@@ -17,15 +17,15 @@ module moist_math_grid_3d_adjoint
       real(wp), allocatable :: w_xi(:)
    contains
       !> Allocate every channel and initialize it to zero
-      procedure :: init => init_domain_adjoint
+      procedure :: init => init_volume_adjoint
       !> Reset every allocated channel to zero
-      procedure :: zero => zero_domain_adjoint
+      procedure :: zero => zero_volume_adjoint
       !> Add any supplied channels
-      procedure :: add_weights => add_domain_weights
+      procedure :: add_weights => add_volume_weights
       !> Report whether every channel is allocated with consistent shapes
-      procedure :: is_initialized => domain_adjoint_is_initialized
+      procedure :: is_initialized => volume_adjoint_is_initialized
       !> Number of grid points the accumulator was initialized for, 0 if none
-      procedure :: size => domain_adjoint_size
+      procedure :: size => volume_adjoint_size
    end type volume_adjoint_type
 
 contains
@@ -34,7 +34,7 @@ contains
    !>
    !> @param[in,out] self  Accumulator
    !> @param[in]    ngrid Number of grid points
-   subroutine init_domain_adjoint(self, ngrid)
+   subroutine init_volume_adjoint(self, ngrid)
       !> Accumulator
       class(volume_adjoint_type), intent(inout) :: self
       !> Number of grid points
@@ -48,12 +48,12 @@ contains
       allocate (self%w_w(ngrid), source=0.0_wp)
       allocate (self%w_xi(ngrid), source=0.0_wp)
 
-   end subroutine init_domain_adjoint
+   end subroutine init_volume_adjoint
 
    !> Reset every allocated channel to zero
    !>
    !> @param[in,out] self  Accumulator
-   subroutine zero_domain_adjoint(self)
+   subroutine zero_volume_adjoint(self)
       !> Accumulator
       class(volume_adjoint_type), intent(inout) :: self
 
@@ -61,7 +61,7 @@ contains
       if (allocated(self%w_w)) self%w_w = 0.0_wp
       if (allocated(self%w_xi)) self%w_xi = 0.0_wp
 
-   end subroutine zero_domain_adjoint
+   end subroutine zero_volume_adjoint
 
    !> Add any supplied weights to an initialized accumulator
    !>
@@ -70,7 +70,7 @@ contains
    !> @param[in]    w_xyz Optional position weights (3, ngrid)
    !> @param[in]    w_w   Optional integration-weight weights (ngrid)
    !> @param[in]    w_xi  Optional Gaussian-width weights (ngrid)
-   subroutine add_domain_weights(self, error, w_xyz, w_w, w_xi)
+   subroutine add_volume_weights(self, error, w_xyz, w_w, w_xi)
       !> Accumulator
       class(volume_adjoint_type), intent(inout) :: self
       !> Error handling
@@ -85,7 +85,7 @@ contains
       !> Number of grid points
       integer :: ngrid
 
-      if (.not. domain_adjoint_is_initialized(self)) then
+      if (.not. volume_adjoint_is_initialized(self)) then
          call fatal_error(error, "add_weights: accumulator is not initialized")
          return
       end if
@@ -114,12 +114,12 @@ contains
       if (present(w_w)) self%w_w = self%w_w + w_w
       if (present(w_xi)) self%w_xi = self%w_xi + w_xi
 
-   end subroutine add_domain_weights
+   end subroutine add_volume_weights
 
    !> Check whether every channel has been initialized consistently
    !>
    !> @param[in] self  Accumulator
-   pure function domain_adjoint_is_initialized(self) result(initialized)
+   pure function volume_adjoint_is_initialized(self) result(initialized)
       !> Accumulator
       class(volume_adjoint_type), intent(in) :: self
 
@@ -136,20 +136,20 @@ contains
       initialized = size(self%w_w) == ngrid .and. &
                     size(self%w_xyz, 1) == 3 .and. size(self%w_xyz, 2) == ngrid
 
-   end function domain_adjoint_is_initialized
+   end function volume_adjoint_is_initialized
 
    !> Number of grid points the accumulator holds channels for, 0 before `init`
    !>
    !> @param[in] self  Accumulator
-   pure function domain_adjoint_size(self) result(ngrid)
+   pure function volume_adjoint_size(self) result(ngrid)
       !> Accumulator
       class(volume_adjoint_type), intent(in) :: self
-      !> Number of domain points
+      !> Number of grid points
       integer :: ngrid
 
       ngrid = 0
       if (allocated(self%w_xi)) ngrid = size(self%w_xi)
 
-   end function domain_adjoint_size
+   end function volume_adjoint_size
 
 end module moist_math_grid_3d_adjoint

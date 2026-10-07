@@ -5,7 +5,7 @@ module moist_math_grid_3d_cartesian
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
-                                      integrand_3d
+                                      integrand_3d, check_trafo_blocks
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
@@ -562,6 +562,8 @@ contains
 
       integer :: j0, ikx, iky, ikz
 
+      ! Out-of-range or absent reciprocal grid: no silent wraparound or divide by zero
+      if (j < 1 .or. j > self%npts_k) error stop "cartesian domain: kpoint index outside the reciprocal grid"
       j0 = j - 1
       ikx = mod(j0, self%nkx) + 1
       iky = mod(j0/self%nkx, self%ny) + 1
@@ -677,7 +679,8 @@ contains
       !> Use one backend team across all FFT lines, including small site counts
       integer :: nthreads, iv
 
-      if (size(f_r, 2) == 0) return
+      call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
       nthreads = self%grid%team_size()
       ! Rank-three calls avoid batched-view overhead when only one worker is available
       if (nthreads == 1) then
@@ -721,7 +724,8 @@ contains
       !> Use one backend team across all FFT lines, including small site counts
       integer :: nthreads, iv
 
-      if (size(f_r, 2) == 0) return
+      call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
       nthreads = self%grid%team_size()
       ! Rank-three calls avoid batched-view overhead when only one worker is available
       if (nthreads == 1) then
@@ -737,6 +741,29 @@ contains
          call fatal_error(error, "cartesian trafo: backward FFT backend failed")
       end if
    end subroutine cartesian_trafo_fft_k2r
+
+   !> Guard - trafo bound to a grid and block shapes match it
+   !>
+   !> @param[in]  self     Trafo instance
+   !> @param[in]  shape_r  Shape of the caller's real-space block
+   !> @param[in]  shape_k  Shape of the caller's reciprocal-space block
+   !> @param[out] error    Set when the trafo cannot transform these blocks
+   subroutine cartesian_trafo_check_blocks(self, shape_r, shape_k, error)
+      !> Trafo instance
+      class(moist_math_grid_3d_cartesian_trafo_type), intent(in) :: self
+      !> Shape of the real-space block
+      integer, intent(in) :: shape_r(2)
+      !> Shape of the reciprocal-space block
+      integer, intent(in) :: shape_k(2)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. associated(self%grid)) then
+         call fatal_error(error, "cartesian trafo: not bound to a grid")
+         return
+      end if
+      call check_trafo_blocks(self%grid%ngrid, self%grid%npts_k, shape_r, shape_k, error)
+   end subroutine cartesian_trafo_check_blocks
 
    !> Single-column forward R2C transform
    !>

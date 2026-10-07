@@ -19,7 +19,7 @@ module moist_math_grid_3d_molecular
    use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type, default_power_width
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
-                                      integrand_3d
+                                      integrand_3d, check_trafo_blocks
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
    implicit none(type, external)
@@ -218,6 +218,12 @@ module moist_math_grid_3d_molecular
    !> Batched calls handle `nv` internally
    !> Worker count fixed at `prepare` from the grid's `team_size`
    !> Reprepare after changing thread count
+   !>
+   !> The trafo owns its FINUFFT plans: `destroy`, reprepare, replacement through
+   !> `new_molecular_grid_trafo` and finalization release them
+   !> Assignment copies the grid binding and settings only; the copy is unprepared
+   !> `allocate(source=)` and polymorphic copies bypass that assignment and would
+   !> share the plans; copy a prepared trafo only by assignment
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_molecular_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
       class(moist_math_grid_3d_molecular_type), pointer :: grid => null()
@@ -261,6 +267,11 @@ module moist_math_grid_3d_molecular
       procedure :: fft_k2r => molecular_trafo_fft_k2r
       procedure :: prepare => molecular_trafo_prepare
       procedure :: destroy => molecular_trafo_destroy
+      !> Copy binding and settings, never plans
+      generic :: assignment(=) => molecular_trafo_assign
+      procedure, private :: molecular_trafo_assign
+      !> Release the plans
+      final :: molecular_trafo_finalize
    end type moist_math_grid_3d_molecular_trafo_type
 
 contains
@@ -696,15 +707,14 @@ contains
       character(len=32) :: label
       integer :: i
 
-      if (.not. all(ieee_is_finite([self%pruning_threshold, self%dr, self%kbuffer, self%nufft_tol, &
-                                    self%xi0_factor, self%weight_threshold]))) then
+      call check_kgrid_settings(self%dr, self%kbuffer, self%nufft_tol, error)
+      if (allocated(error)) return
+      if (.not. all(ieee_is_finite([self%pruning_threshold, self%xi0_factor, self%weight_threshold]))) then
          call fatal_error(error, "molecular domain: settings must be finite")
       else if (self%weight_threshold < 0.0_wp) then
          call fatal_error(error, "molecular domain: weight_threshold must be nonnegative")
       else if (self%pruning_threshold < 0.0_wp .or. self%pruning_threshold >= 1.0_wp) then
          call fatal_error(error, "molecular domain: pruning_threshold must be in [0, 1)")
-      else if (self%dr <= 0.0_wp .or. self%kbuffer < 0.0_wp .or. self%nufft_tol <= 0.0_wp) then
-         call fatal_error(error, "molecular domain: invalid dr, kbuffer or nufft_tol")
       else if (self%xi0_factor <= 0.0_wp) then
          call fatal_error(error, "molecular domain: xi0_factor must be positive")
       end if
@@ -1494,10 +1504,12 @@ contains
    !>
    !> @param[in,out] self       Grid whose real-space points are already built
    !> @param[in]     dr         Real-space spacing of the implied box (bohr, > 0)
-   !> @param[out]    error      Propagated error (no points, dr <= 0, ...)
-   !> @param[in]     buffer     Optional margin per side (bohr); default 2 bohr
-   !> @param[in]     nufft_tol  Optional requested FINUFFT relative tolerance;
-   !>                           default `default_nufft_tol` (1e-10)
+   !> @param[out]    error      Propagated error (no points, invalid setting, ...);
+   !>                           a rejected call leaves the grid unchanged
+   !> @param[in]     buffer     Optional margin per side (bohr, >= 0); default the
+   !>                           grid's current `kbuffer`
+   !> @param[in]     nufft_tol  Optional requested FINUFFT relative tolerance (> 0);
+   !>                           default the grid's current `nufft_tol`
    !> @param[in]     reference  Optional phase origin; sizes a symmetric period about it
    subroutine molecular_grid_set_kgrid(self, dr, error, buffer, nufft_tol, reference)
       !> Grid instance
@@ -1513,25 +1525,24 @@ contains
       !> Optional center of symmetric period
       real(wp), optional, intent(in)    :: reference(3)
 
-      real(wp) :: lo(3), hi(3), extent(3), box, marg
+      real(wp) :: lo(3), hi(3), extent(3), box, marg, tol
       integer  :: nk(3), d
 
       if (.not. allocated(self%xyz) .or. self%ngrid < 1) then
          call fatal_error(error, "molecular grid: build the grid before set_kgrid")
          return
       end if
-      if (dr <= 0.0_wp) then
-         call fatal_error(error, "molecular grid: set_kgrid needs dr > 0")
-         return
-      end if
-      marg = default_kgrid_buffer
+      marg = self%kbuffer
       if (present(buffer)) marg = buffer
-      if (present(nufft_tol)) then
-         if (nufft_tol <= 0.0_wp) then
-            call fatal_error(error, "molecular grid: set_kgrid needs nufft_tol > 0")
+      tol = self%nufft_tol
+      if (present(nufft_tol)) tol = nufft_tol
+      call check_kgrid_settings(dr, marg, tol, error)
+      if (allocated(error)) return
+      if (present(reference)) then
+         if (.not. all(ieee_is_finite(reference))) then
+            call fatal_error(error, "molecular grid: set_kgrid reference must be finite")
             return
          end if
-         self%nufft_tol = nufft_tol
       end if
 
       lo = minval(self%xyz, dim=2)
@@ -1561,6 +1572,7 @@ contains
          return
       end if
 
+      ! Commit only after every check passed
       self%nkx = nk(1); self%nky = nk(2); self%nkz = nk(3)
       self%dkx = two_pi/(real(nk(1), wp)*dr)
       self%dky = two_pi/(real(nk(2), wp)*dr)
@@ -1578,10 +1590,38 @@ contains
       end if
       self%dr = dr
       self%kbuffer = marg
+      self%nufft_tol = tol
       self%has_kgrid = .true.
       ! Reciprocal changes invalidate earlier transform plans
       self%geom_generation = self%geom_generation + 1
    end subroutine molecular_grid_set_kgrid
+
+   !> Validate the reciprocal-grid settings shared by configuration and `set_kgrid`
+   !>
+   !> @param[in]  dr         Real-space spacing of the implied box (bohr)
+   !> @param[in]  kbuffer    Period margin per side (bohr)
+   !> @param[in]  nufft_tol  Requested FINUFFT relative tolerance
+   !> @param[out] error      Set on a non-finite or out-of-range setting
+   subroutine check_kgrid_settings(dr, kbuffer, nufft_tol, error)
+      !> Real-space spacing of the implied box
+      real(wp), intent(in) :: dr
+      !> Period margin per side
+      real(wp), intent(in) :: kbuffer
+      !> Requested FINUFFT relative tolerance
+      real(wp), intent(in) :: nufft_tol
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. all(ieee_is_finite([dr, kbuffer, nufft_tol]))) then
+         call fatal_error(error, "molecular grid: dr, kbuffer and nufft_tol must be finite")
+      else if (dr <= 0.0_wp) then
+         call fatal_error(error, "molecular grid: dr must be positive")
+      else if (kbuffer < 0.0_wp) then
+         call fatal_error(error, "molecular grid: kbuffer must be nonnegative")
+      else if (nufft_tol <= 0.0_wp) then
+         call fatal_error(error, "molecular grid: nufft_tol must be positive")
+      end if
+   end subroutine check_kgrid_settings
 
    !> Reciprocal-space coordinate (1/bohr) of k-point j (1..npts_k)
    !>
@@ -1601,6 +1641,8 @@ contains
 
       integer :: j0, ax, ay, az
 
+      ! Out-of-range or absent reciprocal grid: no silent wraparound or divide by zero
+      if (j < 1 .or. j > self%npts_k) error stop "molecular grid: kpoint index outside the reciprocal grid"
       j0 = j - 1
       ax = mod(j0, self%nkx)
       ay = mod(j0/self%nkx, self%nky)
@@ -1640,8 +1682,9 @@ contains
    !>
    !> Build k-grid, then call `trafo%prepare(nv)` for FINUFFT plans
    !> Grid must outlive transform
+   !> Plans of a previously prepared `trafo` are released first
    !>
-   !> @param[out] trafo      Initialized (unprepared) transform engine
+   !> @param[in,out] trafo   Initialized (unprepared) transform engine
    !> @param[in]  grid       Grid to transform on (must have the target attribute)
    !> @param[in]  nufft_tol  Optional requested FINUFFT relative tolerance; when
    !>                        absent the grid's own `nufft_tol` is used
@@ -1650,7 +1693,7 @@ contains
    !>                        `.false.` forces the reference type-3 path
    subroutine new_molecular_grid_trafo(trafo, grid, nufft_tol, use_type12)
       !> Initialized transform engine
-      type(moist_math_grid_3d_molecular_trafo_type), intent(out) :: trafo
+      type(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: trafo
       !> Grid to transform on
       type(moist_math_grid_3d_molecular_type), intent(in), target :: grid
       !> Optional requested FINUFFT relative tolerance
@@ -1658,9 +1701,12 @@ contains
       !> Optional transform-family override
       logical, optional, intent(in) :: use_type12
 
+      call molecular_trafo_free_plans(trafo)
+      trafo%geom_generation = -1
       trafo%grid => grid
       trafo%nufft_tol = grid%nufft_tol
       if (present(nufft_tol)) trafo%nufft_tol = nufft_tol
+      trafo%want_type12 = .true.
       if (present(use_type12)) trafo%want_type12 = use_type12
    end subroutine new_molecular_grid_trafo
 
@@ -1692,7 +1738,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out)   :: error
 
-      integer :: ax, ay, az, j, ngrid, npts_k, ier
+      integer :: ax, ay, az, j, ngrid, npts_k, ier, stat
       integer(int64) :: n_modes(3), m_npts, nk_npts, no_targets
       type(finufft_opts) :: opts
       real(c_double) :: dummy(1)
@@ -1720,7 +1766,14 @@ contains
       ! Shifted real-space coordinates
       ! `kref` shift preserves Cartesian FFT phase on both routes
       npts_k = self%grid%npts_k
-      allocate (self%xj(ngrid), self%yj(ngrid), self%zj(ngrid))
+      allocate (self%xj(ngrid), stat=stat)
+      if (stat == 0) allocate (self%yj(ngrid), stat=stat)
+      if (stat == 0) allocate (self%zj(ngrid), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular trafo: cannot allocate point coordinates")
+         call molecular_trafo_free_plans(self)
+         return
+      end if
       do j = 1, ngrid
          self%xj(j) = self%grid%xyz(1, j) - self%grid%kref(1)
          self%yj(j) = self%grid%xyz(2, j) - self%grid%kref(2)
@@ -1746,7 +1799,14 @@ contains
          end do
       else
          ! Explicit nonuniform k coordinates, only needed by type 3
-         allocate (self%xk(npts_k), self%yk(npts_k), self%zk(npts_k))
+         allocate (self%xk(npts_k), stat=stat)
+         if (stat == 0) allocate (self%yk(npts_k), stat=stat)
+         if (stat == 0) allocate (self%zk(npts_k), stat=stat)
+         if (stat /= 0) then
+            call fatal_error(error, "molecular trafo: cannot allocate reciprocal coordinates")
+            call molecular_trafo_free_plans(self)
+            return
+         end if
          j = 0
          do az = 0, self%grid%nkz - 1
             do ay = 0, self%grid%nky - 1
@@ -1759,7 +1819,12 @@ contains
             end do
          end do
       end if
-      allocate (self%cj(ngrid, ntrans))
+      allocate (self%cj(ngrid, ntrans), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular trafo: cannot allocate transform scratch")
+         call molecular_trafo_free_plans(self)
+         return
+      end if
 
       call finufft_default_opts(opts)
       ! CMCL modes: -N/2 .. N/2-1, x fastest
@@ -1890,6 +1955,35 @@ contains
       self%grid => null()
    end subroutine molecular_trafo_destroy
 
+   !> Copy the grid binding and settings; the copy is unprepared
+   !>
+   !> Plans are never shared, so each copy owns (and frees) only its own
+   !>
+   !> @param[in,out] self    Target trafo; its own plans are released
+   !> @param[in]     source  Trafo to copy
+   subroutine molecular_trafo_assign(self, source)
+      !> Target trafo
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Trafo to copy
+      class(moist_math_grid_3d_molecular_trafo_type), intent(in) :: source
+
+      call molecular_trafo_free_plans(self)
+      self%geom_generation = -1
+      self%grid => source%grid
+      self%nufft_tol = source%nufft_tol
+      self%want_type12 = source%want_type12
+   end subroutine molecular_trafo_assign
+
+   !> Finalizer releases the plans
+   !>
+   !> @param[in,out] self  Trafo instance
+   subroutine molecular_trafo_finalize(self)
+      !> Trafo instance
+      type(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+
+      call molecular_trafo_free_plans(self)
+   end subroutine molecular_trafo_finalize
+
    !> Forward NUFFT of all `nv` sites, real-space to reciprocal-space
    !>
    !> `f_r(ngrid, nv)` -> `f_k(npts_k, nv)` with strengths `w_j*f(r_j)`
@@ -1913,9 +2007,9 @@ contains
       integer :: it, nv, ier
       external :: finufft_execute
 
-      nv = size(f_r, 2)
-      call molecular_trafo_check_ready(self, nv, size(f_r, 1), size(f_k, 1), error)
+      call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
+      nv = size(f_r, 2)
       ! Strengths c_j = w_j * f(r_j); real -> complex assignment zeroes imag
       do it = 1, nv
          self%cj(:, it) = self%grid%w*f_r(:, it)
@@ -1951,9 +2045,9 @@ contains
       real(wp) :: scale
       external :: finufft_execute
 
-      nv = size(f_k, 2)
-      call molecular_trafo_check_ready(self, nv, size(f_r, 1), size(f_k, 1), error)
+      call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
+      nv = size(f_k, 2)
       ! FINUFFT `execute(plan, cj, fk)` argument roles depend on type
       ! Type 2: cj output, fk mode input; type 3: cj source, fk target
       ! Both paths store real-space values in `self%cj`
@@ -1972,24 +2066,22 @@ contains
       end do
    end subroutine molecular_trafo_fft_k2r
 
-   !> Guard - trafo prepared, bound to its geometry, block sizes match
+   !> Guard - trafo prepared, bound to its geometry, block shapes match
    !>
-   !> Require prepared plans, matching geometry, and matching block sizes
+   !> Require prepared plans, matching geometry, block shapes of the grid,
+   !> and the prepared batch width
    !>
-   !> @param[in]  self   Trafo instance
-   !> @param[in]  nv     Number of columns presented to the transform
-   !> @param[in]  n_r    Leading extent of the caller's real-space block
-   !> @param[in]  n_k    Leading extent of the caller's reciprocal-space block
-   !> @param[out] error  Set when the trafo cannot transform this batch
-   subroutine molecular_trafo_check_ready(self, nv, n_r, n_k, error)
+   !> @param[in]  self     Trafo instance
+   !> @param[in]  shape_r  Shape of the caller's real-space block
+   !> @param[in]  shape_k  Shape of the caller's reciprocal-space block
+   !> @param[out] error    Set when the trafo cannot transform this batch
+   subroutine molecular_trafo_check_ready(self, shape_r, shape_k, error)
       !> Trafo instance
       class(moist_math_grid_3d_molecular_trafo_type), intent(in) :: self
-      !> Batch width of this call
-      integer, intent(in) :: nv
-      !> Leading extent of the caller's real-space block
-      integer, intent(in) :: n_r
-      !> Leading extent of the caller's reciprocal-space block
-      integer, intent(in) :: n_k
+      !> Shape of the real-space block
+      integer, intent(in) :: shape_r(2)
+      !> Shape of the reciprocal-space block
+      integer, intent(in) :: shape_k(2)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -2002,13 +2094,14 @@ contains
             & "molecular trafo: grid geometry changed since prepare; destroy and recreate the trafo")
          return
       end if
-      if (nv /= self%ntrans) then
+      call check_trafo_blocks(self%grid%ngrid, self%grid%npts_k, shape_r, shape_k, error)
+      if (allocated(error)) return
+      if (shape_r(2) /= self%ntrans) then
          call fatal_error(error, "molecular trafo: batch width does not match prepared ntrans")
          return
       end if
-      if (n_r /= self%grid%ngrid .or. n_k /= self%grid%npts_k .or. size(self%cj, 1) /= self%grid%ngrid) then
+      if (size(self%cj, 1) /= self%grid%ngrid) then
          call fatal_error(error, "molecular trafo: field block size does not match the prepared grid")
-         return
       end if
    end subroutine molecular_trafo_check_ready
 

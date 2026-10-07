@@ -11,6 +11,7 @@ module moist_math_grid_3d_base
    public :: moist_math_grid_3d_type
    public :: moist_math_grid_3d_trafo_type
    public :: integrand_3d
+   public :: check_trafo_blocks
 
    !> Scalar-valued 3D integrand used by `integrate`
    abstract interface
@@ -461,6 +462,42 @@ contains
       ! Stateless default: nothing to build; self/ntrans deliberately unused,
       ! error returns unallocated
    end subroutine grid_trafo_prepare_default
+
+   !> Validate the field blocks of one batched transform call
+   !>
+   !> - Grid built: `ngrid >= 1` and `npts_k >= 1`; a destroyed grid keeps its
+   !>   backend extents, so empty blocks must not reach native code
+   !> - Real-space block `(ngrid, nv)`, reciprocal-space block `(npts_k, nv)`
+   !> - Both blocks share the batch width `nv >= 1`
+   !> - Run before any backend call: native code trusts these extents
+   !>
+   !> @param[in]  ngrid    Real-space point count of the bound grid
+   !> @param[in]  npts_k   Reciprocal-space point count of the bound grid
+   !> @param[in]  shape_r  Shape of the caller's real-space block
+   !> @param[in]  shape_k  Shape of the caller's reciprocal-space block
+   !> @param[out] error    Set when the blocks do not fit the grid
+   subroutine check_trafo_blocks(ngrid, npts_k, shape_r, shape_k, error)
+      !> Real-space point count
+      integer, intent(in) :: ngrid
+      !> Reciprocal-space point count
+      integer, intent(in) :: npts_k
+      !> Shape of the real-space block
+      integer, intent(in) :: shape_r(2)
+      !> Shape of the reciprocal-space block
+      integer, intent(in) :: shape_k(2)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (ngrid < 1 .or. npts_k < 1) then
+         call fatal_error(error, "grid trafo: grid has no points; update the grid first")
+      else if (shape_r(1) /= ngrid .or. shape_k(1) /= npts_k) then
+         call fatal_error(error, "grid trafo: field block size does not match the grid")
+      else if (shape_r(2) /= shape_k(2)) then
+         call fatal_error(error, "grid trafo: real- and reciprocal-space blocks differ in batch width")
+      else if (shape_r(2) < 1) then
+         call fatal_error(error, "grid trafo: batch needs at least one column")
+      end if
+   end subroutine check_trafo_blocks
 
    !> Default field quadrature: `result = sum_i measure(i) * f(i)`
    !>
