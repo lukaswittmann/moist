@@ -3,5 +3,4 @@ srcs += files(
   'becke.f90',
   'ssf.f90',
   'pvoronoi.f90',
-  'cartesian.f90',
 )

@@ -57,6 +57,10 @@ module moist_math_grid_3d_base
    contains
       !> Rebuild geometry for the molecule
       procedure(update_grid), deferred :: update
+      !> Check the configured settings before any geometry is built
+      procedure(validate_grid_i), deferred :: validate
+      !> Common update preamble: mark unusable, validate, check the structure
+      procedure, non_overridable :: check_update_input => grid_check_update_input
       !> Contract volume adjoints into the nuclear gradient
       procedure :: get_volume_gradient => get_grid_volume_gradient_default
       !> Contract fixed volume adjoints into a nuclear Hessian-vector product
@@ -130,6 +134,19 @@ module moist_math_grid_3d_base
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
       end subroutine update_grid
+
+      !> Check the configured settings before any geometry is built
+      !>
+      !> @param[in] self Domain instance
+      !> @param[out] error Invalid setting
+      subroutine validate_grid_i(self, error)
+         import :: moist_math_grid_3d_type, error_type
+         implicit none(type, external)
+         !> Domain instance
+         class(moist_math_grid_3d_type), intent(in) :: self
+         !> Error handling
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine validate_grid_i
 
       !> Reciprocal-space coordinate (1/bohr) of k-point j (1..npts_k)
       !>
@@ -427,6 +444,35 @@ contains
       w = self%w(i)
    end function grid_measure
 
+   !> Common update preamble shared by every concrete grid
+   !>
+   !> - Zero `natom` first: any failure from here on leaves the grid unusable
+   !> - Validate the settings, then require at least one atom and finite coordinates
+   !> - Concrete updates add their own geometry checks afterwards
+   !>
+   !> @param[in,out] self Domain instance
+   !> @param[in] mol Requested solute structure
+   !> @param[out] error Invalid settings or structure
+   subroutine grid_check_update_input(self, mol, error)
+      !> Domain instance
+      class(moist_math_grid_3d_type), intent(inout) :: self
+      !> Requested solute structure
+      type(structure_type), intent(in) :: mol
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      self%natom = 0
+      call self%validate(error)
+      if (allocated(error)) return
+      if (mol%nat < 1) then
+         call fatal_error(error, self%kind_name()//" domain: at least one solute atom is required")
+         return
+      end if
+      if (.not. all(ieee_is_finite(mol%xyz))) then
+         call fatal_error(error, self%kind_name()//" domain: solute coordinates must be finite")
+      end if
+   end subroutine grid_check_update_input
+
    !> Release common discretization storage
    !>
    !> @param[in,out] self Grid instance
@@ -508,7 +554,7 @@ contains
    !>   grids with a uniform (or otherwise cheap) measure should override it
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values (length ngrid)
+   !> @param[in]  f       Per-point field values (length ngrid); any other length stops
    !> @param[out] result  Quadrature result
    pure subroutine grid_integrate_field_default(self, f, result)
       !> Grid instance
@@ -520,6 +566,7 @@ contains
 
       integer :: i
 
+      if (size(f) /= self%ngrid) error stop "3d grid: integrate_field needs one value per grid point"
       result = 0.0_wp
       do i = 1, self%ngrid
          result = result + self%measure(i)*f(i)

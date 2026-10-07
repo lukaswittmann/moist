@@ -10,8 +10,6 @@ module moist_math_grid_3d_cartesian
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
-   use moist_math_grid_3d_kernel_cartesian, only: cartesian_grid_gradient, &
-      & cartesian_grid_hessian_vector, cartesian_grid_hessian
    implicit none(type, external)
    private
 
@@ -19,6 +17,13 @@ module moist_math_grid_3d_cartesian
    public :: new_cartesian_point_grid, new_cartesian_gaussian_grid
    public :: moist_math_grid_3d_cartesian_trafo_type
    public :: nk_x_from_nx
+
+   !> Default real-space points per axis
+   integer, parameter :: default_box_points = 128
+   !> Default real-space spacing, bohr
+   real(wp), parameter :: default_box_spacing = 0.6_wp
+   !> Default minimum distance from every nucleus to the box faces, bohr
+   real(wp), parameter :: default_box_margin = 10.0_wp
 
    !> Cartesian volume domain with a centroid-following origin
    !>
@@ -29,47 +34,55 @@ module moist_math_grid_3d_cartesian
       !> Molecular centroid of the last successful update, bohr
       real(wp), private :: center(3) = 0.0_wp
       !> Real-space size along x
-      integer :: nx = 32
+      integer :: nx = default_box_points
       !> Real-space size along y
-      integer :: ny = 32
+      integer :: ny = default_box_points
       !> Real-space size along z
-      integer :: nz = 32
+      integer :: nz = default_box_points
       !> First reciprocal-space dimension (R2C halved axis)
-      integer :: nkx = 0
+      integer, private :: nkx = 0
       !> Real-space spacing (bohr)
-      real(wp) :: dr = 0.5_wp
+      real(wp) :: dr = default_box_spacing
+      !> Minimum distance from every nucleus to the box faces (bohr); keeps the
+      !> solute away from its periodic images
+      real(wp) :: margin = default_box_margin
       !> Gaussian exponent scale, xi0 = xi0_factor/dr
       real(wp) :: xi0_factor = 1.0_wp
       !> Real-space cell volume (dr**3)
-      real(wp) :: dv = 0.0_wp
+      real(wp), private :: dv = 0.0_wp
       !> Total box volume
-      real(wp) :: vbox = 0.0_wp
+      real(wp), private :: vbox = 0.0_wp
       !> Reciprocal-space spacing along x, inverse bohr
-      real(wp) :: dkx = 0.0_wp
+      real(wp), private :: dkx = 0.0_wp
       !> Reciprocal-space spacing along y, inverse bohr
-      real(wp) :: dky = 0.0_wp
+      real(wp), private :: dky = 0.0_wp
       !> Reciprocal-space spacing along z, inverse bohr
-      real(wp) :: dkz = 0.0_wp
+      real(wp), private :: dkz = 0.0_wp
       !> Real-space coordinate of grid point (1, 1, 1)
-      real(wp) :: origin(3) = 0.0_wp
+      real(wp), private :: origin(3) = 0.0_wp
       !> Reciprocal frequencies along x, inverse bohr, length nkx
-      real(wp), allocatable :: kx(:)
+      real(wp), allocatable, private :: kx(:)
       !> Reciprocal frequencies along y, inverse bohr, length ny, FFT-ordered
-      real(wp), allocatable :: ky(:)
+      real(wp), allocatable, private :: ky(:)
       !> Reciprocal frequencies along z, inverse bohr, length nz, FFT-ordered
-      real(wp), allocatable :: kz(:)
+      real(wp), allocatable, private :: kz(:)
    contains
       procedure :: validate => validate_cartesian_grid
       procedure :: update => update_cartesian
       procedure :: get_volume_gradient => get_volume_gradient_cartesian
       procedure :: get_volume_hessian_vector => get_volume_hessian_vector_cartesian
       procedure :: get_volume_hessian => get_volume_hessian_cartesian
-      procedure :: rebuild => rebuild_cartesian
       procedure :: kind_name => cartesian_kind_name
       procedure :: kpoint => cartesian_grid_3d_kpoint
       procedure :: destroy => cartesian_grid_3d_dealloc
       procedure :: integrate_field => cartesian_grid_3d_integrate_field
       procedure :: new_trafo => cartesian_grid_3d_new_trafo
+      !> Real-space coordinate of grid point (1, 1, 1), bohr
+      procedure :: get_origin => cartesian_get_origin
+      !> Real-space cell volume `dr**3`, bohr**3
+      procedure :: get_cell_volume => cartesian_get_cell_volume
+      !> Periodic box volume, bohr**3
+      procedure :: get_box_volume => cartesian_get_box_volume
    end type moist_math_grid_3d_cartesian_type
 
    !> 3D Fourier transform engine for a Cartesian grid
@@ -80,7 +93,7 @@ module moist_math_grid_3d_cartesian
    !> threads, but one per thread is equally fine
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_cartesian_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
-      class(moist_math_grid_3d_cartesian_type), pointer :: grid => null()
+      class(moist_math_grid_3d_cartesian_type), pointer, private :: grid => null()
    contains
       procedure :: fft_r2k => cartesian_trafo_fft_r2k
       procedure :: fft_k2r => cartesian_trafo_fft_k2r
@@ -93,11 +106,12 @@ contains
    !>
    !> @param[in,out] self Grid configuration
    !> @param[out] error Invalid settings
-   !> @param[in] nx Optional x point count, default 32
-   !> @param[in] ny Optional y point count, default 32
-   !> @param[in] nz Optional z point count, default 32
-   !> @param[in] dr Optional spacing, default 0.5 bohr
-   subroutine new_cartesian_point_grid(self, error, nx, ny, nz, dr)
+   !> @param[in] nx Optional x point count, default 128
+   !> @param[in] ny Optional y point count, default 128
+   !> @param[in] nz Optional z point count, default 128
+   !> @param[in] dr Optional spacing, default 0.6 bohr
+   !> @param[in] margin Optional nucleus-to-face distance, default 10 bohr
+   subroutine new_cartesian_point_grid(self, error, nx, ny, nz, dr, margin)
       !> Grid configuration
       type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
       !> Configuration error
@@ -110,20 +124,23 @@ contains
       integer, intent(in), optional :: nz
       !> Spacing
       real(wp), intent(in), optional :: dr
+      !> Nucleus-to-face distance
+      real(wp), intent(in), optional :: margin
 
-      call configure_cartesian_grid(self, error, .false., nx, ny, nz, dr)
+      call configure_cartesian_grid(self, error, .false., nx, ny, nz, dr, margin=margin)
    end subroutine new_cartesian_point_grid
 
    !> Configure a Cartesian gaussian grid without realizing geometry
    !>
    !> @param[in,out] self Grid configuration
    !> @param[out] error Invalid settings
-   !> @param[in] nx Optional x point count, default 32
-   !> @param[in] ny Optional y point count, default 32
-   !> @param[in] nz Optional z point count, default 32
-   !> @param[in] dr Optional spacing, default 0.5 bohr
+   !> @param[in] nx Optional x point count, default 128
+   !> @param[in] ny Optional y point count, default 128
+   !> @param[in] nz Optional z point count, default 128
+   !> @param[in] dr Optional spacing, default 0.6 bohr
    !> @param[in] xi0_factor Optional width scale, default 1
-   subroutine new_cartesian_gaussian_grid(self, error, nx, ny, nz, dr, xi0_factor)
+   !> @param[in] margin Optional nucleus-to-face distance, default 10 bohr
+   subroutine new_cartesian_gaussian_grid(self, error, nx, ny, nz, dr, xi0_factor, margin)
       !> Grid configuration
       type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
       !> Configuration error
@@ -138,8 +155,10 @@ contains
       real(wp), intent(in), optional :: dr
       !> Gaussian width scale
       real(wp), intent(in), optional :: xi0_factor
+      !> Nucleus-to-face distance
+      real(wp), intent(in), optional :: margin
 
-      call configure_cartesian_grid(self, error, .true., nx, ny, nz, dr, xi0_factor)
+      call configure_cartesian_grid(self, error, .true., nx, ny, nz, dr, xi0_factor, margin)
    end subroutine new_cartesian_gaussian_grid
 
    !> Shared configuration reset for Cartesian variants
@@ -152,7 +171,8 @@ contains
    !> @param[in] nz Optional z point count
    !> @param[in] dr Optional spacing, bohr
    !> @param[in] xi0_factor Optional Gaussian width scale
-   subroutine configure_cartesian_grid(self, error, gaussian, nx, ny, nz, dr, xi0_factor)
+   !> @param[in] margin Optional nucleus-to-face distance, bohr
+   subroutine configure_cartesian_grid(self, error, gaussian, nx, ny, nz, dr, xi0_factor, margin)
       !> Grid configuration
       type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
       !> Configuration error
@@ -169,12 +189,15 @@ contains
       real(wp), intent(in), optional :: dr
       !> Gaussian width scale
       real(wp), intent(in), optional :: xi0_factor
+      !> Nucleus-to-face distance
+      real(wp), intent(in), optional :: margin
 
       call self%destroy()
-      self%nx = 32
-      self%ny = 32
-      self%nz = 32
-      self%dr = 0.5_wp
+      self%nx = default_box_points
+      self%ny = default_box_points
+      self%nz = default_box_points
+      self%dr = default_box_spacing
+      self%margin = default_box_margin
       self%xi0_factor = 1.0_wp
       self%gaussian = gaussian
       self%center = 0.0_wp
@@ -183,10 +206,14 @@ contains
       if (present(nz)) self%nz = nz
       if (present(dr)) self%dr = dr
       if (present(xi0_factor)) self%xi0_factor = xi0_factor
+      if (present(margin)) self%margin = margin
       call check_cartesian_settings(self, error)
    end subroutine configure_cartesian_grid
 
    !> Contract centroid-following point adjoints into the nuclear gradient
+   !>
+   !> Every point moves with the centroid and weights and widths are constant,
+   !> so each atom receives `sum(w_xyz, dim=2)/natom`
    !>
    !> @param[in] self Successfully updated grid
    !> @param[in] acc Volume-observable adjoints
@@ -202,9 +229,21 @@ contains
       !> Invalid input
       type(error_type), allocatable, intent(out) :: error
 
+      !> Contribution of every atom
+      real(wp) :: contribution(3)
+      !> Atom index
+      integer :: iat
+
       call self%check_volume_adjoint(acc, error, vector=gradient)
       if (allocated(error)) return
-      call cartesian_grid_gradient(acc%w_xyz, gradient, error)
+      contribution = sum(acc%w_xyz, dim=2)/real(self%natom, wp)
+      if (.not. all(ieee_is_finite(contribution))) then
+         call fatal_error(error, "cartesian domain: non-finite gradient contraction")
+         return
+      end if
+      do iat = 1, self%natom
+         gradient(:, iat) = gradient(:, iat) + contribution
+      end do
    end subroutine get_volume_gradient_cartesian
 
    !> Zero curvature of linear centroid motion and constant quadrature weights
@@ -226,9 +265,8 @@ contains
       !> Invalid input
       type(error_type), allocatable, intent(out) :: error
 
+      ! Exact zero contribution: the accumulator stays as it is
       call self%check_volume_adjoint(acc, error, vector=hessian_vector, direction=direction)
-      if (allocated(error)) return
-      call cartesian_grid_hessian_vector(hessian_vector)
    end subroutine get_volume_hessian_vector_cartesian
 
    !> Zero curvature of linear centroid motion and constant quadrature weights
@@ -247,9 +285,8 @@ contains
       !> Invalid input
       type(error_type), allocatable, intent(out) :: error
 
+      ! Exact zero contribution: the accumulator stays as it is
       call self%check_volume_adjoint(acc, error, hessian=hessian)
-      if (allocated(error)) return
-      call cartesian_grid_hessian(hessian)
    end subroutine get_volume_hessian_cartesian
 
    !> Validate a configured Cartesian grid
@@ -294,8 +331,42 @@ contains
          call fatal_error(error, "cartesian domain: dr must be finite and positive")
       else if (self%xi0_factor <= 0.0_wp) then
          call fatal_error(error, "cartesian domain: xi0_factor must be finite and positive")
+      else if (.not. ieee_is_finite(self%margin) .or. self%margin < 0.0_wp) then
+         call fatal_error(error, "cartesian domain: margin must be finite and nonnegative")
       end if
    end subroutine check_cartesian_settings
+
+   !> Require every nucleus to stay `margin` away from the box faces
+   !>
+   !> - The box spans `center +- n*dr/2` per axis and repeats periodically
+   !> - `reach(d)` is the largest nuclear distance from the centroid along axis d
+   !>
+   !> @param[in]  self   Grid settings
+   !> @param[in]  reach  Largest nuclear distance from the centroid per axis, bohr
+   !> @param[out] error  Names the first axis without room
+   subroutine check_cartesian_fit(self, reach, error)
+      !> Grid settings
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Largest nuclear distance from the centroid per axis
+      real(wp), intent(in) :: reach(3)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=1), parameter :: axis(3) = ["x", "y", "z"]
+      character(len=24) :: needed
+      real(wp) :: half(3)
+      integer :: d
+
+      half = 0.5_wp*self%dr*real([self%nx, self%ny, self%nz], wp)
+      do d = 1, 3
+         if (reach(d) + self%margin > half(d)) then
+            write (needed, "(f0.3)") 2.0_wp*(reach(d) + self%margin)
+            call fatal_error(error, "cartesian domain: solute and margin do not fit the box along "// &
+               & axis(d)//"; n"//axis(d)//"*dr must be at least "//trim(needed)//" bohr")
+            return
+         end if
+      end do
+   end subroutine check_cartesian_fit
 
    !> Commit a successfully constructed Cartesian discretization
    !>
@@ -330,8 +401,10 @@ contains
 
    !> Center the fixed box on the current solute centroid
    !>
-   !> Failure keeps the committed box and center but zeroes `natom`, so reverse
-   !> contractions refuse the stale geometry
+   !> Every nucleus must stay `margin` away from the box faces
+   !>
+   !> Failure keeps the committed box and center but zeroes `natom`; the grid
+   !> stays unusable (contractions refuse) until an update succeeds
    !>
    !> @param[in,out] self Domain instance
    !> @param[in] mol Solute structure
@@ -345,52 +418,27 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Requested box center
       real(wp) :: center(3)
+      !> Largest nuclear distance from the requested center per axis
+      real(wp) :: reach(3)
+      !> Atom index
+      integer :: iat
 
-      self%natom = 0
-      call self%validate(error)
+      call self%check_update_input(mol, error)
       if (allocated(error)) return
-      if (mol%nat < 1) then
-         call fatal_error(error, "cartesian domain: at least one solute atom is required")
-         return
-      end if
-      if (.not. all(ieee_is_finite(mol%xyz))) then
-         call fatal_error(error, "cartesian domain: solute coordinates must be finite")
-         return
-      end if
       center = sum(mol%xyz, dim=2)/real(mol%nat, wp)
+      reach = 0.0_wp
+      do iat = 1, mol%nat
+         reach = max(reach, abs(mol%xyz(:, iat) - center))
+      end do
+      call check_cartesian_fit(self, reach, error)
+      if (allocated(error)) return
       call realize_cartesian(self, center, error)
       if (allocated(error)) return
       self%center = center
       self%natom = mol%nat
    end subroutine update_cartesian
 
-   !> Rebuild from the current settings around the realized box center
-   !>
-   !> @param[in,out] self Realized domain
-   !> @param[out] error Invalid settings or missing geometry
-   subroutine rebuild_cartesian(self, error)
-      !> Realized domain
-      class(moist_math_grid_3d_cartesian_type), intent(inout) :: self
-      !> Invalid settings or missing geometry
-      type(error_type), allocatable, intent(out) :: error
-      !> Center retained from the previous coordinates
-      real(wp) :: center(3)
-      !> Atom count restored after a successful rebuild
-      integer :: natom
-
-      if (self%ngrid < 1) then
-         call fatal_error(error, "cartesian domain: initialize or update before rebuild")
-         return
-      end if
-      center = self%center
-      natom = self%natom
-      self%natom = 0
-      call realize_cartesian(self, center, error)
-      if (allocated(error)) return
-      self%natom = natom
-   end subroutine rebuild_cartesian
-
-   !> Construct and commit a Cartesian grid from its own settings
+   !> Construct and commit a Cartesian grid from its validated settings
    !>
    !> @param[in,out] self Grid retaining atom count
    !> @param[in] center Box center, bohr
@@ -409,8 +457,6 @@ contains
       !> Allocation status
       integer :: stat
 
-      call self%validate(error)
-      if (allocated(error)) return
       allocate (grid, stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "cartesian domain: cannot allocate grid")
@@ -627,7 +673,7 @@ contains
    !> `measure`-loop with this constant-weight form
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values (length ngrid)
+   !> @param[in]  f       Per-point field values (length ngrid); any other length stops
    !> @param[out] result  Quadrature result
    pure subroutine cartesian_grid_3d_integrate_field(self, f, result)
       !> Grid instance
@@ -637,8 +683,42 @@ contains
       !> Quadrature result
       real(wp), intent(out) :: result
 
+      if (size(f) /= self%ngrid) error stop "cartesian domain: integrate_field needs one value per grid point"
       result = self%dv*sum(f)
    end subroutine cartesian_grid_3d_integrate_field
+
+   !> Real-space coordinate of grid point (1, 1, 1)
+   !>
+   !> @param[in] self Grid instance
+   pure function cartesian_get_origin(self) result(origin)
+      !> Grid instance
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Box origin (bohr)
+      real(wp) :: origin(3)
+      origin = self%origin
+   end function cartesian_get_origin
+
+   !> Real-space cell volume, zero before a successful update
+   !>
+   !> @param[in] self Grid instance
+   pure function cartesian_get_cell_volume(self) result(dv)
+      !> Grid instance
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> `dr**3` (bohr**3)
+      real(wp) :: dv
+      dv = self%dv
+   end function cartesian_get_cell_volume
+
+   !> Periodic box volume, zero before a successful update
+   !>
+   !> @param[in] self Grid instance
+   pure function cartesian_get_box_volume(self) result(vbox)
+      !> Grid instance
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Box volume (bohr**3)
+      real(wp) :: vbox
+      vbox = self%vbox
+   end function cartesian_get_box_volume
 
    !> Detach the trafo from its grid, idempotent
    !>

@@ -127,7 +127,7 @@ contains
    !> average
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-node field values, shape (npts)
+   !> @param[in]  f       Per-node field values, shape (npts); any other length stops
    !> @param[out] result  Integral of f over the unit sphere
    pure subroutine angular_integrate_field(self, f, result)
       !> Grid instance
@@ -140,6 +140,7 @@ contains
       !> Node index
       integer :: i
 
+      if (size(f) /= self%npts) error stop "angular grid: integrate_field needs one value per node"
       result = 0.0_wp
       do i = 1, self%npts
          result = result + self%weights(i)*f(i)

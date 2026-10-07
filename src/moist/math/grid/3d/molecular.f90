@@ -140,13 +140,13 @@ module moist_math_grid_3d_molecular
       !> Before setup: `has_kgrid = false`, `npts_k = 0`; no transforms
       !> `nkx*nky*nkz` modes, per-axis `dk*` spacing
       !> CMCL `modeord = 0`: kx fastest, frequencies -N/2 .. N/2-1
-      integer :: nkx = 0, nky = 0, nkz = 0
+      integer, private :: nkx = 0, nky = 0, nkz = 0
       !> Reciprocal-space spacings (1/bohr)
-      real(wp) :: dkx = 0.0_wp, dky = 0.0_wp, dkz = 0.0_wp
+      real(wp), private :: dkx = 0.0_wp, dky = 0.0_wp, dkz = 0.0_wp
       !> Phase reference: real-space point the transform phases are measured from
       !>
       !> Explicit k-grid setup uses `point(1)`; updates use solute centroid
-      real(wp) :: kref(3) = 0.0_wp
+      real(wp), private :: kref(3) = 0.0_wp
       !> Requested FINUFFT relative tolerance for transforms on this grid
       !>
       !> Set by constructor or `molecular_grid_set_kgrid`
@@ -158,7 +158,7 @@ module moist_math_grid_3d_molecular
       !> Explicit reference offset from the molecular centroid, bohr
       real(wp), private :: kref_offset(3) = 0.0_wp
       !> Whether the reciprocal grid has been configured
-      logical :: has_kgrid = .false.
+      logical, private :: has_kgrid = .false.
       !> Latest requested geometry, retained after a period error
       type(structure_type), allocatable, private :: molecule
       !> Realized-geometry generation counter
@@ -172,7 +172,6 @@ module moist_math_grid_3d_molecular
       procedure :: get_volume_gradient => get_volume_gradient_molecular
       procedure :: get_volume_hessian_vector => get_volume_hessian_vector_molecular
       procedure :: get_volume_hessian => get_volume_hessian_molecular
-      procedure :: rebuild => rebuild_molecular
       procedure :: kind_name => molecular_kind_name
       procedure :: has_geometry_dependent_xi0 => molecular_xi0_dependent
       !> Reciprocal-space coordinate of k-point j (1..npts_k; needs k-grid set)
@@ -201,6 +200,14 @@ module moist_math_grid_3d_molecular
       procedure :: get_pruning_threshold => molecular_get_pruning_threshold
       !> Requested FINUFFT relative tolerance
       procedure :: get_nufft_tol => molecular_get_nufft_tol
+      !> Reciprocal mode counts `[nkx, nky, nkz]`
+      procedure :: get_kmodes => molecular_get_kmodes
+      !> Reciprocal spacings `[dkx, dky, dkz]` (1/bohr)
+      procedure :: get_kspacing => molecular_get_kspacing
+      !> Phase reference of the transforms (bohr)
+      procedure :: get_kref => molecular_get_kref
+      !> Whether the reciprocal grid is configured
+      procedure :: has_reciprocal => molecular_has_reciprocal
    end type moist_math_grid_3d_molecular_type
 
    !> Fourier transform engine for a molecular grid
@@ -226,42 +233,42 @@ module moist_math_grid_3d_molecular
    !> share the plans; copy a prepared trafo only by assignment
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_molecular_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
-      class(moist_math_grid_3d_molecular_type), pointer :: grid => null()
+      class(moist_math_grid_3d_molecular_type), pointer, private :: grid => null()
       !> Number of simultaneous transforms baked into the plans (0 = unprepared)
-      integer :: ntrans = 0
+      integer, private :: ntrans = 0
       !> Grid's `geom_generation` at the end of a successful `prepare`
       !>
       !> `check_ready` rejects stale geometry
-      integer :: geom_generation = -1
+      integer, private :: geom_generation = -1
       !> Requested FINUFFT relative tolerance actually used by the plans
       !>
       !> Grid `nufft_tol` unless constructor overrides it
-      real(wp) :: nufft_tol = default_nufft_tol
+      real(wp), private :: nufft_tol = default_nufft_tol
       !> Request the type-1/type-2 fast path (the default)
       !>
       !> `.false.` selects type 3 for elementwise comparison with type 1/2
-      logical :: want_type12 = .true.
+      logical, private :: want_type12 = .true.
       !> Whether the prepared plans are actually type 1/2 (`.false.` = type 3)
       !>
       !> Fall back to type 3 outside portable `[-3pi, 3pi]` window
-      logical :: is_type12 = .false.
+      logical, private :: is_type12 = .false.
       !> Opaque FINUFFT plan handles, real-space to reciprocal-space (0 = none)
-      integer(int64) :: plan_r2k = 0_int64
+      integer(int64), private :: plan_r2k = 0_int64
       !> Opaque FINUFFT plan handle, reciprocal-space to real-space (0 = none)
-      integer(int64) :: plan_k2r = 0_int64
+      integer(int64), private :: plan_k2r = 0_int64
       !> Shifted molecular-grid coordinates, length ngrid
       !>
       !> Retained for plan lifetime
       !> Type 3: `xj(j) = xyz(1,j) - kref(1)` in bohr
       !> Type 1/2: the same shifted coordinate scaled by `dkx` into
       !> FINUFFT's radian convention, `xj(j) = (xyz(1,j) - kref(1))*dkx`
-      real(c_double), allocatable :: xj(:), yj(:), zj(:)
+      real(c_double), allocatable, private :: xj(:), yj(:), zj(:)
       !> Reciprocal-grid target/source coordinates, length npts_k
       !>
       !> Type-3 only; type 1/2 uses lattice mode indices
-      real(c_double), allocatable :: xk(:), yk(:), zk(:)
+      real(c_double), allocatable, private :: xk(:), yk(:), zk(:)
       !> Real-space strength/result scratch, shape (ngrid, ntrans), reused every call
-      complex(c_double_complex), allocatable :: cj(:, :)
+      complex(c_double_complex), allocatable, private :: cj(:, :)
    contains
       procedure :: fft_r2k => molecular_trafo_fft_r2k
       procedure :: fft_k2r => molecular_trafo_fft_k2r
@@ -272,6 +279,12 @@ module moist_math_grid_3d_molecular
       procedure, private :: molecular_trafo_assign
       !> Release the plans
       final :: molecular_trafo_finalize
+      !> Prepared batch width (0 = unprepared)
+      procedure :: get_ntrans => molecular_trafo_get_ntrans
+      !> Whether the prepared plans use the type-1/type-2 path
+      procedure :: uses_type12 => molecular_trafo_uses_type12
+      !> Requested FINUFFT relative tolerance of the plans
+      procedure :: get_nufft_tol => molecular_trafo_get_nufft_tol
    end type moist_math_grid_3d_molecular_trafo_type
 
 contains
@@ -840,8 +853,8 @@ contains
 
    !> Move atomic grids, recompute partition weights and guard the fixed period
    !>
-   !> Failure keeps the committed points but zeroes `natom`, so reverse
-   !> contractions refuse the stale geometry
+   !> Failure keeps the committed points but zeroes `natom`; the grid stays
+   !> unusable (contractions refuse) until an update succeeds
    !>
    !> @param[in,out] self Domain instance
    !> @param[in] mol Solute structure
@@ -854,17 +867,8 @@ contains
       !> Invalid settings, invalid geometry or insufficient period
       type(error_type), allocatable, intent(out) :: error
 
-      self%natom = 0
-      call self%validate(error)
+      call self%check_update_input(mol, error)
       if (allocated(error)) return
-      if (mol%nat < 1) then
-         call fatal_error(error, "molecular domain: at least one solute atom is required")
-         return
-      end if
-      if (.not. all(ieee_is_finite(mol%xyz))) then
-         call fatal_error(error, "molecular domain: solute coordinates must be finite")
-         return
-      end if
       ! Partition requires each atom's covalent radius
       if (any(mol%num < 1) .or. any(mol%num > max_elem)) then
          call fatal_error(error, "molecular domain: atomic numbers must be between 1 and the "// &
@@ -872,25 +876,8 @@ contains
          return
       end if
       self%molecule = mol
-      call realize_molecular(self, .false., error)
+      call realize_molecular(self, error)
    end subroutine update_molecular
-
-   !> Rebuild the reciprocal period for the latest requested geometry
-   !>
-   !> @param[in,out] self Domain instance
-   !> @param[out] error Invalid grid or no previous update
-   subroutine rebuild_molecular(self, error)
-      !> Domain instance
-      class(moist_math_grid_3d_molecular_type), intent(inout) :: self
-      !> Invalid grid or no previous update
-      type(error_type), allocatable, intent(out) :: error
-
-      if (.not. allocated(self%molecule)) then
-         call fatal_error(error, "molecular domain: update before rebuild")
-         return
-      end if
-      call realize_molecular(self, .true., error)
-   end subroutine rebuild_molecular
 
    !> Domain name for diagnostics
    !>
@@ -908,14 +895,14 @@ contains
    !> Cached local grids preserve quadrature points across geometries
    !> Reapplied threshold pruning may change point counts
    !>
-   !> @param[in,out] self Domain with a requested molecular geometry
-   !> @param[in] reset_period Allow the reciprocal grid to change
+   !> An existing reciprocal grid keeps its period; the first update sizes it
+   !> about the centroid when `reciprocal` is on
+   !>
+   !> @param[in,out] self Validated domain with a requested molecular geometry
    !> @param[out] error Construction or period error
-   subroutine realize_molecular(self, reset_period, error)
+   subroutine realize_molecular(self, error)
       !> Domain with a requested geometry
       class(moist_math_grid_3d_molecular_type), intent(inout) :: self
-      !> Allow the reciprocal grid to change
-      logical, intent(in) :: reset_period
       !> Construction or period error
       type(error_type), allocatable, intent(out) :: error
       !> Candidate point cloud
@@ -924,13 +911,7 @@ contains
       real(wp) :: center(3), reference(3), required(3), period(3), tolerance(3)
       !> Allocation status
       integer :: stat
-      !> Whether to retain the previous reciprocal grid
-      logical :: preserve_period
 
-      ! Committed again only by a successful move
-      self%natom = 0
-      call self%validate(error)
-      if (allocated(error)) return
       allocate (grid, stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "molecular domain: cannot allocate grid")
@@ -953,8 +934,7 @@ contains
             return
          end if
       end if
-      preserve_period = self%has_kgrid .and. .not. reset_period
-      if (preserve_period) then
+      if (self%has_kgrid) then
          if (self%centered_period) then
             reference = center + self%kref_offset
             required = 2.0_wp*(max(abs(maxval(grid%xyz, dim=2) - reference), &
@@ -966,7 +946,7 @@ contains
          period = two_pi/[self%dkx, self%dky, self%dkz]
          tolerance = 64.0_wp*epsilon(1.0_wp)*max(1.0_wp, period)
          if (any(required > period + tolerance)) then
-            call fatal_error(error, "molecular domain: fixed reciprocal period exceeded; call rebuild")
+            call fatal_error(error, "molecular domain: fixed reciprocal period exceeded by the new geometry; increase kbuffer")
             return
          end if
          grid%nkx = self%nkx
@@ -981,14 +961,9 @@ contains
          grid%centered_period = self%centered_period
          grid%kref_offset = self%kref_offset
          grid%has_kgrid = .true.
-      else if (self%auto_kgrid .or. (reset_period .and. self%has_kgrid)) then
-         if (self%centered_period .or. self%auto_kgrid) then
-            call molecular_grid_set_kgrid(grid, self%dr, error, buffer=self%kbuffer, &
-               & nufft_tol=self%nufft_tol, reference=center + self%kref_offset)
-         else
-            call molecular_grid_set_kgrid(grid, self%dr, error, buffer=self%kbuffer, &
-               & nufft_tol=self%nufft_tol)
-         end if
+      else if (self%auto_kgrid) then
+         call molecular_grid_set_kgrid(grid, self%dr, error, buffer=self%kbuffer, &
+            & nufft_tol=self%nufft_tol, reference=center + self%kref_offset)
          if (allocated(error)) return
       end if
 
@@ -1356,6 +1331,50 @@ contains
       real(wp) :: kbuffer
       kbuffer = self%kbuffer
    end function molecular_get_kbuffer
+
+   !> Reciprocal mode counts, zero without a reciprocal grid
+   !>
+   !> @param[in] self Grid instance
+   pure function molecular_get_kmodes(self) result(modes)
+      !> Grid instance
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> `[nkx, nky, nkz]`
+      integer :: modes(3)
+      modes = [self%nkx, self%nky, self%nkz]
+   end function molecular_get_kmodes
+
+   !> Reciprocal spacings, zero without a reciprocal grid
+   !>
+   !> @param[in] self Grid instance
+   pure function molecular_get_kspacing(self) result(spacing)
+      !> Grid instance
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> `[dkx, dky, dkz]` (1/bohr)
+      real(wp) :: spacing(3)
+      spacing = [self%dkx, self%dky, self%dkz]
+   end function molecular_get_kspacing
+
+   !> Phase reference of the transforms
+   !>
+   !> @param[in] self Grid instance
+   pure function molecular_get_kref(self) result(kref)
+      !> Grid instance
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Real-space phase origin (bohr)
+      real(wp) :: kref(3)
+      kref = self%kref
+   end function molecular_get_kref
+
+   !> Whether the reciprocal grid is configured
+   !>
+   !> @param[in] self Grid instance
+   pure function molecular_has_reciprocal(self) result(has)
+      !> Grid instance
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Reciprocal grid present
+      logical :: has
+      has = self%has_kgrid
+   end function molecular_has_reciprocal
 
    !> Gaussian width scale, `xi0 = xi0_factor/w**(1/3)`
    !>
@@ -1983,6 +2002,39 @@ contains
 
       call molecular_trafo_free_plans(self)
    end subroutine molecular_trafo_finalize
+
+   !> Prepared batch width
+   !>
+   !> @param[in] self Trafo instance
+   pure function molecular_trafo_get_ntrans(self) result(ntrans)
+      !> Trafo instance
+      class(moist_math_grid_3d_molecular_trafo_type), intent(in) :: self
+      !> Batch width baked into the plans (0 = unprepared)
+      integer :: ntrans
+      ntrans = self%ntrans
+   end function molecular_trafo_get_ntrans
+
+   !> Whether the prepared plans use the type-1/type-2 path
+   !>
+   !> @param[in] self Trafo instance
+   pure function molecular_trafo_uses_type12(self) result(type12)
+      !> Trafo instance
+      class(moist_math_grid_3d_molecular_trafo_type), intent(in) :: self
+      !> Type 1/2 plans (`.false.` = type 3 or unprepared)
+      logical :: type12
+      type12 = self%is_type12
+   end function molecular_trafo_uses_type12
+
+   !> Requested FINUFFT relative tolerance of the plans
+   !>
+   !> @param[in] self Trafo instance
+   pure function molecular_trafo_get_nufft_tol(self) result(tol)
+      !> Trafo instance
+      class(moist_math_grid_3d_molecular_trafo_type), intent(in) :: self
+      !> Requested relative tolerance
+      real(wp) :: tol
+      tol = self%nufft_tol
+   end function molecular_trafo_get_nufft_tol
 
    !> Forward NUFFT of all `nv` sites, real-space to reciprocal-space
    !>

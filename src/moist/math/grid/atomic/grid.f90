@@ -359,7 +359,7 @@ contains
    !> Volume quadrature of tabulated values: `result = sum_i w(i)*f(i)`
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values, shape (npts)
+   !> @param[in]  f       Per-point field values, shape (npts); any other length stops
    !> @param[out] result  Quadrature result
    pure subroutine atomic_integrate_field(self, f, result)
       !> Grid instance
@@ -371,6 +371,7 @@ contains
 
       integer :: i
 
+      if (size(f) /= self%npts) error stop "atomic grid: integrate_field needs one value per point"
       result = 0.0_wp
       do i = 1, self%npts
          result = result + self%w(i)*f(i)

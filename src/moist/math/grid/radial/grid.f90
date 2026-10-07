@@ -230,7 +230,7 @@ contains
    !> Volume quadrature of tabulated values: sum_i 4*pi*r_i^2*w_i*f_i
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-node field values, shape (npts)
+   !> @param[in]  f       Per-node field values, shape (npts); any other length stops
    !> @param[out] result  Quadrature result
    pure subroutine radial_integrate_field(self, f, result)
       !> Grid instance
@@ -242,6 +242,7 @@ contains
 
       integer :: i
 
+      if (size(f) /= self%npts) error stop "radial grid: integrate_field needs one value per node"
       result = 0.0_wp
       do i = 1, self%npts
          result = result + four_pi*self%r(i)*self%r(i)*self%w(i)*f(i)
