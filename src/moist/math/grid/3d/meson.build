@@ -3,6 +3,5 @@ srcs += files(
   'adjoint.f90',
   'cartesian.f90',
   'molecular.f90',
-  'partition.f90',
 )
-subdir('partition')
+subdir('kernel')

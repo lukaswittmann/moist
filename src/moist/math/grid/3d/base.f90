@@ -1,6 +1,7 @@
 !> Abstract volumetric domain and separate 3D Fourier transform engine
 module moist_math_grid_3d_base
    use mctc_env, only: wp, error_type, fatal_error
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_io, only: structure_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
 !$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
@@ -57,6 +58,12 @@ module moist_math_grid_3d_base
       procedure(update_grid), deferred :: update
       !> Contract volume adjoints into the nuclear gradient
       procedure :: get_volume_gradient => get_grid_volume_gradient_default
+      !> Contract fixed volume adjoints into a nuclear Hessian-vector product
+      procedure :: get_volume_hessian_vector => get_grid_volume_hessian_vector_default
+      !> Contract fixed volume adjoints into the full nuclear Hessian
+      procedure :: get_volume_hessian => get_grid_volume_hessian
+      !> Validate state, adjoint channels and the nuclear tensors of one contraction
+      procedure :: check_volume_adjoint => check_grid_volume_adjoint
       !> Whether Gaussian widths follow molecular geometry
       procedure :: has_geometry_dependent_xi0 => grid_xi0_dependent_default
       !> Diagnostic grid name
@@ -226,6 +233,149 @@ module moist_math_grid_3d_base
    end interface
 
 contains
+
+   !> Validate realized state, adjoint channels and the nuclear tensors of one contraction
+   !>
+   !> - Every call checks the update state and the adjoint channels
+   !> - `direction` or `hessian` marks a curvature contraction, which rejects
+   !>   geometry-dependent Gaussian-width adjoints
+   !>
+   !> @param[in] self Realized grid
+   !> @param[in] acc Volume-observable adjoints
+   !> @param[out] error Invalid state, channels or shapes
+   !> @param[in] vector Optional nuclear gradient or Hessian-vector accumulator (3, natom)
+   !> @param[in] direction Optional nuclear displacement direction (3, natom)
+   !> @param[in] hessian Optional nuclear Hessian accumulator (3, natom, 3, natom)
+   subroutine check_grid_volume_adjoint(self, acc, error, vector, direction, hessian)
+      !> Realized grid
+      class(moist_math_grid_3d_type), intent(in) :: self
+      !> Volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Invalid input
+      type(error_type), allocatable, intent(out) :: error
+      !> Nuclear gradient or Hessian-vector accumulator
+      real(wp), intent(in), optional :: vector(:, :)
+      !> Nuclear displacement direction
+      real(wp), intent(in), optional :: direction(:, :)
+      !> Nuclear Hessian accumulator
+      real(wp), intent(in), optional :: hessian(:, :, :, :)
+
+      ! Updates zero natom on entry and commit it only on success
+      if (self%natom < 1 .or. self%ngrid < 1) then
+         call fatal_error(error, "volume adjoint: update the grid successfully first")
+         return
+      end if
+      if (.not. acc%is_initialized()) then
+         call fatal_error(error, "volume adjoint: accumulator is not initialized")
+         return
+      end if
+      if (acc%size() /= self%ngrid) then
+         call fatal_error(error, "volume adjoint: grid size mismatch")
+         return
+      end if
+      if (.not. all(ieee_is_finite(acc%w_xyz)) .or. .not. all(ieee_is_finite(acc%w_w)) &
+         & .or. .not. all(ieee_is_finite(acc%w_xi))) then
+         call fatal_error(error, "volume adjoint: adjoints must be finite")
+         return
+      end if
+      if (.not. allocated(self%xi0)) then
+         if (any(acc%w_xi /= 0.0_wp)) then
+            call fatal_error(error, "volume adjoint: point grids have no Gaussian-width channel")
+            return
+         end if
+      end if
+      if (present(vector)) then
+         if (any(shape(vector) /= [3, self%natom])) then
+            call fatal_error(error, "volume adjoint: nuclear accumulator shape mismatch")
+            return
+         end if
+      end if
+      if (present(direction)) then
+         if (any(shape(direction) /= [3, self%natom])) then
+            call fatal_error(error, "volume Hessian: nuclear-direction shape mismatch")
+            return
+         end if
+         if (.not. all(ieee_is_finite(direction))) then
+            call fatal_error(error, "volume Hessian: nuclear direction must be finite")
+            return
+         end if
+      end if
+      if (present(hessian)) then
+         if (any(shape(hessian) /= [3, self%natom, 3, self%natom])) then
+            call fatal_error(error, "volume Hessian: nuclear-Hessian shape mismatch")
+            return
+         end if
+      end if
+      if (present(direction) .or. present(hessian)) then
+         if (self%has_geometry_dependent_xi0()) then
+            if (any(acc%w_xi /= 0.0_wp)) then
+               call fatal_error(error, "volume Hessian: geometry-dependent Gaussian-width curvature is unsupported")
+               return
+            end if
+         end if
+      end if
+   end subroutine check_grid_volume_adjoint
+
+   !> Assemble a full nuclear Hessian from exact directional contractions
+   !>
+   !> @param[in] self Successfully updated grid
+   !> @param[in] acc Fixed volume adjoints
+   !> @param[in,out] hessian Nuclear Hessian accumulator (3, natom, 3, natom)
+   !> @param[out] error Invalid input or allocation failure
+   subroutine get_grid_volume_hessian(self, acc, hessian, error)
+      !> Updated grid
+      class(moist_math_grid_3d_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Invalid input or allocation failure
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: local(:, :, :, :), direction(:, :)
+      integer :: a, c, stat
+
+      call self%check_volume_adjoint(acc, error, hessian=hessian)
+      if (allocated(error)) return
+      allocate (local(3, self%natom, 3, self%natom), stat=stat)
+      if (stat == 0) allocate (direction(3, self%natom), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "volume Hessian: cannot allocate contraction scratch")
+         return
+      end if
+      local = 0.0_wp
+      do a = 1, self%natom
+         do c = 1, 3
+            direction = 0.0_wp
+            direction(c, a) = 1.0_wp
+            call self%get_volume_hessian_vector(acc, direction, local(:, :, c, a), error)
+            if (allocated(error)) return
+         end do
+      end do
+      hessian = hessian + local
+   end subroutine get_grid_volume_hessian
+
+   !> Default error for grids without a second nuclear response
+   !>
+   !> @param[in] self Grid instance
+   !> @param[in] acc Fixed volume adjoints
+   !> @param[in] direction Nuclear displacement direction
+   !> @param[in,out] hessian_vector Nuclear Hessian-vector accumulator
+   !> @param[out] error Unsupported grid
+   subroutine get_grid_volume_hessian_vector_default(self, acc, direction, hessian_vector, error)
+      !> Grid instance
+      class(moist_math_grid_3d_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear direction
+      real(wp), intent(in) :: direction(:, :)
+      !> Nuclear Hessian-vector accumulator
+      real(wp), intent(inout) :: hessian_vector(:, :)
+      !> Unsupported grid
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, self%kind_name()//": volume Hessian is not implemented")
+   end subroutine get_grid_volume_hessian_vector_default
 
    !> Weighted volume integral sampled on the domain coordinates
    !>

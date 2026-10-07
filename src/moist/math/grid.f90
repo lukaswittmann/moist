@@ -20,8 +20,8 @@
 !> 3D (molecular grid for many atoms):
 !> - `3d/base.f90`: abstract volume grid with field integration; adjoint channels in `3d/adjoint.f90`
 !> - `3d/cartesian.f90`: uniform Cartesian box grid with FFT r <-> k transforms
-!> - `3d/partition.f90`: Becke and SSF partition weights
 !> - `3d/molecular.f90`: molecular grid, partitioned union of atomic grids, NUFFT r <-> k transforms
+!> - `3d/kernel/`: generated Becke, SSF and power-Voronoi partition kernels and grid derivatives
 !>
 !> This module re-exports the main public names of every layer; the check routines and the table
 !> metadata stay in their modules, import those directly when needed
@@ -55,17 +55,19 @@ module moist_math_grid
       & element_override_index
    use moist_math_grid_atomic_grid, only: moist_math_grid_atomic_type, new_atomic_grid, &
       & integrand_atomic
+   use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
       & integrand_3d
-   use moist_math_grid_3d_partition, only: becke_partition_weights, ssf_partition_weights, &
-      & pvoronoi_partition_weights, &
-      & partition_becke, partition_ssf, partition_pvoronoi
+   use moist_math_grid_3d_kernel_base, only: moist_math_grid_3d_partition_type
+   use moist_math_grid_3d_kernel_becke, only: becke_partition_type
+   use moist_math_grid_3d_kernel_ssf, only: ssf_partition_type
+   use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
-      & new_cartesian_grid_3d, moist_math_grid_3d_cartesian_trafo_type
+      & new_cartesian_point_grid, new_cartesian_gaussian_grid, moist_math_grid_3d_cartesian_trafo_type
    use moist_math_grid_3d_molecular, only: &
-      & moist_math_grid_3d_molecular_type, new_molecular_grid, &
+      & moist_math_grid_3d_molecular_type, new_molecular_point_grid, new_molecular_gaussian_grid, &
       & molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, &
-      & new_molecular_grid_trafo, default_nufft_tol
+      & new_molecular_grid_trafo, default_nufft_tol, partition_becke, partition_ssf, partition_pvoronoi
    implicit none(type, external)
    private
 
@@ -127,14 +129,16 @@ module moist_math_grid
    public :: integrand_atomic
    public :: moist_math_grid_3d_type
    public :: moist_math_grid_3d_trafo_type
+   public :: volume_adjoint_type
    public :: integrand_3d
-   public :: becke_partition_weights, ssf_partition_weights, pvoronoi_partition_weights
+   public :: moist_math_grid_3d_partition_type
+   public :: becke_partition_type, ssf_partition_type, pvoronoi_partition_type
    public :: partition_becke, partition_ssf, partition_pvoronoi
    public :: moist_math_grid_3d_cartesian_type
-   public :: new_cartesian_grid_3d
+   public :: new_cartesian_point_grid, new_cartesian_gaussian_grid
    public :: moist_math_grid_3d_cartesian_trafo_type
    public :: moist_math_grid_3d_molecular_type
-   public :: new_molecular_grid
+   public :: new_molecular_point_grid, new_molecular_gaussian_grid
    public :: molecular_grid_set_kgrid
    public :: moist_math_grid_3d_molecular_trafo_type
    public :: new_molecular_grid_trafo

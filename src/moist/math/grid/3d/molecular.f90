@@ -1,6 +1,6 @@
 !> Atom-centered molecular integration grid
 !>
-!> - `new_molecular_grid`: atomic recipes, partition, pruning, reciprocal settings
+!> - the molecular constructors: atomic recipes, partition, pruning, reciprocal settings
 !> - `update`: translate cached atomic grids, partition, prune
 !> - Reciprocal path: auto-sized NUFFT k-grid, period guard, FINUFFT transform
 module moist_math_grid_3d_molecular
@@ -13,9 +13,11 @@ module moist_math_grid_3d_molecular
       & moist_math_grid_atomic_recipe_override_type, element_override_index, &
       & default_molecular_recipe
    use moist_math_grid_atomic_grid, only: moist_math_grid_atomic_type, new_atomic_grid
-   use moist_math_grid_3d_partition, only: becke_partition_weights, ssf_partition_weights, &
-      & pvoronoi_partition_weights, default_stiffness, default_ssf_a, &
-      & default_power_width, partition_becke, partition_ssf, partition_pvoronoi
+   use moist_math_grid_3d_kernel_base, only: moist_math_grid_3d_partition_type
+   use moist_math_grid_3d_kernel_becke, only: becke_partition_type, default_stiffness
+   use moist_math_grid_3d_kernel_ssf, only: ssf_partition_type
+   use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type, default_power_width
+   use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
                                       integrand_3d
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
@@ -24,11 +26,19 @@ module moist_math_grid_3d_molecular
    private
 
    public :: moist_math_grid_3d_molecular_type
-   public :: new_molecular_grid
+   public :: new_molecular_point_grid, new_molecular_gaussian_grid
    public :: molecular_grid_set_kgrid
    public :: moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo
    public :: integrand_3d
    public :: default_nufft_tol
+   public :: partition_becke, partition_ssf, partition_pvoronoi
+
+   !> Original size-adjusted Becke partition
+   integer, parameter :: partition_becke = 1
+   !> Stratmann-Scuseria-Frisch partition
+   integer, parameter :: partition_ssf = 2
+   !> Custom C-infinity power-Voronoi partition
+   integer, parameter :: partition_pvoronoi = 3
 
    !> Default requested FINUFFT relative tolerance
    real(wp), parameter :: default_nufft_tol = 1.0e-10_wp
@@ -62,13 +72,13 @@ module moist_math_grid_3d_molecular
 
    !> Atom-centered molecular integration grid
    !>
-   !> - Owned atomic recipes and molecular partition from `new_molecular_grid`
+   !> - Owned atomic recipes and molecular partition from the molecular constructors
    !> - Coordinates, count and volume fields inherited from the domain bases
    !> - Per-atom and per-shell results public for reading
    !> - No transform handles; destroy borrowed engines before geometry changes
    type, extends(moist_math_grid_3d_type) :: moist_math_grid_3d_molecular_type
-      !> Whether `new_molecular_grid` configured this grid
-      logical, private :: constructed = .false.
+      !> Unpartitioned atomic weights of retained points (ngrid), bohr**3
+      real(wp), allocatable, private :: atomic_w(:)
       !> Atomic recipe of every element without an override
       type(moist_math_grid_atomic_recipe_type), private :: recipe
       !> Per-element recipe overrides, shape (noverride)
@@ -76,14 +86,8 @@ module moist_math_grid_3d_molecular
 
       !* ---------------------------------- Settings ---------------------------------- *!
 
-      !> Becke polynomial iteration count
-      integer, private :: becke_k = default_stiffness
-      !> Optional SSF cell parameter, replacing the iterated polynomial
-      real(wp), allocatable, private :: ssf_a
-      !> Molecular partition scheme
-      integer, private :: partition = partition_becke
-      !> Power-gap switching half-width in bohr**2
-      real(wp), private :: power_width = default_power_width
+      !> Configured partition scheme with its switch settings
+      class(moist_math_grid_3d_partition_type), allocatable, private :: partition
       !> Quadrature-weight pruning threshold in bohr**3; zero retains all nonzero weights
       real(wp), private :: weight_threshold = default_wthr
       !> Bare partition-weight pruning threshold
@@ -141,7 +145,7 @@ module moist_math_grid_3d_molecular
       real(wp) :: dkx = 0.0_wp, dky = 0.0_wp, dkz = 0.0_wp
       !> Phase reference: real-space point the transform phases are measured from
       !>
-      !> Direct grids use `point(1)`; domain updates use solute centroid
+      !> Explicit k-grid setup uses `point(1)`; updates use solute centroid
       real(wp) :: kref(3) = 0.0_wp
       !> Requested FINUFFT relative tolerance for transforms on this grid
       !>
@@ -165,6 +169,9 @@ module moist_math_grid_3d_molecular
    contains
       procedure :: validate => validate_molecular_grid
       procedure :: update => update_molecular
+      procedure :: get_volume_gradient => get_volume_gradient_molecular
+      procedure :: get_volume_hessian_vector => get_volume_hessian_vector_molecular
+      procedure :: get_volume_hessian => get_volume_hessian_molecular
       procedure :: rebuild => rebuild_molecular
       procedure :: kind_name => molecular_kind_name
       procedure :: has_geometry_dependent_xi0 => molecular_xi0_dependent
@@ -258,6 +265,221 @@ module moist_math_grid_3d_molecular
 
 contains
 
+   !> Configure a molecular point grid without realizing geometry
+   !>
+   !> @param[in,out] self Grid configuration
+   !> @param[out] error Invalid settings
+   !> @param[in] recipe Optional atomic recipe
+   !> @param[in] overrides Optional element overrides
+   !> @param[in] becke_k Optional becke iteration count
+   !> @param[in] ssf_a Optional ssf half-width
+   !> @param[in] pruning_threshold Optional partition pruning threshold
+   !> @param[in] dr Optional reciprocal real-space spacing, bohr
+   !> @param[in] kbuffer Optional reciprocal period margin, bohr
+   !> @param[in] nufft_tol Optional nufft tolerance
+   !> @param[in] reciprocal Optional configure reciprocal geometry
+   !> @param[in] partition Optional partition scheme
+   !> @param[in] power_width Optional power half-width, bohr**2
+   !> @param[in] weight_threshold Optional weight pruning threshold, bohr**3
+   subroutine new_molecular_point_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
+         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold)
+      !> Grid configuration
+      type(moist_math_grid_3d_molecular_type), intent(inout) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+      !> Atomic recipe
+      type(moist_math_grid_atomic_recipe_type), intent(in), optional :: recipe
+      !> Element overrides
+      type(moist_math_grid_atomic_recipe_override_type), intent(in), optional :: overrides(:)
+      !> Becke iteration count
+      integer, intent(in), optional :: becke_k
+      !> SSF half-width
+      real(wp), intent(in), optional :: ssf_a
+      !> Partition pruning threshold
+      real(wp), intent(in), optional :: pruning_threshold
+      !> Reciprocal real-space spacing, bohr
+      real(wp), intent(in), optional :: dr
+      !> Reciprocal period margin, bohr
+      real(wp), intent(in), optional :: kbuffer
+      !> NUFFT tolerance
+      real(wp), intent(in), optional :: nufft_tol
+      !> Configure reciprocal geometry
+      logical, intent(in), optional :: reciprocal
+      !> Partition scheme
+      integer, intent(in), optional :: partition
+      !> Power half-width, bohr**2
+      real(wp), intent(in), optional :: power_width
+      !> Weight pruning threshold, bohr**3
+      real(wp), intent(in), optional :: weight_threshold
+
+      call configure_molecular_grid(self, error, gaussian=.false., recipe=recipe, overrides=overrides, &
+         & becke_k=becke_k, ssf_a=ssf_a, pruning_threshold=pruning_threshold, &
+         & dr=dr, kbuffer=kbuffer, nufft_tol=nufft_tol, &
+         & reciprocal=reciprocal, partition=partition, power_width=power_width, weight_threshold=weight_threshold)
+   end subroutine new_molecular_point_grid
+
+   !> Configure a molecular gaussian grid without realizing geometry
+   !>
+   !> @param[in,out] self Grid configuration
+   !> @param[out] error Invalid settings
+   !> @param[in] recipe Optional atomic recipe
+   !> @param[in] overrides Optional element overrides
+   !> @param[in] becke_k Optional becke iteration count
+   !> @param[in] ssf_a Optional ssf half-width
+   !> @param[in] pruning_threshold Optional partition pruning threshold
+   !> @param[in] dr Optional reciprocal real-space spacing, bohr
+   !> @param[in] kbuffer Optional reciprocal period margin, bohr
+   !> @param[in] nufft_tol Optional nufft tolerance
+   !> @param[in] reciprocal Optional configure reciprocal geometry
+   !> @param[in] partition Optional partition scheme
+   !> @param[in] power_width Optional power half-width, bohr**2
+   !> @param[in] weight_threshold Optional weight pruning threshold, bohr**3
+   !> @param[in] xi0_factor Optional gaussian width scale
+   subroutine new_molecular_gaussian_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
+         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold, xi0_factor)
+      !> Grid configuration
+      type(moist_math_grid_3d_molecular_type), intent(inout) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+      !> Atomic recipe
+      type(moist_math_grid_atomic_recipe_type), intent(in), optional :: recipe
+      !> Element overrides
+      type(moist_math_grid_atomic_recipe_override_type), intent(in), optional :: overrides(:)
+      !> Becke iteration count
+      integer, intent(in), optional :: becke_k
+      !> SSF half-width
+      real(wp), intent(in), optional :: ssf_a
+      !> Partition pruning threshold
+      real(wp), intent(in), optional :: pruning_threshold
+      !> Reciprocal real-space spacing, bohr
+      real(wp), intent(in), optional :: dr
+      !> Reciprocal period margin, bohr
+      real(wp), intent(in), optional :: kbuffer
+      !> NUFFT tolerance
+      real(wp), intent(in), optional :: nufft_tol
+      !> Configure reciprocal geometry
+      logical, intent(in), optional :: reciprocal
+      !> Partition scheme
+      integer, intent(in), optional :: partition
+      !> Power half-width, bohr**2
+      real(wp), intent(in), optional :: power_width
+      !> Weight pruning threshold, bohr**3
+      real(wp), intent(in), optional :: weight_threshold
+      !> Gaussian width scale
+      real(wp), intent(in), optional :: xi0_factor
+
+      call configure_molecular_grid(self, error, gaussian=.true., recipe=recipe, overrides=overrides, &
+         & becke_k=becke_k, ssf_a=ssf_a, pruning_threshold=pruning_threshold, &
+         & dr=dr, kbuffer=kbuffer, nufft_tol=nufft_tol, &
+         & reciprocal=reciprocal, partition=partition, power_width=power_width, weight_threshold=weight_threshold, &
+         & xi0_factor=xi0_factor)
+   end subroutine new_molecular_gaussian_grid
+
+   !> Contract molecular point, weight and Gaussian-width adjoints
+   !>
+   !> - Fixed retained membership and atomic recipes
+   !> - Recomputed partition state; no persistent nuclear Jacobians
+   !>
+   !> @param[in] self Successfully updated molecular grid
+   !> @param[in] acc Volume-observable adjoints
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, natom)
+   !> @param[out] error Invalid geometry, adjoints or scratch allocation
+   subroutine get_volume_gradient_molecular(self, acc, gradient, error)
+      !> Updated grid
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Invalid input or allocation failure
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: numbers(:)
+      integer :: stat
+
+      call self%check_volume_adjoint(acc, error, vector=gradient)
+      if (allocated(error)) return
+      allocate (numbers(self%natom), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular response: cannot allocate atomic numbers")
+         return
+      end if
+      numbers = self%molecule%num(self%molecule%id)
+      if (self%gaussian) then
+         call self%partition%grid_gaussian_gradient(self%xyz, self%molecule%xyz, numbers, self%owner, &
+            & self%atomic_w, acc%w_xyz, acc%w_w, acc%w_xi, self%xi0, self%w, gradient, error, &
+            & nthreads=self%team_size())
+      else
+         call self%partition%grid_gradient(self%xyz, self%molecule%xyz, numbers, self%owner, self%atomic_w, &
+            & acc%w_xyz, acc%w_w, gradient, error, nthreads=self%team_size())
+      end if
+   end subroutine get_volume_gradient_molecular
+
+   !> Nuclear curvature of point positions and weights with fixed volume adjoints
+   !>
+   !> @param[in] self Successfully updated molecular grid
+   !> @param[in] acc Fixed position and weight adjoints; width channel zero
+   !> @param[in] direction Nuclear displacement direction (3, natom)
+   !> @param[in,out] hessian_vector Nuclear Hessian-vector accumulator (3, natom)
+   !> @param[out] error Invalid geometry, channels or allocation failure
+   subroutine get_volume_hessian_vector_molecular(self, acc, direction, hessian_vector, error)
+      !> Updated grid
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear displacement direction
+      real(wp), intent(in) :: direction(:, :)
+      !> Nuclear Hessian-vector accumulator
+      real(wp), intent(inout) :: hessian_vector(:, :)
+      !> Invalid input or allocation failure
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: numbers(:)
+      integer :: stat
+
+      call self%check_volume_adjoint(acc, error, vector=hessian_vector, direction=direction)
+      if (allocated(error)) return
+      allocate (numbers(self%natom), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular response: cannot allocate atomic numbers")
+         return
+      end if
+      numbers = self%molecule%num(self%molecule%id)
+      call self%partition%grid_hessian_vector(self%xyz, self%molecule%xyz, numbers, self%owner, self%atomic_w, &
+         & acc%w_w, direction, hessian_vector, error, nthreads=self%team_size())
+   end subroutine get_volume_hessian_vector_molecular
+
+   !> Dense nuclear curvature with fixed volume adjoints
+   !>
+   !> @param[in] self Successfully updated molecular grid
+   !> @param[in] acc Fixed position and weight adjoints; width channel zero
+   !> @param[in,out] hessian Nuclear Hessian accumulator (3, natom, 3, natom)
+   !> @param[out] error Invalid geometry, channels or allocation failure
+   subroutine get_volume_hessian_molecular(self, acc, hessian, error)
+      !> Updated grid
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Invalid input or allocation failure
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: numbers(:)
+      integer :: stat
+
+      call self%check_volume_adjoint(acc, error, hessian=hessian)
+      if (allocated(error)) return
+      allocate (numbers(self%natom), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular response: cannot allocate atomic numbers")
+         return
+      end if
+      numbers = self%molecule%num(self%molecule%id)
+      call self%partition%grid_hessian(self%xyz, self%molecule%xyz, numbers, self%owner, self%atomic_w, &
+         & acc%w_w, hessian, error, nthreads=self%team_size())
+   end subroutine get_volume_hessian_molecular
+
    !* ================================================================================= *!
    !*                                   Construction                                    *!
    !* ================================================================================= *!
@@ -269,14 +491,15 @@ contains
    !> - `recipe`: `default_molecular_recipe`; midpoint 50, HandyMod to 10 bohr,
    !>   110 Lebedev points per shell
    !> - `becke_k = 3` without SSF, `pruning_threshold = 0` (no partition
-   !>   pruning), `weight_threshold = 1e-14` bohr**3, point potentials (`gaussian = .false.`, `xi0_factor = 1`)
+   !>   pruning), `weight_threshold = 1e-14` bohr**3, `xi0_factor = 1`
+   !> - Point or Gaussian variant selected by the calling constructor
    !> - `dr = 0.5` bohr, `kbuffer = 2` bohr, `nufft_tol = 1e-10`,
    !>   `reciprocal = .true.`
    !>
    !> Integration grids: `default_element_recipes` per-element table
    !> Unbounded Becke mapping requires `reciprocal = .false.` or `rcut_upper`
    !>
-   !> Copy recipes and overrides; leave grid unconstructed on error
+   !> Copy recipes and overrides; a failed configuration also fails `validate`
    !> Reconfiguration discards geometry and invalidates bound transform plans
    !>
    !> @param[in,out] self            Configured, geometry-free grid
@@ -295,7 +518,7 @@ contains
    !> @param[in]  partition          Scheme constant; default Becke, or SSF when ssf_a is supplied
    !> @param[in]  power_width        Positive power-gap half-width in bohr**2; only with partition_pvoronoi
    !> @param[in]  weight_threshold   Nonnegative quadrature-weight cutoff in bohr**3; zero for exact-zero pruning
-   subroutine new_molecular_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
+   subroutine configure_molecular_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
          & dr, kbuffer, nufft_tol, gaussian, xi0_factor, reciprocal, partition, power_width, weight_threshold)
       !> Configured grid
       type(moist_math_grid_3d_molecular_type), intent(inout) :: self
@@ -318,7 +541,7 @@ contains
       !> Requested FINUFFT relative tolerance
       real(wp), intent(in), optional :: nufft_tol
       !> Publish Gaussian widths
-      logical, intent(in), optional :: gaussian
+      logical, intent(in) :: gaussian
       !> Gaussian width scale
       real(wp), intent(in), optional :: xi0_factor
       !> Size the reciprocal grid on the first update
@@ -331,7 +554,7 @@ contains
       !> Quadrature-weight pruning threshold
       real(wp), intent(in), optional :: weight_threshold
 
-      integer :: generation
+      integer :: generation, scheme
 
       ! Preserve counter across reset to invalidate earlier transform plans
       generation = self%geom_generation
@@ -343,17 +566,18 @@ contains
          return
       end if
 
-      if (present(ssf_a)) self%partition = partition_ssf
-      if (present(partition)) self%partition = partition
-      if (present(becke_k) .and. self%partition /= partition_becke) then
+      scheme = partition_becke
+      if (present(ssf_a)) scheme = partition_ssf
+      if (present(partition)) scheme = partition
+      if (present(becke_k) .and. scheme /= partition_becke) then
          call fatal_error(error, "molecular domain: becke_k requires the Becke partition")
          return
       end if
-      if (present(ssf_a) .and. self%partition /= partition_ssf) then
+      if (present(ssf_a) .and. scheme /= partition_ssf) then
          call fatal_error(error, "molecular domain: ssf_a requires the SSF partition")
          return
       end if
-      if (present(power_width) .and. self%partition /= partition_pvoronoi) then
+      if (present(power_width) .and. scheme /= partition_pvoronoi) then
          call fatal_error(error, "molecular domain: power_width requires the power-Voronoi partition")
          return
       end if
@@ -365,23 +589,78 @@ contains
          if (allocated(error)) return
       end if
       if (present(overrides)) self%overrides = overrides
-      if (present(becke_k)) self%becke_k = becke_k
-      if (self%partition == partition_ssf) self%ssf_a = default_ssf_a
-      if (present(ssf_a)) self%ssf_a = ssf_a
-      if (present(power_width)) self%power_width = power_width
       if (present(weight_threshold)) self%weight_threshold = weight_threshold
       if (present(pruning_threshold)) self%pruning_threshold = pruning_threshold
       if (present(dr)) self%dr = dr
       if (present(kbuffer)) self%kbuffer = kbuffer
       if (present(nufft_tol)) self%nufft_tol = nufft_tol
-      if (present(gaussian)) self%gaussian = gaussian
+      self%gaussian = gaussian
       if (present(xi0_factor)) self%xi0_factor = xi0_factor
       if (present(reciprocal)) self%auto_kgrid = reciprocal
 
-      call check_molecular_settings(self, error)
+      call new_partition_scheme(self%partition, scheme, error, becke_k, ssf_a, power_width)
       if (allocated(error)) return
-      self%constructed = .true.
-   end subroutine new_molecular_grid
+      call check_molecular_settings(self, error)
+   end subroutine configure_molecular_grid
+
+   !> Validate partition options and build the selected scheme
+   !>
+   !> @param[out] partition Configured scheme; unallocated on error
+   !> @param[in] scheme Scheme selector
+   !> @param[out] error Unknown scheme or invalid switch setting
+   !> @param[in] becke_k Optional Becke iteration count
+   !> @param[in] ssf_a Optional SSF half-width
+   !> @param[in] power_width Optional power half-width, bohr**2
+   subroutine new_partition_scheme(partition, scheme, error, becke_k, ssf_a, power_width)
+      !> Configured scheme
+      class(moist_math_grid_3d_partition_type), allocatable, intent(out) :: partition
+      !> Scheme selector
+      integer, intent(in) :: scheme
+      !> Unknown scheme or invalid switch setting
+      type(error_type), allocatable, intent(out) :: error
+      !> Becke iteration count
+      integer, intent(in), optional :: becke_k
+      !> SSF half-width
+      real(wp), intent(in), optional :: ssf_a
+      !> Power half-width
+      real(wp), intent(in), optional :: power_width
+
+      type(becke_partition_type) :: becke
+      type(ssf_partition_type) :: ssf
+      type(pvoronoi_partition_type) :: pvoronoi
+
+      select case (scheme)
+      case (partition_becke)
+         if (present(becke_k)) becke%k = becke_k
+         if (becke%k < 1) then
+            call fatal_error(error, "molecular domain: becke_k must be >= 1")
+            return
+         end if
+         allocate (partition, source=becke)
+      case (partition_ssf)
+         if (present(ssf_a)) ssf%a = ssf_a
+         if (.not. ieee_is_finite(ssf%a)) then
+            call fatal_error(error, "molecular domain: ssf_a must be finite")
+            return
+         else if (ssf%a <= 0.0_wp .or. ssf%a > 1.0_wp) then
+            call fatal_error(error, "molecular domain: ssf_a must be in (0, 1]")
+            return
+         end if
+         allocate (partition, source=ssf)
+      case (partition_pvoronoi)
+         if (present(power_width)) pvoronoi%width = power_width
+         if (.not. ieee_is_finite(pvoronoi%width)) then
+            call fatal_error(error, "molecular domain: settings must be finite")
+            return
+         else if (pvoronoi%width <= 0.0_wp) then
+            call fatal_error(error, "molecular domain: power_width must be positive")
+            return
+         end if
+         allocate (partition, source=pvoronoi)
+      case default
+         call fatal_error(error, "molecular domain: unknown partition scheme")
+      end select
+   end subroutine new_partition_scheme
 
    !> Reset a grid to defaults
    !>
@@ -394,17 +673,13 @@ contains
    !> Validate the stored configuration
    !>
    !> @param[in] self Grid configuration
-   !> @param[out] error Unconstructed grid or invalid setting
+   !> @param[out] error Invalid setting or incomplete recipe
    subroutine validate_molecular_grid(self, error)
       !> Grid configuration
       class(moist_math_grid_3d_molecular_type), intent(in) :: self
-      !> Unconstructed grid or invalid setting
+      !> Invalid setting or incomplete recipe
       type(error_type), allocatable, intent(out) :: error
 
-      if (.not. self%constructed) then
-         call fatal_error(error, "molecular domain: construct the grid with new_molecular_grid first")
-         return
-      end if
       call check_molecular_settings(self, error)
    end subroutine validate_molecular_grid
 
@@ -422,16 +697,10 @@ contains
       integer :: i
 
       if (.not. all(ieee_is_finite([self%pruning_threshold, self%dr, self%kbuffer, self%nufft_tol, &
-                                    self%xi0_factor, self%power_width, self%weight_threshold]))) then
+                                    self%xi0_factor, self%weight_threshold]))) then
          call fatal_error(error, "molecular domain: settings must be finite")
-      else if (.not. any(self%partition == [partition_becke, partition_ssf, partition_pvoronoi])) then
-         call fatal_error(error, "molecular domain: unknown partition scheme")
-      else if (self%power_width <= 0.0_wp) then
-         call fatal_error(error, "molecular domain: power_width must be positive")
       else if (self%weight_threshold < 0.0_wp) then
          call fatal_error(error, "molecular domain: weight_threshold must be nonnegative")
-      else if (self%becke_k < 1) then
-         call fatal_error(error, "molecular domain: becke_k must be >= 1")
       else if (self%pruning_threshold < 0.0_wp .or. self%pruning_threshold >= 1.0_wp) then
          call fatal_error(error, "molecular domain: pruning_threshold must be in [0, 1)")
       else if (self%dr <= 0.0_wp .or. self%kbuffer < 0.0_wp .or. self%nufft_tol <= 0.0_wp) then
@@ -440,17 +709,14 @@ contains
          call fatal_error(error, "molecular domain: xi0_factor must be positive")
       end if
       if (allocated(error)) return
-      if (allocated(self%ssf_a)) then
-         if (.not. ieee_is_finite(self%ssf_a)) then
-            call fatal_error(error, "molecular domain: ssf_a must be finite")
-         else if (self%ssf_a <= 0.0_wp .or. self%ssf_a > 1.0_wp) then
-            call fatal_error(error, "molecular domain: ssf_a must be in (0, 1]")
-         end if
-      end if
-      if (allocated(error)) return
 
       call check_atomic_recipe(self%recipe, "default recipe", error)
       if (allocated(error)) return
+      ! Built only from valid partition options
+      if (.not. allocated(self%partition)) then
+         call fatal_error(error, "molecular domain: no valid partition scheme configured")
+         return
+      end if
       if (.not. allocated(self%overrides)) return
       do i = 1, size(self%overrides)
          write (label, "(a,i0)") "override ", i
@@ -551,6 +817,7 @@ contains
       call move_alloc(source%w, dest%w)
       call move_alloc(source%owner, dest%owner)
       call move_alloc(source%xi0, dest%xi0)
+      call move_alloc(source%atomic_w, dest%atomic_w)
       call move_alloc(source%atom_offset, dest%atom_offset)
       call move_alloc(source%nrad_per_atom, dest%nrad_per_atom)
       call move_alloc(source%nang_per_atom, dest%nang_per_atom)
@@ -563,21 +830,23 @@ contains
 
    !> Move atomic grids, recompute partition weights and guard the fixed period
    !>
+   !> Failure keeps the committed points but zeroes `natom`, so reverse
+   !> contractions refuse the stale geometry
+   !>
    !> @param[in,out] self Domain instance
    !> @param[in] mol Solute structure
-   !> @param[out] error Unconstructed grid, invalid geometry or insufficient period
+   !> @param[out] error Invalid settings, invalid geometry or insufficient period
    subroutine update_molecular(self, mol, error)
       !> Domain instance
       class(moist_math_grid_3d_molecular_type), intent(inout) :: self
       !> Solute structure
       type(structure_type), intent(in) :: mol
-      !> Unconstructed grid, invalid geometry or insufficient period
+      !> Invalid settings, invalid geometry or insufficient period
       type(error_type), allocatable, intent(out) :: error
 
-      if (.not. self%constructed) then
-         call fatal_error(error, "molecular domain: construct the grid with new_molecular_grid before update")
-         return
-      end if
+      self%natom = 0
+      call self%validate(error)
+      if (allocated(error)) return
       if (mol%nat < 1) then
          call fatal_error(error, "molecular domain: at least one solute atom is required")
          return
@@ -613,7 +882,7 @@ contains
       call realize_molecular(self, .true., error)
    end subroutine rebuild_molecular
 
-   !> Domain name for diagnostics, including the inherited gradient stub
+   !> Domain name for diagnostics
    !>
    !> @param[in] self Domain instance
    function molecular_kind_name(self) result(name)
@@ -648,6 +917,8 @@ contains
       !> Whether to retain the previous reciprocal grid
       logical :: preserve_period
 
+      ! Committed again only by a successful move
+      self%natom = 0
       call self%validate(error)
       if (allocated(error)) return
       allocate (grid, stat=stat)
@@ -747,7 +1018,7 @@ contains
       !> Requested shell count and largest angular count per atom
       integer, allocatable :: nrad_atom(:), nang_atom(:)
       !> Raw (unpruned) points, weights, partition weights, and owners
-      real(wp), allocatable :: raw_xyz(:, :), raw_w(:), raw_bw(:)
+      real(wp), allocatable :: raw_xyz(:, :), raw_w(:), raw_bw(:), raw_atomic_w(:)
       integer, allocatable :: raw_atom(:)
       integer(int64) :: total
       integer :: nat, iat, i, ig, lo, nraw, nshell, ish, stat
@@ -778,6 +1049,7 @@ contains
       allocate (raw_xyz(3, nraw), stat=stat)
       if (stat == 0) allocate (raw_w(nraw), stat=stat)
       if (stat == 0) allocate (raw_bw(nraw), stat=stat)
+      if (stat == 0) allocate (raw_atomic_w(nraw), stat=stat)
       if (stat == 0) allocate (raw_atom(nraw), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "molecular domain: cannot allocate the raw point buffer")
@@ -796,32 +1068,20 @@ contains
                raw_xyz(3, ig) = r*local%u(3, i) + mol%xyz(3, iat)
                raw_atom(ig) = iat
             end do
-            if (ig >= lo) then
-               ! Parallel points; serial atom loop
-               select case (self%partition)
-               case (partition_becke)
-                  call becke_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), &
-                     & stiffness=self%becke_k, nthreads=self%team_size())
-               case (partition_ssf)
-                  call ssf_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), a=self%ssf_a, &
-                     & nthreads=self%team_size())
-               case (partition_pvoronoi)
-                  call pvoronoi_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), &
-                     & width=self%power_width, nthreads=self%team_size())
-               case default
-                  call fatal_error(error, "molecular domain: unknown partition scheme")
-                  return
-               end select
-            end if
             do i = 1, local%npts
-               raw_w(lo + i - 1) = local%w(i)*raw_bw(lo + i - 1)
+               raw_atomic_w(lo + i - 1) = local%w(i)
             end do
          end associate
       end do
 
+      call self%partition%grid_weights(raw_xyz, self%molecule%xyz, numbers, raw_atom, raw_atomic_w, &
+         & raw_w, raw_bw, error, nthreads=self%team_size())
+      if (allocated(error)) return
+
       call finalise_grid(grid, nat, nrad_atom, nang_atom, nraw, raw_xyz, raw_w, raw_atom, &
-         & self%weight_threshold, raw_bw=raw_bw, bthr=self%pruning_threshold)
-      deallocate (raw_xyz, raw_w, raw_bw, raw_atom)
+         & self%weight_threshold, raw_atomic_w, error, raw_bw=raw_bw, bthr=self%pruning_threshold)
+      if (allocated(error)) return
+      deallocate (raw_xyz, raw_w, raw_bw, raw_atomic_w, raw_atom)
 
       allocate (grid%atom_shell_offset(nat + 1), stat=stat)
       if (stat == 0) allocate (grid%shell_r(nshell), stat=stat)
@@ -944,10 +1204,12 @@ contains
    !> @param[in]  raw_w      Raw quadrature weights, shape (nraw), bohr^3
    !> @param[in]  raw_atom   Raw point owning atom, shape (nraw), one based
    !> @param[in]  wthr       Pruning threshold on |raw_w| (bohr^3)
+   !> @param[out] error Allocation failure
+   !> @param[in]  raw_atomic_w Unpartitioned atomic integration weights (nraw), bohr**3
    !> @param[in]  raw_bw     Optional bare partition weight of each raw point, shape (nraw)
    !> @param[in]  bthr       Optional partition-weight prune threshold
    subroutine finalise_grid(self, nat, nrad_atom, nang_atom, &
-         & nraw, raw_xyz, raw_w, raw_atom, wthr, raw_bw, bthr)
+         & nraw, raw_xyz, raw_w, raw_atom, wthr, raw_atomic_w, error, raw_bw, bthr)
       !> Grid to fill
       type(moist_math_grid_3d_molecular_type), intent(out) :: self
       !> Number of atoms
@@ -966,6 +1228,10 @@ contains
       integer, intent(in) :: raw_atom(:)
       !> Pruning threshold on |raw_w| (bohr^3)
       real(wp), intent(in) :: wthr
+      !> Unpartitioned atomic integration weights
+      real(wp), intent(in) :: raw_atomic_w(:)
+      !> Allocation failure
+      type(error_type), allocatable, intent(out) :: error
       !> Bare partition weight of each raw point, shape (nraw)
       !>
       !> Dimensionless `w_A(r)` before radial Jacobian
@@ -977,7 +1243,7 @@ contains
       !> Zero or absent adds no pruning beyond `wthr`
       real(wp), intent(in), optional :: bthr
 
-      integer :: i, iat, ngrid
+      integer :: i, iat, ngrid, stat
       logical :: prune_bw
       logical, allocatable :: keep(:)
 
@@ -988,7 +1254,11 @@ contains
       end if
 
       ! Retain NaN weights for caller's finiteness check
-      allocate (keep(nraw))
+      allocate (keep(nraw), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular domain: cannot allocate pruning mask")
+         return
+      end if
       if (prune_bw) then
          do i = 1, nraw
             keep(i) = .not. (raw_w(i) == 0.0_wp .or. abs(raw_w(i)) < wthr) .and. .not. (raw_bw(i) < bthr)
@@ -1007,9 +1277,17 @@ contains
 
       self%ngrid = ngrid
       self%natom = nat
-      allocate (self%xyz(3, ngrid), self%w(ngrid), self%owner(ngrid))
-      allocate (self%atom_offset(nat + 1))
-      allocate (self%nrad_per_atom(nat), self%nang_per_atom(nat))
+      allocate (self%xyz(3, ngrid), stat=stat)
+      if (stat == 0) allocate (self%w(ngrid), stat=stat)
+      if (stat == 0) allocate (self%owner(ngrid), stat=stat)
+      if (stat == 0) allocate (self%atomic_w(ngrid), stat=stat)
+      if (stat == 0) allocate (self%atom_offset(nat + 1), stat=stat)
+      if (stat == 0) allocate (self%nrad_per_atom(nat), stat=stat)
+      if (stat == 0) allocate (self%nang_per_atom(nat), stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "molecular domain: cannot allocate retained geometry")
+         return
+      end if
 
       self%nrad_per_atom = nrad_atom
       self%nang_per_atom = nang_atom
@@ -1031,6 +1309,7 @@ contains
             ngrid = ngrid + 1
             self%xyz(:, ngrid) = raw_xyz(:, i)
             self%w(ngrid) = raw_w(i)
+            self%atomic_w(ngrid) = raw_atomic_w(i)
             self%owner(ngrid) = raw_atom(i)
          end if
       end do
@@ -1087,7 +1366,12 @@ contains
       class(moist_math_grid_3d_molecular_type), intent(in) :: self
       !> Iteration count
       integer :: becke_k
-      becke_k = self%becke_k
+      becke_k = default_stiffness
+      if (.not. allocated(self%partition)) return
+      select type (partition => self%partition)
+      type is (becke_partition_type)
+         becke_k = partition%k
+      end select
    end function molecular_get_becke_k
 
    !> Molecular partition scheme
@@ -1098,7 +1382,14 @@ contains
       class(moist_math_grid_3d_molecular_type), intent(in) :: self
       !> Molecular partition scheme
       integer :: value
-      value = self%partition
+      value = partition_becke
+      if (.not. allocated(self%partition)) return
+      select type (partition => self%partition)
+      type is (ssf_partition_type)
+         value = partition_ssf
+      type is (pvoronoi_partition_type)
+         value = partition_pvoronoi
+      end select
    end function molecular_get_partition
 
    !> Power-gap switching half-width in bohr**2
@@ -1109,7 +1400,12 @@ contains
       class(moist_math_grid_3d_molecular_type), intent(in) :: self
       !> Power-gap switching half-width in bohr**2
       real(wp) :: value
-      value = self%power_width
+      value = default_power_width
+      if (.not. allocated(self%partition)) return
+      select type (partition => self%partition)
+      type is (pvoronoi_partition_type)
+         value = partition%width
+      end select
    end function molecular_get_power_width
 
    !> Quadrature-weight pruning threshold in bohr**3
@@ -1159,6 +1455,7 @@ contains
       class(moist_math_grid_3d_molecular_type), intent(inout) :: self
 
       call self%clear_geometry()
+      if (allocated(self%atomic_w)) deallocate (self%atomic_w)
       if (allocated(self%molecule)) deallocate (self%molecule)
       if (allocated(self%atom_offset)) deallocate (self%atom_offset)
       if (allocated(self%nrad_per_atom)) deallocate (self%nrad_per_atom)
@@ -1675,7 +1972,7 @@ contains
       end do
    end subroutine molecular_trafo_fft_k2r
 
-   !> Guard: trafo prepared, bound to its geometry, block sizes match
+   !> Guard - trafo prepared, bound to its geometry, block sizes match
    !>
    !> Require prepared plans, matching geometry, and matching block sizes
    !>

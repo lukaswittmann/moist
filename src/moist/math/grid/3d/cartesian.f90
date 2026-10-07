@@ -6,14 +6,17 @@ module moist_math_grid_3d_cartesian
    use mctc_io, only: structure_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
                                       integrand_3d
+   use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
+   use moist_math_grid_3d_kernel_cartesian, only: cartesian_grid_gradient, &
+      & cartesian_grid_hessian_vector, cartesian_grid_hessian
    implicit none(type, external)
    private
 
    public :: moist_math_grid_3d_cartesian_type
-   public :: new_cartesian_grid_3d
+   public :: new_cartesian_point_grid, new_cartesian_gaussian_grid
    public :: moist_math_grid_3d_cartesian_trafo_type
    public :: nk_x_from_nx
 
@@ -21,6 +24,10 @@ module moist_math_grid_3d_cartesian
    !>
    !> No transform handles; destroy borrowed engines before geometry mutation
    type, extends(moist_math_grid_3d_type) :: moist_math_grid_3d_cartesian_type
+      !> Publish Gaussian widths
+      logical, private :: gaussian = .false.
+      !> Molecular centroid of the last successful update, bohr
+      real(wp), private :: center(3) = 0.0_wp
       !> Real-space size along x
       integer :: nx = 32
       !> Real-space size along y
@@ -54,6 +61,9 @@ module moist_math_grid_3d_cartesian
    contains
       procedure :: validate => validate_cartesian_grid
       procedure :: update => update_cartesian
+      procedure :: get_volume_gradient => get_volume_gradient_cartesian
+      procedure :: get_volume_hessian_vector => get_volume_hessian_vector_cartesian
+      procedure :: get_volume_hessian => get_volume_hessian_cartesian
       procedure :: rebuild => rebuild_cartesian
       procedure :: kind_name => cartesian_kind_name
       procedure :: kpoint => cartesian_grid_3d_kpoint
@@ -79,11 +89,187 @@ module moist_math_grid_3d_cartesian
 
 contains
 
+   !> Configure a Cartesian point grid without realizing geometry
+   !>
+   !> @param[in,out] self Grid configuration
+   !> @param[out] error Invalid settings
+   !> @param[in] nx Optional x point count, default 32
+   !> @param[in] ny Optional y point count, default 32
+   !> @param[in] nz Optional z point count, default 32
+   !> @param[in] dr Optional spacing, default 0.5 bohr
+   subroutine new_cartesian_point_grid(self, error, nx, ny, nz, dr)
+      !> Grid configuration
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+      !> X point count
+      integer, intent(in), optional :: nx
+      !> Y point count
+      integer, intent(in), optional :: ny
+      !> Z point count
+      integer, intent(in), optional :: nz
+      !> Spacing
+      real(wp), intent(in), optional :: dr
+
+      call configure_cartesian_grid(self, error, .false., nx, ny, nz, dr)
+   end subroutine new_cartesian_point_grid
+
+   !> Configure a Cartesian gaussian grid without realizing geometry
+   !>
+   !> @param[in,out] self Grid configuration
+   !> @param[out] error Invalid settings
+   !> @param[in] nx Optional x point count, default 32
+   !> @param[in] ny Optional y point count, default 32
+   !> @param[in] nz Optional z point count, default 32
+   !> @param[in] dr Optional spacing, default 0.5 bohr
+   !> @param[in] xi0_factor Optional width scale, default 1
+   subroutine new_cartesian_gaussian_grid(self, error, nx, ny, nz, dr, xi0_factor)
+      !> Grid configuration
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+      !> X point count
+      integer, intent(in), optional :: nx
+      !> Y point count
+      integer, intent(in), optional :: ny
+      !> Z point count
+      integer, intent(in), optional :: nz
+      !> Spacing
+      real(wp), intent(in), optional :: dr
+      !> Gaussian width scale
+      real(wp), intent(in), optional :: xi0_factor
+
+      call configure_cartesian_grid(self, error, .true., nx, ny, nz, dr, xi0_factor)
+   end subroutine new_cartesian_gaussian_grid
+
+   !> Shared configuration reset for Cartesian variants
+   !>
+   !> @param[in,out] self Grid configuration
+   !> @param[out] error Invalid settings
+   !> @param[in] gaussian Publish Gaussian widths
+   !> @param[in] nx Optional x point count
+   !> @param[in] ny Optional y point count
+   !> @param[in] nz Optional z point count
+   !> @param[in] dr Optional spacing, bohr
+   !> @param[in] xi0_factor Optional Gaussian width scale
+   subroutine configure_cartesian_grid(self, error, gaussian, nx, ny, nz, dr, xi0_factor)
+      !> Grid configuration
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+      !> Gaussian variant
+      logical, intent(in) :: gaussian
+      !> X point count
+      integer, intent(in), optional :: nx
+      !> Y point count
+      integer, intent(in), optional :: ny
+      !> Z point count
+      integer, intent(in), optional :: nz
+      !> Spacing
+      real(wp), intent(in), optional :: dr
+      !> Gaussian width scale
+      real(wp), intent(in), optional :: xi0_factor
+
+      call self%destroy()
+      self%nx = 32
+      self%ny = 32
+      self%nz = 32
+      self%dr = 0.5_wp
+      self%xi0_factor = 1.0_wp
+      self%gaussian = gaussian
+      self%center = 0.0_wp
+      if (present(nx)) self%nx = nx
+      if (present(ny)) self%ny = ny
+      if (present(nz)) self%nz = nz
+      if (present(dr)) self%dr = dr
+      if (present(xi0_factor)) self%xi0_factor = xi0_factor
+      call check_cartesian_settings(self, error)
+   end subroutine configure_cartesian_grid
+
+   !> Contract centroid-following point adjoints into the nuclear gradient
+   !>
+   !> @param[in] self Successfully updated grid
+   !> @param[in] acc Volume-observable adjoints
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, natom)
+   !> @param[out] error Invalid geometry or adjoints
+   subroutine get_volume_gradient_cartesian(self, acc, gradient, error)
+      !> Updated grid
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Invalid input
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%check_volume_adjoint(acc, error, vector=gradient)
+      if (allocated(error)) return
+      call cartesian_grid_gradient(acc%w_xyz, gradient, error)
+   end subroutine get_volume_gradient_cartesian
+
+   !> Zero curvature of linear centroid motion and constant quadrature weights
+   !>
+   !> @param[in] self Successfully updated grid
+   !> @param[in] acc Fixed volume adjoints
+   !> @param[in] direction Nuclear displacement direction (3, natom)
+   !> @param[in,out] hessian_vector Nuclear Hessian-vector accumulator (3, natom)
+   !> @param[out] error Invalid geometry, direction or adjoints
+   subroutine get_volume_hessian_vector_cartesian(self, acc, direction, hessian_vector, error)
+      !> Updated grid
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear displacement direction
+      real(wp), intent(in) :: direction(:, :)
+      !> Nuclear Hessian-vector accumulator
+      real(wp), intent(inout) :: hessian_vector(:, :)
+      !> Invalid input
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%check_volume_adjoint(acc, error, vector=hessian_vector, direction=direction)
+      if (allocated(error)) return
+      call cartesian_grid_hessian_vector(hessian_vector)
+   end subroutine get_volume_hessian_vector_cartesian
+
+   !> Zero curvature of linear centroid motion and constant quadrature weights
+   !>
+   !> @param[in] self Successfully updated grid
+   !> @param[in] acc Fixed volume adjoints
+   !> @param[in,out] hessian Nuclear Hessian accumulator (3, natom, 3, natom)
+   !> @param[out] error Invalid geometry, direction or adjoints
+   subroutine get_volume_hessian_cartesian(self, acc, hessian, error)
+      !> Updated grid
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Invalid input
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%check_volume_adjoint(acc, error, hessian=hessian)
+      if (allocated(error)) return
+      call cartesian_grid_hessian(hessian)
+   end subroutine get_volume_hessian_cartesian
+
+   !> Validate a configured Cartesian grid
+   !>
+   !> @param[in] self Grid configuration
+   !> @param[out] error Invalid settings
+   subroutine validate_cartesian_grid(self, error)
+      !> Grid configuration
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_cartesian_settings(self, error)
+   end subroutine validate_cartesian_grid
+
    !> Reject invalid sizes and non-finite scales before grid allocation
    !>
    !> @param[in] self Grid construction settings
    !> @param[out] error Invalid setting
-   subroutine validate_cartesian_grid(self, error)
+   subroutine check_cartesian_settings(self, error)
       !> Grid construction settings
       class(moist_math_grid_3d_cartesian_type), intent(in) :: self
       !> Invalid setting
@@ -109,7 +295,7 @@ contains
       else if (self%xi0_factor <= 0.0_wp) then
          call fatal_error(error, "cartesian domain: xi0_factor must be finite and positive")
       end if
-   end subroutine validate_cartesian_grid
+   end subroutine check_cartesian_settings
 
    !> Commit a successfully constructed Cartesian discretization
    !>
@@ -144,6 +330,9 @@ contains
 
    !> Center the fixed box on the current solute centroid
    !>
+   !> Failure keeps the committed box and center but zeroes `natom`, so reverse
+   !> contractions refuse the stale geometry
+   !>
    !> @param[in,out] self Domain instance
    !> @param[in] mol Solute structure
    !> @param[out] error Invalid geometry or allocation failure
@@ -154,6 +343,12 @@ contains
       type(structure_type), intent(in) :: mol
       !> Invalid geometry or allocation failure
       type(error_type), allocatable, intent(out) :: error
+      !> Requested box center
+      real(wp) :: center(3)
+
+      self%natom = 0
+      call self%validate(error)
+      if (allocated(error)) return
       if (mol%nat < 1) then
          call fatal_error(error, "cartesian domain: at least one solute atom is required")
          return
@@ -162,8 +357,10 @@ contains
          call fatal_error(error, "cartesian domain: solute coordinates must be finite")
          return
       end if
-      call realize_cartesian(self, sum(mol%xyz, dim=2)/real(mol%nat, wp), error)
+      center = sum(mol%xyz, dim=2)/real(mol%nat, wp)
+      call realize_cartesian(self, center, error)
       if (allocated(error)) return
+      self%center = center
       self%natom = mol%nat
    end subroutine update_cartesian
 
@@ -178,13 +375,19 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Center retained from the previous coordinates
       real(wp) :: center(3)
+      !> Atom count restored after a successful rebuild
+      integer :: natom
 
       if (self%ngrid < 1) then
          call fatal_error(error, "cartesian domain: initialize or update before rebuild")
          return
       end if
-      center = sum(self%xyz, dim=2)/real(self%ngrid, wp)
+      center = self%center
+      natom = self%natom
+      self%natom = 0
       call realize_cartesian(self, center, error)
+      if (allocated(error)) return
+      self%natom = natom
    end subroutine rebuild_cartesian
 
    !> Construct and commit a Cartesian grid from its own settings
@@ -214,13 +417,14 @@ contains
          return
       end if
       origin = center - 0.5_wp*self%dr*real([self%nx, self%ny, self%nz], wp)
-      call new_cartesian_grid_3d(grid, self%nx, self%ny, self%nz, self%dr, origin, error)
+      grid%gaussian = self%gaussian
+      grid%xi0_factor = self%xi0_factor
+      call build_cartesian_grid(grid, self%nx, self%ny, self%nz, self%dr, origin, error)
       if (allocated(error)) return
-      grid%xi0 = self%xi0_factor/self%dr
       call move_cartesian_geometry(grid, self)
    end subroutine realize_cartesian
 
-   !> Domain name for diagnostics, including the inherited gradient stub
+   !> Domain name for diagnostics
    !>
    !> @param[in] self Domain instance
    function cartesian_kind_name(self) result(name)
@@ -242,74 +446,24 @@ contains
       nkx = nx/2 + 1
    end function nk_x_from_nx
 
-   !> Initialise the grid
-   !>
-   !> @param[out] grid   Grid to construct
-   !> @param[in]  nx     Real-space size along x
-   !> @param[in]  ny     Real-space size along y
-   !> @param[in]  nz     Real-space size along z
-   !> @param[in]  dr     Real-space spacing, bohr
-   !> @param[in]  origin Box origin, bohr; defaults to a box centered on zero
-   !> @param[out] error  Invalid settings or allocation failure
-   subroutine new_cartesian_grid_3d(grid, nx, ny, nz, dr, origin, error)
-      !> Grid to construct
-      type(moist_math_grid_3d_cartesian_type), intent(out) :: grid
-      !> Real-space sizes along x, y, z
-      integer, intent(in) :: nx, ny, nz
-      !> Real-space spacing, bohr
-      real(wp), intent(in) :: dr
-      !> Box origin, bohr; defaults to a box centered on zero
-      real(wp), intent(in), optional :: origin(3)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: origin_value(3)
-
-      call default_cartesian_origin(nx, ny, nz, dr, origin, origin_value)
-      call new_cartesian_grid_3d_impl(grid, nx, ny, nz, dr, origin_value, error)
-   end subroutine new_cartesian_grid_3d
-
-   !> Fill the default Cartesian origin when the caller does not provide one
-   !>
-   !> @param[in]  nx           Real-space size along x
-   !> @param[in]  ny           Real-space size along y
-   !> @param[in]  nz           Real-space size along z
-   !> @param[in]  dr           Real-space spacing, bohr
-   !> @param[in]  origin       Caller-supplied origin, bohr; used as is when present
-   !> @param[out] origin_value Resolved origin, bohr
-   pure subroutine default_cartesian_origin(nx, ny, nz, dr, origin, origin_value)
-      !> Real-space sizes along x, y, z
-      integer, intent(in) :: nx, ny, nz
-      !> Real-space spacing, bohr
-      real(wp), intent(in) :: dr
-      !> Caller-supplied origin, bohr; used as is when present
-      real(wp), intent(in), optional :: origin(3)
-      !> Resolved origin, bohr
-      real(wp), intent(out) :: origin_value(3)
-
-      if (present(origin)) then
-         origin_value = origin
-      else
-         origin_value = [-0.5_wp*real(nx, wp)*dr, &
-                         -0.5_wp*real(ny, wp)*dr, &
-                         -0.5_wp*real(nz, wp)*dr]
-      end if
-   end subroutine default_cartesian_origin
-
    !> Initialise Cartesian grid storage from concrete arguments
    !>
-   !> @param[out] grid   Grid to construct
+   !> @param[in,out] grid Configured candidate receiving geometry
    !> @param[in]  nx     Real-space size along x
    !> @param[in]  ny     Real-space size along y
    !> @param[in]  nz     Real-space size along z
    !> @param[in]  dr     Real-space spacing, bohr
    !> @param[in]  origin Box origin, bohr
    !> @param[out] error  Invalid settings or allocation failure
-   subroutine new_cartesian_grid_3d_impl(grid, nx, ny, nz, dr, origin, error)
+   subroutine build_cartesian_grid(grid, nx, ny, nz, dr, origin, error)
       !> Grid to construct
-      type(moist_math_grid_3d_cartesian_type), intent(out) :: grid
-      !> Real-space sizes along x, y, z
-      integer, intent(in) :: nx, ny, nz
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: grid
+      !> Real-space x size
+      integer, intent(in) :: nx
+      !> Real-space y size
+      integer, intent(in) :: ny
+      !> Real-space z size
+      integer, intent(in) :: nz
       !> Real-space spacing, bohr
       real(wp), intent(in) :: dr
       !> Box origin, bohr
@@ -346,7 +500,7 @@ contains
       allocate (grid%xyz(3, grid%ngrid), stat=stat)
       if (stat == 0) allocate (grid%w(grid%ngrid), stat=stat)
       if (stat == 0) allocate (grid%owner(grid%ngrid), stat=stat)
-      if (stat == 0) allocate (grid%xi0(grid%ngrid), stat=stat)
+      if (stat == 0 .and. grid%gaussian) allocate (grid%xi0(grid%ngrid), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "cartesian domain: cannot allocate geometry")
          return
@@ -362,7 +516,7 @@ contains
       end do
       grid%w = grid%dv
       grid%owner = 0
-      grid%xi0 = grid%xi0_factor/dr
+      if (grid%gaussian) grid%xi0 = grid%xi0_factor/dr
 
       allocate (grid%kx(grid%nkx), stat=stat)
       if (stat == 0) allocate (grid%ky(ny), stat=stat)
@@ -390,7 +544,7 @@ contains
          end if
       end do
 
-   end subroutine new_cartesian_grid_3d_impl
+   end subroutine build_cartesian_grid
 
    !> Reciprocal-space coordinate of flat k-point j (R2C layout, kx fastest)
    !>
@@ -456,6 +610,12 @@ contains
       if (allocated(self%kz)) deallocate (self%kz)
       call self%clear_geometry()
       self%nkx = 0
+      self%dv = 0.0_wp
+      self%vbox = 0.0_wp
+      self%dkx = 0.0_wp
+      self%dky = 0.0_wp
+      self%dkz = 0.0_wp
+      self%origin = 0.0_wp
    end subroutine cartesian_grid_3d_dealloc
 
    !> Volume integral of a field already tabulated on the grid points
