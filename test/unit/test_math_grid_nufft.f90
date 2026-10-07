@@ -5,7 +5,7 @@
 !> - Round-trip diagonal, forward vs analytic FT, k-space convolution
 !> - Quadrature refinement, type-1/2 vs type-3 routes, stale and recreated trafo
 !> - Preparation guards: unbound trafo, missing k-grid, empty batch keeps the
-!>   prepared plans; type-3 fallback for coordinates outside the type-1/2 window
+!>   prepared plans
 !> - Tolerances assume a nucleus-localised field, the cloud resolves `2*pi/k` only near the nuclei
 module test_math_grid_nufft
    use, intrinsic :: iso_fortran_env, only: output_unit
@@ -16,14 +16,14 @@ module test_math_grid_nufft
    use mctc_io_constants, only: pi
    use moist_math_grid_3d_base, only: moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
-      & new_cartesian_grid_3d
+      & new_cartesian_gaussian_grid
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
       & moist_math_grid_atomic_recipe_override_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_grid, molecular_grid_set_kgrid, &
+      & new_molecular_point_grid, molecular_grid_set_kgrid, &
       & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, &
       & default_nufft_tol
-   use test_helpers, only: get_uniform_recipe
+   use test_helpers, only: get_cartesian_gaussian_grid, get_uniform_recipe
 
    implicit none(type, external)
    private
@@ -67,8 +67,7 @@ contains
                   new_unittest("nufft_trafo_destroy_recreate", test_trafo_destroy_recreate), &
                   new_unittest("nufft_prepare_unbound", test_prepare_unbound), &
                   new_unittest("nufft_prepare_without_kgrid", test_prepare_without_kgrid), &
-                  new_unittest("nufft_prepare_zero_batch", test_prepare_zero_batch), &
-                  new_unittest("nufft_type12_coordinate_fallback", test_coordinate_fallback) &
+                  new_unittest("nufft_prepare_zero_batch", test_prepare_zero_batch) &
                   ]
    end subroutine collect_math_grid_nufft
 
@@ -113,7 +112,7 @@ contains
       ready = .false.
       call probe_structure(mol)
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
-      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
                                                          reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
@@ -264,7 +263,7 @@ contains
          return
       end if
       ! Phase against mg%kref (point(1) directly, solute centroid after a domain update)
-      call max_ft_error(fk(:, 1), mg%npts_k, mg%kref, cen, mg, .true., cg, emax)
+      call max_ft_error(fk(:, 1), mg%npts_k, mg%get_kref(), cen, mg, .true., cg, emax)
       ! Quadrature-limited: 3.0e-4 at (50, 110), 2.7e-7 from Lebedev order 302
       call check(error, emax <= 1.0e-3_wp, &
                  "molecular forward NUFFT disagrees with the analytic Gaussian FT")
@@ -273,7 +272,7 @@ contains
       deallocate (f, fk)
       if (allocated(error)) return
 
-      call new_cartesian_grid_3d(cg, 48, 48, 48, probe_dr, error=merr)
+      call get_cartesian_gaussian_grid(cg, 48, 48, 48, probe_dr, error=merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -462,7 +461,7 @@ contains
          else
             call get_uniform_recipe(recipe, overrides, 100, 590, merr, rmax=probe_rmax)
          end if
-         if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+         if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
                                                             reciprocal=.false.)
          if (.not. allocated(merr)) call mg%update(mol, merr)
          if (allocated(merr)) then
@@ -613,7 +612,7 @@ contains
          call t12%destroy()
          return
       end if
-      if (.not. t12%is_type12 .or. t3%is_type12) then
+      if (.not. t12%uses_type12() .or. t3%uses_type12()) then
          call test_failed(error, "transform-route switch did not take effect")
          call t12%destroy(); call t3%destroy()
          return
@@ -682,7 +681,7 @@ contains
 
       call probe_structure(mol)
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
-      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
                                                          reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
@@ -821,7 +820,7 @@ contains
    !>
    !> - Same recipe, same sequence of update and `molecular_grid_set_kgrid`, one
    !>   atom moved: the point count is unchanged, so only a generation
-   !>   counter that survives `new_molecular_grid` catches the stale plans
+   !>   counter that survives `new_molecular_point_grid` catches the stale plans
    subroutine test_trafo_stale_after_reconstruction(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -844,7 +843,7 @@ contains
 
       mol%xyz(1, 1) = mol%xyz(1, 1) + 0.05_wp
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
-      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
                                                          reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (.not. allocated(merr)) call molecular_grid_set_kgrid(mg, probe_dr, merr)
@@ -916,7 +915,7 @@ contains
       call forward(error, trafo, f, fk)
       if (.not. allocated(error)) then
          ! Same bound as test_forward_analytic; 3.1e-4 measured, 4.3e-2 with the pre-update center
-         call max_ft_error(fk(:, 1), mg%npts_k, mg%kref, cen, mg, .true., cg, emax)
+         call max_ft_error(fk(:, 1), mg%npts_k, mg%get_kref(), cen, mg, .true., cg, emax)
          call check(error, emax <= 1.0e-3_wp, &
                     "recreated molecular NUFFT disagrees with the analytic Gaussian FT")
       end if
@@ -970,13 +969,13 @@ contains
 
       call probe_structure(mol)
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
-      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
                                                          reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
       else
-         call check(error, mg%ngrid > 0 .and. .not. mg%has_kgrid, &
+         call check(error, mg%ngrid > 0 .and. .not. mg%has_reciprocal(), &
             & "fixture must be a built grid without k-grid")
       end if
       if (.not. allocated(error)) then
@@ -1012,7 +1011,7 @@ contains
          call trafo%prepare(0, merr)
          call check(error, allocated(merr), "NUFFT preparation of zero columns must fail")
          if (.not. allocated(error)) then
-            call check(error, trafo%ntrans == 1, "rejected empty batch dropped the plans")
+            call check(error, trafo%get_ntrans() == 1, "rejected empty batch dropped the plans")
          end if
          if (.not. allocated(error)) then
             allocate (f(mg%ngrid, 1), fk(mg%npts_k, 1))
@@ -1023,42 +1022,5 @@ contains
       call trafo%destroy()
       call mg%destroy()
    end subroutine test_prepare_zero_batch
-
-   !> Use type 3 when shifted coordinates exceed the type-1/2 window
-   !>
-   !> - No public setter reaches the fallback: `molecular_grid_set_kgrid` sizes
-   !>   the period so the scaled span stays within 2*pi
-   !> - Moving `kref` by 1000 bohr scales the coordinates to about 1000*dkx,
-   !>   some 160 rad on the probe grid, far beyond the [-3*pi, 3*pi] window
-   subroutine test_coordinate_fallback(error)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      type(structure_type) :: mol
-      type(moist_math_grid_3d_molecular_type), target :: mg
-      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
-      type(mctc_error_type), allocatable :: merr
-      logical :: ready
-
-      call setup_probe(mol, mg, trafo, ready, error)
-      if (.not. allocated(error) .and. ready) then
-         call check(error, trafo%is_type12, "probe grid must start on the type-1/2 route")
-      end if
-      if (.not. allocated(error) .and. ready) then
-         mg%kref(1) = mg%kref(1) + 1000.0_wp
-         call check(error, minval(abs(mg%xyz(1, :) - mg%kref(1)))*mg%dkx > 3.0_wp*pi, &
-            & "shifted coordinates must leave the type-1/2 window")
-      end if
-      if (.not. allocated(error) .and. ready) then
-         call trafo%prepare(1, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-         else
-            call check(error,.not. trafo%is_type12, "large shifted coordinates must select type 3")
-         end if
-      end if
-      call trafo%destroy()
-      call mg%destroy()
-   end subroutine test_coordinate_fallback
 
 end module test_math_grid_nufft

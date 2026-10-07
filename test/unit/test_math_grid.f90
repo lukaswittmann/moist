@@ -29,13 +29,13 @@ module test_math_grid
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use test_helpers, only: center_at_origin, get_uniform_recipe, get_qc_handymod_recipe
+   use test_helpers, only: get_cartesian_gaussian_grid, center_at_origin, get_uniform_recipe, get_qc_handymod_recipe
    use moist_math_grid, only: moist_math_grid_3d_molecular_type, moist_math_grid_3d_type, &
-      & new_molecular_grid, molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, &
+      & new_molecular_point_grid, molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, &
       & new_molecular_grid_trafo, moist_math_grid_atomic_recipe_type, &
       & moist_math_grid_atomic_recipe_override_type, default_element_recipes
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
-      & new_cartesian_grid_3d
+      & new_cartesian_gaussian_grid
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_chebyshev2_type, &
       & new_chebyshev2_rule
    use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_becke_type, &
@@ -382,7 +382,7 @@ contains
       ! enclosed); the midpoint rule converges exponentially, so the residual
       ! is pure summation round-off over ~2.1M terms (~4e-12) -- hence the 5e-12
       ! floor rather than a machine-precision threshold
-      call new_cartesian_grid_3d(cgrid, 128, 128, 128, 0.11_wp, error=merr)
+      call get_cartesian_gaussian_grid(cgrid, 128, 128, 128, 0.11_wp, error=merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -403,7 +403,7 @@ contains
       type(mctc_error), allocatable :: merr
 
       ! Same 128^3 box, so also summation-round-off-limited (~2e-12)
-      call new_cartesian_grid_3d(cgrid, 128, 128, 128, 0.11_wp, error=merr)
+      call get_cartesian_gaussian_grid(cgrid, 128, 128, 128, 0.11_wp, error=merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -425,7 +425,7 @@ contains
       class(moist_math_grid_3d_type), pointer :: grid
       type(mctc_error), allocatable :: merr
 
-      call new_cartesian_grid_3d(cgrid, 128, 128, 128, 0.11_wp, error=merr)
+      call get_cartesian_gaussian_grid(cgrid, 128, 128, 128, 0.11_wp, error=merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -451,7 +451,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call default_element_recipes(recipe, overrides, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
@@ -484,7 +484,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call get_uniform_recipe(recipe, overrides, 300, 1202, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
@@ -516,7 +516,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call get_uniform_recipe(recipe, overrides, 300, 1202, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
@@ -561,7 +561,7 @@ contains
       !> a molecular grid otherwise keeps far, low-weight shells that bloat the
       !> bounding box (and the NUFFT grid) far beyond what this test needs
       call get_uniform_recipe(recipe, overrides, 40, 110, merr, rmax=6.0_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
@@ -575,9 +575,9 @@ contains
          call test_failed(error, merr%message)
          return
       end if
-      call check(error, mgrid%has_kgrid)
+      call check(error, mgrid%has_reciprocal())
       if (allocated(error)) return
-      call check(error, mgrid%npts_k == mgrid%nkx*mgrid%nky*mgrid%nkz)
+      call check(error, mgrid%npts_k == product(mgrid%get_kmodes()))
       if (allocated(error)) return
 
       call new_molecular_grid_trafo(trafo, mgrid)
@@ -630,7 +630,7 @@ contains
          kvec = mgrid%kpoint(ktest)
          fk_ref = (0.0_wp, 0.0_wp)
          do j = 1, npts
-            phase = dot_product(kvec, mgrid%xyz(:, j) - mgrid%kref)
+            phase = dot_product(kvec, mgrid%xyz(:, j) - mgrid%get_kref())
             fk_ref = fk_ref + mgrid%w(j)*field(j, 1)*cmplx(cos(phase), -sin(phase), wp)
          end do
          call check(error, abs(fk(ktest, 1) - fk_ref) <= 1.0e-7_wp*abs(fk_ref) + 1.0e-9_wp)
@@ -905,7 +905,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call default_element_recipes(recipe, overrides, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(grid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
@@ -935,7 +935,7 @@ contains
       call center_at_origin(mol)
       call get_qc_handymod_recipe(recipe, merr, nrad=2000, degree=77, rmin=0.0_wp, rmax=6.0_wp, &
          & m=0.1_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call new_molecular_point_grid(grid, merr, recipe=recipe, reciprocal=.false.)
       if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -976,7 +976,7 @@ contains
       call center_at_origin(mol)
 
       call get_uniform_recipe(recipe, overrides, 12, 26, merr, rmax=3.0_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(before_grid, merr, recipe=recipe, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(before_grid, merr, recipe=recipe, &
          & overrides=overrides, reciprocal=.false.)
       if (.not. allocated(merr)) call before_grid%update(mol, merr)
       if (allocated(merr)) then
@@ -987,7 +987,7 @@ contains
       weight_before = sum(before_grid%w)
 
       call get_qc_handymod_recipe(recipe, merr, nrad=16, degree=7, rmin=0.0_wp, rmax=3.0_wp, m=0.1_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(qc_grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call new_molecular_point_grid(qc_grid, merr, recipe=recipe, reciprocal=.false.)
       if (.not. allocated(merr)) call qc_grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -996,7 +996,7 @@ contains
       end if
 
       call get_uniform_recipe(recipe, overrides, 12, 26, merr, rmax=3.0_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(after_grid, merr, recipe=recipe, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(after_grid, merr, recipe=recipe, &
          & overrides=overrides, reciprocal=.false.)
       if (.not. allocated(merr)) call after_grid%update(mol, merr)
       if (allocated(merr)) then
@@ -1030,7 +1030,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call default_element_recipes(recipe, overrides, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(grid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
@@ -1060,7 +1060,7 @@ contains
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
       call default_element_recipes(recipe, overrides, merr)
-      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+      if (.not. allocated(merr)) call new_molecular_point_grid(grid, merr, recipe=recipe, overrides=overrides, &
          & reciprocal=.false.)
       if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then

@@ -27,6 +27,8 @@ module test_model_continuum
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
+   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
@@ -62,6 +64,8 @@ contains
          & new_unittest("continuum_model_cpcm", test_continuum_model_smoke), &
          & new_unittest("continuum_model_cpcm_pv", test_continuum_model_pv_smoke), &
          & new_unittest("continuum_model_guards", test_continuum_model_guards), &
+         & new_unittest("continuum_model_reconstructed_cavity_context", &
+         &              test_continuum_model_reconstructed_cavity_context), &
          & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies), &
          & new_unittest("continuum_model_parameter_printout", test_continuum_model_parameter_printout) &
          & ]
@@ -688,6 +692,82 @@ contains
       end subroutine check_foreign
 
    end subroutine test_continuum_model_guards
+
+   !> Reconstructing a cavity without a context drops the previous one, so its
+   !> copy in a model with another context runs on the model's
+   subroutine test_continuum_model_reconstructed_cavity_context(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+
+      !> Context of the first construction and of the model
+      type(moist_context_type), target :: first, other
+      !> Radius model storage
+      type(radius_type_static) :: radius_model
+      !> Level set of the DROP and marching-cubes cavities
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw
+      !> One cavity of every kind
+      type(cavity_type_drop) :: drop
+      type(cavity_type_iswig) :: iswig
+      type(cavity_type_numsa) :: numsa
+      type(cavity_type_marchingcubes) :: mc
+      !> Cavity kind
+      integer :: icase
+
+      call new_context(first)
+      call new_context(other)
+      call new_cosmo_radii(radius_model)
+      call svdw%new()
+      do icase = 1, 4
+         select case (icase)
+         case (1)
+            call new_cavity_drop(drop, radius_model, svdw, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_drop(drop, radius_model, svdw, err)
+            if (.not. allocated(err)) call check_model_context(drop, "DROP")
+         case (2)
+            call new_cavity_iswig(iswig, radius_model, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_iswig(iswig, radius_model, err)
+            if (.not. allocated(err)) call check_model_context(iswig, "iSwiG")
+         case (3)
+            call new_cavity_numsa(numsa, radius_model, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_numsa(numsa, radius_model, err)
+            if (.not. allocated(err)) call check_model_context(numsa, "NUMSA")
+         case (4)
+            call new_cavity_marchingcubes(mc, radius_model, svdw, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_marchingcubes(mc, radius_model, svdw, err)
+            if (.not. allocated(err)) call check_model_context(mc, "marching cubes")
+         case default
+            error stop "test_model_continuum: unhandled case in reconstructed_cavity_context"
+         end select
+         if (allocated(err)) call test_failed(error, "Cavity setup failed: "//err%message)
+         if (allocated(error)) exit
+      end do
+      call first%delete()
+      call other%delete()
+
+   contains
+
+      !> The rebuilt cavity has no context and its model copy runs on `other`
+      subroutine check_model_context(cavity, label)
+         !> Cavity rebuilt without a context
+         class(cavity_type), intent(in) :: cavity
+         !> Cavity kind for the failure message
+         character(len=*), intent(in) :: label
+         !> Model with the other context
+         type(model_continuum_type) :: model
+
+         call check(error, .not. associated(cavity%ctx), &
+            & more=label//" kept the previous context through reconstruction")
+         if (allocated(error)) return
+         call new_continuum_model(model, other, cavity, err)
+         if (allocated(err)) return
+         call check(error, associated(model%cavity%ctx, other), &
+            & more=label//" copy does not run on the model context")
+      end subroutine check_model_context
+
+   end subroutine test_continuum_model_reconstructed_cavity_context
 
 !> Per-component energies published by the continuum model
 !>

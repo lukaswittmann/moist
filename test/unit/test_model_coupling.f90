@@ -183,13 +183,13 @@ contains
       integer :: k
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_component_cpcm(pcm1, ctx, epsilon=2.0_wp, error=err)
-      call new_component_cpcm(pcm2, ctx, epsilon=30.0_wp, error=err)
+      call new_component_cpcm(pcm1, epsilon=2.0_wp, error=err, ctx=ctx)
+      call new_component_cpcm(pcm2, epsilon=30.0_wp, error=err, ctx=ctx)
       allocate(gradients(3, mol%nat, 4), source=0.0_wp)
       allocate(repeated_gradient(3, mol%nat), source=0.0_wp)
       energies = 0.0_wp
       do k = 1, 4
-         call new_continuum_model(model, cavity, ctx, err)
+         call new_continuum_model(model, ctx, cavity, err)
          if (k == 1 .or. k == 3) call model%add_component(pcm1, err)
          if (k /= 3) call model%add_component(pcm2, err)
          if (k == 2) call model%add_component(pcm1, err)
@@ -243,7 +243,7 @@ contains
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       call new_component_gostshyp(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -295,7 +295,7 @@ contains
       if (allocated(error)) return
       call check(error, .not. coupling%next())
       if (allocated(error)) return
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       call new_component_gostshyp(component, 0.0_wp)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -309,7 +309,7 @@ contains
       if (failed(error, err, "disabled GOSTSHYP energy")) return
       call check(error, energy, 0.0_wp, thr=0.0_wp)
       if (allocated(error)) return
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       call new_component_gostshyp(component, test_pressure)
       component%scale = 0.0_wp
       call model%add_component(component, err)
@@ -342,7 +342,7 @@ contains
       real(wp), parameter :: pv_abs_thr = 1.0e-10_wp, pv_rel_thr = 1.0e-9_wp
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       call new_component_pv(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -435,10 +435,10 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=drop_blend_k, &
             blend_3b=drop_blend_3b))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=err, param=moist_cavity_drop_parameters_type(num_leb=nleb_drop, tolerance=drop_proj_tol, &
             proj_maxiter=drop_proj_maxiter, proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, &
-            do_fine=.true.))
+            do_fine=.true.), ctx=ctx)
       end block
       if (failed(error, err, "DROP setup")) return
 
@@ -474,15 +474,15 @@ contains
       type(model_continuum_component_cpcm) :: cpcm
       type(model_continuum_component_pv) :: pv
 
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       if (failed(error, err, "model setup")) return
       if (with_pv) then
          call new_component_pv(pv, test_pressure)
          call model%add_component(pv, err)
          if (failed(error, err, "adding PV")) return
       end if
-      call new_component_cpcm(cpcm, ctx, epsilon=eps_model, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(cpcm, epsilon=eps_model, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (failed(error, err, "CPCM setup")) return
       call model%add_component(cpcm, err)
       if (failed(error, err, "adding CPCM")) return

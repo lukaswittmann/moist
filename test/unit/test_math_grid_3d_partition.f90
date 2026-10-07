@@ -20,11 +20,9 @@ module test_math_grid_3d_partition
    use moist_data_atomicrad, only: covalent_rad
    use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test, test_failed
    use test_helpers, only: get_test_structures, get_test_points, fd4_scalar
-   use moist_math_grid_3d_partition, only: becke_partition_weights, ssf_partition_weights, &
-      & pvoronoi_partition_weights
-   use moist_math_grid_3d_partition_becke, only: becke_cell
-   use moist_math_grid_3d_partition_ssf, only: ssf_cell
-   use moist_math_grid_3d_partition_pvoronoi, only: bump_cell
+   use moist_math_grid_3d_kernel_becke, only: becke_partition_type
+   use moist_math_grid_3d_kernel_ssf, only: ssf_partition_type
+   use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type
    implicit none(type, external)
    private
 
@@ -97,17 +95,24 @@ contains
       !> Owner weights
       real(wp), intent(out) :: w(:)
 
+      type(becke_partition_type) :: becke
+      type(ssf_partition_type) :: ssf
+      type(pvoronoi_partition_type) :: pvoronoi
+
       select case (cell)
       case (cell_becke_k1)
-         call becke_partition_weights(owner, points, xyz, numbers, w, stiffness=1)
+         becke%k = 1
+         call becke%owner_weights(owner, points, xyz, numbers, w)
       case (cell_becke_k3)
-         call becke_partition_weights(owner, points, xyz, numbers, w, stiffness=3)
+         becke%k = 3
+         call becke%owner_weights(owner, points, xyz, numbers, w)
       case (cell_becke_default)
-         call becke_partition_weights(owner, points, xyz, numbers, w)
+         call becke%owner_weights(owner, points, xyz, numbers, w)
       case (cell_power)
-         call pvoronoi_partition_weights(owner, points, xyz, numbers, w)
+         call pvoronoi%owner_weights(owner, points, xyz, numbers, w)
       case default
-         call ssf_partition_weights(owner, points, xyz, numbers, w, a=ssf_a)
+         ssf%a = ssf_a
+         call ssf%owner_weights(owner, points, xyz, numbers, w)
       end select
    end subroutine batched
 
@@ -203,6 +208,7 @@ contains
       real(wp), parameter :: margin = 1.0e-3_wp
       real(wp) :: xyz(3, 2), points(3, npts), t(npts), nu, w1(npts), w2(npts)
       integer :: numbers(2), ip
+      type(ssf_partition_type) :: ssf
 
       numbers = [7, 7]
       xyz = 0.0_wp
@@ -212,8 +218,9 @@ contains
          t(ip) = -1.0_wp + (bond + 2.0_wp)*real(ip - 1, wp)/real(npts - 1, wp)
          points(3, ip) = t(ip)
       end do
-      call becke_partition_weights(1, points, xyz, numbers, w1, ssf_a=ssf_a)
-      call becke_partition_weights(2, points, xyz, numbers, w2, ssf_a=ssf_a)
+      ssf%a = ssf_a
+      call ssf%owner_weights(1, points, xyz, numbers, w1)
+      call ssf%owner_weights(2, points, xyz, numbers, w2)
 
       do ip = 1, npts
          nu = (2.0_wp*min(max(t(ip), 0.0_wp), bond) - bond)/bond
@@ -242,7 +249,9 @@ contains
       integer, allocatable :: numbers(:)
       real(wp), allocatable :: points(:, :), w(:)
       integer :: im, iat, owner, nat
+      type(ssf_partition_type) :: ssf
 
+      ssf%a = ssf_a
       call get_test_structures(mols, nmol)
       do im = 1, size(mols)
          nat = mols(im)%nat
@@ -253,7 +262,7 @@ contains
             points(:, 2*iat) = mols(im)%xyz(:, iat) - [0.0_wp, offset, offset]/sqrt(2.0_wp)
          end do
          do owner = 1, nat
-            call becke_partition_weights(owner, points, mols(im)%xyz, numbers, w, ssf_a=ssf_a)
+            call ssf%owner_weights(owner, points, mols(im)%xyz, numbers, w)
             do iat = 1, nat
                if (iat == owner) then
                   call check(error, all(w(2*iat - 1:2*iat) == 1.0_wp), &
@@ -515,33 +524,39 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp) :: x, expected, h, points(3, 1), xyz(3, 2), legacy(1), direct(1)
+      real(wp) :: x, expected, h, points(3, 1), xyz(3, 2), direct(1)
       real(wp) :: tail
       integer :: i
+      type(becke_partition_type) :: becke
+      type(ssf_partition_type) :: ssf
+      type(pvoronoi_partition_type) :: bump
 
-      tail = becke_cell(1.0_wp - 1.0e-3_wp, 3)
+      ssf%a = 1.0_wp
+      becke%k = 3
+      tail = becke%eval(1.0_wp - 1.0e-3_wp)
       call check(error, tail > 0.0_wp .and. tail < 1.0e-20_wp, "Becke tail remains positive after three iterations")
       if (allocated(error)) return
       x = 0.2_wp
       do i = 1, 5
          x = (3.0_wp*x - x**3)/2.0_wp
       end do
-      call check(error, abs(becke_cell(0.2_wp, 5) - (1.0_wp - x)/2.0_wp) < 1.0e-15_wp, &
+      becke%k = 5
+      call check(error, abs(becke%eval(0.2_wp) - (1.0_wp - x)/2.0_wp) < 1.0e-15_wp, &
          & "Becke stiffness beyond the default must retain every iteration")
       if (allocated(error)) return
       do i = -10, 10
          x = real(i, wp)/10.0_wp
          expected = (1.0_wp - (35.0_wp*x - 35.0_wp*x**3 + 21.0_wp*x**5 - 5.0_wp*x**7)/16.0_wp)/2.0_wp
-         call check(error, abs(ssf_cell(x) - expected) < 8.0_wp*epsilon(x), "SSF polynomial")
+         call check(error, abs(ssf%eval(x) - expected) < 8.0_wp*epsilon(x), "SSF polynomial")
          if (allocated(error)) return
-         call check(error, abs(bump_cell(x) + bump_cell(-x) - 1.0_wp) < epsilon(x), "bump complement")
+         call check(error, abs(bump%eval(x) + bump%eval(-x) - 1.0_wp) < epsilon(x), "bump complement")
          if (allocated(error)) return
       end do
-      call check(error, ssf_cell(1.0_wp) == 0.0_wp .and. ssf_cell(-1.0_wp) == 1.0_wp &
-         & .and. bump_cell(1.0_wp) == 0.0_wp .and. bump_cell(-1.0_wp) == 1.0_wp, "exact endpoints")
+      call check(error, ssf%eval(1.0_wp) == 0.0_wp .and. ssf%eval(-1.0_wp) == 1.0_wp &
+         & .and. bump%eval(1.0_wp) == 0.0_wp .and. bump%eval(-1.0_wp) == 1.0_wp, "exact endpoints")
       if (allocated(error)) return
       h = 1.0e-4_wp
-      call check(error, ssf_cell(1.0_wp - h) > 0.0_wp .and. ssf_cell(1.0_wp - h) < 3.0_wp*h**4, &
+      call check(error, ssf%eval(1.0_wp - h) > 0.0_wp .and. ssf%eval(1.0_wp - h) < 3.0_wp*h**4, &
          & "SSF tail remains positive with fourth-order approach to zero")
       if (allocated(error)) return
       ! Relative bound: rounding x*x at x = 0.95 (0.5 ulp, the subtraction is
@@ -549,24 +564,20 @@ contains
       ! carries over to the logistic tail as relative error
       x = 0.95_wp
       expected = 1.0_wp/(1.0_wp + exp(2.0_wp*x/(1.0_wp - x*x)))
-      call check(error, abs(bump_cell(x)/expected - 1.0_wp) < 2.0e-14_wp, &
+      call check(error, abs(bump%eval(x)/expected - 1.0_wp) < 2.0e-14_wp, &
          & "bump switch interior tail must follow its logistic formula")
       if (allocated(error)) return
       h = 0.02_wp
-      call check(error, bump_cell(1.0_wp - h) > 0.0_wp .and. bump_cell(1.0_wp - h) < h**10, &
+      call check(error, bump%eval(1.0_wp - h) > 0.0_wp .and. bump%eval(1.0_wp - h) < h**10, &
          & "bump tail approaches zero faster than a finite-order switch")
       if (allocated(error)) return
       xyz = 0.0_wp
       xyz(1, 2) = 2.0_wp
-      points(:, 1) = [0.7_wp, 0.2_wp, 0.0_wp]
-      call becke_partition_weights(1, points, xyz, [8, 1], legacy, stiffness=1, ssf_a=ssf_a)
-      call ssf_partition_weights(1, points, xyz, [8, 1], direct)
-      call check(error, all(legacy == direct), "legacy SSF option selects the separate SSF routine")
-      if (allocated(error)) return
       x = -0.3_wp/0.4_wp
       expected = (1.0_wp - (35.0_wp*x - 35.0_wp*x**3 + 21.0_wp*x**5 - 5.0_wp*x**7)/16.0_wp)/2.0_wp
       points(:, 1) = [0.7_wp, 0.0_wp, 0.0_wp]
-      call ssf_partition_weights(1, points, xyz, [1, 1], direct, a=0.4_wp)
+      ssf%a = 0.4_wp
+      call ssf%owner_weights(1, points, xyz, [1, 1], direct)
       call check(error, abs(direct(1) - expected) < 1.0e-15_wp, "explicit SSF width must set its polynomial argument")
    end subroutine test_compact_switches
 
@@ -645,13 +656,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: xyz(3, 2), points(3, 5), w(5), w2(5), expected, h, derivative, fd
+      type(pvoronoi_partition_type) :: pvoronoi
 
       xyz = 0.0_wp
       xyz(1, 2) = 2.0_wp
       points = 0.0_wp
       points(1, :) = [-1.0e6_wp, 0.25_wp, 0.375_wp, 0.5_wp, 1.0e6_wp]
-      call pvoronoi_partition_weights(1, points, xyz, [1, 1], w, radii=[1.0_wp, 2.0_wp])
-      call pvoronoi_partition_weights(2, points, xyz, [1, 1], w2, radii=[1.0_wp, 2.0_wp])
+      pvoronoi%radii = [1.0_wp, 2.0_wp]
+      call pvoronoi%owner_weights(1, points, xyz, [1, 1], w)
+      call pvoronoi%owner_weights(2, points, xyz, [1, 1], w2)
       expected = 1.0_wp/(1.0_wp + exp(4.0_wp/3.0_wp))
       call check(error, w(1) == 1.0_wp .and. w(2) == 0.5_wp .and. abs(w(3) - expected) < 1.0e-15_wp &
          & .and. all(w(4:5) == 0.0_wp) .and. maxval(abs(w + w2 - 1.0_wp)) < 1.0e-15_wp, &
@@ -660,7 +673,9 @@ contains
 
       h = 1.0e-4_wp
       points(1, :) = [-2.0_wp*h, -h, 0.0_wp, h, 2.0_wp*h]
-      call pvoronoi_partition_weights(1, points, xyz, [1, 1], w, width=8.0_wp, radii=[1.0_wp, 1.0_wp])
+      pvoronoi%width = 8.0_wp
+      pvoronoi%radii = [1.0_wp, 1.0_wp]
+      call pvoronoi%owner_weights(1, points, xyz, [1, 1], w)
       expected = 1.0_wp/(1.0_wp + exp(-4.0_wp/3.0_wp))
       call check(error, abs(w(3) - expected) < 1.0e-15_wp, "explicit power width must set the transition scale")
       if (allocated(error)) return
@@ -709,19 +724,22 @@ contains
       integer, parameter :: nat = 1100
       real(wp) :: xyz(3, nat), points(3, 1), w(1)
       integer :: numbers(nat)
+      type(becke_partition_type) :: becke
+      type(ssf_partition_type) :: ssf
+      type(pvoronoi_partition_type) :: pvoronoi
 
       xyz = 0.0_wp
       points = 0.0_wp
       numbers = 1
-      call becke_partition_weights(1, points, xyz(:, :3), numbers(:3), w)
+      call becke%owner_weights(1, points, xyz(:, :3), numbers(:3), w)
       call check(error, abs(w(1) - 1.0_wp/3.0_wp) < epsilon(1.0_wp), &
          & "coincident Becke sites share equal weights")
       if (allocated(error)) return
-      call ssf_partition_weights(1, points, xyz(:, :3), numbers(:3), w)
+      call ssf%owner_weights(1, points, xyz(:, :3), numbers(:3), w)
       call check(error, abs(w(1) - 1.0_wp/3.0_wp) < epsilon(1.0_wp), &
          & "coincident SSF sites share equal weights")
       if (allocated(error)) return
-      call pvoronoi_partition_weights(1, points, xyz, numbers, w)
+      call pvoronoi%owner_weights(1, points, xyz, numbers, w)
       call check(error, abs(w(1)*real(nat, wp) - 1.0_wp) < 4.0_wp*epsilon(1.0_wp), &
          & "underflowing coincident power-cell products must still normalize")
    end subroutine test_large_coincident

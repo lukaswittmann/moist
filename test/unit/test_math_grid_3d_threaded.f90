@@ -19,7 +19,7 @@ module test_math_grid_3d_threaded
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d
    use moist_math_grid_3d_base, only: moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
-      & new_cartesian_grid_3d
+      & new_cartesian_gaussian_grid
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_chebyshev2_type, &
       & new_chebyshev2_rule
    use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_becke_type, &
@@ -30,9 +30,9 @@ module test_math_grid_3d_threaded
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
       & moist_math_grid_atomic_recipe_override_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_grid, molecular_grid_set_kgrid, &
+      & new_molecular_point_grid, molecular_grid_set_kgrid, &
       & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, default_nufft_tol
-   use test_helpers, only: get_uniform_recipe
+   use test_helpers, only: get_cartesian_gaussian_grid, get_uniform_recipe
    use, intrinsic :: iso_c_binding, only: c_int
    implicit none(type, external)
    private
@@ -138,7 +138,7 @@ contains
       call enter_threaded(error, max_threads)
       if (allocated(error)) return
 
-      call new_cartesian_grid_3d(grid, 15, 14, 13, 0.4_wp, error=merr)
+      call get_cartesian_gaussian_grid(grid, 15, 14, 13, 0.4_wp, error=merr)
       if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -172,7 +172,7 @@ contains
          end do
          do i = 1, 2
             status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-               & f_r(:, i), f_k_ref(:, i), grid%dv)
+               & f_r(:, i), f_k_ref(:, i), grid%get_cell_volume())
             call check(error, status == 0, "reference forward FFT backend call failed")
             if (allocated(error)) exit checks
          end do
@@ -210,7 +210,7 @@ contains
       call enter_threaded(error, max_threads)
       if (allocated(error)) return
 
-      call new_cartesian_grid_3d(grid, 15, 14, 13, 0.4_wp, error=merr)
+      call get_cartesian_gaussian_grid(grid, 15, 14, 13, 0.4_wp, error=merr)
       if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -223,7 +223,7 @@ contains
       end do
 
       status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-         & f_r(:, 1), f_k_ref(:, 1), grid%dv)
+         & f_r(:, 1), f_k_ref(:, 1), grid%get_cell_volume())
       call check(error, status == 0, "reference forward FFT backend call failed")
       if (allocated(error)) then
 !$       call omp_set_num_threads(max_threads)
@@ -269,7 +269,7 @@ contains
       call enter_threaded(error, max_threads)
       if (allocated(error)) return
 
-      call new_cartesian_grid_3d(grid, 15, 14, 13, 0.4_wp, error=merr)
+      call get_cartesian_gaussian_grid(grid, 15, 14, 13, 0.4_wp, error=merr)
       if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -287,11 +287,11 @@ contains
       ! Per-site single-field references in both directions
       do a = 1, ns
          status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-            & f_r(:, a), f_k_ref(:, a), grid%dv)
+            & f_r(:, a), f_k_ref(:, a), grid%get_cell_volume())
          if (status == 0) then
             scratch = f_k_ref(:, a)
             status = moist_fft_c2r_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-               & scratch, g_r_ref(:, a), 1.0_wp/grid%vbox)
+               & scratch, g_r_ref(:, a), 1.0_wp/grid%get_box_volume())
          end if
          call check(error, status == 0, "reference single-field FFT backend call failed")
          if (allocated(error)) exit
@@ -377,7 +377,7 @@ contains
                                           1.43_wp, 0.0_wp, 1.11_wp, &
                                           -1.43_wp, 0.0_wp, 1.11_wp], [3, 3]))
          call get_uniform_recipe(recipe, overrides, nufft_nrad, nufft_nang, merr, rmax=nufft_rmax)
-         if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, &
+         if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, &
                                                             overrides=overrides, reciprocal=.false.)
          if (.not. allocated(merr)) call mg%update(mol, merr)
          if (.not. allocated(merr)) call molecular_grid_set_kgrid(mg, nufft_dr, merr)
@@ -466,13 +466,13 @@ contains
       if (allocated(error)) return
 
       ! Direct inverse sum at the Gaussian center and +-0.3 bohr along (1, -1, 1)
-      inverse_scale = mg%dkx*mg%dky*mg%dkz/(2.0_wp*pi)**3
+      inverse_scale = product(mg%get_kspacing())/(2.0_wp*pi)**3
       scale = maxval(abs(g_thr))
       do iv = 1, nv
          do probe = 1, 3
             probe_xyz = cen(:, iv) + 0.3_wp*real(probe - 2, wp)*[1.0_wp, -1.0_wp, 1.0_wp]
             ip = minloc(sum((mg%xyz - spread(probe_xyz, 2, mg%ngrid))**2, dim=1), dim=1)
-            point = mg%xyz(:, ip) - mg%kref
+            point = mg%xyz(:, ip) - mg%get_kref()
             inverse_ref = 0.0_wp
             do ik = 1, mg%npts_k
                kvec = mg%kpoint(ik)
@@ -537,7 +537,7 @@ contains
          call trafo%destroy()
          return
       end if
-      if (trafo%is_type12 .neqv. use_type12) then
+      if (trafo%uses_type12() .neqv. use_type12) then
          call test_failed(error, "molecular NUFFT transform-route switch did not take effect")
          call trafo%destroy()
          return
@@ -592,7 +592,7 @@ contains
       do j = 1, mg%npts_k
          kvec = mg%kpoint(j)
          if (norm2(kvec) > pi/mg%get_dr()) cycle
-         phase = dot_product(kvec, cen - mg%kref)
+         phase = dot_product(kvec, cen - mg%get_kref())
          fex = f0*exp(-sum(kvec**2)/(4.0_wp*alpha))*cmplx(cos(phase), -sin(phase), wp)
          dev = abs(fk(j) - fex)/f0
          if (.not. ieee_is_finite(dev)) then

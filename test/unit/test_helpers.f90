@@ -113,6 +113,7 @@ module test_helpers
    public :: get_test_cross
    public :: read_printout, printed_entry
    public :: fd4_scalar
+   public :: require_message
    public :: fd4_offsets
    public :: fd6_scalar
    public :: fd6_offsets
@@ -175,7 +176,7 @@ contains
 
       type(structure_type) :: mol
 
-      call new_cartesian_gaussian_grid(grid, error, nx, ny, nz, dr)
+      call new_cartesian_gaussian_grid(grid, error, nx, ny, nz, dr, margin=0.0_wp)
       if (allocated(error)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call grid%update(mol, error)
@@ -856,6 +857,32 @@ contains
          call test_failed(error, trim(err%message))
       end if
    end subroutine check_moist_error
+
+   !> Fail unless `merr` is set and names `expected`
+   !>
+   !> For an error in the middle of a test that continues afterwards; a test
+   !> whose only purpose is one error uses `should_fail` instead
+   !>
+   !> @param[out] error     Test failure
+   !> @param[in]  merr      Library error, possibly unallocated
+   !> @param[in]  expected  Substring the message must contain
+   !> @param[in]  label     Case label for the failure message
+   subroutine require_message(error, merr, expected, label)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(moist_error_type), allocatable, intent(in) :: merr
+      !> Substring the message must contain
+      character(len=*), intent(in) :: expected
+      !> Case label
+      character(len=*), intent(in) :: label
+
+      if (.not. allocated(merr)) then
+         call test_failed(error, label//": expected an error containing '"//expected//"'")
+      else if (index(merr%message, expected) == 0) then
+         call test_failed(error, label//": message '"//merr%message//"' lacks '"//expected//"'")
+      end if
+   end subroutine require_message
 
    !> 4-point central finite-difference formula:
    !>   f'(x) ~ (-f(x+2h) + 8 f(x+h) - 8 f(x-h) + f(x-2h)) / (12 h)

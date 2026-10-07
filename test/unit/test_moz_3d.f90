@@ -6,8 +6,8 @@ module test_moz_3d
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
-   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_grid_3d
-   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_grid
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_gaussian_grid
+   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_point_grid, new_molecular_gaussian_grid
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
    use test_helpers, only: get_qc_handymod_recipe
    use moist_channels_fields, only: field_query_type
@@ -55,11 +55,16 @@ contains
       integer :: i
       call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_cartesian_gaussian_grid(template, err, nx=2, ny=2, nz=2, margin=0.0_wp)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
       template%nx = 2
       template%ny = 2
       template%nz = 2
       template%dr = 0.5_wp
-      call new_moz_3d_model(model, template, ctx, err)
+      call new_moz_3d_model(model, ctx, template, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return
@@ -158,12 +163,12 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call new_cartesian_grid_3d(cart, 4, 6, 8, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 4, 6, 8, 0.5_wp, margin=0.0_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
-      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe, gaussian=.true.)
-      if (.not. allocated(err)) call new_molecular_grid(bare, err, recipe=recipe)
+      if (.not. allocated(err)) call new_molecular_gaussian_grid(molecular, err, recipe=recipe)
+      if (.not. allocated(err)) call new_molecular_point_grid(bare, err, recipe=recipe)
       call require_success(error, err)
       if (allocated(error)) return
       do kind = 1, 3
@@ -175,7 +180,7 @@ contains
          case default
             allocate (grid, source=bare)
          end select
-         call new_moz_3d_model(model, grid, ctx, err)
+         call new_moz_3d_model(model, ctx, grid, err)
          call require_success(error, err)
          if (allocated(error)) return
          call check(error, associated(model%ctx, ctx), "model must retain its borrowed context")
@@ -215,7 +220,7 @@ contains
          type is (moist_math_grid_3d_cartesian_type)
             call check(error, g%ngrid, 4*6*8)
          type is (moist_math_grid_3d_molecular_type)
-            call check(error, g%has_kgrid)
+            call check(error, g%has_reciprocal())
          class default
             call test_failed(error, "model did not retain the concrete grid grid")
          end select
@@ -246,12 +251,12 @@ contains
       integer :: kind
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
-      if (.not. allocated(err)) call new_molecular_grid(widths, err, recipe=recipe, gaussian=.true.)
-      if (.not. allocated(err)) call new_molecular_grid(points, err, recipe=recipe)
+      if (.not. allocated(err)) call new_molecular_gaussian_grid(widths, err, recipe=recipe)
+      if (.not. allocated(err)) call new_molecular_point_grid(points, err, recipe=recipe)
       call require_success(error, err)
       if (allocated(error)) return
       do kind = 1, 3
@@ -292,7 +297,7 @@ contains
       character(len=96) :: walks(3)
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       call require_success(error, err)
       if (allocated(error)) return
@@ -316,7 +321,7 @@ contains
       type(coupling_type), pointer :: coupling
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       call require_success(error, err)
       if (allocated(error)) return
@@ -433,7 +438,7 @@ contains
       !> Construction or update error
       type(moist_error), allocatable, intent(out) :: err
       type(structure_type) :: mol
-      call new_moz_3d_model(model, grid, ctx, err)
+      call new_moz_3d_model(model, ctx, grid, err)
       if (allocated(err)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call model%update(mol, err)
@@ -477,7 +482,7 @@ contains
          & "staged for the", "is not implemented"]
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, foreign, err)
       model%coupling_mode = "qat"
@@ -642,7 +647,7 @@ contains
       call check(error, index(err%message, "Construct the 3D MOZ model") > 0)
       if (allocated(error)) return
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call new_cartesian_gaussian_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       model%coupling_mode = "qat"
       if (.not. allocated(err)) call model%new_coupling(coupling, err)
