@@ -449,7 +449,6 @@ contains
       if (present(param)) settings = param
       call settings%validate(error)
       if (allocated(error)) return
-      !> Reconstruction without a context drops the previous one
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
       self%label = "Marching cubes"
