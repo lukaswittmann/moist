@@ -105,7 +105,6 @@ jobs:
       - name: Generate Cobertura XML coverage report
         run: |
           mkdir -p build/meson-logs
-          # --include-internal-functions is needed due to gfortran's procedure naming
           gcovr -r . build \
             -e subprojects \
             -e 'src/moist/math/fft/(ducc0|finufft|xsimd)/.*' \
@@ -113,6 +112,7 @@ jobs:
             -e '.*_libmoist\.c' \
             --include-internal-functions \
             --gcov-ignore-errors=no_working_dir_found \
+            --gcov-suspicious-hits-threshold=1099511627776 \
             -x -o build/meson-logs/coverage.xml
 
       - name: Generate Python coverage report
