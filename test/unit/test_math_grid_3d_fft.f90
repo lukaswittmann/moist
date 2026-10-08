@@ -317,7 +317,8 @@ contains
    !> - Pins the dV and 1/Vbox normalizations together with the phase reference: a missing
    !>   r1 correction shifts the result by r1 (half the box), a wrong measure scales it
    !> - Expected error ~ 1e-10 absolute, from the periodic image of the convolution
-   !>   (exponent ab/(a+b) = 0.75) across the x faces: exp(-0.75 (L_x - 5.5 - 0.2)^2) ~ 1e-10
+   !>   across the x faces, exponent ab/(a+b) = 0.75:
+   !>   exp(-0.75 (L_x - 5.5 - 0.2)^2) ~ 1e-10
    !> - Band-limit and aliasing terms below 1e-17: product spectrum exp(-|k|^2/3) at
    !>   k = pi/dr, cross term F_b(k - 2 pi/dr) F_a(k) <= exp(-39)
    !> - Single-field truncation exp(-a (L/2 - |c_i|)^2) <= 1e-12

@@ -73,7 +73,7 @@ contains
 
    !> Collect all math_grid_3d_partition tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_3d_partition(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -99,18 +99,16 @@ contains
                   ]
    end subroutine collect_math_grid_3d_partition
 
-   !* ================================================================================= *!
-   !*                                 Partition weights                                 *!
-   !* ================================================================================= *!
+   !* ------------------------------- Partition weights ------------------------------- *!
 
    !> Batched weights of one owner under a cell setting
    !>
-   !> @param[in]  cell     Cell-function setting (`cell_*`)
-   !> @param[in]  owner    Atom whose weight is returned
-   !> @param[in]  points   Sample points, shape (3, npts)
-   !> @param[in]  xyz      Atom positions, shape (3, nat)
-   !> @param[in]  numbers  Atomic numbers, shape (nat)
-   !> @param[out] w        Owner weights, shape (npts)
+   !> @param[in]  cell     cell-function setting (`cell_*`)
+   !> @param[in]  owner    atom whose weight is returned
+   !> @param[in]  points   sample points, shape (3, npts)
+   !> @param[in]  xyz      atom positions, shape (3, nat)
+   !> @param[in]  numbers  atomic numbers, shape (nat)
+   !> @param[out] w        owner weights, shape (npts)
    subroutine batched(cell, owner, points, xyz, numbers, w)
       !> Cell-function setting
       integer, intent(in) :: cell
@@ -149,9 +147,9 @@ contains
    !> - Six axis directions at each of `shell_radii` around every atom
    !> - `nbox` deterministic random points in the padded bounding box
    !>
-   !> @param[in]  mol      Structure
-   !> @param[out] numbers  Atomic numbers, shape (nat)
-   !> @param[out] points   Sample points, shape (3, npts)
+   !> @param[in]  mol      structure
+   !> @param[out] numbers  atomic numbers, shape (nat)
+   !> @param[out] points   sample points, shape (3, npts)
    subroutine make_fixture(mol, numbers, points)
       !> Structure
       type(structure_type), intent(in) :: mol
@@ -234,7 +232,9 @@ contains
 
       integer, parameter :: npts = 81
       real(wp), parameter :: bond = 2.1_wp
-      !> Clearance from the window edges; 1 - g(z) ~ (1 - |z|)**4 must stay above round-off
+      !> Clearance from the window edges
+      !>
+      !> - 1 - g(z) ~ (1 - |z|)**4 above round-off
       real(wp), parameter :: margin = 1.0e-3_wp
       real(wp) :: xyz(3, 2), points(3, npts), t(npts), nu, w1(npts), w2(npts)
       integer :: numbers(2), ip
@@ -317,7 +317,7 @@ contains
    !> - Three iterations at the same point
    !> - Heteronuclear midpoint `mu = 0`, so `nu = a`: O-H gives Becke and SSF
    !>   an unclamped size adjustment, H-Cs one clamped to `|a| = 1/2` (Becke
-   !>   1988, App. A); both power-cell pairs saturate and pin only the sign of
+   !>   1988, Appendix A); both power-cell pairs saturate and pin only the sign of
    !>   the squared-radius offset
    subroutine test_homonuclear_analytic(error)
       !> Test failure
@@ -647,9 +647,7 @@ contains
          & "underflowing coincident power-cell products must still normalize")
    end subroutine test_large_coincident
 
-   !* ================================================================================= *!
-   !*                              Molecular grid assembly                              *!
-   !* ================================================================================= *!
+   !* ---------------------------- Molecular grid assembly ---------------------------- *!
 
    !> All schemes select, prune and repartition the molecular grid correctly
    subroutine test_partition_assembly(error)
@@ -907,14 +905,14 @@ contains
             & "atom points")
          if (allocated(error)) return
       end do
-      ! The hydrogen cutoff keeps fewer shells than requested
+      ! Fewer retained hydrogen shells than requested after cutoff
       call check(error, grid%atom_shell_offset(3) - grid%atom_shell_offset(2) < grid%nrad_per_atom(2) &
          & .and. all(grid%shell_r(grid%atom_shell_offset(2):grid%atom_shell_offset(3) - 1) <= 4.0_wp), &
          & "rcut_upper of the hydrogen override")
       if (allocated(error)) return
 
-      ! A variable shell policy reports the largest retained angular rule; both
-      ! sector orders, so neither the first nor the last shell passes for the maximum
+      ! Largest retained angular rule for a variable shell policy
+      ! Both sector orders: neither first nor last shell sufficient for the maximum
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       do order = 1, 2
          call get_becke_recipe(recipe, 14, 0.5_wp, 5, merr, rcut_upper=5.0_wp)
@@ -938,9 +936,7 @@ contains
       end do
    end subroutine test_element_overrides
 
-   !* ================================================================================= *!
-   !*                         Owner-level partition derivatives                         *!
-   !* ================================================================================= *!
+   !* ----------------------- Owner-level partition derivatives ----------------------- *!
 
    !> Fused switch values and first two derivatives against independent differences
    subroutine test_switch_jets(error)
@@ -1002,12 +998,12 @@ contains
 
    !> Production switch jets and agreement of the value, first- and second-order bindings
    !>
-   !> @param[in] cell Configured partition scheme
-   !> @param[in] x Pair coordinate
-   !> @param[out] s Switch value
-   !> @param[out] ds First derivative
-   !> @param[out] d2s Second derivative
-   !> @param[out] error Test failure
+   !> @param[in]  cell   configured partition scheme
+   !> @param[in]  x      pair coordinate
+   !> @param[out] s      switch value
+   !> @param[out] ds     first derivative
+   !> @param[out] d2s    second derivative
+   !> @param[out] error  test failure
    subroutine production_switch_jet(cell, x, s, ds, d2s, error)
       !> Configured partition scheme
       class(moist_math_grid_3d_partition_type), intent(in) :: cell
@@ -1054,7 +1050,7 @@ contains
          do stiffness = 1, 5, 2
             if (scheme /= partition_becke .and. stiffness /= 3) cycle
             points(:, 2) = mol%xyz(:, 2)
-            ! The one-iteration switch is only once differentiable at a nucleus
+            ! One-iteration switch only once differentiable at a nucleus
             if (scheme == partition_becke .and. stiffness == 1) then
                points(:, 2) = points(:, 2) + [0.05_wp, -0.03_wp, 0.02_wp]
             end if
@@ -1213,7 +1209,7 @@ contains
 
    !> Hydrogen molecule on the x axis, 1.4 bohr bond
    !>
-   !> @param[out] mol  Structure
+   !> @param[out] mol  structure
    subroutine make_h2(mol)
       !> Structure
       type(structure_type), intent(out) :: mol
@@ -1223,7 +1219,7 @@ contains
 
    !> Water, oxygen near the origin
    !>
-   !> @param[out] mol  Structure
+   !> @param[out] mol  structure
    subroutine make_water(mol)
       !> Structure
       type(structure_type), intent(out) :: mol
@@ -1235,7 +1231,7 @@ contains
 
    !> Three distinct nuclei away from partition switching boundaries
    !>
-   !> @param[out] mol Test molecule
+   !> @param[out] mol  test molecule
    subroutine make_molecule(mol)
       !> Test molecule
       type(structure_type), intent(out) :: mol

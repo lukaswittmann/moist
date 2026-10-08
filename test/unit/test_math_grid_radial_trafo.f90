@@ -33,7 +33,7 @@ contains
 
    !> Collect all math_grid_radial_trafo tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_radial_trafo(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -67,8 +67,8 @@ contains
 
    !> Largest deviation max|got - ref| relative to max|ref|; huge on a non-finite entry
    !>
-   !> @param[in] got  Values under test
-   !> @param[in] ref  Reference values
+   !> @param[in] got  values under test
+   !> @param[in] ref  reference values
    pure function rel_dev(got, ref) result(err)
       !> Values under test
       real(wp), intent(in) :: got(:)
@@ -94,8 +94,8 @@ contains
 
    !> `rel_dev` over all columns of a 2D array
    !>
-   !> @param[in] got  Values under test
-   !> @param[in] ref  Reference values
+   !> @param[in] got  values under test
+   !> @param[in] ref  reference values
    pure function rel_dev2(got, ref) result(err)
       !> Values under test
       real(wp), intent(in) :: got(:, :)
@@ -111,11 +111,11 @@ contains
    !>
    !> @param[out] rgrid  r-space grid
    !> @param[out] kgrid  k-space grid
-   !> @param[in]  nr     Number of r nodes
+   !> @param[in]  nr     number of r nodes
    !> @param[in]  p_r    r-space scale (bohr)
-   !> @param[in]  nk     Number of k nodes
+   !> @param[in]  nk     number of k nodes
    !> @param[in]  p_k    k-space scale (1/bohr)
-   !> @param[out] merr   Construction error
+   !> @param[out] merr   construction error
    subroutine make_cheb_pair(rgrid, kgrid, nr, p_r, nk, p_k, merr)
       !> r-space grid
       type(moist_math_grid_radial_type), intent(out) :: rgrid
@@ -139,10 +139,10 @@ contains
 
    !> One Chebyshev-II + Becke grid with a fixed scale
    !>
-   !> @param[out] grid  Radial grid
-   !> @param[in]  n     Number of nodes
+   !> @param[out] grid  radial grid
+   !> @param[in]  n     number of nodes
    !> @param[in]  p     Becke scale
-   !> @param[out] merr  Construction error
+   !> @param[out] merr  construction error
    subroutine make_cheb_grid(grid, n, p, merr)
       !> Radial grid
       type(moist_math_grid_radial_type), intent(out) :: grid
@@ -166,10 +166,11 @@ contains
       call new_radial_grid(grid, recipe, 1, merr)
    end subroutine make_cheb_grid
 
-   !> Build a trafo with the factory, turning a library error into a test failure
+   !> Build a trafo via the factory and report library errors as test failures
+   !>
    !> @param[in]  rgrid  r-space grid
    !> @param[in]  kgrid  k-space grid
-   !> @param[out] trafo  New trafo
+   !> @param[out] trafo  new trafo
    subroutine make_trafo(error, rgrid, kgrid, trafo)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -187,10 +188,11 @@ contains
    end subroutine make_trafo
 
    !> Uniform pair plus its trafo, or a Chebyshev-II + Becke pair plus its trafo
+   !>
    !> @param[in]  kind   transform_dst4 or transform_quadrature
    !> @param[out] rgrid  r-space grid
    !> @param[out] kgrid  k-space grid
-   !> @param[out] trafo  New trafo
+   !> @param[out] trafo  new trafo
    subroutine make_case(error, kind, rgrid, kgrid, trafo)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -219,11 +221,11 @@ contains
 
    !> Apply one scalar transform direction
    !>
-   !> @param[in,out] trafo  Trafo instance
-   !> @param[in]     op     Direction selector
-   !> @param[in]     f_in   Input field
-   !> @param[out]    f_out  Output field
-   !> @param[out]    merr   Library error
+   !> @param[in,out] trafo  trafo instance
+   !> @param[in]     op     direction selector
+   !> @param[in]     f_in   input field
+   !> @param[out]    f_out  output field
+   !> @param[out]    merr   library error
    subroutine apply_one(trafo, op, f_in, f_out, merr)
       !> Trafo instance
       class(moist_math_grid_radial_trafo_type), intent(inout) :: trafo
@@ -250,11 +252,11 @@ contains
 
    !> Apply one batched transform direction
    !>
-   !> @param[in,out] trafo  Trafo instance
-   !> @param[in]     op     Direction selector
-   !> @param[in]     f_in   Input fields, one per column
-   !> @param[out]    f_out  Output fields, one per column
-   !> @param[out]    merr   Library error
+   !> @param[in,out] trafo  trafo instance
+   !> @param[in]     op     direction selector
+   !> @param[in]     f_in   input fields, one per column
+   !> @param[out]    f_out  output fields, one per column
+   !> @param[out]    merr   library error
    subroutine apply_all(trafo, op, f_in, f_out, merr)
       !> Trafo instance
       class(moist_math_grid_radial_trafo_type), intent(inout) :: trafo
@@ -281,10 +283,10 @@ contains
 
    !> Input and output lengths of a direction: r-space nr, k-space nk
    !>
-   !> @param[in]  trafo  Trafo instance
-   !> @param[in]  op     Direction selector
-   !> @param[out] n_in   Input length
-   !> @param[out] n_out  Output length
+   !> @param[in]  trafo  trafo instance
+   !> @param[in]  op     direction selector
+   !> @param[out] n_in   input length
+   !> @param[out] n_out  output length
    pure subroutine op_sizes(trafo, op, n_in, n_out)
       !> Trafo instance
       class(moist_math_grid_radial_trafo_type), intent(in) :: trafo
@@ -306,10 +308,10 @@ contains
 
    !> Deterministic input fields of shape (n, nb)
    !>
-   !> @param[in]  n       Column length
-   !> @param[in]  nb      Number of columns
-   !> @param[in]  offset  Signal offset
-   !> @param[out] f       Fields
+   !> @param[in]  n       column length
+   !> @param[in]  nb      number of columns
+   !> @param[in]  offset  signal offset
+   !> @param[out] f       fields
    pure subroutine fill_fields(n, nb, offset, f)
       !> Column length
       integer, intent(in) :: n
@@ -404,8 +406,8 @@ contains
 
    !> DST-IV round trips are the identity: k2r(r2k(f)) = f and r2k_adj(k2r_adj(g)) = g
    !>
-   !> The weight diagonals telescope through the involution to exactly 1
-   !> for dk = pi/(npts*dr); sizes include one node and odd lengths
+   !> - Weight diagonals telescoping through the involution to exactly 1 for dk = pi/(npts*dr)
+   !> - Sizes including one node and odd lengths
    subroutine test_dst4_round_trip(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -464,11 +466,12 @@ contains
    !> Chebyshev-II + Becke pair, p_r = 1, p_k = 1.5, exponent 0.7; forward
    !> error relative to F(0), backward error absolute (f(0) = 1), over the
    !> nodes with r, k <= 10; each window node is checked against its bound
-   !> @param[in]  n        Number of r and k nodes
-   !> @param[in]  bound_k  Forward bound, relative to F(0)
-   !> @param[in]  bound_r  Backward bound, absolute
-   !> @param[out] err_k    Forward window error
-   !> @param[out] err_r    Backward window error
+   !>
+   !> @param[in]  n        number of r and k nodes
+   !> @param[in]  bound_k  forward bound, relative to F(0)
+   !> @param[in]  bound_r  backward bound, absolute
+   !> @param[out] err_k    forward window error
+   !> @param[out] err_r    backward window error
    subroutine gaussian_window_errors(error, n, bound_k, bound_r, err_k, err_r)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -542,8 +545,8 @@ contains
    !> - Measured window errors at 64, 80, 128, 200 nodes: forward (relative
    !>   to F(0)) 1.7e-7, 9.5e-10, 5.4e-14, 3.7e-15; backward (absolute)
    !>   1.7e-5, 9.2e-7, 9.0e-12, 3.9e-15; bounds carry about a factor 3
-   !> - The error must also shrink as the node count grows
-   !> - Over all nodes the error stalls near 1e-3 (outer k nodes unresolved)
+   !> - Decreasing error with increasing node count
+   !> - Full-grid error plateau near 1e-3 from unresolved outer k nodes
    subroutine test_quadrature_convergence(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -562,7 +565,7 @@ contains
          & "Quadrature window error does not decrease with the node count")
    end subroutine test_quadrature_convergence
 
-   !> A node at k = 0 or r = 0 uses sinc(0) = 1 and gives the plain moments
+   !> Check plain moments at k = 0 or r = 0 via sinc(0) = 1
    !>
    !> F(0) = 4*pi sum_i f_i r_i^2 w_i and f(0) = 1/(2*pi^2) sum_j F_j k_j^2 w_j;
    !> hand-made grids, since no rule places a node at 0
@@ -608,14 +611,13 @@ contains
          & "Quadrature f(r = 0) must be the plain k-space moment")
    end subroutine test_quadrature_sinc_zero
 
-   !> The dense kernel on a uniform pair equals the DST-IV transform to round-off
+   !> Check the uniform-pair dense kernel against DST-IV to round-off
    !>
-   !> On the midpoint nodes both evaluate the same discrete operator, so this
-   !> pins the quadrature prefactors against the independent DST-IV path;
-   !> the quadrature trafo is built directly, since the factory never selects
-   !> it for a DST-IV pair; deviation relative to the largest output element,
-   !> measured at most 9.7e-15 (the dense path reduces sin arguments up to
-   !> about 300 in floating point, the DST-IV phase is exact)
+   !> - Same discrete operator on midpoint nodes: independent check of quadrature prefactors
+   !> - Direct quadrature trafo construction; factory selects DST-IV for uniform pairs
+   !> - Deviation relative to the largest output element, measured at most 9.7e-15
+   !> - Dense path: floating-point reduction of sin arguments up to about 300
+   !> - Exact DST-IV phase
    subroutine test_quadrature_vs_dst4(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -656,8 +658,8 @@ contains
 
    !> Both adjoints are the transposes: <T a, b> = <a, T^T b>
    !>
-   !> The residual is scaled by ||T a|| ||b||, the natural size of the
-   !> bilinear form; DST-IV on 96 nodes, quadrature on 64 r and 80 k nodes
+   !> - Residual scaled by ||T a|| ||b||, the natural bilinear-form size
+   !> - DST-IV on 96 nodes; quadrature on 64 r and 80 k nodes
    subroutine test_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -739,9 +741,8 @@ contains
 
    !> Batch widths 3, 5, 2 on one instance reproduce the scalar loop
    !>
-   !> - Every direction grows the cached width (2 or 3 to 5) and shrinks it
-   !>   (5 to 2) on the same instance; each batch is checked against the scalar
-   !>   loop, so a cache kept at a narrower width fails here
+   !> - Cached width growth (2 or 3 to 5) and shrinkage (5 to 2) per direction
+   !> - Each batch checked against the scalar loop to detect a stale narrower cache
    subroutine test_batched_width_change(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

@@ -46,13 +46,12 @@ module test_math_grid_3d_threaded
 
    !> Radial shells per atom of the threaded NUFFT grid
    !>
-   !> Grid sized so FINUFFT takes its multithreaded bin sort
+   !> Grid size for FINUFFT multithreaded bin sorting
    !>
    !> - FINUFFT sorts multithreaded only when `10*M` exceeds the fine grid `N`
    !> - Water at (nrad, nang, rmax, dr) = (40, 194, 6, 0.7): M = 18932 points,
-   !>   type-1 fine grid 60 x 48 x 48 = 138240, so 10*M = 189320 > N
-   !> - The `math_grid_nufft` probe grid (50, 110, 16, 0.7) sorts
-   !>   single-threaded
+   !>   type-1 fine grid 60 x 48 x 48 = 138240; 10*M = 189320 > N
+   !> - Single-threaded sorting for the `math_grid_nufft` probe grid (50, 110, 16, 0.7)
    integer, parameter :: nufft_nrad = 40
    !> Raw Lebedev point count per shell of the threaded NUFFT grid
    integer, parameter :: nufft_nang = 194
@@ -535,10 +534,10 @@ contains
 
    !> One Chebyshev-II + Becke radial grid with a fixed scale
    !>
-   !> @param[out] grid  Radial grid, tagged for the quadrature trafo
-   !> @param[in]  n     Number of nodes
+   !> @param[out] grid  radial grid, tagged for the quadrature trafo
+   !> @param[in]  n     number of nodes
    !> @param[in]  p     Becke scale
-   !> @param[out] merr  Construction error
+   !> @param[out] merr  construction error
    subroutine chebyshev_becke_grid(grid, n, p, merr)
       !> Radial grid
       type(moist_math_grid_radial_type), intent(out) :: grid
@@ -564,9 +563,9 @@ contains
 
    !> Worker of the radial per-thread test: clone the template once, transform every nteam-th column
    !>
-   !> @param[in]     template  Shared template trafo, read only
-   !> @param[in]     it        Worker index, 1..nteam
-   !> @param[in]     nteam     Number of workers
+   !> @param[in]     template  shared template trafo, read only
+   !> @param[in]     it        worker index, 1..nteam
+   !> @param[in]     nteam     number of workers
    !> @param[in]     f         r-space fields, shape (nr, nb)
    !> @param[in,out] g         k-space results, shape (nk, nb); this worker's columns written
    !> @param[in,out] h         r-space results of the forward adjoint, shape (nr, nb)
@@ -603,12 +602,11 @@ contains
       end do
    end subroutine radial_trafo_worker
 
-   !> One radial trafo per OpenMP thread, cloned from a shared template, matches the serial result
+   !> Check radial trafos cloned per OpenMP thread against the serial result
    !>
    !> - DST-IV on a uniform pair and the quadrature trafo on a
    !>   Chebyshev-II + Becke pair
-   !> - The same trafo code runs serially and per thread, so the results
-   !>   must be equal, not merely close
+   !> - Same trafo code serially and per thread: exact result equality
    subroutine test_radial_trafo_per_thread(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -782,11 +780,11 @@ contains
 
    !> Element-wise agreement of a 3 x 3 block with its serial reference
    !>
-   !> @param[out] error      Test failure
-   !> @param[in]  actual     Threaded result
-   !> @param[in]  reference  Serial result
-   !> @param[in]  thr        Absolute threshold
-   !> @param[in]  what       Failure context
+   !> @param[out] error      test failure
+   !> @param[in]  actual     threaded result
+   !> @param[in]  reference  serial result
+   !> @param[in]  thr        absolute threshold
+   !> @param[in]  what       failure context
    subroutine check_block(error, actual, reference, thr, what)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

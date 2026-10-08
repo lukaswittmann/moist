@@ -38,7 +38,7 @@ contains
 
    !> Collect all math_grid_radial tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_radial(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -61,7 +61,7 @@ contains
 
    !> Spherically symmetric unit Gaussian f(r) = exp(-r^2)
    !>
-   !> @param[in] r  Radius (bohr)
+   !> @param[in] r  radius (bohr)
    pure function gaussian_unit_radial(r) result(val)
       !> Radius (bohr)
       real(wp), intent(in) :: r
@@ -73,7 +73,7 @@ contains
 
    !> Constant integrand f(r) = 1
    !>
-   !> @param[in] r  Radius (bohr)
+   !> @param[in] r  radius (bohr)
    pure function one_radial(r) result(val)
       !> Radius (bohr)
       real(wp), intent(in) :: r
@@ -85,7 +85,7 @@ contains
 
    !> Antiderivative of r^2 exp(-r): -exp(-r)*(r^2 + 2r + 2)
    !>
-   !> @param[in] r  Radius (bohr)
+   !> @param[in] r  radius (bohr)
    pure function r2_exp_antiderivative(r) result(val)
       !> Radius (bohr)
       real(wp), intent(in) :: r
@@ -97,8 +97,8 @@ contains
 
    !> Build a rule of the requested kind behind the abstract type
    !>
-   !> @param[in]  kind  Rule selector
-   !> @param[out] rule  Allocated rule
+   !> @param[in]  kind  rule selector
+   !> @param[out] rule  allocated rule
    subroutine make_rule(kind, rule)
       !> Rule selector
       integer, intent(in) :: kind
@@ -124,13 +124,13 @@ contains
 
    !> Generate a canonical rule and apply a mapping for element z
    !>
-   !> @param[in]  kind     Rule selector
-   !> @param[in]  n        Number of nodes
-   !> @param[in]  mapping  Radial mapping
-   !> @param[in]  z        Atomic number
-   !> @param[out] r        Radii, shape (n)
+   !> @param[in]  kind     rule selector
+   !> @param[in]  n        number of nodes
+   !> @param[in]  mapping  radial mapping
+   !> @param[in]  z        atomic number
+   !> @param[out] r        radii, shape (n)
    !> @param[out] w        dr weights, shape (n)
-   !> @param[out] merr     Rule or mapping error
+   !> @param[out] merr     rule or mapping error
    subroutine mapped_nodes(kind, n, mapping, z, r, w, merr)
       !> Rule selector
       integer, intent(in) :: kind
@@ -156,12 +156,12 @@ contains
       call mapping%transform(z, x, wx, r, w, merr)
    end subroutine mapped_nodes
 
-   !> Fill a recipe with a rule of the given kind, a mapping, and a node count
+   !> Fill a recipe with a rule selector, mapping, and node count
    !>
-   !> @param[out] recipe   Recipe without cutoffs
-   !> @param[in]  kind     Rule selector
-   !> @param[in]  mapping  Radial mapping, copied
-   !> @param[in]  npts     Number of nodes
+   !> @param[out] recipe   recipe without cutoffs
+   !> @param[in]  kind     rule selector
+   !> @param[in]  mapping  radial mapping, copied
+   !> @param[in]  npts     number of nodes
    subroutine make_recipe(recipe, kind, mapping, npts)
       !> Recipe
       type(moist_math_grid_radial_recipe_type), intent(out) :: recipe
@@ -179,11 +179,11 @@ contains
 
    !> Element-wise relative check |a_i - b_i| <= tol*|b_i| against a finite reference
    !>
-   !> @param[out] error  Test failure
-   !> @param[in]  a      Values under test
-   !> @param[in]  b      Reference values, nonzero
-   !> @param[in]  tol    Relative tolerance
-   !> @param[in]  more   Failure context
+   !> @param[out] error  test failure
+   !> @param[in]  a      values under test
+   !> @param[in]  b      reference values, nonzero
+   !> @param[in]  tol    relative tolerance
+   !> @param[in]  more   failure context
    subroutine check_rel_dev(error, a, b, tol, more)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -434,8 +434,8 @@ contains
             call check(error, abs(sum(w*r*r*exp(-r*r)) - 0.25_wp*sqrt(pi)) <= 1.0e-13_wp, &
                & "Knowles mapping: Gaussian moment deviates from sqrt(pi)/4")
             if (allocated(error)) return
-            ! exp(-r) becomes ~(1 - t)^R near t = 1, so a small R leaves a weak
-            ! endpoint singularity and algebraic convergence; checked for R >= 5
+            ! exp(-r) ~ (1 - t)^R near t = 1
+            ! Weak endpoint singularity and algebraic convergence for small R; checks for R >= 5
             if (scales(is) < 5.0_wp) cycle
             if (kind == rule_midpoint) then
                ! Midpoint converges algebraically on the exponential tail

@@ -28,7 +28,7 @@ contains
 
    !> Collect all math_grid_radial_rule tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_radial_rule(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -46,8 +46,8 @@ contains
 
    !> Build a rule of the requested kind behind the abstract type
    !>
-   !> @param[in]  kind  Rule selector
-   !> @param[out] rule  Allocated rule
+   !> @param[in]  kind  rule selector
+   !> @param[out] rule  allocated rule
    subroutine make_rule(kind, rule)
       !> Rule selector
       integer, intent(in) :: kind
@@ -73,7 +73,7 @@ contains
 
    !> Exact integral of x^j over [-1, 1]
    !>
-   !> @param[in] j  Monomial degree (j >= 0)
+   !> @param[in] j  monomial degree (j >= 0)
    pure function monomial_moment(j) result(m)
       !> Monomial degree
       integer, intent(in) :: j
@@ -128,9 +128,8 @@ contains
    !> sum_{i=1..n} sin(i*pi/(n+1)) = cot(pi/(2(n+1))); the sum tends to 2 as
    !> 2 - pi^2/(6(n+1)^2)
    !>
-   !> Each weight equals pi/(n+1)*sqrt((1-x_i)*(1+x_i)) at the stored rounded
-   !> x_i to 4 eps (rule contract); weights from sin(i*pi/(n+1)) instead miss
-   !> this by 30 to 3000 eps at n = 50 to 400
+   !> - Weight pi/(n+1)*sqrt((1-x_i)*(1+x_i)) at stored rounded x_i, within 4 eps
+   !> - Weights from sin(i*pi/(n+1)): deviations of 30 to 3000 eps for n = 50..400
    subroutine test_chebyshev2_weight_sum(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

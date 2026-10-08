@@ -79,11 +79,11 @@ contains
    !>
    !> - `ready` false with `error` set on failure, callers release the grid either way
    !>
-   !> @param[out]   mol    carrier structure
-   !> @param[out]   mg     molecular grid with its reciprocal grid configured
-   !> @param[out]   trafo  transform prepared for one column
-   !> @param[out]   ready  whether a usable transform was produced
-   !> @param[out]   error  propagated test failure
+   !> @param[out] mol    carrier structure
+   !> @param[out] mg     molecular grid with its reciprocal grid configured
+   !> @param[out] trafo  transform prepared for one column
+   !> @param[out] ready  whether a usable transform was produced
+   !> @param[out] error  propagated test failure
    subroutine setup_probe(mol, mg, trafo, ready, error)
       !> Carrier structure
       type(structure_type), intent(out) :: mol
@@ -121,7 +121,7 @@ contains
          call test_failed(error, merr%message)
          return
       end if
-      ! The analytic probes cover the production route
+      ! Analytic probes for the production route
       if (.not. trafo%uses_type12()) then
          call test_failed(error, "default molecular transform must use NUFFT type 1/2")
          return
@@ -383,9 +383,9 @@ contains
 
    !> `exp(-a |r - c|^2)`
    !>
-   !> @param[in]  r    evaluation point (bohr)
-   !> @param[in]  c    gaussian center (bohr)
-   !> @param[in]  a    exponent (bohr^-2)
+   !> @param[in] r  evaluation point (bohr)
+   !> @param[in] c  gaussian center (bohr)
+   !> @param[in] a  exponent (bohr^-2)
    pure function gaussian(r, c, a) result(val)
       !> Evaluation point
       real(wp), intent(in) :: r(3)
@@ -538,12 +538,9 @@ contains
    !> Lennard-Jones + screened-Coulomb (Yukawa) field at `r`, summed over sources
    !>
    !> - Sources at `coord(:,a)` with per-atom well depth `eps`, size `sig`, charge `q`
-   !> - Source distance softened to `dsoft`, so the field is bounded at the grid
-   !>   points nearest a core
-   !> - Coulomb part screened by `kappa`, so the field is compact
-   !> - Together they keep the transform well resolved on both the uniform
-   !>   Cartesian and the atom-centered grid, which makes a cross-grid comparison
-   !>   meaningful
+   !> - Source distance softened to `dsoft`: bounded field near each core
+   !> - Coulomb screening by `kappa`: compact field
+   !> - Transform resolved on uniform Cartesian and atom-centered grids for cross-grid comparison
    !>
    !> @param[in] r      field point in bohr
    !> @param[in] coord  source coordinates, shape (3, nat)
@@ -551,7 +548,7 @@ contains
    !> @param[in] sig    per-source LJ size
    !> @param[in] q      per-source charge
    !> @param[in] dsoft  distance softening in bohr
-   !> @param[in] kappa  Coulomb screening in 1/bohr
+   !> @param[in] kappa  coulomb screening in 1/bohr
    pure function lj_screened_coulomb(r, coord, eps, sig, q, dsoft, kappa) result(val)
       !> Field point (bohr)
       real(wp), intent(in) :: r(3)
@@ -580,9 +577,8 @@ contains
    !> Finiteness of a complex value, true iff both its parts are finite
    !>
    !> - Guards the `max(maxerr, abs(...))` accumulators below
-   !> - A NaN sample would otherwise vanish silently, an IEEE comparison against
-   !>   NaN is always false so gfortran's `max` can keep the running finite
-   !>   accumulator
+   !> - IEEE comparisons against NaN always false
+   !> - NaN samples potentially hidden by gfortran's `max` retaining a finite accumulator
    !>
    !> @param[in] z  value to test
    pure function complex_is_finite(z) result(ok)

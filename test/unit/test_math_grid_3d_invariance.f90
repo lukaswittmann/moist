@@ -40,7 +40,7 @@ contains
 
    !> Collect geometries; each runs every motion, integrand and grid variant
    !>
-   !> @param[out] testsuite Collected tests
+   !> @param[out] testsuite  collected tests
    subroutine collect_math_grid_3d_invariance(testsuite)
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -77,7 +77,7 @@ contains
    !> - Two oblique rotations and their noncommuting composition about an offset pivot
    !> - Final identity update checks recovery after the combined motion
    !>
-   !> @param[out] motions Ordered translations, rotations and restoration
+   !> @param[out] motions  ordered translations, rotations and restoration
    subroutine make_motions(motions)
       !> Rigid motions applied independently to the original geometry
       type(rigid_motion_type), allocatable, intent(out) :: motions(:)
@@ -103,8 +103,8 @@ contains
 
    !> Rodrigues rotation about a nonzero axis
    !>
-   !> @param[in] axis Rotation axis, shape (3)
-   !> @param[in] angle Rotation angle (radians)
+   !> @param[in] axis   rotation axis, shape (3)
+   !> @param[in] angle  rotation angle (radians)
    pure function axis_rotation(axis, angle) result(rotation)
       !> Nonzero direction of the rotation axis
       real(wp), intent(in) :: axis(3)
@@ -125,11 +125,11 @@ contains
 
    !> Update each grid through the rigid motions and compare scalar integrals
    !>
-   !> Cartesian and Lebedev grids keep fixed lab-frame directions, so arbitrary
-   !> rotations preserve the continuum integral only to quadrature accuracy
+   !> - Fixed lab-frame directions for Cartesian and Lebedev grids
+   !> - Arbitrary rotation invariance limited by quadrature accuracy
    !>
-   !> @param[in] mol Original carrier geometry
-   !> @param[out] error Test failure
+   !> @param[in]  mol    original carrier geometry
+   !> @param[out] error  test failure
    subroutine check_invariance(mol, error)
       !> Original carrier geometry
       type(structure_type), intent(in) :: mol
@@ -199,12 +199,12 @@ contains
    !>
    !> Proper rotations have unit Jacobian; the whole-space reference is unchanged
    !>
-   !> @param[in] grid Updated grid for the moved molecule
-   !> @param[in] field Original scalar field and its independent integral
-   !> @param[in] motion Active rigid motion
-   !> @param[out] integrals Callback and tabulated integrals, shape (2)
-   !> @param[in] label Assertion context
-   !> @param[out] error Test failure
+   !> @param[in]  grid       updated grid for the moved molecule
+   !> @param[in]  field      original scalar field and its independent integral
+   !> @param[in]  motion     active rigid motion
+   !> @param[out] integrals  callback and tabulated integrals, shape (2)
+   !> @param[in]  label      assertion context
+   !> @param[out] error      test failure
    subroutine integrate_moved_field(grid, field, motion, integrals, label, error)
       !> Grid regenerated from the moved molecule
       class(moist_math_grid_3d_type), intent(in) :: grid
@@ -247,7 +247,7 @@ contains
 
       !> Pull the lab-frame evaluation point back into the original field frame
       !>
-      !> @param[in] r Position on the updated grid (bohr), shape (3)
+      !> @param[in] r  position on the updated grid (bohr), shape (3)
       pure function moved_integrand(r) result(value)
          !> Position in the transformed frame
          real(wp), intent(in) :: r(3)

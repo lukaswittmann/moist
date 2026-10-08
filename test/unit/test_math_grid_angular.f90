@@ -33,14 +33,14 @@ module test_math_grid_angular
    real(wp), parameter :: inexact_margin = 1.0e-3_wp
    !> Bound on a monomial moment the rule integrates exactly; measured at most 5.9e-14
    real(wp), parameter :: mono_exact_tol = 1.0e-12_wp
-   !> Lower bound on the worst monomial error one degree above the rule; measured at least 4.2e-8
+   !> Worst monomial error lower bound one degree above the rule; measured at least 4.2e-8
    real(wp), parameter :: mono_inexact_margin = 1.0e-9_wp
 
 contains
 
    !> Collect all math_grid_angular tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_angular(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -57,19 +57,17 @@ contains
          ]
    end subroutine collect_math_grid_angular
 
-   !* ================================================================================= *!
-   !*                                      Helpers                                      *!
-   !* ================================================================================= *!
+   !* ------------------------------------ Helpers ------------------------------------ *!
 
    !> Run a selection that must succeed and check the selected size
    !>
    !> Also checks that the grid is consistently filled for that size
    !>
-   !> @param[out] error      Test failure
-   !> @param[in]  generator  Generator under test
-   !> @param[in]  request    Angular request
-   !> @param[in]  expected   Expected point count
-   !> @param[in]  label      Case description for the failure message
+   !> @param[out] error      test failure
+   !> @param[in]  generator  generator under test
+   !> @param[in]  request    angular request
+   !> @param[in]  expected   expected point count
+   !> @param[in]  label      case description for the failure message
    subroutine expect_npts(error, generator, request, expected, label)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -104,8 +102,9 @@ contains
    end subroutine expect_npts
 
    !> Build the grid of an exact point count with the default generator
-   !> @param[in]  npts   Supported point count
-   !> @param[out] grid   Generated grid
+   !>
+   !> @param[in]  npts  supported point count
+   !> @param[out] grid  generated grid
    subroutine build_exact(error, npts, grid)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -125,9 +124,9 @@ contains
    !> `2*Gamma(A)*Gamma(B)*Gamma(C)/Gamma(A+B+C)` with `A = (a+1)/2` etc.,
    !> zero if any exponent is odd
    !>
-   !> @param[in] a  Exponent of x
-   !> @param[in] b  Exponent of y
-   !> @param[in] c  Exponent of z
+   !> @param[in] a  exponent of x
+   !> @param[in] b  exponent of y
+   !> @param[in] c  exponent of z
    pure function monomial_integral(a, b, c) result(r)
       !> Exponent of x
       integer, intent(in) :: a
@@ -155,7 +154,7 @@ contains
    !> f(1, 0, 0) = 1.5 differs from the spherical average 2, so a callback
    !> evaluated only at the first Lebedev node cannot pass
    !>
-   !> @param[in]  uvec  Cartesian unit vector
+   !> @param[in] uvec  Cartesian unit vector
    pure function f_quadratic(uvec) result(val)
       !> Cartesian unit vector
       real(wp), intent(in) :: uvec(3)
@@ -165,9 +164,7 @@ contains
       val = 1.0_wp + 0.5_wp*uvec(1) + 3.0_wp*uvec(3)**2
    end function f_quadratic
 
-   !* ================================================================================= *!
-   !*                                   Angular grid                                    *!
-   !* ================================================================================= *!
+   !* ---------------------------------- Angular grid --------------------------------- *!
 
    !> Nodes are Cartesian unit vectors and arrays match npts
    subroutine test_unit_directions(error)
@@ -306,7 +303,7 @@ contains
       end do
    end subroutine test_monomial_moments
 
-   !> The recorded degree is exact and sharp on all 32 rules
+   !> Check exactness and sharpness of the recorded degree on all 32 rules
    !>
    !> - Zonal harmonics P_l(a.u) integrate to 0 for 1 <= l <= degree and not
    !>   for l = degree + 1, for two directions off the symmetry axes
@@ -355,7 +352,7 @@ contains
                p0(:) = p1
                p1(:) = p2
             end do
-            ! q now holds the integral of P_(d+1)
+            ! Integral of P_(d+1) in q
             write (msg, "(a,i0,a,i0,a,es10.3)") "Lebedev rule with ", n, &
                & " points is not exact through degree ", d, ": ", max_low
             call check(error, max_low <= exact_tol, trim(msg))
@@ -369,11 +366,9 @@ contains
       end do
    end subroutine test_achieved_degree
 
-   !* ================================================================================= *!
-   !*                                 Lebedev metadata                                  *!
-   !* ================================================================================= *!
+   !* -------------------------------- Lebedev metadata ------------------------------- *!
 
-   !> The negative-weight list matches the signs of the generated tables
+   !> Check the negative-weight list against the generated table signs
    !>
    !> Measured minimum weights: 74 -> -2.96e-2, 230 -> -5.52e-2, 266 -> -2.52e-3
    subroutine test_negative_weight_list(error)
@@ -406,11 +401,9 @@ contains
          & "Negative-weight list has the wrong length")
    end subroutine test_negative_weight_list
 
-   !* ================================================================================= *!
-   !*                                 Lebedev selection                                 *!
-   !* ================================================================================= *!
+   !* ------------------------------- Lebedev selection ------------------------------- *!
 
-   !> The opt-in filter skips negative-weight rules
+   !> Check exclusion of negative-weight rules by the opt-in filter
    subroutine test_positive_only(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

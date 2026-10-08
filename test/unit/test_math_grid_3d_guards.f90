@@ -203,7 +203,7 @@ contains
          & 0.7_wp, 0.3_wp, -0.25_wp, 0.1_wp, 1.2_wp, 0.4_wp], [3, 3]))
    end subroutine make_molecule
 
-   !> A stretch beyond the fixed reciprocal period fails the molecular update
+   !> Check molecular update failure beyond the fixed reciprocal period
    subroutine test_molecular_motion_period(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -226,7 +226,7 @@ contains
       call expect_error(error, err, "period exceeded")
    end subroutine test_molecular_motion_period
 
-   !> Solute wider than the box minus its margin fails the update and names the needed length
+   !> Check update failure and required box length for a solute exceeding the margin
    subroutine test_cartesian_fit_fails(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -244,9 +244,9 @@ contains
 
    !> Build an H2 molecular grid with its k-grid and an unprepared engine bound to it
    !>
-   !> @param[out] mgrid   molecular grid, must outlive mtrafo
-   !> @param[out] mtrafo  unprepared engine bound to mgrid
-   !> @param[out] err     library error from the construction
+   !> @param[in,out] mgrid   molecular grid, must outlive mtrafo
+   !> @param[in,out] mtrafo  unprepared engine bound to mgrid
+   !> @param[out]    err     library error from the construction
    subroutine molecular_trafo_fixture(mgrid, mtrafo, err)
       !> Molecular grid, must outlive mtrafo
       type(moist_math_grid_3d_molecular_type), intent(inout), target :: mgrid
@@ -503,10 +503,10 @@ contains
 
    !> Build the water probe grid and its single-column transform
    !>
-   !> @param[out] mol    carrier water structure, bohr
-   !> @param[out] mg     molecular grid with its reciprocal grid configured
-   !> @param[out] trafo  transform prepared for one column
-   !> @param[out] err    library error from the construction
+   !> @param[out]    mol    carrier water structure, bohr
+   !> @param[in,out] mg     molecular grid with its reciprocal grid configured
+   !> @param[in,out] trafo  transform prepared for one column
+   !> @param[out]    err    library error from the construction
    subroutine probe_fixture(mol, mg, trafo, err)
       !> Carrier structure
       type(structure_type), intent(out) :: mol

@@ -54,7 +54,7 @@ contains
 
    !> Collect all math_grid_atomic tests
    !>
-   !> @param[out] testsuite  Collected unit tests
+   !> @param[out] testsuite  collected unit tests
    subroutine collect_math_grid_atomic(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -73,13 +73,11 @@ contains
          ]
    end subroutine collect_math_grid_atomic
 
-   !* ================================================================================= *!
-   !*                                     Integrands                                    *!
-   !* ================================================================================= *!
+   !* ----------------------------------- Integrands ---------------------------------- *!
 
    !> Constant integrand f = 1
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function one_3d(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -91,7 +89,7 @@ contains
 
    !> Squared distance f = |r|^2
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function r2_3d(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -103,7 +101,7 @@ contains
 
    !> Cartesian moment f = x^2
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function x2_3d(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -115,7 +113,7 @@ contains
 
    !> Cartesian moment f = x^2 y^2
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function x2y2_3d(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -127,7 +125,7 @@ contains
 
    !> Gaussian exp(-|r|^2/2), integral (2*pi)^(3/2)
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function gauss_half(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -139,7 +137,7 @@ contains
 
    !> Gaussian exp(-|r|^2), integral pi^(3/2)
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function gauss_one(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -151,7 +149,7 @@ contains
 
    !> Gaussian exp(-4|r|^2), integral (pi/4)^(3/2)
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function gauss_four(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -163,7 +161,7 @@ contains
 
    !> Exponential exp(-|r|), integral 8*pi
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function exp_one(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -175,7 +173,7 @@ contains
 
    !> Exponential exp(-2|r|), integral pi
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function exp_two(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -187,7 +185,7 @@ contains
 
    !> Off-center Gaussian exp(-|r - d|^2), integral pi^(3/2)
    !>
-   !> @param[in] r  Atom-relative point (bohr)
+   !> @param[in] r  atom-relative point (bohr)
    pure function gauss_off_center(r) result(val)
       !> Atom-relative point (bohr)
       real(wp), intent(in) :: r(3)
@@ -200,14 +198,12 @@ contains
       val = exp(-(d(1)*d(1) + d(2)*d(2) + d(3)*d(3)))
    end function gauss_off_center
 
-   !* ================================================================================= *!
-   !*                                      Helpers                                      *!
-   !* ================================================================================= *!
+   !* ------------------------------------ Helpers ------------------------------------ *!
 
    !> Relative deviation |a - b|/|b|
    !>
-   !> @param[in] a  Value under test
-   !> @param[in] b  Reference value, nonzero
+   !> @param[in] a  value under test
+   !> @param[in] b  reference value, nonzero
    pure function rel_dev(a, b) result(dev)
       !> Value under test
       real(wp), intent(in) :: a
@@ -221,8 +217,8 @@ contains
 
    !> Build a rule of the requested kind behind the abstract type
    !>
-   !> @param[in]  kind  Rule selector
-   !> @param[out] rule  Allocated rule
+   !> @param[in]  kind  rule selector
+   !> @param[out] rule  allocated rule
    subroutine make_rule(kind, rule)
       !> Rule selector
       integer, intent(in) :: kind
@@ -248,12 +244,12 @@ contains
 
    !> Assemble an atomic recipe from its parts; every part is copied
    !>
-   !> @param[out] recipe      New recipe
-   !> @param[in]  kind        Rule selector
-   !> @param[in]  npts        Number of radial nodes
-   !> @param[in]  mapping     Radial mapping
-   !> @param[in]  positive    Lebedev generator with positive weights only
-   !> @param[in]  shells      Shell policy
+   !> @param[out] recipe    new recipe
+   !> @param[in]  kind      rule selector
+   !> @param[in]  npts      number of radial nodes
+   !> @param[in]  mapping   radial mapping
+   !> @param[in]  positive  Lebedev generator with positive weights only
+   !> @param[in]  shells    shell policy
    subroutine assemble_recipe(recipe, kind, npts, mapping, positive, shells)
       !> New recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
@@ -280,13 +276,13 @@ contains
 
    !> Recipe with a linear radial mapping on [lower, upper] and Gauss-Legendre nodes
    !>
-   !> @param[out] recipe  New recipe
-   !> @param[in]  npts    Number of radial nodes
-   !> @param[in]  lower   Inner radius (bohr)
-   !> @param[in]  upper   Outer radius (bohr)
-   !> @param[in]  shells  Shell policy
+   !> @param[out] recipe    new recipe
+   !> @param[in]  npts      number of radial nodes
+   !> @param[in]  lower     inner radius (bohr)
+   !> @param[in]  upper     outer radius (bohr)
+   !> @param[in]  shells    shell policy
    !> @param[in]  positive  Lebedev generator with positive weights only
-   !> @param[out] merr    Mapping error
+   !> @param[out] merr      mapping error
    subroutine linear_recipe(recipe, npts, lower, upper, shells, positive, merr)
       !> New recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
@@ -312,12 +308,12 @@ contains
 
    !> Recipe with a Chebyshev-II rule and an element-scaled Becke mapping
    !>
-   !> @param[out] recipe         New recipe
-   !> @param[in]  npts           Number of radial nodes
+   !> @param[out] recipe         new recipe
+   !> @param[in]  npts           number of radial nodes
    !> @param[in]  radius_factor  Becke scale as a multiple of the covalent radius
-   !> @param[in]  shells         Shell policy
+   !> @param[in]  shells         shell policy
    !> @param[in]  positive       Lebedev generator with positive weights only
-   !> @param[out] merr           Mapping error
+   !> @param[out] merr           mapping error
    subroutine becke_recipe(recipe, npts, radius_factor, shells, positive, merr)
       !> New recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
@@ -343,9 +339,9 @@ contains
    !>
    !> Independent restatement of the selection rule; 0 if the window is empty
    !>
-   !> @param[in] target  Soft target point count
-   !> @param[in] nlo     Floor
-   !> @param[in] nhi     Cap
+   !> @param[in] target  soft target point count
+   !> @param[in] nlo     floor
+   !> @param[in] nhi     cap
    pure function positive_size_for_target(target, nlo, nhi) result(npts)
       !> Soft target point count
       real(wp), intent(in) :: target
@@ -367,9 +363,7 @@ contains
       end do
    end function positive_size_for_target
 
-   !* ================================================================================= *!
-   !*                                   Shell policies                                  *!
-   !* ================================================================================= *!
+   !* --------------------------------- Shell policies -------------------------------- *!
 
    !> Sector policy: sector of r, shells on an edge in the inner sector
    subroutine test_sector_edges(error)
@@ -555,9 +549,7 @@ contains
       call check(error, nshort > 0 .and. nmet > 0, "Arc fallback: case does not cover both regimes")
    end subroutine test_target_fallback
 
-   !* ================================================================================= *!
-   !*                                 Atomic composition                                *!
-   !* ================================================================================= *!
+   !* ------------------------------- Atomic composition ------------------------------ *!
 
    !> Point order, shell bookkeeping, and the separate radius and direction
    !>
@@ -638,9 +630,9 @@ contains
 
    !> Cycle through the Lebedev degrees in consecutive unit-radius bands
    !>
-   !> @param[in] self  Shell policy
-   !> @param[in] z     Atomic number
-   !> @param[in] r     Shell radius (bohr)
+   !> @param[in] self  shell policy
+   !> @param[in] z     atomic number
+   !> @param[in] r     shell radius (bohr)
    pure function repeating_request(self, z, r) result(request)
       !> Shell policy
       class(repeating_shell_type), intent(in) :: self
@@ -676,7 +668,7 @@ contains
       character(len=120) :: msg
       integer :: ish, nshell, degree
 
-      ! Midpoint shells at r = ish - 0.5, so int(r) = ish - 1 selects the degree
+      ! Midpoint shells r = ish - 0.5; degree selected by int(r) = ish - 1
       nshell = 2*size(lebedev_degree_table)
       call new_linear_mapping(mapping, 0.0_wp, real(nshell, wp), merr)
       call check_moist_error(error, merr, "Repeating request mapping")
@@ -761,7 +753,8 @@ contains
    !> Gaussian and exponential integrals across elements and radial scales
    !>
    !> - Per-element default recipes for H, C, Na, and Br (Chebyshev-II + Becke)
-   !> - Fixed Becke scales 1 and 3 bohr, and midpoint + Knowles (k = 3, R = 5)
+   !> - Fixed Becke scales 1 and 3 bohr
+   !> - Midpoint + Knowles (k = 3, R = 5)
    subroutine test_radial_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -821,9 +814,10 @@ contains
    end subroutine test_radial_integrals
 
    !> Check three Gaussian and two exponential integrals on one grid
-   !> @param[in]  grid   Atomic grid
-   !> @param[in]  label  Case description
-   !> @param[in]  tol    Relative tolerance
+   !>
+   !> @param[in] grid   atomic grid
+   !> @param[in] label  case description
+   !> @param[in] tol    relative tolerance
    subroutine check_radial_integrals(error, grid, label, tol)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -901,9 +895,7 @@ contains
       call check(error, dev <= tol, trim(msg))
    end subroutine test_off_center_gaussian
 
-   !* ================================================================================= *!
-   !*                                      Recipes                                      *!
-   !* ================================================================================= *!
+   !* ------------------------------------ Recipes ------------------------------------ *!
 
    !> Override lookup: first listing wins, default otherwise, unallocated list is absent
    subroutine test_element_overrides(error)

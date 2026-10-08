@@ -96,7 +96,7 @@ contains
 
    !> Register geometries; each exercises every integrand on all four grids
    !>
-   !> @param[out] testsuite Collected tests
+   !> @param[out] testsuite  collected tests
    subroutine collect_math_grid_3d_integration(testsuite)
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -215,7 +215,7 @@ contains
       end do
    end subroutine test_multicenter_integrals
 
-   !> Rigidly rotating molecule and integrand changes the integral less at a higher angular degree
+   !> Check integral convergence under rigid rotation of molecule and integrand as angular degree increases
    subroutine test_rotational_convergence(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -264,7 +264,7 @@ contains
 
       !> Rotation matrix from three Euler angles (z-y-z)
       !>
-      !> @param[in] ang  Euler angles (rad)
+      !> @param[in] ang  euler angles (rad)
       pure function rotation(ang) result(r)
          !> Euler angles
          real(wp), intent(in) :: ang(3)
@@ -283,7 +283,7 @@ contains
       end function rotation
    end subroutine test_rotational_convergence
 
-   !> Integral of 1 dV over the box equals the box volume, dispatched polymorphically
+   !> Check the box volume via polymorphic integration of 1 dV
    !>
    !> - Field integral of 1 + x^2 over the 8^3 box of spacing 0.25 bohr, nodes
    !>   at the cell centers +-0.125 .. +-0.875 bohr: box volume 8 times
@@ -372,7 +372,7 @@ contains
 
    !> Shared function catalogue for every geometry and grid variant
    !>
-   !> @param[out] cases Functions and whole-space reference values
+   !> @param[out] cases  functions and whole-space reference values
    subroutine make_cases(cases)
       !> Functions and independently calculated integrals
       type(integration_case_type), allocatable, intent(out) :: cases(:)
@@ -406,8 +406,8 @@ contains
    !>
    !> A field of the wrong length is rejected, and the next valid call succeeds
    !>
-   !> @param[in] mol Carrier molecule
-   !> @param[out] error Test failure
+   !> @param[in]  mol    carrier molecule
+   !> @param[out] error  test failure
    subroutine check_integrals(mol, error)
       !> Geometry supplying grid centers
       type(structure_type), intent(in) :: mol
@@ -459,10 +459,10 @@ contains
 
    !> Build a point or Gaussian variant with common quadrature settings
    !>
-   !> @param[in] kind Grid variant, 1..4
-   !> @param[in] mol Carrier geometry
-   !> @param[out] grid Updated grid
-   !> @param[out] error Test failure
+   !> @param[in]  kind   grid variant, 1..4
+   !> @param[in]  mol    carrier geometry
+   !> @param[out] grid   updated grid
+   !> @param[out] error  test failure
    subroutine make_grid(kind, mol, grid, error)
       !> Grid variant
       integer, intent(in) :: kind
@@ -516,8 +516,8 @@ contains
    !>
    !> Rational radial mapping resolves both the near-nucleus partition and tails
    !>
-   !> @param[out] recipe Atomic quadrature recipe
-   !> @param[out] error Invalid mapping or shell settings
+   !> @param[out] recipe  atomic quadrature recipe
+   !> @param[out] error   invalid mapping or shell settings
    subroutine make_recipe(recipe, error)
       !> Shared recipe for every element
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
@@ -543,7 +543,7 @@ contains
 
    !> Water, oxygen near the origin
    !>
-   !> @param[out] mol Structure
+   !> @param[out] mol  structure
    subroutine make_water(mol)
       !> Structure
       type(structure_type), intent(out) :: mol
@@ -555,8 +555,8 @@ contains
 
    !> Deterministic small displacement of every nucleus
    !>
-   !> @param[in] mol Structure
-   !> @param[out] moved Structure with displaced nuclei (at most 0.06 bohr per axis)
+   !> @param[in]  mol    structure
+   !> @param[out] moved  structure with displaced nuclei (at most 0.06 bohr per axis)
    subroutine displace(mol, moved)
       !> Structure
       type(structure_type), intent(in) :: mol
@@ -575,7 +575,7 @@ contains
 
    !> Centroid of the nuclei
    !>
-   !> @param[in] mol Structure
+   !> @param[in] mol  structure
    pure function centroid(mol) result(c)
       !> Structure
       type(structure_type), intent(in) :: mol
@@ -590,11 +590,11 @@ contains
    !> `f = exp(-alpha |r - R_a|**2 - alpha |r - R_b|**2)`, or a single
    !> Gaussian on `R_a` when `a == b`
    !>
-   !> @param[in] grid Realized grid
-   !> @param[in] mol Structure
-   !> @param[in] a First nucleus
-   !> @param[in] b Second nucleus
-   !> @param[in] alpha Exponent (1/bohr^2)
+   !> @param[in] grid   realized grid
+   !> @param[in] mol    structure
+   !> @param[in] a      first nucleus
+   !> @param[in] b      second nucleus
+   !> @param[in] alpha  exponent (1/bohr^2)
    function gauss_pair_integral(grid, mol, a, b, alpha) result(total)
       !> Realized grid
       class(moist_math_grid_3d_type), intent(in) :: grid
@@ -626,10 +626,10 @@ contains
 
    !> Exact integral of the Gaussian product of `gauss_pair_integral`
    !>
-   !> @param[in] mol Structure
-   !> @param[in] a First nucleus
-   !> @param[in] b Second nucleus
-   !> @param[in] alpha Exponent (1/bohr^2)
+   !> @param[in] mol    structure
+   !> @param[in] a      first nucleus
+   !> @param[in] b      second nucleus
+   !> @param[in] alpha  exponent (1/bohr^2)
    pure function gauss_pair_exact(mol, a, b, alpha) result(exact)
       !> Structure
       type(structure_type), intent(in) :: mol
@@ -651,7 +651,7 @@ contains
 
    !> Constant integrand, a volume probe
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function one(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -663,7 +663,7 @@ contains
 
    !> Unit Gaussian
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -675,7 +675,7 @@ contains
 
    !> Off-center Gaussian with a nonunit exponent
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function shifted_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -687,7 +687,7 @@ contains
 
    !> Product of two Gaussians with distinct centers and exponents
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function gaussian_product(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -699,7 +699,7 @@ contains
 
    !> Second Cartesian moment of a Gaussian
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function quadratic_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -711,7 +711,7 @@ contains
 
    !> Mixed sixth-order Gaussian moment, x**2*y**2*z**2
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function mixed_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -723,7 +723,7 @@ contains
 
    !> Gaussian modulated by cos(2*x)
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function modulated_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -735,7 +735,7 @@ contains
 
    !> Orthonormal coordinates about an off-axis center
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function principal_coordinates(r) result(u)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -750,7 +750,7 @@ contains
 
    !> Tilted Gaussian with three distinct principal widths
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function anisotropic_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -762,7 +762,7 @@ contains
 
    !> Tilted anisotropic Gaussian with a nonzero oscillation phase
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function oscillatory_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -776,7 +776,7 @@ contains
 
    !> Signed odd moment with an exactly zero integral
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function odd_gaussian(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -790,7 +790,7 @@ contains
 
    !> Signed mixture of narrow and diffuse Gaussians at three centers
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function gaussian_mixture(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -806,7 +806,7 @@ contains
 
    !> Diffuse shell centered away from the carrier nuclei
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function gaussian_shell(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -818,7 +818,7 @@ contains
 
    !> Gaussian times the finite Coulomb potential erf(beta*r)/r
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function gaussian_coulomb(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)
@@ -842,7 +842,7 @@ contains
    !> - Screening both terms removes the algebraic Lennard-Jones tail
    !> - exp(-screening*(d-core)) keeps the screening factor one at the center
    !>
-   !> @param[in] r Position (bohr), shape (3)
+   !> @param[in] r  position (bohr), shape (3)
    pure function smooth_interaction(r) result(value)
       !> Position
       real(wp), intent(in) :: r(3)

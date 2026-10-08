@@ -44,8 +44,10 @@ module test_math_grid_3d_derivatives
    real(wp), parameter :: CURVATURE_ABS_THR = 1.0E-10_wp
    real(wp), parameter :: CURVATURE_REL_THR = 1.0E-9_wp
 
-   !> Six-point O(h**6) central stencil, `f' = sum_k STENCIL_WEIGHTS(k)*(f(k*h) - f(-k*h))/h`;
-   !> differencing before weighting cancels identical values exactly
+   !> Six-point O(h**6) central stencil
+   !>
+   !> - `f' = sum_k STENCIL_WEIGHTS(k)*(f(k*h) - f(-k*h))/h`
+   !> - Differencing before weighting: exact cancellation of identical values
    real(wp), parameter :: STENCIL_WEIGHTS(3) = [45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
 
    !> Cartesian box: points per axis and spacing (bohr)
@@ -62,7 +64,7 @@ contains
 
    !> Collect the finite-difference derivative tests
    !>
-   !> @param[out] testsuite Collected tests
+   !> @param[out] testsuite  collected tests
    subroutine collect_math_grid_3d_derivatives(testsuite)
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -150,7 +152,7 @@ contains
       integer, parameter :: stiffness(2) = [1, 5]
       class(moist_math_grid_3d_type), allocatable :: grid
       type(structure_type) :: mol
-      ! Unallocated for SSF and power Voronoi, which take no stiffness
+      ! Unallocated for SSF and power Voronoi: no stiffness parameter
       integer, allocatable :: becke_k
       integer :: is, kind
 
@@ -170,10 +172,10 @@ contains
       end do
    end subroutine test_partition_schemes
 
-   !> Gaussian width term stays finite for retained weights far below the xi0/w overflow
+   !> Finite Gaussian width term for retained weights below the xi0/w overflow threshold
    !>
-   !> Regression: `xi0/w` overflows for weights below ~1e-240, so a zero width adjoint
-   !> must not touch it and a width adjoint on ordinary points must not reach it
+   !> - `xi0/w` overflow for weights below ~1e-240
+   !> - No tiny-weight quotient evaluation for zero adjoints or adjoints confined to ordinary points
    subroutine test_gaussian_tiny_weights(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -218,7 +220,8 @@ contains
    end subroutine test_gaussian_tiny_weights
 
    !> Gradient and Hessian finite differences of `mol` on every 3D grid
-   !> @param[in]  mol   Reference geometry
+   !>
+   !> @param[in] mol  reference geometry
    subroutine do_test(error, mol)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -246,11 +249,11 @@ contains
    !>   is given, small recipe, thresholds that keep point membership under the
    !>   stencil steps
    !>
-   !> @param[in]  kind     Grid kind, 1..4
-   !> @param[in]  mol      Geometry to update with
-   !> @param[out] grid     Updated grid
-   !> @param[out] error    Test failure
-   !> @param[in]  scheme   Molecular partition scheme
+   !> @param[in]  kind     grid kind, 1..4
+   !> @param[in]  mol      geometry to update with
+   !> @param[out] grid     updated grid
+   !> @param[out] error    test failure
+   !> @param[in]  scheme   molecular partition scheme
    !> @param[in]  becke_k  Becke stiffness
    subroutine make_grid(kind, mol, grid, error, scheme, becke_k)
       !> Grid kind
@@ -317,9 +320,9 @@ contains
    !> - Also checks the translation identity and additive accumulation
    !> - Every element compared one by one with absolute and relative thresholds
    !>
-   !> @param[in]  grid   Successfully updated grid
-   !> @param[in]  mol    Geometry of that update
-   !> @param[out] error  Test failure
+   !> @param[in]  grid   successfully updated grid
+   !> @param[in]  mol    geometry of that update
+   !> @param[out] error  test failure
    subroutine check_grid_gradient_fd(grid, mol, error)
       !> Successfully updated grid
       class(moist_math_grid_3d_type), intent(in) :: grid
@@ -404,7 +407,7 @@ contains
          if (.not. active(channel)) cycle
          do a = 1, mol%nat
             do c = 1, 3
-               ! test-drive accepts a non-finite expected value
+               ! Test-drive accepts a non-finite expected value
                call check(error, ieee_is_finite(fd(c, a, channel)), "finite-difference gradient is not finite")
                if (allocated(error)) return
                call check(error, gradient(c, a, channel), fd(c, a, channel), thr_abs=GRADIENT_ABS_THR, &
@@ -424,9 +427,9 @@ contains
    !> - Six-point O(h**6) stencil of `get_volume_gradient` with `HESSIAN_STEP`
    !> - Every element compared one by one with absolute and relative thresholds
    !>
-   !> @param[in]  grid   Successfully updated grid
-   !> @param[in]  mol    Geometry of that update
-   !> @param[out] error  Test failure
+   !> @param[in]  grid   successfully updated grid
+   !> @param[in]  mol    geometry of that update
+   !> @param[out] error  test failure
    subroutine check_grid_hessian_fd(grid, mol, error)
       !> Successfully updated grid
       class(moist_math_grid_3d_type), intent(in) :: grid
@@ -527,12 +530,12 @@ contains
    !>
    !> Molecular points follow their owner; Cartesian points follow the centroid
    !>
-   !> @param[in]  grid   Reference grid
-   !> @param[in]  moved  Grid updated with atom `a` displaced along `c`
-   !> @param[in]  a      Displaced atom
-   !> @param[in]  c      Displaced Cartesian component
-   !> @param[in]  shift  Displacement (bohr)
-   !> @param[out] error  Test failure
+   !> @param[in]  grid   reference grid
+   !> @param[in]  moved  grid updated with atom `a` displaced along `c`
+   !> @param[in]  a      displaced atom
+   !> @param[in]  c      displaced Cartesian component
+   !> @param[in]  shift  displacement (bohr)
+   !> @param[out] error  test failure
    subroutine check_rigid_motion(grid, moved, a, c, shift, error)
       !> Reference grid
       class(moist_math_grid_3d_type), intent(in) :: grid
@@ -560,7 +563,8 @@ contains
          type is (moist_math_grid_3d_molecular_type)
             if (grid%owner(i) == a) motion(c) = shift
          end select
-         ! Per-element check calls cost ~30x here (millions of points); `.not. all(... < thr)` also fails on NaN
+         ! Per-element checks ~30x slower on millions of points
+         ! `.not. all(... < thr)` also rejects NaN
          if (.not. all(abs(moved%xyz(:, i) - grid%xyz(:, i) - motion) < 1.0e-12_wp)) then
             call test_failed(error, grid%kind_name()//": retained point identities must stay fixed")
             return
@@ -570,8 +574,8 @@ contains
 
    !> Linear synthetic energy in grid observables with fixed seeds
    !>
-   !> @param[in] grid Realized grid
-   !> @param[in] acc Fixed energy coefficients
+   !> @param[in] grid  realized grid
+   !> @param[in] acc   fixed energy coefficients
    pure function grid_observable_energy(grid, acc) result(energy)
       !> Realized grid
       class(moist_math_grid_3d_type), intent(in) :: grid
