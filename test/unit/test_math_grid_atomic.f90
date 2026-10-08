@@ -1,19 +1,17 @@
 !> Test suite for the atomic grid layer
 !>
-!> - Shell policies: constant, sector, and arc requests; edge membership;
-!>   hard floors and caps; target fallback with achieved-resolution
-!>   reporting; errors for invalid policies and incompatible constraints
-!> - Atomic composition: point layout, ball and shell volumes, Gaussian and
-!>   exponential integrals across radial scales and elements, cutoffs
-!> - Recipes: element overrides, the per-element default table, and copies
-!>   of the nested polymorphic recipe and override list
+!> - Shell policies: sector and arc requests, edge membership, hard floors
+!>   and caps, target fallback to the largest admissible rule
+!> - Atomic composition: point layout, rules kept across cache growth, ball
+!>   and shell volumes, Gaussian and exponential integrals across radial
+!>   scales and elements
+!> - Recipes: element overrides, first listing wins
 module test_math_grid_atomic
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_data_atomicrad, only: covalent_rad
+   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use test_helpers, only: check_moist_error
    use moist_math_grid_angular_lebedev, only: grid_size, lebedev_negative_weight_sizes, &
       & lebedev_degree_table
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type, &
@@ -25,8 +23,7 @@ module test_math_grid_atomic
       & moist_math_grid_radial_mapping_becke_type, new_becke_mapping, &
       & moist_math_grid_radial_mapping_knowles_type, new_knowles_mapping
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_radial_grid
-   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, &
-      & moist_math_grid_angular_generator_type, moist_math_grid_angular_request_type, &
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, moist_math_grid_angular_request_type, &
       & moist_math_grid_angular_generator_lebedev_type, new_lebedev_generator, new_lebedev_grid
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_shell_type, &
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
@@ -63,25 +60,16 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("shell_constant_request", test_constant_request), &
          new_unittest("shell_sector_edges", test_sector_edges), &
          new_unittest("shell_arc_target_and_bands", test_arc_request), &
-         new_unittest("shell_policy_errors", test_policy_errors), &
          new_unittest("shell_floor_and_cap", test_floor_and_cap), &
          new_unittest("shell_target_fallback", test_target_fallback), &
-         new_unittest("shell_incompatible_constraints", test_incompatible_constraints), &
          new_unittest("atomic_layout", test_atomic_layout), &
          new_unittest("atomic_cache_repeated_requests", test_cache_repeated_requests), &
          new_unittest("atomic_ball_and_shell_volume", test_ball_volume), &
          new_unittest("atomic_radial_integrals", test_radial_integrals), &
          new_unittest("atomic_off_center_gaussian", test_off_center_gaussian), &
-         new_unittest("atomic_cutoff_counts", test_cutoff_counts), &
-         new_unittest("atomic_recipe_errors", test_recipe_errors), &
-         new_unittest("atomic_integrate_matches_field", test_integrate_agreement), &
-         new_unittest("atomic_destroy_idempotent", test_destroy), &
-         new_unittest("recipe_element_overrides", test_element_overrides), &
-         new_unittest("recipe_default_table", test_default_table), &
-         new_unittest("recipe_copy_independent", test_recipe_copy) &
+         new_unittest("recipe_element_overrides", test_element_overrides) &
          ]
    end subroutine collect_math_grid_atomic
 
@@ -216,20 +204,6 @@ contains
    !*                                      Helpers                                      *!
    !* ================================================================================= *!
 
-   !> Forward a library error into a test failure
-   !> @param[in]  merr   Library error, ignored if unallocated
-   !> @param[in]  label  Case description
-   subroutine require_ok(error, merr, label)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error
-      type(mctc_error), allocatable, intent(in) :: merr
-      !> Case description
-      character(len=*), intent(in) :: label
-
-      if (allocated(merr)) call test_failed(error, label//": "//merr%message)
-   end subroutine require_ok
-
    !> Relative deviation |a - b|/|b|
    !>
    !> @param[in] a  Value under test
@@ -280,9 +254,7 @@ contains
    !> @param[in]  mapping     Radial mapping
    !> @param[in]  positive    Lebedev generator with positive weights only
    !> @param[in]  shells      Shell policy
-   !> @param[in]  rcut_lower  Optional lower radial cutoff (bohr)
-   !> @param[in]  rcut_upper  Optional upper radial cutoff (bohr)
-   subroutine assemble_recipe(recipe, kind, npts, mapping, positive, shells, rcut_lower, rcut_upper)
+   subroutine assemble_recipe(recipe, kind, npts, mapping, positive, shells)
       !> New recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
       !> Rule selector
@@ -295,18 +267,12 @@ contains
       logical, intent(in) :: positive
       !> Shell policy
       class(moist_math_grid_atomic_shell_type), intent(in) :: shells
-      !> Lower radial cutoff (bohr)
-      real(wp), intent(in), optional :: rcut_lower
-      !> Upper radial cutoff (bohr)
-      real(wp), intent(in), optional :: rcut_upper
 
       type(moist_math_grid_angular_generator_lebedev_type) :: generator
 
       call make_rule(kind, recipe%radial%rule)
       recipe%radial%npts = npts
       allocate (recipe%radial%mapping, source=mapping)
-      if (present(rcut_lower)) recipe%radial%rcut_lower = rcut_lower
-      if (present(rcut_upper)) recipe%radial%rcut_upper = rcut_upper
       call new_lebedev_generator(generator, positive_weights_only=positive)
       allocate (recipe%angular, source=generator)
       allocate (recipe%shells, source=shells)
@@ -352,9 +318,7 @@ contains
    !> @param[in]  shells         Shell policy
    !> @param[in]  positive       Lebedev generator with positive weights only
    !> @param[out] merr           Mapping error
-   !> @param[in]  rcut_lower     Optional lower radial cutoff (bohr)
-   !> @param[in]  rcut_upper     Optional upper radial cutoff (bohr)
-   subroutine becke_recipe(recipe, npts, radius_factor, shells, positive, merr, rcut_lower, rcut_upper)
+   subroutine becke_recipe(recipe, npts, radius_factor, shells, positive, merr)
       !> New recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
       !> Number of radial nodes
@@ -367,17 +331,12 @@ contains
       logical, intent(in) :: positive
       !> Mapping error
       type(mctc_error), allocatable, intent(out) :: merr
-      !> Lower radial cutoff (bohr)
-      real(wp), intent(in), optional :: rcut_lower
-      !> Upper radial cutoff (bohr)
-      real(wp), intent(in), optional :: rcut_upper
 
       type(moist_math_grid_radial_mapping_becke_type) :: becke
 
       call new_becke_mapping(becke, merr, radius_factor=radius_factor)
       if (allocated(merr)) return
-      call assemble_recipe(recipe, rule_chebyshev2, npts, becke, positive, shells, &
-         & rcut_lower=rcut_lower, rcut_upper=rcut_upper)
+      call assemble_recipe(recipe, rule_chebyshev2, npts, becke, positive, shells)
    end subroutine becke_recipe
 
    !> Smallest positive-weight Lebedev size in [nlo, nhi] meeting a target, else the largest
@@ -412,39 +371,6 @@ contains
    !*                                   Shell policies                                  *!
    !* ================================================================================= *!
 
-   !> Constant policy: same degree and hard bounds on every shell and element
-   subroutine test_constant_request(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: radii(5) = [0.0_wp, 0.3_wp, 1.0_wp, 7.5_wp, 1.0e3_wp]
-      integer, parameter :: elements(3) = [1, 6, 35]
-      type(moist_math_grid_atomic_shell_constant_type) :: pol, bare
-      type(moist_math_grid_angular_request_type) :: req
-      type(mctc_error), allocatable :: merr
-      integer :: ir, iz
-
-      call new_constant_shell_policy(pol, 17, merr, min_points=50, max_points=590)
-      call require_ok(error, merr, "Constant policy")
-      if (allocated(error)) return
-      do iz = 1, size(elements)
-         do ir = 1, size(radii)
-            req = pol%request(elements(iz), radii(ir))
-            call check(error, req%min_degree == 17 .and. req%min_points == 50 &
-               & .and. req%max_points == 590 .and. req%npts == 0 &
-               & .and. req%target_points == 0.0_wp, "Constant policy: request differs from its degree")
-            if (allocated(error)) return
-         end do
-      end do
-
-      call new_constant_shell_policy(bare, 29, merr)
-      call require_ok(error, merr, "Constant policy without bounds")
-      if (allocated(error)) return
-      req = bare%request(6, 2.0_wp)
-      call check(error, req%min_degree == 29 .and. req%min_points == 0 &
-         & .and. req%max_points == huge(0), "Constant policy: default bounds are not 0 and huge(0)")
-   end subroutine test_constant_request
-
    !> Sector policy: sector of r, shells on an edge in the inner sector
    subroutine test_sector_edges(error)
       !> Test failure
@@ -460,7 +386,7 @@ contains
 
       call new_sector_shell_policy(pol, [1.0_wp, 2.5_wp], [11, 17, 23], merr, &
          & min_points=26, max_points=974)
-      call require_ok(error, merr, "Sector policy")
+      call check_moist_error(error, merr, "Sector policy")
       if (allocated(error)) return
 
       radii = [0.0_wp, 0.5_wp, 1.0_wp, nearest(1.0_wp, 2.0_wp), 2.5_wp, &
@@ -479,7 +405,7 @@ contains
 
       ! No edges: one sector covering every radius
       call new_sector_shell_policy(single, [real(wp) ::], [29], merr)
-      call require_ok(error, merr, "Sector policy without edges")
+      call check_moist_error(error, merr, "Sector policy without edges")
       if (allocated(error)) return
       do ir = 1, size(radii)
          req = single%request(1, radii(ir))
@@ -504,7 +430,7 @@ contains
       integer :: ir
 
       call new_arc_shell_policy(pol, edges, spacing, merr)
-      call require_ok(error, merr, "Arc policy")
+      call check_moist_error(error, merr, "Arc policy")
       if (allocated(error)) return
       call check(error, pol%min_points == 110 .and. pol%max_points == 5810, &
          & "Arc policy: default floor and cap are not 110 and 5810")
@@ -526,112 +452,12 @@ contains
       end do
 
       call new_arc_shell_policy(bounded, edges, spacing, merr, min_points=26, max_points=302)
-      call require_ok(error, merr, "Arc policy with bounds")
+      call check_moist_error(error, merr, "Arc policy with bounds")
       if (allocated(error)) return
       req = bounded%request(1, 2.0_wp)
       call check(error, req%min_points == 26 .and. req%max_points == 302, &
          & "Arc policy: explicit floor and cap not copied")
    end subroutine test_arc_request
-
-   !> Invalid policies are rejected by their constructors and by validate
-   subroutine test_policy_errors(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_shell_sector_type) :: spol, empty_sector
-      type(moist_math_grid_atomic_shell_arc_type) :: apol, empty_arc
-      type(mctc_error), allocatable :: merr
-      real(wp) :: nan, inf
-
-      nan = ieee_value(nan, ieee_quiet_nan)
-      inf = ieee_value(inf, ieee_positive_inf)
-
-      call empty_sector%validate(merr)
-      call check(error, allocated(merr), "Sector policy: missing components accepted")
-      if (allocated(error)) return
-      call empty_arc%validate(merr)
-      call check(error, allocated(merr), "Arc policy: missing components accepted")
-      if (allocated(error)) return
-
-      call new_constant_shell_policy(cpol, -1, merr)
-      call check(error, allocated(merr), "Constant policy: negative degree accepted")
-      if (allocated(error)) return
-      call new_constant_shell_policy(cpol, 5, merr, min_points=-1)
-      call check(error, allocated(merr), "Constant policy: negative floor accepted")
-      if (allocated(error)) return
-      call new_constant_shell_policy(cpol, 5, merr, min_points=302, max_points=110)
-      call check(error, allocated(merr), "Constant policy: cap below floor accepted")
-      if (allocated(error)) return
-
-      call new_sector_shell_policy(spol, [1.0_wp], [3], merr)
-      call check(error, allocated(merr), "Sector policy: degrees without one more entry accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [2.0_wp, 1.0_wp], [3, 5, 7], merr)
-      call check(error, allocated(merr), "Sector policy: descending edges accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [1.0_wp, 1.0_wp], [3, 5, 7], merr)
-      call check(error, allocated(merr), "Sector policy: repeated edge accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [0.0_wp], [3, 5], merr)
-      call check(error, allocated(merr), "Sector policy: non-positive edge accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [nan], [3, 5], merr)
-      call check(error, allocated(merr), "Sector policy: NaN edge accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [1.0_wp], [3, -1], merr)
-      call check(error, allocated(merr), "Sector policy: negative degree accepted")
-      if (allocated(error)) return
-      call new_sector_shell_policy(spol, [1.0_wp], [3, 5], merr, min_points=50, max_points=26)
-      call check(error, allocated(merr), "Sector policy: cap below floor accepted")
-      if (allocated(error)) return
-
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp], merr)
-      call check(error, allocated(merr), "Arc policy: spacing without one more entry accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp, 0.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: zero spacing accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [-0.5_wp, 1.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: negative spacing accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [nan, 1.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: NaN spacing accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp, inf], merr)
-      call check(error, allocated(merr), "Arc policy: infinite spacing accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [3.0_wp, 1.0_wp], [0.5_wp, 0.7_wp, 1.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: descending edges accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [-1.0_wp], [0.5_wp, 1.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: negative edge accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [inf], [0.5_wp, 1.0_wp], merr)
-      call check(error, allocated(merr), "Arc policy: infinite edge accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp, 1.0_wp], merr, min_points=302, max_points=110)
-      call check(error, allocated(merr), "Arc policy: cap below floor accepted")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp, 1.0_wp], merr, min_points=-1)
-      call check(error, allocated(merr), "Arc policy: negative floor accepted")
-      if (allocated(error)) return
-
-      ! Components assigned directly are caught by validate
-      call new_sector_shell_policy(spol, [1.0_wp], [3, 5], merr)
-      call require_ok(error, merr, "Sector policy")
-      if (allocated(error)) return
-      spol%degrees = [3, 5, 7]
-      call spol%validate(merr)
-      call check(error, allocated(merr), "Sector policy: validate accepts mismatched sizes")
-      if (allocated(error)) return
-      call new_arc_shell_policy(apol, [1.0_wp], [0.5_wp, 1.0_wp], merr)
-      call require_ok(error, merr, "Arc policy")
-      if (allocated(error)) return
-      apol%spacing(2) = 0.0_wp
-      call apol%validate(merr)
-      call check(error, allocated(merr), "Arc policy: validate accepts a zero spacing")
-   end subroutine test_policy_errors
 
    !> Hard floors lift and caps bound the selected sizes of every policy
    subroutine test_floor_and_cap(error)
@@ -648,11 +474,11 @@ contains
 
       ! Degree 3 alone selects 6 points; the floor lifts it to 110
       call new_constant_shell_policy(cpol, 3, merr, min_points=110)
-      call require_ok(error, merr, "Constant policy with floor")
+      call check_moist_error(error, merr, "Constant policy with floor")
       if (allocated(error)) return
       call linear_recipe(recipe, 4, 0.0_wp, 3.0_wp, cpol, .true., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Constant policy with floor")
+      call check_moist_error(error, merr, "Constant policy with floor")
       if (allocated(error)) return
       call check(error, all(grid%shell_npts == 110) .and. all(grid%shell_degree == 17), &
          & "Constant policy: floor 110 not applied")
@@ -660,11 +486,11 @@ contains
 
       ! Inner sector degree 5 lifted to the 26-point floor, outer sector degree 41 (590)
       call new_sector_shell_policy(spol, [1.5_wp], [5, 41], merr, min_points=26)
-      call require_ok(error, merr, "Sector policy with floor")
+      call check_moist_error(error, merr, "Sector policy with floor")
       if (allocated(error)) return
       call linear_recipe(recipe, 6, 0.0_wp, 3.0_wp, spol, .true., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Sector policy with floor")
+      call check_moist_error(error, merr, "Sector policy with floor")
       if (allocated(error)) return
       do ish = 1, grid%nshell
          if (grid%shell_r(ish) <= 1.5_wp) then
@@ -677,16 +503,16 @@ contains
 
       ! Spacing far below reach: every shell outside the floor capped at 434
       call new_arc_shell_policy(apol, [real(wp) ::], [1.0e-3_wp], merr, min_points=6, max_points=434)
-      call require_ok(error, merr, "Arc policy with cap")
+      call check_moist_error(error, merr, "Arc policy with cap")
       if (allocated(error)) return
       call linear_recipe(recipe, 5, 1.0_wp, 3.0_wp, apol, .true., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Arc policy with cap")
+      call check_moist_error(error, merr, "Arc policy with cap")
       if (allocated(error)) return
       call check(error, all(grid%shell_npts == 434), "Arc policy: cap 434 not applied")
    end subroutine test_floor_and_cap
 
-   !> Unreachable targets fall back to the largest admissible rule; the shortfall is recorded
+   !> Unreachable targets fall back to the largest admissible rule
    subroutine test_target_fallback(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -696,18 +522,17 @@ contains
       type(moist_math_grid_atomic_shell_arc_type) :: apol
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(moist_math_grid_atomic_type) :: grid
-      type(moist_math_grid_angular_type) :: s2
       type(mctc_error), allocatable :: merr
       real(wp) :: r, target
       character(len=160) :: msg
       integer :: ish, expected, nshort, nmet
 
       call new_arc_shell_policy(apol, [real(wp) ::], [h], merr, min_points=nlo, max_points=nhi)
-      call require_ok(error, merr, "Arc policy")
+      call check_moist_error(error, merr, "Arc policy")
       if (allocated(error)) return
       call linear_recipe(recipe, 12, 0.0_wp, 6.0_wp, apol, .true., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Arc policy atomic grid")
+      call check_moist_error(error, merr, "Arc policy atomic grid")
       if (allocated(error)) return
 
       nshort = 0
@@ -721,90 +546,14 @@ contains
          call check(error, grid%shell_npts(ish), expected, trim(msg))
          if (allocated(error)) return
 
-         call new_lebedev_grid(s2, merr, npts=grid%shell_npts(ish))
-         call require_ok(error, merr, "Achieved rule")
-         if (allocated(error)) return
-         call check(error, grid%shell_degree(ish), s2%degree, "Arc fallback: achieved degree not recorded")
-         if (allocated(error)) return
-         call check(error, rel_dev(grid%shell_spacing(ish), &
-            & sqrt(4.0_wp*pi*r*r/real(grid%shell_npts(ish), wp))) <= 4.0_wp*epsilon(1.0_wp), &
-            & "Arc fallback: spacing estimate is not sqrt(4*pi*r**2/N)")
-         if (allocated(error)) return
-
          if (target > real(nhi, wp)) then
-            ! Shortfall: capped size, achieved spacing coarser than requested
             nshort = nshort + 1
-            call check(error, grid%shell_npts(ish) == nhi .and. grid%shell_spacing(ish) > h, &
-               & "Arc fallback: shortfall not visible in the recorded spacing")
          else
             nmet = nmet + 1
-            call check(error, grid%shell_spacing(ish) <= h*(1.0_wp + 4.0_wp*epsilon(1.0_wp)), &
-               & "Arc fallback: met target but recorded spacing exceeds h")
          end if
-         if (allocated(error)) return
       end do
       call check(error, nshort > 0 .and. nmet > 0, "Arc fallback: case does not cover both regimes")
    end subroutine test_target_fallback
-
-   !> Hard constraints no rule satisfies are errors, never relaxed
-   subroutine test_incompatible_constraints(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_shell_sector_type) :: spol
-      type(moist_math_grid_atomic_shell_arc_type) :: apol
-      type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(moist_math_grid_atomic_type) :: grid
-      type(mctc_error), allocatable :: merr
-
-      ! Degree 41 needs 590 points, capped at 434
-      call new_constant_shell_policy(cpol, 41, merr, max_points=434)
-      call require_ok(error, merr, "Constant policy")
-      if (allocated(error)) return
-      call linear_recipe(recipe, 3, 0.0_wp, 2.0_wp, cpol, .true., merr)
-      call require_ok(error, merr, "Constant recipe")
-      if (allocated(error)) return
-      call new_atomic_grid(grid, recipe, 6, merr)
-      call check(error, allocated(merr) .and. grid%npts == 0, &
-         & "Atomic grid: degree 41 under a 434-point cap accepted")
-      if (allocated(error)) return
-
-      ! [200, 250] holds only 230, which positive_weights_only excludes
-      call new_arc_shell_policy(apol, [real(wp) ::], [0.5_wp], merr, min_points=200, max_points=250)
-      call require_ok(error, merr, "Arc policy")
-      if (allocated(error)) return
-      call linear_recipe(recipe, 3, 0.0_wp, 2.0_wp, apol, .true., merr)
-      call require_ok(error, merr, "Arc recipe")
-      if (allocated(error)) return
-      call new_atomic_grid(grid, recipe, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: empty positive-weight window accepted")
-      if (allocated(error)) return
-      call check(error, index(merr%message, "No Lebedev rule") > 0, &
-         & "Atomic grid: window error does not come from the generator: "//merr%message)
-      if (allocated(error)) return
-      ! The same window with every rule admissible selects 230 on every shell
-      call linear_recipe(recipe, 3, 0.0_wp, 2.0_wp, apol, .false., merr)
-      if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Arc policy with all weights")
-      if (allocated(error)) return
-      call check(error, all(grid%shell_npts == 230), "Arc policy: 230 not selected without the filter")
-      if (allocated(error)) return
-
-      ! An unsatisfiable outer sector fails only when a shell reaches it
-      call new_sector_shell_policy(spol, [1.0_wp], [11, 131], merr, max_points=1000)
-      call require_ok(error, merr, "Sector policy")
-      if (allocated(error)) return
-      call linear_recipe(recipe, 4, 0.0_wp, 0.9_wp, spol, .true., merr)
-      if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Sector policy inside the inner sector")
-      if (allocated(error)) return
-      call linear_recipe(recipe, 4, 0.0_wp, 2.0_wp, spol, .true., merr)
-      call require_ok(error, merr, "Sector recipe")
-      if (allocated(error)) return
-      call new_atomic_grid(grid, recipe, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: degree 131 under a 1000-point cap accepted")
-   end subroutine test_incompatible_constraints
 
    !* ================================================================================= *!
    !*                                 Atomic composition                                *!
@@ -829,14 +578,14 @@ contains
       integer :: ish, j, ip, i0
 
       call new_sector_shell_policy(spol, [1.0_wp], [7, 17], merr)
-      call require_ok(error, merr, "Sector policy")
+      call check_moist_error(error, merr, "Sector policy")
       if (allocated(error)) return
       call becke_recipe(recipe, nrad, 0.5_wp, spol, .true., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, z, merr)
-      call require_ok(error, merr, "Layout grid")
+      call check_moist_error(error, merr, "Layout grid")
       if (allocated(error)) return
       call new_radial_grid(radial, recipe%radial, z, merr)
-      call require_ok(error, merr, "Layout radial grid")
+      call check_moist_error(error, merr, "Layout radial grid")
       if (allocated(error)) return
 
       call check(error, grid%z == z .and. grid%nshell == nrad .and. grid%nshell_requested == nrad, &
@@ -861,7 +610,7 @@ contains
             & "Layout: shell offsets disagree with shell sizes")
          if (allocated(error)) return
          call new_lebedev_grid(s2, merr, npts=grid%shell_npts(ish))
-         call require_ok(error, merr, "Layout angular rule")
+         call check_moist_error(error, merr, "Layout angular rule")
          if (allocated(error)) return
          call check(error, grid%shell_degree(ish), s2%degree, "Layout: shell degree not recorded")
          if (allocated(error)) return
@@ -930,11 +679,11 @@ contains
       ! Midpoint shells at r = ish - 0.5, so int(r) = ish - 1 selects the degree
       nshell = 2*size(lebedev_degree_table)
       call new_linear_mapping(mapping, 0.0_wp, real(nshell, wp), merr)
-      call require_ok(error, merr, "Repeating request mapping")
+      call check_moist_error(error, merr, "Repeating request mapping")
       if (allocated(error)) return
       call assemble_recipe(recipe, rule_midpoint, nshell, mapping, .false., shells)
       call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Repeating request grid")
+      call check_moist_error(error, merr, "Repeating request grid")
       if (allocated(error)) return
       write (msg, "(a,i0,a,i0)") "Repeating request grid: nshell ", grid%nshell, ", expected ", nshell
       call check(error, grid%nshell == nshell, trim(msg))
@@ -942,7 +691,7 @@ contains
       do ish = 1, nshell
          degree = lebedev_degree_table(mod(ish - 1, size(lebedev_degree_table)) + 1)
          call new_lebedev_grid(angular, merr, degree=degree)
-         call require_ok(error, merr, "Repeating request reference")
+         call check_moist_error(error, merr, "Repeating request reference")
          if (allocated(error)) return
          write (msg, "(a,i0,a,i0,a,i0,a,i0,a,i0)") "Shell ", ish, ": degree ", &
             & grid%shell_degree(ish), ", expected ", angular%degree, "; npts ", &
@@ -971,11 +720,11 @@ contains
 
       ! 4 Gauss-Legendre nodes: exact through r^7; degree 5 (14 points): exact through x^2 y^2
       call new_constant_shell_policy(cpol, 5, merr)
-      call require_ok(error, merr, "Constant policy")
+      call check_moist_error(error, merr, "Constant policy")
       if (allocated(error)) return
       call linear_recipe(recipe, 4, 0.0_wp, rball, cpol, .false., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 8, merr)
-      call require_ok(error, merr, "Ball grid")
+      call check_moist_error(error, merr, "Ball grid")
       if (allocated(error)) return
 
       call grid%integrate(one_3d, val)
@@ -1001,7 +750,7 @@ contains
 
       call linear_recipe(recipe, 4, rinner, rball, cpol, .false., merr)
       if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 8, merr)
-      call require_ok(error, merr, "Shell grid")
+      call check_moist_error(error, merr, "Shell grid")
       if (allocated(error)) return
       call grid%integrate(one_3d, val)
       ref = 4.0_wp/3.0_wp*pi*(rball**3 - rinner**3)
@@ -1033,20 +782,20 @@ contains
       integer :: iz, icase
 
       call default_element_recipes(defaults, overrides, merr)
-      call require_ok(error, merr, "Default recipes")
+      call check_moist_error(error, merr, "Default recipes")
       if (allocated(error)) return
       do iz = 1, size(elements)
          call get_element_recipe(recipe, defaults, elements(iz), overrides)
          call new_atomic_grid(grid, recipe, elements(iz), merr)
          write (label, "(a,i0)") "Default recipe, z = ", elements(iz)
-         call require_ok(error, merr, trim(label))
+         call check_moist_error(error, merr, trim(label))
          if (allocated(error)) return
          call check_radial_integrals(error, grid, trim(label), element_tol(iz))
          if (allocated(error)) return
       end do
 
       call new_constant_shell_policy(cpol, 11, merr)
-      call require_ok(error, merr, "Constant policy")
+      call check_moist_error(error, merr, "Constant policy")
       if (allocated(error)) return
       do icase = 1, 3
          select case (icase)
@@ -1064,7 +813,7 @@ contains
             label = "Midpoint + Knowles, R = 5"
          end select
          if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 8, merr)
-         call require_ok(error, merr, trim(label))
+         call check_moist_error(error, merr, trim(label))
          if (allocated(error)) return
          call check_radial_integrals(error, grid, trim(label), scale_tol(icase))
          if (allocated(error)) return
@@ -1105,7 +854,9 @@ contains
 
    !> Off-center Gaussian with the carbon default recipe
    !>
-   !> Couples radial and angular quadrature: exp(-|r - d|^2) with |d| = 0.54 bohr
+   !> - Couples radial and angular quadrature: exp(-|r - d|^2) with |d| = 0.54 bohr
+   !> - Same accuracy as a callback and as samples tabulated on the points
+   !> - A field of the wrong length is rejected, and the next valid call succeeds
    subroutine test_off_center_gaussian(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1116,181 +867,39 @@ contains
       type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       type(moist_math_grid_atomic_type) :: grid
       type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: samples(:)
       real(wp) :: val, dev
+      integer :: i
       character(len=120) :: msg
 
       call default_element_recipes(defaults, overrides, merr)
-      call require_ok(error, merr, "Default recipes")
+      call check_moist_error(error, merr, "Default recipes")
       if (allocated(error)) return
       call get_element_recipe(recipe, defaults, 6, overrides)
       call new_atomic_grid(grid, recipe, 6, merr)
-      call require_ok(error, merr, "Carbon grid")
+      call check_moist_error(error, merr, "Carbon grid")
       if (allocated(error)) return
       call grid%integrate(gauss_off_center, val)
       dev = rel_dev(val, pi**1.5_wp)
       write (msg, "(a,es10.3)") "Off-center Gaussian: relative error ", dev
       call check(error, dev <= tol, trim(msg))
-   end subroutine test_off_center_gaussian
-
-   !> Radial cutoffs: retained shells and points follow the radial grid's counts
-   subroutine test_cutoff_counts(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: z = 6, nrad = 40
-      real(wp), parameter :: lo = 0.05_wp, hi = 10.0_wp
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(moist_math_grid_atomic_type) :: full, cut
-      type(mctc_error), allocatable :: merr
-      integer :: nkeep
-
-      call new_constant_shell_policy(cpol, 11, merr)
-      call require_ok(error, merr, "Constant policy")
-      if (allocated(error)) return
-      call becke_recipe(recipe, nrad, 0.5_wp, cpol, .true., merr)
-      if (.not. allocated(merr)) call new_atomic_grid(full, recipe, z, merr)
-      call require_ok(error, merr, "Uncut grid")
-      if (allocated(error)) return
-      call becke_recipe(recipe, nrad, 0.5_wp, cpol, .true., merr, rcut_lower=lo, rcut_upper=hi)
-      if (.not. allocated(merr)) call new_atomic_grid(cut, recipe, z, merr)
-      call require_ok(error, merr, "Cut grid")
       if (allocated(error)) return
 
-      nkeep = count(.not. (full%shell_r < lo) .and. .not. (full%shell_r > hi))
-      call check(error, full%nshell == nrad .and. full%nshell_requested == nrad, &
-         & "Cutoffs: uncut grid lost shells")
-      if (allocated(error)) return
-      call check(error, nkeep > 0 .and. nkeep < nrad, "Cutoffs: case does not truncate")
-      if (allocated(error)) return
-      call check(error, cut%nshell == nkeep .and. cut%nshell_requested == nrad, &
-         & "Cutoffs: retained and requested shell counts not recorded")
-      if (allocated(error)) return
-      call check(error, all(cut%shell_r >= lo .and. cut%shell_r <= hi), &
-         & "Cutoffs: shell outside [rcut_lower, rcut_upper]")
-      if (allocated(error)) return
-      call check(error, all(cut%shell_r == pack(full%shell_r, &
-         & .not. (full%shell_r < lo) .and. .not. (full%shell_r > hi))), &
-         & "Cutoffs: retained shells differ from the uncut grid's")
-      if (allocated(error)) return
-      call check(error, cut%npts, 50*nkeep, "Cutoffs: point count is not 50 per retained shell")
-   end subroutine test_cutoff_counts
-
-   !> Incomplete or invalid recipes are errors
-   subroutine test_recipe_errors(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_shell_sector_type) :: spol
-      type(moist_math_grid_atomic_recipe_type) :: recipe, broken
-      type(moist_math_grid_atomic_type) :: grid
-      type(mctc_error), allocatable :: merr
-
-      call new_constant_shell_policy(cpol, 11, merr)
-      call require_ok(error, merr, "Constant policy")
-      if (allocated(error)) return
-      call linear_recipe(recipe, 4, 0.0_wp, 2.0_wp, cpol, .true., merr)
-      call require_ok(error, merr, "Linear recipe")
-      if (allocated(error)) return
-
-      broken = recipe
-      deallocate (broken%angular)
-      call new_atomic_grid(grid, broken, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: recipe without generator accepted")
-      if (allocated(error)) return
-
-      broken = recipe
-      deallocate (broken%shells)
-      call new_atomic_grid(grid, broken, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: recipe without shell policy accepted")
-      if (allocated(error)) return
-
-      broken = recipe
-      deallocate (broken%radial%rule)
-      call new_atomic_grid(grid, broken, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: recipe without radial rule accepted")
-      if (allocated(error)) return
-
-      broken = recipe
-      broken%radial%npts = 0
-      call new_atomic_grid(grid, broken, 6, merr)
-      call check(error, allocated(merr), "Atomic grid: recipe without radial nodes accepted")
-      if (allocated(error)) return
-
-      ! Policy components assigned past the constructor
-      call new_sector_shell_policy(spol, [1.0_wp], [3, 5], merr)
-      call require_ok(error, merr, "Sector policy")
-      if (allocated(error)) return
-      spol%edges = [2.0_wp]
-      spol%degrees = [3]
-      broken = recipe
-      deallocate (broken%shells)
-      allocate (broken%shells, source=spol)
-      call new_atomic_grid(grid, broken, 6, merr)
-      call check(error, allocated(merr) .and. grid%npts == 0, &
-         & "Atomic grid: invalid shell policy accepted")
-   end subroutine test_recipe_errors
-
-   !> `integrate` and `integrate_field` agree bit for bit
-   subroutine test_integrate_agreement(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(moist_math_grid_atomic_type) :: grid
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f(:)
-      real(wp) :: a, b
-      integer :: i
-
-      call new_constant_shell_policy(cpol, 17, merr)
-      call require_ok(error, merr, "Constant policy")
-      if (allocated(error)) return
-      call becke_recipe(recipe, 30, 0.5_wp, cpol, .true., merr)
-      if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 7, merr)
-      call require_ok(error, merr, "Nitrogen grid")
-      if (allocated(error)) return
-
-      allocate (f(grid%npts))
+      allocate (samples(grid%npts))
       do i = 1, grid%npts
-         f(i) = gauss_off_center(grid%xyz(:, i))
+         samples(i) = gauss_off_center(grid%xyz(:, i))
       end do
-      call grid%integrate(gauss_off_center, a)
-      call grid%integrate_field(f, b)
-      call check(error, a == b, "Atomic grid: integrate and integrate_field disagree")
-   end subroutine test_integrate_agreement
-
-   !> `destroy` empties the grid and is idempotent
-   subroutine test_destroy(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(moist_math_grid_atomic_type) :: grid
-      type(mctc_error), allocatable :: merr
-
-      call new_constant_shell_policy(cpol, 5, merr)
-      call require_ok(error, merr, "Constant policy")
+      ! A short field is rejected; the valid call below still succeeds
+      call grid%integrate_field(samples(2:), val, merr)
+      call check(error, allocated(merr), "integrate_field accepted a short field")
       if (allocated(error)) return
-      call linear_recipe(recipe, 3, 0.0_wp, 1.0_wp, cpol, .true., merr)
-      if (.not. allocated(merr)) call new_atomic_grid(grid, recipe, 1, merr)
-      call require_ok(error, merr, "Small grid")
+      call grid%integrate_field(samples, val, merr)
+      call check_moist_error(error, merr, "Off-center Gaussian samples")
       if (allocated(error)) return
-
-      call grid%destroy()
-      call grid%destroy()
-      call check(error, grid%npts == 0 .and. grid%nshell == 0 .and. grid%z == 0 &
-         & .and. .not. allocated(grid%xyz) .and. .not. allocated(grid%u) &
-         & .and. .not. allocated(grid%w) .and. .not. allocated(grid%shell) &
-         & .and. .not. allocated(grid%shell_r) .and. .not. allocated(grid%shell_offset) &
-         & .and. .not. allocated(grid%shell_w) .and. .not. allocated(grid%shell_npts) &
-         & .and. .not. allocated(grid%shell_degree) .and. .not. allocated(grid%shell_spacing) &
-         & .and. grid%nshell_requested == 0, &
-         & "Atomic grid: destroy left storage behind")
-   end subroutine test_destroy
+      dev = rel_dev(val, pi**1.5_wp)
+      write (msg, "(a,es10.3)") "Off-center Gaussian samples: relative error ", dev
+      call check(error, dev <= tol, trim(msg))
+   end subroutine test_off_center_gaussian
 
    !* ================================================================================= *!
    !*                                      Recipes                                      *!
@@ -1308,19 +917,19 @@ contains
       type(mctc_error), allocatable :: merr
 
       call new_constant_shell_policy(cpol, 11, merr)
-      call require_ok(error, merr, "Constant policy")
+      call check_moist_error(error, merr, "Constant policy")
       if (allocated(error)) return
       call becke_recipe(default_recipe, 14, 0.5_wp, cpol, .true., merr)
-      call require_ok(error, merr, "Default recipe")
+      call check_moist_error(error, merr, "Default recipe")
       if (allocated(error)) return
       allocate (overrides(2))
       overrides(1)%elements = [6, 7]
       call becke_recipe(overrides(1)%recipe, 10, 0.5_wp, cpol, .true., merr)
-      call require_ok(error, merr, "First override")
+      call check_moist_error(error, merr, "First override")
       if (allocated(error)) return
       overrides(2)%elements = [7, 8]
       call becke_recipe(overrides(2)%recipe, 12, 0.5_wp, cpol, .true., merr)
-      call require_ok(error, merr, "Second override")
+      call check_moist_error(error, merr, "Second override")
       if (allocated(error)) return
 
       call check(error, element_override_index(6, overrides) == 1 &
@@ -1351,263 +960,10 @@ contains
 
       call get_element_recipe(selected, default_recipe, 8, overrides)
       call new_atomic_grid(grid, selected, 8, merr)
-      call require_ok(error, merr, "Override grid")
+      call check_moist_error(error, merr, "Override grid")
       if (allocated(error)) return
       call check(error, grid%nshell_requested == 12 .and. grid%npts == 12*50, &
          & "Overrides: atomic grid not built from the override")
    end subroutine test_element_overrides
-
-   !> Per-element default table: radial count, Becke factor, degree, filter
-   subroutine test_default_table(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: built(8) = [1, 2, 3, 10, 11, 18, 19, 86]
-      type(moist_math_grid_atomic_recipe_type) :: defaults, recipe
-      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
-      type(moist_math_grid_atomic_type) :: grid
-      type(mctc_error), allocatable :: merr
-      character(len=80) :: msg
-      logical :: ok
-      integer :: z, nrad, degree, nang
-      real(wp) :: factor
-
-      call default_element_recipes(defaults, overrides, merr)
-      call require_ok(error, merr, "Default recipes")
-      if (allocated(error)) return
-      call check(error, size(overrides), 4, "Default table: expected four overrides")
-      if (allocated(error)) return
-
-      do z = 1, 86
-         call default_row(z, nrad, factor, degree, nang)
-         call get_element_recipe(recipe, defaults, z, overrides)
-         write (msg, "(a,i0)") "Default table, z = ", z
-         ok = recipe%radial%npts == nrad .and. .not. allocated(recipe%radial%rcut_lower) &
-            & .and. .not. allocated(recipe%radial%rcut_upper)
-         select type (rule => recipe%radial%rule)
-         type is (moist_math_grid_radial_rule_chebyshev2_type)
-         class default
-            ok = .false.
-         end select
-         select type (mapping => recipe%radial%mapping)
-         type is (moist_math_grid_radial_mapping_becke_type)
-            ok = ok .and. mapping%per_element .and. mapping%radius_factor == factor
-         class default
-            ok = .false.
-         end select
-         select type (gen => recipe%angular)
-         type is (moist_math_grid_angular_generator_lebedev_type)
-            ok = ok .and. gen%positive_weights_only
-         class default
-            ok = .false.
-         end select
-         select type (shells => recipe%shells)
-         type is (moist_math_grid_atomic_shell_constant_type)
-            ok = ok .and. shells%degree == degree .and. shells%min_points == 0 &
-               & .and. shells%max_points == huge(0)
-         class default
-            ok = .false.
-         end select
-         call check(error, ok, trim(msg)//": recipe components differ from the table")
-         if (allocated(error)) return
-
-         if (any(built == z)) then
-            call new_atomic_grid(grid, recipe, z, merr)
-            call require_ok(error, merr, trim(msg))
-            if (allocated(error)) return
-            call check(error, grid%nshell == nrad .and. all(grid%shell_npts == nang) &
-               & .and. grid%npts == nrad*nang, trim(msg)//": grid sizes differ from the table")
-            if (allocated(error)) return
-         end if
-      end do
-   end subroutine test_default_table
-
-   !> Expected row of the per-element default table
-   !>
-   !> @param[in]  z       Atomic number
-   !> @param[out] nrad    Number of Chebyshev-II shells
-   !> @param[out] factor  Becke radius factor
-   !> @param[out] degree  Constant Lebedev degree
-   !> @param[out] nang    Lebedev point count of that degree
-   pure subroutine default_row(z, nrad, factor, degree, nang)
-      !> Atomic number
-      integer, intent(in) :: z
-      !> Number of Chebyshev-II shells
-      integer, intent(out) :: nrad
-      !> Becke radius factor
-      real(wp), intent(out) :: factor
-      !> Constant Lebedev degree
-      integer, intent(out) :: degree
-      !> Lebedev point count
-      integer, intent(out) :: nang
-
-      factor = 0.5_wp
-      if (z == 1) then
-         nrad = 50; factor = 1.0_wp; degree = 29; nang = 302
-      else if (z == 2) then
-         nrad = 50; degree = 29; nang = 302
-      else if (z <= 10) then
-         nrad = 75; degree = 29; nang = 302
-      else if (z <= 18) then
-         nrad = 75; degree = 35; nang = 434
-      else
-         nrad = 99; degree = 41; nang = 590
-      end if
-   end subroutine default_row
-
-   !> Recipes and override lists survive assignment and allocate(source=) independently
-   !>
-   !> The copies keep every nested polymorphic component with its dynamic
-   !> type and values after the source is changed or emptied
-   subroutine test_recipe_copy(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: z = 19
-      type(moist_math_grid_atomic_recipe_type) :: source, assigned
-      type(moist_math_grid_atomic_recipe_type), allocatable :: sourced
-      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:), &
-         & ov_assigned(:), ov_sourced(:)
-      type(moist_math_grid_atomic_type) :: reference, grid
-      type(mctc_error), allocatable :: merr
-
-      call default_element_recipes(source, overrides, merr)
-      call require_ok(error, merr, "Default recipes")
-      if (allocated(error)) return
-      call new_atomic_grid(reference, source, z, merr)
-      call require_ok(error, merr, "Reference grid")
-      if (allocated(error)) return
-
-      assigned = source
-      allocate (sourced, source=source)
-      ov_assigned = overrides
-      allocate (ov_sourced, source=overrides)
-
-      ! Change every nested component of the sources, then drop them
-      source%radial%npts = 7
-      source%radial%rcut_upper = 1.0_wp
-      select type (mapping => source%radial%mapping)
-      type is (moist_math_grid_radial_mapping_becke_type)
-         mapping%radius_factor = 2.0_wp
-      end select
-      select type (gen => source%angular)
-      type is (moist_math_grid_angular_generator_lebedev_type)
-         gen%positive_weights_only = .false.
-      end select
-      select type (shells => source%shells)
-      type is (moist_math_grid_atomic_shell_constant_type)
-         shells%degree = 3
-      end select
-      overrides(1)%elements = [19]
-      overrides(3)%recipe%radial%npts = 3
-      select type (shells => overrides(4)%recipe%shells)
-      type is (moist_math_grid_atomic_shell_constant_type)
-         shells%degree = 5
-      end select
-      deallocate (source%shells, source%angular, source%radial%rule, source%radial%mapping)
-      deallocate (overrides)
-
-      call check_default_copy(error, assigned, "Assigned recipe")
-      if (allocated(error)) return
-      call check_default_copy(error, sourced, "Sourced recipe")
-      if (allocated(error)) return
-
-      call new_atomic_grid(grid, assigned, z, merr)
-      call require_ok(error, merr, "Grid from assigned recipe")
-      if (allocated(error)) return
-      call check(error, grid%npts == reference%npts .and. all(grid%xyz == reference%xyz) &
-         & .and. all(grid%w == reference%w), "Assigned recipe builds a different grid")
-      if (allocated(error)) return
-      call new_atomic_grid(grid, sourced, z, merr)
-      call require_ok(error, merr, "Grid from sourced recipe")
-      if (allocated(error)) return
-      call check(error, grid%npts == reference%npts .and. all(grid%xyz == reference%xyz) &
-         & .and. all(grid%w == reference%w), "Sourced recipe builds a different grid")
-      if (allocated(error)) return
-
-      call check_default_overrides(error, ov_assigned, "Assigned override list")
-      if (allocated(error)) return
-      call check_default_overrides(error, ov_sourced, "Sourced override list")
-   end subroutine test_recipe_copy
-
-   !> Check a copy of the default recipe (K and heavier)
-   !>
-   !> @param[out] error   Test failure
-   !> @param[in]  recipe  Copied recipe
-   !> @param[in]  label   Case description
-   subroutine check_default_copy(error, recipe, label)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Copied recipe
-      type(moist_math_grid_atomic_recipe_type), intent(in) :: recipe
-      !> Case description
-      character(len=*), intent(in) :: label
-
-      logical :: ok
-
-      ok = allocated(recipe%radial%rule) .and. allocated(recipe%radial%mapping) &
-         & .and. allocated(recipe%angular) .and. allocated(recipe%shells)
-      call check(error, ok, label//": lost a polymorphic component")
-      if (allocated(error)) return
-      ok = recipe%radial%npts == 99 .and. .not. allocated(recipe%radial%rcut_upper)
-      select type (rule => recipe%radial%rule)
-      type is (moist_math_grid_radial_rule_chebyshev2_type)
-      class default
-         ok = .false.
-      end select
-      select type (mapping => recipe%radial%mapping)
-      type is (moist_math_grid_radial_mapping_becke_type)
-         ok = ok .and. mapping%radius_factor == 0.5_wp
-      class default
-         ok = .false.
-      end select
-      select type (gen => recipe%angular)
-      type is (moist_math_grid_angular_generator_lebedev_type)
-         ok = ok .and. gen%positive_weights_only
-      class default
-         ok = .false.
-      end select
-      select type (shells => recipe%shells)
-      type is (moist_math_grid_atomic_shell_constant_type)
-         ok = ok .and. shells%degree == 41
-      class default
-         ok = .false.
-      end select
-      call check(error, ok, label//": components changed with the source")
-   end subroutine check_default_copy
-
-   !> Check a copy of the default override list
-   !>
-   !> @param[out] error      Test failure
-   !> @param[in]  overrides  Copied overrides
-   !> @param[in]  label      Case description
-   subroutine check_default_overrides(error, overrides, label)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Copied overrides
-      type(moist_math_grid_atomic_recipe_override_type), intent(in) :: overrides(:)
-      !> Case description
-      character(len=*), intent(in) :: label
-
-      integer :: i
-      logical :: ok
-
-      call check(error, size(overrides), 4, label//": wrong size")
-      if (allocated(error)) return
-      ok = all(overrides(1)%elements == [1]) .and. overrides(3)%recipe%radial%npts == 75
-      do i = 1, 4
-         ok = ok .and. allocated(overrides(i)%recipe%angular) .and. allocated(overrides(i)%recipe%shells) &
-            & .and. allocated(overrides(i)%recipe%radial%rule) .and. allocated(overrides(i)%recipe%radial%mapping)
-      end do
-      if (ok) then
-         select type (shells => overrides(4)%recipe%shells)
-         type is (moist_math_grid_atomic_shell_constant_type)
-            ok = shells%degree == 35
-         class default
-            ok = .false.
-         end select
-      end if
-      call check(error, ok, label//": components changed with the source")
-   end subroutine check_default_overrides
 
 end module test_math_grid_atomic

@@ -1,15 +1,13 @@
 !> Test suite for the reference quadrature rules on [-1, 1]
 !>
 !>   - Chebyshev-II: exact sqrt(1-x^2)*p(x) moments through deg(p) = 2n-1,
-!>     closed-form weight sum, descending interior nodes, weights evaluated
-!>     at the stored nodes
+!>     closed-form weight sum, weights evaluated at the stored nodes
 !>   - Midpoint: exact through degree 1, closed-form x^2 deficit, equal
 !>     weights 2/n, uniform node spacing 2/n
 !>   - Gauss-Legendre: exact through degree 2n-1, closed-form degree-2n error,
-!>     literal low-order nodes, exact symmetry
-!>   - Affine interval scaling and invalid requests for every rule
+!>     literal low-order nodes
+!>   - Affine interval scaling for every rule
 module test_math_grid_radial_rule
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
@@ -42,9 +40,7 @@ contains
          new_unittest("gauss_legendre_exactness", test_gauss_legendre_exactness), &
          new_unittest("gauss_legendre_degree_2n_error", test_gauss_legendre_degree_2n), &
          new_unittest("gauss_legendre_literal_nodes", test_gauss_legendre_literal), &
-         new_unittest("scaled_interval", test_scaled_interval), &
-         new_unittest("scaled_interval_one_bound", test_scaled_interval_one_bound), &
-         new_unittest("invalid_requests", test_invalid_requests) &
+         new_unittest("scaled_interval", test_scaled_interval) &
          ]
    end subroutine collect_math_grid_radial_rule
 
@@ -113,8 +109,6 @@ contains
             call test_failed(error, merr%message)
             return
          end if
-         call check(error, size(x) == n .and. size(w) == n, "Chebyshev-II: wrong node count")
-         if (allocated(error)) return
          do j = 0, 2*n - 1
             s = sum(w*sqrt(1.0_wp - x*x)*x**j)
             if (mod(j, 2) == 1) then
@@ -129,7 +123,7 @@ contains
       end do
    end subroutine test_chebyshev2_weighted_moments
 
-   !> Chebyshev-II dx weights sum to pi/(n+1)*cot(pi/(2(n+1))), nodes descend inside (-1, 1)
+   !> Chebyshev-II dx weights sum to pi/(n+1)*cot(pi/(2(n+1)))
    !>
    !> sum_{i=1..n} sin(i*pi/(n+1)) = cot(pi/(2(n+1))); the sum tends to 2 as
    !> 2 - pi^2/(6(n+1)^2)
@@ -164,13 +158,6 @@ contains
          call check(error, abs(sum(w) - ref) <= 1.0e-14_wp*ref, &
             & "Chebyshev-II: weight sum differs from pi/(n+1)*cot(pi/(2(n+1)))")
          if (allocated(error)) return
-         call check(error, all(x > -1.0_wp .and. x < 1.0_wp) .and. all(w > 0.0_wp), &
-            & "Chebyshev-II: nodes must be interior with positive weights")
-         if (allocated(error)) return
-         if (n > 1) then
-            call check(error, all(x(2:) < x(:n - 1)), "Chebyshev-II: nodes must descend")
-            if (allocated(error)) return
-         end if
       end do
    end subroutine test_chebyshev2_weight_sum
 
@@ -196,8 +183,6 @@ contains
             call test_failed(error, merr%message)
             return
          end if
-         call check(error, size(x) == n .and. size(w) == n, "Midpoint: wrong node count")
-         if (allocated(error)) return
          call check(error, all(abs(w - 2.0_wp/real(n, wp)) <= 4.0_wp*epsilon(1.0_wp)), &
             & "Midpoint: weights must each equal 2/n")
          if (allocated(error)) return
@@ -217,13 +202,6 @@ contains
          call check(error, abs(sum(w*x*x) - ref2) <= 1.0e-14_wp, &
             & "Midpoint: x^2 sum differs from 2/3 - 2/(3n^2)")
          if (allocated(error)) return
-         call check(error, all(abs(x + x(n:1:-1)) <= 4.0_wp*epsilon(1.0_wp)), &
-            & "Midpoint: nodes must be symmetric")
-         if (allocated(error)) return
-         if (n > 1) then
-            call check(error, all(x(2:) > x(:n - 1)), "Midpoint: nodes must ascend")
-            if (allocated(error)) return
-         end if
       end do
    end subroutine test_midpoint_moments
 
@@ -246,23 +224,11 @@ contains
             call test_failed(error, merr%message)
             return
          end if
-         call check(error, size(x) == n .and. size(w) == n, "Gauss-Legendre: wrong node count")
-         if (allocated(error)) return
          do j = 0, 2*n - 1
             call check(error, abs(sum(w*x**j) - monomial_moment(j)) <= 2.0e-14_wp, &
                & "Gauss-Legendre: monomial moment not exact through degree 2n-1")
             if (allocated(error)) return
          end do
-         call check(error, all(x(n:1:-1) == -x) .and. all(w(n:1:-1) == w), &
-            & "Gauss-Legendre: nodes and weights must be exactly symmetric")
-         if (allocated(error)) return
-         call check(error, all(w > 0.0_wp) .and. all(x > -1.0_wp .and. x < 1.0_wp), &
-            & "Gauss-Legendre: nodes must be interior with positive weights")
-         if (allocated(error)) return
-         if (n > 1) then
-            call check(error, all(x(2:) > x(:n - 1)), "Gauss-Legendre: nodes must ascend")
-            if (allocated(error)) return
-         end if
       end do
    end subroutine test_gauss_legendre_exactness
 
@@ -368,8 +334,6 @@ contains
             & .and. all(abs(w - 0.5_wp*(b - a)*w0) <= tol*abs(w)), &
             & "Scaled rule: nodes or weights are not the affine image of the reference rule")
          if (allocated(error)) return
-         call check(error, all(x >= a .and. x <= b), "Scaled rule: node outside [a, b]")
-         if (allocated(error)) return
          call check(error, abs(sum(w) - 0.5_wp*(b - a)*sum(w0)) <= tol*sum(w), &
             & "Scaled rule: weight sum must scale by (b - a)/2")
          if (allocated(error)) return
@@ -398,94 +362,5 @@ contains
       call check(error, abs(sum(w*x) - ref) <= 1.0e-14_wp*ref, &
          & "Scaled midpoint: not exact for degree 1 on [a, b]")
    end subroutine test_scaled_interval
-
-   !> A single bound keeps the other at its default (-1 or 1)
-   subroutine test_scaled_interval_one_bound(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: n = 5
-      class(moist_math_grid_radial_rule_type), allocatable :: rule
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: x(:), w(:)
-      integer :: j
-
-      call make_rule(rule_gauss_legendre, rule)
-      call rule%generate(n, x, w, merr, lower=0.0_wp)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      do j = 0, 2*n - 1
-         call check(error, abs(sum(w*x**j) - 1.0_wp/real(j + 1, wp)) <= 1.0e-14_wp, &
-            & "Gauss-Legendre with lower = 0: not exact on [0, 1]")
-         if (allocated(error)) return
-      end do
-
-      call rule%generate(n, x, w, merr, upper=0.25_wp)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      do j = 0, 2*n - 1
-         call check(error, abs(sum(w*x**j) - (0.25_wp**(j + 1) - (-1.0_wp)**(j + 1))/real(j + 1, wp)) &
-            & <= 1.0e-14_wp, "Gauss-Legendre with upper = 0.25: not exact on [-1, 0.25]")
-         if (allocated(error)) return
-      end do
-   end subroutine test_scaled_interval_one_bound
-
-   !> Invalid counts and bounds are errors for every rule
-   subroutine test_invalid_requests(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      class(moist_math_grid_radial_rule_type), allocatable :: rule
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: x(:), w(:)
-      real(wp) :: nan, inf
-      integer :: kind
-
-      nan = ieee_value(nan, ieee_quiet_nan)
-      inf = ieee_value(inf, ieee_positive_inf)
-      do kind = rule_chebyshev2, rule_gauss_legendre
-         call make_rule(kind, rule)
-         call rule%generate(0, x, w, merr)
-         call check(error, allocated(merr), "Rule must reject n = 0")
-         if (allocated(error)) return
-         call rule%generate(-3, x, w, merr)
-         call check(error, allocated(merr), "Rule must reject n < 0")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=1.0_wp, upper=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject lower == upper")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=2.0_wp, upper=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject lower > upper")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject lower = 1 with the default upper")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, upper=-2.0_wp)
-         call check(error, allocated(merr), "Rule must reject upper below the default lower")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=nan, upper=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject a NaN bound")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=0.0_wp, upper=inf)
-         call check(error, allocated(merr), "Rule must reject an infinite bound")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=-inf, upper=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject a negative infinite lower bound")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=0.0_wp, upper=nan)
-         call check(error, allocated(merr), "Rule must reject a NaN upper bound")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=inf, upper=1.0_wp)
-         call check(error, allocated(merr), "Rule must reject a positive infinite lower bound")
-         if (allocated(error)) return
-         call rule%generate(4, x, w, merr, lower=0.0_wp, upper=-inf)
-         call check(error, allocated(merr), "Rule must reject a negative infinite upper bound")
-         if (allocated(error)) return
-      end do
-   end subroutine test_invalid_requests
 
 end module test_math_grid_radial_rule

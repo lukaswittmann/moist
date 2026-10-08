@@ -669,22 +669,39 @@ contains
    !> Volume integral of a field already tabulated on the grid points
    !>
    !> Every Cartesian cell carries the same volume element `dV = dr**3`, so
-   !> the weighted sum collapses to `dV * sum(f)`; overrides the base
-   !> `measure`-loop with this constant-weight form
+   !> the weighted sum collapses to `dV * sum(f)`; compensated summation
+   !> preserves small field contributions on fine grids
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values (length ngrid); any other length stops
+   !> @param[in]  f       Per-point field values (length ngrid); any other length is an error
    !> @param[out] result  Quadrature result
-   pure subroutine cartesian_grid_3d_integrate_field(self, f, result)
+   !> @param[out] error   Error handling
+   subroutine cartesian_grid_3d_integrate_field(self, f, result, error)
       !> Grid instance
       class(moist_math_grid_3d_cartesian_type), intent(in) :: self
       !> Per-point field values (length ngrid)
       real(wp), intent(in) :: f(:)
       !> Quadrature result
       real(wp), intent(out) :: result
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-      if (size(f) /= self%ngrid) error stop "cartesian domain: integrate_field needs one value per grid point"
-      result = self%dv*sum(f)
+      real(wp) :: correction, term, subtotal
+      integer :: i
+
+      result = 0.0_wp
+      if (size(f) /= self%ngrid) then
+         call fatal_error(error, "cartesian domain: integrate_field needs one value per grid point")
+         return
+      end if
+      correction = 0.0_wp
+      do i = 1, self%ngrid
+         term = f(i) - correction
+         subtotal = result + term
+         correction = (subtotal - result) - term
+         result = subtotal
+      end do
+      result = self%dv*result
    end subroutine cartesian_grid_3d_integrate_field
 
    !> Real-space coordinate of grid point (1, 1, 1)

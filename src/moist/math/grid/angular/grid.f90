@@ -127,21 +127,27 @@ contains
    !> average
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-node field values, shape (npts); any other length stops
+   !> @param[in]  f       Per-node field values, shape (npts); any other length is an error
    !> @param[out] result  Integral of f over the unit sphere
-   pure subroutine angular_integrate_field(self, f, result)
+   !> @param[out] error   Error handling
+   subroutine angular_integrate_field(self, f, result, error)
       !> Grid instance
       class(moist_math_grid_angular_type), intent(in) :: self
       !> Per-node field values, shape (npts)
       real(wp), intent(in) :: f(:)
       !> Integral of f over the unit sphere
       real(wp), intent(out) :: result
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
       !> Node index
       integer :: i
 
-      if (size(f) /= self%npts) error stop "angular grid: integrate_field needs one value per node"
       result = 0.0_wp
+      if (size(f) /= self%npts) then
+         call fatal_error(error, "angular grid: integrate_field needs one value per node")
+         return
+      end if
       do i = 1, self%npts
          result = result + self%weights(i)*f(i)
       end do

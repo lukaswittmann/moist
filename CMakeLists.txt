@@ -299,13 +299,15 @@ if(MOIST_TESTS)
     api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
-    math_solvers math_sorters math_trig math_grid
-    math_fft_dst4 math_fft_3d finufft math_grid_nufft math_grid_3d
+    math_solvers math_sorters math_trig
+    math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
     math_grid_3d_partition
-    math_grid_3d_molecular
+    math_grid_3d_guards math_grid_3d_derivatives
+    math_grid_3d_integration
+    math_grid_3d_invariance
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
@@ -318,15 +320,17 @@ if(MOIST_TESTS)
   )
   # Each run as a selected test, outside test-drive's OpenMP team
   set(moist_test_selected_utils_prettylistprint_threaded independent_rows)
+  set(moist_test_selected_math_grid_3d_derivatives
+    single_atom dimer amino20x4_gly_xab mb16_43_01 but14diol_1 il16_008
+    partition_schemes gaussian_tiny_weights)
+  set(moist_test_selected_math_grid_3d_integration
+    single_atom asymmetric_trimer partition_integrals multicenter_integrals
+    rotational_convergence integrate_constant_is_box_volume gaussian_width_law)
+  set(moist_test_selected_math_grid_3d_invariance single_atom asymmetric_trimer)
   set(moist_test_selected_math_grid_3d_threaded
-    batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
+    batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
-    radial_trafo_one_per_thread grid_thread_count_override)
-  set(moist_test_selected_math_grid_3d_partition
-    compact_switches nuclear_derivative_continuity power_geometry partition_invariance large_coincident_partition
-    partition_of_unity ssf_bond_axis_hard_zeros ssf_owned_near_nucleus
-    single_atom_weight_one homonuclear_analytic_weights batch_matches_single_points
-    threaded_matches_serial nested_call_inside_parallel_region)
+    radial_trafo_one_per_thread partition_grid_threaded)
 
   set(moist_test_srcs
     "${_unit}/main.F90"

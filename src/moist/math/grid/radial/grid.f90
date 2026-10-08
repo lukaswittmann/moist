@@ -230,20 +230,26 @@ contains
    !> Volume quadrature of tabulated values: sum_i 4*pi*r_i^2*w_i*f_i
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-node field values, shape (npts); any other length stops
+   !> @param[in]  f       Per-node field values, shape (npts); any other length is an error
    !> @param[out] result  Quadrature result
-   pure subroutine radial_integrate_field(self, f, result)
+   !> @param[out] error   Error handling
+   subroutine radial_integrate_field(self, f, result, error)
       !> Grid instance
       class(moist_math_grid_radial_type), intent(in) :: self
       !> Per-node field values
       real(wp), intent(in) :: f(:)
       !> Quadrature result
       real(wp), intent(out) :: result
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
       integer :: i
 
-      if (size(f) /= self%npts) error stop "radial grid: integrate_field needs one value per node"
       result = 0.0_wp
+      if (size(f) /= self%npts) then
+         call fatal_error(error, "radial grid: integrate_field needs one value per node")
+         return
+      end if
       do i = 1, self%npts
          result = result + four_pi*self%r(i)*self%r(i)*self%w(i)*f(i)
       end do

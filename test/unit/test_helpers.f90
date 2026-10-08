@@ -39,10 +39,12 @@
 !>   * `build_numbering_map(numbering, map)` - persistent grid numbering ->
 !>                                             current array index
 !>   * `get_uniform_recipe(recipe, overrides, nrad, nang, error, ...)`,
-!>     `get_handymod_recipe(recipe, nrad, nang, rmin, rmax, m, error)`,
 !>     `get_qc_handymod_recipe(recipe, error, ...)` - atomic recipes of the
-!>                                         uniform, HandyMod, and midpoint
-!>                                         HandyMod molecular grids
+!>                                         uniform and midpoint HandyMod
+!>                                         molecular grids
+!>   * `get_becke_recipe(recipe, nrad, radius_factor, degree, error, ...)` -
+!>                                         Chebyshev-II x Becke recipe, constant
+!>                                         degree, positive-weight rules
 !>   * `read_printout(unit, lines, nline)` - lines written to a scratch unit
 !>   * `printed_entry(lines, key, value)` - whether a `key ... value` line was printed
 !>
@@ -113,7 +115,6 @@ module test_helpers
    public :: get_test_cross
    public :: read_printout, printed_entry
    public :: fd4_scalar
-   public :: require_message
    public :: fd4_offsets
    public :: fd6_scalar
    public :: fd6_offsets
@@ -123,7 +124,7 @@ module test_helpers
    public :: build_numbering_map
    public :: cavity_xi0
    public :: get_uniform_recipe
-   public :: get_handymod_recipe
+   public :: get_becke_recipe
    public :: get_qc_handymod_recipe
 
    !> Default n for get_test_structures (must be a multiple of 5)
@@ -858,32 +859,6 @@ contains
       end if
    end subroutine check_moist_error
 
-   !> Fail unless `merr` is set and names `expected`
-   !>
-   !> For an error in the middle of a test that continues afterwards; a test
-   !> whose only purpose is one error uses `should_fail` instead
-   !>
-   !> @param[out] error     Test failure
-   !> @param[in]  merr      Library error, possibly unallocated
-   !> @param[in]  expected  Substring the message must contain
-   !> @param[in]  label     Case label for the failure message
-   subroutine require_message(error, merr, expected, label)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(moist_error_type), allocatable, intent(in) :: merr
-      !> Substring the message must contain
-      character(len=*), intent(in) :: expected
-      !> Case label
-      character(len=*), intent(in) :: label
-
-      if (.not. allocated(merr)) then
-         call test_failed(error, label//": expected an error containing '"//expected//"'")
-      else if (index(merr%message, expected) == 0) then
-         call test_failed(error, label//": message '"//merr%message//"' lacks '"//expected//"'")
-      end if
-   end subroutine require_message
-
    !> 4-point central finite-difference formula:
    !>   f'(x) ~ (-f(x+2h) + 8 f(x+h) - 8 f(x-h) + f(x-2h)) / (12 h)
    !> Truncation O(h^4 f^(5)); useful for FD-checking analytic derivatives
@@ -1276,45 +1251,41 @@ contains
       call assemble_recipe(overrides(1)%recipe, rule, nrad, becke, shells, .false., rmin, rmax)
    end subroutine get_uniform_recipe
 
-   !> Recipe of the uniform Chebyshev-II x HandyMod molecular grid
+   !> Chebyshev-II x Becke recipe with a constant minimum degree
    !>
-   !> Lebedev generator admitting every rule, constant degree of the
-   !> `nang`-point rule
+   !> Positive-weight Lebedev rules only
    !>
-   !> @param[out] recipe  Recipe of every element
-   !> @param[in]  nrad    Radial node count
-   !> @param[in]  nang    Lebedev point count
-   !> @param[in]  rmin    HandyMod inner radius (bohr)
-   !> @param[in]  rmax    HandyMod outer radius (bohr)
-   !> @param[in]  m       HandyMod parameter (> 0)
-   !> @param[out] error   Unsupported point count or invalid mapping
-   subroutine get_handymod_recipe(recipe, nrad, nang, rmin, rmax, m, error)
-      !> Recipe of every element
+   !> @param[out] recipe         Recipe
+   !> @param[in]  nrad           Radial node count
+   !> @param[in]  radius_factor  Becke scale as a multiple of the covalent radius
+   !> @param[in]  degree         Constant minimum Lebedev degree
+   !> @param[out] error          Invalid shell policy or mapping
+   !> @param[in]  rcut_upper     Optional upper radial cutoff (bohr)
+   subroutine get_becke_recipe(recipe, nrad, radius_factor, degree, error, rcut_upper)
+      !> Recipe
       type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
       !> Radial node count
       integer, intent(in) :: nrad
-      !> Lebedev point count
-      integer, intent(in) :: nang
-      !> HandyMod inner radius
-      real(wp), intent(in) :: rmin
-      !> HandyMod outer radius
-      real(wp), intent(in) :: rmax
-      !> HandyMod parameter
-      real(wp), intent(in) :: m
+      !> Becke scale factor
+      real(wp), intent(in) :: radius_factor
+      !> Constant minimum Lebedev degree
+      integer, intent(in) :: degree
       !> Error handling
       type(moist_error_type), allocatable, intent(out) :: error
+      !> Upper radial cutoff
+      real(wp), intent(in), optional :: rcut_upper
 
       type(moist_math_grid_radial_rule_chebyshev2_type) :: rule
-      type(moist_math_grid_radial_mapping_handymod_type) :: handymod
+      type(moist_math_grid_radial_mapping_becke_type) :: becke
       type(moist_math_grid_atomic_shell_constant_type) :: shells
 
-      call constant_policy_from_count(nang, shells, error)
+      call new_constant_shell_policy(shells, degree, error)
       if (allocated(error)) return
-      call new_handymod_mapping(handymod, rmin, rmax, m, error)
+      call new_becke_mapping(becke, error, radius_factor=radius_factor)
       if (allocated(error)) return
       call new_chebyshev2_rule(rule)
-      call assemble_recipe(recipe, rule, nrad, handymod, shells, .false.)
-   end subroutine get_handymod_recipe
+      call assemble_recipe(recipe, rule, nrad, becke, shells, .true., rcut_upper=rcut_upper)
+   end subroutine get_becke_recipe
 
    !> Recipe of the midpoint x HandyMod molecular grid
    !>

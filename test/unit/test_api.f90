@@ -3192,7 +3192,7 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call new_cartesian_gaussian_grid(template, model_error, nx=2, ny=2, nz=2)
+      call new_cartesian_gaussian_grid(template, model_error, nx=2, ny=2, nz=2, margin=0.0_wp)
       if (allocated(model_error)) then
          call test_failed(error, model_error%message)
          return

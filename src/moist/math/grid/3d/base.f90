@@ -409,10 +409,16 @@ contains
       real(wp), intent(out) :: result
       !> Point index
       integer :: i
+      real(wp) :: correction, term, subtotal
 
       result = 0.0_wp
+      correction = 0.0_wp
+      ! Preserve small contributions after the accumulated integral grows
       do i = 1, self%ngrid
-         result = result + self%w(i)*f(self%xyz(:, i))
+         term = self%w(i)*f(self%xyz(:, i)) - correction
+         subtotal = result + term
+         correction = (subtotal - result) - term
+         result = subtotal
       end do
    end subroutine grid_integrate
 
@@ -554,22 +560,34 @@ contains
    !>   grids with a uniform (or otherwise cheap) measure should override it
    !>
    !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values (length ngrid); any other length stops
+   !> @param[in]  f       Per-point field values (length ngrid); any other length is an error
    !> @param[out] result  Quadrature result
-   pure subroutine grid_integrate_field_default(self, f, result)
+   !> @param[out] error   Error handling
+   subroutine grid_integrate_field_default(self, f, result, error)
       !> Grid instance
       class(moist_math_grid_3d_type), intent(in) :: self
       !> Per-point field values (length ngrid)
       real(wp), intent(in) :: f(:)
       !> Quadrature result
       real(wp), intent(out) :: result
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
       integer :: i
+      real(wp) :: correction, term, subtotal
 
-      if (size(f) /= self%ngrid) error stop "3d grid: integrate_field needs one value per grid point"
       result = 0.0_wp
+      if (size(f) /= self%ngrid) then
+         call fatal_error(error, "3d grid: integrate_field needs one value per grid point")
+         return
+      end if
+      correction = 0.0_wp
+      ! Same compensated accumulation as the callback interface
       do i = 1, self%ngrid
-         result = result + self%measure(i)*f(i)
+         term = self%measure(i)*f(i) - correction
+         subtotal = result + term
+         correction = (subtotal - result) - term
+         result = subtotal
       end do
    end subroutine grid_integrate_field_default
 

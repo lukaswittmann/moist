@@ -7,6 +7,8 @@
 !> - NUFFT: type 1/2 and type 3, both directions, one column and a batch,
 !>   against the analytic Gaussian FT, a direct inverse sum and a serial run
 !> - Radial transforms: one trafo per thread, cloned from a shared template
+!> - Molecular partition kernels: weights, gradient and curvature of every
+!>   scheme with one and two workers, and called from an enclosing team
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
 !$    & omp_get_max_active_levels
@@ -30,9 +32,12 @@ module test_math_grid_3d_threaded
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
       & moist_math_grid_atomic_recipe_override_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_point_grid, molecular_grid_set_kgrid, &
-      & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, default_nufft_tol
-   use test_helpers, only: get_cartesian_gaussian_grid, get_uniform_recipe
+      & new_molecular_point_grid, new_molecular_gaussian_grid, molecular_grid_set_kgrid, &
+      & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, default_nufft_tol, &
+      & partition_becke, partition_pvoronoi
+   use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+   use test_helpers, only: get_cartesian_gaussian_grid, get_uniform_recipe, get_qc_handymod_recipe, &
+      & check_moist_error
    use, intrinsic :: iso_c_binding, only: c_int
    implicit none(type, external)
    private
@@ -68,6 +73,16 @@ module test_math_grid_3d_threaded
    !> Acceptance bound for the backward transform against a direct inverse sum
    real(wp), parameter :: inverse_sum_tol = 100.0_wp*default_nufft_tol
 
+   !> Nuclear derivatives of one caller inside an enclosing team
+   type :: grid_call_type
+      !> Nuclear gradient
+      real(wp) :: gradient(3, 3) = 0.0_wp
+      !> Hessian-vector product
+      real(wp) :: hvp(3, 3) = 0.0_wp
+      !> Caller-local failure
+      type(mctc_error), allocatable :: error
+   end type grid_call_type
+
 contains
 
    !> Collect all math_grid_3d_threaded tests
@@ -78,12 +93,11 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("batched_fft_uses_threaded_backend", test_threaded_batch), &
                   new_unittest("batched_ifft_uses_threaded_backend", test_threaded_round_trip), &
                   new_unittest("molecular_nufft_type12_threaded", test_nufft_type12_threaded), &
                   new_unittest("molecular_nufft_type3_threaded", test_nufft_type3_threaded), &
                   new_unittest("radial_trafo_one_per_thread", test_radial_trafo_per_thread), &
-                  new_unittest("grid_thread_count_override", test_grid_thread_count) &
+                  new_unittest("partition_grid_threaded", test_partition_grid_threaded) &
                   ]
    end subroutine collect_math_grid_3d_threaded
 
@@ -122,128 +136,6 @@ contains
 
 !$    call omp_set_num_threads(min(4, max_threads))
    end subroutine enter_threaded
-
-   !> A grid's `nthreads` overrides the OpenMP default outside a team and is
-   !> ignored inside one; the serial transform still matches the backend call
-   subroutine test_grid_thread_count(error)
-      !> Test failure, or set by `skip_test`
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_3d_cartesian_type), target :: grid
-      class(moist_math_grid_3d_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f_r(:, :)
-      complex(wp), allocatable :: f_k(:, :), f_k_ref(:, :)
-      integer :: max_threads, team, nested, i, status
-
-      call enter_threaded(error, max_threads)
-      if (allocated(error)) return
-
-      call get_cartesian_gaussian_grid(grid, 15, 14, 13, 0.4_wp, error=merr)
-      if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-!$       call omp_set_num_threads(max_threads)
-         return
-      end if
-
-      checks: block
-         team = 1
-!$       team = omp_get_max_threads()
-         call check(error, grid%team_size() == team, "unset count follows the OpenMP default")
-         if (allocated(error)) exit checks
-         grid%nthreads = 2
-         call check(error, grid%team_size() == 2, "explicit count overrides the OpenMP default")
-         if (allocated(error)) exit checks
-         nested = 0
-         !$omp parallel num_threads(2) shared(grid, nested)
-         !$omp master
-         nested = grid%team_size()
-         !$omp end master
-         !$omp end parallel
-         if (nested == 0) nested = 1
-         call check(error, nested == 1, "count is 1 inside an OpenMP team")
-         if (allocated(error)) exit checks
-
-         grid%nthreads = 1
-         allocate (f_r(grid%ngrid, 2), f_k(grid%npts_k, 2), f_k_ref(grid%npts_k, 2))
-         do i = 1, grid%ngrid
-            f_r(i, 1) = sin(0.013_wp*i) + cos(0.007_wp*i)
-            f_r(i, 2) = cos(0.011_wp*i)
-         end do
-         do i = 1, 2
-            status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-               & f_r(:, i), f_k_ref(:, i), grid%get_cell_volume())
-            call check(error, status == 0, "reference forward FFT backend call failed")
-            if (allocated(error)) exit checks
-         end do
-         call trafo%fft_r2k(f_r, f_k, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-            exit checks
-         end if
-         call check(error, maxval(abs(f_k - f_k_ref)) < 1.0e-11_wp, &
-            & "serial batched forward transform deviates from the single-field backend call")
-      end block checks
-
-!$    call omp_set_num_threads(max_threads)
-      call trafo%destroy()
-      call grid%destroy()
-   end subroutine test_grid_thread_count
-
-   !> Outside any enclosing OpenMP team, batched forward FFT matches the reference
-   !>
-   !> - `cartesian_trafo_fft_r2k` selects nthreads = omp_get_max_threads() and
-   !>   routes through the batched ducc0 backend (see its `nthreads == 1` branch)
-   !> - Preconditions forcing that path are checked by `enter_threaded` before
-   !>   the transform runs
-   !> - Batched result is then compared with the single-field backend call, or set by `skip_test`
-   subroutine test_threaded_batch(error)
-      !> Test failure, or set by `skip_test`
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_3d_cartesian_type), target :: grid
-      class(moist_math_grid_3d_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f_r(:, :)
-      complex(wp), allocatable :: f_k(:, :), f_k_ref(:, :)
-      integer :: max_threads, i, status
-
-      call enter_threaded(error, max_threads)
-      if (allocated(error)) return
-
-      call get_cartesian_gaussian_grid(grid, 15, 14, 13, 0.4_wp, error=merr)
-      if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-!$       call omp_set_num_threads(max_threads)
-         return
-      end if
-      allocate (f_r(grid%ngrid, 1), f_k(grid%npts_k, 1), f_k_ref(grid%npts_k, 1))
-      do i = 1, grid%ngrid
-         f_r(i, 1) = sin(0.013_wp*i) + cos(0.007_wp*i)
-      end do
-
-      status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
-         & f_r(:, 1), f_k_ref(:, 1), grid%get_cell_volume())
-      call check(error, status == 0, "reference forward FFT backend call failed")
-      if (allocated(error)) then
-!$       call omp_set_num_threads(max_threads)
-         call trafo%destroy(); call grid%destroy(); return
-      end if
-
-      call trafo%fft_r2k(f_r, f_k, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-      else
-         call check(error, maxval(abs(f_k(:, 1) - f_k_ref(:, 1))) < 1.0e-11_wp, &
-            & "threaded batched forward transform deviates from the single-field backend call")
-      end if
-
-!$    call omp_set_num_threads(max_threads)
-
-      deallocate (f_r, f_k, f_k_ref)
-      call trafo%destroy()
-      call grid%destroy()
-   end subroutine test_threaded_batch
 
    !> Outside any enclosing OpenMP team, a multi-site batch transforms both ways
    !>
@@ -302,20 +194,42 @@ contains
          if (allocated(merr)) call test_failed(error, merr%message)
       end if
       if (.not. allocated(error)) then
-         call check(error, maxval(abs(f_k - f_k_ref)) < 1.0e-11_wp, &
-            & "threaded multi-site forward transform deviates from the single-field backend calls")
+         forward: do a = 1, ns
+            do i = 1, grid%npts_k
+               call check(error, ieee_is_finite(real(f_k_ref(i, a))) .and. ieee_is_finite(aimag(f_k_ref(i, a))), &
+                  & "reference spectrum is not finite")
+               if (allocated(error)) exit forward
+               call check(error, f_k(i, a), f_k_ref(i, a), thr=1.0e-11_wp, &
+                  & more="threaded multi-site forward transform deviates from the single-field backend calls")
+               if (allocated(error)) exit forward
+            end do
+         end do forward
       end if
       if (.not. allocated(error)) then
          call trafo%fft_k2r(f_k, g_r, merr)
          if (allocated(merr)) call test_failed(error, merr%message)
       end if
       if (.not. allocated(error)) then
-         call check(error, maxval(abs(g_r - g_r_ref)) < 1.0e-12_wp, &
-            & "threaded multi-site backward transform deviates from the single-field backend calls")
+         backward: do a = 1, ns
+            do i = 1, grid%ngrid
+               call check(error, ieee_is_finite(g_r_ref(i, a)), "reference backward transform is not finite")
+               if (allocated(error)) exit backward
+               call check(error, g_r(i, a), g_r_ref(i, a), thr=1.0e-12_wp, &
+                  & more="threaded multi-site backward transform deviates from the single-field backend calls")
+               if (allocated(error)) exit backward
+            end do
+         end do backward
       end if
       if (.not. allocated(error)) then
-         call check(error, maxval(abs(g_r - f_r)) < 1.0e-12_wp, &
-            & "threaded multi-site backward transform does not invert the forward one")
+         round_trip: do a = 1, ns
+            do i = 1, grid%ngrid
+               call check(error, ieee_is_finite(f_r(i, a)), "input field is not finite")
+               if (allocated(error)) exit round_trip
+               call check(error, g_r(i, a), f_r(i, a), thr=1.0e-12_wp, &
+                  & more="threaded multi-site backward transform does not invert the forward one")
+               if (allocated(error)) exit round_trip
+            end do
+         end do round_trip
       end if
 
 !$    call omp_set_num_threads(max_threads)
@@ -487,15 +401,31 @@ contains
       end do
 
       scale = maxval(abs(fk_ser))
-      dev = maxval(abs(fk_thr - fk_ser))/scale
-      call check(error, ieee_is_finite(dev) .and. scale > 0.0_wp .and. dev <= default_nufft_tol, &
-         & "threaded molecular forward NUFFT disagrees with the serial run")
+      call check(error, scale > 0.0_wp, "serial forward NUFFT spectrum is zero")
       if (allocated(error)) return
+      do iv = 1, nv
+         do ik = 1, mg%npts_k
+            call check(error, ieee_is_finite(real(fk_ser(ik, iv))) .and. ieee_is_finite(aimag(fk_ser(ik, iv))), &
+               & "serial forward NUFFT spectrum is not finite")
+            if (allocated(error)) return
+            call check(error, fk_thr(ik, iv), fk_ser(ik, iv), thr=default_nufft_tol*scale, &
+               & more="threaded molecular forward NUFFT disagrees with the serial run")
+            if (allocated(error)) return
+         end do
+      end do
 
       scale = maxval(abs(g_ser))
-      dev = maxval(abs(g_thr - g_ser))/scale
-      call check(error, ieee_is_finite(dev) .and. scale > 0.0_wp .and. dev <= default_nufft_tol, &
-         & "threaded molecular backward NUFFT disagrees with the serial run")
+      call check(error, scale > 0.0_wp, "serial backward NUFFT field is zero")
+      if (allocated(error)) return
+      do iv = 1, nv
+         do j = 1, mg%ngrid
+            call check(error, ieee_is_finite(g_ser(j, iv)), "serial backward NUFFT field is not finite")
+            if (allocated(error)) return
+            call check(error, g_thr(j, iv), g_ser(j, iv), thr=default_nufft_tol*scale, &
+               & more="threaded molecular backward NUFFT disagrees with the serial run")
+            if (allocated(error)) return
+         end do
+      end do
    end subroutine check_threaded_nufft
 
    !> Forward transform of a block and backward transform of the result
@@ -740,5 +670,145 @@ contains
 
 !$    call omp_set_num_threads(max_threads)
    end subroutine test_radial_trafo_per_thread
+
+   !> Molecular partition kernels agree for one and two workers and inside an enclosing team
+   !>
+   !> Per scheme: update weights, Gaussian reverse gradient, Hessian-vector
+   !> product and dense Hessian with `nthreads` 1 and 2; two callers of the
+   !> gradient and the Hessian-vector product from one enclosing team
+   subroutine test_partition_grid_threaded(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(structure_type) :: mol
+      type(volume_adjoint_type) :: acc, curvature
+      type(mctc_error), allocatable :: merr
+      type(grid_call_type) :: calls(2)
+      real(wp), allocatable :: weights(:)
+      real(wp) :: gradient(3, 3), hvp(3, 3), hessian(3, 3, 3, 3), direction(3, 3)
+      real(wp) :: threaded(3, 3), threaded_hessian(3, 3, 3, 3)
+      integer :: scheme, i, b, d
+
+      call new(mol, [8, 1, 6], reshape([-0.6_wp, -0.2_wp, 0.1_wp, 0.7_wp, 0.3_wp, -0.25_wp, &
+         & 0.1_wp, 1.2_wp, 0.4_wp], [3, 3]))
+      direction = reshape(sin(real([(i, i=1, 9)], wp)), [3, 3])
+      call get_qc_handymod_recipe(recipe, merr, nrad=8, degree=11)
+      call check_moist_error(error, merr, "threaded partition recipe")
+      if (allocated(error)) return
+      do scheme = partition_becke, partition_pvoronoi
+         call new_molecular_gaussian_grid(grid, merr, recipe=recipe, partition=scheme, reciprocal=.false.)
+         grid%nthreads = 1
+         if (.not. allocated(merr)) call grid%update(mol, merr)
+         call check_moist_error(error, merr, "serial partition update")
+         if (allocated(error)) return
+         weights = grid%w
+         call acc%init(grid%ngrid)
+         acc%w_w = sin(grid%xyz(1, :))
+         acc%w_xi = 0.01_wp*grid%w
+         acc%w_xyz = 0.01_wp
+         ! Molecular curvature excludes width adjoints
+         call curvature%init(grid%ngrid)
+         curvature%w_w = acc%w_w
+         curvature%w_xyz = acc%w_xyz
+         gradient = 0.0_wp
+         call grid%get_volume_gradient(acc, gradient, merr)
+         hvp = 0.0_wp
+         if (.not. allocated(merr)) call grid%get_volume_hessian_vector(curvature, direction, hvp, merr)
+         hessian = 0.0_wp
+         if (.not. allocated(merr)) call grid%get_volume_hessian(curvature, hessian, merr)
+         call check_moist_error(error, merr, "serial partition derivatives")
+         if (allocated(error)) return
+
+         grid%nthreads = 2
+         call grid%update(mol, merr)
+         call check_moist_error(error, merr, "threaded partition update")
+         if (allocated(error)) return
+         call check(error, grid%ngrid, size(weights), "threaded update changed the point set")
+         if (allocated(error)) return
+         do i = 1, grid%ngrid
+            call check(error, ieee_is_finite(weights(i)), "serial weight is not finite")
+            if (allocated(error)) return
+            call check(error, grid%w(i), weights(i), thr=1.0e-14_wp, more="threaded partition weights")
+            if (allocated(error)) return
+         end do
+         threaded = 0.0_wp
+         call grid%get_volume_gradient(acc, threaded, merr)
+         call check_moist_error(error, merr, "threaded reverse gradient")
+         if (allocated(error)) return
+         call check_block(error, threaded, gradient, 2.0e-11_wp, "threaded reverse gradient")
+         if (allocated(error)) return
+         threaded = 0.0_wp
+         call grid%get_volume_hessian_vector(curvature, direction, threaded, merr)
+         call check_moist_error(error, merr, "threaded Hessian-vector")
+         if (allocated(error)) return
+         call check_block(error, threaded, hvp, 2.0e-9_wp, "threaded Hessian-vector")
+         if (allocated(error)) return
+         threaded_hessian = 0.0_wp
+         call grid%get_volume_hessian(curvature, threaded_hessian, merr)
+         call check_moist_error(error, merr, "threaded dense Hessian")
+         if (allocated(error)) return
+         do b = 1, 3
+            do d = 1, 3
+               call check_block(error, threaded_hessian(:, :, d, b), hessian(:, :, d, b), 2.0e-9_wp, &
+                  & "threaded dense Hessian")
+               if (allocated(error)) return
+            end do
+         end do
+
+         do i = 1, 2
+            calls(i)%gradient = 0.0_wp
+            calls(i)%hvp = 0.0_wp
+         end do
+         !$omp parallel do num_threads(2) default(shared) private(i)
+         do i = 1, 2
+            call grid%get_volume_gradient(acc, calls(i)%gradient, calls(i)%error)
+            if (.not. allocated(calls(i)%error)) then
+               call grid%get_volume_hessian_vector(curvature, direction, calls(i)%hvp, calls(i)%error)
+            end if
+         end do
+         !$omp end parallel do
+         do i = 1, 2
+            call check_moist_error(error, calls(i)%error, "enclosing-team caller")
+            if (allocated(error)) return
+            call check_block(error, calls(i)%gradient, gradient, 2.0e-11_wp, "enclosing-team reverse gradient")
+            if (allocated(error)) return
+            call check_block(error, calls(i)%hvp, hvp, 2.0e-9_wp, "enclosing-team Hessian-vector")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_partition_grid_threaded
+
+   !> Element-wise agreement of a 3 x 3 block with its serial reference
+   !>
+   !> @param[out] error      Test failure
+   !> @param[in]  actual     Threaded result
+   !> @param[in]  reference  Serial result
+   !> @param[in]  thr        Absolute threshold
+   !> @param[in]  what       Failure context
+   subroutine check_block(error, actual, reference, thr, what)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Threaded result
+      real(wp), intent(in) :: actual(3, 3)
+      !> Serial result
+      real(wp), intent(in) :: reference(3, 3)
+      !> Absolute threshold
+      real(wp), intent(in) :: thr
+      !> Failure context
+      character(len=*), intent(in) :: what
+
+      integer :: a, c
+
+      do a = 1, 3
+         do c = 1, 3
+            call check(error, ieee_is_finite(reference(c, a)), "serial reference is not finite")
+            if (allocated(error)) return
+            call check(error, actual(c, a), reference(c, a), thr=thr, more=what)
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_block
 
 end module test_math_grid_3d_threaded

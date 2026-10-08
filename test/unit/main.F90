@@ -22,7 +22,6 @@ program tester
    use test_math_cell_grid, only: collect_math_cell_grid
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
-   use test_math_grid, only: collect_math_grid
    use test_math_grid_radial_rule, only: collect_math_grid_radial_rule
    use test_math_grid_radial, only: collect_math_grid_radial
    use test_math_grid_radial_trafo, only: collect_math_grid_radial_trafo
@@ -31,11 +30,14 @@ program tester
    use test_math_fft_dst4, only: collect_math_fft_dst4
    use test_math_fft_3d, only: collect_math_fft_3d
    use test_finufft, only: collect_finufft
-   use test_math_grid_nufft, only: collect_math_grid_nufft
-   use test_math_grid_3d, only: collect_math_grid_3d
+   use test_math_grid_3d_fft, only: collect_math_grid_3d_fft
+   use test_math_grid_3d_nufft, only: collect_math_grid_3d_nufft
    use test_math_grid_3d_threaded, only: collect_math_grid_3d_threaded
    use test_math_grid_3d_partition, only: collect_math_grid_3d_partition
-   use test_math_grid_3d_molecular, only: collect_math_grid_3d_molecular
+   use test_math_grid_3d_derivatives, only: collect_math_grid_3d_derivatives
+   use test_math_grid_3d_integration, only: collect_math_grid_3d_integration
+   use test_math_grid_3d_invariance, only: collect_math_grid_3d_invariance
+   use test_math_grid_3d_guards, only: collect_math_grid_3d_guards
    use test_cavity_iswig, only: collect_cavity_iswig
    use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
@@ -90,7 +92,6 @@ program tester
       & new_testsuite("math_solvers", collect_math_solvers), &
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
-      & new_testsuite("math_grid", collect_math_grid), &
       & new_testsuite("math_grid_radial_rule", collect_math_grid_radial_rule), &
       & new_testsuite("math_grid_radial", collect_math_grid_radial), &
       & new_testsuite("math_grid_radial_trafo", collect_math_grid_radial_trafo), &
@@ -99,11 +100,14 @@ program tester
       & new_testsuite("math_fft_dst4", collect_math_fft_dst4), &
       & new_testsuite("math_fft_3d", collect_math_fft_3d), &
       & new_testsuite("finufft", collect_finufft), &
-      & new_testsuite("math_grid_nufft", collect_math_grid_nufft), &
-      & new_testsuite("math_grid_3d", collect_math_grid_3d), &
+      & new_testsuite("math_grid_3d_fft", collect_math_grid_3d_fft), &
+      & new_testsuite("math_grid_3d_nufft", collect_math_grid_3d_nufft), &
       & new_testsuite("math_grid_3d_threaded", collect_math_grid_3d_threaded), &
       & new_testsuite("math_grid_3d_partition", collect_math_grid_3d_partition), &
-      & new_testsuite("math_grid_3d_molecular", collect_math_grid_3d_molecular), &
+      & new_testsuite("math_grid_3d_derivatives", collect_math_grid_3d_derivatives), &
+      & new_testsuite("math_grid_3d_integration", collect_math_grid_3d_integration), &
+      & new_testsuite("math_grid_3d_invariance", collect_math_grid_3d_invariance), &
+      & new_testsuite("math_grid_3d_guards", collect_math_grid_3d_guards), &
       & new_testsuite("moz_1d", collect_moz_1d), &
       & new_testsuite("moz_3d", collect_moz_3d), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &

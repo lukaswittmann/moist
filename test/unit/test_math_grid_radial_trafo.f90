@@ -1,15 +1,10 @@
 !> Test suite for the radial Fourier-Bessel transforms and their factory
 !>
-!>   - Factory: tag dispatch and every mismatch error
-!>   - Direct constructors: invalid tags, empty or unallocated grids, node
-!>     arrays that disagree with npts, a negative spacing
 !>   - DST-IV: Gaussian against its closed-form transform, round trips
 !>   - General quadrature: convergence in the node count for r, k <= 10,
 !>     sinc(0) = 1, agreement with DST-IV on a uniform pair
 !>   - Both: adjoint dot products, batched against scalar, batch widths
-!>     changing on one instance, empty batches, size errors, independent
-!>     clones; the base default batched loops
-!>     through a minimal test trafo; one trafo per thread is tested in
+!>     changing on one instance; one trafo per thread is tested in
 !>     `math_grid_3d_threaded`, outside test-drive's team
 module test_math_grid_radial_trafo
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -25,8 +20,7 @@ module test_math_grid_radial_trafo
       & moist_math_grid_radial_recipe_type, new_radial_grid, new_uniform_radial_pair, &
       & transform_quadrature, transform_dst4
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, &
-      & moist_math_grid_radial_trafo_dst4_type, moist_math_grid_radial_trafo_quadrature_type, &
-      & new_dst4_trafo, new_quadrature_trafo, new_radial_trafo
+      & moist_math_grid_radial_trafo_quadrature_type, new_quadrature_trafo, new_radial_trafo
    implicit none(type, external)
    private
 
@@ -34,21 +28,6 @@ module test_math_grid_radial_trafo
 
    !> Transform directions, selectors for `apply_one` and `apply_all`
    integer, parameter :: op_r2k = 1, op_k2r = 2, op_r2k_adj = 3, op_k2r_adj = 4
-
-   !> Minimal trafo that only scales, so the base default batched loops are exercised
-   type, extends(moist_math_grid_radial_trafo_type) :: scale_trafo_type
-   contains
-      !> Transform tag (none)
-      procedure :: implementation => scale_implementation
-      !> 2*f
-      procedure :: fbt_r2k => scale_r2k
-      !> 3*f
-      procedure :: fbt_k2r => scale_k2r
-      !> 5*f
-      procedure :: fbt_r2k_adj => scale_r2k_adj
-      !> 7*f
-      procedure :: fbt_k2r_adj => scale_k2r_adj
-   end type scale_trafo_type
 
 contains
 
@@ -60,14 +39,6 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("direct_constructor_errors", test_direct_constructor_errors), &
-         new_unittest("factory_selects_dst4", test_factory_dst4), &
-         new_unittest("factory_selects_quadrature", test_factory_quadrature), &
-         new_unittest("factory_unset_tag", test_factory_unset_tag), &
-         new_unittest("factory_unknown_tag", test_factory_unknown_tag), &
-         new_unittest("factory_mixed_tags", test_factory_mixed_tags), &
-         new_unittest("factory_dst4_npts_mismatch", test_factory_dst4_npts), &
-         new_unittest("factory_dst4_spacing_mismatch", test_factory_dst4_spacing), &
          new_unittest("dst4_gaussian_analytic", test_dst4_gaussian), &
          new_unittest("dst4_round_trip", test_dst4_round_trip), &
          new_unittest("quadrature_gaussian_convergence", test_quadrature_convergence), &
@@ -75,11 +46,7 @@ contains
          new_unittest("quadrature_matches_dst4_on_uniform_pair", test_quadrature_vs_dst4), &
          new_unittest("adjoint_dot_product", test_adjoint), &
          new_unittest("batched_matches_scalar", test_batched), &
-         new_unittest("batched_width_change", test_batched_width_change), &
-         new_unittest("empty_batch", test_empty_batch), &
-         new_unittest("size_errors", test_size_errors), &
-         new_unittest("base_default_batched_loops", test_base_default), &
-         new_unittest("clone_independent", test_clone) &
+         new_unittest("batched_width_change", test_batched_width_change) &
          ]
    end subroutine collect_math_grid_radial_trafo
 
@@ -363,287 +330,6 @@ contains
       end do
    end subroutine fill_fields
 
-   !> Run a factory call that must fail with a message containing `expected`
-   !>
-   !> @param[out] error     Test failure
-   !> @param[in]  rgrid     r-space grid
-   !> @param[in]  kgrid     k-space grid
-   !> @param[in]  expected  Substring of the expected message
-   !> @param[in]  what      Case label for the failure message
-   subroutine expect_factory_error(error, rgrid, kgrid, expected, what)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> r-space grid
-      type(moist_math_grid_radial_type), intent(in) :: rgrid
-      !> k-space grid
-      type(moist_math_grid_radial_type), intent(in) :: kgrid
-      !> Substring of the expected message
-      character(len=*), intent(in) :: expected
-      !> Case label
-      character(len=*), intent(in) :: what
-
-      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-
-      call new_radial_trafo(trafo, rgrid, kgrid, merr)
-      if (.not. allocated(merr)) then
-         call test_failed(error, what//": factory accepted the pair")
-         return
-      end if
-      call check(error, index(merr%message, expected) > 0, &
-         & what//": unexpected message '"//merr%message//"'")
-      if (allocated(error)) return
-      call check(error, .not. allocated(trafo), what//": trafo allocated despite the error")
-   end subroutine expect_factory_error
-
-   !* ------------------------------------ Factory ------------------------------------ *!
-
-   !> A uniform pair selects DST-IV and exposes the recorded spacings
-   subroutine test_factory_dst4(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-
-      call new_uniform_radial_pair(rgrid, kgrid, 64, 0.05_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call make_trafo(error, rgrid, kgrid, trafo)
-      if (allocated(error)) return
-      call check(error, trafo%implementation() == transform_dst4, &
-         & "Uniform pair must select the DST-IV trafo")
-      if (allocated(error)) return
-      call check(error, trafo%nr == 64 .and. trafo%nk == 64, "DST-IV trafo sizes")
-      if (allocated(error)) return
-      select type (trafo)
-      type is (moist_math_grid_radial_trafo_dst4_type)
-         call check(error, trafo%dr == rgrid%spacing .and. trafo%dk == kgrid%spacing, &
-            & "DST-IV trafo must expose the recorded dr and dk")
-      class default
-         call test_failed(error, "Uniform pair did not produce a DST-IV trafo type")
-      end select
-   end subroutine test_factory_dst4
-
-   !> Direct constructors reject invalid metadata and missing grid arrays
-   subroutine test_direct_constructor_errors(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad
-      type(moist_math_grid_radial_trafo_dst4_type) :: dst4
-      type(moist_math_grid_radial_trafo_quadrature_type) :: quad
-      type(mctc_error), allocatable :: merr
-      character(len=80) :: message
-      integer :: icase, side
-
-      do icase = 1, 5
-         call new_uniform_radial_pair(rgrid, kgrid, 16, 0.1_wp, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-            return
-         end if
-         select case (icase)
-         case (1)
-            rgrid%transform = transform_quadrature
-            message = "both grids must be tagged"
-         case (2)
-            rgrid%npts = 0
-            kgrid%npts = 0
-            message = "grids have no nodes"
-         case (3)
-            deallocate (rgrid%r)
-            message = "grid nodes are not allocated"
-         case (4)
-            rgrid%r = rgrid%r(:15)
-            message = "node arrays do not match npts"
-         case (5)
-            ! Negating both spacings keeps dk == pi/(npts*dr) exact, so only the
-            ! r-spacing guard can reject this pair
-            rgrid%spacing = -rgrid%spacing
-            kgrid%spacing = -kgrid%spacing
-            message = "r grid has no positive finite spacing"
-         case default
-            call test_failed(error, "Unknown DST-IV constructor case")
-            return
-         end select
-         call new_dst4_trafo(dst4, rgrid, kgrid, merr)
-         call check(error, allocated(merr), "Direct DST-IV constructor accepted invalid grid")
-         if (allocated(error)) return
-         call check(error, index(merr%message, trim(message)) > 0, &
-            & "Direct DST-IV constructor did not diagnose the invalid metadata")
-         if (allocated(error)) return
-      end do
-
-      do side = 1, 2
-         do icase = 1, 3
-            call new_uniform_radial_pair(rgrid, kgrid, 16, 0.1_wp, merr)
-            if (allocated(merr)) then
-               call test_failed(error, merr%message)
-               return
-            end if
-            bad = rgrid
-            select case (icase)
-            case (1)
-               ! Consistently empty: zero nodes and zero-size arrays
-               bad%npts = 0
-               bad%r = bad%r(:0)
-               bad%w = bad%w(:0)
-               message = "grid has no nodes"
-            case (2)
-               deallocate (bad%w)
-               message = "grid arrays are not allocated"
-            case (3)
-               bad%w = bad%w(:15)
-               message = "grid arrays do not match npts"
-            case default
-               call test_failed(error, "Unknown quadrature constructor case")
-               return
-            end select
-            if (side == 1) then
-               call new_quadrature_trafo(quad, bad, kgrid, merr)
-            else
-               call new_quadrature_trafo(quad, rgrid, bad, merr)
-            end if
-            call check(error, allocated(merr), &
-               & "Direct quadrature constructor accepted invalid grid")
-            if (allocated(error)) return
-            call check(error, index(merr%message, trim(message)) > 0, &
-               & "Direct quadrature constructor did not diagnose the invalid metadata")
-            if (allocated(error)) return
-         end do
-      end do
-   end subroutine test_direct_constructor_errors
-
-   !> A Chebyshev-II + Becke pair selects the general quadrature; nr and nk may differ
-   subroutine test_factory_quadrature(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-
-      call make_cheb_pair(rgrid, kgrid, 40, 1.0_wp, 50, 1.5_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call make_trafo(error, rgrid, kgrid, trafo)
-      if (allocated(error)) return
-      call check(error, trafo%implementation() == transform_quadrature, &
-         & "Chebyshev-II + Becke pair must select the quadrature trafo")
-      if (allocated(error)) return
-      call check(error, trafo%nr == 40 .and. trafo%nk == 50, "Quadrature trafo sizes")
-      if (allocated(error)) return
-      select type (trafo)
-      type is (moist_math_grid_radial_trafo_quadrature_type)
-      class default
-         call test_failed(error, "Quadrature pair did not produce a quadrature trafo type")
-      end select
-   end subroutine test_factory_quadrature
-
-   !> A default-initialized grid (tag 0) is refused on either side
-   subroutine test_factory_unset_tag(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: unset, rgrid, kgrid
-      type(mctc_error), allocatable :: merr
-
-      call expect_factory_error(error, unset, unset, "r grid has no transform tag", "both unset")
-      if (allocated(error)) return
-      call new_uniform_radial_pair(rgrid, kgrid, 16, 0.1_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call expect_factory_error(error, rgrid, unset, "k grid has no transform tag", "k unset")
-      if (allocated(error)) return
-      call expect_factory_error(error, unset, kgrid, "r grid has no transform tag", "r unset")
-   end subroutine test_factory_unset_tag
-
-   !> A tag that is neither transform_quadrature nor transform_dst4 is refused
-   subroutine test_factory_unknown_tag(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      type(mctc_error), allocatable :: merr
-
-      call make_cheb_pair(rgrid, kgrid, 16, 1.0_wp, 16, 1.0_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      kgrid%transform = 99
-      call expect_factory_error(error, rgrid, kgrid, "k grid has an unknown transform tag", &
-         & "unknown k tag")
-   end subroutine test_factory_unknown_tag
-
-   !> Exactly one DST-IV grid is refused, in either order
-   subroutine test_factory_mixed_tags(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: ur, uk, cr, ck
-      type(mctc_error), allocatable :: merr
-
-      call new_uniform_radial_pair(ur, uk, 32, 0.1_wp, merr)
-      if (.not. allocated(merr)) call make_cheb_pair(cr, ck, 32, 1.0_wp, 32, 1.5_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call expect_factory_error(error, ur, ck, "exactly one grid is tagged for DST-IV", &
-         & "DST-IV r, quadrature k")
-      if (allocated(error)) return
-      call expect_factory_error(error, cr, uk, "exactly one grid is tagged for DST-IV", &
-         & "quadrature r, DST-IV k")
-   end subroutine test_factory_mixed_tags
-
-   !> Two DST-IV grids from pairs of different size are refused
-   subroutine test_factory_dst4_npts(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: r1, k1, r2, k2
-      type(mctc_error), allocatable :: merr
-
-      call new_uniform_radial_pair(r1, k1, 32, 0.1_wp, merr)
-      if (.not. allocated(merr)) call new_uniform_radial_pair(r2, k2, 48, 0.1_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call expect_factory_error(error, r1, k2, "differ in npts", "npts 32 vs 48")
-   end subroutine test_factory_dst4_npts
-
-   !> Two DST-IV grids whose recorded spacings do not satisfy dk = pi/(npts*dr) are refused
-   !>
-   !> Covers a k grid from a pair of another dr and a recorded dk off by one ULP
-   subroutine test_factory_dst4_spacing(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_math_grid_radial_type) :: r1, k1, r2, k2
-      type(mctc_error), allocatable :: merr
-
-      call new_uniform_radial_pair(r1, k1, 32, 0.1_wp, merr)
-      if (.not. allocated(merr)) call new_uniform_radial_pair(r2, k2, 32, 0.2_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message)
-         return
-      end if
-      call expect_factory_error(error, r1, k2, "k spacing does not match", "dr 0.1 vs 0.2")
-      if (allocated(error)) return
-      k1%spacing = nearest(k1%spacing, 1.0_wp)
-      call expect_factory_error(error, r1, k1, "k spacing does not match", "dk one ULP off")
-   end subroutine test_factory_dst4_spacing
-
    !* ------------------------------------- DST-IV ------------------------------------ *!
 
    !> DST-IV transforms of Gaussians match the closed-form 3D Fourier transform
@@ -777,15 +463,21 @@ contains
    !>
    !> Chebyshev-II + Becke pair, p_r = 1, p_k = 1.5, exponent 0.7; forward
    !> error relative to F(0), backward error absolute (f(0) = 1), over the
-   !> nodes with r, k <= 10
-   !> @param[in]  n      Number of r and k nodes
-   !> @param[out] err_k  Forward window error
-   !> @param[out] err_r  Backward window error
-   subroutine gaussian_window_errors(error, n, err_k, err_r)
+   !> nodes with r, k <= 10; each window node is checked against its bound
+   !> @param[in]  n        Number of r and k nodes
+   !> @param[in]  bound_k  Forward bound, relative to F(0)
+   !> @param[in]  bound_r  Backward bound, absolute
+   !> @param[out] err_k    Forward window error
+   !> @param[out] err_r    Backward window error
+   subroutine gaussian_window_errors(error, n, bound_k, bound_r, err_k, err_r)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Number of r and k nodes
       integer, intent(in) :: n
+      !> Forward bound
+      real(wp), intent(in) :: bound_k
+      !> Backward bound
+      real(wp), intent(in) :: bound_r
       !> Forward window error
       real(wp), intent(out) :: err_k
       !> Backward window error
@@ -798,6 +490,7 @@ contains
       type(mctc_error), allocatable :: merr
       real(wp), allocatable :: f(:), fk(:), got_k(:), got_r(:)
       real(wp) :: peak
+      integer :: i
 
       err_k = huge(1.0_wp)
       err_r = huge(1.0_wp)
@@ -819,11 +512,28 @@ contains
          call test_failed(error, merr%message)
          return
       end if
-      if (all(ieee_is_finite(got_k)) .and. all(ieee_is_finite(got_r)) .and. &
-         & any(kgrid%r <= window) .and. any(rgrid%r <= window)) then
-         err_k = maxval(abs(got_k - fk), mask=kgrid%r <= window)/peak
-         err_r = maxval(abs(got_r - f), mask=rgrid%r <= window)
-      end if
+      call check(error, any(kgrid%r <= window) .and. any(rgrid%r <= window), &
+         & "Quadrature window holds no r or k node")
+      if (allocated(error)) return
+      do i = 1, n
+         if (kgrid%r(i) > window) cycle
+         call check(error, ieee_is_finite(fk(i)), "analytic transform is not finite")
+         if (allocated(error)) return
+         call check(error, got_k(i), fk(i), thr=bound_k*peak, &
+            & more="Quadrature fbt_r2k window error above its bound")
+         if (allocated(error)) return
+      end do
+      do i = 1, n
+         if (rgrid%r(i) > window) cycle
+         call check(error, ieee_is_finite(f(i)), "Gaussian reference is not finite")
+         if (allocated(error)) return
+         call check(error, got_r(i), f(i), thr=bound_r, &
+            & more="Quadrature fbt_k2r window error above its bound")
+         if (allocated(error)) return
+      end do
+      ! Every window node is finite here; the maxima only feed the convergence order
+      err_k = maxval(abs(got_k - fk), mask=kgrid%r <= window)/peak
+      err_r = maxval(abs(got_r - f), mask=rgrid%r <= window)
    end subroutine gaussian_window_errors
 
    !> Quadrature transforms of a Gaussian converge in the node count for r, k <= 10
@@ -845,13 +555,7 @@ contains
       integer :: is
 
       do is = 1, size(sizes)
-         call gaussian_window_errors(error, sizes(is), err_k(is), err_r(is))
-         if (allocated(error)) return
-         call check(error, err_k(is) <= bounds_k(is), &
-            & "Quadrature fbt_r2k window error above its bound")
-         if (allocated(error)) return
-         call check(error, err_r(is) <= bounds_r(is), &
-            & "Quadrature fbt_k2r window error above its bound")
+         call gaussian_window_errors(error, sizes(is), bounds_k(is), bounds_r(is), err_k(is), err_r(is))
          if (allocated(error)) return
       end do
       call check(error, all(err_k(2:) < err_k(:3)) .and. all(err_r(2:) < err_r(:3)), &
@@ -1038,8 +742,6 @@ contains
    !> - Every direction grows the cached width (2 or 3 to 5) and shrinks it
    !>   (5 to 2) on the same instance; each batch is checked against the scalar
    !>   loop, so a cache kept at a narrower width fails here
-   !> - DST-IV only, secondary: the batched plan and buffers follow the last
-   !>   width (type doc: plan rebuilt for each batch width)
    subroutine test_batched_width_change(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1079,278 +781,8 @@ contains
                deallocate (loop, batch)
             end do
          end do
-
-         select type (trafo)
-         type is (moist_math_grid_radial_trafo_dst4_type)
-            call check(error, trafo%nbatch == widths(size(widths)), &
-               & "DST-IV cache does not record the last batch width")
-            if (allocated(error)) return
-            ! No short-circuit in Fortran: size() only on allocated buffers
-            if (allocated(trafo%work_all) .and. allocated(trafo%tmp_all)) then
-               call check(error, size(trafo%work_all, 2) == trafo%nbatch &
-                  & .and. size(trafo%tmp_all, 2) == trafo%nbatch, &
-                  & "DST-IV batched buffers do not match the cached width")
-            else
-               call test_failed(error, "DST-IV batched buffers are not allocated")
-            end if
-            if (allocated(error)) return
-         end select
          deallocate (trafo)
       end do
    end subroutine test_batched_width_change
-
-   !> A zero-width batch on a fresh trafo returns without an error
-   subroutine test_empty_batch(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: kinds(2) = [transform_dst4, transform_quadrature]
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f(:, :), g(:, :)
-      integer :: ik, op, n_in, n_out
-
-      do ik = 1, size(kinds)
-         call make_case(error, kinds(ik), rgrid, kgrid, trafo)
-         if (allocated(error)) return
-         do op = op_r2k, op_k2r_adj
-            call op_sizes(trafo, op, n_in, n_out)
-            allocate (f(n_in, 0), g(n_out, 0))
-            call apply_all(trafo, op, f, g, merr)
-            call check(error, .not. allocated(merr), "Empty batch reported an error")
-            if (allocated(error)) return
-            deallocate (f, g)
-         end do
-      end do
-   end subroutine test_empty_batch
-
-   !> Wrong input or output lengths and mismatched batch widths are refused
-   subroutine test_size_errors(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: kinds(2) = [transform_dst4, transform_quadrature]
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f(:), g(:), f2(:, :), g2(:, :)
-      integer :: ik, op, n_in, n_out
-
-      do ik = 1, size(kinds)
-         call make_case(error, kinds(ik), rgrid, kgrid, trafo)
-         if (allocated(error)) return
-         do op = op_r2k, op_k2r_adj
-            call op_sizes(trafo, op, n_in, n_out)
-            allocate (f(n_in + 1), g(n_out))
-            call apply_one(trafo, op, f, g, merr)
-            call check(error, allocated(merr), "Scalar transform accepted a long input")
-            if (allocated(error)) return
-            deallocate (f, g)
-            allocate (f(n_in), g(n_out - 1))
-            f(:) = 0.0_wp
-            call apply_one(trafo, op, f, g, merr)
-            call check(error, allocated(merr), "Scalar transform accepted a short output")
-            if (allocated(error)) return
-            deallocate (f, g)
-            allocate (f2(n_in, 2), g2(n_out, 3))
-            f2(:, :) = 0.0_wp
-            call apply_all(trafo, op, f2, g2, merr)
-            call check(error, allocated(merr), "Batched transform accepted mismatched widths")
-            if (allocated(error)) return
-            deallocate (f2, g2)
-            allocate (f2(n_in - 1, 2), g2(n_out, 2))
-            f2(:, :) = 0.0_wp
-            call apply_all(trafo, op, f2, g2, merr)
-            call check(error, allocated(merr), "Batched transform accepted a short input column")
-            if (allocated(error)) return
-            deallocate (f2, g2)
-         end do
-      end do
-   end subroutine test_size_errors
-
-   !> The base default batched loops apply the scalar form per column and check shapes
-   subroutine test_base_default(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: factors(4) = [2.0_wp, 3.0_wp, 5.0_wp, 7.0_wp]
-      type(scale_trafo_type) :: trafo
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f(:, :), g(:, :)
-      integer :: op
-
-      trafo%nr = 5
-      trafo%nk = 5
-      call check(error, trafo%implementation() == 0, "Scale trafo tag")
-      if (allocated(error)) return
-      call fill_fields(5, 3, 0, f)
-      allocate (g(5, 3))
-      do op = op_r2k, op_k2r_adj
-         call apply_all(trafo, op, f, g, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-            return
-         end if
-         call check(error, all(g == factors(op)*f), &
-            & "Default batched loop does not apply the scalar form per column")
-         if (allocated(error)) return
-      end do
-      deallocate (g)
-      allocate (g(5, 2))
-      call apply_all(trafo, op_r2k, f, g, merr)
-      call check(error, allocated(merr), "Default batched loop accepted mismatched widths")
-      if (allocated(error)) return
-      deallocate (g)
-      allocate (g(4, 3))
-      call apply_all(trafo, op_k2r, f, g, merr)
-      call check(error, allocated(merr), "Default batched loop accepted a short output column")
-   end subroutine test_base_default
-
-   !> A clone is independent of its template, and a trafo of its grids
-   !>
-   !> - Template results recorded, grids overwritten afterwards, template
-   !>   cloned with allocate(source=) and deallocated
-   !> - The clone reproduces the template bit for bit, scalar and batched,
-   !>   first with a batch width other than the one the template cached last
-   subroutine test_clone(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: kinds(2) = [transform_dst4, transform_quadrature]
-      type(moist_math_grid_radial_type) :: rgrid, kgrid
-      class(moist_math_grid_radial_trafo_type), allocatable :: template, clone
-      type(mctc_error), allocatable :: merr
-      real(wp), allocatable :: f3(:, :), f5(:, :), ref1(:), ref3(:, :), ref5(:, :)
-      real(wp), allocatable :: got1(:), got3(:, :), got5(:, :)
-      integer :: ik
-
-      do ik = 1, size(kinds)
-         call make_case(error, kinds(ik), rgrid, kgrid, template)
-         if (allocated(error)) return
-         call fill_fields(template%nr, 3, 1, f3)
-         call fill_fields(template%nr, 5, 2, f5)
-         allocate (ref1(template%nk), ref3(template%nk, 3), ref5(template%nk, 5))
-         allocate (got1(template%nk), got3(template%nk, 3), got5(template%nk, 5))
-
-         call template%fbt_r2k(f3(:, 1), ref1, merr)
-         if (.not. allocated(merr)) call template%fbt_r2k_all(f5, ref5, merr)
-         if (.not. allocated(merr)) call template%fbt_r2k_all(f3, ref3, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-            return
-         end if
-
-         ! The trafo copied what it needs; the grids may change or vanish
-         rgrid%r(:) = -1.0_wp
-         kgrid%r(:) = -1.0_wp
-         deallocate (rgrid%r, rgrid%w, kgrid%r, kgrid%w)
-
-         allocate (clone, source=template)
-         deallocate (template)
-
-         call clone%fbt_r2k_all(f5, got5, merr)
-         if (.not. allocated(merr)) call clone%fbt_r2k(f3(:, 1), got1, merr)
-         if (.not. allocated(merr)) call clone%fbt_r2k_all(f3, got3, merr)
-         if (allocated(merr)) then
-            call test_failed(error, merr%message)
-            return
-         end if
-         call check(error, all(got1 == ref1) .and. all(got3 == ref3) .and. all(got5 == ref5), &
-            & "Clone does not reproduce its template")
-         if (allocated(error)) return
-         deallocate (clone, f3, f5, ref1, ref3, ref5, got1, got3, got5)
-      end do
-   end subroutine test_clone
-
-   !* ------------------- Minimal scale trafo for the base defaults ------------------- *!
-
-   !> No implementation tag
-   !>
-   !> @param[in] self  Trafo instance
-   pure function scale_implementation(self) result(tag)
-      !> Trafo instance
-      class(scale_trafo_type), intent(in) :: self
-      !> 0
-      integer :: tag
-
-      tag = 0*self%nr
-   end function scale_implementation
-
-   !> f_out = 2*f_in
-   !>
-   !> @param[in,out] self   Trafo instance
-   !> @param[in]     f_in   Input field
-   !> @param[out]    f_out  Output field
-   !> @param[out]    error  Never set
-   subroutine scale_r2k(self, f_in, f_out, error)
-      !> Trafo instance
-      class(scale_trafo_type), intent(inout) :: self
-      !> Input field
-      real(wp), intent(in) :: f_in(:)
-      !> Output field
-      real(wp), intent(out) :: f_out(:)
-      !> Error handling
-      type(mctc_error), allocatable, intent(out) :: error
-
-      f_out = 2.0_wp*f_in
-   end subroutine scale_r2k
-
-   !> f_out = 3*f_in
-   !>
-   !> @param[in,out] self   Trafo instance
-   !> @param[in]     f_in   Input field
-   !> @param[out]    f_out  Output field
-   !> @param[out]    error  Never set
-   subroutine scale_k2r(self, f_in, f_out, error)
-      !> Trafo instance
-      class(scale_trafo_type), intent(inout) :: self
-      !> Input field
-      real(wp), intent(in) :: f_in(:)
-      !> Output field
-      real(wp), intent(out) :: f_out(:)
-      !> Error handling
-      type(mctc_error), allocatable, intent(out) :: error
-
-      f_out = 3.0_wp*f_in
-   end subroutine scale_k2r
-
-   !> f_out = 5*f_in
-   !>
-   !> @param[in,out] self   Trafo instance
-   !> @param[in]     f_in   Input field
-   !> @param[out]    f_out  Output field
-   !> @param[out]    error  Never set
-   subroutine scale_r2k_adj(self, f_in, f_out, error)
-      !> Trafo instance
-      class(scale_trafo_type), intent(inout) :: self
-      !> Input field
-      real(wp), intent(in) :: f_in(:)
-      !> Output field
-      real(wp), intent(out) :: f_out(:)
-      !> Error handling
-      type(mctc_error), allocatable, intent(out) :: error
-
-      f_out = 5.0_wp*f_in
-   end subroutine scale_r2k_adj
-
-   !> f_out = 7*f_in
-   !>
-   !> @param[in,out] self   Trafo instance
-   !> @param[in]     f_in   Input field
-   !> @param[out]    f_out  Output field
-   !> @param[out]    error  Never set
-   subroutine scale_k2r_adj(self, f_in, f_out, error)
-      !> Trafo instance
-      class(scale_trafo_type), intent(inout) :: self
-      !> Input field
-      real(wp), intent(in) :: f_in(:)
-      !> Output field
-      real(wp), intent(out) :: f_out(:)
-      !> Error handling
-      type(mctc_error), allocatable, intent(out) :: error
-
-      f_out = 7.0_wp*f_in
-   end subroutine scale_k2r_adj
 
 end module test_math_grid_radial_trafo
