@@ -29,6 +29,7 @@ contains
                   new_unittest("owned_logfile", test_owned_logfile), &
                   new_unittest("print_settings_runs", test_print_settings_runs), &
                   new_unittest("debug_message_gated", test_debug_message_gated), &
+                  new_unittest("message_flush_gated", test_message_flush_gated), &
                   new_unittest("delete_is_safe", test_delete_is_safe), &
                   new_unittest("output_contracts", test_output_contracts), &
                   new_unittest("failed_files", test_failed_files) &
@@ -387,6 +388,33 @@ contains
       end if
       close (iu, status="delete")
    end subroutine test_debug_message_gated
+
+   !> message_flush writes like message: only at an enabled level
+   subroutine test_message_flush_gated(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      character(*), parameter :: path = "test_context_message_flush.tmp"
+      integer :: iu, stat
+      character(64) :: line
+
+      call new_context(ctx, nthreads=0, verbosity=1, logfile=path)
+      call ctx%message_flush("level two is silent", level=2)
+      call ctx%message_flush("level one is written")
+      call ctx%delete()
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
+      call check(error, stat == 0, "log file exists")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      call check(error, stat == 0, "log file is non-empty")
+      if (.not. allocated(error)) then
+         call check(error, trim(line) == "level one is written", "only the enabled message written")
+      end if
+      if (.not. allocated(error)) then
+         read (iu, "(a)", iostat=stat) line
+         call check(error, is_iostat_end(stat), "silenced message not written")
+      end if
+      close (iu, status="delete")
+   end subroutine test_message_flush_gated
 
    !> delete() is safe to call, including twice, and reports no nodes after
    subroutine test_delete_is_safe(error)

@@ -63,6 +63,8 @@ module moist_context
       procedure :: writes => context_writes
       !> Write a message to the context output unit, gated by verbosity
       procedure :: message => context_message
+      !> Write a message like `message`, then flush the output unit
+      procedure :: message_flush => context_message_flush
       !> Write a debug message to the debug unit when debug is enabled
       procedure :: debug_message => context_debug_message
       !> OpenMP thread count fixed at construction
@@ -251,6 +253,35 @@ contains
       end if
 
    end subroutine context_message
+
+   !> Write a message like `message`, then flush the output unit
+   !>
+   !> Write and flush share one critical section, so no other message lands
+   !> between them
+   !>
+   !> @param[in]  msg    message text
+   !> @param[in]  level  verbosity level required to emit it (default 1)
+   subroutine context_message_flush(self, msg, level)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Message text
+      character(len=*), intent(in) :: msg
+      !> Verbosity level required to emit the message
+      integer, intent(in), optional :: level
+      !> Effective level
+      integer :: lvl
+
+      lvl = 1
+      if (present(level)) lvl = level
+
+      if (self%writes(lvl)) then
+         !$omp critical(moist_context_io)
+         write (self%unit, "(a)") msg
+         flush (self%unit)
+         !$omp end critical(moist_context_io)
+      end if
+
+   end subroutine context_message_flush
 
    !> Write a debug message to the debug unit when debug is enabled
    !>
