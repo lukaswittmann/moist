@@ -10,6 +10,7 @@
 !>
 !> - `add`: copy of a term; insertion order is the order of preference
 !> - `update(mol)`: every term from the structure, coverage merge, structure kept
+!> - `update(mol, grid)`: the same, then grid-dependent term data from the owning model's grid
 !>   - LJ data and charges: first term covering an atom supplies it, never summed
 !>   - Uncovered atoms: named error
 !>   - Whole-side field term: no other charge supplier
@@ -106,7 +107,12 @@ module moist_model_moz_potential
       !> Append a copy of a term; drops the updated state
       procedure :: add => potential_add
       !> Update every term from the structure and merge their data
-      procedure :: update => potential_update
+      procedure :: update_plain => potential_update
+      !> Update from the structure, then grid-dependent term data (radial grid)
+      procedure :: update_1d => potential_update_1d
+      !> Update from the structure, then grid-dependent term data (volume grid)
+      procedure :: update_3d => potential_update_3d
+      generic :: update => update_plain, update_1d, update_3d
       !> Declare the coupling requests of every term in its own scope (radial grid)
       procedure :: declare_1d => potential_declare_1d
       !> Declare the coupling requests of every term in its own scope (volume grid)
@@ -198,6 +204,48 @@ module moist_model_moz_potential
          !> Optional solvent id of this side
          integer, intent(in), optional :: solvent_id
       end subroutine potential_update
+
+      !> Update every term from the structure, then its grid-dependent data (radial grid)
+      !>
+      !> - Grid hook of each term after the structure update and merge
+      !> - A failing grid hook leaves the potential not updated
+      !>
+      !> @param[in,out] self   potential
+      !> @param[in]     mol    structure of this side, bohr
+      !> @param[in]     grid   radial grid of the owning model
+      !> @param[out]    error  structure update failure or a term refusing the grid
+      module subroutine potential_update_1d(self, mol, grid, error)
+         implicit none(type, external)
+         !> Potential
+         class(moz_potential_type), intent(inout) :: self
+         !> Structure of this side
+         class(structure_type), intent(in) :: mol
+         !> Radial grid of the owning model
+         type(moist_math_grid_radial_type), intent(in) :: grid
+         !> Error handling
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine potential_update_1d
+
+      !> Update every term from the structure, then its grid-dependent data (volume grid)
+      !>
+      !> - Grid hook of each term after the structure update and merge
+      !> - A failing grid hook leaves the potential not updated
+      !>
+      !> @param[in,out] self   potential
+      !> @param[in]     mol    structure of this side, bohr
+      !> @param[in]     grid   volume grid of the owning model, already updated to `mol`
+      !> @param[out]    error  structure update failure or a term refusing the grid
+      module subroutine potential_update_3d(self, mol, grid, error)
+         implicit none(type, external)
+         !> Potential
+         class(moz_potential_type), intent(inout) :: self
+         !> Structure of this side
+         class(structure_type), intent(in) :: mol
+         !> Volume grid of the owning model
+         class(moist_math_grid_3d_type), intent(in) :: grid
+         !> Error handling
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine potential_update_3d
 
       !> Declare the coupling requests of every term in its own scope (radial grid)
       !>

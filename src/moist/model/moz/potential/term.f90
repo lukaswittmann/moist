@@ -1,6 +1,7 @@
 !> Abstract term of a MOZ potential
 !>
 !> - Updated from a structure; solvent id for solvent-specific parameters
+!> - Grid-dependent data from the owning model's grid in `update_grid`, after `update`; none by default
 !> - Short range: plain-data 12-6 Lennard-Jones slot `pair`, partial atom coverage allowed
 !> - Uncovered atoms filled by later terms of the potential
 !> - Electrostatics: tail charges (`tail_charges`) and/or grid potential (`has_field`, `field`)
@@ -42,6 +43,11 @@ module moist_model_moz_potential_term
       procedure(potential_name_i), deferred :: name
       !> Fill the term from the structure
       procedure(potential_update_i), deferred :: update
+      !> Prepare grid-dependent data for a radial grid after `update`; nothing by default
+      procedure :: update_grid_1d => potential_update_grid_1d
+      !> Prepare grid-dependent data for a volume grid after `update`; nothing by default
+      procedure :: update_grid_3d => potential_update_grid_3d
+      generic :: update_grid => update_grid_1d, update_grid_3d
       !> Whether evaluation reads host data from the coupling; false by default
       procedure :: is_host_fed => potential_is_host_fed
       !> Whether `field` supplies a grid potential; false by default
@@ -130,6 +136,34 @@ contains
       logical :: has
       has = .false.
    end function potential_has_field
+
+   !> Prepare nothing for a radial grid
+   !>
+   !> @param[in,out] self   updated term
+   !> @param[in]     grid   radial grid of the owning model
+   !> @param[out]    error  never set
+   subroutine potential_update_grid_1d(self, grid, error)
+      !> Updated term
+      class(potential_term_type), intent(inout) :: self
+      !> Radial grid of the owning model
+      type(moist_math_grid_radial_type), intent(in) :: grid
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+   end subroutine potential_update_grid_1d
+
+   !> Prepare nothing for a volume grid
+   !>
+   !> @param[in,out] self   updated term
+   !> @param[in]     grid   volume grid of the owning model
+   !> @param[out]    error  never set
+   subroutine potential_update_grid_3d(self, grid, error)
+      !> Updated term
+      class(potential_term_type), intent(inout) :: self
+      !> Volume grid of the owning model
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+   end subroutine potential_update_grid_3d
 
    !> Declare nothing for a radial grid
    !>

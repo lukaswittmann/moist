@@ -1,4 +1,11 @@
 !> Three-dimensional MOZ model state
+!>
+!> - Owned spatial grid copy
+!> - Solute potential `potential` (public) and a private copy of the updated bulk solvent
+!> - Correlation theory pending; the tables come from `potential%compute(grid, ..., solvent=...)`
+!> - Coupling scope of solute term i: i
+!> - Point grids only, by design: Gaussian widths give the tables nothing and cost more
+!> - The model does not watch its potential: update it again after a change
 module moist_model_moz_3d_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
@@ -6,23 +13,27 @@ module moist_model_moz_3d_type
    use moist_model_type, only: solvation_model_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_channels_fields, only: field_query_type
-   use moist_channels_coupling, only: coupling_type, point_potential_request_type, &
-      & gaussian_potential_request_type, atomic_charge_request_type, &
-      & atomic_multipole_request_type, moist_phase_energy, moist_phase_response, &
-      & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
-      & coupling_register, request_require, coupling_snapshot, coupling_check_mandatory
+   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, moist_phase_energy, &
+      & moist_phase_response, moist_phase_gradient, coupling_snapshot, coupling_check_mandatory
    use moist_channels_response, only: response_type
+   use moist_model_moz_potential, only: moz_potential_type
+   use moist_model_moz_solvent_vv, only: solvent_vv_type
    implicit none(type, external)
    private
    public :: model_moz_3d_type, new_moz_3d_model
 
+   !> Refusal of a grid with Gaussian widths
+   character(len=*), parameter :: gaussian_grid_refused = &
+      & "MOZ 3D model supports point grids only; Gaussian-width grids are not supported yet"
+
    !> Direct 3D MOZ model; correlation theory is pending
    type, extends(solvation_model_type) :: model_moz_3d_type
+      !> Solute potential; add terms before `update`
+      type(moz_potential_type) :: potential
       !> Owned spatial grid
       class(moist_math_grid_3d_type), allocatable :: grid
-      ! TODO: replace the coupling_mode string with a typed selector set at construction
-      !> Electrostatic coupling source: "qat", "ec" or "multipoles" (3D only)
-      character(len=16) :: coupling_mode = "ec"
+      !> Copy of the updated bulk solvent
+      type(solvent_vv_type), allocatable, private :: solvent
    contains
       final :: destroy_moz_3d_model
       procedure :: update => moz_3d_update
@@ -30,49 +41,71 @@ module moist_model_moz_3d_type
       procedure :: get_response => moz_3d_response
       procedure :: get_gradient => moz_3d_gradient
       procedure :: atom_count => moz_3d_atom_count
-      !> Declare the requests of the electrostatic coupling source: point
-      !> charges ("qat"), point multipoles ("multipoles") or the grid potential
-      !> plus tail charges ("ec")
+      !> Declare the coupling requests of every solute term in its own scope
       procedure :: declare_pass => moz_3d_declare_pass
       !> Publish the grid geometry as named fields
       procedure :: list_fields => moz_3d_list_fields
+      !> Whether the model holds a solvent
+      procedure :: has_solvent => moz_3d_has_solvent
+      !> Number of solvent sites; 0 before construction
+      procedure :: solvent_nsite => moz_3d_solvent_nsite
    end type model_moz_3d_type
 
 contains
 
-
-
-   !> Copy the configured spatial grid
+   !> Copy the configured spatial grid and an updated bulk solvent
    !>
-   !> @param[out] self Model
-   !> @param[in] ctx Run context, borrowed for the lifetime of the model
-   !> @param[in] grid Spatial grid template
-   !> @param[out] error Allocation failure
-   subroutine new_moz_3d_model(self, ctx, grid, error)
+   !> - Gaussian widths already present: refusal at construction
+   !> - Geometry-dependent Gaussian widths: refusal at `update`
+   !>
+   !> @param[out] self     model
+   !> @param[in]  ctx      run context, borrowed for the lifetime of the model
+   !> @param[in]  grid     spatial point grid template
+   !> @param[in]  solvent  bulk solvent with an updated potential, copied into the model
+   !> @param[out] error    gaussian-width grid, solvent not updated or allocation failure
+   subroutine new_moz_3d_model(self, ctx, grid, solvent, error)
       !> Model
       type(model_moz_3d_type), intent(out) :: self
       !> Run context, borrowed for the lifetime of the model
       type(moist_context_type), intent(in), target :: ctx
-      !> Spatial grid template, copied into the model
+      !> Spatial point grid template, copied into the model
       class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Bulk solvent with an updated potential
+      type(solvent_vv_type), intent(in) :: solvent
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Allocation status of the grid copy
+      !> Allocation status of the copies
       integer :: stat
+      if (allocated(grid%xi0)) then
+         call fatal_error(error, gaussian_grid_refused)
+         return
+      end if
+      if (.not. solvent%potential%is_updated()) then
+         call fatal_error(error, "Update the 1D VV solvent before constructing the 3D MOZ model")
+         return
+      end if
+      ! TODO: Require solved solvent after VV solve implementation
+      allocate (self%solvent, source=solvent, stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "Failed to copy the 1D VV solvent")
+         return
+      end if
+      self%ctx => ctx
       allocate (self%grid, source=grid, stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "Failed to copy 3D MOZ grid")
          return
       end if
       self%grid%nthreads = ctx%get_num_threads()
-      self%ctx => ctx
    end subroutine new_moz_3d_model
 
-   !> Update owned grid geometry
+   !> Update the owned grid geometry, then the solute potential on it; print it at verbosity 2
    !>
-   !> @param[in,out] self Model
-   !> @param[in] mol Solute structure
-   !> @param[out] error Grid error
+   !> - Grid-dependent term data (EC fit) built from the updated grid
+   !>
+   !> @param[in,out] self   model
+   !> @param[in]     mol    solute structure
+   !> @param[out]    error  grid error, Gaussian-width grid, empty structure, no terms or term failure
    subroutine moz_3d_update(self, mol, error)
       !> Model
       class(model_moz_3d_type), intent(inout) :: self
@@ -81,46 +114,47 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%invalidate()
-      if (.not. allocated(self%grid)) then
+      if (.not. allocated(self%grid) .or. .not. allocated(self%solvent)) then
          call fatal_error(error, "Construct the 3D MOZ model before update")
          return
       end if
       call self%grid%update(mol, error)
       if (allocated(error)) return
+      if (allocated(self%grid%xi0)) then
+         call fatal_error(error, gaussian_grid_refused)
+         return
+      end if
+      call self%potential%update(mol, self%grid, error)
+      if (allocated(error)) return
+      if (self%ctx%writes(2)) then
+         call self%ctx%message("Solute potential parameters", 2)
+         call self%potential%print_table(self%ctx%unit, error)
+         if (allocated(error)) return
+         call self%ctx%message("", 2)
+      end if
       self%updated = .true.
    end subroutine moz_3d_update
 
-   !> Number of solute atoms in the grid
+   !> Site count of the latest valid structure, from the solute potential
    !>
-   !> @param[in] self Self
+   !> @param[in] self  model
    function moz_3d_atom_count(self) result(natom)
-      !> Self
+      !> Model
       class(model_moz_3d_type), intent(in) :: self
-      !> Natom
+      !> Site count
       integer :: natom
-      natom = 0
-      if (allocated(self%grid)) natom = self%grid%natom
+      natom = self%potential%natom()
    end function moz_3d_atom_count
 
-   !> Declare the requests of the electrostatic coupling source
+   !> Declare the coupling requests of every solute term in its own scope
    !>
-   !> - "qat": the solute's partial charges, `q` in every phase
-   !> - "multipoles": the solute's point multipoles, `q`, `mu` and `theta` in
-   !>   every phase; `q` doubles as the tail charges
-   !> - "ec": the host potential on the grid, `phi` in every phase and
-   !>   `dphi_dr` for the gradient, plus the partial charges, `q` in every
-   !>   phase, as the tail charges of the Ng split
+   !> - Coupling scope of term i: i
+   !> - No requests from parameter terms
+   !> - EC term declares point-potential probes at grid points
    !>
-   !> Gaussian grid constructors select widths; point grid constructors select
-   !> bare point values for both Cartesian and molecular grids
-   !> Either way, `allocated(grid%xi0)` after `update` selects the "ec"
-   !> potential: present widths mean a Gaussian-probed potential, which also
-   !> needs `dphi_dxi` for the gradient when the widths follow the geometry;
-   !> their absence a bare point potential
-   !>
-   !> @param[in,out] self Updated model
-   !> @param[in,out] coupling Coupling to declare
-   !> @param[out] error Unknown coupling source or failed declaration
+   !> @param[in,out] self      updated model
+   !> @param[in,out] coupling  coupling to declare
+   !> @param[out]    error     failed declaration
    subroutine moz_3d_declare_pass(self, coupling, error)
       !> Updated model
       class(model_moz_3d_type), intent(inout) :: self
@@ -128,87 +162,41 @@ contains
       type(coupling_type), intent(inout) :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-
-      !> Phases every source requires its outputs in
-      integer, parameter :: phases(3) = [moist_phase_energy, moist_phase_response, moist_phase_gradient]
-      !> Per-atom partial charge request
-      type(atomic_charge_request_type) :: charges
-      !> Per-atom point multipole request
-      type(atomic_multipole_request_type) :: multipoles
-      integer :: ip
-
       call coupling_begin_registration(coupling)
-      call coupling_set_scope(coupling, 0)
-      select case (self%coupling_mode)
-      case ("qat")
-         do ip = 1, size(phases)
-            call request_require(charges, phases(ip), "q", error)
-            if (allocated(error)) return
-         end do
-         call coupling_register(coupling, "charges", charges, error)
-      case ("multipoles")
-         ! TODO: this is what gfn2 and gxtb will use
-         do ip = 1, size(phases)
-            call request_require(multipoles, phases(ip), "q", error)
-            if (allocated(error)) return
-            call request_require(multipoles, phases(ip), "mu", error)
-            if (allocated(error)) return
-            call request_require(multipoles, phases(ip), "theta", error)
-            if (allocated(error)) return
-         end do
-         call coupling_register(coupling, "multipoles", multipoles, error)
-      case ("ec")
-         ! TODO: I added the gaussian one here; but as the point one works we
-         !       should use that (integrals are much faster)
-         if (allocated(self%grid%xi0)) then
-            block
-               !> Gaussian-probed potential request
-               type(gaussian_potential_request_type) :: potential
-               do ip = 1, size(phases)
-                  call request_require(potential, phases(ip), "phi", error)
-                  if (allocated(error)) return
-               end do
-               call request_require(potential, moist_phase_gradient, "dphi_dr", error)
-               if (allocated(error)) return
-               call request_require(potential, moist_phase_gradient, "dphi_dxi", &
-                  & self%grid%has_geometry_dependent_xi0(), error)
-               if (allocated(error)) return
-               call coupling_register(coupling, "potential", potential, error)
-            end block
-         else
-            block
-               !> Bare point potential request
-               type(point_potential_request_type) :: potential
-               do ip = 1, size(phases)
-                  call request_require(potential, phases(ip), "phi", error)
-                  if (allocated(error)) return
-               end do
-               call request_require(potential, moist_phase_gradient, "dphi_dr", error)
-               if (allocated(error)) return
-               call coupling_register(coupling, "potential", potential, error)
-            end block
-         end if
-         if (allocated(error)) return
-         ! The tail charges of the Ng split
-         do ip = 1, size(phases)
-            call request_require(charges, phases(ip), "q", error)
-            if (allocated(error)) return
-         end do
-         call coupling_register(coupling, "charges", charges, error)
-      case default
-         call fatal_error(error, "3D MOZ coupling_mode '"//trim(self%coupling_mode)//"' is not supported")
-      end select
+      call self%potential%declare(self%grid, coupling, error)
       if (allocated(error)) return
       call coupling_snapshot(coupling, ngrid=self%grid%ngrid, natom=self%grid%natom)
-
    end subroutine moz_3d_declare_pass
+
+   !> Whether the model holds a solvent
+   !>
+   !> @param[in] self  model
+   pure function moz_3d_has_solvent(self) result(has)
+      !> Model
+      class(model_moz_3d_type), intent(in) :: self
+      !> Presence
+      logical :: has
+      has = allocated(self%solvent)
+   end function moz_3d_has_solvent
+
+   !> Number of solvent sites; 0 before construction
+   !>
+   !> @param[in] self  model
+   pure function moz_3d_solvent_nsite(self) result(nsite)
+      !> Model
+      class(model_moz_3d_type), intent(in) :: self
+      !> Site count
+      integer :: nsite
+      nsite = 0
+      if (allocated(self%solvent)) nsite = self%solvent%nsite()
+   end function moz_3d_solvent_nsite
 
    !> Publish the grid geometry as named fields, the model's evaluation domain
    !>
-   !> @param[in] self Self
-   !> @param[in,out] query Field walker
+   !> @param[in]     self   model
+   !> @param[in,out] query  field walker
    subroutine moz_3d_list_fields(self, query)
-      !> Self
+      !> Model
       class(model_moz_3d_type), intent(in) :: self
       !> Field walker
       type(field_query_type), intent(inout) :: query
@@ -217,25 +205,24 @@ contains
       call query%add_int_value("natom", "Number of solute atoms", self%grid%natom)
       call query%add_real2("xyz", "Grid coordinates, bohr (3, ngrid)", self%grid%xyz)
       call query%add_real("w", "Integration weights, bohr**3 (ngrid)", self%grid%w)
-      call query%add_real("xi0", "Gaussian exponents, inverse bohr (ngrid)", self%grid%xi0)
       call query%add_int("owner", "Atom owner, zero based; -1 for unowned points", &
          & self%grid%owner, zero_based=.true.)
    end subroutine moz_3d_list_fields
 
    !> Report pending 3D MOZ energy theory
    !>
-   !> @param[in,out] self Self
-   !> @param[in,out] coupling Coupling
-   !> @param[in,out] energy Energy
-   !> @param[out] error Error
+   !> @param[in,out] self      model
+   !> @param[in,out] coupling  coupling owned by the model
+   !> @param[in,out] energy    energy, untouched
+   !> @param[out]    error     foreign coupling, model not updated, missing answers or pending theory
    subroutine moz_3d_energy(self, coupling, energy, error)
-      !> Self
+      !> Model
       class(model_moz_3d_type), intent(inout) :: self
-      !> Coupling
+      !> Coupling owned by the model
       class(coupling_type), intent(inout), target :: coupling
-      !> Energy
+      !> Energy, untouched
       real(wp), intent(inout) :: energy
-      !> Error
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%require_owned(coupling, error)
       if (allocated(error)) return
@@ -248,18 +235,18 @@ contains
 
    !> Report pending 3D MOZ response theory
    !>
-   !> @param[in,out] self Self
-   !> @param[in,out] coupling Coupling
-   !> @param[in,out] response Response
-   !> @param[out] error Error
+   !> @param[in,out] self      model
+   !> @param[in,out] coupling  coupling owned by the model
+   !> @param[in,out] response  response, untouched
+   !> @param[out]    error     foreign coupling, model not updated, missing answers or pending theory
    subroutine moz_3d_response(self, coupling, response, error)
-      !> Self
+      !> Model
       class(model_moz_3d_type), intent(inout) :: self
-      !> Coupling
+      !> Coupling owned by the model
       class(coupling_type), intent(inout), target :: coupling
-      !> Response
+      !> Response, untouched
       type(response_type), intent(inout) :: response
-      !> Error
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%require_owned(coupling, error)
       if (allocated(error)) return
@@ -272,21 +259,21 @@ contains
 
    !> Report pending 3D MOZ gradient theory
    !>
-   !> @param[in,out] self Self
-   !> @param[in,out] coupling Coupling
-   !> @param[in,out] response Response
-   !> @param[in,out] gradient Gradient
-   !> @param[out] error Error
+   !> @param[in,out] self      model
+   !> @param[in,out] coupling  coupling owned by the model
+   !> @param[in,out] response  response, untouched
+   !> @param[in,out] gradient  nuclear gradient, untouched
+   !> @param[out]    error     foreign coupling, model not updated, missing answers or pending theory
    subroutine moz_3d_gradient(self, coupling, response, gradient, error)
-      !> Self
+      !> Model
       class(model_moz_3d_type), intent(inout) :: self
-      !> Coupling
+      !> Coupling owned by the model
       class(coupling_type), intent(inout), target :: coupling
-      !> Response
+      !> Response, untouched
       type(response_type), intent(inout) :: response
-      !> Gradient
+      !> Nuclear gradient, untouched
       real(wp), intent(inout) :: gradient(:, :)
-      !> Error
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%require_owned(coupling, error)
       if (allocated(error)) return
@@ -299,7 +286,7 @@ contains
 
    !> Release the coupling registry
    !>
-   !> @param[in,out] self Model being destroyed
+   !> @param[in,out] self  model being destroyed
    subroutine destroy_moz_3d_model(self)
       !> Model being destroyed
       type(model_moz_3d_type), intent(inout) :: self

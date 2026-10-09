@@ -1,26 +1,38 @@
 !> One-dimensional MOZ model state
+!>
+!> - Owned radial grid pair `rgrid`, `kgrid`, independent of the solute structure
+!> - Solute potential `potential` (public) and a private copy of the updated bulk solvent
+!> - Radial theory pending; the tables come from `potential%compute(rgrid, kgrid, ..., solvent=...)`
+!> - Coupling scope of solute term i: i
+!> - Monopole term owns its host-charge requirements
+!> - The model does not watch its potential: update it again after a change
 module moist_model_moz_1d_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_model_type, only: solvation_model_type
-   use moist_channels_coupling, only: coupling_type, atomic_charge_request_type, &
-      & moist_phase_energy, moist_phase_response, moist_phase_gradient, &
-      & coupling_begin_registration, coupling_set_scope, coupling_register, &
-      & request_require, coupling_snapshot, coupling_check_mandatory
+   use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
+   use moist_channels_fields, only: field_query_type
+   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, moist_phase_energy, &
+      & moist_phase_response, moist_phase_gradient, coupling_snapshot, coupling_check_mandatory
    use moist_channels_response, only: response_type
+   use moist_model_moz_potential, only: moz_potential_type
+   use moist_model_moz_potential_kernel_table_1d, only: require_radial_grids
+   use moist_model_moz_solvent_vv, only: solvent_vv_type
    implicit none(type, external)
    private
    public :: model_moz_1d_type, new_moz_1d_model
 
    !> Direct 1D MOZ model; radial theory is pending
    type, extends(solvation_model_type) :: model_moz_1d_type
-      private
-      ! TODO: replace the coupling_mode string with a typed selector set at construction
-      !> Electrostatic coupling source: "qat", "ec" or "multipoles" (3D only)
-      character(len=16), public :: coupling_mode = "qat"
-      !> Number of solute sites in the latest structure
-      integer :: natom = 0
+      !> Solute potential; add terms before `update`
+      type(moz_potential_type) :: potential
+      !> Owned real-space radial grid, bohr
+      type(moist_math_grid_radial_type) :: rgrid
+      !> Owned reciprocal radial grid, 1/bohr
+      type(moist_math_grid_radial_type) :: kgrid
+      !> Copy of the updated bulk solvent
+      type(solvent_vv_type), allocatable, private :: solvent
    contains
       final :: destroy_moz_1d_model
       procedure :: update => moz_1d_update
@@ -28,32 +40,62 @@ module moist_model_moz_1d_type
       procedure :: get_response => moz_1d_response
       procedure :: get_gradient => moz_1d_gradient
       procedure :: atom_count => moz_1d_atom_count
-      !> Declare the requests of the electrostatic coupling source
+      !> Declare the coupling requests of every solute term in its own scope
       procedure :: declare_pass => moz_1d_declare_pass
+      !> Publish the radial grid as named fields
+      procedure :: list_fields => moz_1d_list_fields
+      !> Whether the model holds a solvent
+      procedure :: has_solvent => moz_1d_has_solvent
+      !> Number of solvent sites; 0 before construction
+      procedure :: solvent_nsite => moz_1d_solvent_nsite
    end type model_moz_1d_type
 
 contains
 
-   !> Attach a borrowed run context
+   !> Copy the radial grid pair and an updated bulk solvent
    !>
-   !> @param[out] self Model
-   !> @param[in] ctx Run context, borrowed for the lifetime of the model
-   !> @param[out] error Error handling
-   subroutine new_moz_1d_model(self, ctx, error)
+   !> @param[out] self     model
+   !> @param[in]  ctx      run context, borrowed for the lifetime of the model
+   !> @param[in]  rgrid    real-space radial grid, nodes r > 0; e.g. from `new_uniform_radial_pair`
+   !> @param[in]  kgrid    reciprocal radial grid of the pair
+   !> @param[in]  solvent  bulk solvent with an updated potential, copied into the model
+   !> @param[out] error    unbuilt grid, node at r <= 0, solvent not updated or copy failure
+   subroutine new_moz_1d_model(self, ctx, rgrid, kgrid, solvent, error)
       !> Model
       type(model_moz_1d_type), intent(out) :: self
       !> Run context, borrowed for the lifetime of the model
       type(moist_context_type), intent(in), target :: ctx
+      !> Real-space radial grid, bohr
+      type(moist_math_grid_radial_type), intent(in) :: rgrid
+      !> Reciprocal radial grid, 1/bohr
+      type(moist_math_grid_radial_type), intent(in) :: kgrid
+      !> Bulk solvent with an updated potential
+      type(solvent_vv_type), intent(in) :: solvent
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      integer :: stat
+      call require_radial_grids(rgrid, kgrid, error)
+      if (allocated(error)) return
+      if (.not. solvent%potential%is_updated()) then
+         call fatal_error(error, "Update the 1D VV solvent before constructing the 1D MOZ model")
+         return
+      end if
+      ! TODO: Require solved solvent after VV solve implementation
+      allocate (self%solvent, source=solvent, stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "Failed to copy the 1D VV solvent")
+         return
+      end if
+      self%rgrid = rgrid
+      self%kgrid = kgrid
       self%ctx => ctx
    end subroutine new_moz_1d_model
 
-   !> Record the solute site count
+   !> Update the solute potential from the structure on the radial grid and print it at verbosity 2
    !>
-   !> @param[in,out] self Model
-   !> @param[in] mol Solute structure
-   !> @param[out] error Invalid structure
+   !> @param[in,out] self   model
+   !> @param[in]     mol    solute structure
+   !> @param[out]    error  unconstructed model, empty structure, no terms, term failure or a term refusing the radial grid
    subroutine moz_1d_update(self, mol, error)
       !> Model
       class(model_moz_1d_type), intent(inout) :: self
@@ -62,39 +104,41 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%invalidate()
-      self%natom = 0
-      if (.not. associated(self%ctx)) then
+      if (.not. associated(self%ctx) .or. .not. allocated(self%solvent)) then
          call fatal_error(error, "Construct the 1D MOZ model before update")
          return
       end if
-      if (mol%nat < 1) then
-         call fatal_error(error, "1D MOZ requires at least one solute atom")
-         return
+      call self%potential%update(mol, self%rgrid, error)
+      if (allocated(error)) return
+      if (self%ctx%writes(2)) then
+         call self%ctx%message("Solute potential parameters", 2)
+         call self%potential%print_table(self%ctx%unit, error)
+         if (allocated(error)) return
+         call self%ctx%message("", 2)
       end if
-      self%natom = mol%nat
       self%updated = .true.
    end subroutine moz_1d_update
 
-   !> Number of sites in the latest valid structure
+   !> Site count of the latest valid structure, from the solute potential
    !>
-   !> @param[in] self Model
+   !> @param[in] self  model
    function moz_1d_atom_count(self) result(natom)
       !> Model
       class(model_moz_1d_type), intent(in) :: self
       !> Site count
       integer :: natom
-      natom = self%natom
+      natom = self%potential%natom()
    end function moz_1d_atom_count
 
-   !> Declare the requests of the electrostatic coupling source
+   !> Declare the coupling requests of every solute term in its own scope
    !>
-   !> - "qat": the solute's partial charges, `q` in every phase
-   !> - "ec": pending the radial grid of the 1D model, refused by name
-   !> - "multipoles": refused, the site-site potentials of 1D MOZ are spherical
+   !> - Coupling scope of term i: i
+   !> - No requests from parameter terms
+   !> - Monopole term declares host charges for tables
    !>
-   !> @param[in,out] self Updated model
-   !> @param[in,out] coupling Coupling to declare
-   !> @param[out] error Unknown or unsupported coupling source
+   !> @param[in,out] self      updated model
+   !> @param[in,out] coupling  coupling to declare
+   !> @param[out]    error     failed declaration
    subroutine moz_1d_declare_pass(self, coupling, error)
       !> Updated model
       class(model_moz_1d_type), intent(inout) :: self
@@ -102,40 +146,51 @@ contains
       type(coupling_type), intent(inout) :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-
-      !> Per-atom partial charge request
-      type(atomic_charge_request_type) :: charges
-
       call coupling_begin_registration(coupling)
-      call coupling_set_scope(coupling, 0)
-      select case (self%coupling_mode)
-      case ("qat")
-         call request_require(charges, moist_phase_energy, "q", error)
-         if (allocated(error)) return
-         call request_require(charges, moist_phase_response, "q", error)
-         if (allocated(error)) return
-         call request_require(charges, moist_phase_gradient, "q", error)
-         if (allocated(error)) return
-         call coupling_register(coupling, "charges", charges, error)
-         if (allocated(error)) return
-      case ("ec")
-         ! TODO: once the 1D model owns its radial grid, register `radial_potential`
-         ! (phi in energy, response, gradient) and `atomic_charges` (q in all three
-         ! phases, the tail charges of the Ng split), publish ngrid/natom/r through
-         ! a `list_fields` override and snapshot ngrid from the radial grid and natom
-         call fatal_error(error, "1D MOZ EC coupling requires the radial grid (pending grid refactor)")
-         return
-      case ("multipoles")
-         call fatal_error(error, "1D MOZ coupling_mode 'multipoles' is not supported: "// &
-            & "1D site-site potentials are spherical, multipoles are 3D only")
-         return
-      case default
-         call fatal_error(error, "1D MOZ coupling_mode '"//trim(self%coupling_mode)//"' is not supported")
-         return
-      end select
-      call coupling_snapshot(coupling, natom=self%natom)
-
+      call self%potential%declare(self%rgrid, coupling, error)
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=self%rgrid%npts, natom=self%potential%natom())
    end subroutine moz_1d_declare_pass
+
+   !> Publish the radial grid as named fields, the model's evaluation domain
+   !>
+   !> - Every solute site carries the same radii
+   !>
+   !> @param[in]     self   model
+   !> @param[in,out] query  field walker
+   subroutine moz_1d_list_fields(self, query)
+      !> Model
+      class(model_moz_1d_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+      if (.not. allocated(self%rgrid%r)) return
+      call query%add_int_value("ngrid", "Number of radial grid points", self%rgrid%npts)
+      call query%add_int_value("natom", "Number of solute atoms", self%potential%natom())
+      call query%add_real("r", "Radii from each solute site, bohr (ngrid)", self%rgrid%r)
+   end subroutine moz_1d_list_fields
+
+   !> Whether the model holds a solvent
+   !>
+   !> @param[in] self  model
+   pure function moz_1d_has_solvent(self) result(has)
+      !> Model
+      class(model_moz_1d_type), intent(in) :: self
+      !> Presence
+      logical :: has
+      has = allocated(self%solvent)
+   end function moz_1d_has_solvent
+
+   !> Number of solvent sites; 0 before construction
+   !>
+   !> @param[in] self  model
+   pure function moz_1d_solvent_nsite(self) result(nsite)
+      !> Model
+      class(model_moz_1d_type), intent(in) :: self
+      !> Site count
+      integer :: nsite
+      nsite = 0
+      if (allocated(self%solvent)) nsite = self%solvent%nsite()
+   end function moz_1d_solvent_nsite
 
    !> Report pending 1D MOZ energy theory
    !>

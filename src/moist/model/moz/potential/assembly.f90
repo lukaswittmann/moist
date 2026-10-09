@@ -70,6 +70,40 @@ contains
       self%nat = mol%nat
    end subroutine potential_update
 
+   module subroutine potential_update_1d(self, mol, grid, error)
+      class(moz_potential_type), intent(inout) :: self
+      class(structure_type), intent(in) :: mol
+      type(moist_math_grid_radial_type), intent(in) :: grid
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i
+      call potential_update(self, mol, error)
+      if (allocated(error)) return
+      do i = 1, self%n_terms()
+         call self%slots(i)%term%update_grid(grid, error)
+         if (allocated(error)) then
+            call drop_update(self)
+            return
+         end if
+      end do
+   end subroutine potential_update_1d
+
+   module subroutine potential_update_3d(self, mol, grid, error)
+      class(moz_potential_type), intent(inout) :: self
+      class(structure_type), intent(in) :: mol
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i
+      call potential_update(self, mol, error)
+      if (allocated(error)) return
+      do i = 1, self%n_terms()
+         call self%slots(i)%term%update_grid(grid, error)
+         if (allocated(error)) then
+            call drop_update(self)
+            return
+         end if
+      end do
+   end subroutine potential_update_3d
+
    module subroutine potential_declare_1d(self, grid, coupling, error)
       class(moz_potential_type), intent(inout) :: self
       type(moist_math_grid_radial_type), intent(in) :: grid
