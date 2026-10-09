@@ -252,7 +252,7 @@ contains
    !>
    !> - Solute potential without terms: refusal at update
    !> - Host multipole stub: refusal at update (build)
-   !> - EC term: refusal at the radial declaration, volume grids only
+   !> - EC term: refusal at the update on the radial grid, volume grids only
    !> - Failed term declaration: coupling refused, previously staged walk ended
    subroutine check_term_failures(error)
       !> Test error
@@ -291,13 +291,12 @@ contains
 
       call new_model(ctx, model, err)
       if (.not. allocated(err)) call model%potential%add(ec, err)
-      if (.not. allocated(err)) call update_h2(model, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return
       end if
-      call model%new_coupling(coupling, err)
-      call check(error, allocated(err) .and. .not. associated(coupling), more="a 1D model declared an EC fit")
+      call update_h2(model, err)
+      call check(error, allocated(err) .and. .not. model%is_updated(), more="a 1D model was updated with an EC fit")
       if (allocated(error)) return
       call check(error, index(err%message, "volume grids only") > 0, more=err%message)
       if (allocated(error)) return
