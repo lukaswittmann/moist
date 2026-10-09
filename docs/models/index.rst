@@ -124,3 +124,11 @@ Components
    :maxdepth: 2
 
    components/index
+
+MOZ Models
+----------
+
+.. toctree::
+   :maxdepth: 2
+
+   moz
