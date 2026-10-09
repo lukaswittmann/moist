@@ -53,6 +53,10 @@ from moist.pyscf import (
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
 from moist.parameters import DROPParameters, ISwiGParameters
+from moist import Context
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 #: Dielectric constant of water
 EPSILON = 80.0
@@ -241,7 +245,8 @@ def solve(mol, positions=None, *, dm, isodensity, components="cpcm"):
     """Driver for ``mol`` displaced to ``positions`` (bohr), evaluated at ``dm``."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    solvation = PySCFSolvation(mol, cavity_config(isodensity), COMPONENTS[components]())
+    solvation = PySCFSolvation(mol,
+                               cavity_config(isodensity), COMPONENTS[components](), context=CONTEXT)
     solvation.evaluate(dm)
     return solvation
 
@@ -250,6 +255,7 @@ def solvated_rhf(mol, epsilon):
     """Converged solvated RHF on the isodensity cavity used by the L2 tier."""
     mean_field = moist_for_scf(
         scf.RHF(mol), cavity=cavity_config(True), components=[ModelComponentCPCM(epsilon)],
+        context=CONTEXT,
     )
     mean_field.conv_tol = 1e-13
     mean_field.conv_tol_grad = 1e-9
@@ -263,7 +269,7 @@ def test_pyscf_host_is_an_isodensity_cavity_source():
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     host = make_host(mol, dm=dm)
 
-    cavity = cavity_config(True).build(source=host)
+    cavity = cavity_config(True).build(source=host, context=CONTEXT)
     cavity.update(host.structure())
 
     assert cavity.density_dependent
@@ -276,7 +282,7 @@ def test_results_are_immutable_and_independent_of_the_input_density():
     """The driver's results are frozen values, not views of the caller's arrays."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     density = np.array(dm, copy=True)
-    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
 
     result = solvation.evaluate(density)
     gradient = solvation.gradient(density)
@@ -355,7 +361,7 @@ def sampled_coordinates(natm):
 def test_l0_pcm_components_and_cavity_types_share_the_pyscf_driver(cavity, component_type):
     """Every PCM/cavity combination runs through the same driver."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    solvation = PySCFSolvation(mol, cavity, [component_type(EPSILON)])
+    solvation = PySCFSolvation(mol, cavity, [component_type(EPSILON)], context=CONTEXT)
 
     result = solvation.evaluate(dm)
 
@@ -620,7 +626,7 @@ def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
     The response and gradient phases receive only ``w_xyz``.
     """
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
     host = solvation.host
 
     potential_calls = []
@@ -668,13 +674,14 @@ def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypat
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
 
-    electrostatic = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    electrostatic = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
     electrostatic.evaluate(dm)
     assert builds == []
     assert electrostatic.moments is None
 
     # Positive control: GOSTSHYP requests moments.
-    pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)])
+    pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)],
+                                 context=CONTEXT)
     pressurised.evaluate(dm)
     assert builds == [1]
 
@@ -795,7 +802,7 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=50))
-    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)])
+    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)], context=CONTEXT)
     result = solvation.evaluate(dm)
     host, model = solvation.host, solvation.model
     coords = model.cavity.xyz
@@ -827,7 +834,7 @@ def test_point_gaussian_mismatch_decreases_with_grid_order():
     differences = []
     for nleb in (50, 194, 770):
         cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=nleb))
-        solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)])
+        solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)], context=CONTEXT)
         result = solvation.evaluate(dm)
         matrix, _ = library.assemble_drop_amat(solvation.model.cavity._handle)
         point_phi = solvation.host.surface_potential(solvation.model.cavity.xyz)

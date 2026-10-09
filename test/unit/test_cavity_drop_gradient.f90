@@ -18,6 +18,7 @@ module test_cavity_drop_gradient
    use mstore, only: get_structure
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: iso_fortran_env, only: error_unit
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -193,7 +194,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call get_test_cross(mol)
 
@@ -205,9 +206,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.0_wp, &
             blend_3b=1.0_wp))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7))
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
 
@@ -258,6 +259,9 @@ contains
 
       do iat = 1, mol%nat
          do idir = 1, ndim
+            call check(error, ieee_is_finite(num_dA_drA(idir, iat)) .and. &
+                       ieee_is_finite(num_dV_drA(idir, iat)), "Non-finite total area or volume FD reference")
+            if (allocated(error)) return
             call check(error, en_dA_drA(idir, iat), num_dA_drA(idir, iat), &
                        thr_abs=ABS_THR, thr_rel=REL_THR, &
                        more="Total area gradient mismatch")
@@ -464,7 +468,7 @@ contains
       type(moist_context_type), target :: ctx
 
       !> Initialize cavity with configurable blending and Lebedev grid
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       blend_k_local = k
       if (present(blend_k_override)) blend_k_local = blend_k_override
@@ -479,9 +483,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
             blend_3b=blend_3b_local))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_local, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4))
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
       ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
@@ -870,7 +874,34 @@ contains
          end do
       end do
 
-      !> Compare analytic vs numeric for valid gridpoints only
+      !> Compare analytic vs numeric for valid gridpoints only; every nuclear direction must
+      !  retain at least a single point each FD step
+      !  Without this, no points left would indicate a pass!
+      do iat = 1, mol%nat
+         do idir = 1, ndim
+            call check(error, count(valid_gridpoint(idir, iat, :)) > 0, &
+                       "No valid FD comparisons for atom "//to_string(iat)// &
+                       " direction "//to_string(idir))
+            if (allocated(error)) return
+            do igrid = 1, ngrid_set
+               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
+               call check(error, &
+                          all(ieee_is_finite(num_xyz1_rA(:, idir, iat, igrid))) .and. &
+                          ieee_is_finite(num_r_iI1_rA(idir, iat, igrid)) .and. &
+                          all(ieee_is_finite(num_normal1_rA(idir, iat, :, igrid))) .and. &
+                          ieee_is_finite(num_cpjac1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_wleb1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_w_f1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_xi1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_iswig1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_area1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_volume1_rA(idir, iat, igrid)), &
+                          "Non-finite FD reference for atom "//to_string(iat)// &
+                          " direction "//to_string(idir)//" point "//to_string(igrid))
+               if (allocated(error)) return
+            end do
+         end do
+      end do
 
       ! Test 1: Gridpoint positions
       max_diff = 0.0_wp
@@ -1272,23 +1303,22 @@ contains
       call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
+      !> The curvature channels need the forward principal curvatures; the
+      !> normals are stored by the projection regardless
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
-         call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_context(ctx, nthreads=0, verbosity=0)
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
+            do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
          return
       end if
-      !> The curvature channels need the forward principal curvatures; the
-      !> normals are stored by the projection regardless
-      call cavity%properties(do_curvature=.true., do_normal=.true.)
-
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to build cavity: "//cavity_error%message)
@@ -1469,6 +1499,9 @@ contains
                do idir = 1, ndim
                   if (.not. valid(idir, iat, igrid)) cycle
                   ncompared(ich) = ncompared(ich) + 1
+                  call check(error, ieee_is_finite(num_adj(idir, iat, igrid, ich)), &
+                             "Non-finite surface adjoint FD reference")
+                  if (allocated(error)) return
                   call check(error, en_adj(idir, iat, igrid, ich), &
                              num_adj(idir, iat, igrid, ich), &
                              thr_abs=ADJ_ABS, thr_rel=ADJ_REL, &
@@ -1532,17 +1565,16 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
-         call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_context(ctx, nthreads=0, verbosity=0)
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
+            do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
          return
       end if
-      call cavity%properties(do_curvature=.true., do_normal=.true.)
-
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to build cavity: "//cavity_error%message)

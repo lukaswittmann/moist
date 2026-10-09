@@ -1,8 +1,13 @@
 Models
 ======
 
-This section describes the solvation models and reusable model components in MOIST.
-Their abstract interfaces are defined in ``src/moist/model/type.f90``.
+This section describes solvation models in MOIST.
+The shared model base is in ``src/moist/model/type.f90``; models are organized by their theory:
+
+* ``model/continuum`` contains cavity-based models and components.
+* ``model/moz`` contains molecular Ornstein Zernike-type theories, including the Reference Interaction Site Model (RISM) theories.
+   * ``model/moz/1d`` contains the VV and UV 1D-RISM model.
+   * ``model/moz/3d`` contains the UV 3D-RISM model.
 
 Solvation Model Interface
 -------------------------
@@ -24,12 +29,12 @@ Concrete models implement four deferred procedures:
    gradient phase.
 
 The ``coupling_type`` holds the requests the host answers, visited one at a time with ``next()``, and ``response_type`` the list of items the model hands back, walked the same way; both are described in :doc:`/reference/coupling`.
-``solvation_model_general`` (``src/moist/model/general.f90``) adds the calls that drive them: ``new_coupling`` returns a model-owned coupling (several may coexist, and ``release_coupling`` frees one) then ``prepare_energy``, ``prepare_response`` and ``prepare_gradient`` stage one phase each.
+``model_continuum_type`` (``src/moist/model/continuum/type.f90``) adds the calls that drive them: ``new_coupling`` returns a model-owned coupling (several may coexist, and ``release_coupling`` frees one) then ``prepare_energy``, ``prepare_response`` and ``prepare_gradient`` stage one phase each.
 
 Model Component Interface
 -------------------------
 
-A ``solvation_model_component_type`` is one reusable energy term evaluated on a shared cavity.
+A ``model_continuum_component_type`` is one reusable energy term evaluated on a shared cavity.
 It stores a name, the current solute structure, and a linear ``scale``, which only GOSTSHYP currently applies.
 
 Components implement ``update``, ``get_energy``, ``get_response``, and ``get_gradient`` with the live ``cavity_type`` as an additional argument.
@@ -46,12 +51,12 @@ Components may also override default hooks:
 Composition and Lifecycle
 -------------------------
 
-The ``solvation_model_general`` owns one cavity and an ordered list of components:
+The ``model_continuum_type`` owns one cavity and an ordered list of components:
 
 1. Construct the model from a cavity and add all components before the first update; the model stores copies of both.
 2. ``update`` refreshes the cavity first, then every component.
-3. ``get_energy`` sums the component energies.
-4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gostshyp_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
+3. ``get_energy`` sums the component energies and keeps each one in the model until the next update, as the ``energy`` field of ``list_component_fields(index, query)``.
+4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gaussian_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
 5. ``get_gradient`` adds the direct nuclear terms, contracts the gradient-side surface weights through the cavity, and refills the response with the same direct items.
 
 Construction Example
@@ -67,35 +72,35 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    use moist_cavity_drop_lsf_svdw, only: &
       & moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
-   use moist_model_general, only: solvation_model_general, new_model_general
-   use moist_model_components, only: solvation_model_component_cpcm, &
-      & new_component_cpcm, solvation_model_component_pv, new_component_pv
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
+   use moist_model_continuum_component, only: model_continuum_component_cpcm, &
+      & new_component_cpcm, model_continuum_component_pv, new_component_pv
 
    type(moist_context_type), target :: ctx
    type(moist_cavity_drop_lsf_svdw_type) :: svdw
    type(cavity_type_drop) :: cavity
-   type(solvation_model_component_cpcm) :: electrostatic
-   type(solvation_model_component_pv) :: pressure_volume
-   type(solvation_model_general), target :: model
+   type(model_continuum_component_cpcm) :: electrostatic
+   type(model_continuum_component_pv) :: pressure_volume
+   type(model_continuum_type), target :: model
    type(error_type), allocatable :: error
 
    ! Global context
-   call new_context(ctx)
+   call new_context(ctx, nthreads=0)
    
    ! Construct cavity and its level set
    call svdw%new()
-   call new_cavity_drop(cavity, ctx, &
+   call new_cavity_drop(cavity, &
       & radius_model=default_cpcm_radii(), lsf_model=svdw, error=error)
    if (allocated(error)) error stop error%message
 
    ! Construct CPCM (water)
-   call new_component_cpcm(electrostatic, ctx, epsilon=80.0_wp, error=error)
+   call new_component_cpcm(electrostatic, epsilon=80.0_wp, error=error)
    if (allocated(error)) error stop error%message
    ! Construct pressure model (1 GPa)
    call new_component_pv(pressure_volume, pressure=3.39893E-5_wp)
 
    ! Construct model
-   call new_model_general(model, cavity, ctx, error)
+   call new_continuum_model(model, ctx, cavity, error)
    if (allocated(error)) error stop error%message
 
    ! Add model components
@@ -104,7 +109,13 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    call model%add_component(pressure_volume, error)
    if (allocated(error)) error stop error%message
 
+The model runs on ``ctx``. The cavity and components above have no context of
+their own, so their copies in the model use that; a part constructed with
+``ctx=`` keeps its own.
+
 Call ``model%update(mol, error)`` with the current structure, then create a host coupling with ``model%new_coupling(coupling, error)``; energies, responses and gradients are computed one phase at a time on that coupling, as described in :doc:`/reference/coupling`.
+``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).
+``model%print_parameters(unit)`` prints the settings at any time: the cavity section followed by each component.; ``unit`` defaults to the run context's unit.
 
 Components
 ----------
@@ -113,3 +124,11 @@ Components
    :maxdepth: 2
 
    components/index
+
+MOZ Models
+----------
+
+.. toctree::
+   :maxdepth: 2
+
+   moz

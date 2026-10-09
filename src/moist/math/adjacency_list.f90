@@ -304,6 +304,9 @@ contains
 
    !> Deallocate all storage
    !>
+   !> Keeps the configuration (`cutoff`, `sorted`), so `update` alone rebuilds
+   !> the list with the same settings; only `init` changes them
+   !>
    !> @param[inout] self  Adjacency list instance
    subroutine adjacency_list_destroy(self)
       class(adjacency_list_type), intent(inout) :: self

@@ -5,10 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# A new push cancels the running PR build; pushes to main each get their own group
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   coverage:
     name: coverage (${{ matrix.leg.name }})
     runs-on: ubuntu-24.04
+    # A slow runner once took 34 min in the coupling tests (per-test cap: 4 x 360 s)
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -20,13 +30,13 @@ jobs:
             setup: -Dpython=true -Dpython_version=python3
             tests: --suite moist:python
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install compiler
-        uses: fortran-lang/setup-fortran@v1
+        uses: fortran-lang/setup-fortran@be037f0a45b1160f139d4ccd0b96f9e9bfd6a682 # v1.10.0
         with:
           compiler: gcc
-          version: '14'
+          version: '15'
 
       - name: Install dependencies (Linux)
         run: |
@@ -36,7 +46,7 @@ jobs:
         run: |
           pipx install --force gcovr==8.6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         if: matrix.leg.name == 'coupling'
         with:
           python-version: '3.12'
@@ -65,19 +75,23 @@ jobs:
 
       - name: Set compiler environment
         run: |
-          echo "FC=gfortran" >> "$GITHUB_ENV"
-          echo "CC=gcc" >> "$GITHUB_ENV"
+          {
+            echo "FC=gfortran-15"
+            echo "CC=gcc-15"
+            echo "CXX=g++-15"
+          } >> "$GITHUB_ENV"
 
-      - name: Point gcov at the gcc 14 toolchain
+      - name: Point gcov at the gcc 15 toolchain
         run: |
-          sudo ln -sf "$(command -v gcov-14)" /usr/local/bin/gcov
+          sudo ln -sf "$(command -v gcov-15)" /usr/local/bin/gcov
           gcov --version | head -n1
 
       - name: Build with coverage instrumentation
         run: |
           meson setup build -Db_coverage=true ${{ matrix.leg.setup }} \
             "-Dfortran_args=['-fprofile-update=atomic','-fprofile-abs-path']" \
-            "-Dc_args=['-fprofile-update=atomic','-fprofile-abs-path']"
+            "-Dc_args=['-fprofile-update=atomic','-fprofile-abs-path']" \
+            "-Dcpp_args=['-fprofile-update=atomic','-fprofile-abs-path']"
           meson compile -C build
 
       - name: Run tests
@@ -91,13 +105,14 @@ jobs:
       - name: Generate Cobertura XML coverage report
         run: |
           mkdir -p build/meson-logs
-          # --include-internal-functions is needed due to gfortran's procedure naming
           gcovr -r . build \
             -e subprojects \
+            -e 'src/moist/math/fft/(ducc0|finufft|xsimd)/.*' \
             -e '.*solventgeometries\.inc' \
             -e '.*_libmoist\.c' \
             --include-internal-functions \
             --gcov-ignore-errors=no_working_dir_found \
+            --gcov-suspicious-hits-threshold=1099511627776 \
             -x -o build/meson-logs/coverage.xml
 
       - name: Generate Python coverage report
@@ -108,7 +123,7 @@ jobs:
             -o build/meson-logs/python-coverage.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: ${{ matrix.leg.name == 'coupling' && 'build/meson-logs/coverage.xml,build/meson-logs/python-coverage.xml' || 'build/meson-logs/coverage.xml' }}
           flags: ${{ matrix.leg.name }}

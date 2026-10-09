@@ -17,16 +17,17 @@ pressure, separate from numerical settings:
 .. code-block:: python
 
    from moist import (
-       CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
+       Context, CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
        ModelComponentCPCM, PCMParameters, PCMSolver, SolvationModel,
    )
 
+   context = Context(nthreads=4)  # 0: current OpenMP setting
    cavity = CavityDROP(
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
        parameters=DROPParameters(nleb=194, proj_level=3),
    )
-   model = SolvationModel(cavity, [
+   model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
            78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
        ),
@@ -37,14 +38,31 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``lsf=CFC()`` or ``lsf=Isodensity(...)`` and all DROP level sets share
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
-the surface independently. ``PCMParameters`` applies to both CPCM and COSMO;
-``ModelParameters`` controls model logging.
+the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
+``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
+negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
+
+``Context(nthreads=0, verbosity=0, debug=False)`` mirrors the Fortran
+``new_context(ctx, nthreads=, verbosity=, debug=)``. The thread count is fixed for
+the context's lifetime: a positive count is used as given, ``0`` (the default)
+takes the calling thread's OpenMP setting at construction (``OMP_NUM_THREADS``
+unless the host changed it) and a negative count raises. Everything built on a
+context retains it.
+
+The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes
+the host's OpenMP runtime. BLAS/LAPACK threading is the host's task to configure.
+Without OpenMP, MOIST itself is serial; the math backend may still use threads.
+
+``SolvationModel(context, cavity, components)`` requires the context as its first argument.
+Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
+raises.
+``cavity.context``, ``component.context`` and ``model.context`` expose the contexts; ``context.nthreads`` reports its thread count. The context alone sets verbosity and debug output.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
 native. Parameter objects are immutable and keyword-only.
 Constraints are checked by the native constructor.
-Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``. 
+Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters`` and ``component.parameters``.
 ``cavity.radius_model`` is the radius configuration; ``cavity.radii`` remains the computed per-sphere radii after an update.
 
 Radii and density sources
@@ -71,6 +89,7 @@ order (1, 2 or 3). See :doc:`/cavities/isodensity` for the density convention.
    from moist import Isodensity, IsodensityParameters
 
    cavity = CavityDROP(
+       context=context,
        lsf=Isodensity(parameters=IsodensityParameters(rho_iso=1e-3)),
        parameters=DROPParameters(nleb=194, proj_maxiter=200),
        source=density_provider,
@@ -94,8 +113,8 @@ PySCF. Use ``dataclasses.replace`` to derive settings for a new calculation:
 
    config = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=194))
    finer = replace(config, parameters=replace(config.parameters, nleb=302))
-   first = config.build()
-   second = config.build()  # independent native state
+   first = config.build(context=context)
+   second = config.build(context=context)  # independent native state
 
 Configurations and parameters can be compared, pickled, or converted to
 dictionaries using ``dataclasses.asdict``. For reproducibility, record the
@@ -117,9 +136,27 @@ C-contiguous float64 array of shape ``(natoms,3)`` and returns the host response
 Both leave their accumulator unchanged on failure. ``get_response(coupling)``
 returns a fresh ``Response``.
 
+``model.components`` contains live views in construction order: ``name``,
+one-line ``description``, ``energy`` (the latest ``get_energy`` contribution in
+Hartree) and ``configuration`` (the original component). ``energy`` raises
+``KeyError`` before evaluation and after ``update``; ``fields()``, ``get(name)``
+and ``describe(name)`` work as on a cavity:
+
+.. code-block:: python
+
+   energy = np.array(0.0)
+   model.get_energy(coupling, energy)
+   for component in model.components:
+       print(component.name, component.energy)
+
+``model.parameters_text()`` returns native settings: the cavity, then components
+numbered from 1, with descriptions, solvent inputs and registered settings.
+``model.print_parameters(file=None)`` prints them to standard output by default.
+Neither needs an update.
+
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
-``a`` and ``f`` mirror ``model%cavity`` in Fortran, and ``cavity.get(name)``
-reads any other field the cavity holds. ``Structure`` copies input arrays on
+``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
+its :doc:`fields`. ``Structure`` copies input arrays on
 construction and update; mutating an input NumPy array cannot change the
 stored geometry, call ``update`` explicitly. See :doc:`coupling` for the
 protocol Python drives with ``for request in coupling``,
@@ -137,7 +174,7 @@ sources. Basis data and the live density are separate from those settings::
    basis = GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                          exponents=[0.5], coefficients=[1.0])
    source = InternalDensity(basis, [[1.0]])
-   cavity = DROP(lsf=Isodensity()).build(source=source)
+   cavity = DROP(lsf=Isodensity()).build(context=context, source=source)
    shell_offsets, powers = cavity.isodensity_layout()
 
 Shell atom indices and offsets are zero-based; ``powers`` has shape ``(ncart,3)``.
@@ -225,11 +262,13 @@ a loop that ran to the end lets the next one start a new pass.
 
 A ``Response`` is a plain value copied out of the native result: iterating it
 yields the items the model produced, in native order, as
-``PotentialAdjointResponse``, ``DensityResponse`` or
-``GostshypAmplitudeResponse``. Each item has the native item name as its
-``name`` class attribute and its arrays as attributes named as in the response
-table, with the grid axis first. The :doc:`pyscf` module drives these loops for
-PySCF.
+``PotentialAdjointResponse``, ``DensityResponse``,
+``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``,
+``AtomicChargeAdjointResponse`` or ``RadialPotentialAdjointResponse``. Each
+item has the native item name as its ``name`` class attribute and its arrays
+as attributes named as their Fortran components, with the dimensions reversed.
+``AtomicMultipoleAdjointResponse`` arrays the model did not compute are
+``None``. The :doc:`pyscf` module drives these loops for PySCF.
 
 API
 ---

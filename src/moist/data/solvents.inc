@@ -9,6 +9,8 @@
 ! Temperatures follow the Minnesota Solvent Descriptor Database: eps and g at
 ! 298.15 K, refr at 293.15 K; rho is mostly at 293.15 K. Deviations are noted
 ! in the block
+! Source for descriptor definitions: Winget et al., Minnesota Solvent Descriptor
+! Database, https://comp.chem.umn.edu/solvation/mnsddb.pdf
 
 !1,1,1-TRICHLOROETHANE
 !--------------------------------------

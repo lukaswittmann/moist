@@ -16,7 +16,7 @@ module test_model_component_pv
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
@@ -68,12 +68,12 @@ contains
 !> contraction would show up. The pressures span ambient to extreme; one atomic
 !> unit of pressure is about 29.4 TPa, so the top of the sweep is far above any
 !> physical solvation pressure and makes the PV term dominate outright
-!>
-!> @param[out] error Error handling
    subroutine test_pv_sphere_volume(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Single-sphere and two-sphere test structures
@@ -83,7 +83,7 @@ contains
       !> Radius model pinning the sphere radius exactly
       class(radius_type), allocatable :: radius_model
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Energy accumulator and the analytic reference volume
@@ -111,6 +111,7 @@ contains
       real(wp), parameter :: vol_rtol = 1.0e-11_wp
 
       call new (mol, [6], reshape(center, [3, 1]))
+      call new_context(ctx)
 
       do irad = 1, size(test_radii)
          volume_ref = 4.0_wp/3.0_wp*pi*test_radii(irad)**3
@@ -130,7 +131,7 @@ contains
             end if
 
             do ipres = 1, size(test_pressures)
-               call new_component_pv(pv_component, test_pressures(ipres))
+               call new_component_pv(pv_component, test_pressures(ipres), ctx=ctx)
                call pv_component%update(mol, cavity, err)
                if (allocated(err)) then
                   call test_failed(error, "PV update failed: "//err%message)
@@ -176,7 +177,7 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, test_pressures(size(test_pressures)))
+      call new_component_pv(pv_component, test_pressures(size(test_pressures)), ctx=ctx)
       call pv_component%update(mol_pair, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update on the two-sphere cavity failed: "//err%message)
@@ -203,12 +204,12 @@ contains
 !> where an accumulation was meant into a failure; the exact pressure scaling is
 !> then checked separately, where it can be asserted to roundoff instead of to
 !> finite-difference accuracy
-!>
-!> @param[out] error Error handling
    subroutine test_pv_nuclear_gradient(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Sampled test structures and the displaced copy driven through the cavity
@@ -217,7 +218,7 @@ contains
       !> Cavity rebuilt at the reference and at every displaced geometry
       type(cavity_type_iswig) :: cavity
       !> Components at unit and at scaled pressure
-      type(solvation_model_component_pv) :: pv_component, pv_scaled
+      type(model_continuum_component_pv) :: pv_component, pv_scaled
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Gradient accumulators at unit and at scaled pressure
@@ -256,7 +257,8 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, unit_pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, unit_pressure, ctx=ctx)
       call pv_component%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -274,7 +276,7 @@ contains
       if (allocated(error)) return
 
       ! The pressure enters as a pure prefactor, so this holds to roundoff
-      call new_component_pv(pv_scaled, scaled_pressure)
+      call new_component_pv(pv_scaled, scaled_pressure, ctx=ctx)
       call pv_scaled%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Scaled PV update failed: "//err%message)
@@ -300,7 +302,8 @@ contains
                call displaced_energy(trial, values(k))
                if (allocated(error)) return
             end do
-            fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+            call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "PV gradient atom ", iatom, ", axis ", iaxis
             call check(error, gradient(iaxis, iatom) - sentinel, fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
@@ -354,12 +357,12 @@ contains
 !> being tested. Unlike CPCM, the volume depends on the normals, so all four
 !> channels stay enabled. The pressure is deliberately not one, so a dropped
 !> prefactor cannot hide
-!>
-!> @param[out] error Error handling
    subroutine test_pv_surface_weights(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; PV only stores it
@@ -367,7 +370,7 @@ contains
       !> Synthetic DROP surface carrying the volume adjoint fields
       type(cavity_type_drop) :: cavity
       !> Components at finite and at zero pressure
-      type(solvation_model_component_pv) :: pv_component, pv_zero
+      type(model_continuum_component_pv) :: pv_component, pv_zero
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Analytic surface weights, and a prefilled accumulator PV must not touch
@@ -412,7 +415,8 @@ contains
             & + sw_areas(igrid)*dot_product(sw_xyz(:, igrid), normals(:, igrid))/3.0_wp
       end do
 
-      call new_component_pv(pv_component, pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -445,7 +449,7 @@ contains
       prefilled%w_xyz = prefill
       prefilled%w_n = prefill
 
-      call new_component_pv(pv_zero, 0.0_wp)
+      call new_component_pv(pv_zero, 0.0_wp, ctx=ctx)
       call pv_zero%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -498,8 +502,6 @@ contains
 !> A zero pressure must short-circuit before the cavity is asked for anything
 !> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,
 !> so a missing short circuit is observable as the error PV raises without them
-!>
-!> @param[out] error Error handling
    subroutine test_pv_short_circuit(error)
 
       !> Error handling
@@ -515,7 +517,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Gradient accumulator carrying a sentinel
       real(wp), allocatable :: gradient(:, :)
       !> Host part of the gradient phase, unused by PV
@@ -524,12 +526,12 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
 
       call new_cosmo_radii(radius_model)
-      call new_cavity_numsa(cavity, ctx, radii=radius_model, error=err, &
-         param=moist_cavity_numsa_parameters_type(num_leb=110))
+      call new_cavity_numsa(cavity, radii=radius_model, error=err, &
+         param=moist_cavity_numsa_parameters_type(num_leb=110), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "NUMSA cavity setup failed: "//err%message)
          return
@@ -543,7 +545,7 @@ contains
       allocate (gradient(3, mol%nat), source=1.5_wp)
 
       ! Zero pressure: no cavity call at all, accumulator untouched
-      call new_component_pv(pv_component, 0.0_wp)
+      call new_component_pv(pv_component, 0.0_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -559,7 +561,7 @@ contains
       if (allocated(error)) return
 
       ! Finite pressure: the missing cavity hook must surface as an error
-      call new_component_pv(pv_component, 0.75_wp)
+      call new_component_pv(pv_component, 0.75_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -576,8 +578,6 @@ contains
 !> The lifecycle guards: a cavity that was never updated carries no volume, a
 !> volume contribution produces no host-trace potential, and a mis-shaped
 !> gradient accumulator is rejected without being written to
-!>
-!> @param[out] error Error handling
    subroutine test_pv_guards(error)
 
       !> Error handling
@@ -595,7 +595,7 @@ contains
       !> Potential accumulator PV must leave alone
       type(response_type) :: response
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
       !> Gradient accumulator of the wrong shape
@@ -609,19 +609,19 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
       call new_cosmo_radii(radius_model)
 
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=26))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=26), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity construction failed: "//err%message)
          return
       end if
 
       ! Never updated: no total volume, so neither update nor get_energy may run
-      call new_component_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       call check(error, allocated(err), &
          & more="PV accepted a cavity that was never updated")

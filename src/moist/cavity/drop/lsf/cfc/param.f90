@@ -107,6 +107,7 @@ contains
       call pp%kv("Pair coupling (c)", self%c)
       call pp%kv("Pair power (m)", self%m)
       call pp%pop()
+      call pp%blank()
    end subroutine print_lsf_cfc_param
 
 end module moist_cavity_drop_lsf_cfc_param

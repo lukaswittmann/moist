@@ -229,7 +229,7 @@ contains
       end if
    end function wendland_c6_23d
 
-   !> Derivative of Wendland C6 kernel for 1D: dW/dq, q < 2
+   !> Derivative of Wendland C6 kernel for 1D: dW/dq = -(3/8)q(35q^2 +36q+12)(1-q/2)^6 , q < 2
    pure function wendland_c6_1d_deriv(q) result(val)
       real(wp), intent(in) :: q
       real(wp) :: val
@@ -237,14 +237,13 @@ contains
 
       if (q < 2.0_wp) then
          tmp = 1.0_wp - 0.5_wp*q
-         ! Using the chain rule from Python reference
-         val = -(63.0_wp/16.0_wp)*q*(q*q + q + 4.0_wp/9.0_wp)*tmp**6
+         val = -(3.0_wp/8.0_wp)*q*(35.0_wp*q*q + 36.0_wp*q + 12.0_wp)*tmp**6
       else
          val = 0.0_wp
       end if
    end function wendland_c6_1d_deriv
 
-   !> Derivative of Wendland C6 kernel for 2D/3D: dW/dq, q < 2
+   !> Derivative of Wendland C6 kernel for 2D/3D: dW/dq = -22q(q^2 +7q/8+1/4)(1-q/2)^7 , q < 2
    pure function wendland_c6_23d_deriv(q) result(val)
       real(wp), intent(in) :: q
       real(wp) :: val
@@ -252,8 +251,7 @@ contains
 
       if (q < 2.0_wp) then
          tmp = 1.0_wp - 0.5_wp*q
-         ! dW/dq = -22q(q^2 + q + 2/11)(1-q/2)^7
-         val = -22.0_wp*q*(q*q + q + 2.0_wp/11.0_wp)*tmp**7
+         val = -22.0_wp*q*(q*q + 0.875_wp*q + 0.25_wp)*tmp**7
       else
          val = 0.0_wp
       end if

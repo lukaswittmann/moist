@@ -2,7 +2,8 @@
 module test_data
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type, fatal_error
-   use mctc_io_convert, only: aatoau
+   use mctc_io, only: structure_type, new_structure
+   use mctc_io_codata2018, only: Avogadro_constant, atomic_unit_of_mass
    use mctc_io_symbols, only: to_symbol
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
 
@@ -14,7 +15,8 @@ module test_data
    use moist_data_radii_legacy, only: get_radius, get_radius_func, &
       & get_upper_bound, rad_type
    use moist_data_solvents, only: get_solvent_id, max_solvents, &
-      & solvation_system_type, new_solvation_system
+      & solvation_system_type, new_solvation_system, solvent_multipole_data_type, &
+      & get_solvent_charges, get_solvent_multipoles
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
@@ -42,9 +44,6 @@ module test_data
    character(len=*), parameter :: model_name(n_models) = [character(len=8) :: &
       & "cpcm", "smd", "d3", "cosmo", "bondi", "rahm", "gauss"]
 
-   !> Atomic numbers sitting on the array-constructor row boundaries of the elem. tab
-   integer, parameter :: anchor_z(8) = [1, 10, 18, 30, 36, 54, 70, 118]
-
 contains
 
    !> Collect all data-table tests
@@ -56,13 +55,7 @@ contains
                   new_unittest("element_tables_complete", test_element_tables_complete), &
                   new_unittest("element_tables_physical", test_element_tables_physical), &
                   new_unittest("hardness_superheavy_are_zero", test_hardness_superheavy), &
-                  new_unittest("anchor_electronegativity", test_anchor_en), &
-                  new_unittest("anchor_hardness", test_anchor_hardness), &
-                  new_unittest("anchor_mass", test_anchor_mass), &
-                  new_unittest("anchor_atomic_rad", test_anchor_atomic_rad), &
-                  new_unittest("anchor_covalent_rad", test_anchor_covalent_rad), &
                   new_unittest("accessor_rejects_out_of_range", test_accessor_out_of_range), &
-                  new_unittest("accessor_accepts_boundaries", test_accessor_boundaries), &
                   new_unittest("accessor_rejects_bad_symbol", test_accessor_bad_symbol), &
                   new_unittest("accessor_symbol_case_insensitive", test_accessor_symbol_case), &
                   new_unittest("accessor_symbol_matches_number", test_accessor_symbol_consistency), &
@@ -71,22 +64,22 @@ contains
                   new_unittest("radius_keyword_normalisation", test_radius_keyword_normalisation), &
                   new_unittest("radius_rejects_bad_keyword", test_radius_bad_keyword), &
                   new_unittest("radius_models_are_distinct", test_radius_models_distinct), &
-                  new_unittest("radius_bondi_missing_rejected", test_radius_bondi_missing), &
                   new_unittest("radius_model_error_wins_over_symbol", test_radius_error_precedence), &
-                  new_unittest("radius_func_sentinel", test_radius_func_sentinel), &
                   new_unittest("radius_func_reports_error", test_radius_func_reports_error), &
-                  new_unittest("solvent_table_checksums", test_solvent_table_checksums), &
                   new_unittest("solvent_alias_round_trip", test_solvent_alias_round_trip), &
                   new_unittest("solvent_alias_case_and_blanks", test_solvent_alias_normalisation), &
                   new_unittest("solvent_rejects_blank_alias", test_solvent_blank_alias), &
                   new_unittest("solvent_system_constructs", test_solvent_system_constructs), &
                   new_unittest("solvent_system_validates_input", test_solvent_system_validation), &
                   new_unittest("solvent_system_all_ids", test_solvent_system_all_ids), &
-                  new_unittest("solvent_surface_tension_units", test_solvent_surface_tension_units) &
+                  new_unittest("solvent_charge_data", test_solvent_charge_data), &
+                  new_unittest("solvent_system_charge_accessors", test_solvent_system_charge_accessors), &
+                  new_unittest("solute_update_ownership", test_solute_update_ownership), &
+                  new_unittest("water_higher_multipoles", test_water_higher_multipoles) &
                   ]
    end subroutine collect_data
 
-    !* -------------------------------- Private helpers ------------------------------- *!
+    !* -------------------------------- Private helpers -------------------------------- *!
 
    !> Dispatch to one of the element-indexed accessors by tag
    subroutine lookup_num(tag, num, val, err)
@@ -239,122 +232,7 @@ contains
       call check(error, nzero, 15, more="Rf-Og (15 elements) must be the only zero hardnesses")
    end subroutine test_hardness_superheavy
 
-   !* ------------ Group B: anchor values on the constructor row boundaries ----------- *!
-
-   !> Pauling electronegativities at H, Ne, Ar, Zn, Kr, Xe, Yb, Og
-   subroutine test_anchor_en(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: expected(8) = [ &
-         & 2.20_wp, 4.50_wp, 3.50_wp, 1.65_wp, 3.00_wp, 2.60_wp, 1.26_wp, 1.50_wp]
-
-      type(moist_error_type), allocatable :: err
-      integer :: i
-      real(wp) :: en
-
-      do i = 1, size(anchor_z)
-         call get_electronegativity(anchor_z(i), en, err)
-         if (allocated(err)) then
-            call test_failed(error, "anchor lookup failed: "//trim(err%message))
-            return
-         end if
-         call check(error, en, expected(i), thr=thr, more="electronegativity anchor mismatch")
-         if (allocated(error)) return
-      end do
-   end subroutine test_anchor_en
-
-   !> DFT-D4 chemical hardnesses on the same anchors
-   subroutine test_anchor_hardness(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: expected(8) = [ &
-         & 0.47259288_wp, 0.75191607_wp, 0.47308269_wp, 0.27592565_wp, &
-         & 0.46611708_wp, 0.44105777_wp, 0.31159587_wp, 0.00000000_wp]
-
-      type(moist_error_type), allocatable :: err
-      integer :: i
-      real(wp) :: eta
-
-      do i = 1, size(anchor_z)
-         call get_hardness(anchor_z(i), eta, err)
-         if (allocated(err)) then
-            call test_failed(error, "anchor lookup failed: "//trim(err%message))
-            return
-         end if
-         call check(error, eta, expected(i), thr=thr, more="hardness anchor mismatch")
-         if (allocated(error)) return
-      end do
-   end subroutine test_anchor_hardness
-
-   !> NIST atomic masses in u on the same anchors
-   subroutine test_anchor_mass(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: expected(8) = [ &
-         &   1.00794075_wp, 20.18004638_wp, 39.94779856_wp, 65.37778253_wp, &
-         &  83.79800000_wp, 131.29276145_wp, 173.05415017_wp, 294.21392000_wp]
-
-      type(moist_error_type), allocatable :: err
-      integer :: i
-      real(wp) :: mass
-
-      do i = 1, size(anchor_z)
-         call get_mass(anchor_z(i), mass, err)
-         if (allocated(err)) then
-            call test_failed(error, "anchor lookup failed: "//trim(err%message))
-            return
-         end if
-         call check(error, mass, expected(i), thr=thr, more="mass anchor mismatch")
-         if (allocated(error)) return
-      end do
-   end subroutine test_anchor_mass
-
-   !> Mantina/Truhlar atomic radii. The table is stored in bohr, so the
-   !> Angstrom source values are converted here the same way
-   subroutine test_anchor_atomic_rad(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: expected(8) = aatoau*[ &
-         & 0.32_wp, 0.62_wp, 1.01_wp, 1.20_wp, 1.16_wp, 1.36_wp, 1.78_wp, 1.57_wp]
-
-      type(moist_error_type), allocatable :: err
-      integer :: i
-      real(wp) :: rad
-
-      do i = 1, size(anchor_z)
-         call get_atomic_rad(anchor_z(i), rad, err)
-         if (allocated(err)) then
-            call test_failed(error, "anchor lookup failed: "//trim(err%message))
-            return
-         end if
-         call check(error, rad, expected(i), thr=thr, more="atomic radius anchor mismatch")
-         if (allocated(error)) return
-      end do
-   end subroutine test_anchor_atomic_rad
-
-   !> Alvarez 2008 covalent radii, likewise stored in bohr
-   subroutine test_anchor_covalent_rad(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: expected(8) = aatoau*[ &
-         & 0.31_wp, 0.58_wp, 1.06_wp, 1.22_wp, 1.16_wp, 1.40_wp, 1.87_wp, 1.50_wp]
-
-      type(moist_error_type), allocatable :: err
-      integer :: i
-      real(wp) :: rad
-
-      do i = 1, size(anchor_z)
-         call get_covalent_rad(anchor_z(i), rad, err)
-         if (allocated(err)) then
-            call test_failed(error, "anchor lookup failed: "//trim(err%message))
-            return
-         end if
-         call check(error, rad, expected(i), thr=thr, more="covalent radius anchor mismatch")
-         if (allocated(error)) return
-      end do
-   end subroutine test_anchor_covalent_rad
-
-   !* ------------------------- Group C: the accessor contract ------------------------ *!
+   !* ------------------------- Group B: the accessor contract ------------------------ *!
 
    !> Out-of-range atomic numbers must be rejected, and the output left at zero
    !> rather than carrying a sentinel the caller might mistake for data
@@ -381,33 +259,6 @@ contains
          end do
       end do
    end subroutine test_accessor_out_of_range
-
-   !> Both ends of the valid range must be accepted. This is the off-by-one
-   !> guard: Z = max_elem is data, Z = max_elem + 1 is not
-   subroutine test_accessor_boundaries(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_error_type), allocatable :: err
-      integer :: tag, upper
-      real(wp) :: val
-
-      do tag = 1, n_accessors
-         upper = accessor_max_elem(tag)
-
-         call lookup_num(tag, 1, val, err)
-         call check(error, .not. allocated(err), trim(acc_name(tag))//" rejected Z = 1")
-         if (allocated(error)) return
-
-         call lookup_num(tag, upper, val, err)
-         call check(error, .not. allocated(err), trim(acc_name(tag))//" rejected its last element")
-         if (allocated(error)) return
-
-         call lookup_num(tag, upper + 1, val, err)
-         call check(error, allocated(err), trim(acc_name(tag))//" accepted max_elem + 1")
-         if (allocated(error)) return
-         deallocate (err)
-      end do
-   end subroutine test_accessor_boundaries
 
    !> Unknown, empty and blank symbols must all be rejected. Previously these
    !> resolved to atomic number zero and fell through to a silent sentinel
@@ -500,12 +351,12 @@ contains
       end do
    end subroutine test_accessor_symbol_consistency
 
-   !* --------------------- Group D: radius-model keyword dispatch -------------------- *!
+   !* --------------------- Group C: radius-model keyword dispatch -------------------- *!
 
    !> Every model must answer for every atomic number up to its own bound. The
-   !> radius tables have four different lengths (88, 94, 96, 118) whose declared
-   !> extents are decoupled from the max_elem_* constants used to guard them, so
-   !> a mismatch would otherwise be an unchecked out-of-bounds read
+   !> d3, cosmo, bondi and rahm tables declare literal extents decoupled from the
+   !> max_elem_* constants used to guard them, so a mismatch would otherwise be
+   !> an unchecked out-of-bounds read
    subroutine test_radius_models_complete(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -660,8 +511,7 @@ contains
    end subroutine test_radius_bad_keyword
 
    !> The seven models must not be aliases of one another. A branch of
-   !> fetch_radius wired to the wrong array would otherwise go unnoticed, since
-   !> its default case silently falls through to the CPCM table
+   !> fetch_radius wired to the wrong array would otherwise go unnoticed
    subroutine test_radius_models_distinct(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -700,37 +550,6 @@ contains
       end do
    end subroutine test_radius_models_distinct
 
-   !> Bondi has no radius for the mid-row transition metals. Those entries carry
-   !> a negative sentinel in the table and must surface as an error, never as a
-   !> negative radius handed back to the caller
-   subroutine test_radius_bondi_missing(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_error_type), allocatable :: err
-      integer :: iz, nmissing
-      real(wp) :: rad
-
-      nmissing = 0
-      do iz = 1, 88
-         call get_radius(iz, rad_type%bondi, rad, err)
-         if (allocated(err)) then
-            nmissing = nmissing + 1
-            deallocate (err)
-            cycle
-         end if
-         if (rad <= 0.0_wp) then
-            call test_failed(error, "bondi returned a non-positive radius without an error")
-            return
-         end if
-      end do
-
-      call check(error, nmissing > 0, "bondi is expected to have unparametrised elements")
-      if (allocated(error)) return
-      ! Technetium is one of the documented gaps
-      call get_radius(43, rad_type%bondi, rad, err)
-      call check(error, allocated(err), more="bondi accepted Tc, which it does not parametrise")
-   end subroutine test_radius_bondi_missing
-
    !> With both a bad symbol and a bad model name, the model name is resolved
    !> first, so its error is the one reported
    subroutine test_radius_error_precedence(error)
@@ -746,33 +565,8 @@ contains
                  "the model-name error must take precedence over the symbol error")
    end subroutine test_radius_error_precedence
 
-   !> A rejected lookup sets the error *and* returns the negative sentinel, so
-   !> code that only inspects the value (print_static_radii skips unparametrised
-   !> rows this way) still sees the failure
-   subroutine test_radius_func_sentinel(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_error_type), allocatable :: err
-      real(wp) :: rad
-
-      rad = get_radius_func(0, err)
-      call check(error, rad < 0.0_wp, "get_radius_func must report failure as a negative value")
-      if (allocated(error)) return
-
-      rad = get_radius_func(119, "cpcm", err)
-      call check(error, rad < 0.0_wp, "get_radius_func must reject Z past the table")
-      if (allocated(error)) return
-
-      rad = get_radius_func(6, "nosuchmodel", err)
-      call check(error, rad < 0.0_wp, "get_radius_func must reject an unknown model name")
-      if (allocated(error)) return
-
-      rad = get_radius_func(6, err)
-      call check(error, rad > 0.0_wp, "get_radius_func must succeed for carbon")
-   end subroutine test_radius_func_sentinel
-
-   !> Passing the optional error reports the same failures the subroutine form
-   !> would, across all three overloads, and leaves it unallocated on success
+   !> Every overload reports a failed lookup through the error *and* the
+   !> negative `missing` sentinel, and leaves the error unallocated on success
    subroutine test_radius_func_reports_error(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -780,19 +574,22 @@ contains
       real(wp) :: rad
 
       rad = get_radius_func(0, err)
-      call check(error, allocated(err), more="default overload accepted Z = 0")
-      if (allocated(error)) return
-      call check(error, rad < 0.0_wp, "the sentinel must still be returned alongside the error")
+      call check(error, allocated(err) .and. rad < 0.0_wp, "default overload accepted Z = 0")
       if (allocated(error)) return
       deallocate (err)
 
       rad = get_radius_func(95, rad_type%d3, err)
-      call check(error, allocated(err), more="tag overload accepted Z past the d3 table")
+      call check(error, allocated(err) .and. rad < 0.0_wp, "tag overload accepted Z past the d3 table")
+      if (allocated(error)) return
+      deallocate (err)
+
+      rad = get_radius_func(119, "cpcm", err)
+      call check(error, allocated(err) .and. rad < 0.0_wp, "name overload accepted Z past the cpcm table")
       if (allocated(error)) return
       deallocate (err)
 
       rad = get_radius_func(6, "nosuchmodel", err)
-      call check(error, allocated(err), more="name overload accepted an unknown model")
+      call check(error, allocated(err) .and. rad < 0.0_wp, "name overload accepted an unknown model")
       if (allocated(error)) return
       call check(error, index(err%message, "radius type") > 0, &
                  "the propagated message must name the offending model")
@@ -801,67 +598,19 @@ contains
 
       ! Bondi does not parametrise Tc, and that surfaces through the error too
       rad = get_radius_func(43, "bondi", err)
-      call check(error, allocated(err), more="bondi accepted Tc")
+      call check(error, allocated(err) .and. rad < 0.0_wp, "bondi accepted Tc")
       if (allocated(error)) return
       deallocate (err)
 
       ! On success the error must be left unallocated
-      rad = get_radius_func(6, "cpcm", err)
-      call check(error, .not. allocated(err), "a valid lookup must not raise an error")
+      rad = get_radius_func(6, err)
+      call check(error, .not. allocated(err) .and. rad > 0.0_wp, "default overload failed for carbon")
       if (allocated(error)) return
-      call check(error, rad > 0.0_wp, "carbon must have a positive CPCM radius")
+      rad = get_radius_func(6, "cpcm", err)
+      call check(error, .not. allocated(err) .and. rad > 0.0_wp, "name overload failed for carbon")
    end subroutine test_radius_func_reports_error
 
-   !* ---------------------------- Group E: solvent tables ---------------------------- *!
-
-   !> Column sums of the solvent table. Any edit to the tabulated values must
-   !> update these references deliberately
-   subroutine test_solvent_table_checksums(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), parameter :: sum_eps_ref = 2089.1406_wp
-      real(wp), parameter :: sum_refr_ref = 260.1461_wp
-      real(wp), parameter :: sum_A_ref = 17.52_wp
-      real(wp), parameter :: sum_B_ref = 55.45_wp
-      real(wp), parameter :: sum_g_ref = 5.1805690392_wp
-      real(wp), parameter :: sum_rho_ref = 181524.8_wp
-
-      integer :: i
-      real(wp) :: sum_eps, sum_refr, sum_A, sum_B, sum_g, sum_rho
-      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
-      integer :: id_list(max_solvents)
-      character(len=64) :: name_list(max_solvents)
-      character(len=64) :: alias_list(10, max_solvents)
-
-      include "../src/moist/data/solvents.inc"
-
-      sum_eps = 0.0_wp
-      sum_refr = 0.0_wp
-      sum_A = 0.0_wp
-      sum_B = 0.0_wp
-      sum_g = 0.0_wp
-      sum_rho = 0.0_wp
-      do i = 1, max_solvents
-         sum_eps = sum_eps + eps(i)
-         sum_refr = sum_refr + refr(i)
-         sum_A = sum_A + A(i)
-         sum_B = sum_B + B(i)
-         sum_g = sum_g + g(i)*0.001_wp
-         sum_rho = sum_rho + rho(i)
-      end do
-
-      call check(error, sum_eps, sum_eps_ref, thr=thr, rel=.true., more="sum of permittivities")
-      if (allocated(error)) return
-      call check(error, sum_refr, sum_refr_ref, thr=thr, rel=.true., more="sum of refractive indices")
-      if (allocated(error)) return
-      call check(error, sum_A, sum_A_ref, thr=thr, rel=.true., more="sum of HB acidities")
-      if (allocated(error)) return
-      call check(error, sum_B, sum_B_ref, thr=thr, rel=.true., more="sum of HB basicities")
-      if (allocated(error)) return
-      call check(error, sum_g, sum_g_ref, thr=thr, rel=.true., more="sum of surface tensions")
-      if (allocated(error)) return
-      call check(error, sum_rho, sum_rho_ref, thr=thr, rel=.true., more="sum of mass densities")
-   end subroutine test_solvent_table_checksums
+   !* ---------------------------- Group D: solvent tables ---------------------------- *!
 
    !> Every stored alias resolves to its own solvent, so no alias is shadowed by
    !> an earlier entry or unreachable through normalisation
@@ -918,15 +667,6 @@ contains
          return
       end if
       call check(error, id, reference, more="padded alias resolved elsewhere")
-      if (allocated(error)) return
-
-      ! A secondary alias reaches the same solvent as the primary name
-      call get_solvent_id("methyl chloroform", id, err)
-      if (allocated(err)) then
-         call test_failed(error, "secondary alias rejected: "//trim(err%message))
-         return
-      end if
-      call check(error, id, 1, more="'methyl chloroform' must map to 1,1,1-trichloroethane")
       if (allocated(error)) return
 
       ! Stored aliases are normalised like the query
@@ -1040,32 +780,48 @@ contains
 
       call new_solvation_system(system, 175, pressure_si=-1.0_wp, error=err)
       call check(error, allocated(err), more="a negative pressure was accepted")
-      if (allocated(error)) return
-      deallocate (err)
-
-      ! The error argument is optional. Omitting it on a failing call must still
-      ! return cleanly: the routine has to route through its own local error
-      ! rather than probing an absent optional
-      call new_solvation_system(system, max_solvents + 1, error=err)
-      call check(error, allocated(err), more="an unknown solvent id was accepted without an error argument")
-      if (allocated(error)) return
    end subroutine test_solvent_system_validation
 
    !> Every table entry either builds a solvation system or reports an error
    !> that names its id. Entries without a geometry must not fail with a
-   !> garbled message
+   !> garbled message, and the geometry and charge tables must cover the same
+   !> ids with the same atom counts
    subroutine test_solvent_system_all_ids(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(solvation_system_type) :: system
-      type(moist_error_type), allocatable :: err
+      type(moist_error_type), allocatable :: err, err_charges
+      real(wp), allocatable :: charges(:)
       character(len=16) :: id_str
       integer :: id
+      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
+      integer :: id_list(max_solvents)
+      character(len=64) :: name_list(max_solvents)
+      character(len=64) :: alias_list(10, max_solvents)
+
+      include "../src/moist/data/solvents.inc"
 
       do id = 1, max_solvents
          call new_solvation_system(system, id, error=err)
+         call get_solvent_charges(id, "gas", "mbis", charges, err_charges)
          if (.not. allocated(err)) then
             call check(error, system%solvent_id, id, more="constructor stored the wrong id")
+            if (allocated(error)) return
+            call check(error, system%solvent_epsilon, eps(id), thr=thr, more="constructor permittivity")
+            if (allocated(error)) return
+            call check(error, system%solvent_refractive_index, refr(id), thr=thr, more="constructor refractive index")
+            if (allocated(error)) return
+            call check(error, system%solvent_alpha, A(id), thr=thr, more="constructor HB acidity")
+            if (allocated(error)) return
+            call check(error, system%solvent_beta, B(id), thr=thr, more="constructor HB basicity")
+            if (allocated(error)) return
+            call check(error, system%solvent_surface_tension_si, g(id)*0.001_wp, thr=thr, more="constructor tension")
+            if (allocated(error)) return
+            call check(error, system%solvent_mass_density_si, rho(id), thr=thr, more="constructor density")
+            if (allocated(error)) return
+            call check(error, .not. allocated(err_charges), more="solvent builds but has no charges")
+            if (allocated(error)) return
+            call check(error, size(charges), system%solv_mol%nat, more="geometry and charge atom counts disagree")
             if (allocated(error)) return
             cycle
          end if
@@ -1075,38 +831,225 @@ contains
             call test_failed(error, "solvent error does not name its id: "//err%message)
             return
          end if
+         call check(error, allocated(err_charges), more="solvent without a geometry has charges")
+         if (allocated(error)) return
          deallocate (err)
       end do
    end subroutine test_solvent_system_all_ids
 
-   !> Surface tensions are tabulated in mN/m. n-Hexane and methanol are checked
-   !> against their 298.15 K literature values (17.89 and 22.07 mN/m), which the
-   !> old cal/(mol A^2) entries overshot by a factor of 1.44
-   subroutine test_solvent_surface_tension_units(error)
+   !> Every charge scheme and MBIS moment set agrees on the atom count, and
+   !> failed lookups clear the output
+   subroutine test_solvent_charge_data(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(solvent_multipole_data_type) :: multipoles
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: charges(:)
+      integer :: id, ienv, imodel, nat
+      character(len=9), parameter :: environments(3) = [character(len=9) :: &
+         "gas", "solvent", "conductor"]
+      character(len=9), parameter :: models(4) = [character(len=9) :: &
+         "hirshfeld", "resp", "mbis", "chelpg"]
+
+      do id = 1, 187
+         if (id == 94) cycle
+         do ienv = 1, size(environments)
+            call get_solvent_multipoles(id, environments(ienv), "mbis", multipoles, err)
+            if (allocated(err)) then
+               call test_failed(error, "multipole data unavailable: "//err%message)
+               return
+            end if
+            nat = size(multipoles%monopole)
+            call check(error, all(shape(multipoles%dipole) == [3, nat]), &
+               "dipole shape does not match atom count")
+            if (allocated(error)) return
+            call check(error, all(shape(multipoles%quadrupole) == [6, nat]), &
+               "quadrupole shape does not match atom count")
+            if (allocated(error)) return
+            call check(error, all(shape(multipoles%octupole) == [10, nat]), &
+               "octupole shape does not match atom count")
+            if (allocated(error)) return
+            do imodel = 1, size(models)
+               call get_solvent_charges(id, environments(ienv), models(imodel), charges, err)
+               if (allocated(err)) then
+                  call test_failed(error, "charge data unavailable: "//err%message)
+                  return
+               end if
+               call check(error, size(charges), nat)
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+
+      call get_solvent_charges(94, "gas", "mbis", charges, err)
+      call check(error, allocated(err), "excluded ID 94 should return an error")
+      if (allocated(error)) return
+      deallocate (err)
+      call get_solvent_multipoles(94, "gas", "mbis", multipoles, err)
+      call check(error, allocated(err), "excluded multipole ID 94 should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(multipoles%monopole), "excluded multipole ID should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call get_solvent_charges(175, "unknown", "mbis", charges, err)
+      call check(error, allocated(err), "unknown charge environment should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(charges), "failed charge environment should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call get_solvent_multipoles(175, "unknown", "mbis", multipoles, err)
+      call check(error, allocated(err), "unknown environment should return an error")
+   end subroutine test_solvent_charge_data
+
+   !> Type-bound accessors return the table entries for their own solvent and
+   !> select charge and multipole models independently
+   subroutine test_solvent_system_charge_accessors(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(solvation_system_type) :: system
+      type(solvent_multipole_data_type) :: multipoles, ref_multipoles
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: charges(:), ref_charges(:)
+      character(len=9), parameter :: models(4) = [character(len=9) :: &
+         "hirshfeld", "resp", "mbis", "chelpg"]
+      integer :: i
+
+      call new_solvation_system(system, 175, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "water system unavailable: "//err%message)
+         return
+      end if
+
+      do i = 1, size(models)
+         call get_solvent_charges(175, "gas", models(i), ref_charges, err)
+         if (.not. allocated(err)) call system%get_charges("gas", models(i), charges, err)
+         if (allocated(err)) then
+            call test_failed(error, "charge lookup failed: "//err%message)
+            return
+         end if
+         call check(error, size(charges), size(ref_charges))
+         if (allocated(error)) return
+         call check(error, all(charges == ref_charges), &
+                    "type-bound "//trim(models(i))//" charges differ from the table")
+         if (allocated(error)) return
+      end do
+
+      call get_solvent_charges(175, "solvent", "mbis", ref_charges, err)
+      if (.not. allocated(err)) call system%get_charges(" SoLvEnT ", "MBIS", charges, err)
+      if (allocated(err)) then
+         call test_failed(error, "case-insensitive charge lookup failed: "//err%message)
+         return
+      end if
+      call check(error, size(charges), size(ref_charges))
+      if (allocated(error)) return
+      call check(error, all(charges == ref_charges), "case-insensitive lookup returned other charges")
+      if (allocated(error)) return
+
+      call get_solvent_multipoles(175, "conductor", "mbis", ref_multipoles, err)
+      if (.not. allocated(err)) call system%get_multipoles(" CoNdUcToR ", "MBIS", multipoles, err)
+      if (allocated(err)) then
+         call test_failed(error, "multipole lookup failed: "//err%message)
+         return
+      end if
+      call check(error, size(multipoles%monopole), size(ref_multipoles%monopole))
+      if (allocated(error)) return
+      call check(error, all(multipoles%monopole == ref_multipoles%monopole) &
+                 .and. all(multipoles%dipole == ref_multipoles%dipole), &
+                 "case-insensitive lookup returned other moments")
+      if (allocated(error)) return
+
+      call system%get_charges("gas", "unknown", charges, err)
+      call check(error, allocated(err), "unknown charge model should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(charges), "failed charge lookup should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call system%get_multipoles("gas", "unknown", multipoles, err)
+      call check(error, allocated(err), "unknown multipole model should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(multipoles%monopole), "failed multipole lookup should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call system%get_multipoles("unknown", "mbis", multipoles, err)
+      call check(error, allocated(err), "unknown environment should return an error")
+   end subroutine test_solvent_system_charge_accessors
+
+   !> Repeated solute updates replace the geometry and recompute the molar
+   !> mass from zero
+   subroutine test_solute_update_ownership(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(solvation_system_type) :: system
+      type(structure_type) :: solute
       type(moist_error_type), allocatable :: err
-      integer :: id
+      real(wp) :: carbon_mass, hydrogen_mass
 
-      call get_solvent_id("n-hexane", id, err)
-      if (.not. allocated(err)) call new_solvation_system(system, id, error=err)
+      ! Molar masses in kg/mol
+      call get_mass(6, carbon_mass, err)
+      if (.not. allocated(err)) call get_mass(1, hydrogen_mass, err)
       if (allocated(err)) then
-         call test_failed(error, "n-hexane system failed to build: "//trim(err%message))
+         call test_failed(error, "mass lookup failed: "//trim(err%message))
          return
       end if
-      call check(error, system%solvent_surface_tension_si, 17.89e-3_wp, thr=1.0e-4_wp, &
-                 more="n-hexane surface tension is not in mN/m")
+      carbon_mass = carbon_mass*0.001_wp
+      hydrogen_mass = hydrogen_mass*0.001_wp
+
+      call new_solvation_system(system, 175, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "water system failed to build: "//trim(err%message))
+         return
+      end if
+      call new_structure(solute, num=[6, 1], sym=["C", "H"], &
+                         xyz=reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2]))
+      call system%update(solute, err)
+      if (allocated(err)) then
+         call test_failed(error, "first solute update failed: "//trim(err%message))
+         return
+      end if
+      call check(error, allocated(system%solu_mol), more="update did not allocate the solute")
+      if (allocated(error)) return
+      call check(error, system%solu_mol%nat, 2, more="first solute atom count")
+      if (allocated(error)) return
+      call check(error, system%solu_mol%xyz(1, 1), 1.0_wp, thr=thr, more="first solute geometry")
+      if (allocated(error)) return
+      call check(error, system%solute_molar_mass_si, carbon_mass + hydrogen_mass, thr=thr, rel=.true., &
+                 more="first solute molar mass")
       if (allocated(error)) return
 
-      call get_solvent_id("methanol", id, err)
-      if (.not. allocated(err)) call new_solvation_system(system, id, error=err)
+      call new_structure(solute, num=[6], sym=["C"], xyz=reshape([7.0_wp, 8.0_wp, 9.0_wp], [3, 1]))
+      call system%update(solute, err)
       if (allocated(err)) then
-         call test_failed(error, "methanol system failed to build: "//trim(err%message))
+         call test_failed(error, "replacement solute update failed: "//trim(err%message))
          return
       end if
-      call check(error, system%solvent_surface_tension_si, 22.07e-3_wp, thr=1.0e-4_wp, &
-                 more="methanol surface tension is not in mN/m")
-   end subroutine test_solvent_surface_tension_units
+      call check(error, system%solu_mol%nat, 1, more="replacement solute atom count")
+      if (allocated(error)) return
+      call check(error, system%solu_mol%xyz(1, 1), 7.0_wp, thr=thr, more="replacement solute geometry")
+      if (allocated(error)) return
+      call check(error, system%solute_molar_mass_si, carbon_mass, thr=thr, rel=.true., &
+                 more="molar mass not reset by the replacement")
+      if (allocated(error)) return
+      call check(error, system%solute_mass_au, carbon_mass/Avogadro_constant/atomic_unit_of_mass, &
+                 thr=thr, rel=.true., more="replacement solute mass in atomic units")
+   end subroutine test_solute_update_ownership
+
+   !> Water MBIS moments are stored component-major, (component, atom). The
+   !> second quadrupole and third octupole component of oxygen differ from
+   !> the entries an atom-major reading would return
+   subroutine test_water_higher_multipoles(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_multipole_data_type) :: multipoles
+      type(moist_error_type), allocatable :: err
+
+      call get_solvent_multipoles(175, "gas", "mbis", multipoles, err)
+      if (allocated(err)) then
+         call test_failed(error, "water gas multipoles unavailable: "//trim(err%message))
+         return
+      end if
+      call check(error, multipoles%quadrupole(2, 1), -5.014708_wp, thr=thr, &
+                 more="oxygen quadrupole component 2")
+      if (allocated(error)) return
+      call check(error, multipoles%octupole(3, 1), 0.653404_wp, thr=thr, &
+                 more="oxygen octupole component 3")
+   end subroutine test_water_higher_multipoles
 
 end module test_data

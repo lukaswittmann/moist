@@ -7,14 +7,16 @@ does not run SCF; use PySCF's usual ``kernel`` or ``run`` methods.
 .. code-block:: python
 
    from pyscf import gto
-   from moist import ModelComponentCPCM, DROPParameters
+   from moist import Context, ModelComponentCPCM, DROPParameters
    from moist.pyscf import DROP, SvdW, Isodensity
 
    mol = gto.M(atom="O 0 0 0; H 0 -1.4 1.1; H 0 1.4 1.1",
                basis="def2-svp", unit="bohr")
+   context = Context(nthreads=4)  # threads, verbosity and debug
    mf = mol.RHF().MOIST(
        cavity=DROP(lsf=SvdW(), parameters=DROPParameters(nleb=194)),
        components=[ModelComponentCPCM(80.0)],
+       context=context,
    )
    mf.kernel()
    gradient = mf.nuc_grad_method().kernel()  # (natoms, 3)
@@ -59,6 +61,7 @@ For an isodensity surface, change the cavity arguments:
            parameters=DROPParameters(nleb=194),
        ),
        components=[ModelComponentCPCM(80.0)],
+       context=context,
    )
    mf.kernel()
 
@@ -80,16 +83,17 @@ share the selected cavity. For example:
        cavity=DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=194)),
        components=[ModelComponentCPCM(80.0),
                    ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
+       context=context,
    )
    # For a pV term, use ModelComponentPV(10.0 * GPA_TO_AU).
 
 Configuration and results
 -------------------------
 
-``mf.with_moist`` holds the configuration and the latest MOIST ``result``
-(energy and Fock contribution); ``e`` and ``v`` expose the two, and all three
-are ``None`` before the first evaluation. Replace the cavity configuration to
-change settings; this clears cached results:
+``mf.with_moist`` holds the configuration and the latest MOIST ``result`` (energy and Fock contribution);
+``e`` and ``v`` expose the two, and all three are ``None`` before the first evaluation.
+``mf.with_moist.components`` stays the configured tuple; after an evaluation, ``mf.with_moist.solvation.model.components`` reports each component's ``energy`` (see :doc:`python`).
+Replace the cavity configuration to change settings; this clears cached results:
 
 .. code-block:: python
 
@@ -100,10 +104,11 @@ change settings; this clears cached results:
        config, parameters=replace(config.parameters, nleb=302),
    ))
 
-``mf.MOIST(..., parameters=ModelParameters(...))`` and
-``mf.with_moist.set(parameters=...)`` configure model logging. ``set`` takes
-only ``cavity``, ``components`` and ``parameters``; cavity settings live on the
-cavity configuration, so ``set(nleb=302)`` raises ``TypeError``.
+``mf.MOIST(..., context=...)`` is required: the :class:`~moist.Context` sets
+threads, verbosity and debug for the cavity and model, and
+``mf.with_moist.set(context=...)`` replaces it. ``set`` takes only ``cavity``,
+``components`` and ``context``; cavity settings live on the cavity
+configuration, so ``set(nleb=302)`` raises ``TypeError``.
 
 RHF, RKS, UHF and UKS are supported, including density fitting, nuclear gradients,
 atom subsets, and energy/gradient scanners. Existing solver settings are
@@ -140,7 +145,7 @@ MOIST owns (``model``), the basis-center derivative of the potential
 (``potential``), of the level set (``density``, isodensity cavities only) and
 of the Gaussian moments (``moments``, GOSTSHYP only). The host's own
 contractions walk the response and dispatch on each item:
-``potential_adjoint``, ``density`` and ``gostshyp_amplitude``, each present
+``potential_adjoint``, ``density`` and ``gaussian_amplitude``, each present
 only when the model produces it; an item the driver does not know raises.
 
 API

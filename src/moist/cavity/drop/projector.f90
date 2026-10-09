@@ -2715,7 +2715,6 @@ contains
          write (output_unit, "(a)") ""
          write (output_unit, "(a)") " ====================== Rienmannian Newton Escape ======================"
          write (output_unit, "(a)") ""
-         ! TODO: re-enable per-iteration r_init/anchor/rho/Phi debug dump when needed
          write (output_unit, "(a4,1x,a12,1x,a12,1x,a12,1x,a10,1x,a12,1x,a12)") &
             "Iter", "Phi", "rho", "||g_tan||", "alpha", "mu_min", "Status"
          write (output_unit, "(a)") repeat("-", 85)

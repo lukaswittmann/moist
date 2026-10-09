@@ -113,6 +113,7 @@ contains
 
       !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
+      self%name = "Isodensity"
 
       self%radius_dependent = .false.
 

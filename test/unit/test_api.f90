@@ -4,10 +4,21 @@ module test_api
                                           c_funptr, c_funloc, c_associated, c_f_pointer, &
                                           c_char, c_null_char, c_size_t, c_sizeof, c_null_funptr, &
                                           c_int8_t
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io_structure, only: structure_type
-   use moist_api, only: vp_cavity, vp_error, vp_response, response_get_api, &
+   use mctc_io, only: new_mol => new
+   use moist_context, only: moist_context_type, new_context
+!$ use omp_lib, only: omp_get_max_threads
+   use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
+   use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
+   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
+   use moist_data_solvents, only: solvation_system_type, new_solvation_system
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
+   use moist_api, only: vp_context, new_context_api, delete_context_api, &
+      & vp_cavity, vp_error, vp_response, get_response_field_real_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
       & vp_model, update_structure_api, set_custom_radii_atoms_api, &
       & set_custom_radii_elements_api, update_solvation_model_api, &
@@ -19,12 +30,29 @@ module test_api
       & compute_cavity_gradient_api, compute_anchor_gradient_api, &
       & get_anchor_gradient_api, get_cavity_gradient_api, get_amat_gradient_api, &
       & contract_amat1_q1q2_surface_weights_api, &
-      & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api
-   use moist_cavity_fields, only: cavity_field_query_type
+      & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api, &
+      & get_model_field_count_api, get_model_field_info_api, get_model_field_about_api, &
+      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api, &
+      & vp_coupling, coupling_answer_api, next_coupling_request_api, &
+      & get_response_field_count_api, get_response_field_info_api, get_response_field_about_api, &
+      & get_coupling_request_field_count_api, get_coupling_request_field_info_api, &
+      & get_coupling_request_field_about_api, get_coupling_request_field_real_api, &
+      & get_model_component_count_api, get_model_component_name_api, &
+      & get_model_component_field_count_api, get_model_component_field_info_api, &
+      & get_model_component_field_about_api, get_model_component_field_real_api, &
+      & general_model_prepare_energy_api, general_model_get_energy_api, &
+      & get_model_component_description_api, get_model_parameters_text_api, new_cpcm_component_api
+   use moist_model_continuum, only: model_continuum_type
+   use moist_channels_fields, only: field_query_type, field_real
+   use moist_model_continuum_component_pcm_amat, only: pcm_amat_surface_weights
    use moist_cavity_type, only: cavity_type
-   use moist_channels_coupling, only: coupling_type
+   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot, &
+      & coupling_register, coupling_arm, request_require, moist_phase_energy, &
+      & atomic_charge_request_type, radial_potential_request_type, &
+      & point_potential_request_type, gaussian_moment_request_type
    use moist_channels_response, only: density_response_type, &
-      & potential_adjoint_response_type, response_accumulate, response_type
+      & potential_adjoint_response_type, response_accumulate, response_type, &
+      & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
    use moist_model_type, only: solvation_model_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
@@ -48,10 +76,6 @@ module test_api
       integer(c_size_t) :: struct_size
       !> Lebedev points per atom
       integer(c_int) :: nleb
-      !> Diagnostic checks
-      logical(c_bool) :: debug
-      !> Output detail level
-      integer(c_int) :: verbosity
       !> Fine cavity refinement
       logical(c_bool) :: do_fine
       !> Projection convergence tolerance
@@ -87,10 +111,11 @@ module test_api
       procedure :: list_fields => stub_cavity_fields
    end type stub_cavity
 
-   !> Test double: a solvation model that is not the general model
+   !> Test double: a solvation model that is not the continuum model, and
+   !> whose `update` never marks it usable
    type, extends(solvation_model_type) :: stub_model
    contains
-      !> Accept any structure
+      !> Accept any structure, but never mark the model updated
       procedure :: update => stub_model_update
       !> Contribute no energy
       procedure :: get_energy => stub_model_energy
@@ -98,6 +123,10 @@ module test_api
       procedure :: get_response => stub_model_response
       !> Contribute no gradient
       procedure :: get_gradient => stub_model_gradient
+      !> No owned geometry
+      procedure :: atom_count => stub_model_atom_count
+      !> Declare no coupling requests
+      procedure :: declare_pass => stub_model_declare_pass
    end type stub_model
 
    !> C bindings of the entry points under test
@@ -142,14 +171,17 @@ module test_api
       !> C binding for moist_new_drop_cavity
       !>
       !> @param[in] error Native error
+      !> @param[in] context Native run context
       !> @param[in] lsf Native lsf
       !> @param[in] radii Native radii
       !> @param[in] options Native options
-      function moist_new_drop_cavity(error, lsf, radii, options) result(cavity) bind(C)
+      function moist_new_drop_cavity(error, context, lsf, radii, options) result(cavity) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: error
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native lsf
          type(c_ptr), value, intent(in) :: lsf
          !> Native radii
@@ -259,7 +291,7 @@ module test_api
          character(kind=c_char), intent(inout), optional :: name(*)
          integer(c_int), intent(inout), optional :: dtype
          integer(c_int), intent(inout), optional :: rank
-         integer(c_int), intent(inout), optional :: dims(2)
+         integer(c_int), intent(inout), optional :: dims(3)
          integer(c_int), intent(inout), optional :: count
       end subroutine moist_get_cavity_field_info
 
@@ -396,22 +428,6 @@ module test_api
          integer(c_size_t), value, intent(in) :: bytes
       end subroutine moist_init_isodensity_options
 
-      !> C binding for moist_init_model_options
-      !>
-      !> @param[in] verror Native error
-      !> @param[in] options Native options buffer
-      !> @param[in] bytes Native buffer size
-      subroutine moist_init_model_options(verror, options, bytes) bind(C)
-         import :: c_ptr, c_size_t
-         implicit none(type, external)
-         !> Native error
-         type(c_ptr), value, intent(in) :: verror
-         !> Native options buffer
-         type(c_ptr), value, intent(in) :: options
-         !> Native buffer size
-         integer(c_size_t), value, intent(in) :: bytes
-      end subroutine moist_init_model_options
-
       !> C binding for moist_init_pcm_options
       !>
       !> @param[in] verror Native error
@@ -465,13 +481,16 @@ module test_api
       !> C binding for moist_new_iswig_cavity
       !>
       !> @param[in] verror Native error
+      !> @param[in] context Native run context
       !> @param[in] radii Native radii
       !> @param[in] options Native options
-      function moist_new_iswig_cavity(verror, radii, options) result(cavity) bind(C)
+      function moist_new_iswig_cavity(verror, context, radii, options) result(cavity) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: verror
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native radii
          type(c_ptr), value, intent(in) :: radii
          !> Native options
@@ -483,17 +502,17 @@ module test_api
       !> C binding for moist_new_model
       !>
       !> @param[in] verror Native error
+      !> @param[in] context Native run context
       !> @param[in] cavity Native cavity
-      !> @param[in] options Native options
-      function moist_new_model(verror, cavity, options) result(model) bind(C)
+      function moist_new_model(verror, context, cavity) result(model) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: verror
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native cavity
          type(c_ptr), value, intent(in) :: cavity
-         !> Native options
-         type(c_ptr), value, intent(in) :: options
          !> Owning result handle
          type(c_ptr) :: model
       end function moist_new_model
@@ -577,6 +596,10 @@ contains
                   new_unittest("isodensity_callback_fails_first_call", test_iso_callback_fails_first), &
                   new_unittest("isodensity_callback_fails_mid_loop", test_iso_callback_fails_mid_loop), &
                   new_unittest("init_options_without_error_handle", test_init_options_null_error), &
+                  new_unittest("shared_context_thread_budget", test_shared_context_thread_budget), &
+                  new_unittest("borrowed_cavity_keeps_context", test_borrowed_cavity_keeps_context), &
+                  new_unittest("model_requires_context", test_model_requires_context), &
+                  new_unittest("parts_without_context", test_parts_without_context), &
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
@@ -588,8 +611,17 @@ contains
                   new_unittest("stub_cavity_guards", test_stub_cavity_guards), &
                   new_unittest("model_handle_guards", test_model_handle_guards), &
                   new_unittest("model_phase_guards", test_model_phase_guards), &
+                  new_unittest("model_fields_forward_the_cavity", test_model_fields_continuum), &
+                  new_unittest("model_fields_of_a_volume_grid", test_model_fields_volume), &
+                  new_unittest("model_fields_empty_domain_and_guards", test_model_fields_guards), &
+                  new_unittest("model_components_by_index", test_model_components), &
+                  new_unittest("model_parameters_text", test_model_parameters_text), &
                   new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
+                  new_unittest("site_resolved_answer_refused_adjoints_read", test_site_resolved_answer_and_adjoints), &
+                  new_unittest("response_fields_describe_the_current_item", test_response_fields), &
+                  new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
+                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs), &
                   new_unittest("amat_surface_weights", test_amat_surface_weights) &
                   ]
 
@@ -755,7 +787,7 @@ contains
       block
          type(c_ptr) :: lsf
          lsf = moist_new_svdw_lsf(verror, c_null_ptr)
-         vcav = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
       call moist_update_cavity(verror, vcav, vmol)
@@ -963,7 +995,8 @@ contains
    end subroutine test_cavity_field_empty_name
 
    !> A field index outside the reported count is refused, and the descriptor
-   !> outputs remain unchanged
+   !> outputs remain unchanged; an index inside it describes `xyz` with its
+   !> declared type, shape and count
    !>
    !> The index is the one field-API argument the caller derives from an earlier
    !> call, so a stale count is the realistic way to get here.  Unchecked it
@@ -974,9 +1007,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
       type(c_ptr) :: verror, vmol, vcav
-      integer(c_int) :: ngrid, nsph, nfield
-      integer(c_int) :: dtype, rank, dims(2), count
-      character(kind=c_char), target :: name(64)
+      integer(c_int) :: ngrid, nsph, nfield, ifield
+      logical :: found_xyz
+      integer(c_int) :: dtype, rank, dims(3), count
+      character(kind=c_char), target :: name(65)
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
       if (allocated(error)) return
@@ -986,6 +1020,26 @@ contains
          call test_failed(error, "get_cavity_field_count failed: "//err%ptr%message)
       else if (nfield <= 0_c_int) then
          call test_failed(error, "A built cavity declares no fields")
+      end if
+
+      found_xyz = .false.
+      if (.not. allocated(error)) then
+         do ifield = 0, nfield - 1
+            call moist_get_cavity_field_info(verror, vcav, ifield, name, dtype, rank, dims, count)
+            if (allocated(err%ptr)) then
+               call test_failed(error, "Valid cavity descriptor failed: "//err%ptr%message)
+               exit
+            end if
+            if (name(1) == "x" .and. name(2) == "y" .and. name(3) == "z" &
+                .and. name(4) == c_null_char) then
+               found_xyz = .true.
+               call check(error, dtype == 1_c_int .and. rank == 2_c_int &
+                  .and. count == 3*ngrid .and. all(dims == [ngrid, 3_c_int, 1_c_int]), &
+                  "Cavity xyz descriptor has incorrect type, shape or count")
+               exit
+            end if
+         end do
+         if (.not. allocated(error)) call check(error, found_xyz, "Cavity xyz descriptor is absent")
       end if
 
       if (.not. allocated(error)) then
@@ -1018,7 +1072,7 @@ contains
       !> Name buffer, seeded so any write is visible
       character(kind=c_char), intent(inout) :: name(:)
       !> Descriptor outputs, seeded so a cleared value is distinguishable
-      integer(c_int), intent(out) :: dtype, rank, dims(2), count
+      integer(c_int), intent(out) :: dtype, rank, dims(3), count
 
       name = "Z"
       dtype = -1_c_int
@@ -1037,18 +1091,18 @@ contains
       !> Name buffer that must still carry its seed
       character(kind=c_char), intent(in) :: name(:)
       !> Descriptor outputs that must retain their sentinel values
-      integer(c_int), intent(in) :: dtype, rank, dims(2), count
+      integer(c_int), intent(in) :: dtype, rank, dims(3), count
 
       if (dtype /= -1_c_int .or. rank /= -1_c_int .or. count /= -1_c_int) then
-         call test_failed(error, "get_cavity_field_info changed the descriptor for "//what)
+         call test_failed(error, "Field info changed the descriptor for "//what)
          return
       end if
       if (any(dims /= -1_c_int)) then
-         call test_failed(error, "get_cavity_field_info changed extents for "//what)
+         call test_failed(error, "Field info changed extents for "//what)
          return
       end if
       if (any(name /= "Z")) then
-         call test_failed(error, "get_cavity_field_info wrote a name for "//what)
+         call test_failed(error, "Field info wrote a name for "//what)
       end if
 
    end subroutine check_unchanged_info
@@ -1101,7 +1155,7 @@ contains
    subroutine test_cavity_field_bool(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
-      type(c_ptr) :: verror, vmol, vcav
+      type(c_ptr) :: verror, vmol, vcav, vmodel
       integer(c_int) :: ngrid, nsph, out_ngrid, out_nsph
       real(c_double) :: area, volume
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
@@ -1133,6 +1187,20 @@ contains
          else if (.not. all(values .eqv. reference)) then
             call test_failed(error, "get_cavity_field_bool disagrees with get_cavity_results")
          end if
+      end if
+
+      if (.not. allocated(error)) then
+         vmodel = model_on_context(verror, vcav)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "DROP model construction failed: "//err%ptr%message)
+         else
+            values = .not. reference
+            call get_model_field_bool_api(verror, vmodel, c_loc(name_conv), values)
+            call check(error, .not. allocated(err%ptr), "Model bool field read failed")
+            if (.not. allocated(error)) call check(error, logical(all(values .eqv. reference)), &
+               "Model bool field differs from the cavity")
+         end if
+         call delete_solvation_model_api(vmodel)
       end if
 
       !> Reading a real field through the logical accessor is refused too
@@ -1173,7 +1241,8 @@ contains
    !> A capacity below the cavity's own ngrid/nsph is refused before a single
    !> element is written.  Without the check these calls write ngrid values into
    !> buffers holding ngrid-1, which is silent heap corruption; the sentinels
-   !> below detect any write at all
+   !> below detect any write that changes a value (`converged` is seeded
+   !> `.true.`, so only a written `.false.` shows)
    subroutine test_capacity_too_small(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -1197,7 +1266,7 @@ contains
       xyz = sentinel
       a = sentinel
       owner = -1_c_int
-      converged = .false._c_bool
+      converged = .true._c_bool
       amat0 = sentinel
       xi = sentinel
       radii = sentinel
@@ -1208,7 +1277,8 @@ contains
                                     radii, asph)
       call expect_capacity_error(error, err, "get_cavity_results")
       if (.not. allocated(error)) then
-         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int)) then
+         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int) &
+             .or. any(radii /= sentinel) .or. any(asph /= sentinel) .or. .not. all(converged)) then
             call test_failed(error, "get_cavity_results wrote into a rejected buffer")
          end if
       end if
@@ -1223,26 +1293,38 @@ contains
          end if
       end if
 
-      ! A short per-sphere capacity has to be caught the same way
+      ! A short per-sphere capacity has to be caught the same way.  Every buffer
+      ! holds the full ngrid/nsph extent, so a missing nsph guard shows up as a
+      ! write instead of a heap overflow
       if (.not. allocated(error)) then
-         deallocate (radii, asph)
-         allocate (radii(nsph - 1), asph(nsph - 1))
+         deallocate (xyz, a, owner, converged)
+         allocate (xyz(3, ngrid), a(ngrid), owner(ngrid), converged(ngrid))
+         xyz = sentinel
+         a = sentinel
+         owner = -1_c_int
+         converged = .true._c_bool
          radii = sentinel
          asph = sentinel
          call moist_get_cavity_results(verror, vcav, ngrid, nsph - 1_c_int, area, &
                                        volume, out_ngrid, out_nsph, xyz, a, owner, &
                                        converged, radii, asph)
          call expect_capacity_error(error, err, "get_cavity_results (nsph)")
+         if (.not. allocated(error)) call check_untouched(error, &
+            any(radii /= sentinel) .or. any(asph /= sentinel) .or. any(xyz /= sentinel) &
+            .or. any(a /= sentinel) .or. any(owner /= -1_c_int) &
+            .or. .not. logical(all(converged)), "short sphere capacity")
       end if
 
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_capacity_too_small
 
-   !> Accept oversized capacities and preserve padding outside the logical extent
+   !> Accept oversized capacities, return the cavity's own arrays in the logical
+   !> extent and preserve padding outside it
    subroutine test_capacity_oversized(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph, ngrid_cap, nsph_cap
       integer(c_int) :: out_ngrid, out_nsph
@@ -1263,6 +1345,8 @@ contains
       a = sentinel
       radii = sentinel
       asph = sentinel
+      owner = -12345_c_int
+      converged = .false._c_bool
 
       call moist_get_cavity_results(verror, vcav, ngrid_cap, nsph_cap, area, volume, &
                                     out_ngrid, out_nsph, xyz, a, owner, converged, &
@@ -1277,6 +1361,19 @@ contains
       if (.not. allocated(error)) call check(error, all(a(ngrid + 1:) == sentinel))
       if (.not. allocated(error)) call check(error, all(xyz(:, ngrid + 1:) == sentinel))
       if (.not. allocated(error)) call check(error, all(radii(nsph + 1:) == sentinel))
+
+      if (.not. allocated(error)) then
+         call c_f_pointer(vcav, cav)
+         call check(error, all(xyz(:, :ngrid) == cav%ptr%xyz) &
+            .and. all(a(:ngrid) == cav%ptr%a) .and. all(radii(:nsph) == cav%ptr%radii) &
+            .and. all(asph(:nsph) == cav%ptr%asph) &
+            .and. all(owner(:ngrid) == cav%ptr%owner - 1) &
+            .and. area == cav%ptr%total_area .and. volume == cav%ptr%total_volume, &
+            "Cavity result payload differs from the owned arrays")
+      end if
+      if (.not. allocated(error)) call check(error, all(asph(nsph + 1:) == sentinel) &
+         .and. all(owner(ngrid + 1:) == -12345_c_int) &
+         .and. .not. logical(any(converged(ngrid + 1:))), "Cavity result padding was overwritten")
 
       call drop_water_cavity(err, vmol, vcav)
 
@@ -1422,7 +1519,7 @@ contains
          options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double)
          lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
                                                c_loc(ctx), c_loc(options))
-         vcav = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
       call moist_update_cavity(verror, vcav, vmol)
@@ -1537,11 +1634,9 @@ contains
 
    end subroutine test_iso_callback_fails_mid_loop
 
-   !> Response copies write exactly the logical shape at all ranks, leave the
-   !> rest of a larger buffer untouched, and name a missing current item, an
-   !> array the current item does not have and a NULL buffer
-   !>
-   !> @param[out] error Test failure
+   !> Response field reads write exactly the logical shape at all ranks, leave
+   !> the rest of a larger buffer untouched, and name a missing current item,
+   !> an array the current item does not have and a NULL buffer
    subroutine test_response_arrays(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1574,8 +1669,8 @@ contains
       bogus = c_string("w_bogus")
 
       ! Arrays are read from the item the walk stopped at, and none is current yet
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] No current response item - call next() first")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] No current response item - call next() first")
       if (allocated(error)) return
       call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
       if (allocated(error)) return
@@ -1584,13 +1679,13 @@ contains
       rho = sentinel
       grad = sentinel
       hess = sentinel
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_loc(grad))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), grad)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), c_loc(hess))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), hess)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
       call check(error, all(rho(:2) == density%w_rho))
@@ -1604,14 +1699,14 @@ contains
       if (allocated(error)) return
 
       ! An array the current item does not have and a NULL buffer are named
-      call response_get_api(c_loc(err), c_loc(response), c_loc(bogus), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] density has no array 'w_bogus'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(bogus), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] density has no field 'w_bogus'")
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_phi), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] density has no array 'w_phi'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] density has no field 'w_phi'")
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_null_ptr)
-      call check_api_error(error, err, "Null array pointer provided for 'w_grad_rho'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho))
+      call check_api_error(error, err, "Required pointer 'values' is missing")
       if (allocated(error)) return
 
       ! The pass ends after the only item, and nothing is current any more
@@ -1619,14 +1714,12 @@ contains
       if (allocated(error)) return
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
       call check_api_error(error, err, "No current response item - call next() first")
    end subroutine test_response_arrays
 
    !> The C walk visits every item once per pass in accumulation order, rewinds
    !> after the last one, names the current item and fails by name outside a pass
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_walk(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1762,8 +1855,6 @@ contains
       case (5)
          call moist_init_isodensity_options(verror, c_loc(buffer), c_sizeof(buffer))
       case (6)
-         call moist_init_model_options(verror, c_loc(buffer), c_sizeof(buffer))
-      case (7)
          call moist_init_pcm_options(verror, c_loc(buffer), c_sizeof(buffer))
       case default
          error stop "test_api: unhandled ikind"
@@ -1784,8 +1875,8 @@ contains
       !> Caller-owned options storage, larger than every layout
       integer(c_int8_t) :: buffer(256)
       !> Initializer names, in the order of `init_options`
-      character(len=10), parameter :: kinds(7) = [character(len=10) :: "drop", "iswig", &
-         & "svdw", "cfc", "isodensity", "model", "pcm"]
+      character(len=10), parameter :: kinds(6) = [character(len=10) :: "drop", "iswig", &
+         & "svdw", "cfc", "isodensity", "pcm"]
       integer :: ikind
 
       allocate (err)
@@ -1810,16 +1901,291 @@ contains
 
    end subroutine test_init_options_null_error
 
+   !> Context ownership spans the public handle, cavity and model copies
+   subroutine test_shared_context_thread_budget(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Baseline runtime observer
+      type(moist_context_type) :: probe
+      !> Shared context, cavity and model wrappers
+      type(vp_context), pointer :: shared
+      type(vp_cavity), pointer :: cav
+      type(vp_model), pointer :: model
+      !> C handles released at the end of each case
+      type(c_ptr) :: context, lsf, cavity, vmodel, component
+      !> Requested thread counts
+      integer(c_int), parameter :: requests(3) = [0_c_int, 2_c_int, 1_c_int]
+      !> Case indices, baseline and effective runtime
+      integer :: ikind, irequest, baseline, expected, runtime
+
+      call new_context(probe, nthreads=0, verbosity=0)
+      baseline = probe%get_num_threads()
+      context = new_context_api(c_loc(err), -1_c_int, 0_c_int, .false._c_bool)
+      call check(error, .not. c_associated(context) .and. allocated(err%ptr), "negative thread count is refused")
+      if (allocated(error)) return
+      deallocate (err%ptr)
+      context = new_context_api(c_loc(err), 0_c_int, 2_c_int, .true._c_bool)
+      call check(error, c_associated(context), "context constructor succeeds")
+      if (allocated(error)) return
+      call c_f_pointer(context, shared)
+      call check(error, shared%ctx%verbosity == 2 .and. shared%ctx%debug .and. &
+         & shared%ctx%get_num_threads() == baseline, "context takes the logging arguments")
+      call delete_context_api(context)
+      if (allocated(error)) return
+      lsf = moist_new_svdw_lsf(c_loc(err), c_null_ptr)
+      call check(error, c_associated(lsf), "LSF setup succeeds")
+      if (allocated(error)) return
+      do ikind = 1, 2
+         do irequest = 1, size(requests)
+            context = c_null_ptr
+            cavity = c_null_ptr
+            vmodel = c_null_ptr
+            component = c_null_ptr
+            checks: block
+               context = new_context_api(c_loc(err), requests(irequest), 0_c_int, .false._c_bool)
+               call check(error, c_associated(context), "context constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(context, shared)
+               expected = baseline
+               if (requests(irequest) > 0) expected = requests(irequest)
+               call check(error, shared%ctx%get_num_threads() == expected, "context records the requested count")
+               if (allocated(error)) exit checks
+               if (ikind == 1) then
+                  cavity = moist_new_drop_cavity(c_loc(err), context, lsf, c_null_ptr, c_null_ptr)
+               else
+                  cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
+               end if
+               call check(error, c_associated(cavity), "cavity constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(cavity, cav)
+               call check(error, associated(cav%ptr%ctx, shared%ctx), "cavity borrows the explicit context")
+               if (allocated(error)) exit checks
+               vmodel = moist_new_model(c_loc(err), context, cavity)
+               call check(error, c_associated(vmodel), "model constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(vmodel, model)
+               call check(error, associated(model%ptr%ctx, shared%ctx), "model borrows the explicit context")
+               if (allocated(error)) exit checks
+               component = new_pv_component_api(c_loc(err), c_null_ptr, 1.0e-4_c_double)
+               call general_model_add_component_api(c_loc(err), vmodel, component)
+               call check(error,.not. allocated(err%ptr), "component addition succeeds")
+               if (allocated(error)) exit checks
+               select type (item => model%ptr)
+               type is (model_continuum_type)
+                  call check(error, associated(item%cavity%ctx, shared%ctx) .and. &
+                     & associated(item%components(1)%item%ctx, shared%ctx), "model borrowers share one context")
+               end select
+               if (allocated(error)) exit checks
+               call check(error, shared%references == 4, &
+                  & "context has one public owner, the cavity, and the model for itself and its cavity copy")
+               if (allocated(error)) exit checks
+               call delete_context_api(context)
+               call check(error,.not. c_associated(context) .and. shared%references == 3, "public release retains dependents")
+               if (allocated(error)) exit checks
+               call moist_delete_cavity(cavity)
+               call check(error, shared%references == 2, "model retains the context after the source cavity is deleted")
+               if (allocated(error)) exit checks
+               runtime = baseline
+!$             runtime = omp_get_max_threads()
+               call check(error, runtime == baseline .and. shared%ctx%get_num_threads() == expected, &
+                  & "the count stays fixed and leaves the runtime alone")
+            end block checks
+            call delete_solvation_component_api(component)
+            call delete_solvation_model_api(vmodel)
+            call moist_delete_cavity(cavity)
+            call delete_context_api(context)
+            runtime = baseline
+!$          runtime = omp_get_max_threads()
+            if (.not. allocated(error)) call check(error, runtime == baseline, "release leaves the runtime alone")
+            if (allocated(error)) exit
+         end do
+         if (allocated(error)) exit
+      end do
+      call moist_delete_lsf(lsf)
+      call probe%delete()
+   end subroutine test_shared_context_thread_budget
+
+   !> A borrowed model cavity retains the context its copy runs on until it is
+   !> deleted; a model built from it runs on its own context, but the cavity
+   !> copy keeps the borrowed cavity's
+   subroutine test_borrowed_cavity_keeps_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Parent and second shared contexts, and the second model wrapper
+      type(vp_context), pointer :: parent, other
+      type(vp_model), pointer :: second_model
+      !> C handles
+      type(c_ptr) :: context, other_context, cavity, first, borrowed, second
+
+      cavity = c_null_ptr
+      first = c_null_ptr
+      borrowed = c_null_ptr
+      second = c_null_ptr
+      context = new_context_api(c_loc(err), 0_c_int, 4_c_int, .true._c_bool)
+      other_context = new_context_api(c_loc(err), 0_c_int, 1_c_int, .false._c_bool)
+      checks: block
+         call check(error, c_associated(context) .and. c_associated(other_context), &
+            & "context constructors succeed")
+         if (allocated(error)) exit checks
+         call c_f_pointer(context, parent)
+         call c_f_pointer(other_context, other)
+         cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
+         if (c_associated(cavity)) first = moist_new_model(c_loc(err), context, cavity)
+         if (c_associated(first)) borrowed = get_solvation_model_cavity_api(c_loc(err), first)
+         call check(error, c_associated(borrowed), "borrowed cavity succeeds")
+         if (allocated(error)) exit checks
+         call check(error, parent%references == 5, "borrowed handle retains the parent context")
+         if (allocated(error)) exit checks
+         call moist_delete_cavity(cavity)
+         call delete_context_api(context)
+         call check(error, parent%references == 3, "parent model and borrowed handle retain the context")
+         if (allocated(error)) exit checks
+         second = moist_new_model(c_loc(err), other_context, borrowed)
+         call check(error, c_associated(second), "model from a borrowed cavity succeeds")
+         if (allocated(error)) exit checks
+         call c_f_pointer(second, second_model)
+         call check(error, associated(second_model%ptr%ctx, other%ctx) .and. &
+            & second_model%ptr%ctx%verbosity == 1 .and. .not. second_model%ptr%ctx%debug, &
+            & "model from a borrowed cavity uses its own context")
+         if (allocated(error)) exit checks
+         select type (item => second_model%ptr)
+         type is (model_continuum_type)
+            call check(error, associated(item%cavity%ctx, parent%ctx), "cavity copy keeps the borrowed cavity's context")
+         end select
+         if (allocated(error)) exit checks
+         call check(error, parent%references == 4 .and. other%references == 2, &
+            & "each context counts only its own dependents")
+         if (allocated(error)) exit checks
+         call moist_delete_cavity(borrowed)
+         call check(error, parent%references == 3, "deleting the borrowed handle releases its reference")
+      end block checks
+      call moist_delete_cavity(borrowed)
+      call delete_solvation_model_api(second)
+      call delete_solvation_model_api(first)
+      call moist_delete_cavity(cavity)
+      call delete_context_api(context)
+      call delete_context_api(other_context)
+   end subroutine test_borrowed_cavity_keeps_context
+
+   !> The model constructor refuses a missing context and returns no handle
+   subroutine test_model_requires_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> C handles
+      type(c_ptr) :: context, cavity, handle
+
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
+      call check(error, c_associated(cavity), "cavity setup succeeds")
+      if (.not. allocated(error)) then
+         handle = moist_new_model(c_loc(err), c_null_ptr, cavity)
+         call check(error, .not. c_associated(handle) .and. allocated(err%ptr), &
+            & "model constructor without a context fails")
+      end if
+      if (.not. allocated(error)) then
+         call check(error, err%ptr%message, "[moist_new_model] Context handle is missing")
+      end if
+      call moist_delete_cavity(cavity)
+      call delete_context_api(context)
+   end subroutine test_model_requires_context
+
+   !> A cavity and a component built without a context fail standalone and run
+   !> on the context of the model they are copied into; a component with its
+   !> own context keeps it, and the model retains it
+   subroutine test_parts_without_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Model and component contexts
+      type(vp_context), pointer :: shared, own
+      !> Model wrapper
+      type(vp_model), pointer :: model
+      !> One hydrogen atom
+      integer(c_int), parameter :: numbers(1) = [1_c_int]
+      real(c_double), parameter :: positions(3, 1) = 0.0_c_double
+      !> C handles
+      type(c_ptr) :: context, own_context, cavity, plain, owned, vmodel, borrowed, vmol
+
+      cavity = c_null_ptr
+      plain = c_null_ptr
+      owned = c_null_ptr
+      vmodel = c_null_ptr
+      borrowed = c_null_ptr
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, positions)
+      checks: block
+         call c_f_pointer(context, shared)
+         call c_f_pointer(own_context, own)
+         cavity = moist_new_iswig_cavity(c_loc(err), c_null_ptr, c_null_ptr, c_null_ptr)
+         plain = new_pv_component_api(c_loc(err), c_null_ptr, 1.0e-4_c_double)
+         owned = new_pv_component_api(c_loc(err), own_context, 2.0e-4_c_double)
+         call check(error, c_associated(cavity) .and. c_associated(plain) .and. c_associated(owned), &
+            & "parts are created with and without a context")
+         if (allocated(error)) exit checks
+         call moist_update_cavity(c_loc(err), cavity, vmol)
+         call check(error, allocated(err%ptr), "standalone update without a context fails")
+         if (allocated(error)) exit checks
+         call check(error, index(err%ptr%message, "Cavity has no context") > 0, &
+            & "the error names the missing context")
+         if (allocated(error)) exit checks
+         vmodel = moist_new_model(c_loc(err), context, cavity)
+         if (c_associated(vmodel)) call general_model_add_component_api(c_loc(err), vmodel, plain)
+         if (c_associated(vmodel)) call general_model_add_component_api(c_loc(err), vmodel, owned)
+         call check(error, c_associated(vmodel) .and. .not. allocated(err%ptr), "model over the parts succeeds")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vmodel, model)
+         select type (item => model%ptr)
+         type is (model_continuum_type)
+            call check(error, associated(item%cavity%ctx, shared%ctx) .and. &
+               & associated(item%components(1)%item%ctx, shared%ctx) .and. &
+               & associated(item%components(2)%item%ctx, own%ctx), &
+               & "parts without a context run on the model's, the other keeps its own")
+         end select
+         if (allocated(error)) exit checks
+         call check(error, shared%references == 3 .and. own%references == 3, &
+            & "model retains its context for its cavity copy and the component's own")
+         if (allocated(error)) exit checks
+         call update_solvation_model_api(c_loc(err), vmodel, vmol)
+         call check(error, .not. allocated(err%ptr), "model update runs every part")
+         if (allocated(error)) exit checks
+         borrowed = get_solvation_model_cavity_api(c_loc(err), vmodel)
+         call check(error, c_associated(borrowed) .and. shared%references == 4, &
+            & "borrowed cavity retains the context its copy runs on")
+         if (allocated(error)) exit checks
+         call delete_solvation_component_api(owned)
+         call delete_context_api(own_context)
+         call check(error, own%references == 1, "model alone keeps the component's context alive")
+         if (allocated(error)) exit checks
+         call delete_solvation_model_api(vmodel)
+      end block checks
+      call moist_delete_cavity(borrowed)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(owned)
+      call delete_solvation_component_api(plain)
+      call moist_delete_cavity(cavity)
+      call moist_delete_structure(vmol)
+      call delete_context_api(own_context)
+      call delete_context_api(context)
+   end subroutine test_parts_without_context
+
    !> LSF constructors refuse a missing callback, non-positive isodensity
    !> controls and every malformed basis, and return no handle
    !>
-   !> The basis cases walk the shell guard (no shells, a NULL array), both
+   !> The basis cases walk the shell guard (no shells, each NULL basis array), both
    !> halves of the primitive guard (a zero count, a sum past `huge`) and the
    !> basis constructor's own rejection of an unsupported angular momentum
    subroutine test_lsf_constructor_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
-      !> Isodensity options with a negative isovalue
+      !> Isodensity options with a negative isovalue or scale
       type(iso_options), target :: options
       !> Two-shell basis, edited per case
       integer(c_int), target :: shell_atom(2), shell_l(2), shell_nprim(2)
@@ -1827,11 +2193,16 @@ contains
       !> Returned LSF handle
       type(c_ptr) :: lsf
       !> Expected diagnostics, one per case
-      character(len=48), parameter :: needles(7) = [character(len=48) :: &
+      character(len=48), parameter :: needles(12) = [character(len=48) :: &
          & "Callback is missing", "rho_iso and scale must be positive", &
          & "Missing basis arrays or invalid shell count", &
          & "Missing basis arrays or invalid shell count", "Invalid primitive counts", &
-         & "Invalid primitive counts", "angular momentum out of supported range"]
+         & "Invalid primitive counts", "angular momentum out of supported range", &
+         & "rho_iso and scale must be positive", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count"]
       integer :: icase
 
       allocate (err)
@@ -1841,6 +2212,7 @@ contains
       coeffs = 1.0_c_double
       do icase = 1, size(needles)
          shell_nprim = 1_c_int
+         shell_l = 0_c_int
          select case (icase)
          case (1)
             lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_null_funptr, c_null_ptr, c_null_ptr)
@@ -1867,8 +2239,24 @@ contains
             shell_l = 99_c_int
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (8)
+            options = iso_options(c_sizeof(options), 1.0e-3_c_double, -1.0_c_double)
+            lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
+                                                  c_null_ptr, c_loc(options))
+         case (9)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_null_ptr, c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (10)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_null_ptr, &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (11)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_null_ptr, c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (12)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_null_ptr, c_loc(coeffs), c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_lsf_constructor_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(lsf), trim(needles(icase)))
@@ -1928,13 +2316,13 @@ contains
          end select
          select case (icase)
          case (1:6)
-            cavity = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_loc(options))
+            cavity = drop_on_context(verror, lsf, c_null_ptr, c_loc(options))
          case (7)
-            cavity = moist_new_drop_cavity(verror, lsf, c_loc(radii), c_null_ptr)
+            cavity = drop_on_context(verror, lsf, c_loc(radii), c_null_ptr)
          case (8)
-            cavity = moist_new_iswig_cavity(verror, c_loc(radii), c_null_ptr)
+            cavity = iswig_on_context(verror, c_loc(radii), c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_cavity_constructor_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(cavity), trim(needles(icase)))
@@ -1997,7 +2385,7 @@ contains
          case (8)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_structure_radii_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(vmol), "structure handle")
@@ -2083,7 +2471,7 @@ contains
       case ("get_cavity_field_count")
          call moist_get_cavity_field_count(verror, c_null_ptr)
       case ("get_cavity_field_info")
-         allocate (name(65), dtype, rank, dims(2), count)
+         allocate (name(65), dtype, rank, dims(3), count)
          if (omit == 1) deallocate (name)
          if (omit == 2) deallocate (dtype)
          if (omit == 3) deallocate (rank)
@@ -2120,8 +2508,6 @@ contains
          if (omit == 3) deallocate (asph1_rA)
          if (omit == 4) deallocate (vsph1_rA)
          if (omit == 5) deallocate (xyz1_rA)
-         if (omit == 6) deallocate (r_iI1_rA)
-         if (omit == 7) deallocate (vec1_rA)
          call get_cavity_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, A_tot1_rA, V_tot1_rA, &
                                       asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, vec1_rA)
       case ("get_amat_gradient")
@@ -2174,8 +2560,8 @@ contains
       !> Required outputs of each reader, in argument order
       character(len=9), parameter :: anchor(6) = [character(len=9) :: "xyz1_rA", "xi1_rA", &
          & "a_i1_rA", "v_i1_rA", "A_tot1_rA", "V_tot1_rA"]
-      character(len=9), parameter :: cavity(7) = [character(len=9) :: "A_tot1_rA", "V_tot1_rA", &
-         & "asph1_rA", "vsph1_rA", "xyz1_rA", "r_iI1_rA", "rho1_rA"]
+      character(len=9), parameter :: cavity(5) = [character(len=9) :: "A_tot1_rA", "V_tot1_rA", &
+         & "asph1_rA", "vsph1_rA", "xyz1_rA"]
       character(len=8), parameter :: amat(3) = [character(len=8) :: "Amat0", "Amat1_rA", "xi"]
 
       call check_missing_pointers(error, "get_anchor_gradient", anchor)
@@ -2204,9 +2590,9 @@ contains
       allocate (err)
       verror = c_loc(err)
       lsf = moist_new_svdw_lsf(verror, c_null_ptr)
-      vdrop = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+      vdrop = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
       call moist_delete_lsf(lsf)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       if (allocated(err%ptr)) then
          call test_failed(error, "Cavity setup failed: "//err%ptr%message)
          deallocate (err%ptr)
@@ -2283,7 +2669,7 @@ contains
          case (6)
             call moist_assemble_amat(verror, c_loc(empty_cav), 1_c_int, amat0, xi)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_unbuilt_cavity_guards"
          end select
          wrote = area /= sentinel .or. volume /= sentinel .or. ngrid /= -1_c_int &
             & .or. nsph /= -1_c_int .or. any(amat0 /= sentinel) .or. any(xi /= sentinel)
@@ -2342,7 +2728,7 @@ contains
          case (6)
             call set_isodensity_density_api(verror, viswig, 1_c_int, c_loc(dcart))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_drop_only_entry_points"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, tolerance /= sentinel, trim(needles(icase)))
@@ -2431,7 +2817,7 @@ contains
             call contract_amat1_q1q2_surface_weights_api(verror, vdrop, c_loc(w1), c_loc(w2), &
                & c_loc(w4), c_loc(w1), c_loc(w3))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_contraction_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          if (allocated(error)) exit
@@ -2476,7 +2862,7 @@ contains
       type(vp_cavity), pointer :: cav
       type(c_ptr) :: verror, vstub
       !> Field descriptor outputs
-      integer(c_int) :: dtype, rank, dims(2), count
+      integer(c_int) :: dtype, rank, dims(3), count
       character(kind=c_char) :: name(66)
       !> Caller buffers, seeded so any write is visible
       real(c_double), target :: amat0(2, 2), xi(2), q(2), w_xi(2), w_f(2), w_xyz(3, 2)
@@ -2528,7 +2914,7 @@ contains
             call contract_pcm_nuclear_gradient_api(verror, vstub, c_loc(q), c_loc(w_xyz), &
                & c_loc(za), c_loc(grad))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_stub_cavity_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, wrote, trim(needles(icase)))
@@ -2545,8 +2931,9 @@ contains
    end subroutine test_stub_cavity_guards
 
    !> Model entry points name a missing or empty cavity, a missing or empty
-   !> model, a model that is not the general one, a model not updated yet and
-   !> an invalid density buffer, and a failed constructor returns no handle
+   !> model, a model not updated yet, a stub model rejected by a continuum-only
+   !> entry point, and an invalid density buffer, and a failed constructor
+   !> returns no handle
    subroutine test_model_handle_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2567,8 +2954,8 @@ contains
          & "[moist_get_model_cavity] Model is not initialized", &
          & "[moist_get_model_cavity] This solvation model type does not expose a cavity", &
          & "[moist_new_coupling] Model is not initialized", &
-         & "[moist_new_coupling] Model is not a general solvation model", &
-         & "[moist_new_coupling] General model must be updated first", &
+         & "[moist_set_model_isodensity_density] Model is not a continuum solvation model", &
+         & "[moist_new_coupling] Solvation model must be updated first", &
          & "[moist_set_model_isodensity_density] Invalid density buffer", &
          & "[moist_set_model_isodensity_density] Invalid density buffer"]
       integer :: icase
@@ -2578,7 +2965,7 @@ contains
          call drop_unbuilt_cavities(err, vdrop, viswig)
          return
       end if
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
       if (allocated(err%ptr)) then
          call test_failed(error, "Model setup failed: "//err%ptr%message)
          call drop_unbuilt_cavities(err, vdrop, viswig)
@@ -2592,9 +2979,9 @@ contains
          handle = c_null_ptr
          select case (icase)
          case (1)
-            handle = moist_new_model(verror, c_null_ptr, c_null_ptr)
+            handle = model_on_context(verror, c_null_ptr)
          case (2)
-            handle = moist_new_model(verror, c_loc(empty_cav), c_null_ptr)
+            handle = model_on_context(verror, c_loc(empty_cav))
          case (3)
             call update_solvation_model_api(verror, c_loc(empty_model), c_null_ptr)
          case (4)
@@ -2608,7 +2995,7 @@ contains
          case (8)
             handle = new_coupling_api(verror, c_loc(empty_model))
          case (9)
-            handle = new_coupling_api(verror, c_loc(stub))
+            call moist_set_model_isodensity_density(verror, c_loc(stub), 1_c_int, c_loc(density))
          case (10)
             handle = new_coupling_api(verror, vmodel)
          case (11)
@@ -2616,7 +3003,7 @@ contains
          case (12)
             call moist_set_model_isodensity_density(verror, vmodel, 1_c_int, c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_model_handle_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(handle), trim(needles(icase)))
@@ -2630,7 +3017,7 @@ contains
 
    end subroutine test_model_handle_guards
 
-   !> Refusals that need an updated general model: a component added after the
+   !> Refusals that need an updated continuum model: a component added after the
    !> update, a gradient read on a model that was never updated, and a NULL
    !> gradient buffer
    !>
@@ -2659,9 +3046,9 @@ contains
       vfresh = c_null_ptr
 
       vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
-      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpv)
       call update_solvation_model_api(verror, vmodel, vmol)
 
@@ -2683,11 +3070,11 @@ contains
             exit checks
          end if
 
-         vfresh = moist_new_model(verror, viswig, c_null_ptr)
+         vfresh = model_on_context(verror, viswig)
          vresp = new_response_api(verror)
          gradient = sentinel
          call general_model_get_gradient_api(verror, vfresh, vcpl, vresp, 2_c_int, c_loc(gradient))
-         call expect_error(error, err, "[moist_get_model_gradient] General model must be updated first")
+         call expect_error(error, err, "[moist_get_model_gradient] Solvation model must be updated first")
          call check_untouched(error, any(gradient /= sentinel), "gradient of a model never updated")
          if (allocated(error)) exit checks
 
@@ -2706,7 +3093,578 @@ contains
 
    end subroutine test_model_phase_guards
 
-   !> Response reads name an empty or unterminated array name and an array the
+   !> The model field getters forward a continuum model's cavity fields: the
+   !> same count and values as the borrowed cavity, `owner` still 0-based
+   subroutine test_model_fields_continuum(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, viswig, vmodel, vpv, vcav
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      integer(c_int) :: nmodel, ncavity, ngrid(1)
+      real(c_double), allocatable :: model_xyz(:), cavity_xyz(:)
+      integer(c_int), allocatable :: model_owner(:), cavity_owner(:)
+      character(kind=c_char), allocatable, target :: name_ngrid(:), name_xyz(:), name_owner(:), name_none(:)
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      name_ngrid = c_string("ngrid")
+      name_xyz = c_string("xyz")
+      name_owner = c_string("owner")
+      name_none = c_string("no_such_field")
+      allocate (err)
+      verror = c_loc(err)
+      vcav = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpv)
+      call update_solvation_model_api(verror, vmodel, vmol)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+         vcav = get_solvation_model_cavity_api(verror, vmodel)
+         call get_model_field_count_api(verror, vmodel, nmodel)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_count(verror, vcav, ncavity)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field count failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, nmodel > 0 .and. nmodel == ncavity, more="model and cavity field counts differ")
+         if (allocated(error)) exit checks
+
+         call get_model_field_int_api(verror, vmodel, c_loc(name_ngrid), ngrid)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "ngrid through the model failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (model_xyz(3*ngrid(1)), cavity_xyz(3*ngrid(1)), model_owner(ngrid(1)), cavity_owner(ngrid(1)))
+         call get_model_field_real_api(verror, vmodel, c_loc(name_xyz), model_xyz)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_real(verror, vcav, c_loc(name_xyz), cavity_xyz)
+         if (.not. allocated(err%ptr)) call get_model_field_int_api(verror, vmodel, c_loc(name_owner), model_owner)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_int(verror, vcav, c_loc(name_owner), cavity_owner)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field read failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(model_xyz == cavity_xyz), more="model xyz differs from the cavity's")
+         if (allocated(error)) exit checks
+         call check(error, all(model_owner == cavity_owner) .and. minval(model_owner) == 0, &
+            & more="model owner differs from the cavity's 0-based owner")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, vmodel, c_loc(name_none), model_xyz)
+         call expect_error(error, err, "[moist_get_model_field_real] Model has no field 'no_such_field'")
+      end block checks
+
+      if (c_associated(vcav)) call moist_delete_cavity(vcav)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call moist_delete_cavity(viswig)
+      call moist_delete_structure(vmol)
+      deallocate (err)
+
+   end subroutine test_model_fields_continuum
+
+   !> The model field getters reach a volume grid through the same handle:
+   !> a 3D MOZ model lists, describes and hands out its grid
+   subroutine test_model_fields_volume(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Model handle holding a 3D MOZ model
+      type(vp_model), pointer :: holder
+      type(moist_error_type), allocatable :: model_error
+      !> Run context, outlives the model
+      type(moist_context_type), target :: ctx
+      type(moist_math_grid_3d_cartesian_type) :: template
+      type(structure_type) :: mol
+      !> Water solvent with fixed charges and host charges on the solute
+      type(solvation_system_type) :: system
+      type(solvent_vv_type) :: solvent
+      type(fixed_charges_type) :: water_charges
+      type(monopole_type) :: monopole
+      type(c_ptr) :: verror, vmodel
+      integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(3), count
+      integer(c_size_t) :: length
+      logical :: has_w, same
+      real(c_double) :: w(8), xyz(24)
+      logical(c_bool) :: flags(8)
+      character(kind=c_char) :: name(65)
+      character(kind=c_char), allocatable, target :: name_ngrid(:), name_w(:), name_xyz(:)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_cartesian_point_grid(template, model_error, nx=2, ny=2, nz=2, margin=0.0_wp)
+      if (allocated(model_error)) then
+         call test_failed(error, model_error%message)
+         return
+      end if
+      template%nx = 2
+      template%ny = 2
+      template%nz = 2
+      template%dr = 0.5_wp
+      name_ngrid = c_string("ngrid")
+      name_w = c_string("w")
+      name_xyz = c_string("xyz")
+      allocate (err, holder)
+      verror = c_loc(err)
+      vmodel = c_loc(holder)
+      allocate (model_moz_3d_type :: holder%ptr)
+      select type (model => holder%ptr)
+      type is (model_moz_3d_type)
+         call new_solvation_system(system, 175, error=model_error)
+         if (.not. allocated(model_error)) call new_vv_solvent(solvent, ctx, system, model_error)
+         if (.not. allocated(model_error)) call new_fixed_charges(water_charges, [-0.8_wp, 0.4_wp, 0.4_wp], model_error)
+         if (.not. allocated(model_error)) call solvent%potential%add(water_charges, model_error)
+         if (.not. allocated(model_error)) call solvent%update(model_error)
+         if (.not. allocated(model_error)) call new_moz_3d_model(model, ctx, template, solvent, model_error)
+         if (.not. allocated(model_error)) call model%potential%add(monopole, model_error)
+         if (.not. allocated(model_error)) call model%update(mol, model_error)
+      end select
+
+      checks: block
+         if (allocated(model_error)) then
+            call test_failed(error, "3D MOZ setup failed: "//model_error%message)
+            exit checks
+         end if
+         call get_model_field_count_api(verror, vmodel, nfield)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field count failed: "//err%ptr%message)
+            exit checks
+         end if
+         has_w = .false.
+         do ifield = 0, nfield - 1
+            call get_model_field_info_api(verror, vmodel, ifield, name, dtype, rank, dims, count)
+            if (allocated(err%ptr)) exit
+            if (name(1) == "w" .and. name(2) == c_null_char) then
+               has_w = dtype == 1_c_int .and. rank == 1_c_int .and. count == 8_c_int
+            end if
+         end do
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field info failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, has_w, more="the grid weights are not listed as a real (8) field")
+         if (allocated(error)) exit checks
+
+         call get_model_field_about_api(verror, vmodel, c_loc(name_w), capacity=0_c_size_t, length=length)
+         if (.not. allocated(err%ptr)) call get_model_field_int_api(verror, vmodel, c_loc(name_ngrid), ngrid)
+         if (.not. allocated(err%ptr)) call get_model_field_real_api(verror, vmodel, c_loc(name_w), w)
+         if (.not. allocated(err%ptr)) call get_model_field_real_api(verror, vmodel, c_loc(name_xyz), xyz)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field read failed: "//err%ptr%message)
+            exit checks
+         end if
+         same = .false.
+         select type (model => holder%ptr)
+         type is (model_moz_3d_type)
+            same = all(w == model%grid%w) .and. all(xyz == reshape(model%grid%xyz, [24]))
+         end select
+         call check(error, length > 0 .and. ngrid(1) == 8 .and. same, &
+            & more="the model fields differ from the grid it owns")
+         if (allocated(error)) exit checks
+
+         flags = .false._c_bool
+         call get_model_field_bool_api(verror, vmodel, c_loc(name_w), flags)
+         call expect_error(error, err, "has a different element type - read the type tag from get_model_field_info")
+         call check_untouched(error, logical(any(flags)), "bool read of a real model field")
+      end block checks
+
+      deallocate (holder%ptr)
+      deallocate (holder, err)
+
+   end subroutine test_model_fields_volume
+
+   !> A model without an evaluation domain lists no fields and refuses every
+   !> name; missing and unbuilt handles are refused by name
+   subroutine test_model_fields_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Model handles: one never constructed, one holding a stub
+      type(vp_model), pointer :: empty_model, stub
+      type(c_ptr) :: verror
+      integer(c_int) :: nfield
+      real(c_double) :: values(1)
+      character(kind=c_char), allocatable, target :: name_xyz(:)
+
+      name_xyz = c_string("xyz")
+      allocate (err, empty_model, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+
+      checks: block
+         nfield = -1_c_int
+         call get_model_field_count_api(verror, c_loc(stub), nfield)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Count on a model without a domain failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, nfield, 0_c_int, more="a model without a domain listed fields")
+         if (allocated(error)) exit checks
+
+         values = -1.0_c_double
+         call get_model_field_real_api(verror, c_loc(stub), c_loc(name_xyz), values)
+         call expect_error(error, err, "[moist_get_model_field_real] Model has no field 'xyz'")
+         call check_untouched(error, any(values /= -1.0_c_double), "field read on a model without a domain")
+         if (allocated(error)) exit checks
+
+         nfield = -1_c_int
+         call get_model_field_count_api(verror, c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_model_field_count] Model handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "count on a missing model handle")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, c_loc(empty_model), c_loc(name_xyz), values)
+         call expect_error(error, err, "[moist_get_model_field_real] Model is not initialized")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, c_loc(stub), c_null_ptr, values)
+         call expect_error(error, err, "[moist_get_model_field_real] Field name is missing")
+      end block checks
+
+      deallocate (stub%ptr)
+      deallocate (stub, empty_model, err)
+
+   end subroutine test_model_fields_guards
+
+   !> Components of a continuum model by zero-based index: count and names
+   !> before any update, the energy listed only after an evaluation and gone
+   !> after an update, and every other family or index refused
+   !>
+   !> Two PV components, so the repeated name is told apart by index and no
+   !> host request has to be answered
+   subroutine test_model_components(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, viswig, vmodel, vlow, vhigh, vcpl
+      !> Model handle holding a model of another family, and the decoded model handle
+      type(vp_model), pointer :: stub, holder
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      !> Counts and descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: ncomponents, nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Name and description buffers and their reported length
+      character(kind=c_char), allocatable :: text(:)
+      integer(c_size_t) :: length
+      !> Energy accumulator and the two component energies, each read into a
+      !> buffer one longer than the count so a write past it shows
+      real(c_double) :: energy, low(2), high(2)
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      character(kind=c_char), allocatable, target :: name_energy(:)
+      real(c_double), parameter :: seed = 0.5_c_double, sentinel = -12345.0_c_double
+      character(len=*), parameter :: pv_about = "Pressure-volume work, pressure times cavity volume"
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      name_energy = c_string("energy")
+      allocate (err, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+      vcpl = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vlow = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
+      vhigh = new_pv_component_api(verror, c_null_ptr, 3.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vlow)
+      if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vhigh)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         ! Count and names need no update
+         ncomponents = -1_c_int
+         call get_model_component_count_api(verror, vmodel, ncomponents)
+         call expect_success(error, err, "component count")
+         if (allocated(error)) exit checks
+         call check(error, ncomponents, 2_c_int, "component count")
+         if (allocated(error)) exit checks
+         call get_model_component_name_api(verror, vmodel, 1_c_int, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "component name length")
+         if (allocated(error)) exit checks
+         call check(error, length == 2_c_size_t, more="component name length")
+         if (allocated(error)) exit checks
+         allocate (text(length + 1))
+         text = "Z"
+         call get_model_component_name_api(verror, vmodel, 1_c_int, text, length + 1, length)
+         call expect_success(error, err, "component name copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string("PV")), more="second component name")
+         if (allocated(error)) exit checks
+
+         ! The description follows the same string convention
+         call get_model_component_description_api(verror, vmodel, 1_c_int, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "component description length")
+         if (allocated(error)) exit checks
+         call check(error, length == len(pv_about, c_size_t), more="component description length")
+         if (allocated(error)) exit checks
+         deallocate (text)
+         allocate (text(length + 1))
+         text = "Z"
+         call get_model_component_description_api(verror, vmodel, 1_c_int, text, length + 1, length)
+         call expect_success(error, err, "component description copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string(pv_about)), more="second component description")
+         if (allocated(error)) exit checks
+         call get_model_component_description_api(verror, vmodel, 2_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_component_description] Component index out of range")
+         if (allocated(error)) exit checks
+
+         ! An index outside [0, count) is refused by every indexed entry
+         call get_model_component_name_api(verror, vmodel, 2_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_component_name] Component index out of range - "// &
+            & "use the count from get_model_component_count")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_model_component_field_count_api(verror, vmodel, -1_c_int, nfield)
+         call expect_error(error, err, "[moist_get_model_component_field_count] Component index out of range")
+         call check_untouched(error, nfield /= -1_c_int, "field count of a component past the list")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_model_component_field_info_api(verror, vmodel, 2_c_int, 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_model_component_field_info] Component index out of range")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "component past the list", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+
+         ! Nothing is evaluated yet: the energy is neither listed nor readable
+         call get_model_component_field_count_api(verror, vmodel, 0_c_int, nfield)
+         call expect_success(error, err, "field count before evaluation")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 0_c_int, "fields listed before evaluation")
+         if (allocated(error)) exit checks
+         low = sentinel
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy), low)
+         call expect_error(error, err, "[moist_get_model_component_field_real] Component 0 (PV) has no field "// &
+            & "'energy' - it is either unknown or was not computed; enumerate the available fields with "// &
+            & "get_model_component_field_count/get_model_component_field_info")
+         call check_untouched(error, any(low /= sentinel), "energy read before evaluation")
+         if (allocated(error)) exit checks
+
+         call update_solvation_model_api(verror, vmodel, vmol)
+         if (.not. allocated(err%ptr)) vcpl = new_coupling_api(verror, vmodel)
+         if (.not. allocated(err%ptr)) call general_model_prepare_energy_api(verror, vmodel, vcpl)
+         energy = seed
+         if (.not. allocated(err%ptr)) call general_model_get_energy_api(verror, vmodel, vcpl, energy)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model evaluation failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         ! Each component lists its scalar energy, the description of the declaration
+         call get_model_component_field_count_api(verror, vmodel, 1_c_int, nfield)
+         call expect_success(error, err, "field count after evaluation")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "fields listed after evaluation")
+         if (allocated(error)) exit checks
+         call get_model_component_field_info_api(verror, vmodel, 1_c_int, 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "energy info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "energy", [integer(c_int) ::])
+         if (allocated(error)) exit checks
+         call get_model_component_field_about_api(verror, vmodel, 1_c_int, c_loc(name_energy), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "energy about length")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vmodel, holder)
+         select type (model => holder%ptr)
+         type is (model_continuum_type)
+            call query%fetch("energy")
+            call model%list_component_fields(2, query)
+         end select
+         call check(error, query%found, more="energy not declared by the model")
+         if (allocated(error)) exit checks
+         call check(error, length == len(query%hit%about, c_size_t), more="energy about length")
+         if (allocated(error)) exit checks
+         deallocate (text)
+         allocate (text(length + 1))
+         call get_model_component_field_about_api(verror, vmodel, 1_c_int, c_loc(name_energy), text, length + 1, length)
+         call expect_success(error, err, "energy about copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string(query%hit%about)), more="energy description")
+         if (allocated(error)) exit checks
+
+         ! The values: one element each, three times apart, summing to the model energy
+         low = sentinel
+         high = sentinel
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy), low)
+         if (.not. allocated(err%ptr)) then
+            call get_model_component_field_real_api(verror, vmodel, 1_c_int, c_loc(name_energy), high)
+         end if
+         call expect_success(error, err, "energy read")
+         if (allocated(error)) exit checks
+         call check(error, low(2) == sentinel .and. high(2) == sentinel, more="energy read wrote past its count")
+         if (allocated(error)) exit checks
+         call check(error, ieee_is_finite(low(1)) .and. ieee_is_finite(high(1)) .and. low(1) > 0.0_c_double, &
+            & more="component energies are not finite and positive")
+         if (allocated(error)) exit checks
+         call check(error, high(1), 3.0_c_double*low(1), thr=1.0e-14_c_double, &
+            & message="repeated PV names were not told apart by index")
+         if (allocated(error)) exit checks
+         call check(error, energy - seed, low(1) + high(1), thr=1.0e-14_c_double, &
+            & message="component energies do not add up to the model energy")
+         if (allocated(error)) exit checks
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_null_ptr, low)
+         call expect_error(error, err, "[moist_get_model_component_field_real] Field name is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy))
+         call expect_error(error, err, "[moist_get_model_component_field_real] Required pointer 'values' is missing")
+         if (allocated(error)) exit checks
+
+         ! An update clears the energies, never the components
+         call update_solvation_model_api(verror, vmodel, vmol)
+         if (.not. allocated(err%ptr)) call get_model_component_field_count_api(verror, vmodel, 0_c_int, nfield)
+         if (.not. allocated(err%ptr)) call get_model_component_count_api(verror, vmodel, ncomponents)
+         call expect_success(error, err, "count after update")
+         if (allocated(error)) exit checks
+         call check(error, nfield == 0_c_int .and. ncomponents == 2_c_int, &
+            & more="update kept an energy or changed the components")
+         if (allocated(error)) exit checks
+
+         ! Other families, missing handles and missing outputs are refused by name
+         ncomponents = -1_c_int
+         call get_model_component_count_api(verror, c_loc(stub), ncomponents)
+         call expect_error(error, err, "[moist_get_model_component_count] Model is not a continuum solvation model")
+         call check_untouched(error, ncomponents /= -1_c_int, "component count of another family")
+         if (allocated(error)) exit checks
+         call get_model_component_field_count_api(verror, c_loc(stub), 0_c_int, nfield)
+         call expect_error(error, err, &
+            & "[moist_get_model_component_field_count] Model is not a continuum solvation model")
+         if (allocated(error)) exit checks
+         call get_model_component_description_api(verror, c_loc(stub), 0_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, &
+            & "[moist_get_model_component_description] Model is not a continuum solvation model")
+         if (allocated(error)) exit checks
+         call get_model_component_count_api(verror, c_null_ptr, ncomponents)
+         call expect_error(error, err, "[moist_get_model_component_count] Model handle is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_count_api(verror, vmodel)
+         call expect_error(error, err, "[moist_get_model_component_count] Required pointer 'ncomponents' is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_name_api(verror, vmodel, 0_c_int, text, size(text, kind=c_size_t))
+         call expect_error(error, err, "[moist_get_model_component_name] Length output is required")
+      end block checks
+
+      call delete_coupling_api(vcpl)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vhigh)
+      call delete_solvation_component_api(vlow)
+      call moist_delete_cavity(viswig)
+      call moist_delete_structure(vmol)
+      deallocate (stub%ptr)
+      deallocate (stub, err)
+
+   end subroutine test_model_components
+
+   !> Settings printout of a continuum model as C text, without an update:
+   !> a length query, a full copy, a truncated copy that still succeeds, and
+   !> the refusals of another family and of missing outputs
+   subroutine test_model_parameters_text(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, viswig, vmodel, vpcm, vpv
+      !> Model handle holding a model of another family
+      type(vp_model), pointer :: stub
+      !> Full copy and a buffer too small for it
+      character(kind=c_char), allocatable :: text(:)
+      character(kind=c_char) :: small(8)
+      !> Reported and full text length
+      integer(c_size_t) :: length, full, i
+      !> Full copy as Fortran text
+      character(len=:), allocatable :: printout
+
+      allocate (err, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpcm = new_cpcm_component_api(verror, c_null_ptr, 78.0_c_double, 3_c_int, 1.0e-10_c_double, 50_c_int)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpcm)
+      if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vpv)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         length = 0_c_size_t
+         call get_model_parameters_text_api(verror, vmodel, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "parameters text length")
+         if (allocated(error)) exit checks
+         full = length
+         call check(error, full > 0_c_size_t, more="empty parameters text")
+         if (allocated(error)) exit checks
+         allocate (text(full + 1))
+         text = "Z"
+         call get_model_parameters_text_api(verror, vmodel, text, full + 1, length)
+         call expect_success(error, err, "parameters text copy")
+         if (allocated(error)) exit checks
+         call check(error, length == full .and. text(full + 1) == c_null_char, more="full copy not terminated")
+         if (allocated(error)) exit checks
+         allocate (character(len=full) :: printout)
+         do i = 1, full
+            printout(i:i) = text(i)
+         end do
+         call check(error, index(printout, "Cavity (vdW iSwiG):") > 0 .and. index(printout, "Component 1 (CPCM):") > 0 &
+            & .and. index(printout, "Component 2 (PV):") > 0 .and. index(printout, "solver_tol") > 0, &
+            & more="parameters text lacks a section: "//printout)
+         if (allocated(error)) exit checks
+         call check(error, printout(full:full) == new_line("a"), more="parameters text does not end in a newline")
+         if (allocated(error)) exit checks
+
+         ! Truncation is success: a terminated prefix and the full length
+         small = "Z"
+         call get_model_parameters_text_api(verror, vmodel, small, size(small, kind=c_size_t), length)
+         call expect_success(error, err, "truncated parameters text")
+         if (allocated(error)) exit checks
+         call check(error, length == full .and. all(small(:7) == text(:7)) .and. small(8) == c_null_char, &
+            & more="truncated copy")
+         if (allocated(error)) exit checks
+
+         ! Other families and missing outputs are refused by name
+         small = "Z"
+         length = 7_c_size_t
+         call get_model_parameters_text_api(verror, c_loc(stub), small, size(small, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_parameters_text] Model is not a continuum solvation model")
+         call check_untouched(error, length /= 7_c_size_t, "parameters text length of another family")
+         if (allocated(error)) exit checks
+         call check(error, small(1) == c_null_char, more="refused call left the buffer unterminated")
+         if (allocated(error)) exit checks
+         call get_model_parameters_text_api(verror, c_null_ptr, small, size(small, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_parameters_text] Model handle is missing")
+         if (allocated(error)) exit checks
+         call get_model_parameters_text_api(verror, vmodel, small, size(small, kind=c_size_t))
+         call expect_error(error, err, "[moist_get_model_parameters_text] Length output is required")
+      end block checks
+
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call delete_solvation_component_api(vpcm)
+      call moist_delete_cavity(viswig)
+      deallocate (stub%ptr)
+      deallocate (stub, err)
+
+   end subroutine test_model_parameters_text
+
+   !> Response reads refuse an empty name, an unknown one and an array the
    !> current item was accumulated without, at every rank, and leave the
    !> caller's buffer alone
    subroutine test_response_unavailable_arrays(error)
@@ -2737,33 +3695,522 @@ contains
       values = sentinel
 
       checks: block
-         ! The name is decoded before the walk is consulted, so no item is needed
-         call response_get_api(c_loc(err), c_loc(response), c_loc(empty), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         ! Names are looked up on the current item, so a walk comes first
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(overlong), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(empty), values)
+         call expect_error(error, err, "[moist_get_response_field_real] Field name is empty")
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(overlong), values)
+         call expect_error(error, err, "[moist_get_response_field_real] potential_adjoint has no field '" &
+            & //repeat("w", 40)//"'")
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_error(error, err, "[moist_get_response_field_real] potential_adjoint has no field 'w_phi'")
          if (allocated(error)) exit checks
 
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_phi), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_phi' is not available")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_grad_rho'")
          if (allocated(error)) exit checks
-
-         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
-         if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_grad_rho' is not available")
-         if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_hess_rho' is not available")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_hess_rho'")
          if (allocated(error)) exit checks
 
          call check_untouched(error, any(values /= sentinel), "response array buffer")
       end block checks
 
    end subroutine test_response_unavailable_arrays
+
+   !> The C layer refuses by name what it has no layout for yet, an answer to
+   !> the (ngrid, natom) phi of `radial_potential`; a per-atom charge answer
+   !> passes, and the charge and radial potential adjoint arrays read back
+   !> through the response fields in Fortran order
+   subroutine test_site_resolved_answer_and_adjoints(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_coupling), target :: cpl
+      type(vp_response), target :: response
+      !> Coupling the wrapper borrows
+      type(coupling_type), target :: coupling
+      type(radial_potential_request_type) :: radial
+      type(atomic_charge_request_type) :: charges
+      type(atomic_charge_adjoint_response_type) :: charge_adjoint
+      type(radial_potential_adjoint_response_type) :: radial_adjoint
+      !> Answer and output buffers, seeded so any write is visible
+      real(c_double), target :: values(6)
+      !> NUL-terminated output and array names
+      character(kind=c_char), allocatable, target :: phi(:), q(:), dg_dq(:), dg_dphi(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      call request_require(radial, moist_phase_energy, "phi", err%ptr)
+      if (.not. allocated(err%ptr)) call request_require(charges, moist_phase_energy, "q", err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_begin_registration(coupling)
+         call coupling_register(coupling, "radial", radial, err%ptr)
+      end if
+      if (.not. allocated(err%ptr)) call coupling_register(coupling, "charges", charges, err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_snapshot(coupling, ngrid=3, natom=2)
+         call coupling_arm(coupling, moist_phase_energy, err%ptr)
+      end if
+      charge_adjoint%dg_dq = [1.0_c_double, 2.0_c_double]
+      radial_adjoint%dg_dphi = reshape([1.0_c_double, 2.0_c_double, 3.0_c_double, &
+         & 4.0_c_double, 5.0_c_double, 6.0_c_double], [3, 2])
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, charge_adjoint, err%ptr)
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, radial_adjoint, err%ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      cpl%ptr => coupling
+      phi = c_string("phi")
+      q = c_string("q")
+      dg_dq = c_string("dg_dq")
+      dg_dphi = c_string("dg_dphi")
+      values = 1.0_c_double
+
+      checks: block
+         call check(error, coupling%next(), more="radial_potential is not pending")
+         if (allocated(error)) exit checks
+         call coupling_answer_api(c_loc(err), c_loc(cpl), c_loc(phi), values)
+         call expect_error(error, err, &
+            & "[moist_answer_coupling_request] radial_potential: phi runs over (ngrid, natom)")
+         if (allocated(error)) exit checks
+         associate (item => coupling%request())
+            call check(error, item%is_missing("phi"), more="the refused radial answer was stored")
+         end associate
+         if (allocated(error)) exit checks
+         call check(error, coupling%next(), more="atomic_charges is not pending")
+         if (allocated(error)) exit checks
+         call coupling_answer_api(c_loc(err), c_loc(cpl), c_loc(q), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Per-atom answer refused: "//err%ptr%message)
+            exit checks
+         end if
+
+         values = sentinel
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(dg_dq), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Charge adjoint read refused: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(values(:2) == charge_adjoint%dg_dq) .and. all(values(3:) == sentinel), &
+            & more="charge adjoint read back wrong")
+         if (allocated(error)) exit checks
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(dg_dphi), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Radial potential adjoint read refused: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(values == reshape(radial_adjoint%dg_dphi, [6])), &
+            & more="radial potential adjoint read back wrong")
+      end block checks
+
+   end subroutine test_site_resolved_answer_and_adjoints
+
+   !* ================================================================================= *!
+   !*                       Named response item and request fields                      *!
+   !* ================================================================================= *!
+
+   !> Seed the descriptor outputs so a write, or its absence, is visible
+   subroutine seed_field_info(name, dtype, rank, dims, count)
+      !> Name buffer
+      character(kind=c_char), intent(out) :: name(:)
+      !> Descriptor outputs
+      integer(c_int), intent(out) :: dtype, rank, dims(3), count
+      name = "Z"
+      dtype = -1_c_int
+      rank = -1_c_int
+      dims = -1_c_int
+      count = -1_c_int
+   end subroutine seed_field_info
+
+   !> Fortran copy of a NUL-terminated buffer
+   pure function c_buffer_text(buffer) result(text)
+      !> Buffer written by a C entry point
+      character(kind=c_char), intent(in) :: buffer(:)
+      !> Text before the terminator
+      character(len=:), allocatable :: text
+      integer :: ichar
+      allocate (character(len=c_string_len(buffer)) :: text)
+      do ichar = 1, len(text)
+         text(ichar:ichar) = buffer(ichar)
+      end do
+   end function c_buffer_text
+
+   !> Fail with the API diagnostic when an entry point reported one
+   subroutine expect_success(error, err, what)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> API error handle produced by the entry point
+      type(vp_error), pointer, intent(in) :: err
+      !> Call being checked, used in the failure message
+      character(len=*), intent(in) :: what
+      if (allocated(err%ptr)) call test_failed(error, what//" failed: "//err%ptr%message)
+   end subroutine expect_success
+
+   !> A descriptor written by a `_field_info` entry point: a real array of the
+   !> given name with its extents in C order, slowest-varying first
+   subroutine check_c_descriptor(error, name, dtype, rank, dims, count, expected_name, expected_dims)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> Name buffer written by the entry point
+      character(kind=c_char), intent(in) :: name(:)
+      !> Descriptor outputs written by the entry point
+      integer(c_int), intent(in) :: dtype, rank, dims(3), count
+      !> Expected name
+      character(len=*), intent(in) :: expected_name
+      !> Expected C extents; the size is the rank
+      integer(c_int), intent(in) :: expected_dims(:)
+      !> Extents padded with ones to MOIST_FIELD_MAX_RANK
+      integer(c_int) :: padded(3)
+      padded = 1_c_int
+      padded(:size(expected_dims)) = expected_dims
+      call check(error, c_buffer_text(name), expected_name, "field name")
+      if (allocated(error)) return
+      call check(error, dtype == field_real .and. rank == size(expected_dims) .and. all(dims == padded) &
+         & .and. count == product(expected_dims), more="descriptor of '"//expected_name//"'")
+   end subroutine check_c_descriptor
+
+   !> The response field family describes the current item: the count, each
+   !> array with its Fortran shape reversed into C order, the description
+   !> through a length query and a copy, and a read in Fortran order; outside
+   !> a pass, for an index past the count, an undeclared name and missing
+   !> outputs it fails by name and leaves the caller's outputs alone
+   subroutine test_response_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_response), target :: response
+      !> Items accumulated in this order, with distinct values
+      type(potential_adjoint_response_type) :: adjoint
+      type(density_response_type) :: density
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      !> Descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Description buffer and its reported length
+      character(kind=c_char), allocatable :: about(:)
+      integer(c_size_t) :: length
+      !> Read buffer, longer than every array so a write past the count shows
+      real(c_double) :: values(20)
+      !> NUL-terminated array names
+      character(kind=c_char), allocatable, target :: w_phi(:), w_hess_rho(:), bogus(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      integer :: i
+
+      adjoint%w_phi = [1.0_c_double, 2.0_c_double, 3.0_c_double]
+      allocate (density%w_rho(2), source=4.0_c_double)
+      allocate (density%w_grad_rho(3, 2), source=5.0_c_double)
+      density%w_hess_rho = reshape([(real(i, c_double), i=1, 18)], [3, 3, 2])
+      call response_accumulate(response%ptr, adjoint, err%ptr)
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, density, err%ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      w_phi = c_string("w_phi")
+      w_hess_rho = c_string("w_hess_rho")
+      bogus = c_string("w_bogus")
+
+      checks: block
+         ! Arrays belong to the item the walk stopped at, and none is current yet
+         nfield = -1_c_int
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_count] No current response item - call next() first")
+         call check_untouched(error, nfield /= -1_c_int, "response field count outside a pass")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_info] No current response item - call next() first")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "response info outside a pass", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_about] No current response item - call next() first")
+         if (allocated(error)) exit checks
+
+         ! The potential adjoint declares its one array
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_success(error, err, "potential_adjoint count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "potential_adjoint declares one array")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_phi info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_phi", [3_c_int])
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_response_field_info_api(c_loc(err), c_loc(response), 1_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_response_field_info] Field index out of range - "// &
+            & "use the count from get_response_field_count")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "response index past the count", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+
+         ! Length query, then a copy of exactly the declared description
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "w_phi about length")
+         if (allocated(error)) exit checks
+         call query%fetch("w_phi")
+         call adjoint%list_fields(query)
+         call check(error, length == len(query%hit%about, c_size_t), more="w_phi about length")
+         if (allocated(error)) exit checks
+         allocate (about(length + 1))
+         about = "Z"
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), about, length + 1, length)
+         call expect_success(error, err, "w_phi about copy")
+         if (allocated(error)) exit checks
+         call check(error, c_buffer_text(about), query%hit%about, "w_phi description")
+         if (allocated(error)) exit checks
+
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_success(error, err, "w_phi read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:3) == adjoint%w_phi) .and. all(values(4:) == sentinel), &
+            & more="w_phi read back wrong")
+         if (allocated(error)) exit checks
+
+         ! The density lists its three ranks, each shape reversed into C order
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_success(error, err, "density count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 3_c_int, "density declares three arrays")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_rho", [2_c_int])
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 1_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_grad_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_grad_rho", [2_c_int, 3_c_int])
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 2_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_hess_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_hess_rho", [2_c_int, 3_c_int, 3_c_int])
+         if (allocated(error)) exit checks
+
+         ! The rank-3 read is the Fortran array flattened, C row-major over the reversed dims
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), values)
+         call expect_success(error, err, "w_hess_rho read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:18) == [(real(i, c_double), i=1, 18)]) .and. all(values(19:) == sentinel), &
+            & more="w_hess_rho read back wrong")
+         if (allocated(error)) exit checks
+
+         ! An undeclared name, a name from the other item and missing outputs are named
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(bogus), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] density has no field 'w_bogus'")
+         if (allocated(error)) exit checks
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_phi'")
+         call check_untouched(error, any(values /= sentinel), "read of an undeclared response array")
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response))
+         call expect_error(error, err, "[moist_get_response_field_count] Required pointer 'nfield' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, dtype=dtype, rank=rank, &
+            & dims=dims, count=count)
+         call expect_error(error, err, "[moist_get_response_field_info] Required pointer 'name' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, count=count)
+         call expect_error(error, err, "[moist_get_response_field_info] Required pointer 'dims' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), about, 4_c_size_t)
+         call expect_error(error, err, "[moist_get_response_field_about] Length output is required")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=4_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] Invalid buffer or capacity")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_null_ptr, &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] Field name is missing")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_response_field_count_api(c_loc(err), c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_response_field_count] Response handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "response field count without a handle")
+      end block checks
+
+   end subroutine test_response_fields
+
+   !> The coupling request field family describes the inputs of the current
+   !> request: a point request lists none and refuses `width` by name, a
+   !> Gaussian moment request lists its exponents over the grid, describes
+   !> and reads them back; outside a pass and for missing outputs it fails by
+   !> name and leaves the caller's outputs alone
+   subroutine test_coupling_request_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_coupling), target :: cpl
+      !> Coupling the wrapper borrows, walked point first
+      type(coupling_type), target :: coupling
+      type(point_potential_request_type) :: point
+      type(gaussian_moment_request_type) :: moments
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      !> Descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Description buffer and its reported length
+      character(kind=c_char), allocatable :: about(:)
+      integer(c_size_t) :: length
+      !> Read buffer, longer than the exponents so a write past the count shows
+      real(c_double) :: values(5)
+      !> NUL-terminated input name
+      character(kind=c_char), allocatable, target :: width(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      moments%width = [0.5_c_double, 1.5_c_double, 2.5_c_double]
+      call request_require(point, moist_phase_energy, "phi", err%ptr)
+      if (.not. allocated(err%ptr)) call request_require(moments, moist_phase_energy, "gt", err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_begin_registration(coupling)
+         call coupling_register(coupling, "point", point, err%ptr)
+      end if
+      if (.not. allocated(err%ptr)) call coupling_register(coupling, "moments", moments, err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_snapshot(coupling, ngrid=3)
+         call coupling_arm(coupling, moist_phase_energy, err%ptr)
+      end if
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      cpl%ptr => coupling
+      width = c_string("width")
+
+      checks: block
+         ! Inputs belong to the request the walk stopped at, and none is current yet
+         nfield = -1_c_int
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_error(error, err, &
+            & "[moist_get_coupling_request_field_count] No current coupling request - call next() first")
+         call check_untouched(error, nfield /= -1_c_int, "request field count outside a pass")
+         if (allocated(error)) exit checks
+         values = sentinel
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_error(error, err, &
+            & "[moist_get_coupling_request_field_real] No current coupling request - call next() first")
+         call check_untouched(error, any(values /= sentinel), "request field read outside a pass")
+         if (allocated(error)) exit checks
+
+         ! A point request has no inputs
+         call check(error, logical(next_coupling_request_api(c_loc(err), c_loc(cpl))), &
+            & more="point_potential is not pending")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_success(error, err, "point_potential count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 0_c_int, "point_potential declares inputs")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_coupling_request_field_info] Field index out of range - "// &
+            & "use the count from get_coupling_request_field_count")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "point_potential index 0", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] point_potential has no field 'width' - "// &
+            & "it is either unknown or was not computed; enumerate the available fields with "// &
+            & "get_coupling_request_field_count/get_coupling_request_field_info")
+         call check_untouched(error, any(values /= sentinel), "read of width on a point request")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_coupling_request_field_about] point_potential has no field 'width'")
+         if (allocated(error)) exit checks
+
+         ! The moment request lists its exponents, one per grid point
+         call check(error, logical(next_coupling_request_api(c_loc(err), c_loc(cpl))), &
+            & more="gaussian_moments is not pending")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_success(error, err, "gaussian_moments count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "gaussian_moments declares one input")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "width info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "width", [3_c_int])
+         if (allocated(error)) exit checks
+
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "width about length")
+         if (allocated(error)) exit checks
+         call query%fetch("width")
+         call moments%list_fields(query)
+         call check(error, length == len(query%hit%about, c_size_t), more="width about length")
+         if (allocated(error)) exit checks
+         allocate (about(length + 1))
+         about = "Z"
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), about, length + 1, length)
+         call expect_success(error, err, "width about copy")
+         if (allocated(error)) exit checks
+         call check(error, c_buffer_text(about), query%hit%about, "width description")
+         if (allocated(error)) exit checks
+
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_success(error, err, "width read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:3) == moments%width) .and. all(values(4:) == sentinel), &
+            & more="width read back wrong")
+         if (allocated(error)) exit checks
+
+         ! Missing outputs, a missing name and a missing handle are named
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl))
+         call expect_error(error, err, "[moist_get_coupling_request_field_count] Required pointer 'nfield' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, count=count)
+         call expect_error(error, err, "[moist_get_coupling_request_field_info] Required pointer 'dims' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width))
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] Required pointer 'values' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_null_ptr, values)
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] Field name is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=4_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_coupling_request_field_about] Invalid buffer or capacity")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_coupling_request_field_count_api(c_loc(err), c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_coupling_request_field_count] Coupling handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "request field count without a handle")
+      end block checks
+
+   end subroutine test_coupling_request_fields
 
    !> Gradient readers refuse capacities one short of the built cavity before
    !> writing a single element
@@ -2804,7 +4251,8 @@ contains
                                       a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
          call expect_error(error, err, "[moist_get_anchor_gradient] Array capacity is too small")
          call check_untouched(error, any(xyz1_rA /= sentinel) .or. any(xi1_rA /= sentinel) &
-            & .or. any(A_tot1_rA /= sentinel), "anchor gradient buffers")
+            & .or. any(a_i1_rA /= sentinel) .or. any(v_i1_rA /= sentinel) &
+            & .or. any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel), "anchor gradient buffers")
          if (allocated(error)) exit checks
          deallocate (xyz1_rA, A_tot1_rA, V_tot1_rA)
 
@@ -2819,7 +4267,9 @@ contains
          call get_cavity_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, A_tot1_rA, V_tot1_rA, &
                                       asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, rho1_rA)
          call expect_error(error, err, "[moist_get_cavity_gradient] Array capacity is too small")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel) &
+            & .or. any(asph1_rA /= sentinel) .or. any(vsph1_rA /= sentinel) &
+            & .or. any(xyz1_rA /= sentinel) .or. any(r_iI1_rA /= sentinel) &
             & .or. any(rho1_rA /= sentinel), "cavity gradient buffers")
          if (allocated(error)) exit checks
 
@@ -2849,6 +4299,71 @@ contains
 
    end subroutine test_gradient_capacity_too_small
 
+   !> The cavity-gradient reader hands out r_iI1_rA and rho1_rA only when the
+   !> cavity computed them
+   !>
+   !> - computing the gradient switches no property flag on
+   !> - without `do_fine` both outputs may be omitted (NULL from C)
+   !> - a buffer for an uncomputed one is refused by name, nothing is written
+   subroutine test_gradient_optional_outputs(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      !> Caller buffers
+      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
+         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) then
+         call drop_water_cavity(err, vmol, vcav)
+         return
+      end if
+
+      checks: block
+         call compute_cavity_gradient_api(verror, vcav)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "compute_cavity_gradient failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
+                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid), &
+                   r_iI1_rA(3, nsph, ngrid), rho1_rA(3, nsph, ngrid), source=sentinel)
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA=r_iI1_rA)
+         call expect_error(error, err, "[moist_get_cavity_gradient] r_iI1_rA was not computed")
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
+            & .or. any(r_iI1_rA /= sentinel), "gradient buffers with an uncomputed r_iI1_rA")
+         if (allocated(error)) exit checks
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, rho1_rA=rho1_rA)
+         call expect_error(error, err, "[moist_get_cavity_gradient] rho1_rA was not computed")
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(rho1_rA /= sentinel), &
+            & "gradient buffers with an uncomputed rho1_rA")
+         if (allocated(error)) exit checks
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "get_cavity_gradient without the optional outputs failed: "// &
+               & err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(ieee_is_finite(A_tot1_rA)) .and. all(ieee_is_finite(xyz1_rA)) .and. &
+            & any(A_tot1_rA /= sentinel) .and. all(xyz1_rA /= sentinel), &
+            & more="required gradient outputs were not filled")
+         if (allocated(error)) exit checks
+         call check(error, all(r_iI1_rA == sentinel) .and. all(rho1_rA == sentinel), &
+            & more="omitted optional outputs were written")
+      end block checks
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_gradient_optional_outputs
+
    !> The A-matrix surface weights of a built cavity carry the closed-form
    !> switching-factor channel and no net position force, a NULL output is
    !> refused before the others are written, and a later success clears the
@@ -2858,9 +4373,15 @@ contains
    !>   w_f_i = -q1_i*q2_i*sqrt(2/pi)*xi_i/f_i**2 exactly
    !> - A depends on point separations only, so a rigid shift of every point
    !>   leaves q1^T A q2 unchanged and the position weights sum to zero
+   !> - the API forwards the cavity arrays to `pcm_amat_surface_weights`
+   !>   unchanged; each row is written by one thread without a reduction, so a
+   !>   direct kernel call reproduces it bit for bit (the kernel itself is
+   !>   checked in pcm_amat_adjoint)
    subroutine test_amat_surface_weights(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
+      type(moist_error_type), allocatable :: kernel_error
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph
       !> Surface data read back by name
@@ -2869,6 +4390,8 @@ contains
       real(c_double), allocatable, target :: q1(:), q2(:), w_xi(:), w_f(:), w_xyz(:, :)
       !> Closed-form switching-factor weights
       real(c_double), allocatable :: reference(:)
+      !> Direct kernel outputs for the forwarding check
+      real(c_double), allocatable :: ref_xi(:), ref_f(:), ref_xyz(:, :)
       character(kind=c_char), allocatable, target :: name_xi0(:), name_f(:)
       real(c_double), parameter :: sentinel = -12345.0_c_double
       real(c_double), parameter :: sqrt_2_over_pi = 0.7978845608028654_c_double
@@ -2914,6 +4437,20 @@ contains
             call test_failed(error, "contract_amat1_q1q2_surface_weights failed: "//err%ptr%message)
             exit checks
          end if
+
+         call c_f_pointer(vcav, cav)
+         allocate (ref_xi(ngrid), ref_f(ngrid), ref_xyz(3, ngrid))
+         call pcm_amat_surface_weights(cav%ptr%xi0, cav%ptr%f, cav%ptr%xyz, &
+            q1, q2, ref_xi, ref_f, ref_xyz, kernel_error)
+         if (allocated(kernel_error)) then
+            call test_failed(error, "Direct surface-weight kernel call failed: " &
+               //kernel_error%message)
+            exit checks
+         end if
+         call check(error, all(w_xi == ref_xi) .and. all(w_f == ref_f) &
+            .and. all(w_xyz == ref_xyz), &
+            "Surface-weight API output differs from a direct kernel call (forwarding check)")
+         if (allocated(error)) exit checks
 
          reference = -q1*q2*sqrt_2_over_pi*xi0/f**2
          if (any(abs(w_f - reference) > 1.0e-12_c_double*abs(reference))) then
@@ -2961,7 +4498,7 @@ contains
       !> Stub cavity
       class(stub_cavity), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call query%add_real(self%field_name, "Stub widths", self%xi0)
 
@@ -3014,5 +4551,90 @@ contains
       !> Never set
       type(moist_error_type), allocatable, intent(out) :: error
    end subroutine stub_model_gradient
+
+   !> Stub atom count: the stub owns no geometry
+   function stub_model_atom_count(self) result(nat)
+      !> Stub model
+      class(stub_model), intent(in) :: self
+      !> Atom count
+      integer :: nat
+      nat = 0
+   end function stub_model_atom_count
+
+   !> Stub declaration: no coupling requests
+   subroutine stub_model_declare_pass(self, coupling, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Coupling to declare
+      type(coupling_type), intent(inout) :: coupling
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+      call coupling_begin_registration(coupling)
+      call coupling_snapshot(coupling)
+   end subroutine stub_model_declare_pass
+
+
+   !> DROP cavity on a fresh default context, which the cavity retains
+   !>
+   !> @param[in] verror  API error handle
+   !> @param[in] lsf     level-set function handle
+   !> @param[in] radii   radii handle or NULL
+   !> @param[in] options options buffer or NULL
+   function drop_on_context(verror, lsf, radii, options) result(cavity)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Level-set function handle
+      type(c_ptr), intent(in) :: lsf
+      !> Radii handle or NULL
+      type(c_ptr), intent(in) :: radii
+      !> Options buffer or NULL
+      type(c_ptr), intent(in) :: options
+      !> Owning cavity handle
+      type(c_ptr) :: cavity
+      !> Context handle, released once the cavity retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_drop_cavity(verror, context, lsf, radii, options)
+      call delete_context_api(context)
+   end function drop_on_context
+
+   !> iSwiG cavity on a fresh default context, which the cavity retains
+   !>
+   !> @param[in] verror  API error handle
+   !> @param[in] radii   radii handle or NULL
+   !> @param[in] options options buffer or NULL
+   function iswig_on_context(verror, radii, options) result(cavity)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Radii handle or NULL
+      type(c_ptr), intent(in) :: radii
+      !> Options buffer or NULL
+      type(c_ptr), intent(in) :: options
+      !> Owning cavity handle
+      type(c_ptr) :: cavity
+      !> Context handle, released once the cavity retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_iswig_cavity(verror, context, radii, options)
+      call delete_context_api(context)
+   end function iswig_on_context
+
+   !> Model on a fresh default context, which the model retains
+   !>
+   !> @param[in] verror API error handle
+   !> @param[in] cavity cavity handle, copied into the model
+   function model_on_context(verror, cavity) result(model)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Cavity handle
+      type(c_ptr), intent(in) :: cavity
+      !> Owning model handle
+      type(c_ptr) :: model
+      !> Context handle, released once the model retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      model = moist_new_model(verror, context, cavity)
+      call delete_context_api(context)
+   end function model_on_context
 
 end module test_api

@@ -48,8 +48,8 @@ NUMSA is exposed by the Fortran API only.
 
    type(cavity_type_numsa) :: cavity
 
-   call new_cavity_numsa(cavity, ctx, radii=radii, error=error, &
-      & param=moist_cavity_numsa_parameters_type(num_leb=194))
+   call new_cavity_numsa(cavity, radii=radii, error=error, &
+      & param=moist_cavity_numsa_parameters_type(num_leb=194), ctx=ctx)
    if (allocated(error)) error stop error%message
 
    call cavity%update(mol, error)

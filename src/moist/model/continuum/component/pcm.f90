@@ -1,0 +1,19 @@
+!> Main PCM module - re-exports all PCM functionality
+!>
+!> - the top-level module to import for PCM access
+module moist_model_continuum_component_pcm
+   use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
+      & pcm_solver_type, solver_type, moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu, &
+      & solve_pcm_cholesky, solve_pcm_iterative, solve_pcm_inversion
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
+      & assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
+      & pcm_amat_nuclear_gradient
+   use moist_model_continuum_component_pcm_electrostatics, only: &
+      & pcm_electrostatic_nuclear_gradient
+   implicit none(type, external)
+   public
+
+end module moist_model_continuum_component_pcm

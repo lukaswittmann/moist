@@ -5,9 +5,9 @@
 !>
 !>   * the bare evaluator [[moist_iso_gto_type]]: the assembled density against an
 !>     independent direct monomial evaluation, and each analytic derivative order
-!>     against a 4-point central FD of the analytic previous order; plus the
-!>     radial screening, which must not perturb any evaluated quantity beyond its
-!>     own threshold
+!>     against a 4-point central FD of the analytic previous order (Richardson
+!>     extrapolated for the third order); plus the radial screening, which must not
+!>     perturb any evaluated quantity beyond its own threshold
 !>
 !>   * the two isodensity LSF backends: the internal
 !>     [[moist_cavity_drop_lsf_isodensity_internal_type]] (moist evaluates the
@@ -33,7 +33,7 @@ module test_cavity_drop_isodensity
    use mstore, only: get_structure
    use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
-   use moist_model_gems_utils, only: BuildSuperStructure
+   use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_internal, only: &
@@ -47,6 +47,13 @@ module test_cavity_drop_isodensity
    public :: collect_cavity_drop_isodensity
 
    integer, parameter :: ndim = 3
+
+   !> Finite-difference step
+   real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
+   !> Absolute finite-difference comparison threshold
+   real(wp), parameter :: ABS_THR = 1.0e-10_wp
+   !> Relative finite-difference comparison threshold
+   real(wp), parameter :: REL_THR = 1.0e-9_wp
 
    !> Every test pairs one mstore record with one basis set
    integer, parameter :: nmolecules = 3
@@ -417,7 +424,7 @@ contains
 
       ! get_env always returns an allocated string, so an `allocated` guard would
       ! never fire; the default is what covers an unset variable. meson exports
-      ! the source root, fpm runs the tester from the project root
+      ! the source root, a tester started from the project root gets the default
       source_root = get_env("MOIST_SOURCE_ROOT", default=".")
       filename = source_root//"/test/unit/data/" &
                  //trim(mol_tag(test_molecule_index(test)))//"_" &
@@ -527,8 +534,6 @@ contains
    end function rho_reference
 
    !> Analytic density value matches the independent direct evaluation
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_value_reference(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -552,8 +557,6 @@ contains
    end subroutine test_gto_value_reference
 
    !> Analytic gradient matches a 4-point central FD of the density
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_grad_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -564,7 +567,6 @@ contains
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: dg(3), dd2(3, 3), dd3(3, 3, 3)
       real(wp) :: pp(3), rpp, rp, rm, rmm, fd
-      real(wp), parameter :: h = 1.0e-3_wp
       integer :: test, ip, ax
 
       do test = 1, ntests
@@ -574,16 +576,17 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 1, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 1, rpp, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 1, rp, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 1, rm, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 1, rmm, dg, dd2, dd3)
-               fd = fd4_scalar(rpp, rp, rm, rmm, h)
-               call check(error, drho(ax), fd, thr=1.0e-8_wp)
+               call fd4_scalar(rpp, rp, rm, rmm, STEP_SIZE, fd, error)
+               if (allocated(error)) return
+               call check(error, drho(ax), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
             end do
          end do
@@ -591,8 +594,6 @@ contains
    end subroutine test_gto_grad_fd
 
    !> Analytic Hessian matches a 4-point central FD of the gradient
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_hess_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -603,7 +604,6 @@ contains
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: drr, dd2(3, 3), dd3(3, 3, 3)
       real(wp) :: pp(3), gpp(3), gp(3), gm(3), gmm(3), fd
-      real(wp), parameter :: h = 1.0e-3_wp
       integer :: test, ip, ax, jx
 
       do test = 1, ntests
@@ -613,17 +613,18 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 2, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 1, drr, gpp, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 1, drr, gp, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 1, drr, gm, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 1, drr, gmm, dd2, dd3)
                do jx = 1, ndim
-                  fd = fd4_scalar(gpp(jx), gp(jx), gm(jx), gmm(jx), h)
-                  call check(error, d2(ax, jx), fd, thr=1.0e-7_wp)
+                  call fd4_scalar(gpp(jx), gp(jx), gm(jx), gmm(jx), STEP_SIZE, fd, error)
+                  if (allocated(error)) return
+                  call check(error, d2(ax, jx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -631,9 +632,8 @@ contains
       end do
    end subroutine test_gto_hess_fd
 
-   !> Analytic third derivative matches a 4-point central FD of the Hessian
-   !>
-   !> @param[out] error Set on mismatch
+   !> Analytic third derivative matches a Richardson-extrapolated 4-point central
+   !> FD of the Hessian (steps h and h/2), which cancels the h^4 truncation term
    subroutine test_gto_third_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -643,8 +643,8 @@ contains
       real(wp), allocatable :: pts(:, :)
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: drr, dg(3), dd3(3, 3, 3)
-      real(wp) :: pp(3), hpp(3, 3), hp(3, 3), hm(3, 3), hmm(3, 3), fd
-      real(wp), parameter :: h = 2.0e-3_wp
+      real(wp) :: pp(3), hpp(3, 3), hp(3, 3), hm(3, 3), hmm(3, 3)
+      real(wp) :: hph(3, 3), hmh(3, 3), fd, fd_full, fd_half
       integer :: test, ip, ax, jx, kx
 
       do test = 1, ntests
@@ -654,18 +654,29 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 3, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hpp, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hp, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hm, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hmm, dd3)
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 0.5_wp*STEP_SIZE
+               call eval_at(gto, pp, 2, drr, dg, hph, dd3)
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 0.5_wp*STEP_SIZE
+               call eval_at(gto, pp, 2, drr, dg, hmh, dd3)
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), h)
-                     call check(error, d3(ax, jx, kx), fd, thr=1.0e-6_wp)
+                     ! Richardson extrapolation cancels the leading fourth-order stencil error
+                     call fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), STEP_SIZE, &
+                                     fd_full, error)
+                     if (allocated(error)) return
+                     call fd4_scalar(hp(jx, kx), hph(jx, kx), hmh(jx, kx), hm(jx, kx), &
+                                     0.5_wp*STEP_SIZE, fd_half, error)
+                     if (allocated(error)) return
+                     fd = (16.0_wp*fd_half - fd_full)/15.0_wp
+                     call check(error, d3(ax, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -675,8 +686,6 @@ contains
    end subroutine test_gto_third_fd
 
    !> Analytic fourth derivative matches a 4-point central FD of the third
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_fourth_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -688,7 +697,6 @@ contains
       real(wp) :: drr, dg(3), dh(3, 3)
       real(wp) :: pp(3), dpp(3, 3, 3), dp(3, 3, 3), dm(3, 3, 3), dmm(3, 3, 3), fd
       real(wp) :: dev
-      real(wp), parameter :: h = 2.0e-3_wp
       integer :: ip, ax, ix, jx, kx
 
       call build_test(gto, test_reference, error, mol)
@@ -713,20 +721,21 @@ contains
          if (allocated(error)) return
 
          do ax = 1, ndim
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dpp)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dp)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dm)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dmm)
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), &
-                                     dm(ix, jx, kx), dmm(ix, jx, kx), h)
-                     call check(error, d4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     call fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), dm(ix, jx, kx), &
+                                     dmm(ix, jx, kx), STEP_SIZE, fd, error)
+                     if (allocated(error)) return
+                     call check(error, d4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1337,8 +1346,6 @@ contains
    end subroutine build_callback_lsf
 
    !> Both isodensity backends must describe the same level set
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_vs_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1349,8 +1356,6 @@ contains
    end subroutine test_internal_vs_callback
 
    !> Body of [[test_internal_vs_callback]], run under the `cb_gto` lock
-   !>
-   !> @param[out] error Set on mismatch
    subroutine run_internal_vs_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1457,8 +1462,6 @@ contains
 
    !> max_deriv must gate what the internal backend caches, without disturbing
    !> the orders that are still requested
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_max_deriv_internal(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1510,8 +1513,6 @@ contains
    end subroutine test_max_deriv_internal
 
    !> max_deriv must gate what the callback backend requests through the ABI
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_max_deriv_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1522,8 +1523,6 @@ contains
    end subroutine test_max_deriv_callback
 
    !> Body of [[test_max_deriv_callback]], run under the `cb_gto` lock
-   !>
-   !> @param[out] error Set on contract violation
    subroutine run_max_deriv_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1621,8 +1620,6 @@ contains
    !> evaluation) and neighbor_cutoff degrades the cavity cell grid to a full
    !> scan. A tight positive threshold must reproduce that exact result at both
    !> near and far points, otherwise the screening bound is not conservative
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_screening_equivalence(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1726,9 +1723,7 @@ contains
       end do
    end subroutine test_internal_screening_equivalence
 
-   !* ===================================================================
-   !*                  Fourth spatial derivative (internal)
-   !* ===================================================================
+   !* ------------ *                  Fourth spatial derivative (internal) ------------ *!
 
    !> Prepare the internal LSF and translate an evaluator failure into a test one
    !>
@@ -1779,8 +1774,6 @@ contains
    !> This is the LSF-level counterpart of [[test_gto_fourth_fd]]: it covers the
    !> sign/scale lift, the `(3,3,3,3)` cache and the `tmm` scratch that the bare
    !> evaluator test does not touch
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_fourth_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1792,11 +1785,13 @@ contains
       real(wp) :: tpp(ndim, ndim, ndim), tp(ndim, ndim, ndim)
       real(wp) :: tm(ndim, ndim, ndim), tmm(ndim, ndim, ndim)
       real(wp) :: pp(ndim), fd, dev, scale_ref
-      real(wp), parameter :: h = 2.0e-3_wp
       integer :: ip, ax, ix, jx, kx
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
       if (allocated(error)) return
+      ! Non-unit scale, so an f4_rrrr that drops the scale factor cannot match the FD of
+      ! f3_rrr; scale is only read at prepare, so setting it after update is safe
+      lsf%param%scale = 2.3_wp
       call get_test_points(mol, pts, 8)
 
       scale_ref = 0.0_wp
@@ -1832,25 +1827,26 @@ contains
          ! being refilled at a lower order between two order-4 evaluations
          call lsf%set_max_deriv(3)
          do ax = 1, ndim
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
             call third_at(lsf, pp, tpp, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
             call third_at(lsf, pp, tp, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
             call third_at(lsf, pp, tm, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
             call third_at(lsf, pp, tmm, error)
             if (allocated(error)) return
 
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), &
-                                     tm(ix, jx, kx), tmm(ix, jx, kx), h)
-                     call check(error, f4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     call fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), tm(ix, jx, kx), &
+                                     tmm(ix, jx, kx), STEP_SIZE, fd, error)
+                     if (allocated(error)) return
+                     call check(error, f4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1877,8 +1873,6 @@ contains
    !> its published C ABI stops at the third derivative, so `set_max_deriv(4)`
    !> must still leave `prepared_deriv` at 3 rather than claim an order it cannot
    !> deliver
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_internal_fourth_gating(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1960,8 +1954,6 @@ contains
 
    !> Body of the callback half of [[test_internal_fourth_gating]], run under the
    !> `cb_gto` lock
-   !>
-   !> @param[out] error Set on contract violation
    subroutine run_callback_fourth_cap(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error

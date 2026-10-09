@@ -1,7 +1,7 @@
 !> Test suite for the timer
 module test_utils_timer
-   use mctc_env, only: wp
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use mctc_env, only: wp, i8
+   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
    use moist_utils_timer, only: timer_type, cat_setup, cat_gradient
    implicit none(type, external)
@@ -27,7 +27,11 @@ contains
          new_unittest("double_start_poisons", test_double_start_poisons), &
          new_unittest("stale_handle_safe", test_stale_handle_safe), &
          new_unittest("unwind_to_depth", test_unwind_to_depth), &
-         new_unittest("reset_and_inactive", test_reset_and_inactive) &
+         new_unittest("reset_and_inactive", test_reset_and_inactive), &
+         new_unittest("seconds_scale", test_seconds_scale), &
+         new_unittest("growth_preserves_tree", test_growth_preserves_tree), &
+         new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
+         new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts) &
          ]
 
    end subroutine collect_utils_timer
@@ -69,6 +73,13 @@ contains
       end do
       call t%stop()
       t_five = t%get("many/inner")
+      ! A subsequent short interval cannot erase previously accumulated time
+      call t%start("many")
+      call t%start("inner")
+      call t%stop()
+      call t%stop()
+      call check(error, t%get("many/inner") >= t_five, "re-entry preserves all previous intervals")
+      if (allocated(error)) return
 
       call check(error, t_once > 0.0_wp, "single interval must accrue time")
       if (allocated(error)) return
@@ -379,5 +390,171 @@ contains
       call t%start("noop")
       call t%stop()
    end subroutine test_reset_and_inactive
+
+   !> Seconds agree with independent enclosing and enclosed wall-clock intervals
+   subroutine test_seconds_scale(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer(i8) :: before_new, after_new, before_start, after_start, before_stop, after_stop
+      integer(i8) :: before_get, after_get, rate, tick
+      real(wp) :: seconds, lower, upper
+
+      call system_clock(before_new, rate)
+      ! Without a clock there is nothing to measure, and the polling loop below
+      ! would never exit
+      if (rate <= 0) then
+         call skip_test(error, "system clock reports no count rate")
+         return
+      end if
+      call t%new()
+      call system_clock(after_new)
+      call system_clock(before_start)
+      call t%start("measured")
+      call system_clock(after_start)
+      ! Independent clock polling guarantees a measurable interval even at -O2
+      do
+         call system_clock(tick)
+         if (real(tick - after_start, wp)/real(rate, wp) >= 0.02_wp) exit
+      end do
+      call system_clock(before_stop)
+      call t%stop()
+      call system_clock(after_stop)
+      seconds = t%get("measured")
+      lower = real(before_stop - after_start, wp)/real(rate, wp)
+      upper = real(after_stop - before_start, wp)/real(rate, wp)
+      call check(error, seconds >= 0.5_wp*lower .and. seconds <= 2.0_wp*upper, &
+                 "node seconds must use clock rate")
+      if (allocated(error)) return
+      call system_clock(before_get)
+      seconds = t%get()
+      call system_clock(after_get)
+      lower = real(before_get - after_new, wp)/real(rate, wp)
+      upper = real(after_get - before_new, wp)/real(rate, wp)
+      call check(error, seconds >= 0.5_wp*lower .and. seconds <= 2.0_wp*upper, &
+                 "total seconds must use clock rate")
+      call t%delete()
+   end subroutine test_seconds_scale
+
+   !> Growing the registry, hash table and nesting stack preserves existing nodes
+   subroutine test_growth_preserves_tree(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: i, h, saved, ids(80)
+      character(len=16) :: name
+      real(wp) :: saved_time
+
+      call t%new()
+      call t%start("saved")
+      call busy()
+      call t%stop()
+      saved = t%resolve("saved", 0)
+      saved_time = t%node_time(saved)
+      do i = 1, 80
+         write (name, "(a,i0)") "node", i
+         call t%start(trim(name))
+         ids(i) = t%current()
+      end do
+      call check(error, t%current_depth() == 80, "deep stack grows")
+      if (allocated(error)) return
+      do i = 80, 1, -1
+         write (name, "(a,i0)") "node", i
+         call check(error, t%current() == ids(i), "stack retains open handles across growth")
+         if (allocated(error)) return
+         call check(error, t%node_name(ids(i)) == trim(name), "names survive node growth")
+         if (allocated(error)) return
+         call check(error, t%node_depth(ids(i)) == i - 1, "parents survive node growth")
+         if (allocated(error)) return
+         if (i == 1) then
+            h = t%resolve(trim(name), 0)
+         else
+            h = t%resolve(trim(name), ids(max(1, i - 1)))
+         end if
+         call check(error, h == ids(i), "rehashing retains existing name-parent pairs")
+         if (allocated(error)) return
+         call t%stop()
+      end do
+      call check(error, t%num_nodes() == 81, "resolving grown tree creates no duplicates")
+      if (allocated(error)) return
+      call check(error, t%node_time(saved) == saved_time, "accumulated ticks survive growth")
+      call t%delete()
+   end subroutine test_growth_preserves_tree
+
+   !> Reset closes open frames and clears persistent imbalance while preserving handles
+   subroutine test_reset_open_and_poisoned(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: h
+
+      call t%new()
+      h = t%resolve("poisoned", 0)
+      call t%stop(h)
+      call check(error, ieee_is_nan(t%node_time(h)), "stop without start poisons node")
+      if (allocated(error)) return
+      call t%start("open")
+      call t%reset()
+      call check(error, t%num_nodes() == 2, "reset preserves registered tree")
+      if (allocated(error)) return
+      call check(error, t%current_depth() == 0 .and. t%current() == 0, "reset empties stack")
+      if (allocated(error)) return
+      call check(error, t%get("open") == 0.0_wp, "reset closes open timers")
+      if (allocated(error)) return
+      call check(error, t%node_time(h) == 0.0_wp, "reset clears poisoning")
+      if (allocated(error)) return
+      call t%start(h)
+      call busy()
+      call t%stop(h)
+      ! >= 0, not > 0: one busy() may not advance a coarse clock; poisoning gives NaN
+      call check(error, t%node_time(h) >= 0.0_wp, "handle remains usable after reset")
+      if (allocated(error)) return
+      call t%new()
+      call check(error, t%num_nodes() == 0 .and. t%current_depth() == 0, "new clears previous tree")
+      call t%delete()
+   end subroutine test_reset_open_and_poisoned
+
+   !> Handles distinguish equal leaf names and named mismatch restores the stack
+   subroutine test_handle_and_mismatch_contracts(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: a, b, ha, hb, i, parents(80), leaves(80)
+      character(len=16) :: name
+
+      call t%new()
+      ! Many distinct pairs exercise probing collisions without assuming slot layout
+      do i = 1, 80
+         write (name, "(a,i0)") "parent", i
+         parents(i) = t%resolve(trim(name), 0)
+      end do
+      do i = 1, 80
+         leaves(i) = t%resolve("same_leaf", parents(i))
+         call check(error, count(leaves(1:i) == leaves(i)) == 1, "parent identity survives hash probing")
+         if (allocated(error)) return
+      end do
+      a = t%resolve("A", 0)
+      b = t%resolve("B", 0)
+      ha = t%resolve("leaf", a)
+      hb = t%resolve("leaf", b)
+      call check(error, ha /= hb, "equal names under distinct parents have distinct handles")
+      if (allocated(error)) return
+      call t%start(ha)
+      call busy()
+      call t%stop(ha)
+      call check(error, t%get("B/leaf") == 0.0_wp, "path lookup observes parent identity")
+      if (allocated(error)) return
+      call check(error, t%current_depth() == 0, "handle start and stop do not push frames")
+      if (allocated(error)) return
+      call t%start("outer")
+      call t%start("inner")
+      call t%stop("absent")
+      call check(error, t%current_depth() == 2, "unknown stop name preserves open stack")
+      if (allocated(error)) return
+      call t%stop("outer")
+      call check(error, t%current_depth() == 0 .and. t%current() == 0, "mismatch empties skipped stack")
+      if (allocated(error)) return
+      call t%stop()
+      call check(error, t%current_depth() == 0, "stop on empty stack keeps it empty")
+      if (allocated(error)) return
+      call check(error, .not. ieee_is_nan(t%get("outer")), "stop on empty stack is a no-op")
+      call t%delete()
+   end subroutine test_handle_and_mismatch_contracts
 
 end module test_utils_timer

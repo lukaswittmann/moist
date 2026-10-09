@@ -5,21 +5,23 @@
 !>   * the amplitudes handed back to the host reproduce that energy
 !>   * the surface adjoints are the derivatives of that energy with respect to
 !>     the cavity area, position and normal channels
-!>   * a grid point that has left the density is switched off in *every*
-!>     quantity, not just in the derivative
+!>   * the fixed C2 transition and optional negative branch suppression
+!>     differentiate the same energy in every phase
 !>
 module test_model_component_gostshyp
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use test_helpers, only: component_view, submit, read_fixture_moments, copy_gostshyp_amplitude
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, ieee_positive_inf
+   use test_helpers, only: component_view, submit, read_fixture_moments, copy_gaussian_amplitude
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type
-   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
-   use moist_model_components, only: solvation_model_component_gostshyp, new_component_gostshyp
+   use moist_channels_response, only: response_type, gaussian_amplitude_response_type
+   use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
+   use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop
    use test_model_component_helper, only: surface_fixture, &
       & new_surface_fixture, check_surface_weights, fixture_radial_normals, &
@@ -34,7 +36,7 @@ module test_model_component_gostshyp
    !> Tolerance for values that must agree to roundoff
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
 
-   !* ------------------------- The model solute density ------------------------- *!
+   !* ---------------------------- The model solute density --------------------------- *!
 
    !> Number of s-Gaussians in the model density
    integer, parameter :: nprim = 2
@@ -62,11 +64,15 @@ contains
 
       testsuite = [ &
          & new_unittest("gostshyp_energy_matches_amplitudes", test_gostshyp_energy), &
+         & new_unittest("gostshyp_regularized_weights", test_gostshyp_regularized_weights), &
          & new_unittest("gostshyp_surface_weights", test_gostshyp_surface_weights), &
+         & new_unittest("gostshyp_switched_weights", test_gostshyp_switched_weights), &
          & new_unittest("gostshyp_switching_factor_is_inert", test_gostshyp_w_f_zero), &
          & new_unittest("gostshyp_zero_pressure_short_circuit", test_gostshyp_short_circuit), &
          & new_unittest("gostshyp_lifecycle_guards", test_gostshyp_guards), &
-         & new_unittest("gostshyp_unrepresentable_amplitudes", test_gostshyp_nonfinite) &
+         & new_unittest("gostshyp_vanishing_trace", test_gostshyp_nonfinite), &
+         & new_unittest("gostshyp_failed_evaluation_is_atomic", test_gostshyp_failed_evaluation), &
+         & new_unittest("gostshyp_regularization_branches", test_gostshyp_branches) &
          & ]
 
    end subroutine collect_model_component_gostshyp
@@ -120,7 +126,7 @@ contains
          s = rho_expo(iprim) + omega
          offset = rho_center(:, iprim) - center
          disp = rho_expo(iprim)*offset/s
-         prefactor = rho_coeff(iprim)*(pi/s)**1.5_wp &
+         prefactor = rho_coeff(iprim)*(omega/s)**1.5_wp &
             & *exp(-rho_expo(iprim)*omega*dot_product(offset, offset)/s)
 
          gt = gt + prefactor
@@ -143,30 +149,36 @@ contains
    !>
    !> @param[inout] coupling   Coupling whose moment request is answered
    !> @param[in]    centers    Grid-point centers (3, ngrid)
-   !> @param[in]    areas      Grid-point areas (ngrid)
-   subroutine set_model_moments(coupling, centers, areas)
+   subroutine set_model_moments(coupling, centers)
       !> Coupling whose moment request is answered
       type(coupling_type), intent(inout), target :: coupling
-      !> Grid-point centers and areas
-      real(wp), intent(in) :: centers(:, :), areas(:)
+      !> Grid-point centers
+      real(wp), intent(in) :: centers(:, :)
 
       !> Moments of the model density on the grid
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
-      !> Grid-point index and grid size
-      integer :: igrid, ngrid
+      !> Grid-point index, grid size and pass index
+      integer :: igrid, ngrid, pass
 
-      ngrid = size(areas)
-      allocate (gt(ngrid))
-      allocate (pt(3, ngrid))
-      allocate (mt(3, 3, ngrid))
-      allocate (rt(3, ngrid))
-
-      do igrid = 1, ngrid
-         call model_moments(centers(:, igrid), gaussian_width(areas(igrid)), &
-            & gt(igrid), pt(:, igrid), mt(:, :, igrid), rt(:, igrid))
+      do pass = 1, 2
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (gaussian_moment_request_type)
+               ngrid = size(request%width)
+               allocate (gt(ngrid), pt(3, ngrid), mt(3, 3, ngrid), rt(3, ngrid))
+               do igrid = 1, ngrid
+                  call model_moments(centers(:, igrid), request%width(igrid), &
+                     & gt(igrid), pt(:, igrid), mt(:, :, igrid), rt(:, igrid))
+               end do
+               call submit(coupling, "gt", gt)
+               call submit(coupling, "pt", pt)
+               call submit(coupling, "mt", mt)
+               call submit(coupling, "rt", rt)
+               return
+            end select
+         end do
       end do
-
-      call answer_moments(coupling, gt, pt, mt, rt)
+      error stop "set_model_moments: the coupling never asked for its moments"
 
    end subroutine set_model_moments
 
@@ -217,12 +229,10 @@ contains
 
    end function gaussian_width
 
-   !> The GOSTSHYP energy of an arbitrary surface, moments rebuilt from scratch
+   !> The plain GOSTSHYP energy `p sum_i a_i gt_i/ftilde_i` of a surface far from both switches
    !>
-   !> The finite-difference reference for the surface weights. It shares no
-   !> state with the component and rebuilds the moments at the displaced
-   !> surface, which is the whole point: the Gaussians live *on* the grid
-   !> points, so every surface channel moves them
+   !> An independent formula for the energy test: every fixture area is far above
+   !> the narrow-point switch and every trace far above the trace window
    !>
    !> @param[in] areas   Grid-point areas
    !> @param[in] centers Grid-point centers
@@ -250,6 +260,61 @@ contains
       end do
 
    end function surface_energy
+
+   !> The component's own energy on an arbitrary surface, moments rebuilt from scratch
+   !>
+   !> The finite-difference reference for the surface weights: a fresh component
+   !> on a fresh surface, answered at the widths it requests, so no switch or
+   !> width convention is restated here. The Gaussians live *on* the grid points,
+   !> so every surface channel moves them
+   !>
+   !> @param[in] areas      Grid-point areas
+   !> @param[in] centers    Grid-point centers
+   !> @param[in] normals    Grid-point outward normals
+   !> @param[in] parameters Fixed regularization settings
+   !> @return GOSTSHYP energy
+   function component_energy(areas, centers, normals, parameters) result(energy)
+      !> Grid-point areas, centers and normals
+      real(wp), intent(in) :: areas(:), centers(:, :), normals(:, :)
+      !> Fixed regularization settings
+      type(moist_gostshyp_parameters_type), intent(in) :: parameters
+      !> GOSTSHYP energy
+      real(wp) :: energy
+
+      !> Silent run context of the fresh component
+      type(moist_context_type), target :: ctx
+      type(moist_error_type), allocatable :: err
+      !> Dummy structure; the component only stores it
+      type(structure_type) :: mol
+      !> Fresh surface, its coupling and the component on it
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(model_continuum_component_gostshyp) :: component
+      !> Fixture normals, replaced by the trial ones
+      real(wp) :: fixture_normals(3, ngrid_sw)
+      !> Dummy molecular geometry
+      real(wp) :: xyz_mol(3, 1)
+
+      call build_fixture_surface(cavity, fixture_normals)
+      cavity%a = areas
+      cavity%xyz = centers
+      cavity%normal0 = normals
+      xyz_mol(:, 1) = 0.0_wp
+      call new (mol, [1], xyz_mol)
+      call new_context(ctx, verbosity=0)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx, param=parameters)
+      call component%update(mol, cavity, err)
+      if (allocated(err)) error stop "component_energy: update failed"
+      call component%new_coupling(cavity, coupling, err)
+      if (allocated(err)) error stop "component_energy: coupling setup failed"
+      call component%prepare_energy(cavity, coupling, err)
+      if (allocated(err)) error stop "component_energy: energy staging failed"
+      call set_model_moments(coupling, centers)
+      energy = 0.0_wp
+      call component%get_energy(component_view(coupling), cavity, energy, err)
+      if (allocated(err)) error stop "component_energy: energy failed"
+
+   end function component_energy
 
    !* ================================================================================= *!
    !*                                       Tests                                       *!
@@ -288,7 +353,7 @@ contains
       !> Test failure information
       type(error_type), allocatable, intent(out) :: error
       !> Component whose moment request the coupling declares
-      type(solvation_model_component_gostshyp), intent(inout) :: component
+      type(model_continuum_component_gostshyp), intent(inout) :: component
       !> Synthetic DROP surface
       type(cavity_type_drop), intent(in) :: cavity
       !> Coupling staged for the energy phase
@@ -306,7 +371,7 @@ contains
          call test_failed(error, "GOSTSHYP energy staging failed: "//err%message)
          return
       end if
-      call set_model_moments(coupling, sw_xyz, sw_areas)
+      call set_model_moments(coupling, cavity%xyz)
 
    end subroutine stage_fixture_moments
 
@@ -317,12 +382,12 @@ contains
    !> paths through the same masking, so a mask applied in one and not the other
    !> shows up as a mismatch here rather than as an unclosable finite difference
    !> three layers up
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_energy(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -333,11 +398,11 @@ contains
       !> Moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -346,6 +411,10 @@ contains
       real(wp) :: energy, rebuilt
       !> Independent reference energy
       real(wp) :: reference
+      !> Normal-projected traces and the analytic f-amplitude of one point
+      real(wp) :: ftilde(ngrid_sw), expected_normal_deriv
+      !> Default settings, whose trace window the plain formula must clear
+      type(moist_gostshyp_parameters_type) :: defaults
       !> Grid-point index
       integer :: igrid
 
@@ -353,7 +422,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -379,7 +449,7 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       if (.not. allocated(amplitude)) then
          call test_failed(error, "GOSTSHYP wrote no host amplitudes")
          return
@@ -405,14 +475,29 @@ contains
       if (allocated(error)) return
 
       do igrid = 1, ngrid_sw
+         ftilde(igrid) = -2.0_wp*gaussian_width(sw_areas(igrid)) &
+                        & *dot_product(normals(:, igrid), pt(:, igrid))
+      end do
+      do igrid = 1, ngrid_sw
+         ! The plain reference formula needs every trace far above the window
+         call check(error, abs(ftilde(igrid)) > 1.0e3_wp*defaults%regularization_end, &
+            & more="GOSTSHYP fixture trace reaches the regularization window")
+         if (allocated(error)) return
          call check(error, amplitude%w_normal_deriv(igrid) < 0.0_wp, &
             & more="GOSTSHYP f-amplitude lost its sign fold")
+         if (allocated(error)) return
+         ! Analytic oracle: dE_i/dftilde_i of the summand p a_i gt_i/ftilde_i, the
+         ! closed form production uses for beta; the energy itself is checked
+         ! against the independent surface sum above
+         expected_normal_deriv = -test_pressure*sw_areas(igrid)*gt(igrid)/ftilde(igrid)**2
+         call check(error, amplitude%w_normal_deriv(igrid), expected_normal_deriv, thr=thr, &
+            & more="GOSTSHYP f-amplitude does not match the analytic dE/dftilde")
          if (allocated(error)) return
       end do
 
    end subroutine test_gostshyp_energy
 
-   !> The GOSTSHYP surface adjoints against fourth-order central differences
+   !> Geometry derivatives with every point fully on, against fourth-order differences
    !>
    !> Driven on the shared synthetic seven-point DROP surface with the radial
    !> normal field: the amplitude `p a / ftilde` inverts the normal-projected
@@ -422,11 +507,130 @@ contains
    !> twice over, explicitly and through the Gaussian width, and the harness
    !> folds `w_a` into both scalar channels
    !>
-   !> @param[out] error Error handling
+   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_surface_weights(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      call check_gostshyp_surface_weights(error, moist_gostshyp_parameters_type())
+   end subroutine test_gostshyp_surface_weights
+
+   !> Geometry derivatives inside the band, including the normalization route
+   !>
+   !> @param[out] error Test diagnostic
+   subroutine test_gostshyp_regularized_weights(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Window holding every fixture trace (0.096 to 0.275), then suppression
+      !>
+      !> Narrower windows steepen the switch until the fourth-order stencil's
+      !> truncation reaches the tolerance: 4.7e-10 at [0.1, 0.25], scaling as h**4
+      type(moist_gostshyp_parameters_type) :: parameters
+      parameters%regularization_start = 0.05_wp
+      parameters%regularization_end = 0.3_wp
+      call check_gostshyp_surface_weights(error, parameters)
+      if (allocated(error)) return
+      parameters%suppress_negative_amplitudes = .true.
+      call check_gostshyp_surface_weights(error, parameters)
+   end subroutine test_gostshyp_regularized_weights
+
+   !> Narrow points: two inside the C2 switch, one below it
+   !>
+   !> The switched-off point is requested at zero width; the derivatives of the
+   !> two inside include the area route through the switch
+   !>
+   !> @param[out] error Test diagnostic
+   subroutine test_gostshyp_switched_weights(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Native diagnostic
+      type(moist_error_type), allocatable :: err
+      !> Fixture areas with narrow points
+      real(wp) :: areas(ngrid_sw), normals(3, ngrid_sw)
+      !> Fixture, pressure component and context
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(model_continuum_component_gostshyp) :: component
+      type(moist_context_type), target :: ctx
+      !> Whether the walk reached the moment request
+      logical :: found
+      !> Host amplitudes and the switch share read back from them
+      type(response_type) :: response
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
+      real(wp) :: share(ngrid_sw)
+      !> Model moments and trace of one point
+      real(wp) :: gt, pt(3), mt(3, 3), rt(3), ftilde
+      !> Point index
+      integer :: i
+
+      areas = sw_areas
+      areas(3) = 1.0e-3_wp
+      areas(5) = 5.0e-4_wp
+      areas(7) = 1.0e-4_wp
+
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
+      call build_fixture_surface(cavity, normals)
+      cavity%a = areas
+      call component%new_coupling(cavity, coupling, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call component%prepare_energy(cavity, coupling, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      found = .false.
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (gaussian_moment_request_type)
+            found = .true.
+            call check(error, request%width(7), 0.0_wp, thr=0.0_wp, &
+               & more="switched-off point requested at a nonzero width")
+            if (allocated(error)) return
+            call check(error, request%width(3), gaussian_width(areas(3)), thr=thr*gaussian_width(areas(3)))
+            if (allocated(error)) return
+         end select
+      end do
+      call check(error, found, more="no moment request")
+      if (allocated(error)) return
+
+      !> Traces sit far above the window, so w_overlap = s(a) p a/ftilde gives s back
+      call set_model_moments(coupling, cavity%xyz)
+      call component%get_response(component_view(coupling), cavity, response, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call copy_gaussian_amplitude(response, amplitude)
+      do i = 1, ngrid_sw
+         call model_moments(cavity%xyz(:, i), gaussian_width(areas(i)), gt, pt, mt, rt)
+         ftilde = -2.0_wp*gaussian_width(areas(i))*dot_product(normals(:, i), pt)
+         share(i) = amplitude%w_overlap(i)*ftilde/(test_pressure*areas(i))
+      end do
+      call check(error, maxval(abs(share([1, 2, 4, 6]) - 1.0_wp)), 0.0_wp, thr=thr, &
+         & more="a regular point is not fully on")
+      if (allocated(error)) return
+      call check(error, all(share([3, 5]) > 0.0_wp .and. share([3, 5]) < 1.0_wp), &
+         & more="fixture points miss the switch transition")
+      if (allocated(error)) return
+      call check(error, amplitude%w_overlap(7), 0.0_wp, thr=0.0_wp, &
+         & more="switched-off point carries an amplitude")
+      if (allocated(error)) return
+
+      call check_gostshyp_surface_weights(error, moist_gostshyp_parameters_type(), areas)
+   end subroutine test_gostshyp_switched_weights
+
+   !> Geometry derivatives of one fixture against fourth-order differences
+   !>
+   !> @param[out] error Test diagnostic
+   !> @param[in] parameters Fixed regularization settings
+   !> @param[in] areas Optional grid-point areas replacing the fixture's
+   subroutine check_gostshyp_surface_weights(error, parameters, areas)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Regularization settings
+      type(moist_gostshyp_parameters_type), intent(in) :: parameters
+      !> Grid-point areas replacing the fixture's
+      real(wp), intent(in), optional :: areas(ngrid_sw)
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -435,7 +639,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Fixture mirroring the synthetic surface for the harness
@@ -468,10 +672,16 @@ contains
       real(wp), parameter :: fd_rtol = 1.0e-9_wp
 
       call build_fixture_surface(cavity, normals)
+      if (present(areas)) cavity%a = areas
+      if (parameters%suppress_negative_amplitudes) then
+         normals(:, 1::2) = -normals(:, 1::2)
+         cavity%normal0 = normals
+      end if
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx, param=parameters)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -498,7 +708,7 @@ contains
          & more="GOSTSHYP wrote no normal weights")
       if (allocated(error)) return
 
-      call new_surface_fixture(surface, sw_areas, sw_xis, sw_fs, sw_xyz, normals)
+      call new_surface_fixture(surface, cavity%a, sw_xis, sw_fs, sw_xyz, normals)
       call check_surface_weights(error, surface, weights, gostshyp_surface_energy, &
          & "gostshyp", step=step, thr_abs=fd_atol, thr_rel=fd_rtol)
 
@@ -516,11 +726,11 @@ contains
          !> GOSTSHYP energy of the perturbed surface
          real(wp) :: energy
 
-         energy = surface_energy(trial%areas(), trial%xyz, trial%normal)
+         energy = component_energy(trial%areas(), trial%xyz, trial%normal, parameters)
 
       end function gostshyp_surface_energy
 
-   end subroutine test_gostshyp_surface_weights
+   end subroutine check_gostshyp_surface_weights
 
    !> The switching factor carries no GOSTSHYP dependence of its own
    !>
@@ -529,12 +739,12 @@ contains
    !> that route itself. A nonzero `w_f` would double-count it. Pinned here
    !> rather than left to a comment because the harness cannot tell a genuine
    !> `w_f` from an area contribution that leaked into it
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_w_f_zero(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -543,7 +753,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Radial normal field
@@ -555,7 +765,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -583,12 +794,12 @@ contains
    !>
    !> Driven with the moment request left unanswered, so a missing short
    !> circuit is observable as the error the component raises when it reads it
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_short_circuit(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -597,7 +808,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -609,7 +820,8 @@ contains
 
       ! Staged for the energy phase but never answered: a component that
       ! reads the moments trips over the stale mandatory request
-      call new_component_gostshyp(component, 0.0_wp)
+      call new_context(ctx)
+      call new_component_gostshyp(component, 0.0_wp, ctx=ctx)
       call component%new_coupling(cavity, coupling, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP coupling setup failed: "//err%message)
@@ -625,7 +837,7 @@ contains
 
       ! A component scaled to zero contributes nothing either, and must reach
       ! that conclusion without asking for moments it will not use
-      call new_component_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       component%scale = 0.0_wp
       call check_inert(error, component, coupling, cavity, mol, "zero scale")
       if (allocated(error)) return
@@ -647,7 +859,7 @@ contains
       !> Test failure information
       type(error_type), allocatable, intent(out) :: error
       !> Component under test
-      type(solvation_model_component_gostshyp), intent(inout) :: component
+      type(model_continuum_component_gostshyp), intent(inout) :: component
       !> Coupling whose moment request is unanswered
       type(coupling_type), intent(inout), target :: coupling
       !> Synthetic DROP surface.  Not `intent(in)`: the component's own energy
@@ -664,7 +876,7 @@ contains
       !> Response list receiving the zero amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
 
@@ -695,7 +907,7 @@ contains
       ! A switched-off component is present and contributing nothing, so it
       ! still publishes its item -- filled with exact zeros. Leaving it
       ! absent would be indistinguishable from having no GOSTSHYP at all
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       call check(error, allocated(amplitude), &
          & more="GOSTSHYP dropped its host amplitudes at "//label)
       if (allocated(error)) return
@@ -729,7 +941,7 @@ contains
          !> Host part of the gradient phase
          type(response_type) :: gradient_response
          !> Copy of the gradient-phase amplitude item
-         type(gostshyp_amplitude_response_type), allocatable :: gradient_amplitude
+         type(gaussian_amplitude_response_type), allocatable :: gradient_amplitude
 
          gradient = sentinel
          call component%get_gradient(component_view(coupling), cavity, gradient_response, &
@@ -740,7 +952,7 @@ contains
          call check(error, maxval(abs(gradient - sentinel)), 0.0_wp, thr=0.0_wp, &
             & more="GOSTSHYP moved the gradient at "//label)
          if (allocated(error)) return
-         call copy_gostshyp_amplitude(gradient_response, gradient_amplitude)
+         call copy_gaussian_amplitude(gradient_response, gradient_amplitude)
          call check(error, allocated(gradient_amplitude), &
             & more="GOSTSHYP gradient dropped its host amplitudes at "//label)
          if (allocated(error)) return
@@ -764,12 +976,12 @@ contains
    !> set is the natural failure. It must be loud: silently reusing moments from
    !> the previous geometry would produce a plausible energy for a surface that
    !> no longer exists
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_guards(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -778,7 +990,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Cavity missing its surface arrays
       type(cavity_type_drop) :: bare
       !> Radial normal field
@@ -792,7 +1004,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
 
       ! An un-updated cavity carries no surface arrays at all
       bare%ngrid = ngrid_sw
@@ -860,7 +1073,7 @@ contains
          type(response_type) :: response
 
          gradient = 0.0_wp
-         call set_model_moments(coupling, sw_xyz, sw_areas)
+         call set_model_moments(coupling, sw_xyz)
          call component%get_gradient(component_view(coupling), cavity, response, gradient, err)
          call check(error, allocated(err), &
             & more="GOSTSHYP returned a forward-mode gradient instead of refusing")
@@ -891,12 +1104,12 @@ contains
    !> double: the energy would look plausible while the amplitude the host folds
    !> into its Fock matrix is an infinity. Both are pinned, because only one of
    !> them shows the damage
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_nonfinite(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -907,11 +1120,11 @@ contains
       !> The moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -923,7 +1136,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -932,8 +1146,7 @@ contains
       call stage_fixture_moments(error, component, cavity, coupling)
       if (allocated(error)) return
 
-      !> Uniform, so every point keeps its share of the total and the relative
-      !> floor has nothing to bite on
+      !> A finite trace approaching zero vanishes through the cubic transition
       call read_fixture_moments(coupling, gt, pt, mt, rt, err)
       if (allocated(err)) then
          call test_failed(error, "reading the moments back failed: "//err%message)
@@ -958,7 +1171,7 @@ contains
          & more="GOSTSHYP reported a non-finite energy")
       if (allocated(error)) return
       call check(error, energy, 0.0_wp, thr=0.0_wp, &
-         & more="GOSTSHYP kept an unrepresentable grid point in the energy")
+         & more="GOSTSHYP failed to vanish at a near-zero trace in the energy")
       if (allocated(error)) return
 
       call component%get_response(component_view(coupling), cavity, response, err)
@@ -966,7 +1179,7 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       call check(error, allocated(amplitude), &
          & more="GOSTSHYP wrote no host amplitudes")
       if (allocated(error)) return
@@ -977,8 +1190,228 @@ contains
       call check(error, maxval(abs(amplitude%w_overlap)) + &
          & maxval(abs(amplitude%w_normal_deriv)), &
          & 0.0_wp, thr=0.0_wp, &
-         & more="GOSTSHYP kept an unrepresentable grid point in the amplitudes")
+         & more="GOSTSHYP failed to vanish at a near-zero trace in the amplitudes")
 
    end subroutine test_gostshyp_nonfinite
+
+   !> Invalid host data must leave every caller accumulator unchanged
+   !>
+   !> @param[out] error Test diagnostic
+   subroutine test_gostshyp_failed_evaluation(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Native evaluation diagnostic
+      type(moist_error_type), allocatable :: err
+      !> Live fixture and coupling
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      !> Pressure component and its context
+      type(model_continuum_component_gostshyp) :: component
+      type(moist_context_type), target :: ctx
+      !> Caller accumulators and response snapshot
+      type(response_type) :: response
+      type(gaussian_amplitude_response_type), allocatable :: before, after
+      type(cavity_surface_adjoint_type) :: weights
+      !> Host moments and fixture normals
+      real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
+      real(wp) :: normals(3, ngrid_sw), energy
+      !> Failure scenario
+      integer :: scenario
+
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
+      call build_fixture_surface(cavity, normals)
+      call stage_fixture_moments(error, component, cavity, coupling)
+      if (allocated(error)) return
+      call component%get_response(component_view(coupling), cavity, response, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call copy_gaussian_amplitude(response, before)
+      call weights%init(ngrid_sw)
+      weights%w_a = 3.0_wp
+      weights%w_xyz = 4.0_wp
+      weights%w_n = 5.0_wp
+      do scenario = 1, 3
+         call read_fixture_moments(coupling, gt, pt, mt, rt, err)
+         call check(error, .not. allocated(err))
+         if (allocated(error)) return
+         call component%prepare_energy(cavity, coupling, err)
+         call check(error, .not. allocated(err))
+         if (allocated(error)) return
+         select case (scenario)
+         case (1)
+            gt(1) = ieee_value(1.0_wp, ieee_quiet_nan)
+         case (2)
+            pt(1, 1) = ieee_value(1.0_wp, ieee_positive_inf)
+         case (3)
+            component%pressure = huge(1.0_wp)
+            component%scale = 2.0_wp
+         case default
+            call test_failed(error, "unknown failure scenario")
+            return
+         end select
+         if (scenario <= 2) then
+            call check(error, coupling%next())
+            if (allocated(error)) return
+            if (scenario == 1) call coupling%answer("gt", gt, err)
+            if (scenario == 2) call coupling%answer("pt", pt, err)
+            call check(error, allocated(err), more="coupling accepted nonfinite host moments")
+            if (allocated(error)) return
+         else
+            call answer_moments(coupling, gt, pt, mt, rt)
+         end if
+         energy = 7.0_wp
+         call component%get_energy(component_view(coupling), cavity, energy, err)
+         call check(error, allocated(err), more="invalid data did not fail the energy")
+         if (allocated(error)) return
+         call check(error, energy, 7.0_wp, thr=0.0_wp)
+         if (allocated(error)) return
+         call component%get_response(component_view(coupling), cavity, response, err)
+         call check(error, allocated(err), more="invalid data did not fail the response")
+         if (allocated(error)) return
+         call copy_gaussian_amplitude(response, after)
+         call check(error, maxval(abs(before%w_overlap - after%w_overlap)), 0.0_wp, thr=0.0_wp)
+         if (allocated(error)) return
+         call check(error, maxval(abs(before%w_normal_deriv - after%w_normal_deriv)), 0.0_wp, thr=0.0_wp)
+         if (allocated(error)) return
+         call component%get_surface_weights(component_view(coupling), cavity, weights, err)
+         call check(error, allocated(err), more="invalid data did not fail surface weights")
+         if (allocated(error)) return
+         call check(error, maxval(abs(weights%w_a - 3.0_wp)) + maxval(abs(weights%w_xyz - 4.0_wp)) &
+            & + maxval(abs(weights%w_n - 5.0_wp)), 0.0_wp, thr=0.0_wp)
+         if (allocated(error)) return
+         !> Scenario 3 leaves settings that refuse staging; nothing follows it
+         if (scenario == 3) exit
+         !> Restore finite moments before staging the next failure scenario
+         call component%prepare_energy(cavity, coupling, err)
+         call set_model_moments(coupling, sw_xyz)
+      end do
+   end subroutine test_gostshyp_failed_evaluation
+
+   !> Exact reciprocal, inner derivatives, zero and negative-branch suppression
+   !>
+   !> @param[out] error Test diagnostic
+   subroutine test_gostshyp_branches(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Native diagnostic
+      type(moist_error_type), allocatable :: err
+      !> Fixture, pressure component and context
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(model_continuum_component_gostshyp) :: component
+      type(moist_context_type), target :: ctx
+      !> Settings deliberately spanning all branches
+      type(moist_gostshyp_parameters_type) :: parameters
+      !> Host answers
+      real(wp) :: gt(ngrid_sw), pt(3, ngrid_sw), mt(3, 3, ngrid_sw), rt(3, ngrid_sw)
+      real(wp) :: normals(3, ngrid_sw), f(ngrid_sw), energy, expected, factor
+      !> Host amplitude response
+      type(response_type) :: response
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
+      !> Point and suppression indices
+      integer :: i, mode, ijoin, sample
+      !> Window midpoint and width; there S = 1/2 and S' = 8/width
+      real(wp) :: middle, width
+      !> Joins of the branches: -end, -start, zero, start, end
+      real(wp) :: joins(5)
+      !> Samples of the published energy and its normal-trace derivative
+      real(wp) :: energies(3), derivatives(3), step, left, right, curvature, tolerance
+
+      parameters%regularization_start = 0.1_wp
+      parameters%regularization_end = 0.3_wp
+      middle = 0.5_wp*(parameters%regularization_start + parameters%regularization_end)
+      width = parameters%regularization_end - parameters%regularization_start
+      joins = [-parameters%regularization_end, -parameters%regularization_start, 0.0_wp, &
+         & parameters%regularization_start, parameters%regularization_end]
+      call new_context(ctx, verbosity=0)
+      call build_fixture_surface(cavity, normals)
+      !> Reciprocal, middle, off, zero, middle, end, reciprocal
+      f = [-0.4_wp, -middle, -0.05_wp, 0.0_wp, middle, parameters%regularization_end, 0.5_wp]
+      gt = 1.0_wp
+      mt = 0.0_wp
+      rt = 0.0_wp
+      do i = 1, ngrid_sw
+         pt(:, i) = -f(i)*normals(:, i)/(2.0_wp*gaussian_width(sw_areas(i)))
+      end do
+      do mode = 1, 2
+         parameters%suppress_negative_amplitudes = mode == 2
+         call new_component_gostshyp(component, test_pressure, ctx=ctx, param=parameters)
+         call stage_fixture_moments(error, component, cavity, coupling)
+         if (allocated(error)) return
+         call component%prepare_energy(cavity, coupling, err)
+         call answer_moments(coupling, gt, pt, mt, rt)
+         energy = 0.0_wp
+         call component%get_energy(component_view(coupling), cavity, energy, err)
+         call check(error, .not. allocated(err))
+         if (allocated(error)) return
+         expected = 0.0_wp
+         do i = 1, ngrid_sw
+            factor = 0.0_wp
+            if (abs(f(i)) >= parameters%regularization_end) factor = 1.0_wp/f(i)
+            if (i == 2 .or. i == 5) factor = 0.5_wp/f(i)
+            if (mode == 2 .and. f(i) < 0.0_wp) factor = 0.0_wp
+            expected = expected + test_pressure*sw_areas(i)*factor
+         end do
+         call check(error, energy, expected, thr=1.0e-12_wp)
+         if (allocated(error)) return
+         response = response_type()
+         call component%get_response(component_view(coupling), cavity, response, err)
+         call check(error, .not. allocated(err))
+         if (allocated(error)) return
+         call copy_gaussian_amplitude(response, amplitude)
+         call check(error, maxval(abs(amplitude%w_overlap(3:4))) + maxval(abs(amplitude%w_normal_deriv(3:4))), &
+            & 0.0_wp, thr=0.0_wp, more="a point at or below the start carries an amplitude")
+         if (allocated(error)) return
+         !> R'(f) = S'/|f| - S/f**2 at the middle
+         call check(error, amplitude%w_normal_deriv(5), &
+            & test_pressure*sw_areas(5)*((8.0_wp/width)/middle - 0.5_wp/middle**2), thr=1.0e-10_wp)
+         if (allocated(error)) return
+         if (mode == 2) then
+            call check(error, maxval(abs(amplitude%w_overlap(1:3))), 0.0_wp, thr=0.0_wp)
+            if (allocated(error)) return
+         end if
+         !> First and second derivative continuity at every join
+         step = parameters%regularization_end*1.0e-7_wp
+         tolerance = 1.0e-4_wp*2.0_wp*test_pressure*sw_areas(4)/parameters%regularization_end**3
+         do ijoin = 1, size(joins)
+            do sample = 1, 3
+               f(4) = joins(ijoin) + real(sample - 2, wp)*step
+               pt(:, 4) = -f(4)*normals(:, 4)/(2.0_wp*gaussian_width(sw_areas(4)))
+               call component%prepare_energy(cavity, coupling, err)
+               call check(error, .not. allocated(err))
+               if (allocated(error)) return
+               call answer_moments(coupling, gt, pt, mt, rt)
+               energies(sample) = 0.0_wp
+               call component%get_energy(component_view(coupling), cavity, energies(sample), err)
+               call check(error, .not. allocated(err))
+               if (allocated(error)) return
+               response = response_type()
+               call component%get_response(component_view(coupling), cavity, response, err)
+               call check(error, .not. allocated(err))
+               if (allocated(error)) return
+               call copy_gaussian_amplitude(response, amplitude)
+               derivatives(sample) = amplitude%w_normal_deriv(4)
+            end do
+            call check(error, (energies(3) - energies(1))/(2.0_wp*step), &
+               & derivatives(2), thr=1.0e-4_wp)
+            if (allocated(error)) return
+            left = (derivatives(2) - derivatives(1))/step
+            right = (derivatives(3) - derivatives(2))/step
+            !> R'' is 2/f**3 at the ends, from both sides; S is flat at the start
+            curvature = 0.0_wp
+            if (abs(joins(ijoin)) == parameters%regularization_end) then
+               curvature = 2.0_wp*test_pressure*sw_areas(4)/joins(ijoin)**3
+            end if
+            if (mode == 2 .and. joins(ijoin) < 0.0_wp) curvature = 0.0_wp
+            call check(error, left, curvature, thr=tolerance)
+            if (allocated(error)) return
+            call check(error, right, curvature, thr=tolerance)
+            if (allocated(error)) return
+         end do
+         f(4) = 0.0_wp
+         pt(:, 4) = 0.0_wp
+      end do
+   end subroutine test_gostshyp_branches
 
 end module test_model_component_gostshyp

@@ -120,6 +120,7 @@ contains
       !> The callback is globally evaluable and holds no per-atom data, so
       !> candidate ids are never translated
       self%candidate_space = lsf_candidate_space_user
+      self%name = "Isodensity"
 
       self%radius_dependent = .false.
 

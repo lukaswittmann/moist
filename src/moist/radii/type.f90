@@ -7,8 +7,6 @@ module moist_radius_type
 
    public :: radius_type
 
-   ! TODO: Add error propagation
-
    !> Abstract base class for cached atomic radii models
    type, abstract :: radius_type
       !> Number of atoms in the cached state

@@ -1,7 +1,7 @@
 Pressure-Volume Component
 =========================
 
-The ``solvation_model_component_pv`` component adds a pressure-volume contribution :cite:p:`spooner2014compressed,zeller2025pressure`.
+The ``model_continuum_component_pv`` component adds a pressure-volume contribution :cite:p:`spooner2014compressed,zeller2025pressure`.
 
 .. math::
 
@@ -38,10 +38,10 @@ Construction
       .. code-block:: fortran
 
          use mctc_env, only : wp
-         use moist_model_components, only : solvation_model_component_pv, &
+         use moist_model_continuum_component, only : model_continuum_component_pv, &
             & new_component_pv
 
-         type(solvation_model_component_pv) :: pv
+         type(model_continuum_component_pv) :: pv
 
          call new_component_pv(pv, pressure=3.39893e-5_wp)
 
@@ -50,7 +50,7 @@ Construction
 
       .. code-block:: c
 
-         moist_component pv = moist_new_pv_component(error, 3.39893e-5);
+         moist_component pv = moist_new_pv_component(error, NULL, 3.39893e-5);
          moist_add_model_component(error, model, pv);
          moist_delete(pv);  /* model owns a copy */
 

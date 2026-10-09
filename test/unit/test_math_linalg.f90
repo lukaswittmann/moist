@@ -12,7 +12,7 @@ module test_math_linalg
    ! Raw vendored linalg solver APIs (upstream test ports folded into this suite)
    use mctc_env_accuracy, only: ip => i4
    use moist_math_linalg_lusol_ez, only: solve
-   use moist_math_linalg_lsmr, only: lsmr
+   use moist_math_linalg_lsmr, only: lsmr, lsmr_operator
    use moist_math_linalg_lsqr, only: lsqr_solver_ez
    implicit none(type, external)
    private
@@ -31,6 +31,20 @@ module test_math_linalg
    integer(ip), parameter :: lsmr_nbar = 100, lsmr_nduplc = 40
    !> LSMR relative solution-error tolerance (upstream etol)
    real(wp), parameter :: lsmr_etol = 1.0e-3_wp
+   !> Solution-error tolerance for the damped diagonal problems, whose exact
+   !> solution is x_i = d_i b_i/(d_i^2 + damp^2); measured error <= 2.2e-16
+   !> (LSQR and LSMR), macOS arm64 gfortran 14.3
+   real(wp), parameter :: damped_solution_thr = 1.0e-10_wp
+
+   !> 3x3 diagonal operator A = diag(d) for LSMR, as a type rather than internal
+   !> procedures, which gfortran would call through trampolines
+   type, extends(lsmr_operator) :: diagonal_lsmr_operator
+      !> Diagonal entries
+      real(wp) :: d(3) = 0.0_wp
+   contains
+      procedure :: aprod1 => diagonal_aprod1
+      procedure :: aprod2 => diagonal_aprod2
+   end type diagonal_lsmr_operator
 
 contains
 
@@ -73,9 +87,11 @@ contains
                   new_unittest("lusol_dense_3x3", test_lusol_dense_3x3), &
                   new_unittest("lusol_rectangular_3x4", test_lusol_rectangular_3x4), &
                   new_unittest("lsqr_dense_3x3", test_lsqr_dense_3x3), &
+                  new_unittest("lsqr_damped", test_lsqr_damped), &
                   new_unittest("lsqr_rectangular_3x4", test_lsqr_rectangular_3x4), &
                   new_unittest("lsmr_over_determined", test_lsmr_over_determined), &
                   new_unittest("lsmr_square", test_lsmr_square), &
+                  new_unittest("lsmr_damped_diagonal", test_lsmr_damped_diagonal), &
                   new_unittest("lsmr_under_determined", test_lsmr_under_determined) &
                   ]
    end subroutine collect_math_linalg
@@ -94,6 +110,9 @@ contains
       end do
 
       success = mat3x3_inv(A, Ainv, det)
+
+      call check(error, success, "Nonsingular inverse should report success")
+      if (allocated(error)) return
 
       call check(error, abs(det - 1.0_wp) < 1.0e-12_wp, "Determinant should be 1")
       if (allocated(error)) return
@@ -116,6 +135,9 @@ contains
       A(3, 3) = 4.0_wp
 
       success = mat3x3_inv(A, Ainv, det)
+
+      call check(error, success, "Nonsingular inverse should report success")
+      if (allocated(error)) return
 
       call check(error, abs(det - 24.0_wp) < 1.0e-12_wp, "Determinant should be 24")
       if (allocated(error)) return
@@ -142,6 +164,9 @@ contains
                   ], [3, 3])
 
       success = mat3x3_inv(A, Ainv, det)
+
+      call check(error, success, "Nonsingular inverse should report success")
+      if (allocated(error)) return
 
       ! Check A * Ainv = I
       prod = matmul(A, Ainv)
@@ -174,11 +199,23 @@ contains
 
       success = mat3x3_inv(A, Ainv, det)
 
+      call check(error,.not. success, "Singular inverse should report failure")
+      if (allocated(error)) return
+
       call check(error, abs(det) < 1.0e-10_wp, "Singular matrix should have zero determinant")
       if (allocated(error)) return
 
       ! Singular matrices return a zero inverse
       call check(error, maxval(abs(Ainv)) < 1.0e-10_wp, "Inverse of singular matrix should be zero")
+      if (allocated(error)) return
+
+      A = 0.0_wp
+      A(1, 1) = 1.0_wp
+      A(2, 2) = 1.0_wp
+      A(3, 3) = 1.0e-8_wp
+      success = mat3x3_inv(A, Ainv, tol=1.0e-6_wp)
+      call check(error,.not. success .and. maxval(abs(Ainv)) == 0.0_wp, &
+                 "Caller tolerance should reject a small determinant")
    end subroutine test_mat3x3_inv_singular
 
    !> Compare inversion with LAPACK
@@ -197,6 +234,8 @@ contains
 
       ! Analytic inversion
       success = mat3x3_inv(A, Ainv_analytic, det)
+      call check(error, success, "Analytic inverse should report success")
+      if (allocated(error)) return
 
       ! LAPACK inversion
       Ainv_lapack = A
@@ -246,6 +285,15 @@ contains
       call check(error, abs(norm_t1 - 1.0_wp) < 1.0e-12_wp, "t1 should be normalized")
       if (allocated(error)) return
       call check(error, abs(norm_t2 - 1.0_wp) < 1.0e-12_wp, "t2 should be normalized")
+      if (allocated(error)) return
+      call check(error, dot_product([t1(2)*t2(3) - t1(3)*t2(2), &
+                                     t1(3)*t2(1) - t1(1)*t2(3), t1(1)*t2(2) - t1(2)*t2(1)], normal) > 0.999_wp, &
+                 "Tangent frame should be right handed")
+      if (allocated(error)) return
+      call setup_tangent_frame(7.0_wp*normal, t1, t2)
+      call check(error, abs(dot_product(normal, t1)) < tensor_tol .and. &
+                 abs(dot_product(t1, t1) - 1.0_wp) < tensor_tol .and. &
+                 abs(dot_product(t2, t2) - 1.0_wp) < tensor_tol, "Nonunit normal should be normalized")
    end subroutine test_tangent_frame_orthonormal
 
    !> Check tangent frame for an axis normal
@@ -268,8 +316,8 @@ contains
    !> Check selected sym3_21 entries
    subroutine test_sym3_21(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: hess(3, 3), grad(3), tensor(3, 3, 3)
-      real(wp) :: expected
+      real(wp) :: hess(3, 3), grad(3), tensor(3, 3, 3), reference(3, 3, 3)
+      real(wp) :: expected, u(3), w(3)
 
       ! Diagonal Hessian
       hess = reshape([1.0_wp, 0.0_wp, 0.0_wp, &
@@ -286,12 +334,25 @@ contains
 
       ! Off-diagonal entry
       call check(error, abs(tensor(1, 2, 3)) < 1.0e-12_wp, "T_123 should be 0")
+      if (allocated(error)) return
+
+      ! Full indefinite Hessian H = u u^T - w w^T: sym3_21 is linear in H and
+      ! sym3_21(u u^T, g) is the polarization of outer3, so the reference needs
+      ! only outer3
+      u = [1.0_wp, 0.3_wp, -0.7_wp]
+      w = [0.4_wp, -1.1_wp, 0.5_wp]
+      grad = [0.2_wp, -0.8_wp, 1.3_wp]
+      hess = outer_matrix(u, u) - outer_matrix(w, w)
+      tensor = sym3_21(hess, grad)
+      reference = polarized_outer3(u, grad) - polarized_outer3(w, grad)
+      call check(error, maxval(abs(tensor - reference)) < tensor_tol, "sym3 full reference")
    end subroutine test_sym3_21
 
    !> Check selected outer3 entries
    subroutine test_outer3(error)
       type(error_type), allocatable, intent(out) :: error
       real(wp) :: vec(3), tensor(3, 3, 3)
+      integer :: i, j, k
 
       vec = [1.0_wp, 2.0_wp, 3.0_wp]
       tensor = outer3(vec)
@@ -306,6 +367,16 @@ contains
 
       ! Second diagonal entry
       call check(error, abs(tensor(2, 2, 2) - 8.0_wp) < 1.0e-12_wp, "T_222 should be 8")
+      if (allocated(error)) return
+      do k = 1, 3
+         do j = 1, 3
+            do i = 1, 3
+               call check(error, abs(tensor(i, j, k) - vec(i)*vec(j)*vec(k)) < tensor_tol, &
+                          "outer3 full reference")
+               if (allocated(error)) return
+            end do
+         end do
+      end do
    end subroutine test_outer3
 
    !> Check selected outer3_linear entries
@@ -324,7 +395,31 @@ contains
 
       ! Mixed derivative
       call check(error, abs(dtensor(1, 2, 3) - 1.8_wp) < 1.0e-12_wp, "dT_123 should be 1.8")
+      if (allocated(error)) return
+
+      dvec = [-0.3_wp, 0.7_wp, 0.2_wp]
+      dtensor = outer3_linear(vec, dvec)
+      call check(error, maxval(abs(dtensor - polarized_outer3(vec, dvec))) < tensor_tol, &
+                 "outer3 linear channels")
    end subroutine test_outer3_linear
+
+   !> Linear part of outer3 from the cubic identity
+   !>   (outer3(v + d) - outer3(v - d))/2 - outer3(d)
+   !>     = d x v x v + v x d x v + v x v x d
+   !>
+   !> @param[in] vec  Expansion point v
+   !> @param[in] dvec Direction d
+   !> @returns        Symmetrized rank-3 tensor, independent of outer3_linear
+   function polarized_outer3(vec, dvec) result(tensor)
+      !> Expansion point
+      real(wp), intent(in) :: vec(3)
+      !> Direction
+      real(wp), intent(in) :: dvec(3)
+      !> Linear part of outer3
+      real(wp) :: tensor(3, 3, 3)
+
+      tensor = 0.5_wp*(outer3(vec + dvec) - outer3(vec - dvec)) - outer3(dvec)
+   end function polarized_outer3
 
    !> Check selected outer_matrix entries
    subroutine test_outer_matrix(error)
@@ -365,6 +460,12 @@ contains
       call check(error, result >= 0.0_wp, "Result should be non-negative")
       if (allocated(error)) return
       call check(error, result < 1.0e-40_wp, "For large negative x, result should be near 0")
+      if (allocated(error)) return
+      result = logaddexp(1000.0_wp)
+      call check(error, abs(result - 1000.0_wp) < tensor_tol, "Softplus should avoid overflow")
+      if (allocated(error)) return
+      result = logaddexp(-1.0_wp)
+      call check(error, abs(result - log(1.0_wp + exp(-1.0_wp))) < tensor_tol, "Negative softplus value")
    end subroutine test_logaddexp_stability
 
    !> Check known logaddexp values
@@ -474,6 +575,11 @@ contains
       dot2 = abs(dot_product(v_max_analytic, evecs_lapack(:, 2)))
       call check(error, abs(dot2 - 1.0_wp) < 1.0e-10_wp, &
                  "Case 2: Largest eigenvector should match LAPACK (up to sign)")
+      if (allocated(error)) return
+      call eig_2x2_symmetric(2.0_wp, 0.0_wp, 5.0_wp, &
+                             lambda_min_analytic, lambda_max_analytic, v_min_analytic, v_max_analytic)
+      call check(error, abs(v_min_analytic(1)) > 0.999_wp .and. &
+                 abs(v_max_analytic(2)) > 0.999_wp, "Ascending diagonal eigenvectors")
    end subroutine test_eig_2x2_symmetric
 
    ! outer4(v) = v_i v_j v_k v_l
@@ -899,9 +1005,7 @@ contains
       end do
    end function sym4_22_full_ref
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/lusol (moist_math_linalg_lusol_ez%solve)
-   !===========================================================================
+   !* ---- Raw-kernel ports: jacobwilliams/lusol (moist_math_linalg_lusol_ez%solve) --- *!
    ! Solve sparse systems supplied in coordinate (COO) form and verify a
    ! near-zero residual ||A*x - b||. Reference problems are from lusol_test.f90
 
@@ -919,6 +1023,8 @@ contains
       integer :: istat
 
       call solve(n, m, m*n, irow, icol, a, b, x, istat)
+      call check(error, istat == 0, "LUSOL solve status should indicate success")
+      if (allocated(error)) return
       call check(error, maxval(abs(matmul(a_mat, x) - b)) < lusol_thr, &
                  "LUSOL 3x3 residual too large")
    end subroutine test_lusol_dense_3x3
@@ -940,13 +1046,13 @@ contains
       integer :: istat
 
       call solve(n, m, m*n, irow, icol, a, b, x, istat)
+      call check(error, istat == 0, "LUSOL solve status should indicate success")
+      if (allocated(error)) return
       call check(error, maxval(abs(matmul(a_mat, x) - b)) < lusol_thr, &
                  "LUSOL 3x4 residual too large")
    end subroutine test_lusol_rectangular_3x4
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/LSQR (lsqr_solver_ez)
-   !===========================================================================
+   !* ------------- Raw-kernel ports: jacobwilliams/LSQR (lsqr_solver_ez) ------------- *!
    ! Same COO systems as the LUSOL ports, driven through the object-oriented
    ! lsqr_solver_ez. The Paige-Saunders generator path is covered by the LSMR
    ! ports below
@@ -971,6 +1077,19 @@ contains
                  "LSQR 3x3 residual too large")
    end subroutine test_lsqr_dense_3x3
 
+   !> Check ridge regularization against independent diagonal solution
+   subroutine test_lsqr_damped(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(lsqr_solver_ez) :: solver
+      real(wp) :: x(3)
+      integer :: istop
+
+      call solver%initialize(3, 3, [1.0_wp, 2.0_wp, 3.0_wp], [1, 2, 3], [1, 2, 3], itnlim=100)
+      call solver%solve([2.0_wp, 4.0_wp, 6.0_wp], 1.0_wp, x, istop)
+      call check(error, maxval(abs(x - [1.0_wp, 1.6_wp, 1.8_wp])) < damped_solution_thr, &
+                 "LSQR damped diagonal solution")
+   end subroutine test_lsqr_damped
+
    !> lsqrtest_ez test_2: a rectangular 3x4 system (n > m) in COO form
    subroutine test_lsqr_rectangular_3x4(error)
       type(error_type), allocatable, intent(out) :: error
@@ -994,9 +1113,7 @@ contains
                  "LSQR 3x4 residual too large")
    end subroutine test_lsqr_rectangular_3x4
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/LSMR (matrix-free Paige-Saunders problem)
-   !===========================================================================
+   !* --- Raw-kernel ports: jacobwilliams/LSMR (matrix-free Paige-Saunders problem) --- *!
    ! A = Y*D*Z applied matrix-free via the Aprod callbacks; lstp builds b from a
    ! known xtrue and LSMR must recover it. Three groups sweep damping values
 
@@ -1013,6 +1130,21 @@ contains
 
       call lsmr_run_group(lsmr_nbar, lsmr_nbar, "square", error)
    end subroutine test_lsmr_square
+
+   !> Check LSMR regularization against an independent diagonal solution
+   subroutine test_lsmr_damped_diagonal(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(diagonal_lsmr_operator) :: op
+      real(wp) :: x(3), normA, condA, normr, normAr, normx
+      integer(ip) :: istop, itn
+
+      op%d = [1.0_wp, 2.0_wp, 3.0_wp]
+      call lsmr(3_ip, 3_ip, op, [2.0_wp, 4.0_wp, 6.0_wp], 1.0_wp, &
+                1.0e-12_wp, 1.0e-12_wp, 1.0e8_wp, 100_ip, 0_ip, 0_ip, &
+                x, istop, itn, normA, condA, normr, normAr, normx)
+      call check(error, maxval(abs(x - [1.0_wp, 1.6_wp, 1.8_wp])) < damped_solution_thr, &
+                 "LSMR damped diagonal solution")
+   end subroutine test_lsmr_damped_diagonal
 
    !> m = nbar, n = 2*nbar
    subroutine test_lsmr_under_determined(error)
@@ -1169,6 +1301,28 @@ contains
       end subroutine lsmr_lstp
 
    end subroutine lsmr_run_group
+
+   !> y := y + A*x for the diagonal operator
+   subroutine diagonal_aprod1(self, m, n, x, y)
+      class(diagonal_lsmr_operator), intent(inout) :: self
+      integer(ip), intent(in) :: m
+      integer(ip), intent(in) :: n
+      real(wp), intent(in) :: x(n)
+      real(wp), intent(inout) :: y(m)
+
+      y = y + self%d*x
+   end subroutine diagonal_aprod1
+
+   !> x := x + A'*y for the diagonal operator
+   subroutine diagonal_aprod2(self, m, n, x, y)
+      class(diagonal_lsmr_operator), intent(inout) :: self
+      integer(ip), intent(in) :: m
+      integer(ip), intent(in) :: n
+      real(wp), intent(inout) :: x(n)
+      real(wp), intent(in) :: y(m)
+
+      x = x + self%d*y
+   end subroutine diagonal_aprod2
 
    !> Apply a Householder transformation: x := (I - 2*z*z')*x
    subroutine lsmr_hprod(n, z, x)

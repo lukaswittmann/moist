@@ -98,6 +98,7 @@ normalization folded into the coefficients.
              exponents=exps, coefficients=coeffs,
          )
          cavity = CavityDROP(
+             context=context,
              lsf=Isodensity(parameters=IsodensityParameters(rho_iso=1.0e-3)),
              radii=CPCMRadii(),
              source=InternalDensity(basis, density_matrix),

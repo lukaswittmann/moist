@@ -9,7 +9,8 @@ module moist_cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
+   use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none(type, external)
@@ -22,9 +23,15 @@ module moist_cavity_type
    !>
    !> Cavities within moist are per default discretized using Gaussians
    type, abstract :: cavity_type
-      !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller, never allocated or freed by the cavity
+      !> Borrowed run context (verbosity/debug/timer); owned by the caller,
+      !> never allocated or freed by the cavity
+      !>
+      !> - optional at construction; a model points a cavity copy without one
+      !>   at its own context
       type(moist_context_type), pointer :: ctx => null()
+
+      !> Short name of the discretization, e.g. `DROP`; set by the constructor
+      character(len=:), allocatable :: label
 
       !> Sphere radii, bohr (nat)
       real(wp), allocatable :: radii(:)
@@ -99,6 +106,14 @@ module moist_cavity_type
       procedure :: write_pqr_debug => write_cavity_pqr_debug
       !> Print basic cavity information
       procedure :: print => print_cavity_info
+      !> Solvent-independent settings; null for a cavity without any
+      procedure :: parameters => cavity_parameters_default
+      !> Print the cavity kind and its registered settings
+      procedure :: print_parameters => print_cavity_parameters
+      !> Print the radius model of the current structure; called by every `update`
+      procedure, non_overridable :: print_radii => print_cavity_radii
+      !> Fail without a run context; called first by every `update`
+      procedure, non_overridable :: require_context => require_cavity_context
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -139,6 +154,36 @@ contains
 
    end function cavity_unit
 
+   !> Fail unless a run context is attached
+   !>
+   !> @param[in]  self  Cavity instance
+   !> @param[out] error Missing-context error
+   subroutine require_cavity_context(self, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. associated(self%ctx)) call fatal_error(error, &
+         & "Cavity has no context: pass one at construction or use it through a model")
+
+   end subroutine require_cavity_context
+
+   !> Print the radius model at verbosity 2 and above
+   !>
+   !> Called by each cavity's `update` right after its radius model was
+   !> updated: the printout lists the radii of the current structure
+   !>
+   !> @param[in] self Cavity instance
+   subroutine print_cavity_radii(self)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+
+      if (.not. associated(self%ctx) .or. .not. allocated(self%radius_model)) return
+      if (self%ctx%verbosity >= 2) call self%radius_model%print(unit=self%ctx%unit)
+
+   end subroutine print_cavity_radii
+
    !* ================================================================================= *!
    !*                                 Readable results                                *!
    !* ================================================================================= *!
@@ -151,7 +196,7 @@ contains
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call query%add_int_value("ngrid", "Number of surface grid points", self%ngrid)
       call query%add_int_value("nsph", "Number of atomic spheres", self%nsph)
@@ -424,5 +469,52 @@ contains
       call pp%blank()
 
    end subroutine print_cavity_info
+
+   !> Default settings hook: the cavity has no parameter object
+   !>
+   !> @param[in] self Cavity instance
+   function cavity_parameters_default(self) result(param)
+      !> Cavity instance
+      class(cavity_type), intent(in), target :: self
+      !> Settings of the cavity, never associated here
+      class(moist_model_parameters_type), pointer :: param
+
+      param => null()
+
+   end function cavity_parameters_default
+
+   !> Print the cavity section: its kind, then the registered settings of
+   !> `parameters()`
+   !>
+   !> @param[in] self Cavity instance
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   subroutine print_cavity_parameters(self, unit)
+      !> Cavity instance
+      class(cavity_type), intent(in), target :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+
+      !> Section printer
+      type(prettyprinter) :: pp
+      !> Registered settings, when the cavity has any
+      class(moist_model_parameters_type), pointer :: param
+      !> Effective output unit
+      integer :: iu
+
+      iu = cavity_unit(self)
+      if (present(unit)) iu = unit
+
+      pp = new_prettyprinter(unit=iu)
+      if (allocated(self%label)) then
+         call pp%push("Cavity ("//self%label//"):")
+      else
+         call pp%push("Cavity:")
+      end if
+      param => self%parameters()
+      if (associated(param)) call param%print_table(pp)
+      call pp%pop()
+      call pp%blank()
+
+   end subroutine print_cavity_parameters
 
 end module moist_cavity_type

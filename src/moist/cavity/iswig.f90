@@ -5,14 +5,14 @@ module moist_cavity_iswig
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
 
-   use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
 
    implicit none(type, external)
    private
@@ -38,12 +38,8 @@ module moist_cavity_iswig
    !> iSwiG cavity state
    type, extends(cavity_type) :: cavity_type_iswig
 
-      !> Number of Lebedev points per sphere
-      integer :: num_leb = 110
-      !> Default area cutoff
-      real(wp) :: cut_a = 0.0_wp
-      !> Default iSwiG value cutoff
-      real(wp) :: cut_f = 1.0E-10_wp
+      !> Construction settings: Lebedev points per sphere, area and switching cutoffs
+      type(moist_cavity_iswig_parameters_type) :: param
 
       !> Raw Lebedev weights (ngrid)
       real(wp), allocatable :: wleb(:)
@@ -56,10 +52,9 @@ module moist_cavity_iswig
 
       ! Cached Lebedev data (reused across updates)
       integer :: cached_num_leb = 0
-      integer :: cached_oleb = 0
       real(wp) :: cached_swx = 0.0_wp
       real(wp), allocatable :: ang_grid(:, :) ! (3, num_leb)
-      real(wp), allocatable :: ang_weight(:)  ! (num_leb)
+      real(wp), allocatable :: ang_weight(:)  ! (num_leb), solid-angle weights summing to 4*pi
 
    contains
       procedure :: update => update_cavity_iswig
@@ -69,6 +64,8 @@ module moist_cavity_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
       !> Declare the readable results an iSwiG cavity holds
       procedure :: list_fields => list_cavity_fields_iswig
+      !> Construction settings
+      procedure :: parameters => iswig_parameters
    end type cavity_type_iswig
 
 contains
@@ -104,12 +101,12 @@ contains
       !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call list_cavity_fields_base(self, query)
 
       call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
-         & self%num_leb)
+         & self%param%num_leb)
       call query%add_int("numbering", "Stable point id, kept when points are removed (ngrid)", &
          & self%numbering)
       call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
@@ -119,32 +116,45 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_iswig(self, ctx, radius_model, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_iswig(self, radius_model, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_iswig), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
       !> Construction error
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_iswig_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
       type(moist_cavity_iswig_parameters_type) :: settings
 
       if (present(param)) settings = param
-      self%ctx => ctx
-      self%num_leb = settings%num_leb
-      self%cut_a = settings%cut_a
-      self%cut_f = settings%cut_f
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
+      self%label = "vdW iSwiG"
+      self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radius_model)
    end subroutine new_cavity_iswig
+
+   !> Construction settings of the cavity
+   !>
+   !> @param[in] self iSwiG cavity instance
+   function iswig_parameters(self) result(param)
+      !> iSwiG cavity instance
+      class(cavity_type_iswig), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function iswig_parameters
 
    !> Write grid to CSV, including numbering, Lebedev weight, and switching value
    subroutine write_cavity_csv_debug(self, filename, error)
@@ -180,6 +190,9 @@ contains
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       !> Set number of spheres
       self%nsph = mol%nat
 
@@ -194,6 +207,7 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
+      call self%print_radii()
       if (allocated(self%radii)) deallocate (self%radii)
       self%radii = self%radius_model%f0
 
@@ -219,9 +233,8 @@ contains
          nsph=self%nsph, &
          centers=self%sphxyz, &
          radii=self%radii, &
-         cut_a=self%cut_a, &
-         cut_f=self%cut_f, &
-         oleb=self%cached_oleb, &
+         cut_a=self%param%cut_a, &
+         cut_f=self%param%cut_f, &
          zeta_born=self%cached_swx, &
          ang_grid=self%ang_grid, &
          ang_weight=self%ang_weight, &
@@ -454,14 +467,29 @@ contains
    end subroutine get_surface_gradient_iswig
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
+   !>
+   !> - Sizes without a fitted swig_xi value are errors here, checked first
+   !> - None of the fitted sizes has negative weights; the generator would
+   !>   refuse such a rule
+   !>
+   !> @param[in,out] self   Cavity whose angular cache is refreshed
+   !> @param[out]    error  Set for an unsupported or rejected Lebedev size
    subroutine ensure_lebedev_cache(self, error)
+      !> Cavity instance
       class(cavity_type_iswig), intent(inout) :: self
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: isize, oleb
+      integer :: isize
 
       !> iSwiG-supported Lebedev orders (indexing into swig_xi_tab)
       integer :: iswig_order
+
+      !> Angular quadrature filling the cache, solid-angle weights summing to 4*pi
+      type(moist_math_grid_angular_type) :: leb
+
+      !> Error message buffer
+      character(len=256) :: msg
 
       ! Precompute constant swig_xi value for this Lebedev order
       real(wp), parameter :: swig_xi_tab(11) = [ &
@@ -470,39 +498,32 @@ contains
       integer, parameter :: iswig_grid_sizes(11) = [ &
                             14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202]
 
-      ! Map requested num_leb to Lebedev order index
-      call lebedev_order_from_num(self%num_leb, oleb, error)
-      if (allocated(error)) return
+      if (self%cached_num_leb == self%param%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
+         return
+      end if
 
-      !> Check if the self%num_leb is available for iswig (xi)
+      !> Check if the self%param%num_leb is available for iswig (xi)
       iswig_order = -1
       do isize = 1, size(iswig_grid_sizes)
-         if (self%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
+         if (self%param%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
       end do
       if (iswig_order < 0) then
-         write (error_unit, "(a,i0)") "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
-         write (error_unit, "(a)") "Supported sizes:"
-         write (error_unit, "(8i10)") iswig_grid_sizes(1:8)
-         write (error_unit, "(8i10)") iswig_grid_sizes(9:)
-         call fatal_error(error, "Unsupported Lebedev size in iSwiG")
+         write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%param%num_leb, &
+            & "; supported sizes: ", iswig_grid_sizes
+         call fatal_error(error, trim(msg))
          return
       end if
 
-      if (self%cached_num_leb == self%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
-         return
-      end if
+      ! Negative weights would give negative areas and imaginary widths
+      call new_lebedev_grid(leb, error, npts=self%param%num_leb, positive_weights_only=.true.)
+      if (allocated(error)) return
 
-      self%cached_num_leb = self%num_leb
-      self%cached_oleb = oleb
+      self%cached_num_leb = self%param%num_leb
       self%cached_swx = swig_xi_tab(iswig_order)
 
-      if (allocated(self%ang_grid)) deallocate (self%ang_grid)
-      if (allocated(self%ang_weight)) deallocate (self%ang_weight)
-
-      allocate (self%ang_grid(3, self%num_leb))
-      allocate (self%ang_weight(self%num_leb))
-      call get_angular_grid(self%cached_oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
+      ! Cache nodes and weights in the plain arrays the integrators consume
+      call move_alloc(leb%points, self%ang_grid)
+      call move_alloc(leb%weights, self%ang_weight)
 
    end subroutine ensure_lebedev_cache
 
@@ -510,7 +531,7 @@ contains
    subroutine setup_iswig_surface( &
       nsph, centers, radii, &
       cut_a, cut_f, &
-      oleb, zeta_born, ang_grid, ang_weight, &
+      zeta_born, ang_grid, ang_weight, &
       ngrid, owner, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
       total_area, total_volume, error)
 
@@ -518,9 +539,9 @@ contains
       real(wp), intent(in) :: centers(3, nsph)
       real(wp), intent(in) :: radii(nsph)
       real(wp), intent(in) :: cut_a, cut_f
-      integer, intent(in) :: oleb
       real(wp), intent(in) :: zeta_born
       real(wp), intent(in) :: ang_grid(:, :)
+      !> Solid-angle weights summing to 4*pi (num_leb)
       real(wp), intent(in) :: ang_weight(:)
 
       integer, intent(out) :: ngrid
@@ -547,7 +568,7 @@ contains
       real(wp) :: rx, ry, rz
 
       ! Allocate raw (pre-filter) arrays of total size
-      num_leb = grid_size(oleb)
+      num_leb = size(ang_weight)
       nraw = nsph*num_leb
       allocate (xyz_raw(3, nraw), source=0.0_wp)
       allocate (area_raw(nraw), source=0.0_wp)
@@ -561,7 +582,7 @@ contains
                                     ang_weight, zeta_born, nraw, xyz_raw, area_raw, owner_raw, &
                                     zeta_raw, weight_raw, switch_raw)
 
-      ! Compute switch_raw(iraw) = product_{j /= owner} [1 - 0.5*(erf(arg_plus)+erf(arg_minus))]
+      ! Compute switch_raw(iraw) = product_{j /= owner} 0.5*(erfc(arg_plus)+erfc(arg_minus))
       call compute_switching_function(nraw, nsph, owner_raw, xyz_raw, centers, &
                                       zeta_raw, radii, switch_raw)
 
@@ -682,8 +703,8 @@ contains
          do ileb = 1, num_leb
             iraw = iraw + 1
 
-            ! Construct raw Lebedev weight from ang_weight(ileb)
-            weight_raw(iraw) = ang_weight(ileb)*(4.0_wp*pi)
+            ! Raw Lebedev weight, solid angle of the node
+            weight_raw(iraw) = ang_weight(ileb)
 
             ! Cartesian location of point on sphere iat:
             xyz_raw(1, iraw) = centers(1, iat) + radii(iat)*ang_grid(1, ileb)
@@ -750,7 +771,7 @@ contains
 
             arg_plus = zeta_raw(iraw)*(radii(iat) + dist)
             arg_minus = zeta_raw(iraw)*(radii(iat) - dist)
-            switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
+            switch_pair = 0.5_wp*(erfc(arg_plus) + erfc(arg_minus))
 
             switch_raw(iraw) = switch_raw(iraw)*switch_pair
          end do
@@ -844,7 +865,7 @@ contains
 
       arg_plus = zeta*(radius + dist)
       arg_minus = zeta*(radius - dist)
-      switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
+      switch_pair = 0.5_wp*(erfc(arg_plus) + erfc(arg_minus))
 
       dfdr = -f_val*zeta/(sqrt(pi)*switch_pair*dist) &
             & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))

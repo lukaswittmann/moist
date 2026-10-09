@@ -54,7 +54,8 @@ contains
                   new_unittest("branch_uniform_phi", test_branch_uniform_phi), &
                   new_unittest("branch_dominant_sibling", test_branch_dominant_sibling), &
                   new_unittest("branch_all_below_cut_fallback", test_branch_fallback), &
-                  new_unittest("branch_softmax_width_limits", test_branch_width_limits) &
+                  new_unittest("branch_softmax_width_limits", test_branch_width_limits), &
+                  new_unittest("branch_pruning_contract_edges", test_branch_contract_edges) &
                   ]
 
    end subroutine collect_cavity_drop_filter
@@ -646,6 +647,82 @@ contains
       call check(error, cav%wbranch(2), 0.5_wp, thr_abs=1.0e-6_wp, thr_rel=0.0_wp)
 
    end subroutine test_branch_width_limits
+
+   !> Strict cutoff with a leading discarded sibling, a lone final point whose
+   !> branch count collapses during weighting, and exact ties at the cutoff
+   subroutine test_branch_contract_edges(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop) :: cav
+      type(moist_context_type), target :: ctx
+      type(moist_error_type), allocatable :: failed
+      integer, parameter :: n = 4
+      real(wp) :: wleb(n), f(n), wref(2)
+      integer :: i, j
+
+      wleb = [100.0_wp, 0.01_wp, 2.0_wp, 0.6_wp]
+      f = [0.2_wp, 0.001_wp, 1.0_wp, 1.0_wp]
+      call build_cavity(cav, ctx, n, wleb, f)
+      cav%param%wleb_cut = 0.1_wp
+      call cav%branch_weight%init(1.0_wp)
+      cav%anchor_id = [80, 80, 80, 81]
+      cav%branch_count = [3, 3, 3, 2]
+      cav%phi0 = [20.0_wp, 0.0_wp, 0.3_wp, 7.0_wp]
+      wref = ref_softmax(cav%phi0(2:3), 1.0_wp)
+
+      call cav%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "pruning succeeds")
+      if (allocated(error)) return
+      call check(error, cav%wbranch(1), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp)
+      if (allocated(error)) return
+      do i = 2, 3
+         call check(error, cav%wbranch(i), wref(i - 1), thr_abs=SOFTMAX_THR, thr_rel=SOFTMAX_THR)
+         if (allocated(error)) return
+         call check(error, cav%wleb(i), wleb(i)*wref(i - 1), &
+                    thr_abs=SOFTMAX_THR, thr_rel=SOFTMAX_THR)
+         if (allocated(error)) return
+         call check(error, cav%branch_count(i), 2, "two retained siblings")
+         if (allocated(error)) return
+      end do
+      !> Point 4 is alone in its group but still has branch_count > 1, so it is weighted
+      call check(error, cav%wbranch(4), 1.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp)
+      if (allocated(error)) return
+      call check(error, cav%branch_count(4), 1, "lone final branch collapses during weighting")
+      if (allocated(error)) return
+      do i = 1, n
+         do j = 1, 3
+            call check(error, cav%xyz(j, i), tag2(SLOT_XYZ, i, j), "branch geometry preserved")
+            if (allocated(error)) return
+         end do
+         call check(error, cav%owner(i), itag(SLOT_OWNER, i), "branch owner preserved")
+         if (allocated(error)) return
+      end do
+
+      !> Equal weights exactly at the cutoff are all rejected, so the fallback keeps one
+      !> sibling; which of the tied siblings survives is not part of the contract
+      wleb = 1.0_wp
+      f = 1.0_wp
+      call build_cavity(cav, ctx, n, wleb, f)
+      cav%param%wleb_cut = 0.25_wp
+      call cav%branch_weight%init(1.0_wp)
+      cav%anchor_id = 82
+      cav%branch_count = n
+      cav%phi0 = 0.0_wp
+      call cav%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "boundary weighting succeeds")
+      if (allocated(error)) return
+      call check(error, count(cav%wbranch(1:n) == 1.0_wp), 1, "exactly one tied sibling survives")
+      if (allocated(error)) return
+      call check(error, count(cav%wbranch(1:n) == 0.0_wp), n - 1, &
+                 "the other tied siblings are discarded")
+      if (allocated(error)) return
+      do i = 1, n
+         call check(error, cav%branch_count(i), 1, "tie fallback keeps a single branch")
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_branch_contract_edges
 
    !* ================================================================================= *!
    !*                                      Fixture                                      *!

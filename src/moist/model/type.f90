@@ -1,40 +1,86 @@
-!> Abstract solvation model and model component
+!> Domain-independent solvation model interface and shared coupling lifecycle
+!>
+!> Every family (continuum, MOZ 1D, MOZ 3D, ...) shares one host coupling
+!> protocol: mint a coupling, stage a phase, walk it and answer by name
+!>
+!> - owns that protocol as concrete base procedures
+!> - a family supplies only `update`, `get_energy`, `get_response`,
+!>   `get_gradient`, `atom_count` and the one coupling hook, `declare_pass`,
+!>   that declares its own requests and snapshots the coupling extents
+!> - a family with an evaluation domain overrides `list_fields` to publish
+!>   its named arrays; the base publishes none
 module moist_model_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_response, only: response_type
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, moist_phase_energy, &
-      & moist_phase_response, moist_phase_gradient, coupling_begin_registration, &
-      & coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate
+   use moist_channels_fields, only: field_query_type
+   use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
+      & moist_phase_energy, moist_phase_response, moist_phase_gradient, &
+      & coupling_arm, coupling_invalidate
 
    implicit none(type, external)
    private
 
-   public :: solvation_model_type, solvation_model_component_type
+   public :: solvation_model_type
 
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
-      !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller, never allocated or freed by the model
+      !> Borrowed run context (verbosity/debug/timer)
+      !>
+      !> Set at construction; owned by the caller, never allocated or freed here
       type(moist_context_type), pointer :: ctx => null()
-
+      !> Whether the latest model update completed successfully
+      logical :: updated = .false.
+      !> Registry of model-owned host couplings
+      type(coupling_registry_type), private :: couplings
    contains
 
       procedure(update_model), deferred :: update
       procedure(get_model_energy), deferred :: get_energy
       procedure(get_model_response), deferred :: get_response
       procedure(get_model_gradient), deferred :: get_gradient
+      !> Number of atoms in the family's owned geometry
+      procedure(model_atom_count_i), deferred :: atom_count
+      !> Declare this family's coupling requests and record the extents
+      procedure(declare_model_pass), deferred :: declare_pass
+      !> Declare the named fields of the evaluation domain; none by default
+      procedure :: list_fields => model_list_fields
+
+      !> Whether the latest update completed
+      procedure :: is_updated => model_is_updated
+      !> Invalidate cached results and every model-owned coupling
+      procedure :: invalidate => invalidate_model
+      !> Release the coupling registry; called from each family's finalizer
+      procedure :: clear_couplings => model_clear_couplings
+      !> Require a successfully updated model
+      procedure :: require_updated => model_require_updated
+      !> Require a coupling minted by this model
+      procedure :: require_owned => model_require_owned
+      !> Build a model-owned coupling and declare its requests
+      procedure :: new_coupling => model_new_coupling
+      procedure :: release_coupling => model_release_coupling
+      !> Stage one phase of the coupling (declare, snapshot the grid size, arm)
+      procedure, private :: stage => model_stage_coupling
+      !> Stage the energy phase
+      procedure :: prepare_energy => model_prepare_energy
+      !> Stage the response phase
+      procedure :: prepare_response => model_prepare_response
+      !> Stage the gradient phase
+      procedure :: prepare_gradient => model_prepare_gradient
 
    end type solvation_model_type
 
+   !> Deferred procedure contracts
    abstract interface
 
       !> Update the solvation model with the current molecular structure
       !>
       !> - calculates all structure-dependent properties
+      !>
+      !> @param[in,out] self Instance of the solvation model
+      !> @param[in] mol Molecular structure data
+      !> @param[out] error Error handling
       subroutine update_model(self, mol, error)
          import solvation_model_type, structure_type, error_type
          implicit none(type, external)
@@ -47,6 +93,11 @@ module moist_model_type
       end subroutine update_model
 
       !> Evaluate the solvation energy
+      !>
+      !> @param[in,out] self Instance of the solvation model
+      !> @param[in,out] coupling Wavefunction data
+      !> @param[in,out] energy Solvation energy
+      !> @param[out] error Error handling
       subroutine get_model_energy(self, coupling, energy, error)
          import solvation_model_type, structure_type, wp, error_type, coupling_type
          implicit none(type, external)
@@ -61,6 +112,11 @@ module moist_model_type
       end subroutine get_model_energy
 
       !> Get the solvation response (only for self-consistent models)
+      !>
+      !> @param[in,out] self Instance of the solvation model
+      !> @param[in,out] coupling Wavefunction data
+      !> @param[in,out] response Solvation response for the component
+      !> @param[out] error Error handling
       subroutine get_model_response(self, coupling, response, error)
          import solvation_model_type, structure_type, wp, error_type, response_type, coupling_type
          implicit none(type, external)
@@ -76,8 +132,16 @@ module moist_model_type
 
       !> Get the solvation energy gradient and the host part of the phase
       !>
-      !> `response` is cleared on entry and returns what the host contracts
-      !> with its own geometry derivatives (potential adjoint, Gaussian amplitudes)
+      !> `response` is cleared once the request is accepted and returns what the
+      !> host contracts with its own geometry derivatives (potential adjoint,
+      !> Gaussian amplitudes); a rejected request, including an unimplemented
+      !> theory, leaves it untouched
+      !>
+      !> @param[in,out] self Instance of the solvation model
+      !> @param[in,out] coupling Wavefunction data
+      !> @param[in,out] response Host part of the gradient phase
+      !> @param[in,out] gradient Solvation gradient
+      !> @param[out] error Error handling
       subroutine get_model_gradient(self, coupling, response, gradient, error)
          import solvation_model_type, structure_type, wp, error_type, response_type, coupling_type
          implicit none(type, external)
@@ -93,351 +157,169 @@ module moist_model_type
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_model_gradient
 
-   end interface
-
-   !> Abstract solvation model component
-   type, abstract :: solvation_model_component_type
-      !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller, never allocated or freed by the component
-      type(moist_context_type), pointer :: ctx => null()
-      !> Name of the component
-      character(len=:), allocatable :: name
-      !> Molecular structure data for the component
-      type(structure_type) :: mol_solu
-      !> Linear scale factor applied to this contribution
+      !> Number of atoms in the family's owned geometry, zero before construction
       !>
-      !> - the component multiplies its energy, solvation response and
-      !>   surface/level set response by this constant, so the contribution
-      !>   stays variational
-      !> - 1.0 leaves it unchanged, 0.0 disables it
-      real(wp) :: scale = 1.0_wp
-      !> Error handling
-      type(error_type), allocatable :: error
-   contains
-
-      procedure(update_component), deferred :: update
-      procedure(get_component_energy), deferred :: get_energy
-      procedure(get_component_response), deferred :: get_response
-      procedure(get_component_gradient), deferred :: get_gradient
-      !> Internal emission hook: accumulate the response items that depend only
-      !> on the potential adjoint; called by a component's own `get_response` and
-      !> `get_gradient`, while the public phase accessors are `get_energy`,
-      !> `get_response` and `get_gradient`
-      procedure :: get_trace_response => get_component_trace_response_default
-      !> Accumulate component-specific surface adjoint weights
-      procedure :: get_surface_weights => get_component_surface_weights_default
-      !> Accumulate the host's direct trace-geometry surface adjoint weights
-      procedure :: get_host_surface_weights => get_component_host_surface_weights_default
-      !> Accumulate the surface adjoint weights the *nuclear gradient* needs
-      procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
-      !> Accumulate nuclear-gradient terms that do not flow through the surface
-      procedure :: get_direct_gradient => get_component_direct_gradient_default
-      !> Declare the host requests this component reads (none by default)
-      procedure :: declare_coupling => declare_component_coupling_default
-      !> Build the coupling of a bare component driven without a model
-      procedure :: new_coupling => new_component_coupling
-      !> Stage one phase of a bare component's coupling
-      procedure, private :: stage => stage_component_coupling
-      !> Stage the energy phase
-      procedure :: prepare_energy => prepare_component_energy
-      !> Stage the response phase
-      procedure :: prepare_response => prepare_component_response
-      !> Stage the gradient phase
-      procedure :: prepare_gradient => prepare_component_gradient
-
-   end type solvation_model_component_type
-
-   abstract interface
-
-      !> Update the solvation model component with the current molecular structure
-      subroutine update_component(self, mol, cavity, error)
-         import solvation_model_component_type, structure_type, cavity_type, error_type
+      !> @param[in] self Instance of the solvation model
+      function model_atom_count_i(self) result(nat)
+         import solvation_model_type
          implicit none(type, external)
-         !> Instance of the solvation model component
-         class(solvation_model_component_type), intent(inout) :: self
-         !> Molecular structure data
-         type(structure_type), intent(in) :: mol
-         !> Cavity type data
-         class(cavity_type), intent(inout) :: cavity
-         !> Error handling
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine update_component
+         !> Instance of the solvation model
+         class(solvation_model_type), intent(in) :: self
+         !> Atom count
+         integer :: nat
+      end function model_atom_count_i
 
-      !> Evaluate the solvation energy for the component
-      subroutine get_component_energy(self, coupling, cavity, energy, error)
-         import solvation_model_component_type, cavity_type, wp, coupling_view_type, error_type
-         implicit none(type, external)
-         !> Instance of the solvation model component
-         class(solvation_model_component_type), intent(inout) :: self
-         !> Wavefunction data
-         class(coupling_view_type), intent(in) :: coupling
-         !> Live cavity owned by the orchestrating model
-         class(cavity_type), intent(inout) :: cavity
-         !> solvation energy for the component
-         real(wp), intent(inout) :: energy
-         !> Error handling
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine get_component_energy
-
-      !> Get the solvation response for the component
-      subroutine get_component_response(self, coupling, cavity, response, error)
-         import solvation_model_component_type, cavity_type, response_type, coupling_view_type, error_type
-         implicit none(type, external)
-         !> Instance of the solvation model component
-         class(solvation_model_component_type), intent(inout) :: self
-         !> Wavefunction data
-         class(coupling_view_type), intent(in) :: coupling
-         !> Live cavity owned by the orchestrating model
-         class(cavity_type), intent(inout) :: cavity
-         !> Solvation response for the component
-         type(response_type), intent(inout) :: response
-         !> Error handling
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine get_component_response
-
-      !> Get the solvation energy gradient for the component
+      !> Declare this family's coupling requests, then record the extents
       !>
-      !> Accumulates into `response` the host part of the gradient phase (what
-      !> the host contracts with its own geometry derivatives)
-      subroutine get_component_gradient(self, coupling, cavity, response, gradient, error)
-         import solvation_model_component_type, cavity_type, wp, response_type, coupling_view_type, &
-            & error_type
+      !> Called on an updated model; ends with `coupling_snapshot`, giving the
+      !> counts the family's own evaluation domain has (`ngrid`, `natom`)
+      !>
+      !> @param[in,out] self Updated solvation model
+      !> @param[in,out] coupling Coupling to declare
+      !> @param[out] error Error handling
+      subroutine declare_model_pass(self, coupling, error)
+         import solvation_model_type, coupling_type, error_type
          implicit none(type, external)
-         !> Instance of the solvation model component
-         class(solvation_model_component_type), intent(inout) :: self
-         !> Wavefunction data
-         class(coupling_view_type), intent(in) :: coupling
-         !> Live cavity owned by the orchestrating model
-         class(cavity_type), intent(inout) :: cavity
-         !> Host part of the gradient phase for the component
-         type(response_type), intent(inout) :: response
-         !> Solvation gradient for the component
-         real(wp), intent(inout) :: gradient(:, :)
+         !> Updated solvation model
+         class(solvation_model_type), intent(inout) :: self
+         !> Coupling to declare
+         type(coupling_type), intent(inout) :: coupling
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_component_gradient
+      end subroutine declare_model_pass
 
    end interface
 
 contains
 
-   !* ================================================================================= *!
-   !*                                 Component hooks                                 *!
-   !* ================================================================================= *!
-
-   !> Default no-op direct trace-response hook
+   !> Whether the latest update completed
    !>
-   !> @param[inout] self      Solvation component
-   !> @param[in]    coupling  Host coupling data
-   !> @param[inout] cavity    Live model cavity
-   !> @param[inout] response  Direct trace-response accumulator
-   !> @param[out]   error     Error object
-   subroutine get_component_trace_response_default(self, coupling, cavity, response, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Host coupling data
-      class(coupling_view_type), intent(in) :: coupling
-      !> Live model cavity
-      class(cavity_type), intent(inout) :: cavity
-      !> Direct trace-response accumulator
-      type(response_type), intent(inout) :: response
+   !> @param[in] self Model
+   function model_is_updated(self) result(updated)
+      !> Model
+      class(solvation_model_type), intent(in) :: self
+      !> Update status
+      logical :: updated
+      updated = self%updated
+   end function model_is_updated
+
+   !> Declare the named fields of the model's evaluation domain
+   !>
+   !> Default: none; a family with a cavity or a grid overrides it
+   !>
+   !> @param[in] self Model
+   !> @param[in,out] query Field walker
+   subroutine model_list_fields(self, query)
+      !> Model
+      class(solvation_model_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+   end subroutine model_list_fields
+
+   !> Invalidate cached results and host answers
+   !>
+   !> @param[in,out] self Model
+   subroutine invalidate_model(self)
+      !> Model
+      class(solvation_model_type), intent(inout) :: self
+      self%updated = .false.
+      call self%couplings%invalidate()
+   end subroutine invalidate_model
+
+   !> Release every coupling minted by this model
+   !>
+   !> Called from each family's own `final` procedure: a `final` subroutine
+   !> takes a non-polymorphic dummy, which an abstract type cannot provide, so
+   !> the registry stays private here and each concrete family destroys
+   !> through this public hook instead of its own `final` touching it directly
+   !>
+   !> @param[in,out] self Model being destroyed
+   subroutine model_clear_couplings(self)
+      !> Model being destroyed
+      class(solvation_model_type), intent(inout) :: self
+      call self%couplings%clear()
+   end subroutine model_clear_couplings
+
+   !> Require a successfully updated model
+   !>
+   !> @param[in] self Model
+   !> @param[out] error Error handling
+   subroutine model_require_updated(self, error)
+      !> Model
+      class(solvation_model_type), intent(in) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      if (.not. self%updated) call fatal_error(error, "Solvation model must be updated first")
+   end subroutine model_require_updated
 
-   end subroutine get_component_trace_response_default
-
-   !> Default no-op surface-weight hook for components without cavity response
+   !> Require a coupling minted by this model
    !>
-   !> @param[inout] self    Solvation component
-   !> @param[in]    coupling     Wavefunction data
-   !> @param[in]    cavity  Cavity data
-   !> @param[inout] acc     Cavity-specific surface-adjoint accumulator
-   !> @param[out]   error   Error object
-   subroutine get_component_surface_weights_default(self, coupling, cavity, acc, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Wavefunction data
-      class(coupling_view_type), intent(in) :: coupling
-      !> Cavity data
-      class(cavity_type), intent(in) :: cavity
-      !> Cavity-specific surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+   !> @param[in] self Model
+   !> @param[in] coupling Coupling to check
+   !> @param[out] error Error handling
+   subroutine model_require_owned(self, coupling, error)
+      !> Model
+      class(solvation_model_type), intent(in), target :: self
+      !> Coupling to check
+      class(coupling_type), intent(in), target :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      if (.not. self%couplings%owns(coupling)) then
+         call fatal_error(error, "Coupling belongs to a different model")
+      end if
+   end subroutine model_require_owned
 
-   end subroutine get_component_surface_weights_default
-
-   !> Default no-op host trace-geometry weight hook
+   !> Build the host coupling of an updated model
    !>
-   !> Surface traces built from the host's QM integrals (potential, normal
-   !> derivative, ...) carry a surface dependence moist cannot differentiate, so
-   !> the host supplies dE/d(xi, f, r, n) at fixed operator through the
-   !> surface-weight requests of the coupling
+   !> - multiple couplings may coexist; release unused ones with
+   !>   `release_coupling`
    !>
-   !> Components with such a trace override this hook to add those channels to
-   !> the shared surface-adjoint accumulator; the rest inherit the no-op
-   !>
-   !> @param[inout] self     Solvation component
-   !> @param[in]    coupling Wavefunction data carrying the host weights
-   !> @param[inout] acc      Surface-adjoint accumulator
-   !> @param[in]    ngrid    Expected grid size of the component's cavity
-   !> @param[out]   error    Error object
-   subroutine get_component_host_surface_weights_default(self, coupling, acc, ngrid, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Wavefunction data
-      class(coupling_view_type), intent(in) :: coupling
-      !> Cavity-specific surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
-      !> Expected grid size of the component's cavity
-      integer, intent(in) :: ngrid
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-   end subroutine get_component_host_surface_weights_default
-
-   !> Default gradient-side surface weights: the same ones the response uses
-   !>
-   !> For most components the surface adjoint of the energy is one object, so
-   !> the reverse-mode nuclear gradient can reuse `get_surface_weights`
-   !> verbatim; a component whose gradient legitimately consumes a different
-   !> set of host channels overrides this (see `solvation_model_component_pcm`)
-   !>
-   !> @param[inout] self     Solvation component
-   !> @param[in]    coupling Wavefunction data
-   !> @param[in]    cavity   Cavity data
-   !> @param[inout] acc      Cavity-specific surface-adjoint accumulator
-   !> @param[out]   error    Error object
-   subroutine get_component_gradient_surface_weights_default(self, coupling, cavity, acc, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Wavefunction data
-      class(coupling_view_type), intent(in) :: coupling
-      !> Cavity data
-      class(cavity_type), intent(in) :: cavity
-      !> Cavity-specific surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call self%get_surface_weights(coupling, cavity, acc, error)
-
-   end subroutine get_component_gradient_surface_weights_default
-
-   !> Default no-op hook for nuclear-gradient terms outside the surface
-   !>
-   !> Used by the reverse-mode gradient path for contributions that do not
-   !> reach the energy through a cavity surface quantity -- for PCM, the
-   !> solute nuclei moving under fixed surface charges
-   !>
-   !> @param[inout] self     Solvation component
-   !> @param[in]    coupling Wavefunction data
-   !> @param[in]    cavity   Cavity data
-   !> @param[inout] gradient Nuclear-gradient accumulator, unchanged
-   !> @param[out]   error    Error object
-   subroutine get_component_direct_gradient_default(self, coupling, cavity, gradient, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Wavefunction data
-      class(coupling_view_type), intent(in) :: coupling
-      !> Cavity data
-      class(cavity_type), intent(inout) :: cavity
-      !> Nuclear-gradient accumulator
-      real(wp), intent(inout) :: gradient(:, :)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-   end subroutine get_component_direct_gradient_default
-
-   !> Default component-side declaration: the component reads no host request
-   !>
-   !> @param[in]    self     Solvation component
-   !> @param[in]    cavity   Cavity the model is built on
-   !> @param[inout] coupling Coupling being declared
-   !> @param[out]   error    Error handling
-   subroutine declare_component_coupling_default(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(in) :: self
-      !> Cavity the model is built on
-      class(cavity_type), intent(in) :: cavity
-      !> Coupling being declared
-      type(coupling_type), intent(inout) :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-   end subroutine declare_component_coupling_default
-
-   !* ================================================================================= *!
-   !*                             Bare-component coupling                             *!
-   !* ================================================================================= *!
-
-   !> Declare the cavity's and the component's requests, then record the grid size
-   !>
-   !> @param[in]    self     Solvation component
-   !> @param[in]    cavity   Updated cavity
-   !> @param[in,out] coupling Coupling to declare
-   !> @param[out]   error    Error handling
-   subroutine declare_component_pass(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(in) :: self
-      !> Updated cavity
-      class(cavity_type), intent(in) :: cavity
-      !> Coupling to declare
-      type(coupling_type), intent(inout) :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call coupling_begin_registration(coupling)
-      call coupling_set_scope(coupling, 0)
-      call cavity%declare_coupling(coupling, error)
-      if (allocated(error)) return
-      call coupling_set_scope(coupling, 1)
-      call self%declare_coupling(cavity, coupling, error)
-      if (allocated(error)) return
-      call coupling_snapshot(coupling, cavity%ngrid)
-
-   end subroutine declare_component_pass
-
-   !> Build the coupling of a bare component driven without a model
-   !>
-   !> The request list never grows after this call; `prepare_*` re-declares
-   !> the same requests with the phase's requirements
-   !>
-   !> @param[in]  self     Solvation component
-   !> @param[in]  cavity   Updated cavity the component was updated on
-   !> @param[out] coupling Coupling to build
-   !> @param[out] error    Error handling
-   subroutine new_component_coupling(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(in) :: self
-      !> Updated cavity
-      class(cavity_type), intent(in) :: cavity
+   !> @param[in,out] self Instance
+   !> @param[out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine model_new_coupling(self, coupling, error)
+      !> Updated model
+      class(solvation_model_type), intent(inout), target :: self
       !> Coupling to build
-      type(coupling_type), intent(out) :: coupling
+      type(coupling_type), pointer, intent(out) :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call declare_component_pass(self, cavity, coupling, error)
+      nullify (coupling)
+      call self%require_updated(error)
+      if (allocated(error)) return
+      call self%couplings%mint(coupling, error)
+      if (allocated(error)) return
+      call self%declare_pass(coupling, error)
+      if (allocated(error)) call self%release_coupling(coupling)
 
-   end subroutine new_component_coupling
+   end subroutine model_new_coupling
 
-   !> Stage one phase of a bare component's coupling
+   !> Release a coupling before destroying its parent model
    !>
-   !> - energy starts a new host evaluation; later phases reuse valid raw
-   !>   answers
-   !> - the coupling keeps no grid copy, so after changing the cavity the
-   !>   caller must stage the energy phase before any later one
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   subroutine model_release_coupling(self, coupling)
+      !> Owning model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Coupling to release; other aliases must no longer be used
+      type(coupling_type), pointer, intent(inout) :: coupling
+      call self%couplings%release(coupling)
+   end subroutine model_release_coupling
+
+   !> Stage per-output requirements and preserve still-valid raw answers
    !>
-   !> @param[in,out] self     Solvation component
-   !> @param[in]    cavity   Live cavity
+   !> - energy staging starts a new host evaluation; response and gradient
+   !>   staging reuse outputs until geometry or declared scientific inputs change
+   !> - every staging starts a new host walk: `next()` begins at the first request
+   !>
+   !> @param[in,out] self     Updated model
    !> @param[in,out] coupling Coupling built by `new_coupling`
    !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
-   !> @param[out]   error    Invalid phase or failed declaration
-   subroutine stage_component_coupling(self, cavity, coupling, phase, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Live cavity
-      class(cavity_type), intent(in) :: cavity
+   !> @param[out]   error    Foreign coupling, invalid phase or failed declaration
+   subroutine model_stage_coupling(self, coupling, phase, error)
+      !> Updated model
+      class(solvation_model_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Phase index
@@ -445,71 +327,66 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call self%require_updated(error)
+      if (allocated(error)) return
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
       if (phase == moist_phase_energy) call coupling_invalidate(coupling)
-      call declare_component_pass(self, cavity, coupling, error)
+      call self%declare_pass(coupling, error)
       if (allocated(error)) return
       call coupling_arm(coupling, phase, error)
 
-   end subroutine stage_component_coupling
+   end subroutine model_stage_coupling
 
-   !> Stage the energy phase of a bare component's coupling
+   !> Stage the energy phase of the coupling
    !>
-   !> @param[in,out] self     Solvation component
-   !> @param[in]    cavity   Live cavity
-   !> @param[in,out] coupling Coupling built by `new_coupling`
-   !> @param[out]   error    Error handling
-   subroutine prepare_component_energy(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Live cavity
-      class(cavity_type), intent(in) :: cavity
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine model_prepare_energy(self, coupling, error)
+      !> Updated model
+      class(solvation_model_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%stage(cavity, coupling, moist_phase_energy, error)
+      call self%stage(coupling, moist_phase_energy, error)
 
-   end subroutine prepare_component_energy
+   end subroutine model_prepare_energy
 
-   !> Stage the response phase of a bare component's coupling
+   !> Stage the response phase of the coupling
    !>
-   !> @param[in,out] self     Solvation component
-   !> @param[in]    cavity   Live cavity
-   !> @param[in,out] coupling Coupling built by `new_coupling`
-   !> @param[out]   error    Error handling
-   subroutine prepare_component_response(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Live cavity
-      class(cavity_type), intent(in) :: cavity
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine model_prepare_response(self, coupling, error)
+      !> Updated model
+      class(solvation_model_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%stage(cavity, coupling, moist_phase_response, error)
+      call self%stage(coupling, moist_phase_response, error)
 
-   end subroutine prepare_component_response
+   end subroutine model_prepare_response
 
-   !> Stage the gradient phase of a bare component's coupling
+   !> Stage the gradient phase of the coupling
    !>
-   !> @param[in,out] self     Solvation component
-   !> @param[in]    cavity   Live cavity
-   !> @param[in,out] coupling Coupling built by `new_coupling`
-   !> @param[out]   error    Error handling
-   subroutine prepare_component_gradient(self, cavity, coupling, error)
-      !> Solvation component
-      class(solvation_model_component_type), intent(inout) :: self
-      !> Live cavity
-      class(cavity_type), intent(in) :: cavity
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine model_prepare_gradient(self, coupling, error)
+      !> Updated model
+      class(solvation_model_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%stage(cavity, coupling, moist_phase_gradient, error)
+      call self%stage(coupling, moist_phase_gradient, error)
 
-   end subroutine prepare_component_gradient
+   end subroutine model_prepare_gradient
 
 end module moist_model_type

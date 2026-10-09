@@ -1,4 +1,8 @@
 import functools
+import importlib
+from pathlib import Path
+import runpy
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -13,6 +17,12 @@ from moist.interface import (
     Structure,
 )
 from moist.library import _callback_takes_order, get_api_version
+from moist import Context
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
+
+REQUIREMENTS_SCRIPT = Path(__file__).parents[1] / "check_requirements.py"
 
 
 def test_api_version_format() -> None:
@@ -158,7 +168,8 @@ def flaky_lsf(water) -> SimpleNamespace:
 def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
     """A callback-backed DROP cavity; the contour is an LSF setting, not the source's."""
     return CavityDROP(lsf=Isodensity(parameters=IsodensityParameters(rho_iso=rho_iso)),
-                      parameters=DROPParameters(nleb=26), source=source, **kwargs)
+                      parameters=DROPParameters(nleb=26), source=source, context=CONTEXT,
+                      **kwargs)
 
 
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
@@ -330,7 +341,7 @@ def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> N
     """Model updates propagate callback failures and invalidate their live view."""
     structure = Structure(*water)
     model = SolvationModel(
-        _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
+        CONTEXT, _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
     )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0
@@ -402,3 +413,171 @@ def test_next_response_item_fails_closed():
         lib.moist_delete_error(ffi.new("moist_error *", error))
     with raises(RuntimeError, match="next_response_item"):
         next_response_item(ResponseHandle.null())
+
+
+def test_callback_uninspectable_falls_back():
+    class Uninspectable:
+        @property
+        def __signature__(self):
+            raise ValueError("no signature")
+
+        def __call__(self, point):
+            raise AssertionError("introspection must not call the callback")
+
+    assert not _callback_takes_order(Uninspectable())
+
+
+@pytest.mark.parametrize("order", [1, 2, 3])
+@pytest.mark.parametrize("attributes", [False, True])
+def test_callback_transports_requested_density_derivatives(order, attributes):
+    from moist.library import ffi
+
+    point = np.array([0.2, -0.7, 1.3])
+    gradient = np.array([2.0, -3.0, 5.0])
+    hessian = np.arange(9, dtype=float).reshape(3, 3) + 7.0
+    third = np.arange(27, dtype=float).reshape(3, 3, 3) - 11.0
+    seen = []
+
+    def callback(actual_point, actual_order):
+        seen.append((actual_point.copy(), actual_order))
+        values = (4.25, gradient, hessian, third)[:actual_order + 1]
+        if attributes:
+            return SimpleNamespace(**dict(zip(("rho", "drho", "d2rho", "d3rho"), values)))
+        return values
+
+    handle = _isodensity(callback)._as_handle()
+    native_point = ffi.new("double[3]", point.tolist())
+    rho = ffi.new("double *")
+    drho = ffi.new("double[3]")
+    d2rho = ffi.new("double[9]") if order >= 2 else ffi.NULL
+    d3rho = ffi.new("double[27]") if order == 3 else ffi.NULL
+    assert handle.callback_ref(ffi.NULL, native_point, rho, drho, d2rho, d3rho) == 0
+    assert len(seen) == 1
+    np.testing.assert_array_equal(seen[0][0], point)
+    assert seen[0][1] == order
+    assert rho[0] == 4.25
+    np.testing.assert_array_equal(list(drho), gradient)
+    if order >= 2:
+        np.testing.assert_array_equal(list(d2rho), hessian.ravel(order="C"))
+    if order == 3:
+        np.testing.assert_array_equal(list(d3rho), third.ravel(order="C"))
+
+
+@pytest.mark.parametrize("values,order,message", [
+    ((1.0, np.zeros((1, 3))), 1, "gradient must have shape"),
+    ((1.0, np.zeros(3), np.zeros(9)), 2, "Hessian must have shape"),
+    ((1.0, np.zeros(3), np.zeros((3, 3)), np.zeros(27)), 3, "third derivative must have shape"),
+    ((1.0, np.zeros(3)), 2, "did not return the requested Hessian"),
+    ((1.0, np.zeros(3), np.zeros((3, 3))), 3, "did not return the requested third derivative"),
+])
+def test_callback_rejects_malformed_derivatives(values, order, message):
+    from moist.library import ffi
+
+    handle = _isodensity(lambda point, order: values)._as_handle()
+    status = handle.callback_ref(
+        ffi.NULL, ffi.new("double[3]"), ffi.new("double *"), ffi.new("double[3]"),
+        ffi.new("double[9]") if order >= 2 else ffi.NULL,
+        ffi.new("double[27]") if order == 3 else ffi.NULL,
+    )
+    assert status != 0
+    with raises(ValueError, match=message):
+        handle.callback_state.raise_if_failed()
+
+
+def test_callback_preserves_base_exception():
+    from moist.library import ffi
+
+    failure = KeyboardInterrupt("density interrupted")
+
+    def callback(point, order):
+        raise failure
+
+    handle = _isodensity(callback)._as_handle()
+    assert handle.callback_ref(
+        ffi.NULL, ffi.new("double[3]"), ffi.new("double *"), ffi.new("double[3]"),
+        ffi.NULL, ffi.NULL,
+    ) != 0
+    with raises(KeyboardInterrupt) as caught:
+        handle.callback_state.raise_if_failed()
+    assert caught.value is failure
+
+
+def test_callback_state_first_failure_consumption_and_reset():
+    from moist.library import CallbackState
+
+    state = CallbackState()
+    first = RuntimeError("first")
+    state.record(first)
+    state.record(ValueError("later"))
+    with raises(RuntimeError) as caught:
+        state.raise_if_failed()
+    assert caught.value is first
+    state.raise_if_failed()
+    state.record(ValueError("reset me"))
+    state.reset()
+    state.raise_if_failed()
+
+
+@pytest.mark.parametrize("missing", [None, "cffi", "numpy", "pytest", "pyscf",
+                                    "pyscf.dft", "pyscf.grad", "pyscf.gto", "pyscf.scf"])
+def test_python_requirements_cli_checks_every_dependency(monkeypatch, capsys, missing):
+    """The registered gate must fail for each unusable root or PySCF submodule."""
+    names = ["cffi", "numpy", "pytest", "pyscf", "pyscf.dft", "pyscf.grad",
+             "pyscf.gto", "pyscf.scf"]
+    called = []
+
+    def import_dependency(name):
+        called.append(name)
+        if name == missing:
+            raise ImportError("dependency's internal import failed")
+        return object()
+
+    monkeypatch.setattr(importlib, "import_module", import_dependency)
+    monkeypatch.setattr(sys, "argv", [str(REQUIREMENTS_SCRIPT), "cffi", "numpy", "pytest",
+                                      "pyscf:dft,grad,gto,scf"])
+    if missing:
+        with raises(SystemExit) as caught:
+            runpy.run_path(str(REQUIREMENTS_SCRIPT), run_name="__main__")
+        message = caught.value.code
+        assert isinstance(message, str)
+        assert f"  {missing}: dependency's internal import failed" in message
+        assert "Install them" in message and "-Dpython=false" in message
+        assert "all Python test requirements are importable" not in capsys.readouterr().out
+    else:
+        runpy.run_path(str(REQUIREMENTS_SCRIPT), run_name="__main__")
+        assert capsys.readouterr().out.strip() == "all Python test requirements are importable"
+    expected = names[:4] if missing == "pyscf" else names
+    assert set(called) == set(expected)
+
+
+def test_python_requirements_aggregates_and_parses_specs(monkeypatch):
+    main = runpy.run_path(str(REQUIREMENTS_SCRIPT))["main"]
+    called = []
+
+    def unavailable(name):
+        called.append(name)
+        if name in {"first", "second.a", "second.b"}:
+            raise ImportError(f"broken {name}")
+        return object()
+
+    monkeypatch.setattr(importlib, "import_module", unavailable)
+    with raises(SystemExit) as caught:
+        main(["first:a,b", "second:a,,b,", "third:"])
+    assert set(called) == {"first", "second", "second.a", "second.b", "third"}
+    message = caught.value.code
+    for name in ("first", "second.a", "second.b"):
+        assert f"  {name}: broken {name}" in message
+
+
+def test_python_requirements_fails_closed_on_unexpected_import_error(monkeypatch):
+    main = runpy.run_path(str(REQUIREMENTS_SCRIPT))["main"]
+    failure = RuntimeError("dependency initialization failed")
+
+    def broken(name):
+        raise failure
+
+    monkeypatch.setattr(importlib, "import_module", broken)
+    with raises((RuntimeError, SystemExit)) as caught:
+        main(["numpy"])
+    if isinstance(caught.value, SystemExit):
+        assert caught.value.code not in (None, 0)

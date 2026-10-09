@@ -18,10 +18,10 @@ module test_cavity_drop_born_fit
    use mstore, only : get_structure
    use moist_cavity_drop, only : cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only : moist_cavity_drop_lsf_svdw_type
-   use moist_math_grid_lebedev, only : get_angular_grid, grid_size, &
+   use moist_math_grid_angular_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
-   use moist_model_component_pcm_solvers, only : solve_pcm_cholesky
-   use moist_model_component_pcm_amat, only : assemble_pcm_amat
+   use moist_model_continuum_component_pcm_solvers, only : solve_pcm_cholesky
+   use moist_model_continuum_component_pcm_amat, only : assemble_pcm_amat
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
@@ -80,7 +80,6 @@ contains
 
       call plp%blank()
       call plp%header("DROP Born zeta fit")
-      call plp%blank()
       call plp%print_header()
       call plp%separator()
 
@@ -185,7 +184,7 @@ contains
       !> Run context borrowed by the cavity returned to the caller
       type(moist_context_type), target, save :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Load MB16-43/H2 and reshape it into a sphere-at-origin
       call get_structure(mol, "MB16-43", "H2")
@@ -206,9 +205,9 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=3.0_wp, &
                blend_1b=1.0_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
-            call new_cavity_drop(cavities(ir), ctx, radius_model=radius_model, lsf_model=svdw_template, &
+            call new_cavity_drop(cavities(ir), radius_model=radius_model, lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, &
-               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2))
+               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "new_cavity_drop failed for nleb=" &

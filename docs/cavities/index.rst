@@ -34,7 +34,7 @@ Typical Use
 1. Construct a concrete cavity and configure its radii and discretization.
 2. Call ``update`` whenever its inputs change: after a geometry change, and for
    a density-backed surface after a density change.
-3. A ``solvation_model_general`` owns one cavity, updates it before its
+3. A ``model_continuum_type`` owns one cavity, updates it before its
    components, and passes the same cavity to each component.
 4. In the response phase, components accumulate model surface weights and
    ``get_surface_response`` maps them to the response items the host receives

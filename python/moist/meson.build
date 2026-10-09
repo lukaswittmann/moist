@@ -51,6 +51,7 @@ moist_pyext = python.extension_module(
 pysrcs = [
   '__init__.py',
   'configuration.py',
+  'context.py',
   'density.py',
   'interface.py',
   'library.py',

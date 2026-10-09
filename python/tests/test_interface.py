@@ -1,3 +1,5 @@
+import io
+from types import SimpleNamespace
 from typing import Callable
 
 import numpy as np
@@ -11,12 +13,15 @@ from moist import (
     SvdW, SvdWParameters,
 )
 from moist.interface import (
+    AtomicChargeAdjointResponse,
+    AtomicMultipoleAdjointResponse,
     Cavity,
     CavityDROP,
     CavityISwiG,
     CavitySnapshot,
     CavitySnapshotDROP,
     Coupling,
+    GaussianAmplitudeResponse,
     GaussianMomentRequest,
     GaussianPotentialRequest,
     ModelComponentCOSMO,
@@ -26,10 +31,14 @@ from moist.interface import (
     DensityResponse,
     PCMSolver,
     PotentialAdjointResponse,
+    RadialPotentialAdjointResponse,
     Response,
     SolvationModel,
     Structure,
 )
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = moist.Context()
 
 #: Shared small-grid parameters for tests that only fix ``nleb``
 _DROP_NLEB26 = DROPParameters(nleb=26)
@@ -80,7 +89,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     Checks absolute area, volume, and point count for a fixed water geometry.
     Regenerate deliberately if the default surface is meant to change.
     """
-    cavity = CavityDROP(parameters=_DROP_NLEB26)
+    cavity = CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT)
     cavity.update(Structure(numbers, positions))
     result = cavity.cavity
 
@@ -99,8 +108,6 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 )),
                 parameters=DROPParameters(
                     nleb=26,
-                    debug=False,
-                    verbosity=0,
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
@@ -109,6 +116,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshotDROP,
         ),
@@ -117,8 +125,6 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 lsf=CFC(parameters=CFCParameters(a1=-15.0, a2=-9.0, c=5.0, m=4)),
                 parameters=DROPParameters(
                     nleb=26,
-                    debug=False,
-                    verbosity=0,
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
@@ -127,6 +133,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshotDROP,
         ),
@@ -136,9 +143,8 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     nleb=26,
                     cut_a=0.0,
                     cut_f=1.0e-10,
-                    debug=False,
-                    verbosity=0,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshot,
         ),
@@ -189,7 +195,7 @@ def test_cavity_declares_its_own_results(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """Every declared field describes itself well enough to be read blind."""
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     fields = cavity.fields()
@@ -209,7 +215,7 @@ def test_named_results_agree_with_the_snapshot(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """The typed snapshot is a view of the same declarations, not a second read."""
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     snapshot = cavity.snapshot()
@@ -231,13 +237,13 @@ def test_uncomputed_results_are_absent_rather_than_zero(
     """A property that was never requested must not read back as zeros."""
     structure = Structure(numbers, positions)
 
-    plain = CavityDROP()
+    plain = CavityDROP(context=CONTEXT)
     plain.update(structure)
     assert "k1" not in {field.name for field in plain.fields()}
     with raises(KeyError, match="k1"):
         plain.get("k1")
 
-    fine = CavityDROP(parameters=DROPParameters(do_fine=True))
+    fine = CavityDROP(parameters=DROPParameters(do_fine=True), context=CONTEXT)
     fine.update(structure)
     curvature = fine.get("k1")
     assert curvature.shape == (fine.ngrid,)
@@ -249,7 +255,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
 
 def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
     """Branch data comes from moist's own arrays, not from unpacking an id."""
-    cavity = CavityDROP(parameters=DROPParameters(proj_level=7))
+    cavity = CavityDROP(parameters=DROPParameters(proj_level=7), context=CONTEXT)
     cavity.update(branching_cross)
     snapshot = cavity.snapshot()
 
@@ -275,7 +281,7 @@ def test_named_results_reach_every_cavity_type(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """The field API is a cavity feature, not a DROP one."""
-    cavity = CavityISwiG()
+    cavity = CavityISwiG(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     names = {field.name for field in cavity.fields()}
@@ -284,7 +290,7 @@ def test_named_results_reach_every_cavity_type(
 
 
 def test_named_results_need_a_built_cavity() -> None:
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     with raises(RuntimeError, match="not been successfully updated"):
         cavity.fields()
     with raises(RuntimeError, match="not been successfully updated"):
@@ -293,14 +299,15 @@ def test_named_results_need_a_built_cavity() -> None:
 
 def test_cavity_drop_is_the_svdw_surface() -> None:
     """Unqualified DROP retains its default surface while allowing composition."""
-    assert CavityDROP().configuration == CavityDROP(lsf=SvdW()).configuration
-    assert isinstance(moist.CavityDROP().lsf, moist.SvdW)
+    assert CavityDROP(context=CONTEXT).configuration == CavityDROP(lsf=SvdW(),
+                                                                   context=CONTEXT).configuration
+    assert isinstance(moist.CavityDROP(context=CONTEXT).lsf, moist.SvdW)
 
 
 @pytest.mark.parametrize("lsf", [SvdW(), CFC()])
 def test_drop_constructor_controls_are_validated_natively(lsf) -> None:
     with raises(RuntimeError, match="wleb_prune_level.*0-6"):
-        CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7))
+        CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7), context=CONTEXT)
 
 
 def test_cavity_specific_options_reach_the_native_implementations(
@@ -313,21 +320,22 @@ def test_cavity_specific_options_reach_the_native_implementations(
         cavity.update(structure)
         return cavity.snapshot()
 
-    svdw_default = surface(CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26))
+    svdw_default = surface(CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT))
     svdw_custom = surface(CavityDROP(
-        lsf=SvdW(parameters=SvdWParameters(blend_k=4.0)), parameters=_DROP_NLEB26
+        lsf=SvdW(parameters=SvdWParameters(blend_k=4.0)), parameters=_DROP_NLEB26, context=CONTEXT
     ))
     assert svdw_custom.area != approx(svdw_default.area, rel=1.0e-6)
 
-    cfc_default = surface(CavityDROP(lsf=CFC(), parameters=_DROP_NLEB26))
+    cfc_default = surface(CavityDROP(lsf=CFC(), parameters=_DROP_NLEB26, context=CONTEXT))
     cfc_custom = surface(CavityDROP(
         lsf=CFC(parameters=CFCParameters(a1=-12.0, a2=-8.0, c=4.0, m=4)),
-        parameters=_DROP_NLEB26,
+        parameters=_DROP_NLEB26, context=CONTEXT,
     ))
     assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)
 
-    iswig_default = surface(CavityISwiG(parameters=_ISWIG_NLEB26))
-    iswig_custom = surface(CavityISwiG(parameters=ISwiGParameters(nleb=26, cut_f=1.0e-2)))
+    iswig_default = surface(CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT))
+    iswig_custom = surface(CavityISwiG(parameters=ISwiGParameters(nleb=26, cut_f=1.0e-2),
+                                       context=CONTEXT))
     assert iswig_custom.ngrid < iswig_default.ngrid
 
 
@@ -421,7 +429,7 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26),
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -452,6 +460,119 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     assert list(response) == [adjoint]
 
 
+def test_model_components_report_their_energies(diatomic) -> None:
+    """Live component views: names before an update, energies of the latest evaluation."""
+    pressure = 2.5e-4
+    cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(pressure)
+    model = SolvationModel(
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT), [cpcm, pv, ModelComponentCPCM(4.0)]
+    )
+
+    components = model.components
+    assert len(components) == 3
+    assert all(isinstance(component, moist.ComponentView) for component in components)
+    assert [component.name for component in components] == ["CPCM", "PV", "CPCM"]
+    assert [component.index for component in components] == [0, 1, 2]
+    assert components[0].description == (
+        "Conductor-like polarizable continuum, f(eps) = (eps - 1)/eps"
+    )
+    assert components[1].description == "Pressure-volume work, pressure times cavity volume"
+    assert components[2].description == components[0].description
+    assert components[0].configuration is cpcm
+    assert components[1].configuration.pressure == pressure
+    for component in components:
+        assert component.fields() == ()
+        with raises(KeyError, match="does not hold a field named 'energy'"):
+            component.energy
+
+    structure = diatomic()
+    model.update(structure)
+    with raises(KeyError):
+        components[0].energy
+
+    coupling = model.new_coupling()
+    model.prepare_energy(coupling)
+    _answer_potential(coupling, np.linspace(-0.2, 0.3, model.cavity.ngrid))
+    seed = 0.75
+    energy = np.array(seed)
+    model.get_energy(coupling, energy)
+    shares = [component.energy for component in components]
+    assert np.all(np.isfinite(shares))
+    assert float(energy) - seed == approx(sum(shares), abs=1.0e-14)
+    assert shares[1] == approx(pressure * model.cavity.volume, rel=1.0e-14)
+    # The two CPCM components differ only in f(epsilon) = (epsilon - 1)/epsilon
+    assert shares[0] != 0.0
+    assert shares[2] / shares[0] == approx((3.0 / 4.0) / (31.0 / 32.0), rel=1.0e-12)
+    (info,) = components[0].fields()
+    assert (info.name, info.shape, info.count) == ("energy", (), 1)
+    assert "Hartree" in components[0].describe("energy")
+    assert components[0].get("energy") == shares[0]
+
+    # Staging keeps the energies; an update clears them, never the components
+    model.prepare_energy(coupling)
+    assert [component.energy for component in components] == shares
+    model.update(structure)
+    for component in model.components:
+        with raises(KeyError):
+            component.energy
+    assert [component.name for component in components] == ["CPCM", "PV", "CPCM"]
+
+
+def test_model_parameters_text_lists_every_section(capsys) -> None:
+    """The native settings printout: cavity, then each component by position."""
+    model = SolvationModel(
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+        [ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu")), ModelComponentPV(2.5e-4)],
+    )
+
+    text = model.parameters_text()
+    assert text.endswith("\n")
+    for section in ("Cavity (SvdW-DROP):", "Component 1 (CPCM):", "Component 2 (PV):"):
+        assert section in text
+    for component in model.components:
+        assert component.description in text
+    lines = text.splitlines()
+    assert any(line.split()[:1] == ["Epsilon"] and "32.0" in line for line in lines)
+    assert any(line.split()[:1] == ["solver"] and line.split()[-1] == "2" for line in lines)
+    (pressure,) = [line.split() for line in lines if line.split()[:1] == ["Pressure"]]
+    assert pressure[2:4] == ["2.50E-04", "Eh/bohr^3"] and pressure[-1] == "GPa"
+    # 2.5e-4 Eh/bohr^3 is 7.355 GPa
+    assert float(pressure[-2]) == approx(7.355, abs=1.0e-3)
+    assert any(line.split()[:3] == ["Number", "of", "Leb."] and "26" in line for line in lines)
+
+    model.print_parameters()
+    assert capsys.readouterr().out == text
+    stream = io.StringIO()
+    model.print_parameters(file=stream)
+    assert stream.getvalue() == text
+    assert capsys.readouterr().out == ""
+
+
+def test_component_views_keep_their_model(diatomic) -> None:
+    """Models built from the same configurations keep separate energies."""
+    cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(2.5e-4)
+    first = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [cpcm, pv])
+    second = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                            [cpcm, pv])
+    structure = diatomic()
+    first.update(structure)
+    second.update(structure)
+
+    energy, _ = _solve(first, np.linspace(-0.2, 0.3, first.cavity.ngrid))
+    assert sum(component.energy for component in first.components) == approx(energy, abs=1.0e-14)
+    for component in second.components:
+        with raises(KeyError):
+            component.energy
+    assert first.components[0].configuration is second.components[0].configuration is cpcm
+
+    # A view outlives the last reference to its model
+    view = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                          [pv]).components[0]
+    assert view.name == "PV"
+    assert view.configuration is pv
+
+
 def test_cosmo_is_a_standalone_pcm_component() -> None:
     cpcm = ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu"))
     cosmo = ModelComponentCOSMO(32.0, parameters=PCMParameters(solver="lu"))
@@ -475,7 +596,8 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     results = {}
 
     for component_type in (ModelComponentCPCM, ModelComponentCOSMO):
-        model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [component_type(epsilon)])
+        model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                               [component_type(epsilon)])
         model.update(structure)
         phi = np.linspace(-0.2, 0.3, model.cavity.ngrid)
         results[component_type] = _solve(model, phi)
@@ -500,7 +622,7 @@ def test_model_drives_the_three_phases(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26),
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -543,7 +665,8 @@ def test_general_model_names_the_request_no_host_answered(diatomic) -> None:
     required output left unanswered is reported by name.
     """
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -556,7 +679,8 @@ def test_staging_a_phase_drops_the_previous_answers(diatomic) -> None:
     """Staging clears the answers; nothing survives into the next phase or update."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     coupling = model.new_coupling()
@@ -586,7 +710,8 @@ def test_staging_ends_the_current_request(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -617,7 +742,8 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
     """The width is the input of one request kind, never a cavity field."""
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
 
@@ -629,15 +755,23 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
     for request in coupling:
         visited.append(request.name)
         assert not hasattr(request, "width")
-        with raises(RuntimeError, match="gaussian_potential has no input 'width'"):
-            library.get_coupling_request_width(coupling._handle, np.empty(model.cavity.ngrid))
+        # A kind without inputs lists none, and refuses one by name.
+        assert library.get_coupling_request_field_count(coupling._handle) == 0
+        with raises(RuntimeError, match="Field index out of range"):
+            library.get_coupling_request_field_info(coupling._handle, 0)
+        with raises(RuntimeError, match="gaussian_potential has no field 'width'"):
+            library.get_coupling_request_field_real(
+                coupling._handle, "width", np.empty(model.cavity.ngrid))
+        with raises(RuntimeError, match="gaussian_potential has no field 'width'"):
+            library.get_coupling_request_field_about(coupling._handle, "width")
     assert visited == ["gaussian_potential"]
 
 
 def test_request_outputs_are_named_and_ordered(diatomic) -> None:
     """Outputs are the contract; answer takes them by keyword only."""
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -676,7 +810,7 @@ def test_grid_inputs_come_from_the_cavity(diatomic, cavity_type) -> None:
     """
 
     model = SolvationModel(
-        cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), [ModelComponentCPCM(32.0)]
+        CONTEXT, cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type], context=CONTEXT), [ModelComponentCPCM(32.0)]
     )
     model.update(diatomic())
     coupling = model.new_coupling()
@@ -706,7 +840,8 @@ def test_native_coupling_retains_model_until_release(diatomic) -> None:
     import gc
     import weakref
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     owner = weakref.ref(model._model)
     coupling = library.new_coupling(model._model)
@@ -731,7 +866,8 @@ def test_getters_require_the_phase_they_were_staged_for(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     unstaged = model.new_coupling()
@@ -765,7 +901,8 @@ def test_each_phase_walks_what_it_still_owes(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -799,7 +936,8 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -810,6 +948,10 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
         lambda: library.get_coupling_request_name(handle),
         lambda: library.get_coupling_request_missing(handle, "phi"),
         lambda: library.answer_coupling_request(handle, "phi", np.zeros(ngrid)),
+        lambda: library.get_coupling_request_field_count(handle),
+        lambda: library.get_coupling_request_field_info(handle, 0),
+        lambda: library.get_coupling_request_field_about(handle, "width"),
+        lambda: library.get_coupling_request_field_real(handle, "width", np.zeros(ngrid)),
     ):
         with raises(RuntimeError, match=no_current):
             query()
@@ -840,7 +982,8 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
 def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
     """A model with no item to hand back yields none; the walk ends immediately."""
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentPV(1.0e-4)])
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -850,21 +993,27 @@ def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
     assert list(response) == []
     handle = model._response_handle()
     assert library.next_response_item(handle) is False
-    # Nothing is current, so there is nothing to name or to read.
-    with raises(RuntimeError, match="No current response item"):
-        library.get_response_item_name(handle)
-    with raises(RuntimeError, match="No current response item"):
-        library.get_response_array(handle, "w_phi", np.empty(ngrid))
+    # Nothing is current, so there is nothing to name, list or read.
+    for query in (
+        lambda: library.get_response_item_name(handle),
+        lambda: library.get_response_field_count(handle),
+        lambda: library.get_response_field_info(handle, 0),
+        lambda: library.get_response_field_about(handle, "w_phi"),
+        lambda: library.get_response_field_real(handle, "w_phi", np.empty(ngrid)),
+    ):
+        with raises(RuntimeError, match="No current response item"):
+            query()
     # A failure is raised, never read as the end of a pass.
     with raises(RuntimeError, match="next_response_item"):
         library.next_response_item(library.ResponseHandle.null())
 
 
 def test_response_arrays_are_read_by_name(gaussian_density) -> None:
-    """The cursor walks the items; each array of the current one is read by name, grid axis first."""
+    """The cursor walks the items; each lists its arrays, read by name in the listed shape."""
 
     model = SolvationModel(
-        CavityDROP(lsf=Isodensity(), parameters=_DROP_NLEB26, source=gaussian_density),
+        CONTEXT, CavityDROP(lsf=Isodensity(),
+                   parameters=_DROP_NLEB26, source=gaussian_density, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(1.0e-4)],
     )
     model.update(Structure(np.array([1]), np.zeros((1, 3))))
@@ -891,28 +1040,47 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
     for item in response:
         assert library.next_response_item(handle) is True
         assert library.get_response_item_name(handle) == item.name
-        for array, shape in expected[item.name].items():
-            value = getattr(item, array)
-            assert value.shape == shape, array
-            assert value.flags.c_contiguous, array
+        listed = [library.get_response_field_info(handle, index)
+                  for index in range(library.get_response_field_count(handle))]
+        # The item lists its arrays in declaration order, C shapes slowest first.
+        assert [field.name for field in listed] == list(expected[item.name])
+        for field in listed:
+            shape = expected[item.name][field.name]
+            assert field.shape == shape, field.name
+            assert field.dtype == np.float64, field.name
+            assert field.count == int(np.prod(shape)), field.name
+            assert library.get_response_field_about(handle, field.name), field.name
+            value = getattr(item, field.name)
+            assert value.shape == shape, field.name
+            assert value.flags.c_contiguous, field.name
             copy = np.empty_like(value)
-            library.get_response_array(handle, array, copy)
+            library.get_response_field_real(handle, field.name, copy)
             np.testing.assert_array_equal(value, copy)
+        with raises(RuntimeError, match="Field index out of range"):
+            library.get_response_field_info(handle, len(listed))
     assert library.next_response_item(handle) is False
     assert np.abs(_item(response, DensityResponse).w_hess_rho).max() > 0.0
 
     # An array the current item does not have is refused by name before
     # anything is written, whether or not another item has it.
     assert library.next_response_item(handle) is True
-    buffer = np.empty(ngrid)
-    with raises(RuntimeError, match="potential_adjoint has no array 'w_rho'"):
-        library.get_response_array(handle, "w_rho", buffer)
-    with raises(RuntimeError, match="potential_adjoint has no array 'q'"):
-        library.get_response_array(handle, "q", buffer)
+    buffer = np.full(ngrid, 7.0)
+    with raises(RuntimeError, match="potential_adjoint has no field 'w_rho'"):
+        library.get_response_field_real(handle, "w_rho", buffer)
+    with raises(RuntimeError, match="potential_adjoint has no field 'q'"):
+        library.get_response_field_real(handle, "q", buffer)
+    with raises(RuntimeError, match="potential_adjoint has no field 'w_rho'"):
+        library.get_response_field_about(handle, "w_rho")
     assert library.next_response_item(handle) is True
     assert library.get_response_item_name(handle) == "density"
-    with raises(RuntimeError, match="density has no array 'w_phi'"):
-        library.get_response_array(handle, "w_phi", buffer)
+    with raises(RuntimeError, match="density has no field 'w_phi'"):
+        library.get_response_field_real(handle, "w_phi", buffer)
+    np.testing.assert_array_equal(buffer, 7.0)
+    # Only the element type and the layout are checked on the Python side.
+    with raises(TypeError, match="float64"):
+        library.get_response_field_real(handle, "w_rho", np.empty(ngrid, dtype=np.float32))
+    with raises(ValueError, match="C-contiguous"):
+        library.get_response_field_real(handle, "w_grad_rho", np.empty((3, ngrid)).T)
 
     # Filling the response again starts a new walk, even in the middle of one.
     library.get_model_response(model._model, coupling._handle, handle)
@@ -920,11 +1088,131 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
     assert library.get_response_item_name(handle) == "potential_adjoint"
 
 
+# -----------------------------------------------------------------------------
+# Response items follow the native declaration
+# -----------------------------------------------------------------------------
+#
+# ``Response`` reads each item's arrays as the native item lists them, so the
+# item types no model reachable from Python produces are pinned against a
+# stand-in for the native walk.
+
+
+def _fake_native_response(monkeypatch, name, arrays):
+    """Stand in for a native response holding one item ``name`` that lists ``arrays``."""
+    listed = [library.FieldInfo(key, np.dtype(np.float64), value.shape, value.size)
+              for key, value in arrays.items()]
+    current = [False]
+
+    def next_item(handle):
+        current[0] = not current[0]
+        return current[0]
+
+    def read(handle, key, values):
+        values[...] = arrays[key]
+
+    monkeypatch.setattr(library, "next_response_item", next_item)
+    monkeypatch.setattr(library, "get_response_item_name", lambda handle: name)
+    monkeypatch.setattr(library, "get_response_field_count", lambda handle: len(listed))
+    monkeypatch.setattr(library, "get_response_field_info", lambda handle, index: listed[index])
+    monkeypatch.setattr(library, "get_response_field_real", read)
+
+
+_NATOM, _NGRID = 2, 5
+_RNG = np.random.default_rng(11)
+
+
+@pytest.mark.parametrize("kind,arrays", [
+    (GaussianAmplitudeResponse, {"w_overlap": _RNG.standard_normal(_NGRID),
+                                 "w_normal_deriv": _RNG.standard_normal(_NGRID)}),
+    (AtomicMultipoleAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM),
+                                      "dg_dmu": _RNG.standard_normal((_NATOM, 3)),
+                                      "dg_dtheta": _RNG.standard_normal((_NATOM, 3, 3))}),
+    (AtomicChargeAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM)}),
+    (RadialPotentialAdjointResponse, {"dg_dphi": _RNG.standard_normal((_NATOM, _NGRID))}),
+])
+def test_response_items_take_the_listed_shapes(monkeypatch, kind, arrays) -> None:
+    """Each item is typed by its native name and copies its arrays in the listed shapes."""
+    _fake_native_response(monkeypatch, kind.name, arrays)
+    (item,) = Response._from_handle(None)
+    assert type(item) is kind
+    for name, value in arrays.items():
+        copy = getattr(item, name)
+        assert copy.shape == value.shape, name
+        np.testing.assert_array_equal(copy, value)
+        assert not copy.flags.writeable, name
+
+
+def test_an_order_the_model_never_consumed_is_none(monkeypatch) -> None:
+    """Atomic multipole arrays are optional natively; an unlisted one is None, never zeros."""
+    dg_dq = np.arange(1.0, 1.0 + _NATOM)
+    _fake_native_response(monkeypatch, "atomic_multipole_adjoint", {"dg_dq": dg_dq})
+    (item,) = Response._from_handle(None)
+    assert isinstance(item, AtomicMultipoleAdjointResponse)
+    np.testing.assert_array_equal(item.dg_dq, dg_dq)
+    assert item.dg_dmu is None
+    assert item.dg_dtheta is None
+
+
+def test_response_bindings_refuse_to_drift_from_the_library(monkeypatch) -> None:
+    """A listed array without an attribute, or a required attribute not listed, is a binding bug."""
+    _fake_native_response(monkeypatch, "potential_adjoint",
+                          {"w_phi": np.zeros(_NGRID), "w_extra": np.zeros(_NGRID)})
+    with raises(RuntimeError, match="'potential_adjoint' declares array 'w_extra'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "density",
+                          {"w_rho": np.zeros(_NGRID), "w_grad_rho": np.zeros((_NGRID, 3))})
+    with raises(RuntimeError, match="'density' does not declare array 'w_hess_rho'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "atomic_charge_adjoint", {})
+    with raises(RuntimeError, match="'atomic_charge_adjoint' does not declare array 'dg_dq'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "bogus", {})
+    with raises(RuntimeError, match="Unknown response item 'bogus'"):
+        Response._from_handle(None)
+
+
+def test_gaussian_moment_width_is_the_listed_input(monkeypatch) -> None:
+    """The width is read as the request lists it; a request without it is a binding bug."""
+    width = np.linspace(0.5, 1.5, _NGRID)
+    listed = [library.FieldInfo("width", np.dtype(np.float64), width.shape, width.size)]
+
+    def read(handle, name, values):
+        values[...] = {"width": width}[name]
+
+    coupling = SimpleNamespace(_handle=None)
+    monkeypatch.setattr(library, "get_coupling_request_field_count", lambda handle: len(listed))
+    monkeypatch.setattr(library, "get_coupling_request_field_info", lambda handle, index: listed[index])
+    monkeypatch.setattr(library, "get_coupling_request_field_real", read)
+    np.testing.assert_array_equal(GaussianMomentRequest._inputs(coupling)["width"], width)
+
+    listed.clear()
+    with raises(RuntimeError, match="'gaussian_moments' does not declare input 'width'"):
+        GaussianMomentRequest._inputs(coupling)
+
+
+def test_every_response_item_is_public() -> None:
+    """The six item types are exported, so the API reference lists them."""
+    from moist.interface import _RESPONSE_ITEMS
+
+    assert set(_RESPONSE_ITEMS) == {
+        "potential_adjoint", "density", "gaussian_amplitude", "atomic_multipole_adjoint",
+        "atomic_charge_adjoint", "radial_potential_adjoint",
+    }
+    for name, kind in _RESPONSE_ITEMS.items():
+        assert kind.name == name
+        assert kind.__name__ in moist.__all__
+        assert getattr(moist, kind.__name__) is kind
+
+
 def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
     """A model-owned cavity may be inspected but not rebuilt out of band."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentPV(1.0e-4)])
     model.update(structure)
     original_area = model.cavity.area
 
@@ -955,7 +1243,8 @@ def _gaussian_answers(ngrid):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
     """A value that is no number never reaches the library, so nothing stored changes."""
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -974,7 +1263,8 @@ def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_native_rejection_leaves_the_output_missing(diatomic, output):
     """A native rejection un-answers exactly that output; the others survive."""
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -998,7 +1288,8 @@ def test_native_rejection_leaves_the_output_missing(diatomic, output):
 
 
 def test_rejected_replacement_is_missing_and_retryable(diatomic):
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -1041,7 +1332,8 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         components.append(ModelComponentGOSTSHYP(0.0 if component == "disabled" else 1e-5))
         if component != "disabled":
             expected.append("gaussian_moments")
-    model = SolvationModel(cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), components)
+    model = SolvationModel(CONTEXT, cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type], context=CONTEXT),
+                           components)
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -1059,13 +1351,22 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         a = model.cavity.a
         assert width.shape == (ngrid,)
         assert not width.flags.writeable
-        active = a > 0.0
+        # Narrow points are switched off at zero width; they are the smallest ones
+        active = width > 0.0
+        assert active.any()
         np.testing.assert_allclose(width[active], np.pi * np.log(2.0) / a[active], rtol=1e-12)
-        np.testing.assert_array_equal(width[~active], 0.0)
-        # The snapshot is a copy of the request's own input.
+        assert np.all(a[~active] < a[active].min())
+        # The snapshot is a copy of the request's own input, its only field.
+        assert library.get_coupling_request_field_count(coupling._handle) == 1
+        field = library.get_coupling_request_field_info(coupling._handle, 0)
+        assert (field.name, field.dtype, field.shape, field.count) == (
+            "width", np.float64, (ngrid,), ngrid)
+        assert library.get_coupling_request_field_about(coupling._handle, "width")
         copy = np.empty(ngrid)
-        library.get_coupling_request_width(coupling._handle, copy)
+        library.get_coupling_request_field_real(coupling._handle, "width", copy)
         np.testing.assert_array_equal(width, copy)
+        with raises(RuntimeError, match="gaussian_moments has no field 'omega'"):
+            library.get_coupling_request_field_real(coupling._handle, "omega", copy)
     assert walked == expected
 
 
@@ -1079,18 +1380,22 @@ def test_removed_protocol_names_stay_removed() -> None:
         assert not hasattr(moist.CouplingRequest, name)
     for name in ("potential_adjoint", "density", "gostshyp_amplitude", "items", "__len__"):
         assert not hasattr(Response, name)
+    for name in ("GostshypAmplitudeResponse", "CavityField"):
+        assert not hasattr(moist, name)
     for name in ("coupling_n_requests", "coupling_request_handle", "coupling_request_missing_count",
                  "response_has", "response_get_potential_adjoint", "response_get_density",
                  "response_get_gostshyp_amplitude",
                  "coupling_next", "coupling_request_name", "coupling_request_missing",
                  "coupling_get_moment_width", "coupling_answer", "response_next",
                  "response_item_name", "response_get", "general_model_get_energy",
-                 "general_model_prepare_energy"):
+                 "general_model_prepare_energy", "get_response_array",
+                 "get_coupling_request_width", "CavityField"):
         assert not hasattr(library, name)
     for name in ("get_coupling_request_count", "get_coupling_request_handle",
                  "get_coupling_request_missing_count", "has_response",
                  "get_response_potential_adjoint", "get_response_density",
-                 "get_response_gostshyp_amplitude"):
+                 "get_response_gostshyp_amplitude", "get_response_array",
+                 "get_coupling_request_width"):
         assert not hasattr(library.lib, "moist_" + name)
 
 
@@ -1112,7 +1417,7 @@ BOTH = ["gaussian_potential", "gaussian_moments"]
 def two_requests(diatomic) -> SolvationModel:
     """ISwiG model whose phases walk a potential request, then a moment request."""
     model = SolvationModel(
-        CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
+        CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
     )
     model.update(diatomic())
     return model
@@ -1283,6 +1588,45 @@ def test_answer_rejects_a_wrong_shape(two_requests):
     assert visited == BOTH
 
 
+def test_answer_forwards_each_declared_output_in_order(two_requests, monkeypatch):
+    """Every raw channel reaches the native answer unchanged in declaration order."""
+    model = two_requests
+    coupling = model.new_coupling()
+    model.prepare_gradient(coupling)
+    ngrid = model.cavity.ngrid
+    shapes = {
+        "gaussian_potential": {"phi": (ngrid,), "dphi_dr": (ngrid, 3),
+                               "dphi_dxi": (ngrid,)},
+        "gaussian_moments": {"gt": (ngrid,), "pt": (ngrid, 3),
+                             "mt": (ngrid, 3, 3), "rt": (ngrid, 3)},
+    }
+    submitted = []
+
+    def capture(handle, name, values):
+        assert handle is coupling._handle
+        assert values.dtype == np.float64
+        assert values.flags.c_contiguous
+        submitted.append((name, values.copy()))
+
+    monkeypatch.setattr(library, "answer_coupling_request", capture)
+    visited = []
+    for request in coupling:
+        visited.append(request.name)
+        declared = shapes[request.name]
+        assert request._outputs == {name: shape[1:] for name, shape in declared.items()}
+        answers = {
+            name: (np.arange(np.prod(shape), dtype=np.float64).reshape(shape) + index + 0.25)
+            for index, (name, shape) in enumerate(declared.items())
+        }
+        submitted.clear()
+        # Caller keyword order must not override the request declaration.
+        coupling.answer(**dict(reversed(tuple(answers.items()))))
+        assert [name for name, _ in submitted] == list(declared)
+        for name, values in submitted:
+            np.testing.assert_array_equal(values, answers[name])
+    assert visited == BOTH
+
+
 def test_request_snapshots_are_values(two_requests, diatomic):
     """A snapshot keeps what the cursor saw: answers and updates leave it alone."""
     model = two_requests
@@ -1298,6 +1642,8 @@ def test_request_snapshots_are_values(two_requests, diatomic):
         # was missing when the cursor got here.
         assert _still_missing(coupling, request) == set()
     potential, moments = snapshots
+    assert isinstance(potential.missing, frozenset)
+    assert isinstance(moments.missing, frozenset)
     assert potential.missing == {"phi"}
     assert moments.missing == {"gt", "pt"}
     with raises(AttributeError):

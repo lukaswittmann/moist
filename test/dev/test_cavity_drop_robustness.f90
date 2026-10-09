@@ -57,7 +57,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in UPU23
       do iid = 1, size(upu23_ids)
@@ -74,8 +74,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -110,7 +110,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in heavy28
       do iid = 1, size(heavy28_ids)
@@ -127,8 +127,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -173,7 +173,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in amino20x4
       do iid = 1, size(amino20x4_ids)
@@ -190,8 +190,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -224,7 +224,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in mb16-43
       do iid = 1, size(mb16_43_ids)
@@ -241,8 +241,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -274,7 +274,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in But14diol
       do iid = 1, size(but14diol_ids)
@@ -291,8 +291,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -323,7 +323,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in IL16
       do iid = 1, size(il16_ids)
@@ -340,8 +340,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -393,7 +393,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Initialize random seed for reproducibility
       seed_array = SEED_VALUE
@@ -528,8 +528,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
