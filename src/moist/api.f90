@@ -22,7 +22,7 @@ module moist_api
    use moist_model_continuum_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, &
-      & new_component_gostshyp
+      & new_component_gostshyp, moist_gostshyp_parameters_type
    use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, &
       & new_component_cpcm
    use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, &
@@ -169,6 +169,21 @@ module moist_api
 
    !> Minimum valid caller size, independent of future library extensions
    integer(c_size_t), parameter :: pcm_options_min_size = c_sizeof(api_pcm_options_v1_0())
+
+   !> Frozen 1.0 GOSTSHYP layout; extend with a new versioned type
+   type, bind(C) :: api_gostshyp_options_v1_0
+      !> Caller allocation size in bytes
+      integer(c_size_t) :: struct_size = 0_c_size_t
+      !> Trace magnitude cutoff, bohr**-4; inactive at and below cutoff
+      real(c_double) :: regularization_start = 0.0_c_double
+      !> Trace magnitude cutoff, bohr**-4; exact reciprocal at and above cutoff
+      real(c_double) :: regularization_end = 0.0_c_double
+      !> Suppress negative pressure amplitudes
+      logical(c_bool) :: suppress_negative_amplitudes = .false._c_bool
+   end type api_gostshyp_options_v1_0
+
+   !> Frozen minimum caller allocation size
+   integer(c_size_t), parameter :: gostshyp_options_min_size = c_sizeof(api_gostshyp_options_v1_0())
 
    !> Owning C handle for an independently configured level-set function
    type :: vp_lsf
@@ -336,6 +351,17 @@ contains
       value%rho_iso = native%rho_iso
       value%scale = native%scale
    end function default_isodensity_options
+
+   !> GOSTSHYP defaults from the native parameter type
+   function default_gostshyp_options() result(value)
+      !> Interoperable options
+      type(api_gostshyp_options_v1_0) :: value
+      !> Compiled scientific defaults
+      type(moist_gostshyp_parameters_type) :: native
+      value%regularization_start = native%regularization_start
+      value%regularization_end = native%regularization_end
+      value%suppress_negative_amplitudes = logical(native%suppress_negative_amplitudes, c_bool)
+   end function default_gostshyp_options
 
    !> Obtain pcm defaults from the native parameter type
    function default_pcm_options() result(value)
@@ -914,6 +940,58 @@ contains
       call c_f_pointer(options, bytes)
       call copy_options(options, c_loc(value), c_sizeof(value), bytes, pcm_options_min_size, error)
    end subroutine read_pcm_options
+
+   !> Initialize GOSTSHYP options within the caller's allocation
+   !>
+   !> @param[in] verror   error handle
+   !> @param[in] options  caller-owned options buffer
+   !> @param[in] bytes    allocated byte count
+   subroutine init_gostshyp_options_api(verror, options, bytes) bind(C, name=namespace//"init_gostshyp_options")
+      !> Error handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Caller-owned options buffer
+      type(c_ptr), value, intent(in) :: options
+      !> Allocated byte count
+      integer(c_size_t), value, intent(in) :: bytes
+      !> Compiled defaults
+      type(api_gostshyp_options_v1_0), target :: defaults
+      !> Default values; only named components are copied to the wire layout
+      type(api_gostshyp_options_v1_0) :: values
+      !> Decoded error handle
+      type(vp_error), pointer :: error
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      values = default_gostshyp_options()
+      call zero_options_storage(c_loc(defaults), c_sizeof(defaults))
+      defaults%struct_size = bytes
+      defaults%regularization_start = values%regularization_start
+      defaults%regularization_end = values%regularization_end
+      defaults%suppress_negative_amplitudes = values%suppress_negative_amplitudes
+      call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, gostshyp_options_min_size, error%ptr)
+      call prefix_api_error(error%ptr, "init_gostshyp_options")
+   end subroutine init_gostshyp_options_api
+
+   !> Decode optional GOSTSHYP options into an independent value
+   !>
+   !> @param[in]  options  optional caller options; NULL selects defaults
+   !> @param[out] value    independent decoded settings
+   !> @param[out] error    invalid options layout diagnostic
+   subroutine read_gostshyp_options(options, value, error)
+      !> Optional caller options; NULL selects defaults
+      type(c_ptr), intent(in) :: options
+      !> Default-initialized result
+      type(api_gostshyp_options_v1_0), intent(out), target :: value
+      !> Diagnostic on invalid size
+      type(error_type), allocatable, intent(out) :: error
+      !> Caller allocation size, the common first field
+      integer(c_size_t), pointer :: bytes
+      value = default_gostshyp_options()
+      value%struct_size = c_sizeof(value)
+      if (.not. c_associated(options)) return
+      call c_f_pointer(options, bytes)
+      call copy_options(options, c_loc(value), c_sizeof(value), bytes, gostshyp_options_min_size, error)
+   end subroutine read_gostshyp_options
 
    !> Clear all bytes before initializing individual fields, including ABI padding
    subroutine zero_options_storage(address, length)
@@ -2180,20 +2258,29 @@ contains
 
    end function new_pv_component_api
 
-   !> Create a GOSTSHYP hydrostatic-pressure component handle
+   !> GOSTSHYP hydrostatic-pressure component handle
    !>
-   !> - no own density traces; the host answers the coupling's Gaussian-moment
-   !>   request (`moist_answer_coupling_request` with "gt", "pt", "mt", "rt") in every phase
-   !> - amplitudes read back as the "gaussian_amplitude" item of the response
-   !>   walk (`moist_next_response_item`, then `moist_get_response_field_real`)
-   function new_gostshyp_component_api(verror, vcontext, pressure) result(vcomponent) &
+   !> - Density traces from the host in every phase
+   !> - Gaussian-moment request: `moist_answer_coupling_request` with "gt", "pt", "mt", "rt"
+   !> - Amplitudes in the "gaussian_amplitude" response item
+   !> - Response walk: `moist_next_response_item`, then `moist_get_response_field_real`
+   !>
+   !> @param[in] verror    error handle
+   !> @param[in] vcontext  shared context or NULL
+   !> @param[in] pressure  pressure in Hartree/bohr**3
+   !> @param[in] options   settings; NULL selects compiled defaults
+   function new_gostshyp_component_api(verror, vcontext, pressure, options) result(vcomponent) &
          & bind(C, name=namespace//"new_gostshyp_component")
       !> Error handle
-      type(c_ptr), value :: verror
+      type(c_ptr), value, intent(in) :: verror
       !> Shared run context retained by the component, or NULL
-      type(c_ptr), value :: vcontext
+      type(c_ptr), value, intent(in) :: vcontext
       !> Applied hydrostatic pressure in Hartree/bohr**3
-      real(c_double), value :: pressure
+      real(c_double), value, intent(in) :: pressure
+      !> Optional settings; NULL selects compiled defaults
+      type(c_ptr), value, intent(in) :: options
+      !> Decoded settings
+      type(api_gostshyp_options_v1_0) :: settings
       !> New component handle
       type(c_ptr) :: vcomponent
       !> Decoded error handle
@@ -2210,9 +2297,21 @@ contains
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
 
+      call read_gostshyp_options(options, settings, error%ptr)
+      call prefix_api_error(error%ptr, "new_gostshyp_component")
+      if (allocated(error%ptr)) return
       allocate (component)
       call acquire_context(vcontext, component%shared_ctx, ctx)
-      call new_component_gostshyp(item, real(pressure, wp), ctx=ctx)
+      call new_component_gostshyp(item, real(pressure, wp), ctx=ctx, &
+         & param=moist_gostshyp_parameters_type(regularization_start=real(settings%regularization_start, wp), &
+         & regularization_end=real(settings%regularization_end, wp), &
+         & suppress_negative_amplitudes=logical(settings%suppress_negative_amplitudes)), error=error%ptr)
+      if (allocated(error%ptr)) then
+         call release_shared_context(component%shared_ctx)
+         deallocate (component)
+         call prefix_api_error(error%ptr, "new_gostshyp_component")
+         return
+      end if
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)
 
