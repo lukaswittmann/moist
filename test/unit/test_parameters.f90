@@ -7,7 +7,7 @@ module test_parameters
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
       moist_cavity_numsa_parameters_type, moist_cavity_marchingcubes_parameters_type, &
       moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
-      moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type
+      moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -278,6 +278,8 @@ contains
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
       type(moist_pcm_parameters_type) :: pcm
+      !> Registered hydrostatic-pressure settings
+      type(moist_gostshyp_parameters_type) :: gostshyp
       character(len=*), parameter :: stem = "moist-test-parameters-roundtrip"
       !> Each input format must preserve logical state after a single pass
       integer :: format_index
@@ -333,6 +335,26 @@ contains
       call roundtrip(pcm, stem, error)
       if (allocated(error)) return
       call check(error, pcm%solver_maxiter, 42)
+      if (allocated(error)) return
+      gostshyp%regularization_start = 2.0e-9_wp
+      gostshyp%regularization_end = 2.0e-8_wp
+      gostshyp%suppress_negative_amplitudes = .true.
+      do format_index = 1, 2
+         call roundtrip(gostshyp, stem, error, format_index)
+         if (allocated(error)) return
+         call check(error, gostshyp%regularization_start, 2.0e-9_wp, thr=1.0e-21_wp)
+         if (allocated(error)) return
+         call check(error, gostshyp%regularization_end, 2.0e-8_wp, thr=1.0e-20_wp)
+         if (allocated(error)) return
+         call check(error, gostshyp%suppress_negative_amplitudes)
+         if (allocated(error)) return
+      end do
+      call gostshyp%init_defaults()
+      call check(error, gostshyp%regularization_start, 1.0e-12_wp, thr=1.0e-24_wp)
+      if (allocated(error)) return
+      call check(error, gostshyp%regularization_end, 1.0e-10_wp, thr=1.0e-22_wp)
+      if (allocated(error)) return
+      call check(error, .not. gostshyp%suppress_negative_amplitudes)
    end subroutine test_roundtrip
 
    !> Exercise the abstract file/printing interface without knowing the concrete type

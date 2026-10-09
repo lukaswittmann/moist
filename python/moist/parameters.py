@@ -134,6 +134,21 @@ class PCMParameters(_Parameters):
         object.__setattr__(self, "solver", PCMSolver(self.solver))
 
 
+@dataclass(frozen=True, kw_only=True)
+class GOSTSHYPParameters(_Parameters):
+    """Fixed C-infinity switch of the reciprocal trace, from start to end in bohr**-4.
+
+    Points with ``|ftilde|`` at or below the start are off; at or above the end
+    the energy is the plain reciprocal. Negative pressure amplitudes remain
+    unless suppression is explicitly enabled.
+    """
+
+    _kind = "gostshyp"
+    regularization_start: float = _native_default("gostshyp", "regularization_start")
+    regularization_end: float = _native_default("gostshyp", "regularization_end")
+    suppress_negative_amplitudes: bool = _native_default("gostshyp", "suppress_negative_amplitudes")
+
+
 def _resolve(parameter_type, parameters):
     """Return ``parameters``, or the defaults of ``parameter_type`` for ``None``."""
     if parameters is None:

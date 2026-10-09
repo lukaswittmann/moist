@@ -284,6 +284,19 @@ moist_API_ENTRY void moist_API_CALL
 moist_init_pcm_options(moist_error error, moist_pcm_options *options,
                         size_t struct_size) moist_API_SUFFIX__V_1_0;
 
+/// Numerical regularization of normalized GOSTSHYP gradient traces
+typedef struct {
+    size_t struct_size;
+    double regularization_start;  /* |ftilde| at and below which a point is off, bohr^-4 */
+    double regularization_end;    /* |ftilde| at and above which 1/ftilde is exact, bohr^-4 */
+    bool suppress_negative_amplitudes;
+    /* --- end of 1.0 layout --- */
+} moist_gostshyp_options;
+
+moist_API_ENTRY void moist_API_CALL
+moist_init_gostshyp_options(moist_error error, moist_gostshyp_options *options,
+                            size_t struct_size) moist_API_SUFFIX__V_1_0;
+
 /// Banner text returned by moist_get_banner
 typedef enum {
     moist_banner_full = 0, moist_banner_short = 1,
@@ -490,11 +503,14 @@ moist_new_pv_component(moist_error error, moist_context context,
 /// Create a GOSTSHYP hydrostatic-pressure component at `pressure` in
 /// Hartree/bohr^3. Cannot form its own density traces: answer the
 /// Gaussian-moment request of the coupling ("gt", "pt", "mt", "rt") with
+/// unit-integral G=(omega/pi)^1.5 exp(-omega |r-C|^2). Use the same
+/// normalization for every moment and for AO response/gradient integrals. Use
 /// moist_answer_coupling_request in every phase, and contract the
-/// "gaussian_amplitude" item of the response walk
+/// "gaussian_amplitude" item of the response walk. NULL options selects
+/// compiled defaults
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_gostshyp_component(moist_error error, moist_context context,
-                             double pressure) moist_API_SUFFIX__V_1_0;
+moist_new_gostshyp_component(moist_error error, moist_context context, double pressure,
+                             const moist_gostshyp_options *options) moist_API_SUFFIX__V_1_0;
 
 /// Delete a standalone solvation-model component handle
 moist_API_ENTRY void moist_API_CALL

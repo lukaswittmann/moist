@@ -100,14 +100,12 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 #: xxx/xyy/xzz, y picks xxy/yyy/yzz and z picks xxz/yyz/zzz.
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/continuum/component/gostshyp.f90``.
-#: Only :class:`GaussianMoments` diagnostics read this copy; the energy, Fock
-#: and gradient paths do not.
-_OVERLAP_FLOOR = 1.0e-9
+def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int, *, normalized=False):
+    """Build one Gaussian shell per point.
 
-
-def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
-    """Build one coefficient-1 GTO shell of angular momentum ``angl`` per grid point."""
+    ``normalized=True`` makes the s Gaussian integrate to one. The same radial
+    coefficient applies to p/d/f shells; callers restore their angular ratios.
+    """
     from pyscf import gto
 
     coords = np.asarray(coords, dtype=np.float64)
@@ -128,16 +126,17 @@ def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
         fakemol._bas[ishell, gto.NCTR_OF] = 1
         fakemol._bas[ishell, gto.PTR_EXP] = len(env)
         fakemol._bas[ishell, gto.PTR_COEFF] = len(env) + 1
-        env.extend((float(exponents[ishell]), 1.0))
+        coefficient = (exponents[ishell] / np.pi)**1.5 / _S_NORM if normalized else 1.0
+        env.extend((float(exponents[ishell]), float(coefficient)))
 
     fakemol._env = np.asarray(env, dtype=np.float64)
     fakemol._built = True
     return fakemol
 
 
-def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
+def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart", *, normalized=False):
     """Compute three-center one-electron integrals over a Gaussian-per-grid-point fakemol."""
-    fakemol = _fakemol_gaussians(centers, omega, angl)
+    fakemol = _fakemol_gaussians(centers, omega, angl, normalized=normalized)
     nbas = mol.nbas
     shls_slice = (0, nbas, 0, nbas, nbas, nbas + fakemol.nbas)
     return (mol + fakemol).intor(intor, shls_slice=shls_slice)
@@ -429,7 +428,8 @@ class PySCFHost:
 class GaussianMoments:
     """The host half of GOSTSHYP: Gaussian moment integrals on the cavity grid.
 
-    GOSTSHYP places an unnormalized Gaussian ``G_j = exp(-omega_j |r-C_j|^2)``
+    GOSTSHYP places a unit-integral Gaussian
+    ``G_j = (omega_j/pi)^1.5 exp(-omega_j |r-C_j|^2)``
     on every grid point.  The component asks the host for the density moments
     ``gt = <G>``, ``pt = <(r-C) G>``, ``mt = <(r-C)(r-C) G>`` and
     ``rt = <(r-C)|r-C|^2 G>`` (the ``gaussian_moments`` request) and hands back
@@ -438,10 +438,9 @@ class GaussianMoments:
     ``f_j = n_j . grad_r g_j``.  ``ftilde`` is not exchanged: moist derives it
     as ``-2 omega_j (n_j . pt_j)`` from the same moments it differentiates.
 
-    Every per-grid-point Gaussian carries a normalization that cancels between
-    energy and Fock, so it is not formed.  Only the relative s/p/d/f angular
-    constants are restored, which is what makes ``f = n . grad g`` exact; they
-    are pinned against an independent quadrature in ``test_gostshyp.py``.
+    The unit-integral normalization and the relative s/p/d/f angular constants
+    are applied to every moment and matching Fock and AO-center derivative block.
+    Normalization varies with area; the component includes that derivative.
 
     The widths ``omega`` are the component's choice, read from the request
     snapshot; the pressure is the component's too.  Bound to one surface and
@@ -535,7 +534,7 @@ class GaussianMoments:
 
         Recomputed on each call, not cached.
         """
-        p_cart = _int3c1e(self.mol, self.centers, self.omega, 1)
+        p_cart = _int3c1e(self.mol, self.centers, self.omega, 1, normalized=True)
         ncart = p_cart.shape[0]
         p_cart = p_cart.reshape(ncart, ncart, self.ngrid, 3)
         # dG/dC_a = 2 omega (r_a - C_a) G, and displacing the field point is the
@@ -547,7 +546,7 @@ class GaussianMoments:
 
     def _build_integrals(self) -> None:
         """Build the dense ``g`` and ``f`` blocks the amplitudes are contracted with."""
-        g_cart = _int3c1e(self.mol, self.centers, self.omega, 0)
+        g_cart = _int3c1e(self.mol, self.centers, self.omega, 0, normalized=True)
         self._G = self._to_spherical(g_cart)
         self._F = np.einsum("uvja,ja->uvj", self.f_vector(), self.normals, optimize=True)
 
@@ -587,16 +586,16 @@ class GaussianMoments:
         ncart = dm_cart.shape[0]
         gt = pt = mt = rt = None
         if "gt" in required:
-            block = _int3c1e(self.mol, centers, omega, 0)
+            block = _int3c1e(self.mol, centers, omega, 0, normalized=True)
             gt = np.einsum("pqj,pq->j", block, dm_cart, optimize=True)
         if "pt" in required:
-            block = _int3c1e(self.mol, centers, omega, 1)
+            block = _int3c1e(self.mol, centers, omega, 1, normalized=True)
             pt = self._contract_p_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 3))
         if "mt" in required:
-            block = _int3c1e(self.mol, centers, omega, 2)
+            block = _int3c1e(self.mol, centers, omega, 2, normalized=True)
             mt = self._contract_d_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 6))
         if "rt" in required:
-            block = _int3c1e(self.mol, centers, omega, 3)
+            block = _int3c1e(self.mol, centers, omega, 3, normalized=True)
             rt = self._contract_f_rho2_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 10))
         return gt, pt, mt, rt
 
@@ -628,30 +627,6 @@ class GaussianMoments:
             self._traces = self.traces(self._dm)
         return self._traces
 
-    @property
-    def inactive_count(self) -> int:
-        """Grid points the component switched off, out of :attr:`ngrid`.
-
-        Derived from ``ftilde``, not from the amplitudes: the amplitudes carry
-        the pressure, and at ``p_inp = 0`` they are zero for every point.
-        """
-        _, ftilde = self.live_traces
-        floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
-        return int(np.count_nonzero(np.abs(ftilde) <= floor))
-
-    def effective_volume(self) -> float:
-        """Return ``E / p_inp`` (eq 11), evaluated as ``sum_j a_j gtilde_j / ftilde_j``.
-
-        Not the cavity volume, and well defined at ``p_inp = 0`` where the
-        energy vanishes with the pressure but the volume does not.
-        """
-        gt, ftilde = self.live_traces
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = self.areas * gt / ftilde
-        floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
-        active = np.abs(ftilde) > floor
-        return float(np.sum(np.where(active, ratio, 0.0)))
-
     # ------------------------------------------------------------------
     # contractions of the amplitudes
     # ------------------------------------------------------------------
@@ -669,8 +644,8 @@ class GaussianMoments:
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
 
-        ip1_g = _int3c1e(self.mol, self.centers, self.omega, 0, "int3c1e_ip1_cart")
-        ip1_p = _int3c1e(self.mol, self.centers, self.omega, 1, "int3c1e_ip1_cart")
+        ip1_g = _int3c1e(self.mol, self.centers, self.omega, 0, "int3c1e_ip1_cart", normalized=True)
+        ip1_p = _int3c1e(self.mol, self.centers, self.omega, 1, "int3c1e_ip1_cart", normalized=True)
         ip1_g = ip1_g.reshape(3, ncart, ncart, self.ngrid)
         ip1_p = ip1_p.reshape(3, ncart, ncart, self.ngrid, 3)
         ip1_f = -_S_OVER_P_NORM * 2.0 * np.einsum(

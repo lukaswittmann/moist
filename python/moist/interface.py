@@ -23,7 +23,7 @@ from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
 from .radii import Radii
 from .density import InternalDensity
 from .parameters import (
-    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, _resolve,
+    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
 )
 
 
@@ -1255,15 +1255,23 @@ class ModelComponentPV(SolvationModelComponent):
 class ModelComponentGOSTSHYP(SolvationModelComponent):
     """GOSTSHYP hydrostatic-pressure component."""
 
-    def __init__(self, pressure: float, *, context: Context | None = None) -> None:
+    def __init__(self, pressure: float, *, parameters: GOSTSHYPParameters | None = None,
+                 context: Context | None = None) -> None:
         context = _resolve_context(context, optional=True)
         self._pressure = float(pressure)
-        super().__init__(library.new_gostshyp_component(self._pressure, context=_context_handle(context)),
+        self._parameters = _resolve(GOSTSHYPParameters, parameters)
+        super().__init__(library.new_gostshyp_component(self._pressure, self._parameters,
+                                                      context=_context_handle(context)),
                          context)
 
     @property
     def pressure(self) -> float:
         return self._pressure
+
+
+    @property
+    def parameters(self) -> GOSTSHYPParameters:
+        return self._parameters
 
 
 class ComponentView:

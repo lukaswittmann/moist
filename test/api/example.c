@@ -3647,7 +3647,7 @@ int test_coupling_protocol_gostshyp(void)
     moist_structure mol = make_h2o(error);
     moist_cavity cav = fixture_iswig(error, NULL, NULL, NULL);
     moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
-    moist_component gostshyp = moist_new_gostshyp_component(error, NULL, 1.0e-4);
+    moist_component gostshyp = moist_new_gostshyp_component(error, NULL, 1.0e-4, NULL);
     moist_model model = NULL;
     moist_coupling cpl = NULL;
     moist_response response = NULL;

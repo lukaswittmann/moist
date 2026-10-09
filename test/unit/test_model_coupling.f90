@@ -264,8 +264,14 @@ contains
          if (allocated(error)) return
          call check(error, all(item%width >= 0.0_wp))
          if (allocated(error)) return
+         !> Narrow points are switched off at zero width; they are the smallest ones
+         call check(error, any(item%width > 0.0_wp))
+         if (allocated(error)) return
          call check(error, maxval(abs(item%width*cav%a - pi*log(2.0_wp)), &
-            & mask=cav%a > 0.0_wp), 0.0_wp, thr=thr)
+            & mask=item%width > 0.0_wp), 0.0_wp, thr=thr)
+         if (allocated(error)) return
+         call check(error, maxval(cav%a, mask=item%width == 0.0_wp) &
+            & < minval(cav%a, mask=item%width > 0.0_wp))
       class default
          call test_failed(error, "unexpected request "//item%name())
       end select

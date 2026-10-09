@@ -44,6 +44,7 @@ from .parameters import (
     ISwiGParameters,
     IsodensityParameters,
     PCMParameters,
+    GOSTSHYPParameters,
     SvdWParameters,
 )
 from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, Radii, SMDRadii
@@ -57,6 +58,7 @@ __all__ = [
     "CFCParameters",
     "IsodensityParameters",
     "PCMParameters",
+    "GOSTSHYPParameters",
     "Radii",
     "CPCMRadii",
     "SMDRadii",

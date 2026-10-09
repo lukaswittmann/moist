@@ -476,7 +476,7 @@ def new_pv_component(pressure: float, *, context=None) -> ComponentHandle:
     return _construct("pv_component", ComponentHandle, float(pressure), context=context)
 
 
-def new_gostshyp_component(pressure: float, *, context=None) -> ComponentHandle:
+def new_gostshyp_component(pressure: float, parameters, *, context=None) -> ComponentHandle:
     """Create a GOSTSHYP hydrostatic-pressure component.
 
     ``pressure`` is in Hartree/bohr^3.  The component declares a Gaussian
@@ -485,7 +485,8 @@ def new_gostshyp_component(pressure: float, *, context=None) -> ComponentHandle:
     with :func:`get_response_field_real`.
     """
 
-    return _construct("gostshyp_component", ComponentHandle, float(pressure), context=context)
+    return _construct("gostshyp_component", ComponentHandle, float(pressure), parameters._as_options(),
+                      context=context)
 
 
 def new_general_model(

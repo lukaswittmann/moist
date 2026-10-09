@@ -133,6 +133,9 @@ PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fo
 The point operator is a separate request for components requiring bare Coulomb potentials.
 
 Gaussian moment widths are exponents in bohr**-2, chosen by GOSTSHYP as ``pi*ln(2)/a`` from the per-point area.
+Every moment uses the unit-integral Gaussian ``G=(width/pi)**1.5 * exp(-width*|r-C|**2)``.
+The same prefactor applies to ``gt``, ``pt``, ``mt`` and ``rt``, and to the host's AO response and nuclear integral derivatives. Ordinary orbital normalization is different.
+Zero-width requests represent inert zero-area points and have zero moments.
 They are a :doc:`field <fields>` of the request, not of the cavity: read them from the request, never recompute them.
 
 PCM requires ``phi`` in every phase.

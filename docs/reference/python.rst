@@ -39,6 +39,8 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
 the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
+``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
+negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
 ``Context(nthreads=0, verbosity=0, debug=False)`` mirrors the Fortran
 ``new_context(ctx, nthreads=, verbosity=, debug=)``. The thread count is fixed for

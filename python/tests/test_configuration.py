@@ -17,7 +17,7 @@ CONTEXT = moist.Context()
 
 @pytest.mark.parametrize("kind", [
     moist.DROPParameters, moist.ISwiGParameters, moist.SvdWParameters,
-    moist.CFCParameters, moist.IsodensityParameters, moist.PCMParameters,
+    moist.CFCParameters, moist.IsodensityParameters, moist.PCMParameters, moist.GOSTSHYPParameters,
 ])
 def test_parameters_cover_native_options_and_defaults(kind):
     parameters = kind()
@@ -451,3 +451,35 @@ def test_builtin_radii_select_their_native_radius_set(radii, kind):
 def test_surface_configuration_is_immutable(config):
     with pytest.raises(FrozenInstanceError):
         config.parameters = config.parameters
+
+
+def test_gostshyp_settings_and_validation():
+    parameters = moist.GOSTSHYPParameters(regularization_start=2e-9, regularization_end=2e-8,
+                                          suppress_negative_amplitudes=True)
+    component = moist.ModelComponentGOSTSHYP(1e-3, parameters=parameters)
+    assert component.parameters == parameters
+    assert not moist.GOSTSHYPParameters().suppress_negative_amplitudes
+    with pytest.raises(RuntimeError, match="start must be nonnegative"):
+        moist.ModelComponentGOSTSHYP(1e-3, parameters=replace(parameters, regularization_start=-1e-9))
+    for end in (2e-9, 1e-9):
+        with pytest.raises(RuntimeError, match="end must exceed start"):
+            moist.ModelComponentGOSTSHYP(1e-3, parameters=replace(parameters, regularization_end=end))
+    for name in ("regularization_start", "regularization_end"):
+        with pytest.raises(ValueError, match="finite"):
+            moist.GOSTSHYPParameters(**{name: float("nan")})
+    with pytest.raises(TypeError, match="GOSTSHYPParameters"):
+        moist.ModelComponentGOSTSHYP(1e-3, parameters=moist.PCMParameters())
+    with pytest.raises(RuntimeError, match="pressure and scale must be finite"):
+        moist.ModelComponentGOSTSHYP(float("inf"))
+
+
+def test_gostshyp_registered_parameter_printout():
+    model = moist.SolvationModel(CONTEXT, moist.CavityISwiG(),
+                                [moist.ModelComponentGOSTSHYP(1e-3)])
+    lines = [line.split() for line in model.parameters_text().splitlines()]
+    rows = {name: [line for line in lines if line[:1] == [name]]
+            for name in ("regularization_start", "regularization_end", "suppress_negative_amplitudes")}
+    assert all(len(found) == 1 for found in rows.values())
+    assert float(rows["regularization_start"][0][-1]) == 1e-12
+    assert float(rows["regularization_end"][0][-1]) == 1e-10
+    assert rows["suppress_negative_amplitudes"][0][-1] == "F"

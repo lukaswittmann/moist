@@ -176,7 +176,10 @@ module moist_channels_coupling
       procedure, private :: declare => gaussian_potential_declare
    end type gaussian_potential_request_type
 
-   !> Raw gaussian_moments calculation: gt, pt(3, ngrid), mt(3, 3, ngrid), rt(3, ngrid)
+   !> Unit-integral Gaussian moments: gt, pt(3, ngrid), mt(3, 3, ngrid), rt(3, ngrid)
+   !>
+   !> G = (width/pi)**1.5 exp(-width |r-C|**2), with the same prefactor in
+   !> every moment and matching host AO response/gradient integral block
    type, extends(coupling_request_type) :: gaussian_moment_request_type
       !> Moment exponents in bohr**(-2), supplied by the component
       real(wp), allocatable :: width(:)

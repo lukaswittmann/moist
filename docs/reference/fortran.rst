@@ -363,7 +363,9 @@ to reproduce the requested pressure:
 
 The ``gaussian_moments`` request (``gaussian_moment_request_type``) carries
 the exponents in ``request%width``; read them from the request, never
-recompute them. Answer only its missing outputs, and contract ``w_overlap``
+recompute them. Use unit-integral Gaussians
+``G=(width/pi)**1.5*exp(-width*|r-C|**2)`` for all moments and matching AO
+integrals. Answer only its missing outputs, and contract ``w_overlap``
 and ``w_normal_deriv`` of the ``gaussian_amplitude`` item
 (``gaussian_amplitude_response_type``) with the host's Gaussian integrals.
 See :ref:`coupling-requests` for the outputs required per phase.

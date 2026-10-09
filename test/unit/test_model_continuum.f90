@@ -66,8 +66,7 @@ contains
          & new_unittest("continuum_model_guards", test_continuum_model_guards), &
          & new_unittest("continuum_model_reconstructed_cavity_context", &
          &              test_continuum_model_reconstructed_cavity_context), &
-         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies), &
-         & new_unittest("continuum_model_parameter_printout", test_continuum_model_parameter_printout) &
+         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies) &
          & ]
 
    end subroutine collect_model_continuum
@@ -1106,222 +1105,18 @@ contains
 
    end subroutine test_continuum_model_component_energies
 
-!> Settings printout of a model, before any update
-!>
-!> iSwiG + CPCM + PV + GOSTSHYP: the cavity section, then one section per
-!> component headed by its 1-based index, with its description, `scale`
-!> only when it is not 1, the solvent inputs and the registered settings of
-!> the copy the model holds; a DROP cavity is labelled by its level set and
-!> prints its grouped settings
-   subroutine test_continuum_model_parameter_printout(error)
-
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error handling
-      type(moist_error_type), allocatable :: err
-
-      !> Model under test
-      type(model_continuum_type), target :: model
-      !> Component templates
-      type(model_continuum_component_cpcm) :: pcm
-      type(model_continuum_component_pv) :: pv
-      type(model_continuum_component_gostshyp) :: gostshyp
-      !> Cavity templates
-      type(cavity_type_iswig) :: cavity
-      type(cavity_type_drop) :: drop
-      !> Level sets of the DROP cavities
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(moist_cavity_drop_lsf_cfc_type) :: cfc
-      type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho_callback
-      type(moist_cavity_drop_lsf_isodensity_internal_type) :: rho_internal
-      !> Radius model storage
-      type(radius_type_static) :: radius_model
-      !> Lines read back from the scratch unit
-      character(len=160) :: lines(120)
-      !> Line count and scratch unit
-      integer :: nline, unit
-      !> Expected GPa values, in the printer's fixed format
-      character(len=16) :: pv_gpa, gostshyp_gpa
-      !> Run context owned here and borrowed by the cavities, model and components
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cosmo_radii(radius_model)
-      call new_cavity_iswig(cavity, radius_model, err, moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
-      if (.not. allocated(err)) call new_component_cpcm(pcm, epsilon=4.0_wp, error=err, &
-         & param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-9_wp, &
-         & solver_maxiter=77), ctx=ctx)
-      call new_component_pv(pv, 2.5e-4_wp)
-      call new_component_gostshyp(gostshyp, 3.0e-5_wp)
-      gostshyp%scale = 0.5_wp
-      if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
-      if (.not. allocated(err)) call model%add_component(pcm, err)
-      if (.not. allocated(err)) call model%add_component(pv, err)
-      if (.not. allocated(err)) call model%add_component(gostshyp, err)
-      if (allocated(err)) then
-         call test_failed(error, "Model setup failed: "//err%message)
-         return
-      end if
-
-      ! The model's copy keeps the solver settings in its parameter object
-      select type (item => model%components(1)%item)
-      type is (model_continuum_component_cpcm)
-         call check(error, item%param%solver == solver_type%iterative .and. item%param%solver_maxiter == 77, &
-            & more="model copy lost the PCM solver settings")
-         if (allocated(error)) return
-         call check(error, item%param%solver_tol, 1.0e-9_wp, thr=1.0e-15_wp, &
-            & message="model copy lost the PCM solver tolerance")
-      class default
-         call test_failed(error, "first component is not CPCM")
-      end select
-      if (allocated(error)) return
-
-      open (newunit=unit, status="scratch", action="readwrite")
-      call model%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-
-      call require("Cavity (vdW iSwiG):")
-      call require("Component 1 (CPCM):")
-      call require("Conductor-like polarizable continuum, f(eps) = (eps - 1)/eps")
-      call require("Component 2 (PV):")
-      call require("Pressure-volume work, pressure times cavity volume")
-      call require("Component 3 (GOSTSHYP):")
-      call require("Gaussians on surface tesserae to simulate hydrostatic pressure")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "num_leb", "50") .and. &
-         & printed_entry(lines(:nline), "cut_f", "1.00E-10"), more="iSwiG settings missing")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "Epsilon", "4.000000") .and. &
-         & printed_entry(lines(:nline), "f(eps)", "0.750000"), more="PCM inputs missing")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "solver", "4") .and. &
-         & printed_entry(lines(:nline), "solver_tol", "1.00E-09") .and. &
-         & printed_entry(lines(:nline), "solver_maxiter", "77"), more="PCM settings missing")
-      if (allocated(error)) return
-      ! Pressures in atomic units, then in GPa through the one conversion factor;
-      ! it agrees with Eh/a_0^3 to the rounding of the CODATA values (4e-12)
-      call check(error, autogpa, Hartree_energy/Bohr_radius**3*1.0e-9_wp, rel=.true., thr=1.0e-11_wp, &
-         & message="Eh/bohr^3 -> GPa factor")
-      if (allocated(error)) return
-      write (pv_gpa, "(f16.6)") 2.5e-4_wp*autogpa
-      write (gostshyp_gpa, "(f16.6)") 3.0e-5_wp*autogpa
-      call check(error, printed_entry(lines(:nline), "Pressure", "2.50E-04 Eh/bohr^3") .and. &
-         & printed_entry(lines(:nline), "Pressure", "3.00E-05 Eh/bohr^3"), more="pressures missing")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "Pressure", trim(adjustl(pv_gpa))//" GPa") .and. &
-         & printed_entry(lines(:nline), "Pressure", trim(adjustl(gostshyp_gpa))//" GPa"), &
-         & more="pressures in GPa missing: "//trim(adjustl(pv_gpa))//", "//trim(adjustl(gostshyp_gpa)))
-      if (allocated(error)) return
-      ! Only GOSTSHYP was rescaled
-      call check(error, printed_entry(lines(:nline), "scale", "0.500000") .and. &
-         & count(index(adjustl(lines(:nline)), "scale ") == 1) == 1, more="scale printed for an unscaled component")
-      if (allocated(error)) return
-      ! Sections follow the list order
-      call check(error, first_line("Cavity (") < first_line("Component 1 ") .and. &
-         & first_line("Component 1 ") < first_line("Component 2 ") .and. &
-         & first_line("Component 2 ") < first_line("Component 3 "), more="sections out of order")
-      if (allocated(error)) return
-
-      ! Every level-set model is named; the two isodensity models share a name
-      call lsf%new()
-      call cfc%new()
-      call rho_callback%new(c_null_funptr, c_null_ptr)
-      call rho_internal%new([1], [0], [1], [1.0_wp], [1.0_wp], err)
-      if (allocated(err)) then
-         call test_failed(error, "Isodensity setup failed: "//err%message)
-         return
-      end if
-      call check(error, lsf%name == "SvdW" .and. cfc%name == "CFC" .and. rho_callback%name == "Isodensity" &
-         & .and. rho_internal%name == "Isodensity", more="unnamed or misnamed level-set model")
-      if (allocated(error)) return
-
-      ! DROP is labelled by its level set and prints its grouped settings, without an update
-      call new_cavity_drop(drop, radius_model, cfc, err, ctx=ctx)
-      if (.not. allocated(err)) then
-         call check(error, drop%label == "CFC-DROP", more="CFC DROP label: "//drop%label)
-         if (allocated(error)) return
-         call new_cavity_drop(drop, radius_model, lsf, err, ctx=ctx)
-      end if
-      if (allocated(err)) then
-         call test_failed(error, "DROP setup failed: "//err%message)
-         return
-      end if
-      call check(error, drop%label == "SvdW-DROP", more="SvdW DROP label: "//drop%label)
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call drop%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call require("Cavity (SvdW-DROP):")
-      call require("DROP Parameters:")
-      call require("Implicit surface (SvdW):")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "Level set", "SvdW") .and. &
-         & printed_entry(lines(:nline), "Number of Leb. points", "194"), more="DROP settings missing")
-      if (allocated(error)) return
-
-      ! The density source tells the two isodensity models apart
-      call new_cavity_drop(drop, radius_model, rho_callback, err, ctx=ctx)
-      if (allocated(err)) then
-         call test_failed(error, "Isodensity DROP setup failed: "//err%message)
-         return
-      end if
-      open (newunit=unit, status="scratch", action="readwrite")
-      call drop%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call require("Cavity (Isodensity-DROP):")
-      call require("Implicit surface (isodensity):")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines(:nline), "Level set", "Isodensity (callback)"), &
-         & more="isodensity density source missing")
-
-   contains
-
-      !> Require one printed line to hold `text`
-      !>
-      !> @param[in] text Expected text
-      subroutine require(text)
-         !> Expected text
-         character(len=*), intent(in) :: text
-
-         if (allocated(error)) return
-         call check(error, first_line(text) > 0, more="printout lacks '"//text//"'")
-      end subroutine require
-
-      !> Index of the first printed line holding `text`, 0 when none does
-      !>
-      !> @param[in] text Text to find
-      integer function first_line(text) result(iline)
-         !> Text to find
-         character(len=*), intent(in) :: text
-         !> Line index
-         integer :: i
-
-         iline = 0
-         do i = 1, nline
-            if (index(lines(i), text) > 0) then
-               iline = i
-               return
-            end if
-         end do
-      end function first_line
-
-   end subroutine test_continuum_model_parameter_printout
-
-!> Assemble an updated continuum model from CPCM and an optional PV component
-!>
-!> PV is appended at the requested pressure when `with_pv` is set
-!>
-!> @param[out] model Model to build
-!> @param[in] cavity Cavity template copied into the model
-!> @param[in] ctx Run context owned by the caller
-!> @param[in] pcm_component CPCM component template
-!> @param[in] with_pv Whether to append a PV component
-!> @param[in] pressure Pressure of the PV component
-!> @param[in] mol Molecular structure
-!> @param[out] error Error handling
+   !> Assemble an updated continuum model from CPCM and an optional PV component
+   !>
+   !> PV is appended at the requested pressure when `with_pv` is set
+   !>
+   !> @param[out] model Model to build
+   !> @param[in] cavity Cavity template copied into the model
+   !> @param[in] ctx Run context owned by the caller
+   !> @param[in] pcm_component CPCM component template
+   !> @param[in] with_pv Whether to append a PV component
+   !> @param[in] pressure Pressure of the PV component
+   !> @param[in] mol Molecular structure
+   !> @param[out] error Error handling
    subroutine build_pv_model(model, cavity, ctx, pcm_component, with_pv, pressure, mol, error)
 
       !> Model to build

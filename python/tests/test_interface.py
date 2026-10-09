@@ -1351,9 +1351,11 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         a = model.cavity.a
         assert width.shape == (ngrid,)
         assert not width.flags.writeable
-        active = a > 0.0
+        # Narrow points are switched off at zero width; they are the smallest ones
+        active = width > 0.0
+        assert active.any()
         np.testing.assert_allclose(width[active], np.pi * np.log(2.0) / a[active], rtol=1e-12)
-        np.testing.assert_array_equal(width[~active], 0.0)
+        assert np.all(a[~active] < a[active].min())
         # The snapshot is a copy of the request's own input, its only field.
         assert library.get_coupling_request_field_count(coupling._handle) == 1
         field = library.get_coupling_request_field_info(coupling._handle, 0)
