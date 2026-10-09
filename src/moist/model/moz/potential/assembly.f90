@@ -110,6 +110,7 @@ contains
       type(coupling_type), intent(inout) :: coupling
       type(error_type), allocatable, intent(out) :: error
       integer :: i
+      ! TODO: skip terms whose charges are all shadowed by earlier owners; the host answers unread requests
       do i = 1, self%n_terms()
          call coupling_set_scope(coupling, i)
          call self%slots(i)%term%declare_pass(grid, coupling, error)
@@ -123,6 +124,7 @@ contains
       type(coupling_type), intent(inout) :: coupling
       type(error_type), allocatable, intent(out) :: error
       integer :: i
+      ! TODO: skip terms whose charges are all shadowed by earlier owners; the host answers unread requests
       do i = 1, self%n_terms()
          call coupling_set_scope(coupling, i)
          call self%slots(i)%term%declare_pass(grid, coupling, error)

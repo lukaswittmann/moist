@@ -85,6 +85,7 @@ contains
          return
       end if
       ! TODO: Require solved solvent after VV solve implementation
+      ! TODO: share the solvent check and copy with the 1D model
       allocate (self%solvent, source=solvent, stat=stat)
       if (stat /= 0) then
          call fatal_error(error, "Failed to copy the 1D VV solvent")

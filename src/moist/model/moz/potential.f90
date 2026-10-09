@@ -112,6 +112,7 @@ module moist_model_moz_potential
       procedure :: update_1d => potential_update_1d
       !> Update from the structure, then grid-dependent term data (volume grid)
       procedure :: update_3d => potential_update_3d
+      ! TODO: check ifx accepts this generic; the specifics differ only in the type of argument 3
       generic :: update => update_plain, update_1d, update_3d
       !> Declare the coupling requests of every term in its own scope (radial grid)
       procedure :: declare_1d => potential_declare_1d
