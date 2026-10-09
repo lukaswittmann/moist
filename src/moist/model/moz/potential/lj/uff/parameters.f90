@@ -1,4 +1,9 @@
+! SPDX-License-Identifier: MPL-2.0 AND MIT
+! Lookup implementation: MPL-2.0; parameter data: MIT
+!
 !> UFF element Lennard-Jones parameters
+!>
+!> Rappe et al., J. Am. Chem. Soc. 114, 10024-10035 (1992), doi:10.1021/ja00051a040
 module moist_model_moz_potential_lj_uff_parameters
    use mctc_env, only: wp
    use mctc_io_convert, only: aatoau, kcaltoau
@@ -6,6 +11,35 @@ module moist_model_moz_potential_lj_uff_parameters
    private
 
    public :: lookup_uff_lj, n_uff
+
+   ! UFF x1 and D1 columns from lammps_interface/uff.py
+   ! https://github.com/peteboyd/lammps_interface/blob/255f027cb76142d39c050a6810404debc6a06562/lammps_interface/uff.py
+   ! Source revision: 255f027cb76142d39c050a6810404debc6a06562
+   ! Changes: collapse identical element LJ rows; omit Du; map Lw6+3 to Lr
+   ! x1 = homonuclear rmin, Angstrom; D1 = epsilon, kcal/mol
+   ! Sigma = x1/2**(1/6); conversion to atomic units on lookup
+   !
+   ! The MIT License (MIT)
+   !
+   ! Copyright (c) 2017 Peter Boyd
+   !
+   ! Permission is hereby granted, free of charge, to any person obtaining a copy
+   ! of this software and associated documentation files (the "Software"), to deal
+   ! in the Software without restriction, including without limitation the rights
+   ! to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   ! copies of the Software, and to permit persons to whom the Software is
+   ! furnished to do so, subject to the following conditions:
+   !
+   ! The above copyright notice and this permission notice shall be included in all
+   ! copies or substantial portions of the Software.
+   !
+   ! THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   ! IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   ! FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   ! AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   ! LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   ! OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   ! SOFTWARE.
 
    !> Number of supported elements, H through Lr; the tables are indexed by atomic number
    integer, parameter :: n_uff = 103
