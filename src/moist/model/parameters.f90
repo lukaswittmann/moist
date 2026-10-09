@@ -303,7 +303,8 @@ contains
             select case (entry%get_type())
             case (toml_type%float)
                call get_value(table, keys(i)%key, rval, stat=stat)
-               if (stat == 0) call pp%kv(keys(i)%key, rval)
+               if (stat == 0) call pp%kv(keys(i)%key, rval, &
+                  & use_exp=(abs(rval) > 0.0_wp .and. abs(rval) < 1.0e-4_wp) .or. abs(rval) >= 1.0e6_wp)
             case (toml_type%int)
                call get_value(table, keys(i)%key, ival, stat=stat)
                if (stat == 0) call pp%kv(keys(i)%key, ival)
