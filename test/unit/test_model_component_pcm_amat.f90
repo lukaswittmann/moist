@@ -6,7 +6,7 @@ module test_model_component_pcm_amat
                                              pcm_amat_surface_weights, &
                                              assemble_pcm_amat_with_gradient, &
                                              pcm_amat_nuclear_gradient
-   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far
+   use moist_math_boys, only: boys_x_far
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
    private
@@ -86,7 +86,7 @@ contains
 
       ngrid = size(xi)
       allocate (bound(ngrid))
-      bound = pcm_amat_x_far/(xi*xi)
+      bound = boys_x_far/(xi*xi)
 
       nfar = 0
       nnear = 0

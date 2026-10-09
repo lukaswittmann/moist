@@ -2,7 +2,8 @@
 submodule(moist_model_continuum_component_pcm_amat) moist_model_continuum_component_pcm_amat_build
    use mctc_env, only: fatal_error
    use moist_context, only: resolve_num_threads
-   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far, &
+   use moist_math_boys, only: boys_x_far
+   use moist_model_continuum_component_pcm_amat_kernel, only: &
       pcm_amat_far_value_row, pcm_amat_near_value, pcm_amat_near_grad, &
       pcm_amat_diag_value, pcm_amat_diag_grad
    implicit none(type, external)
@@ -50,7 +51,7 @@ contains
       !> Per-point saturation bounds
       real(wp), intent(out) :: bound(:)
 
-      bound = pcm_amat_x_far/(xi*xi)
+      bound = boys_x_far/(xi*xi)
    end subroutine saturation_bounds
 
    !> Mirror the upper triangle of a square matrix onto the lower one

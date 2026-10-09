@@ -1,8 +1,8 @@
 !> Kernel-level unit tests for the auto-generated Gaussian PCM pair kernel
 module test_model_component_pcm_amat_kernel
    use mctc_env_accuracy, only: wp
-   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far, &
-      pcm_amat_x_taylor, pcm_amat_boys012, pcm_amat_width2, &
+   use moist_math_boys, only: boys_x_far, boys_x_taylor, boys012
+   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_width2, &
       pcm_amat_far_value, pcm_amat_far_grad, pcm_amat_far_hess, &
       pcm_amat_far_value_row, pcm_amat_far_grad_row, &
       pcm_amat_near_value, pcm_amat_near_grad, pcm_amat_near_hess, &
@@ -170,7 +170,7 @@ contains
                              [0.5_wp, 1.0_wp, 4.0_wp, 20.0_wp, 60.0_wp]
 
       ! Exact values at the origin
-      call pcm_amat_boys012(0.0_wp, f0, f1, f2, ex)
+      call boys012(0.0_wp, f0, f1, f2, ex)
       call check(error, f0, 1.0_wp, thr=exact_thr, more="F0(0) is wrong")
       if (allocated(error)) return
       call check(error, f1, 1.0_wp/3.0_wp, thr=exact_thr, more="F1(0) is wrong")
@@ -182,7 +182,7 @@ contains
 
       do i = 1, size(stable_x)
          x = stable_x(i)
-         call pcm_amat_boys012(x, f0, f1, f2, ex)
+         call boys012(x, f0, f1, f2, ex)
          f0_ref = 0.88622692545275801_wp*erf(sqrt(x))/sqrt(x)
          f1_ref = 0.5_wp*(f0_ref - exp(-x))/x
          f2_ref = 0.5_wp*(3.0_wp*f1_ref - exp(-x))/x
@@ -199,9 +199,9 @@ contains
 
       ! The Taylor branch must join the recursion branch continuously at the
       ! crossover; a short series would show up here first
-      x = pcm_amat_x_taylor
-      call pcm_amat_boys012(x*(1.0_wp - epsilon(1.0_wp)), f0, f1, f2, ex)
-      call pcm_amat_boys012(x*(1.0_wp + 8.0_wp*epsilon(1.0_wp)), f0_ref, f1_ref, &
+      x = boys_x_taylor
+      call boys012(x*(1.0_wp - epsilon(1.0_wp)), f0, f1, f2, ex)
+      call boys012(x*(1.0_wp + 8.0_wp*epsilon(1.0_wp)), f0_ref, f1_ref, &
                             f2_ref, ex)
       call check(error, f0, f0_ref, thr=1.0e-15_wp, &
                  more="Boys F0 is discontinuous at the Taylor crossover")
@@ -461,7 +461,7 @@ contains
 
       do i = 1, size(factors)
          ! p**2 = xi**2/2, so x = p**2*r2; pick r2 from the requested x
-         r2 = factors(i)*pcm_amat_x_far*2.0_wp/(xi*xi)
+         r2 = factors(i)*boys_x_far*2.0_wp/(xi*xi)
 
          call pcm_amat_far_hess(r2, a_far, a_r2_far, a_r2r2_far)
          call pcm_amat_near_hess(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2, &
@@ -515,7 +515,7 @@ contains
       real(wp), parameter :: xi = 3.0_wp
 
       ! Step just below the cutoff so the erf/exp branch is taken
-      r2 = (1.0_wp - 1.0e-12_wp)*pcm_amat_x_far*2.0_wp/(xi*xi)
+      r2 = (1.0_wp - 1.0e-12_wp)*boys_x_far*2.0_wp/(xi*xi)
       call pcm_amat_far_grad(r2, a_far, a_r2_far)
       call pcm_amat_near_grad(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2)
 
