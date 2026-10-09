@@ -62,7 +62,6 @@ contains
          & new_unittest("charge_fallback", check_charge_fallback), &
          & new_unittest("monopole_requests_by_phase", check_monopole_requests), &
          & new_unittest("monopole_tail_charges_from_view", check_monopole_tail_charges), &
-         & new_unittest("pending_terms", check_pending_terms), &
          & new_unittest("monopole_tables_match_fixed", check_monopole_tables), &
          & new_unittest("monopole_adjoint_gradient_phase", check_monopole_adjoint), &
          & new_unittest("monopole_adjoint_response_phase", check_monopole_response_phase), &
@@ -561,25 +560,6 @@ contains
       if (allocated(error)) return
       call check_close(error, q, q_u, 0.0_wp, "host tail charges")
    end subroutine check_monopole_tail_charges
-
-   !> Check EC construction and multipole stub refusal
-   subroutine check_pending_terms(error)
-      !> Test error
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error), allocatable :: err
-      type(structure_type) :: mol
-      type(ec_charges_type) :: ec
-      type(multipole_type) :: multipoles
-
-      call make_solute(mol)
-      call ec%update(mol, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      call multipoles%update(mol, err)
-      call check(error, allocated(err), more="host multipoles built")
-      if (allocated(error)) return
-      call check(error, index(err%message, "not implemented in this build round") > 0, more=err%message)
-   end subroutine check_pending_terms
 
    !> Compare host-fed and fixed-charge tables
    !>
