@@ -47,6 +47,7 @@ tests = [
   'moz_3d',
   'moz_potential_kernel',
   'moz_potential_electrostatic',
+  'moz_potential_ec',
   'moz_potential_lj',
   'moz_potential_oplsaa',
   'moz_solvent',

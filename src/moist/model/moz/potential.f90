@@ -50,8 +50,8 @@ module moist_model_moz_potential
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
-   use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
+   use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_model_charges_type, &
       & solvent_multipoles_type, coulomb_hirshfeld_gas, coulomb_hirshfeld_solvent, coulomb_hirshfeld_conductor, &
       & coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor, coulomb_mbis_gas, coulomb_mbis_solvent, &

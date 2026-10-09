@@ -7,19 +7,18 @@ module test_moz_1d
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
    use moist_data_solvents, only: solvation_system_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
-   use moist_model_moz_potential, only: moz_potential_type
+   use moist_model_moz_potential, only: moz_potential_type, ec_charges_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
-   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
-   use moist_model_moz_potential_electrostatic_host_potential, only: host_potential_type
-   use moist_model_moz_potential_electrostatic_multipole, only: host_multipoles_type
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
+   use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_channels_coupling, only: coupling_type, coupling_request_type
    use moist_channels_fields, only: field_query_type
    use moist_channels_response, only: response_type, atomic_charge_adjoint_response_type, response_accumulate
    use test_helpers, only: check_moist_error
    use test_moz_fixtures, only: water_sigma, water_epsilon, water_charges, new_water_system, &
-      & new_water_solvent, refusing_term_type, answer_charges, answer_radial_potential
+      & new_water_solvent, refusing_term_type, answer_charges
    implicit none(type, external)
    private
    public :: collect_moz_1d
@@ -36,8 +35,8 @@ contains
          new_unittest("getter_guards", check_getter_guards), &
          new_unittest("update_guards", check_update_guards), &
          new_unittest("atom_count_follows_update", check_atom_count_follows_update), &
-         new_unittest("host_charges_in_every_phase", check_host_charges_phases), &
-         new_unittest("host_potential_declared", check_host_potential), &
+         new_unittest("monopole_in_every_phase", check_monopole_phases), &
+         new_unittest("radial_fields", check_radial_fields), &
          new_unittest("term_failures", check_term_failures), &
          new_unittest("solvent_copy", check_solvent_copy), &
          new_unittest("uv_potential_tables", check_potential_tables)]
@@ -60,7 +59,7 @@ contains
       real(wp) :: energy, gradient(3, 2)
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_host_charges_model(ctx, model, err)
+      call new_monopole_model(ctx, model, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return
@@ -143,7 +142,7 @@ contains
       type(coupling_type), pointer :: coupling
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_host_charges_model(ctx, model, err)
+      call new_monopole_model(ctx, model, err)
       if (.not. allocated(err)) then
          call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
          call model%update(mol, err)
@@ -192,7 +191,7 @@ contains
    !> Check host-charge declarations
    !>
    !> - `q` pending in energy, response and gradient phases
-   subroutine check_host_charges_phases(error)
+   subroutine check_monopole_phases(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -208,39 +207,27 @@ contains
       end if
       walks = "atomic_charges(q*);"
       call check_phase_walks(error, model, walks)
-   end subroutine check_host_charges_phases
+   end subroutine check_monopole_phases
 
-   !> Check host-potential declarations on the radial grid of the model
+   !> Check the published radial grid and monopole requirements
    !>
-   !> - Radial potential pending in every phase, beside the host charges
-   !> - Radial grid published as named fields
-   !> - Answer over the wrong number of radii refused; correct shape accepted
-   subroutine check_host_potential(error)
+   !> @param[out] error  test error
+   subroutine check_radial_fields(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(model_moz_1d_type), target :: model
-      type(host_potential_type) :: potential
-      type(custom_lj_type) :: lj
-      type(coupling_type), pointer :: coupling
       type(field_query_type) :: query
-      real(wp), allocatable :: phi(:, :)
       character(len=96) :: walks(3)
       character(len=5), parameter :: names(3) = [character(len=5) :: "ngrid", "natom", "r"]
       integer :: i
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_custom_lj(lj, [3.0_wp, 3.0_wp], [1.0e-4_wp, 1.0e-4_wp], err)
-      if (.not. allocated(err)) call new_model(ctx, model, err)
-      if (.not. allocated(err)) call model%potential%add(potential, err)
-      if (.not. allocated(err)) call model%potential%add(lj, err)
-      if (.not. allocated(err)) call update_h2(model, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      walks = "atomic_charges(q*);radial_potential(phi*);"
+      call new_updated_model(ctx, model, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      walks = "atomic_charges(q*);"
       call check_phase_walks(error, model, walks)
       if (allocated(error)) return
 
@@ -259,32 +246,13 @@ contains
          end select
          if (allocated(error)) return
       end do
-
-      call model%new_coupling(coupling, err)
-      if (.not. allocated(err)) call model%prepare_energy(coupling, err)
-      if (.not. allocated(err)) call answer_charges(coupling, [0.1_wp, -0.1_wp], err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      call check(error, coupling%next(), more="radial_potential must be pending")
-      if (allocated(error)) return
-      allocate (phi(model%rgrid%npts + 1, 2), source=0.0_wp)
-      call coupling%answer("phi", phi, err)
-      call check(error, allocated(err), more="a radial potential over the wrong radii was accepted")
-      if (allocated(error)) return
-      deallocate (err, phi)
-      allocate (phi(model%rgrid%npts, 2), source=0.0_wp)
-      call coupling%answer("phi", phi, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      call model%release_coupling(coupling)
-   end subroutine check_host_potential
+   end subroutine check_radial_fields
 
    !> Check named solute failures and cleared coupling state
    !>
    !> - Solute potential without terms: refusal at update
    !> - Host multipole stub: refusal at update (build)
+   !> - EC term: refusal at the radial declaration, volume grids only
    !> - Failed term declaration: coupling refused, previously staged walk ended
    subroutine check_term_failures(error)
       !> Test error
@@ -292,8 +260,9 @@ contains
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(model_moz_1d_type), target :: model
-      type(host_multipoles_type) :: multipoles
-      type(host_charges_type) :: charges
+      type(multipole_type) :: multipoles
+      type(monopole_type) :: charges
+      type(ec_charges_type) :: ec
       type(refusing_term_type) :: refusing
       !> Declaration switch shared with the refusing term
       logical, target :: refuse
@@ -316,7 +285,21 @@ contains
       if (.not. allocated(err)) call update_h2(model, err)
       call check(error, allocated(err) .and. .not. model%is_updated(), more="the multipoles stub was built")
       if (allocated(error)) return
-      call check(error, index(err%message, "host_multipoles") > 0, more=err%message)
+      call check(error, index(err%message, "multipole") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+
+      call new_model(ctx, model, err)
+      if (.not. allocated(err)) call model%potential%add(ec, err)
+      if (.not. allocated(err)) call update_h2(model, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call model%new_coupling(coupling, err)
+      call check(error, allocated(err) .and. .not. associated(coupling), more="a 1D model declared an EC fit")
+      if (allocated(error)) return
+      call check(error, index(err%message, "volume grids only") > 0, more=err%message)
       if (allocated(error)) return
       deallocate (err)
 
@@ -373,7 +356,7 @@ contains
       type(solvent_vv_type) :: solvent
       type(moz_potential_type) :: solvent_pot
       type(fixed_charges_type) :: extra
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
       type(moist_math_grid_radial_type) :: rgrid, kgrid, empty
 
       call new_context(ctx, nthreads=0, verbosity=0)
@@ -443,9 +426,9 @@ contains
       call check(error, model%potential%n_terms(), 2)
    end subroutine check_solvent_copy
 
-   !> UV tables of an LJ + H2 solute against the water solvent, for fixed
-   !> solute charges, for host charges and for the host potential
-   !> phi(r, a) = q_a/r with host charges, both read from the coupling
+   !> UV tables of an LJ + H2 solute against the water solvent
+   !>
+   !> - Fixed charges and host-fed monopoles
    !>
    !> - Column (iu - 1) nv + iv holds [iu, iv]
    !> - At alpha = 1: u_sr + ur_lr = u_LJ + q_u q_v/r, ur_lr = q_u q_v erf(r)/r
@@ -459,11 +442,10 @@ contains
       type(solvent_vv_type) :: solvent
       type(custom_lj_type) :: lj
       type(fixed_charges_type) :: fixed
-      type(host_charges_type) :: host
-      type(host_potential_type) :: field
+      type(monopole_type) :: host
       type(coupling_type), pointer :: coupling
       type(moist_math_grid_radial_type) :: rgrid, kgrid
-      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), sr6(:), expected(:), phi(:, :)
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), sr6(:), expected(:)
       integer, allocatable :: pairs(:, :)
       real(wp), parameter :: sigma_u(2) = [2.5_wp, 3.5_wp], epsilon_u(2) = [1.0e-4_wp, 3.0e-4_wp]
       real(wp), parameter :: q_u(2) = [0.25_wp, -0.25_wp]
@@ -478,17 +460,15 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
 
-      do source = 1, 3
+      do source = 1, 2
          call new_moz_1d_model(model, ctx, rgrid, kgrid, solvent, err)
          if (.not. allocated(err)) call model%potential%add(lj, err)
          if (.not. allocated(err)) then
             select case (source)
             case (1)
                call model%potential%add(fixed, err)
-            case (2)
-               call model%potential%add(host, err)
             case default
-               call model%potential%add(field, err)
+               call model%potential%add(host, err)
             end select
          end if
          call check_moist_error(error, err)
@@ -518,13 +498,6 @@ contains
          call model%prepare_energy(coupling, err)
          if (source >= 2) then
             if (.not. allocated(err)) call answer_charges(coupling, q_u, err)
-         end if
-         if (source == 3) then
-            allocate (phi(model%rgrid%npts, 2))
-            do iu = 1, 2
-               phi(:, iu) = q_u(iu)/model%rgrid%r
-            end do
-            if (.not. allocated(err)) call answer_radial_potential(coupling, phi, err)
          end if
          if (.not. allocated(err)) call model%potential%compute(model%rgrid, model%kgrid, u_sr, ur_lr, uk_lr, err, &
             & solvent=solvent%potential, coupling=coupling)
@@ -882,18 +855,18 @@ contains
    !> @param[in]  ctx    run context, outlives the model
    !> @param[out] model  constructed model
    !> @param[out] err    construction error
-   subroutine new_host_charges_model(ctx, model, err)
+   subroutine new_monopole_model(ctx, model, err)
       !> Run context, outlives the model
       type(moist_context_type), intent(in), target :: ctx
       !> Constructed model
       type(model_moz_1d_type), intent(out) :: model
       !> Construction error
       type(moist_error), allocatable, intent(out) :: err
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
       call new_model(ctx, model, err)
       if (allocated(err)) return
       call model%potential%add(charges, err)
-   end subroutine new_host_charges_model
+   end subroutine new_monopole_model
 
    !> Construct a 1D MOZ model with a host charges term, updated to two hydrogen atoms
    !>
@@ -907,7 +880,7 @@ contains
       type(model_moz_1d_type), intent(out) :: model
       !> Construction or update error
       type(moist_error), allocatable, intent(out) :: err
-      call new_host_charges_model(ctx, model, err)
+      call new_monopole_model(ctx, model, err)
       if (allocated(err)) return
       call update_h2(model, err)
    end subroutine new_updated_model

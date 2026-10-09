@@ -11,9 +11,9 @@ module test_moz_3d
    use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
-   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
-   use moist_model_moz_potential_electrostatic_host_potential, only: host_potential_type
-   use moist_model_moz_potential_electrostatic_multipole, only: host_multipoles_type
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
+   use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
+   use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid, &
       & new_cartesian_gaussian_grid
@@ -41,9 +41,9 @@ contains
          & new_unittest("getter_guards", check_getter_guards), &
          & new_unittest("update_guards", check_update_guards), &
          & new_unittest("owned_grid", test_grid_model), &
-         & new_unittest("host_potential_point_requests", check_host_potential_requests), &
+         & new_unittest("ec_point_requests", check_ec_requests), &
          & new_unittest("gaussian_grid_refused", check_gaussian_grid_refused), &
-         & new_unittest("host_charges_and_multipoles", check_charge_sources), &
+         & new_unittest("monopole_and_multipoles", check_charge_sources), &
          & new_unittest("term_failures", check_term_failures), &
          & new_unittest("solvent_copy", check_solvent_copy), &
          & new_unittest("uv_potential_tables", check_potential_tables)]
@@ -52,7 +52,7 @@ contains
    !> Drive a 3D MOZ model through the coupling protocol
    !>
    !> - Owned copy of configured point grid
-   !> - Host potential: atomic_charges and point_potential requests through coupling protocol
+   !> - EC term: point_potential request through coupling protocol
    !> - Theory-pending error after all mandatory answers
    !> - Wrong-shape answer rejected first
    subroutine check_moz_3d(error)
@@ -67,10 +67,11 @@ contains
       type(coupling_type), pointer :: coupling
       type(response_type) :: response
       type(solvent_vv_type) :: solvent
-      type(host_potential_type) :: potential
+      type(ec_charges_type) :: potential
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
       integer :: i
+      potential%exclusion_radius = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) then
@@ -117,13 +118,6 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call check(error, coupling%next(), more="the tail charges must be pending")
-      if (allocated(error)) return
-      call coupling%answer("q", [0.0_wp], err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
       call check(error, coupling%next(), more="point_potential must be pending")
       if (allocated(error)) return
 
@@ -140,7 +134,7 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call check(error, .not. coupling%next(), more="atomic_charges and point_potential are the only requests")
+      call check(error, .not. coupling%next(), more="point_potential is the only request")
       if (allocated(error)) return
 
       energy = 9.0_wp
@@ -184,7 +178,7 @@ contains
       type(field_query_type) :: query
       real(wp), allocatable :: original(:, :)
       type(solvent_vv_type) :: solvent
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
       integer :: kind, template_ngrid
 
       call new_context(ctx, nthreads=0, verbosity=0)
@@ -255,12 +249,12 @@ contains
       end do
    end subroutine test_grid_model
 
-   !> Check host-potential declarations on point grids
+   !> Check EC declarations on point grids
    !>
-   !> - Tail charges, then point potential at grid points
+   !> - Point potential at grid points; no host-charge request
    !> - phi in every phase; dphi_dr in gradient phase
    !> - Cartesian and molecular point grids
-   subroutine check_host_potential_requests(error)
+   subroutine check_ec_requests(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -270,20 +264,21 @@ contains
       !> Molecular point grid
       type(moist_math_grid_3d_molecular_type) :: points
       type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(host_potential_type) :: potential
+      type(ec_charges_type) :: potential
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
       integer :: kind
 
+      potential%exclusion_radius = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
       if (.not. allocated(err)) call new_molecular_point_grid(points, err, recipe=recipe)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      walks(1) = "atomic_charges(q*);point_potential(phi*,dphi_dr);"
+      walks(1) = "point_potential(phi*,dphi_dr);"
       walks(2) = walks(1)
-      walks(3) = "atomic_charges(q*);point_potential(phi*,dphi_dr*);"
+      walks(3) = "point_potential(phi*,dphi_dr*);"
       do kind = 1, 2
          if (kind == 1) then
             call new_updated_model(ctx, cart, model, err, potential)
@@ -295,7 +290,7 @@ contains
          call check_phase_walks(error, model, walks)
          if (allocated(error)) return
       end do
-   end subroutine check_host_potential_requests
+   end subroutine check_ec_requests
 
    !> Check Gaussian-width grid refusal
    !>
@@ -311,7 +306,7 @@ contains
       type(moist_math_grid_3d_molecular_type) :: widths
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(solvent_vv_type) :: solvent
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
       type(structure_type) :: mol
       character(len=*), parameter :: refusal = &
          & "MOZ 3D model supports point grids only; Gaussian-width grids are not supported yet"
@@ -350,7 +345,7 @@ contains
    !> Check host term declarations and multipole refusal
    !>
    !> - Host charges: partial charges pending in every phase
-   !> - Separate term scopes; shared charge request for identical inputs
+   !> - EC term supplies every tail charge
    !> - Host multipole stub: refusal at update
    subroutine check_charge_sources(error)
       !> Test error
@@ -359,13 +354,14 @@ contains
       type(moist_context_type), target :: ctx
       type(model_moz_3d_type), target :: model
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(host_charges_type) :: charges
-      type(host_potential_type) :: potential
-      type(host_multipoles_type) :: multipoles
+      type(monopole_type) :: charges
+      type(ec_charges_type) :: potential
+      type(multipole_type) :: multipoles
       type(structure_type) :: mol
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
 
+      potential%exclusion_radius = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
@@ -380,19 +376,19 @@ contains
       if (.not. allocated(err)) call model%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      ! Host potential requests: charges and point probe
-      walks(1) = "atomic_charges(q*);point_potential(phi*,dphi_dr);"
+      ! EC requests the point potential
+      walks(1) = "point_potential(phi*,dphi_dr);"
       walks(2) = walks(1)
-      walks(3) = "atomic_charges(q*);point_potential(phi*,dphi_dr*);"
+      walks(3) = "point_potential(phi*,dphi_dr*);"
       call check_phase_walks(error, model, walks)
       if (allocated(error)) return
 
       ! First charge supplier owns each atom
-      ! Host potential after another charge term: field without owned charges
+      ! EC after another charge term: field without owned charges
       call new_updated_model(ctx, cart, model, err, charges)
       if (.not. allocated(err)) call model%potential%add(potential, err)
       if (.not. allocated(err)) call model%update(mol, err)
-      call check(error, allocated(err), more="a host potential behind another charge term was accepted")
+      call check(error, allocated(err), more="EC behind another charge term was accepted")
       if (allocated(error)) return
       call check(error, index(err%message, "must supply every charge") > 0, more=err%message)
       if (allocated(error)) return
@@ -401,7 +397,7 @@ contains
       call new_updated_model(ctx, cart, model, err, multipoles)
       call check(error, allocated(err) .and. .not. model%is_updated(), more="the multipoles stub was built")
       if (allocated(error)) return
-      call check(error, index(err%message, "host_multipoles") > 0, more=err%message)
+      call check(error, index(err%message, "multipole") > 0, more=err%message)
    end subroutine check_charge_sources
 
    !> Check named solute failures and cleared coupling state
@@ -483,7 +479,7 @@ contains
       type(solvent_vv_type) :: solvent
       type(moz_potential_type) :: solvent_pot
       type(fixed_charges_type) :: extra
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
@@ -537,7 +533,7 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: cart
       type(custom_lj_type) :: lj
       type(fixed_charges_type) :: fixed
-      type(host_charges_type) :: host
+      type(monopole_type) :: host
       type(coupling_type), pointer :: coupling
       type(structure_type) :: mol
       type(solvent_vv_type) :: solvent
@@ -747,7 +743,7 @@ contains
       !> Optional solute term; host charges when absent
       class(potential_term_type), intent(in), optional :: term
       type(solvent_vv_type) :: solvent
-      type(host_charges_type) :: charges
+      type(monopole_type) :: charges
       type(structure_type) :: mol
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) return

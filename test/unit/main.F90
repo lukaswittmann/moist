@@ -16,6 +16,7 @@ program tester
    use test_moz_3d, only: collect_moz_3d
    use test_moz_potential_kernel, only: collect_moz_potential_kernel
    use test_moz_potential_electrostatic, only: collect_moz_potential_electrostatic
+   use test_moz_potential_ec, only: collect_moz_potential_ec
    use test_moz_potential_lj, only: collect_moz_potential_lj
    use test_moz_potential_oplsaa, only: collect_moz_potential_oplsaa
    use test_moz_solvent, only: collect_moz_solvent
@@ -117,6 +118,7 @@ program tester
       & new_testsuite("moz_3d", collect_moz_3d), &
       & new_testsuite("moz_potential_kernel", collect_moz_potential_kernel), &
       & new_testsuite("moz_potential_electrostatic", collect_moz_potential_electrostatic), &
+      & new_testsuite("moz_potential_ec", collect_moz_potential_ec), &
       & new_testsuite("moz_potential_lj", collect_moz_potential_lj), &
       & new_testsuite("moz_potential_oplsaa", collect_moz_potential_oplsaa), &
       & new_testsuite("moz_solvent", collect_moz_solvent), &
