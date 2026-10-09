@@ -312,7 +312,6 @@ contains
       call fatal_error(error, "Potential term '"//trim(self%name())//"' has no volume adjoint")
    end subroutine potential_accumulate_adjoint_3d
 
-
    !> Form the diagnostic atom label "Sym<index>", e.g. "O1"
    !>
    !> - Fixed-length subroutine output, safe inside OpenMP regions

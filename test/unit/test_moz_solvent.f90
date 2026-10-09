@@ -11,7 +11,7 @@ module test_moz_solvent
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_lj_base, only: lj_mixing_lorentz_berthelot, lj_mixing_geometric
-   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use test_helpers, only: check_moist_error
    use test_moz_fixtures, only: water_id, water_sigma, water_epsilon, water_charges, new_water_system, &
@@ -185,7 +185,7 @@ contains
       type(solvation_system_type) :: system
       type(solvent_vv_type) :: solvent
       type(moz_potential_type) :: pot
-      type(host_charges_type) :: host
+      type(monopole_type) :: host
       type(custom_lj_type) :: lj
       integer :: pass
 

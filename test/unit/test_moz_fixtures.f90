@@ -3,7 +3,7 @@
 !> - Table water solvent with custom LJ and fixed charges
 !> - Pair-only term with switchable declaration failure
 !> - Reference 12-6 potential with Lorentz-Berthelot mixing
-!> - Answers to pending atomic_charges and radial_potential requests
+!> - Answers to pending atomic_charges requests
 module test_moz_fixtures
    use mctc_env, only: wp, moist_error => error_type, fatal_error
    use mctc_io, only: structure_type
@@ -21,7 +21,7 @@ module test_moz_fixtures
    private
 
    public :: water_id, water_sigma, water_epsilon, water_charges
-   public :: new_water_system, new_water_solvent, refusing_term_type, ref_lj, answer_charges, answer_radial_potential
+   public :: new_water_system, new_water_solvent, refusing_term_type, ref_lj, answer_charges
 
    !> Water solvent id of the table
    integer, parameter :: water_id = 175
@@ -215,27 +215,5 @@ contains
       end do
       call fatal_error(err, "atomic_charges is not pending")
    end subroutine answer_charges
-
-   !> Answer the pending radial potential of a staged walk
-   !>
-   !> @param[in,out] coupling  staged coupling
-   !> @param[in]     phi       radial potential per atom (ngrid, natom)
-   !> @param[out]    err       missing request or rejected answer
-   subroutine answer_radial_potential(coupling, phi, err)
-      !> Staged coupling
-      type(coupling_type), intent(inout) :: coupling
-      !> Radial potential per atom (ngrid, natom)
-      real(wp), intent(in) :: phi(:, :)
-      !> Missing request or rejected answer
-      type(moist_error), allocatable, intent(out) :: err
-      do while (coupling%next())
-         associate (item => coupling%request())
-            if (item%name() /= "radial_potential") cycle
-         end associate
-         call coupling%answer("phi", phi, err)
-         return
-      end do
-      call fatal_error(err, "radial_potential is not pending")
-   end subroutine answer_radial_potential
 
 end module test_moz_fixtures

@@ -14,7 +14,7 @@ module test_api
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
-   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_data_solvents, only: solvation_system_type, new_solvation_system
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
    use moist_api, only: vp_context, new_context_api, delete_context_api, &
@@ -3189,7 +3189,7 @@ contains
       type(solvation_system_type) :: system
       type(solvent_vv_type) :: solvent
       type(fixed_charges_type) :: water_charges
-      type(host_charges_type) :: host_charges
+      type(monopole_type) :: monopole
       type(c_ptr) :: verror, vmodel
       integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(3), count
       integer(c_size_t) :: length
@@ -3225,7 +3225,7 @@ contains
          if (.not. allocated(model_error)) call solvent%potential%add(water_charges, model_error)
          if (.not. allocated(model_error)) call solvent%update(model_error)
          if (.not. allocated(model_error)) call new_moz_3d_model(model, ctx, template, solvent, model_error)
-         if (.not. allocated(model_error)) call model%potential%add(host_charges, model_error)
+         if (.not. allocated(model_error)) call model%potential%add(monopole, model_error)
          if (.not. allocated(model_error)) call model%update(mol, model_error)
       end select
 

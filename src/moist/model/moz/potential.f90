@@ -32,7 +32,7 @@
 !>   - Table environments: gas, solvent, conductor
 !>   - Solvent multipoles: `multipoles_mbis_<environment>`, stub for 6D MOZ
 !>   - User-data constructors: `new_fixed_charges`, `new_custom_lj`
-!>   - Host terms: `host_charges_type`, `host_potential_type`, `host_multipoles_type`
+!>   - Solute electrostatics: `monopole_type`, `multipole_type`, `ec_charges_type`
 module moist_model_moz_potential
    use mctc_env, only: wp, error_type
    use mctc_io, only: structure_type
@@ -49,10 +49,9 @@ module moist_model_moz_potential
    use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
-   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
-   use moist_model_moz_potential_electrostatic_host_potential, only: host_potential_type
+   use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
-   use moist_model_moz_potential_electrostatic_multipole, only: host_multipoles_type
+   use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_model_charges_type, &
       & solvent_multipoles_type, coulomb_hirshfeld_gas, coulomb_hirshfeld_solvent, coulomb_hirshfeld_conductor, &
       & coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor, coulomb_mbis_gas, coulomb_mbis_solvent, &
@@ -67,7 +66,7 @@ module moist_model_moz_potential
    public :: lj_typed_type, lj_element_type, lj_solvent_type, custom_lj_type, new_custom_lj
    public :: lj_gaff, lj_oplsaa, lj_uff, lj_dreiding, lj_tm, lj_spce
    public :: fixed_charges_type, new_fixed_charges
-   public :: host_charges_type, host_potential_type, host_multipoles_type, ec_charges_type
+   public :: monopole_type, multipole_type, ec_charges_type
    public :: solvent_charges_type, solvent_model_charges_type, solvent_multipoles_type
    public :: coulomb_hirshfeld_gas, coulomb_hirshfeld_solvent, coulomb_hirshfeld_conductor
    public :: coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor
