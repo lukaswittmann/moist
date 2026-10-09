@@ -7,10 +7,10 @@
 module moist_model_moz_potential_lj_solvent
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_model_moz_potential_base, only: potential_type, potential_name_len
+   use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6
    use moist_model_moz_potential_lj_spce_parameters, only: lookup_spce_lj
-   use moist_model_moz_potential_utils, only: is_water
+   use moist_model_moz_potential_electrostatic_solvent, only: is_water
    implicit none(type, external)
    private
 
@@ -20,14 +20,14 @@ module moist_model_moz_potential_lj_solvent
    integer, parameter :: lj_set_spce = 1
 
    !> Lennard-Jones term by solvent model
-   type, extends(potential_type) :: lj_solvent_type
+   type, extends(potential_term_type) :: lj_solvent_type
       !> Solvent model, `lj_set_spce`; 0 until constructed
       integer :: set = 0
-      !> Water site per atom after build, "ow/SPCE" or "hw/SPCE"
+      !> Water site per atom after update, "ow/SPCE" or "hw/SPCE"
       character(len=8), allocatable :: atomtype(:)
    contains
       procedure :: name => lj_solvent_name
-      procedure :: build => lj_solvent_build
+      procedure :: update => lj_solvent_update
    end type lj_solvent_type
 
    !> SPC/E-style water sites
@@ -52,7 +52,7 @@ contains
    !> @param[in]     mol         one neutral, closed-shell water molecule, in any atom order
    !> @param[out]    error       unconstructed term, incompatible solvent or parameter failure
    !> @param[in]     solvent_id  water ID, or zero for custom water; optional
-   subroutine lj_solvent_build(self, mol, error, solvent_id)
+   subroutine lj_solvent_update(self, mol, error, solvent_id)
       !> Term
       class(lj_solvent_type), intent(inout) :: self
       !> Solvent structure
@@ -108,6 +108,6 @@ contains
          deallocate (self%pair, self%atomtype)
          return
       end if
-   end subroutine lj_solvent_build
+   end subroutine lj_solvent_update
 
 end module moist_model_moz_potential_lj_solvent

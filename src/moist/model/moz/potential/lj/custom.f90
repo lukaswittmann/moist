@@ -2,11 +2,11 @@
 !>
 !> - Explicit sigma (bohr) and epsilon (Hartree) in structure atom order
 !> - Optional coverage mask for atoms left to later terms
-!> - Validation and storage at construction; structure consistency check at `build`
+!> - Validation and storage at construction; structure consistency check at `update`
 module moist_model_moz_potential_lj_custom
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_model_moz_potential_base, only: potential_type, potential_name_len
+   use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6
    implicit none(type, external)
    private
@@ -17,10 +17,10 @@ module moist_model_moz_potential_lj_custom
    character(len=*), parameter :: custom_label = "custom"
 
    !> Lennard-Jones term with explicit parameters
-   type, extends(potential_type) :: custom_lj_type
+   type, extends(potential_term_type) :: custom_lj_type
    contains
       procedure :: name => custom_lj_name
-      procedure :: build => custom_lj_build
+      procedure :: update => custom_lj_update
    end type custom_lj_type
 
 contains
@@ -73,7 +73,7 @@ contains
    !> @param[in]     mol         structure of this side
    !> @param[out]    error       unconstructed term or parameter count differing from the atom count
    !> @param[in]     solvent_id  ignored; the parameters are given per atom
-   subroutine custom_lj_build(self, mol, error, solvent_id)
+   subroutine custom_lj_update(self, mol, error, solvent_id)
       !> Term
       class(custom_lj_type), intent(inout) :: self
       !> Structure of this side
@@ -92,6 +92,6 @@ contains
          call fatal_error(error, "Custom Lennard-Jones parameters do not match the atoms of the structure "// &
             & "(parameters/atoms "//trim(label)//")")
       end if
-   end subroutine custom_lj_build
+   end subroutine custom_lj_update
 
 end module moist_model_moz_potential_lj_custom

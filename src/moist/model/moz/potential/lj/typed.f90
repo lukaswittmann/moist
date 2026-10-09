@@ -1,6 +1,6 @@
 !> Lennard-Jones potential term with parameters by atom type
 !>
-!> - Structure typing and parameter lookup at build; force field chosen at construction
+!> - Structure typing and parameter lookup at update; force field chosen at construction
 !> - `lj_set_gaff`: approximate types from element and geometry, GAFF2 Version 2.2.30 parameters
 !> - `lj_set_oplsaa`: environment rules from explicit bond graph with all hydrogens
 !> - OPLS-AA rule labels for compatible imported LJ keys
@@ -8,20 +8,19 @@
 !> - OPLS-AA geometric mixing on interaction
 !> - Untyped atoms or missing parameters: atoms left for later terms
 !> - Fallback examples: UFF element table, solvent LJ for ow/hw water placeholders
-!> - Atoms uncovered by every term: error at set build
+!> - Atoms uncovered by every term: error at potential update
 !> - Unprocessable structure, such as OPLS-AA without bond graph: error
 module moist_model_moz_potential_lj_typed
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_data_atomicrad, only: max_elem
-   use moist_model_moz_potential_base, only: potential_type, potential_name_len
+   use moist_model_moz_potential_term, only: potential_term_type, atom_label, atom_label_len, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6
    use moist_model_moz_potential_lj_gaff_typing, only: generate_gaff_atomtypes
    use moist_model_moz_potential_lj_gaff_parameters, only: lookup_gaff_lj
    use moist_model_moz_potential_lj_oplsaa_parameters, only: lookup_oplsaa_lj, oplsaa_key_len
    use moist_model_moz_potential_lj_oplsaa_rules, only: oplsaa_type_len
    use moist_model_moz_potential_lj_oplsaa_typing, only: generate_oplsaa_atomtypes
-   use moist_model_moz_potential_utils, only: atom_label, atom_label_len
    implicit none(type, external)
    private
 
@@ -37,10 +36,10 @@ module moist_model_moz_potential_lj_typed
    integer, parameter :: lj_atomtype_len = max(8, oplsaa_type_len)
 
    !> Lennard-Jones term by atom type
-   type, extends(potential_type) :: lj_typed_type
+   type, extends(potential_term_type) :: lj_typed_type
       !> Force field, `lj_set_gaff` or `lj_set_oplsaa`; 0 until constructed
       integer :: set = 0
-      !> Atom-type label per atom after build
+      !> Atom-type label per atom after update
       !>
       !> - GAFF: "type/GAFF" for covered atoms (GAFF2 table), bare type when uncovered
       !> - OPLS-AA: rule label, blank when uncovered
@@ -49,7 +48,7 @@ module moist_model_moz_potential_lj_typed
       character(len=oplsaa_key_len), allocatable :: parameter_key(:)
    contains
       procedure :: name => lj_typed_name
-      procedure :: build => lj_typed_build
+      procedure :: update => lj_typed_update
    end type lj_typed_type
 
    !> GAFF2 by approximate GAFF typing
@@ -76,7 +75,7 @@ contains
    !> @param[in]     mol         structure of this side, coordinates in bohr
    !> @param[out]    error       unknown force field, atomic number outside the tables or parameter failure
    !> @param[in]     solvent_id  ignored; typing reads only the structure
-   subroutine lj_typed_build(self, mol, error, solvent_id)
+   subroutine lj_typed_update(self, mol, error, solvent_id)
       !> Term
       class(lj_typed_type), intent(inout) :: self
       !> Structure of this side
@@ -100,7 +99,7 @@ contains
          call fatal_error(error, "Unknown typed Lennard-Jones force field "//trim(label)// &
             & "; use lj_gaff or lj_oplsaa")
       end select
-   end subroutine lj_typed_build
+   end subroutine lj_typed_update
 
    !> Type GAFF atoms and look up GAFF2/TM/UFF parameters
    !>

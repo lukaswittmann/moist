@@ -125,7 +125,7 @@ contains
          typed_keys(iat) = ""
          typed_names(iat) = ""
          ! No rule, an unsupported charge state or a rule without imported
-         ! parameters leaves the atom untyped for a later term of the set
+         ! parameters leaves the atom untyped for a later term of the potential
          if (chosen == 0) cycle
          if (count(matched(:, iat) .and. .not. excluded) /= 1) then
             call fatal_error(error, "Ambiguous OPLS-AA environment for atom "//trim(label)//": "//alternatives)

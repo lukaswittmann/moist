@@ -4,7 +4,7 @@
 !> - Interaction mixing rule; one `lj_12_6_mix` per atom pair
 !> - Potential evaluation through `lj_12_6_evaluate`
 !> - Common data type for custom, element and typed LJ terms
-!> - Partial terms merged by coverage in the potential set
+!> - Partial terms merged by coverage in the potential
 module moist_model_moz_potential_lj_base
    use mctc_env, only: wp, error_type, fatal_error
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
@@ -128,7 +128,7 @@ contains
       end select
    end subroutine check_lj_mixing
 
-   !> Mix the cross parameters of one atom pair
+   !> Cross parameters of one atom pair
    !>
    !> - Inactive atom (epsilon = 0): inactive pair, sigma unvalidated
    !> - Inactive pair: zero cross parameters under every rule
@@ -174,7 +174,7 @@ contains
       end select
    end subroutine lj_12_6_mix
 
-   !> Evaluate the 12-6 potential of one mixed pair over a distance vector
+   !> 12-6 potential of one mixed pair over a distance vector
    !>
    !> - sr6 = (sigma/r)^6
    !> - u = 4 eps (sr6^2 - sr6)

@@ -11,7 +11,7 @@ module moist_model_moz_potential_lj_element
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_symbols, only: to_symbol
-   use moist_model_moz_potential_base, only: potential_type, potential_name_len
+   use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6
    use moist_model_moz_potential_lj_uff_parameters, only: lookup_uff_lj
    use moist_model_moz_potential_lj_dreiding_parameters, only: lookup_dreiding_lj
@@ -30,14 +30,14 @@ module moist_model_moz_potential_lj_element
    integer, parameter :: lj_set_tm = 3
 
    !> Lennard-Jones term by element
-   type, extends(potential_type) :: lj_element_type
+   type, extends(potential_term_type) :: lj_element_type
       !> Element table, `lj_set_uff`, `lj_set_dreiding` or `lj_set_tm`; 0 until constructed
       integer :: set = 0
-      !> "El/table" label per atom after build, e.g. "O/UFF"; blank for an uncovered atom
+      !> "El/table" label per atom after update, e.g. "O/UFF"; blank for an uncovered atom
       character(len=12), allocatable :: atomtype(:)
    contains
       procedure :: name => lj_element_name
-      procedure :: build => lj_element_build
+      procedure :: update => lj_element_update
    end type lj_element_type
 
    !> UFF element rows
@@ -66,7 +66,7 @@ contains
    !> @param[in]     mol         structure of this side
    !> @param[out]    error       unconstructed term, empty structure or parameter failure
    !> @param[in]     solvent_id  ignored; the lookup uses the elements
-   subroutine lj_element_build(self, mol, error, solvent_id)
+   subroutine lj_element_update(self, mol, error, solvent_id)
       !> Term
       class(lj_element_type), intent(inout) :: self
       !> Structure of this side
@@ -117,6 +117,6 @@ contains
       allocate (self%pair)
       call new_lj_12_6(self%pair, sigma, epsilon, error, covered, self%atomtype)
       if (allocated(error)) deallocate (self%pair)
-   end subroutine lj_element_build
+   end subroutine lj_element_update
 
 end module moist_model_moz_potential_lj_element
