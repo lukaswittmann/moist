@@ -6,7 +6,7 @@ module moist_model_continuum
       & model_continuum_component_cosmo, new_component_cosmo, &
       & model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp, &
-      & solver_type, moist_pcm_parameters_type
+      & solver_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
    implicit none(type, external)
    private
    public :: model_continuum_type, new_continuum_model, model_continuum_component_type
@@ -14,5 +14,5 @@ module moist_model_continuum
    public :: model_continuum_component_cosmo, new_component_cosmo
    public :: model_continuum_component_pv, new_component_pv
    public :: model_continuum_component_gostshyp, new_component_gostshyp
-   public :: solver_type, moist_pcm_parameters_type
+   public :: solver_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
 end module moist_model_continuum
