@@ -12,7 +12,11 @@ module test_api
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib, only: omp_get_max_threads
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
-   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_gaussian_grid
+   use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
+   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
+   use moist_model_moz_potential_electrostatic_host_charges, only: host_charges_type
+   use moist_data_solvents, only: solvation_system_type, new_solvation_system
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
    use moist_api, only: vp_context, new_context_api, delete_context_api, &
       & vp_cavity, vp_error, vp_response, get_response_field_real_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
@@ -3181,6 +3185,11 @@ contains
       type(moist_context_type), target :: ctx
       type(moist_math_grid_3d_cartesian_type) :: template
       type(structure_type) :: mol
+      !> Water solvent with fixed charges and host charges on the solute
+      type(solvation_system_type) :: system
+      type(solvent_vv_type) :: solvent
+      type(fixed_charges_type) :: water_charges
+      type(host_charges_type) :: host_charges
       type(c_ptr) :: verror, vmodel
       integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(3), count
       integer(c_size_t) :: length
@@ -3192,7 +3201,7 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call new_cartesian_gaussian_grid(template, model_error, nx=2, ny=2, nz=2, margin=0.0_wp)
+      call new_cartesian_point_grid(template, model_error, nx=2, ny=2, nz=2, margin=0.0_wp)
       if (allocated(model_error)) then
          call test_failed(error, model_error%message)
          return
@@ -3210,7 +3219,13 @@ contains
       allocate (model_moz_3d_type :: holder%ptr)
       select type (model => holder%ptr)
       type is (model_moz_3d_type)
-         call new_moz_3d_model(model, ctx, template, model_error)
+         call new_solvation_system(system, 175, error=model_error)
+         if (.not. allocated(model_error)) call new_vv_solvent(solvent, ctx, system, model_error)
+         if (.not. allocated(model_error)) call new_fixed_charges(water_charges, [-0.8_wp, 0.4_wp, 0.4_wp], model_error)
+         if (.not. allocated(model_error)) call solvent%potential%add(water_charges, model_error)
+         if (.not. allocated(model_error)) call solvent%update(model_error)
+         if (.not. allocated(model_error)) call new_moz_3d_model(model, ctx, template, solvent, model_error)
+         if (.not. allocated(model_error)) call model%potential%add(host_charges, model_error)
          if (.not. allocated(model_error)) call model%update(mol, model_error)
       end select
 

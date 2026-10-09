@@ -9,7 +9,7 @@ module test_moz_potential_oplsaa
    use testdrive, only: unittest_type, new_unittest, error_type, check
    use moist_model_moz_potential_lj_typed, only: lj_typed_type, lj_oplsaa
    use moist_model_moz_potential_lj_element, only: lj_uff
-   use moist_model_moz_potential_set, only: potential_set_type
+   use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_sites, only: potential_sites_type
    use test_helpers, only: check_moist_error
    implicit none(type, external)
@@ -65,7 +65,7 @@ contains
 
       call make_methanol(mol, .false.)
       oplsaa = lj_oplsaa
-      call oplsaa%build(mol, err)
+      call oplsaa%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(oplsaa%pair%covered), "OPLS-AA must cover every methanol atom")
@@ -83,23 +83,23 @@ contains
       type(moist_error), allocatable :: err
       type(structure_type) :: mol
       type(lj_typed_type) :: oplsaa
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
 
       call new(mol, [18], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       mol%nbd = 0
       allocate (mol%bond(3, 0))
       oplsaa = lj_oplsaa
-      call oplsaa%build(mol, err)
+      call oplsaa%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, .not. any(oplsaa%pair%covered), "OPLS-AA must leave argon uncovered")
       if (allocated(error)) return
 
-      call set%add(lj_oplsaa, err)
-      if (.not. allocated(err)) call set%add(lj_uff, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      call pot%add(lj_oplsaa, err)
+      if (.not. allocated(err)) call pot%add(lj_uff, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, sites%pair%label(1), "Ar/UFF", "UFF must fill the argon OPLS-AA left")
@@ -111,14 +111,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(structure_type) :: mol
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
 
       call make_methanol(mol, .true.)
-      call set%add(lj_oplsaa, err)
-      if (.not. allocated(err)) call set%add(lj_uff, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      call pot%add(lj_oplsaa, err)
+      if (.not. allocated(err)) call pot%add(lj_uff, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(sites%pair%covered), "OPLS-AA then UFF must cover every atom")
@@ -143,7 +143,7 @@ contains
       mol%nbd = 5
       mol%bond = reshape([1, 2, 1, 1, 3, 1, 1, 4, 1, 1, 5, 1, 1, 6, 1], [3, 5])
       oplsaa = lj_oplsaa
-      call oplsaa%build(mol, err)
+      call oplsaa%update(mol, err)
       call check(error, allocated(err), "a pentavalent carbon was typed")
       if (allocated(error)) return
       call check(error, index(err%message, "Unsupported OPLS-AA valence at atom 1") > 0, err%message)

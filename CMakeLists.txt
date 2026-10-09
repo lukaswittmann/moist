@@ -304,6 +304,7 @@ if(MOIST_TESTS)
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
+    moz_potential_kernel moz_potential_electrostatic moz_potential_lj moz_potential_oplsaa moz_solvent
     math_grid_3d_partition
     math_grid_3d_guards math_grid_3d_derivatives
     math_grid_3d_integration
@@ -335,6 +336,7 @@ if(MOIST_TESTS)
   set(moist_test_srcs
     "${_unit}/main.F90"
     "${_unit}/test_helpers.f90"
+    "${_unit}/test_moz_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"
   )
   foreach(suite IN LISTS moist_test_suites)

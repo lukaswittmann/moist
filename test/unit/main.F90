@@ -14,6 +14,11 @@ program tester
    use test_channels, only: collect_channels
    use test_moz_1d, only: collect_moz_1d
    use test_moz_3d, only: collect_moz_3d
+   use test_moz_potential_kernel, only: collect_moz_potential_kernel
+   use test_moz_potential_electrostatic, only: collect_moz_potential_electrostatic
+   use test_moz_potential_lj, only: collect_moz_potential_lj
+   use test_moz_potential_oplsaa, only: collect_moz_potential_oplsaa
+   use test_moz_solvent, only: collect_moz_solvent
    use test_radii, only: collect_radii
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
@@ -110,6 +115,11 @@ program tester
       & new_testsuite("math_grid_3d_guards", collect_math_grid_3d_guards), &
       & new_testsuite("moz_1d", collect_moz_1d), &
       & new_testsuite("moz_3d", collect_moz_3d), &
+      & new_testsuite("moz_potential_kernel", collect_moz_potential_kernel), &
+      & new_testsuite("moz_potential_electrostatic", collect_moz_potential_electrostatic), &
+      & new_testsuite("moz_potential_lj", collect_moz_potential_lj), &
+      & new_testsuite("moz_potential_oplsaa", collect_moz_potential_oplsaa), &
+      & new_testsuite("moz_solvent", collect_moz_solvent), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &

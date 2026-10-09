@@ -15,7 +15,7 @@ module test_moz_potential_lj
    use moist_model_moz_potential_lj_element, only: lj_element_type, lj_uff, lj_dreiding, lj_tm
    use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
-   use moist_model_moz_potential_set, only: potential_set_type
+   use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_sites, only: potential_sites_type
    use test_helpers, only: check_moist_error
    implicit none(type, external)
@@ -36,7 +36,7 @@ contains
          & new_unittest("gaff-water", check_gaff_water), &
          & new_unittest("spce-water", check_spce_water), &
          & new_unittest("spce-invalid-solvent", check_spce_invalid_solvent), &
-         & new_unittest("set-water-model", check_set_water_model), &
+         & new_unittest("potential-water-model", check_potential_water_model), &
          & new_unittest("gaff-methanol", check_gaff_methanol), &
          & new_unittest("gaff-benzene", check_gaff_benzene), &
          & new_unittest("gaff-acetonitrile", check_gaff_acetonitrile), &
@@ -45,10 +45,10 @@ contains
          & new_unittest("gaff-chloroform", check_gaff_chloroform), &
          & new_unittest("gaff-element-uncovered", check_gaff_element_uncovered), &
          & new_unittest("gaff-water-fragment-uncovered", check_gaff_water_fragment), &
-         & new_unittest("set-fallback", check_set_fallback), &
-         & new_unittest("set-gaff-alone-uncovered", check_set_uncovered), &
+         & new_unittest("potential-fallback", check_potential_fallback), &
+         & new_unittest("potential-gaff-alone-uncovered", check_potential_uncovered), &
          & new_unittest("custom-wrong-size", check_custom_wrong_size), &
-         & new_unittest("set-mixing", check_set_mixing), &
+         & new_unittest("potential-mixing", check_potential_mixing), &
          & new_unittest("epsilon-zero", check_epsilon_zero), &
          & new_unittest("mixing-rules", check_mixing_rules), &
          & new_unittest("inactive-site-mixing", check_inactive_site_mixing), &
@@ -145,7 +145,7 @@ contains
       call check(error, size(types), mol%nat, "reference covers a different number of atoms")
       if (allocated(error)) return
       gaff = lj_gaff
-      if (.not. allocated(err)) call gaff%build(mol, err)
+      if (.not. allocated(err)) call gaff%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, allocated(gaff%pair), "GAFF supplied no Lennard-Jones data")
@@ -175,7 +175,7 @@ contains
       call solvent_mol(error, "water", mol)
       if (allocated(error)) return
       gaff = lj_gaff
-      if (.not. allocated(err)) call gaff%build(mol, err)
+      if (.not. allocated(err)) call gaff%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error,.not. any(gaff%pair%covered), "GAFF must leave water sites uncovered")
@@ -208,7 +208,7 @@ contains
       if (allocated(error)) return
       call get_solvent_id("water", water_id, err)
       if (.not. allocated(err)) spce = lj_spce
-      if (.not. allocated(err)) call spce%build(mol, err, water_id)
+      if (.not. allocated(err)) call spce%update(mol, err, water_id)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(spce%pair%covered), "Explicit water model must cover every site")
@@ -225,7 +225,7 @@ contains
       end do
 
       call new(permuted, mol%num(mol%id(order)), mol%xyz(:, order))
-      call spce%build(permuted, err, solvent_id=0)
+      call spce%update(permuted, err, solvent_id=0)
       call check_moist_error(error, err)
       if (allocated(error)) return
       do iat = 1, permuted%nat
@@ -238,7 +238,7 @@ contains
             & thr=thr_rel, rel=.true.)
          if (allocated(error)) return
       end do
-      call spce%build(mol, err)
+      call spce%update(mol, err)
       call check_moist_error(error, err)
    end subroutine check_spce_water
 
@@ -255,19 +255,19 @@ contains
 
       call solvent_mol(error, "water", mol)
       if (allocated(error)) return
-      call spce%build(mol, err)
+      call spce%update(mol, err)
       call check(error, allocated(err), "Unconstructed solvent term must be refused")
       if (allocated(error)) return
       deallocate (err)
       spce = lj_solvent_type(set=99)
-      call spce%build(mol, err)
+      call spce%update(mol, err)
       call check(error, allocated(err), "Unknown solvent model must be refused")
       if (allocated(error)) return
       call check(error, index(err%message, "Unknown Lennard-Jones solvent model 99") > 0, err%message)
       if (allocated(error)) return
       deallocate (err)
       spce = lj_spce
-      call spce%build(mol, err)
+      call spce%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(spce%pair%covered), "Water must be covered")
@@ -312,7 +312,7 @@ contains
       !> Optional solvent id of the table
       integer, intent(in), optional :: solvent_id
       type(moist_error), allocatable :: err
-      call spce%build(mol, err, solvent_id)
+      call spce%update(mol, err, solvent_id)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, allocated(spce%pair), "Water model must supply LJ data for "//what)
@@ -322,17 +322,17 @@ contains
       call check(error, all(len_trim(spce%atomtype) == 0), "Uncovered atoms must carry blank labels for "//what)
    end subroutine check_uncovered
 
-   !> Check explicit water-model selection after GAFF in a set
+   !> Check explicit water-model selection after GAFF in a potential
    !>
    !> @param[out] error  test error
-   subroutine check_set_water_model(error)
+   subroutine check_potential_water_model(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
       type(moist_error), allocatable :: err
       type(lj_typed_type) :: gaff
       type(lj_solvent_type) :: spce
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
       integer :: water_id
 
@@ -340,17 +340,17 @@ contains
       if (allocated(error)) return
       call get_solvent_id("water", water_id, err)
       if (.not. allocated(err)) gaff = lj_gaff
-      if (.not. allocated(err)) call set%add(gaff, err)
+      if (.not. allocated(err)) call pot%add(gaff, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call set%build(mol, err, water_id)
+      call pot%update(mol, err, water_id)
       call check(error, allocated(err), "GAFF alone must not provide a water solvent model")
       if (allocated(error)) return
       deallocate (err)
       spce = lj_spce
-      call set%add(spce, err)
-      if (.not. allocated(err)) call set%build(mol, err, water_id)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      call pot%add(spce, err)
+      if (.not. allocated(err)) call pot%update(mol, err, water_id)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(sites%pair%covered), "Explicit solvent term must fill the GAFF water sites")
@@ -360,7 +360,7 @@ contains
       if (allocated(error)) return
       call check(error, sites%pair%epsilon(2), 2.4748632292216419e-5_wp, "Merged water hydrogen epsilon", &
          & thr=thr_rel, rel=.true.)
-   end subroutine check_set_water_model
+   end subroutine check_potential_water_model
 
    !> Check methanol types: sp3 carbon, hydroxyl O and H, aliphatic H
    subroutine check_gaff_methanol(error)
@@ -438,13 +438,13 @@ contains
       type(moist_error), allocatable :: err
       type(lj_typed_type) :: gaff
       type(lj_element_type) :: uff, tm
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
       ! Methane carbon and hydrogen, argon and iron
       call new(mol, [6, 1, 18, 26], reshape([0.0_wp, 0.0_wp, 0.0_wp, 2.05_wp, 0.0_wp, 0.0_wp, &
          & 0.0_wp, 0.0_wp, 12.0_wp, 0.0_wp, 12.0_wp, 0.0_wp], [3, 4]))
       gaff = lj_gaff
-      if (.not. allocated(err)) call gaff%build(mol, err)
+      if (.not. allocated(err)) call gaff%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(gaff%pair%covered .eqv. [.true., .true., .false., .false.]), &
@@ -453,11 +453,11 @@ contains
       call check(error, gaff%atomtype(3), "du", "An uncovered atom keeps its bare GAFF type")
       if (allocated(error)) return
       uff = lj_uff
-      if (.not. allocated(err)) call uff%build(mol, err)
-      if (.not. allocated(err)) call set%add(gaff, err)
-      if (.not. allocated(err)) call set%add(uff, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      if (.not. allocated(err)) call uff%update(mol, err)
+      if (.not. allocated(err)) call pot%add(gaff, err)
+      if (.not. allocated(err)) call pot%add(uff, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(sites%pair%covered), "GAFF then UFF must cover every atom")
@@ -474,11 +474,11 @@ contains
       if (allocated(error)) return
       call check(error, sites%pair%label(3), "Ar/UFF", "Merged label of the UFF argon")
       if (allocated(error)) return
-      call check_site_table(error, set, mol)
+      call check_site_table(error, pot, mol)
       if (allocated(error)) return
       ! Separate transition-metal table: iron coverage only
       tm = lj_tm
-      if (.not. allocated(err)) call tm%build(mol, err)
+      if (.not. allocated(err)) call tm%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(tm%pair%covered .eqv. [.false., .false., .false., .true.]), &
@@ -494,13 +494,13 @@ contains
    !> Print the built site table to a scratch unit and check rows
    !>
    !> @param[out] error  test error
-   !> @param[in]  set    built set of methane carbon and hydrogen, argon and iron
+   !> @param[in]  pot    updated potential of methane carbon and hydrogen, argon and iron
    !> @param[in]  mol    its structure
-   subroutine check_site_table(error, set, mol)
+   subroutine check_site_table(error, pot, mol)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
-      !> Built set
-      type(potential_set_type), intent(in) :: set
+      !> Updated potential
+      type(moz_potential_type), intent(in) :: pot
       !> Structure
       type(structure_type), intent(in) :: mol
       type(moist_error), allocatable :: err
@@ -509,7 +509,7 @@ contains
       open (newunit=unit, status="scratch", action="readwrite", form="formatted", iostat=stat)
       call check(error, stat, 0, "Cannot open a scratch unit")
       if (allocated(error)) return
-      call set%print_table(mol, unit, err)
+      call pot%print_table(unit, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       rewind (unit)
@@ -533,7 +533,8 @@ contains
       read (unit, "(a)", iostat=stat) line
       call check(error, stat, 0, "Third row missing")
       if (allocated(error)) return
-      call check(error, index(line, " 3     Ar") > 0 .and. index(line, "Ar/UFF") > 0, more="Third row differs: "//trim(line))
+      call check(error, index(line, " 3     Ar") > 0 .and. index(line, "Ar/UFF") > 0, &
+         & more="Third row differs: "//trim(line))
       if (allocated(error)) return
       read (unit, "(a)", iostat=stat) line
       call check(error, stat, 0, "Fourth row missing")
@@ -554,7 +555,7 @@ contains
       call new(mol, [water%num(water%id), 18], &
          & reshape([water%xyz, 0.0_wp, 0.0_wp, 15.0_wp], [3, water%nat + 1]))
       gaff = lj_gaff
-      if (.not. allocated(err)) call gaff%build(mol, err)
+      if (.not. allocated(err)) call gaff%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, .not. any(gaff%pair%covered), "GAFF covers neither the water sites nor argon")
@@ -583,12 +584,12 @@ contains
    end subroutine methanol_with_rf
 
    !> Check custom fallback restricted to atoms left uncovered by GAFF
-   subroutine check_set_fallback(error)
+   subroutine check_potential_fallback(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
       type(moist_error), allocatable :: err
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
       type(lj_typed_type) :: gaff
       type(custom_lj_type) :: custom
@@ -606,10 +607,10 @@ contains
       covered(mol%nat) = .true.
       gaff = lj_gaff
       if (.not. allocated(err)) call new_custom_lj(custom, sigma, epsilon, err, covered)
-      if (.not. allocated(err)) call set%add(gaff, err)
-      if (.not. allocated(err)) call set%add(custom, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      if (.not. allocated(err)) call pot%add(gaff, err)
+      if (.not. allocated(err)) call pot%add(custom, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return
@@ -622,28 +623,28 @@ contains
       call check(error, sites%pair%sigma(mol%nat), 7.0_wp, "Custom term did not fill the rutherfordium atom")
       if (allocated(error)) return
       call check(error, sites%pair%epsilon(mol%nat), 3.0e-4_wp, "Custom term did not fill the rutherfordium atom")
-   end subroutine check_set_fallback
+   end subroutine check_potential_fallback
 
-   !> Check named set failure for rutherfordium left uncovered by GAFF
-   subroutine check_set_uncovered(error)
+   !> Check named update failure for rutherfordium left uncovered by GAFF
+   subroutine check_potential_uncovered(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
       type(moist_error), allocatable :: err
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(lj_typed_type) :: gaff
       call methanol_with_rf(error, mol)
       if (allocated(error)) return
       gaff = lj_gaff
-      if (.not. allocated(err)) call set%add(gaff, err)
+      if (.not. allocated(err)) call pot%add(gaff, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call set%build(mol, err)
-      call check(error, allocated(err), "An uncovered atom must fail the set build")
+      call pot%update(mol, err)
+      call check(error, allocated(err), "An uncovered atom must fail the potential update")
       if (allocated(error)) return
       call check(error, index(err%message, "No pair potential parameters for atoms: Rf7") > 0, &
          & "Error should name the atom: "//err%message)
-   end subroutine check_set_uncovered
+   end subroutine check_potential_uncovered
 
    !> Check inconsistent custom-parameter sizes
    subroutine check_custom_wrong_size(error)
@@ -667,17 +668,17 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call custom%build(mol, err)
+      call custom%update(mol, err)
       call check(error, allocated(err), "Parameters for another number of atoms must be refused at build")
    end subroutine check_custom_wrong_size
 
    !> Check Lorentz-Berthelot mixing across merged terms
-   subroutine check_set_mixing(error)
+   subroutine check_potential_mixing(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
       type(moist_error), allocatable :: err
-      type(potential_set_type) :: set
+      type(moz_potential_type) :: pot
       type(potential_sites_type) :: sites
       type(custom_lj_type) :: oxygen, hydrogens
       real(wp), parameter :: r(2) = [5.5_wp, 8.0_wp]
@@ -690,10 +691,10 @@ contains
       e = [0.1554_wp*kcaltoau, 2.0e-5_wp, 3.0e-5_wp]
       call new_custom_lj(oxygen, s, e, err, covered=[.true., .false., .false.])
       if (.not. allocated(err)) call new_custom_lj(hydrogens, s, e, err, covered=[.false., .true., .true.])
-      if (.not. allocated(err)) call set%add(oxygen, err)
-      if (.not. allocated(err)) call set%add(hydrogens, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      if (.not. allocated(err)) call pot%add(oxygen, err)
+      if (.not. allocated(err)) call pot%add(hydrogens, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       pairs = reshape([1, 2, 2, 3], [2, 2])
@@ -715,7 +716,7 @@ contains
             if (allocated(error)) return
          end do
       end do
-   end subroutine check_set_mixing
+   end subroutine check_potential_mixing
 
    !> Check active and inactive LJ parameter validation
    !>
@@ -808,14 +809,14 @@ contains
       call solvent_mol(error, "water", mol)
       if (allocated(error)) return
       uff = lj_element_type(set=7)
-      call uff%build(mol, err)
+      call uff%update(mol, err)
       call check(error, allocated(err), "An unknown element table must be refused")
       if (allocated(error)) return
       deallocate (err)
       uff = lj_uff
       dreiding = lj_dreiding
-      call uff%build(mol, err)
-      if (.not. allocated(err)) call dreiding%build(mol, err)
+      call uff%update(mol, err)
+      if (.not. allocated(err)) call dreiding%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(uff%pair%covered) .and. all(dreiding%pair%covered), "Water must be covered")
@@ -840,7 +841,7 @@ contains
    !>
    !> - No argon row: uncovered atom
    !> - Later custom term: argon coverage
-   !> - No fallback: named set error
+   !> - No fallback: named update error
    subroutine check_element_fallback(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -848,7 +849,7 @@ contains
       type(structure_type) :: water, mol
       type(lj_element_type) :: dreiding
       type(custom_lj_type) :: custom
-      type(potential_set_type) :: set, alone
+      type(moz_potential_type) :: pot, alone
       type(potential_sites_type) :: sites
       real(wp), allocatable :: sigma(:), epsilon(:)
       call solvent_mol(error, "water", water)
@@ -856,7 +857,7 @@ contains
       call new(mol, [water%num(water%id), 18], &
          & reshape([water%xyz, 0.0_wp, 0.0_wp, 15.0_wp], [3, water%nat + 1]))
       dreiding = lj_dreiding
-      if (.not. allocated(err)) call dreiding%build(mol, err)
+      if (.not. allocated(err)) call dreiding%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(dreiding%pair%covered .eqv. [.true., .true., .true., .false.]), &
@@ -870,10 +871,10 @@ contains
       sigma(4) = 6.4_wp
       epsilon(4) = 3.7e-4_wp
       call new_custom_lj(custom, sigma, epsilon, err, covered=[.false., .false., .false., .true.])
-      if (.not. allocated(err)) call set%add(dreiding, err)
-      if (.not. allocated(err)) call set%add(custom, err)
-      if (.not. allocated(err)) call set%build(mol, err)
-      if (.not. allocated(err)) call set%sites(sites, err)
+      if (.not. allocated(err)) call pot%add(dreiding, err)
+      if (.not. allocated(err)) call pot%add(custom, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, all(sites%pair%covered), "The custom term must fill argon")
@@ -886,8 +887,8 @@ contains
       call alone%add(dreiding, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call alone%build(mol, err)
-      call check(error, allocated(err), "An uncovered atom must fail the set build")
+      call alone%update(mol, err)
+      call check(error, allocated(err), "An uncovered atom must fail the potential update")
       if (allocated(error)) return
       call check(error, index(err%message, "No pair potential parameters for atoms: Ar4") > 0, &
          & "Error should name the atom: "//err%message)

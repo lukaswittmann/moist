@@ -45,6 +45,11 @@ tests = [
   'math_grid_3d_invariance',
   'moz_1d',
   'moz_3d',
+  'moz_potential_kernel',
+  'moz_potential_electrostatic',
+  'moz_potential_lj',
+  'moz_potential_oplsaa',
+  'moz_solvent',
   'cavity_drop_primitives',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
@@ -98,6 +103,7 @@ test_selected = {
 test_srcs = files(
   'main.F90',
   'test_helpers.f90',
+  'test_moz_fixtures.f90',
   'test_model_component_helper.f90',
 )
 
