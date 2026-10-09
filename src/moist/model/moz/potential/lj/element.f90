@@ -1,15 +1,12 @@
 !> Lennard-Jones potential term with parameters by element
 !>
-!> Looks sigma and epsilon up by atomic number in one element table, chosen
-!> at construction:
-!>
+!> - Sigma and epsilon lookup by atomic number; element table chosen at construction
 !> - `lj_set_uff`: UFF, H through Lr (Rappe et al. 1992)
-!> - `lj_set_dreiding`: DREIDING explicit-atom rows (Mayo et al. 1990), with
-!>   ordinary hydrogen LJ; the hydrogen-bond term is outside this term
-!> - `lj_set_tm`: fourteen transition metals, the former GAFF element fallback
-!>
-!> Atoms of elements absent from the table stay uncovered, for a later term
-!> of the potential set to fill. The mixing rule is chosen on the solvent
+!> - `lj_set_dreiding`: DREIDING explicit-atom rows (Mayo et al. 1990), ordinary hydrogen LJ
+!> - Hydrogen-bond term outside the DREIDING LJ term
+!> - `lj_set_tm`: fourteen transition metals, former GAFF element fallback
+!> - Elements absent from table: atoms left for later terms
+!> - Mixing rule chosen on solvent
 module moist_model_moz_potential_lj_element
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
@@ -54,7 +51,7 @@ contains
 
    !> Diagnostic name
    !>
-   !> @param[in] self Term
+   !> @param[in] self  term
    pure function lj_element_name(self) result(name)
       !> Term
       class(lj_element_type), intent(in) :: self
@@ -65,10 +62,10 @@ contains
 
    !> Look up the parameters of every atom by element
    !>
-   !> @param[in,out] self Term
-   !> @param[in] mol Structure of this side
-   !> @param[out] error Unconstructed term, empty structure or parameter failure
-   !> @param[in] solvent_id Ignored; the lookup uses the elements
+   !> @param[in,out] self        term
+   !> @param[in]     mol         structure of this side
+   !> @param[out]    error       unconstructed term, empty structure or parameter failure
+   !> @param[in]     solvent_id  ignored; the lookup uses the elements
    subroutine lj_element_build(self, mol, error, solvent_id)
       !> Term
       class(lj_element_type), intent(inout) :: self

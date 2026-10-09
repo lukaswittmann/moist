@@ -1,22 +1,15 @@
 !> Lennard-Jones potential term with parameters by atom type
 !>
-!> Types the structure at build and looks the parameters up per type, in one
-!> typed force field chosen at construction:
-!>
-!> - `lj_set_gaff`: approximate GAFF atom types from element and geometry,
-!>   then GAFF2 Version 2.2.30 parameters
-!> - `lj_set_oplsaa`: native environment rules from an explicit bond graph
-!>   with all hydrogens present; rule labels select compatible imported LJ
-!>   keys
-!>
-!> OPLS-AA rules assign LJ parameters only; charges and bonded terms are
-!> outside this term. OPLS-AA geometric mixing is chosen on the interaction
-!>
-!> Atoms the chosen force field cannot type or parametrise are left
-!> uncovered, for a later term of the potential set to fill (an element table
-!> such as UFF, or a solvent LJ term for the ow/hw water placeholders); only
-!> an atom no term of the set covers fails, at the set build. A structure the
-!> force field cannot process at all (no bond graph for OPLS-AA) is an error
+!> - Structure typing and parameter lookup at build; force field chosen at construction
+!> - `lj_set_gaff`: approximate types from element and geometry, GAFF2 Version 2.2.30 parameters
+!> - `lj_set_oplsaa`: environment rules from explicit bond graph with all hydrogens
+!> - OPLS-AA rule labels for compatible imported LJ keys
+!> - OPLS-AA scope: LJ parameters; separate charges and bonded terms
+!> - OPLS-AA geometric mixing on interaction
+!> - Untyped atoms or missing parameters: atoms left for later terms
+!> - Fallback examples: UFF element table, solvent LJ for ow/hw water placeholders
+!> - Atoms uncovered by every term: error at set build
+!> - Unprocessable structure, such as OPLS-AA without bond graph: error
 module moist_model_moz_potential_lj_typed
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
@@ -49,8 +42,8 @@ module moist_model_moz_potential_lj_typed
       integer :: set = 0
       !> Atom-type label per atom after build
       !>
-      !> "type/GAFF" for a covered GAFF atom (GAFF2 table), the bare type for
-      !> an uncovered one; the OPLS-AA rule label, blank when uncovered
+      !> - GAFF: "type/GAFF" for covered atoms (GAFF2 table), bare type when uncovered
+      !> - OPLS-AA: rule label, blank when uncovered
       character(len=lj_atomtype_len), allocatable :: atomtype(:)
       !> Source-prefixed LJ key per atom after OPLS-AA typing
       character(len=oplsaa_key_len), allocatable :: parameter_key(:)
@@ -68,7 +61,7 @@ contains
 
    !> Diagnostic name
    !>
-   !> @param[in] self Term
+   !> @param[in] self  term
    pure function lj_typed_name(self) result(name)
       !> Term
       class(lj_typed_type), intent(in) :: self
@@ -79,10 +72,10 @@ contains
 
    !> Type the structure and look up the parameters
    !>
-   !> @param[in,out] self Term
-   !> @param[in] mol Structure of this side, coordinates in bohr
-   !> @param[out] error Unknown force field, atomic number outside the tables or parameter failure
-   !> @param[in] solvent_id Ignored; typing reads only the structure
+   !> @param[in,out] self        term
+   !> @param[in]     mol         structure of this side, coordinates in bohr
+   !> @param[out]    error       unknown force field, atomic number outside the tables or parameter failure
+   !> @param[in]     solvent_id  ignored; typing reads only the structure
    subroutine lj_typed_build(self, mol, error, solvent_id)
       !> Term
       class(lj_typed_type), intent(inout) :: self
@@ -109,11 +102,11 @@ contains
       end select
    end subroutine lj_typed_build
 
-   !> GAFF typing and GAFF2/TM/UFF lookup
+   !> Type GAFF atoms and look up GAFF2/TM/UFF parameters
    !>
-   !> @param[in,out] self Term, pair and labels unallocated
-   !> @param[in] mol Structure of this side, coordinates in bohr
-   !> @param[out] error Atomic number outside the tables or parameter failure
+   !> @param[in,out] self   term, pair and labels unallocated
+   !> @param[in]     mol    structure of this side, coordinates in bohr
+   !> @param[out]    error  atomic number outside the tables or parameter failure
    subroutine build_gaff(self, mol, error)
       !> Term
       type(lj_typed_type), intent(inout) :: self
@@ -159,14 +152,13 @@ contains
       if (allocated(error)) deallocate (self%pair)
    end subroutine build_gaff
 
-   !> Native graph typing and lookup of compatible imported OPLS-AA LJ rows
+   !> Type the bond graph and look up compatible imported OPLS-AA LJ rows
    !>
-   !> Atoms without a resolved environment or without imported parameters
-   !> stay uncovered (blank key and label) for a later term of the set
+   !> - Unresolved environment or missing parameters: blank key and label, atoms left for later terms
    !>
-   !> @param[in,out] self Term, pair and labels unallocated
-   !> @param[in] mol Explicit hydrogens, bonds and bond orders in atom order
-   !> @param[out] error Invalid graph, ambiguous rules or inconsistent parameters
+   !> @param[in,out] self   term, pair and labels unallocated
+   !> @param[in]     mol    explicit hydrogens, bonds and bond orders in atom order
+   !> @param[out]    error  invalid graph, ambiguous rules or inconsistent parameters
    subroutine build_oplsaa(self, mol, error)
       !> Term
       type(lj_typed_type), intent(inout) :: self

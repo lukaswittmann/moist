@@ -1,12 +1,10 @@
 !> Lennard-Jones 12-6 pair data of the MOZ potential layer
 !>
-!> Plain per-atom data of one side: sigma (bohr), epsilon (Hartree) and a
-!> coverage mask. The mixing rule belongs to the interaction, not to a side:
-!> the kernels mix the parameters of the two atoms of a pair once with
-!> `lj_12_6_mix` and evaluate the potential with `lj_12_6_evaluate`
-!>
-!> Every LJ term (custom, element, typed) fills this one type, so any two of
-!> them combine; the potential set merges partial terms by coverage
+!> - Per-atom sigma (bohr), epsilon (Hartree) and coverage mask for one side
+!> - Interaction mixing rule; one `lj_12_6_mix` per atom pair
+!> - Potential evaluation through `lj_12_6_evaluate`
+!> - Common data type for custom, element and typed LJ terms
+!> - Partial terms merged by coverage in the potential set
 module moist_model_moz_potential_lj_base
    use mctc_env, only: wp, error_type, fatal_error
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
@@ -40,17 +38,17 @@ contains
 
    !> Validate and store per-atom parameters
    !>
-   !> Parameters of uncovered atoms are ignored; a term typed from the
-   !> structure passes the atoms it could type as `covered`. A covered atom
-   !> needs finite parameters, epsilon >= 0 and, where epsilon > 0, sigma > 0;
-   !> epsilon = 0 (a polar hydrogen) switches the atom's pair potential off
+   !> - Uncovered atoms: parameters ignored
+   !> - Structure-based typing: successfully typed atoms in `covered`
+   !> - Covered atoms: finite parameters, epsilon >= 0, sigma > 0 when epsilon > 0
+   !> - epsilon = 0: inactive pair potential, e.g. polar hydrogen
    !>
-   !> @param[out] self Parameters
-   !> @param[in] sigma Sigma per atom, bohr
-   !> @param[in] epsilon Epsilon per atom, Hartree
-   !> @param[out] error Size mismatch or invalid covered parameter
-   !> @param[in] covered Optional coverage mask; every atom when absent
-   !> @param[in] label Optional "Type/Src" label per atom, kept for covered atoms
+   !> @param[out] self     parameters
+   !> @param[in]  sigma    sigma per atom, bohr
+   !> @param[in]  epsilon  epsilon per atom, Hartree
+   !> @param[out] error    size mismatch or invalid covered parameter
+   !> @param[in]  covered  optional coverage mask; every atom when absent
+   !> @param[in]  label    optional "Type/Src" label per atom, kept for covered atoms
    subroutine new_lj_12_6(self, sigma, epsilon, error, covered, label)
       !> Parameters
       type(lj_12_6_type), intent(out) :: self
@@ -113,8 +111,8 @@ contains
 
    !> Refuse an unknown mixing rule
    !>
-   !> @param[in] mixing Mixing rule, `lj_mixing_lorentz_berthelot` or `lj_mixing_geometric`
-   !> @param[out] error Unknown rule
+   !> @param[in]  mixing  mixing rule, `lj_mixing_lorentz_berthelot` or `lj_mixing_geometric`
+   !> @param[out] error   unknown rule
    subroutine check_lj_mixing(mixing, error)
       !> Mixing rule
       integer, intent(in) :: mixing
@@ -130,20 +128,19 @@ contains
       end select
    end subroutine check_lj_mixing
 
-   !> Cross parameters of one atom pair
+   !> Mix the cross parameters of one atom pair
    !>
-   !> A pair with an inactive atom (epsilon = 0, whose sigma is not
-   !> validated) is inactive: zero cross parameters under every rule. An
-   !> unknown rule yields NaN parameters, never a silent zero; callers
-   !> validate the rule with `check_lj_mixing`
+   !> - Inactive atom (epsilon = 0): inactive pair, sigma unvalidated
+   !> - Inactive pair: zero cross parameters under every rule
+   !> - Unknown rule: NaN parameters; caller validation with `check_lj_mixing`
    !>
-   !> @param[in] mixing Mixing rule
-   !> @param[in] sigma_i Sigma of the first atom, bohr
-   !> @param[in] eps_i Epsilon of the first atom, Hartree
-   !> @param[in] sigma_j Sigma of the second atom, bohr
-   !> @param[in] eps_j Epsilon of the second atom, Hartree
-   !> @param[out] sigma_ij Cross sigma, bohr
-   !> @param[out] eps_ij Cross epsilon, Hartree
+   !> @param[in]  mixing    mixing rule
+   !> @param[in]  sigma_i   sigma of the first atom, bohr
+   !> @param[in]  eps_i     epsilon of the first atom, Hartree
+   !> @param[in]  sigma_j   sigma of the second atom, bohr
+   !> @param[in]  eps_j     epsilon of the second atom, Hartree
+   !> @param[out] sigma_ij  cross sigma, bohr
+   !> @param[out] eps_ij    cross epsilon, Hartree
    pure subroutine lj_12_6_mix(mixing, sigma_i, eps_i, sigma_j, eps_j, sigma_ij, eps_ij)
       !> Mixing rule
       integer, intent(in) :: mixing
@@ -177,16 +174,18 @@ contains
       end select
    end subroutine lj_12_6_mix
 
-   !> 12-6 potential of one mixed pair over a distance vector
+   !> Evaluate the 12-6 potential of one mixed pair over a distance vector
    !>
-   !> sr6 = (sigma/r)^6, u = 4 eps (sr6^2 - sr6), du/dr = -24 eps (2 sr6^2 - sr6)/r.
-   !> A distance of zero is a caller error; the kernels guard it
+   !> - sr6 = (sigma/r)^6
+   !> - u = 4 eps (sr6^2 - sr6)
+   !> - du/dr = -24 eps (2 sr6^2 - sr6)/r
+   !> - Zero distance: caller error, guarded by kernels
    !>
-   !> @param[in] sigma_ij Cross sigma, bohr
-   !> @param[in] eps_ij Cross epsilon, Hartree
-   !> @param[in] r Distances, bohr (n)
-   !> @param[out] u Pair potential, Hartree (n)
-   !> @param[out] du_dr Optional radial derivative, Hartree/bohr (n)
+   !> @param[in]  sigma_ij  cross sigma, bohr
+   !> @param[in]  eps_ij    cross epsilon, Hartree
+   !> @param[in]  r         distances, bohr (n)
+   !> @param[out] u         pair potential, Hartree (n)
+   !> @param[out] du_dr     optional radial derivative, Hartree/bohr (n)
    pure subroutine lj_12_6_evaluate(sigma_ij, eps_ij, r, u, du_dr)
       !> Cross sigma, bohr
       real(wp), intent(in) :: sigma_ij

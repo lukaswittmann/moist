@@ -1,9 +1,8 @@
 !> Lennard-Jones potential term with explicit per-atom parameters
 !>
-!> Sigma (bohr) and epsilon (Hartree) given per atom of the structure, in its
-!> atom order; an optional coverage mask leaves atoms for a later term of the
-!> potential set. The parameters are validated and stored at construction,
-!> `build` only checks them against the structure
+!> - Explicit sigma (bohr) and epsilon (Hartree) in structure atom order
+!> - Optional coverage mask for atoms left to later terms
+!> - Validation and storage at construction; structure consistency check at `build`
 module moist_model_moz_potential_lj_custom
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
@@ -28,11 +27,11 @@ contains
 
    !> Create a term from explicit per-atom parameters
    !>
-   !> @param[out] self Term
-   !> @param[in] sigma Sigma per atom, bohr
-   !> @param[in] epsilon Epsilon per atom, Hartree
-   !> @param[out] error Size mismatch, invalid covered parameter or no covered atom
-   !> @param[in] covered Optional coverage mask; every atom when absent
+   !> @param[out] self     term
+   !> @param[in]  sigma    sigma per atom, bohr
+   !> @param[in]  epsilon  epsilon per atom, Hartree
+   !> @param[out] error    size mismatch, invalid covered parameter or no covered atom
+   !> @param[in]  covered  optional coverage mask; every atom when absent
    subroutine new_custom_lj(self, sigma, epsilon, error, covered)
       !> Term
       type(custom_lj_type), intent(out) :: self
@@ -59,7 +58,7 @@ contains
 
    !> Diagnostic name
    !>
-   !> @param[in] self Term
+   !> @param[in] self  term
    pure function custom_lj_name(self) result(name)
       !> Term
       class(custom_lj_type), intent(in) :: self
@@ -70,10 +69,10 @@ contains
 
    !> Check the stored parameters against the structure
    !>
-   !> @param[in,out] self Term
-   !> @param[in] mol Structure of this side
-   !> @param[out] error Unconstructed term or parameter count differing from the atom count
-   !> @param[in] solvent_id Ignored; the parameters are given per atom
+   !> @param[in,out] self        term
+   !> @param[in]     mol         structure of this side
+   !> @param[out]    error       unconstructed term or parameter count differing from the atom count
+   !> @param[in]     solvent_id  ignored; the parameters are given per atom
    subroutine custom_lj_build(self, mol, error, solvent_id)
       !> Term
       class(custom_lj_type), intent(inout) :: self

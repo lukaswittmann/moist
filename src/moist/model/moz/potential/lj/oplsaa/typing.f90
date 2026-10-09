@@ -233,7 +233,7 @@ contains
          graph%order(graph%degree(j), j) = mol%bond(3, ibond)
       end do
       do iat = 1, mol%nat
-         ! No rule types other elements; they stay uncovered for a later term
+         ! Elements without rules: uncovered atoms for later terms
          if (.not. supported_element(graph%num(iat))) cycle
          if (valid_valence(graph, iat, charge(iat))) cycle
          write (label, "(i0)") iat
@@ -281,7 +281,7 @@ contains
          case (8, 16)
             valid = degree == 2 .and. charge == 0
          case default
-            ! No other element carries aromatic bonds
+            ! Unsupported aromatic-bond element
             valid = .false.
          end select
          return
@@ -304,14 +304,14 @@ contains
       case (3)
          valid = degree == 0 .and. charge == 1
       case default
-         ! Unreachable: build_graph checks supported elements only
+         ! Unreachable: supported elements checked by build_graph
          valid = .false.
       end select
    end function valid_valence
 
    !> Whether the typing rules cover an element
    !>
-   !> @param[in] num Atomic number
+   !> @param[in] num  atomic number
    pure function supported_element(num) result(supported)
       !> Atomic number
       integer, intent(in) :: num

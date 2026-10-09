@@ -1,11 +1,9 @@
 !> Lennard-Jones potential term for an explicitly selected solvent model
 !>
-!> `lj_set_spce` preserves the legacy SPC/E-style water parameters, including
-!> nonzero hydrogen LJ. The model requires one neutral, closed-shell H2O
-!> molecule and assigns sites by element, independently of GAFF typing
-!>
-!> A positive solvent ID must name water; an absent or zero ID permits a
-!> custom water structure. Charges and the mixing rule are selected separately
+!> - `lj_set_spce`: legacy SPC/E-style water parameters, including nonzero hydrogen LJ
+!> - One neutral, closed-shell H2O molecule; sites by element, independent of GAFF typing
+!> - Positive solvent ID: water required; absent or zero ID: custom water permitted
+!> - Separate charge and mixing-rule selection
 module moist_model_moz_potential_lj_solvent
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
@@ -39,7 +37,7 @@ contains
 
    !> Diagnostic name
    !>
-   !> @param[in] self Term
+   !> @param[in] self  term
    pure function lj_solvent_name(self) result(name)
       !> Term
       class(lj_solvent_type), intent(in) :: self
@@ -50,10 +48,10 @@ contains
 
    !> Validate the solvent and assign LJ parameters to its sites
    !>
-   !> @param[in,out] self Term
-   !> @param[in] mol One neutral, closed-shell water molecule, in any atom order
-   !> @param[out] error Unconstructed term, incompatible solvent or parameter failure
-   !> @param[in] solvent_id Water ID, or zero for custom water; optional
+   !> @param[in,out] self        term
+   !> @param[in]     mol         one neutral, closed-shell water molecule, in any atom order
+   !> @param[out]    error       unconstructed term, incompatible solvent or parameter failure
+   !> @param[in]     solvent_id  water ID, or zero for custom water; optional
    subroutine lj_solvent_build(self, mol, error, solvent_id)
       !> Term
       class(lj_solvent_type), intent(inout) :: self
@@ -84,7 +82,7 @@ contains
          call fatal_error(error, "SPC/E-style Lennard-Jones solvent model has invalid atom IDs")
          return
       end if
-      ! Anything but neutral, closed-shell H2O is left uncovered for a later term
+      ! Non-water, charged or open-shell structure: atoms left for later terms
       if (.not. is_water(mol, solvent_id)) then
          allocate (self%atomtype(mol%nat), source=repeat(" ", len(self%atomtype)))
          allocate (self%pair)
