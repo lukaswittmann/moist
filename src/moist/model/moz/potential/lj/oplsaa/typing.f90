@@ -233,6 +233,8 @@ contains
          graph%order(graph%degree(j), j) = mol%bond(3, ibond)
       end do
       do iat = 1, mol%nat
+         ! No rule types other elements; they stay uncovered for a later term
+         if (.not. supported_element(graph%num(iat))) cycle
          if (valid_valence(graph, iat, charge(iat))) cycle
          write (label, "(i0)") iat
          call fatal_error(error, "Unsupported OPLS-AA valence at atom "//trim(label)// &
@@ -279,7 +281,8 @@ contains
          case (8, 16)
             valid = degree == 2 .and. charge == 0
          case default
-            error stop "Impossible case in valid_valence 1"
+            ! No other element carries aromatic bonds
+            valid = .false.
          end select
          return
       end if
@@ -300,10 +303,27 @@ contains
          valid = (valence == 2 .or. valence == 4 .or. valence == 6) .and. charge == 0
       case (3)
          valid = degree == 0 .and. charge == 1
-         case default
-            error stop "Impossible case in valid_valence 2"
+      case default
+         ! Unreachable: build_graph checks supported elements only
+         valid = .false.
       end select
    end function valid_valence
+
+   !> Whether the typing rules cover an element
+   !>
+   !> @param[in] num Atomic number
+   pure function supported_element(num) result(supported)
+      !> Atomic number
+      integer, intent(in) :: num
+      !> Whether a valence check and rules exist for the element
+      logical :: supported
+      select case (num)
+      case (1, 3, 6, 7, 8, 9, 15, 16, 17, 35, 53)
+         supported = .true.
+      case default
+         supported = .false.
+      end select
+   end function supported_element
 
    !> Restrict charged sites to environments explicitly identified by a rule
    !>
