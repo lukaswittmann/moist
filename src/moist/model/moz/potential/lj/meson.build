@@ -1,0 +1,7 @@
+srcs += files('base.f90', 'custom.f90', 'element.f90', 'solvent.f90', 'typed.f90')
+subdir('dreiding')
+subdir('gaff')
+subdir('oplsaa')
+subdir('spce')
+subdir('tm')
+subdir('uff')
