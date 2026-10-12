@@ -40,8 +40,8 @@ module test_cavity_drop_isodensity
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
-      & nuclear_charge_request_type, gaussian_potential_request_type, coupling_view_type, &
-      & coupling_make_view, coupling_close_view
+      & nuclear_charge_request_type, gaussian_potential_request_type, point_potential_request_type, &
+      & coupling_view_type, coupling_make_view, coupling_close_view
    use moist_channels_fields, only: field_query_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_work_type, &
@@ -56,7 +56,7 @@ module test_cavity_drop_isodensity
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
    use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
    implicit none(type, external)
    private
@@ -3630,6 +3630,12 @@ contains
       do while (coupling%next())
          select type (request => coupling%request())
          type is (gaussian_potential_request_type)
+            nvisit = nvisit + 1
+            call coupling%answer("phi", phi, err)
+         type is (point_potential_request_type)
+            call check(error, refused .and. .not. cavity%is_built(), &
+               & more="a built Gaussian cavity declared a point potential")
+            if (allocated(error)) return
             nvisit = nvisit + 1
             call coupling%answer("phi", phi, err)
          end select

@@ -1,0 +1,155 @@
+!> LPB component backed by generated Gaussian and point kernels
+module moist_model_continuum_component_pcm_lpb
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use mctc_env, only: wp, error_type, fatal_error
+   use moist_context, only: moist_context_type
+   use moist_cavity_type, only: cavity_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
+   use moist_model_continuum_component_pcm_solvers, only: pcm_solver
+   use moist_model_continuum_component_pcm_kernel_gauss_lpb, only: lpb_complex_state, &
+      & lpb_assemble, lpb_medium, lpb_solve, lpb_weights
+   use moist_model_continuum_component_pcm_kernel_point_lpb, only: lpb_point_complex_state, &
+      & lpb_point_assemble, lpb_point_medium, lpb_point_solve, &
+      & lpb_point_weights
+   implicit none(type, external)
+   private
+
+   public :: model_continuum_component_lpb, new_component_lpb
+   public :: debye_kappa
+
+   !> Concrete LPB component
+   type, extends(pcm_layer_base) :: model_continuum_component_lpb
+      type(lpb_complex_state) :: gauss
+      type(lpb_point_complex_state) :: point
+      real(wp) :: kappa = 0.0_wp
+   contains
+      procedure :: assemble_layer => lpb_assemble_layer
+      procedure :: solve_layer => lpb_solve_layer
+      procedure :: layer_weights => lpb_layer_weights
+      procedure :: is_inert => lpb_is_inert
+   end type model_continuum_component_lpb
+
+contains
+
+   !> Construct LPB from physical and numerical parameters
+   subroutine new_component_lpb(self, epsilon, kappa, error, param, ctx)
+      type(model_continuum_component_lpb), intent(out) :: self
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
+      real(wp), intent(in) :: epsilon
+      real(wp), intent(in) :: kappa
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_pcm_parameters_type), intent(in), optional :: param
+      type(moist_pcm_parameters_type) :: settings
+
+      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+         call fatal_error(error, "LPB epsilon must be >= 1")
+         return
+      end if
+      if (.not. ieee_is_finite(kappa) .or. kappa < 0.0_wp) then
+         call fatal_error(error, "LPB kappa must be finite and nonnegative")
+         return
+      end if
+      if (present(param)) settings = param
+      call settings%validate(error)
+      if (allocated(error)) return
+      if (present(ctx)) self%ctx => ctx
+      self%epsilon = epsilon
+      self%feps = pcm_layer_feps(epsilon)
+      self%param = settings
+      self%name = "LPB"
+      self%kappa = kappa
+   end subroutine new_component_lpb
+
+   !> Assemble the LPB operators
+   subroutine lpb_assemble_layer(self, cavity, solver, error)
+      class(model_continuum_component_lpb), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(pcm_solver), intent(in) :: solver
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      associate (r => cavity%xyz(:, 1:ngrid), n => cavity%normal0(:, 1:ngrid), &
+         & k1 => cavity%k1(1:ngrid), k2 => cavity%k2(1:ngrid), &
+         & a => cavity%a(1:ngrid))
+         if (self%smeared) then
+            associate (xi => cavity%xi0(1:ngrid), f => cavity%f(1:ngrid))
+               call lpb_assemble(self%gauss%lpb_state, r, n, k1, k2, xi, f, a, error, solver)
+               if (allocated(error)) return
+               call lpb_medium(self%gauss%lpb_state, self%epsilon, self%kappa, error)
+            end associate
+         else
+            call lpb_point_assemble(self%point%lpb_point_state, r, n, k1, k2, a, error, solver)
+            if (allocated(error)) return
+            call lpb_point_medium(self%point%lpb_point_state, self%epsilon, self%kappa, error)
+         end if
+      end associate
+   end subroutine lpb_assemble_layer
+
+   !> Solve the current LPB host traces
+   subroutine lpb_solve_layer(self, error)
+      class(model_continuum_component_lpb), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      if (self%smeared) then
+         call lpb_solve(self%gauss%lpb_state, self%phi, self%kernel_energy, self%q, self%qsym, error)
+      else
+         call lpb_point_solve(self%point%lpb_point_state, self%phi, self%kernel_energy, self%q, self%qsym, error)
+      end if
+   end subroutine lpb_solve_layer
+
+   !> Accumulate LPB operator surface weights
+   subroutine lpb_layer_weights(self, cavity, acc, error)
+      class(model_continuum_component_lpb), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
+      real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
+      real(wp) :: w_eps
+      real(wp) :: w_kappa
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
+      if (self%smeared) then
+         allocate (w_xi(ngrid), w_f(ngrid), source=0.0_wp)
+         call lpb_weights(self%gauss%lpb_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, w_eps, w_kappa, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
+            & w_k2=w_k2, w_a=w_a, w_xi=w_xi, w_f=w_f)
+      else
+         call lpb_point_weights(self%point%lpb_point_state, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, w_kappa, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
+            & w_k2=w_k2, w_a=w_a)
+      end if
+   end subroutine lpb_layer_weights
+
+   !> Screening can polarize even when epsilon is one
+   pure function lpb_is_inert(self) result(inert)
+      class(model_continuum_component_lpb), intent(in) :: self
+      logical :: inert
+      inert = self%feps == 0.0_wp .and. self%kappa == 0.0_wp
+   end function lpb_is_inert
+
+   !> Inverse Debye screening length of a 1:1 electrolyte, in inverse bohr
+   pure function debye_kappa(epsilon, ionic_strength, temperature) result(kappa)
+      use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+      use mctc_io_constants, only: pi, codata
+      use mctc_io_convert, only: autoaa, autokj
+      real(wp), intent(in) :: epsilon, ionic_strength, temperature
+      real(wp) :: kappa, density, kt
+
+      if (.not. (epsilon > 0.0_wp .and. ionic_strength >= 0.0_wp .and. temperature > 0.0_wp)) then
+         kappa = ieee_value(kappa, ieee_quiet_nan)
+         return
+      end if
+      density = ionic_strength*1.0e3_wp*codata%NA*(autoaa*1.0e-10_wp)**3
+      kt = codata%kb*temperature*codata%NA*1.0e-3_wp/autokj
+      kappa = sqrt(8.0_wp*pi*density/(epsilon*kt))
+   end function debye_kappa
+
+end module moist_model_continuum_component_pcm_lpb

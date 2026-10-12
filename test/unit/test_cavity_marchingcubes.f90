@@ -98,6 +98,7 @@ contains
          & new_unittest("translation_invariance", test_translation_invariance), &
          & new_unittest("no_grid_points", test_no_grid_points), &
          & new_unittest("no_gradient", test_gradient_unavailable), &
+         & new_unittest("rejects_optional_geometry", test_rejects_optional_geometry), &
          & new_unittest("rejects_bad_spacing", test_rejects_bad_spacing), &
          & new_unittest(case_to_string(cases(1)), test_case_001), &
          & new_unittest(case_to_string(cases(2)), test_case_002), &
@@ -118,6 +119,20 @@ contains
          & ]
 
    end subroutine collect_cavity_marchingcubes
+
+   !> Unsupported geometry requests fail before a cavity update
+   subroutine test_rejects_optional_geometry(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(cavity_type_marchingcubes) :: cav
+      type(mctc_error), allocatable :: cavity_error
+
+      call cav%configure(normal=.true., error=cavity_error)
+      call check(error, allocated(cavity_error), more="Marching cubes accepted surface normals")
+      if (allocated(error)) return
+
+      call cav%configure(curvature=.true., error=cavity_error)
+      call check(error, allocated(cavity_error), more="Marching cubes accepted principal curvatures")
+   end subroutine test_rejects_optional_geometry
 
    !> Build a marching-cubes cavity over hydrogen centers with custom radii
    !>

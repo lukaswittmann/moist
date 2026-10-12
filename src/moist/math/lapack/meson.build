@@ -10,6 +10,8 @@ srcs += files(
   'gels.F90',
   'potrf.f90',
   'potrs.f90',
+  'sytrf.f90',
+  'sytrs.f90',
   'solver.f90',
   'syev.f90',
   'sygst.f90',

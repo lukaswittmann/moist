@@ -132,6 +132,8 @@ module moist_channels_response
    type, extends(response_item_type) :: potential_adjoint_response_type
       !> Weights for the potential values (ngrid)
       real(wp), allocatable :: w_phi(:)
+      !> Weights for the spatial potential derivatives (3, ngrid)
+      real(wp), allocatable :: w_dphi_dr(:, :)
    contains
       procedure :: name => potential_adjoint_name
       procedure :: list_fields => potential_adjoint_list_fields
@@ -440,6 +442,7 @@ contains
       type(field_query_type), intent(inout) :: query
 
       call query%add_real("w_phi", "dE/dphi on the cavity grid (ngrid)", self%w_phi)
+      call query%add_real2("w_dphi_dr", "dE/d(grad phi) on the cavity grid (3, ngrid)", self%w_dphi_dr)
 
    end subroutine potential_adjoint_list_fields
 
@@ -455,6 +458,8 @@ contains
       select type (other)
       type is (potential_adjoint_response_type)
          call accumulate_vector(self%w_phi, other%w_phi, "potential_adjoint", "w_phi", error)
+         if (allocated(error)) return
+         call accumulate_matrix(self%w_dphi_dr, other%w_dphi_dr, "potential_adjoint", "w_dphi_dr", error)
       class default
          call type_mismatch("potential_adjoint", error)
       end select
@@ -467,6 +472,7 @@ contains
       class(potential_adjoint_response_type), intent(inout) :: self
 
       if (allocated(self%w_phi)) deallocate (self%w_phi)
+      if (allocated(self%w_dphi_dr)) deallocate (self%w_dphi_dr)
 
    end subroutine potential_adjoint_clear
 

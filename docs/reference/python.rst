@@ -29,7 +29,7 @@ pressure, separate from numerical settings:
    )
    model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
-           78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
+           78.4, parameters=PCMParameters(solver=PCMSolver.DENSE),
        ),
    ])
 
@@ -38,7 +38,7 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``lsf=CFC()`` or ``lsf=Isodensity(...)`` and all DROP level sets share
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
-the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
+the surface independently. ``PCMParameters`` applies to every PCM model.
 ``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
 negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
@@ -57,6 +57,19 @@ are the unpaired form.
 Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
 raises.
 ``cavity.context``, ``component.context`` and ``model.context`` expose the contexts; ``context.nthreads`` reports its thread count. The context alone sets verbosity and debug output.
+
+PCM choices are ``ModelComponentCPCM``, ``ModelComponentCOSMO``,
+``ModelComponentIEFPCM``, ``ModelComponentSSVPE``, ``ModelComponentDPCM``,
+``ModelComponentDPCMOriginal``, ``ModelComponentLPB``, ``ModelComponentSLIC``
+and ``ModelComponentNonlocal``. The first six take ``epsilon``. LPB also takes
+``kappa`` in bohr⁻¹. SLIC takes ``epsilon, alpha, beta, gamma, mu,
+phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda_, eps_solute``.
+All accept keyword-only ``parameters=PCMParameters(...)`` and optional
+``context=...``. Its controls are
+``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,
+``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.AUTO``,
+``DENSE`` or ``MATRIX_FREE``), ``memory_budget_gib`` (integer GiB), ``newton_tol`` and
+``newton_maxiter``. See :doc:`/models/components/pcm/index` for defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
@@ -126,7 +139,7 @@ Array and accumulator contracts
 
 Python uses C-contiguous row-major arrays, with reversed native Fortran dimensions.
 Positions and nuclear gradients have shape ``(natoms,3)``; grid vectors have shape
-``(ngrid,3)``. Hessian weights have shape ``(ngrid,3,3)`` with indices
+``(ngrid,3)``. Potential second derivatives and Hessian weights have shape ``(ngrid,3,3)`` with indices
 ``[point,b,a]`` corresponding to native ``(a,b,point)``. These weights need not be
 symmetric. Full diagnostic derivative tensors follow the same exact reversal.
 
@@ -249,7 +262,7 @@ Grid inputs are read from ``model.cavity``.
 
    model.prepare_response(coupling)
    for request in coupling:
-       ...  # walk again: a density-dependent cavity also needs dphi_dr, dphi_dxi
+       ...  # walk again and answer the requested raw potential derivatives
    response = model.get_response(coupling)
    for item in response:
        if isinstance(item, PotentialAdjointResponse):

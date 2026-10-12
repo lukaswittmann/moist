@@ -15,6 +15,8 @@ module moist_output_citations
    public :: citation_iswig_adaptive, citation_numsa, citation_cfc, citation_smd
    public :: citation_slsqp, citation_lbfgsb, citation_fmin, citation_lsqr
    public :: citation_lsmr, citation_lusol, citation_pv, citation_gostshyp
+   public :: citation_cpcm, citation_cosmo, citation_iefpcm, citation_ssvpe
+   public :: citation_dpcm, citation_dpcm_original, citation_lpb, citation_slic, citation_nonlocal
 
    !> Registry labels; a part records the ones it used through `ctx%cite`
    character(len=*), parameter :: citation_moist = "moist"
@@ -34,6 +36,15 @@ module moist_output_citations
    character(len=*), parameter :: citation_lusol = "LUSOL"
    character(len=*), parameter :: citation_pv = "Pressure-volume term (PV)"
    character(len=*), parameter :: citation_gostshyp = "GOSTSHYP"
+   character(len=*), parameter :: citation_cpcm = "CPCM"
+   character(len=*), parameter :: citation_cosmo = "COSMO"
+   character(len=*), parameter :: citation_iefpcm = "IEF-PCM"
+   character(len=*), parameter :: citation_ssvpe = "SS(V)PE"
+   character(len=*), parameter :: citation_dpcm = "DPCM"
+   character(len=*), parameter :: citation_dpcm_original = "DPCM original"
+   character(len=*), parameter :: citation_lpb = "LPB"
+   character(len=*), parameter :: citation_slic = "SLIC"
+   character(len=*), parameter :: citation_nonlocal = "Nonlocal electrostatics"
 
    !> Length that holds every label
    integer, parameter :: citation_label_len = 80
@@ -55,7 +66,7 @@ module moist_output_citations
    end type citation_entry_type
 
    !> Number of entries in the registry
-   integer, parameter :: num_citations = 21
+   integer, parameter :: num_citations = 31
 
    !> The global citation registry, populated in init_citations()
    type(citation_entry_type), target :: moist_citations(num_citations)
@@ -262,6 +273,91 @@ contains
                             "High Pressure Effects on Molecular and Electronic Structure.", &
                             journal="J. Chem. Theory Comput. 2025, 21, 747-761", &
                             doi="https://doi.org/10.1021/acs.jctc.4c01502")
+
+      moist_citations(22) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_cpcm, &
+                            authors="Barone, V., Cossi, M.", &
+                            title="Quantum Calculation of Molecular Energies and Energy Gradients "// &
+                            "in Solution by a Conductor Solvent Model.", &
+                            journal="J. Phys. Chem. A 1998, 102, 1995-2001", &
+                            doi="https://doi.org/10.1021/jp9716997")
+
+      moist_citations(23) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_cpcm, &
+                            authors="Cossi, M., Rega, N., Scalmani, G., Barone, V.", &
+                            title="Energies, structures, and electronic properties of molecules "// &
+                            "in solution with the C-PCM solvation model.", &
+                            journal="J. Comput. Chem. 2003, 24, 669-681", &
+                            doi="https://doi.org/10.1002/jcc.10189")
+
+      moist_citations(24) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_cosmo, &
+                            authors="Klamt, A., Schuurmann, G.", &
+                            title="COSMO: a new approach to dielectric screening in solvents "// &
+                            "with explicit expressions for the screening energy and its gradient.", &
+                            journal="J. Chem. Soc., Perkin Trans. 2 1993, 799-805", &
+                            doi="https://doi.org/10.1039/P29930000799")
+
+      moist_citations(25) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_iefpcm, &
+                            authors="Cances, E., Mennucci, B., Tomasi, J.", &
+                            title="A new integral equation formalism for the polarizable continuum model: "// &
+                            "Theoretical background and applications to isotropic and anisotropic dielectrics.", &
+                            journal="J. Chem. Phys. 1997, 107, 3032-3041", &
+                            doi="https://doi.org/10.1063/1.474659")
+
+      moist_citations(26) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_ssvpe, &
+                            authors="Chipman, D.M.", &
+                            title="Reaction field treatment of charge penetration.", &
+                            journal="J. Chem. Phys. 2000, 112, 5558-5565", &
+                            doi="https://doi.org/10.1063/1.481133")
+
+      moist_citations(27) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_dpcm, &
+                            authors="Miertus, S., Scrocco, E., Tomasi, J.", &
+                            title="Electrostatic interaction of a solute with a continuum. "// &
+                            "A direct utilization of ab initio molecular potentials for the prevision of solvent effects.", &
+                            journal="Chem. Phys. 1981, 55, 117-129", &
+                            doi="https://doi.org/10.1016/0301-0104(81)85090-2")
+
+      moist_citations(28) = moist_citations(27)
+      moist_citations(28)%label = citation_dpcm_original
+
+      moist_citations(29) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_lpb, &
+                            authors="Juffer, A.H., Botta, E.F.F., van Keulen, B.A.M., "// &
+                            "van der Ploeg, A., Berendsen, H.J.C.", &
+                            title="The electric potential of a macromolecule in a solvent: "// &
+                            "A fundamental approach.", &
+                            journal="J. Comput. Phys. 1991, 97, 144-171", &
+                            doi="https://doi.org/10.1016/0021-9991(91)90043-K")
+
+      moist_citations(30) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_slic, &
+                            authors="Molavi Tabrizi, A., Goossens, S., Mehdizadeh Rahimi, A., "// &
+                            "Knepley, M., Bardhan, J.P.", &
+                            title="Predicting solvation free energies and thermodynamics in polar "// &
+                            "solvents and mixtures using a solvation-layer interface condition.", &
+                            journal="J. Chem. Phys. 2017, 146, 094103", &
+                            doi="https://doi.org/10.1063/1.4977037")
+
+      moist_citations(31) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_nonlocal, &
+                            authors="Hildebrandt, A., Blossey, R., Rjasanow, S., "// &
+                            "Kohlbacher, O., Lenhof, H.-P.", &
+                            title="Novel Formulation of Nonlocal Electrostatics.", &
+                            journal="Phys. Rev. Lett. 2004, 93, 108104", &
+                            doi="https://doi.org/10.1103/PhysRevLett.93.108104")
 
       initialised = .true.
    end subroutine fill_citations

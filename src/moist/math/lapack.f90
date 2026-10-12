@@ -5,6 +5,8 @@ module moist_math_lapack
    use moist_math_lapack_getrs, only: getrs => wrap_getrs
    use moist_math_lapack_potrf, only: potrf => wrap_potrf
    use moist_math_lapack_potrs, only: potrs => wrap_potrs
+   use moist_math_lapack_sytrf, only: sytrf => wrap_sytrf
+   use moist_math_lapack_sytrs, only: sytrs => wrap_sytrs
    use moist_math_lapack_syev, only: lapack_syev
    use moist_math_lapack_gesv, only: lapack_gesv
    use moist_math_lapack_gesvd, only: lapack_gesvd

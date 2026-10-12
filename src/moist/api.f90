@@ -16,19 +16,22 @@ module moist_api
       & current_request, answer_flat, output_name_len, coupling_extent_grid_atom
    use moist_channels_response, only: response_type, response_item_type, current_response_item
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
-                                             assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
-                                             pcm_amat_nuclear_gradient
    use moist_model_continuum_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, &
       & new_component_gostshyp, moist_gostshyp_parameters_type
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, &
-      & new_component_cpcm
-   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, &
-      & new_component_cosmo
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, &
+      & new_component_cpcm, model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_iefpcm, only: model_continuum_component_iefpcm, new_component_iefpcm
+   use moist_model_continuum_component_pcm_ssvpe, only: model_continuum_component_ssvpe, new_component_ssvpe
+   use moist_model_continuum_component_pcm_dpcm, only: model_continuum_component_dpcm, new_component_dpcm
+   use moist_model_continuum_component_pcm_dpcm_original, only: model_continuum_component_dpcm_original, &
+      & new_component_dpcm_original
+   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
+   use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, new_component_slic
+   use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_model_continuum_component_pv, only: model_continuum_component_pv, new_component_pv
-   use moist_model_continuum, only: model_continuum_type, new_continuum_model
+   use moist_model_continuum_type, only: model_continuum_type, new_continuum_model
    use moist_context, only: moist_context_type, new_context
    use moist_utils_timer, only: timer_name_len => name_len
    use moist_radii, only: radius_type, new_radii, radius_type_custom
@@ -162,20 +165,30 @@ module moist_api
    !> Minimum valid caller size, independent of future library extensions
    integer(c_size_t), parameter :: isodensity_options_min_size = c_sizeof(api_isodensity_options_v1_0())
 
-   !> Frozen 1.0 pcm layout; a future addition needs a new versioned type
-   type, bind(C) :: api_pcm_options_v1_0
+   !> PCM numerical controls; callers supply the complete current layout
+   type, bind(C) :: api_pcm_options
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> PCM linear solver selector
-      integer(c_int) :: solver = 3_c_int
-      !> Iteration cap; only read by the iterative solver
-      integer(c_int) :: solver_maxiter = 50_c_int
-      !> Residual threshold; only read by the iterative solver
-      real(c_double) :: solver_tol = 1.0e-10_c_double
-   end type api_pcm_options_v1_0
+      integer(c_int) :: solver = 1_c_int
+      !> Iteration cap for restarted GMRES
+      integer(c_int) :: solver_maxiter = 1000_c_int
+      !> Number of GMRES steps between restarts
+      integer(c_int) :: solver_restart = 100_c_int
+      !> Residual threshold for restarted GMRES
+      real(c_double) :: solver_tol = 1.0e-8_c_double
+      !> Matrix storage selection
+      integer(c_int) :: storage = 3_c_int
+      !> Memory budget in GiB for automatic storage
+      integer(c_int) :: memory_budget_gib = 4_c_int
+      !> Nonlinear solve tolerance
+      real(c_double) :: newton_tol = 1.0e-10_c_double
+      !> Nonlinear iteration cap
+      integer(c_int) :: newton_maxiter = 50_c_int
+   end type api_pcm_options
 
-   !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: pcm_options_min_size = c_sizeof(api_pcm_options_v1_0())
+   !> Minimum valid caller size for the generated PCM controls
+   integer(c_size_t), parameter :: pcm_options_min_size = c_sizeof(api_pcm_options())
 
    !> Frozen 1.0 GOSTSHYP layout; extend with a new versioned type
    type, bind(C) :: api_gostshyp_options_v1_0
@@ -339,16 +352,12 @@ module moist_api
    ! Type-specific getters
    public :: get_drop_cavity_tolerance_api
    public :: get_isodensity_cart_layout_api
-   public :: assemble_amat_api
    public :: get_cavity_gaussian_api
    ! Gradient API
    public :: compute_cavity_gradient_api
    public :: compute_anchor_gradient_api
    public :: get_anchor_gradient_api
    public :: get_cavity_gradient_api
-   public :: get_amat_gradient_api
-   public :: contract_amat1_q1q2_rA_api
-   public :: contract_amat1_q1q2_surface_weights_api
    public :: contract_surface_lsf_weights_api, contract_surface_lsf_weights_extended_api
    public :: contract_pcm_nuclear_gradient_api
 
@@ -381,13 +390,32 @@ contains
    !> Obtain pcm defaults from the native parameter type
    function default_pcm_options() result(value)
       !> Interoperable options
-      type(api_pcm_options_v1_0) :: value
+      type(api_pcm_options) :: value
       !> Native compiled defaults
       type(moist_pcm_parameters_type) :: native
       value%solver = native%solver
       value%solver_maxiter = native%solver_maxiter
+      value%solver_restart = native%solver_restart
       value%solver_tol = native%solver_tol
+      value%storage = native%storage
+      value%memory_budget_gib = native%memory_budget_gib
+      value%newton_tol = native%newton_tol
+      value%newton_maxiter = native%newton_maxiter
    end function default_pcm_options
+
+   !> Convert interoperable PCM controls to the native parameter object
+   function pcm_parameters_from_options(options) result(param)
+      type(api_pcm_options), intent(in) :: options
+      type(moist_pcm_parameters_type) :: param
+      param%solver = int(options%solver)
+      param%solver_maxiter = int(options%solver_maxiter)
+      param%solver_restart = int(options%solver_restart)
+      param%solver_tol = real(options%solver_tol, wp)
+      param%storage = int(options%storage)
+      param%memory_budget_gib = int(options%memory_budget_gib, kind(param%memory_budget_gib))
+      param%newton_tol = real(options%newton_tol, wp)
+      param%newton_maxiter = int(options%newton_maxiter)
+   end function pcm_parameters_from_options
 
    !> Obtain cfc defaults from the native parameter type
    function default_cfc_options() result(value)
@@ -1061,9 +1089,9 @@ contains
       !> Allocated byte count
       integer(c_size_t), value, intent(in) :: bytes
       !> Compiled defaults
-      type(api_pcm_options_v1_0), target :: defaults
+      type(api_pcm_options), target :: defaults
       !> Default values; only named components are copied to the wire layout
-      type(api_pcm_options_v1_0) :: values
+      type(api_pcm_options) :: values
       !> Decoded error handle
       type(vp_error), pointer :: error
       if (.not. c_associated(verror)) return
@@ -1074,7 +1102,12 @@ contains
       defaults%struct_size = bytes
       defaults%solver = values%solver
       defaults%solver_maxiter = values%solver_maxiter
+      defaults%solver_restart = values%solver_restart
       defaults%solver_tol = values%solver_tol
+      defaults%storage = values%storage
+      defaults%memory_budget_gib = values%memory_budget_gib
+      defaults%newton_tol = values%newton_tol
+      defaults%newton_maxiter = values%newton_maxiter
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, pcm_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_pcm_options")
    end subroutine init_pcm_options_api
@@ -1084,7 +1117,7 @@ contains
       !> Optional caller options; NULL selects defaults
       type(c_ptr), intent(in) :: options
       !> Default-initialized result
-      type(api_pcm_options_v1_0), intent(out), target :: value
+      type(api_pcm_options), intent(out), target :: value
       !> Diagnostic on invalid size
       type(error_type), allocatable, intent(out) :: error
       !> Caller allocation size, the common first field
@@ -1171,7 +1204,7 @@ contains
       integer(c_size_t), intent(in) :: required
       !> Caller allocation length
       integer(c_size_t), intent(in) :: available
-      !> Frozen minimum size of the first supported ABI layout
+      !> Minimum size of the supported caller layout
       integer(c_size_t), intent(in) :: minimum
       !> Diagnostic; destination is unchanged on error
       type(error_type), allocatable, intent(out) :: error
@@ -1184,7 +1217,7 @@ contains
          return
       end if
       if (available < minimum) then
-         call fatal_error(error, "Options struct_size is smaller than the 1.0 layout")
+         call fatal_error(error, "Options struct_size is smaller than the required layout")
          return
       end if
       copied = min(required, available)
@@ -1235,8 +1268,9 @@ contains
       end if
       select type (item => lsf%ptr)
       type is (moist_cavity_drop_lsf_svdw_type)
-         call item%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=real(o%blend_k, wp), &
-                                       blend_1b=real(o%blend_1b, wp), blend_2b=real(o%blend_2b, wp), blend_3b=real(o%blend_3b, wp)))
+         call item%new(param=moist_cavity_drop_lsf_svdw_param_type( &
+            & blend_k=real(o%blend_k, wp), blend_1b=real(o%blend_1b, wp), &
+            & blend_2b=real(o%blend_2b, wp), blend_3b=real(o%blend_3b, wp)))
       end select
       handle = c_loc(lsf)
    end function new_svdw_lsf_api
@@ -1510,10 +1544,11 @@ contains
       select type (item => cav%ptr)
       type is (cavity_type_drop)
          call new_cavity_drop(item, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
-                              param=moist_cavity_drop_parameters_type(num_leb=int(o%nleb), tolerance=real(o%tolerance, wp), &
-                                       do_fine=logical(o%do_fine), proj_maxiter=int(o%proj_maxiter), proj_level=int(o%proj_level), &
-                                                   branch_weight_s=real(o%branch_weight_s, wp), rho_grid_h=real(o%rho_grid_h, wp), &
-                                                                      wleb_prune_level=int(o%wleb_prune_level)), ctx=ctx)
+            & param=moist_cavity_drop_parameters_type( &
+            & num_leb=int(o%nleb), tolerance=real(o%tolerance, wp), &
+            & do_fine=logical(o%do_fine), proj_maxiter=int(o%proj_maxiter), &
+            & proj_level=int(o%proj_level), branch_weight_s=real(o%branch_weight_s, wp), &
+            & rho_grid_h=real(o%rho_grid_h, wp), wleb_prune_level=int(o%wleb_prune_level)), ctx=ctx)
       end select
       call prefix_api_error(error%ptr, "new_drop_cavity")
       if (allocated(error%ptr)) then
@@ -1621,7 +1656,7 @@ contains
       type(c_ptr), value, intent(in) :: options
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
-      type(api_pcm_options_v1_0) :: o
+      type(api_pcm_options) :: o
       handle = c_null_ptr
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -1629,7 +1664,7 @@ contains
       call read_pcm_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_cpcm_component")
       if (allocated(error%ptr)) return
-      handle = new_cpcm_component_api(verror, vcontext, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
+      handle = new_cpcm_component_api(verror, vcontext, epsilon, pcm_parameters_from_options(o))
    end function create_cpcm_component_api
 
    !> Create a cosmo component with optional solver settings
@@ -1650,7 +1685,7 @@ contains
       type(c_ptr), value, intent(in) :: options
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
-      type(api_pcm_options_v1_0) :: o
+      type(api_pcm_options) :: o
       handle = c_null_ptr
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -1658,8 +1693,228 @@ contains
       call read_pcm_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_cosmo_component")
       if (allocated(error%ptr)) return
-      handle = new_cosmo_component_api(verror, vcontext, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
+      handle = new_cosmo_component_api(verror, vcontext, epsilon, pcm_parameters_from_options(o))
    end function create_cosmo_component_api
+
+   !> Create a PCM component wrapper with validated numerical controls
+   subroutine begin_pcm_component(verror, vcontext, options, routine, component, param, ctx)
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      character(len=*), intent(in) :: routine
+      type(vp_component), pointer, intent(out) :: component
+      type(moist_pcm_parameters_type), intent(out) :: param
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer, intent(out) :: ctx
+      type(vp_error), pointer :: error
+      type(api_pcm_options) :: o
+      nullify (component, ctx)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      call read_pcm_options(options, o, error%ptr)
+      call prefix_api_error(error%ptr, routine)
+      if (allocated(error%ptr)) return
+      param = pcm_parameters_from_options(o)
+      allocate (component)
+      call acquire_context(vcontext, component%shared_ctx, ctx)
+   end subroutine begin_pcm_component
+
+   !> Return a constructed component or report its constructor error
+   subroutine finish_pcm_component(verror, routine, component, component_error, handle)
+      type(c_ptr), value, intent(in) :: verror
+      character(len=*), intent(in) :: routine
+      type(vp_component), pointer, intent(inout) :: component
+      type(error_type), allocatable, intent(in) :: component_error
+      type(c_ptr), intent(out) :: handle
+      type(vp_error), pointer :: error
+      handle = c_null_ptr
+      if (allocated(component_error)) then
+         call c_f_pointer(verror, error)
+         call api_error(error%ptr, routine, component_error%message)
+         call release_shared_context(component%shared_ctx)
+         deallocate (component)
+      else
+         handle = c_loc(component)
+      end if
+   end subroutine finish_pcm_component
+
+   !> Create a IEFPCM component with optional PCM controls
+   function create_iefpcm_component_api(verror, vcontext, epsilon, options) result(handle) &
+      & bind(C, name=namespace//"new_iefpcm_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_iefpcm_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_iefpcm :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_iefpcm)
+         call new_component_iefpcm(pcm, epsilon=real(epsilon, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_iefpcm_component", component, component_error, handle)
+   end function create_iefpcm_component_api
+
+   !> Create a SSVPE component with optional PCM controls
+   function create_ssvpe_component_api(verror, vcontext, epsilon, options) result(handle) &
+      & bind(C, name=namespace//"new_ssvpe_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_ssvpe_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_ssvpe :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_ssvpe)
+         call new_component_ssvpe(pcm, epsilon=real(epsilon, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_ssvpe_component", component, component_error, handle)
+   end function create_ssvpe_component_api
+
+   !> Create a DPCM component with optional PCM controls
+   function create_dpcm_component_api(verror, vcontext, epsilon, options) result(handle) &
+      & bind(C, name=namespace//"new_dpcm_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_dpcm_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_dpcm :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_dpcm)
+         call new_component_dpcm(pcm, epsilon=real(epsilon, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_dpcm_component", component, component_error, handle)
+   end function create_dpcm_component_api
+
+   !> Create a DPCM_ORIGINAL component with optional PCM controls
+   function create_dpcm_original_component_api(verror, vcontext, epsilon, options) result(handle) &
+      & bind(C, name=namespace//"new_dpcm_original_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_dpcm_original_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_dpcm_original :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_dpcm_original)
+         call new_component_dpcm_original(pcm, epsilon=real(epsilon, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_dpcm_original_component", component, component_error, handle)
+   end function create_dpcm_original_component_api
+
+   !> Create a LPB component with optional PCM controls
+   function create_lpb_component_api(verror, vcontext, epsilon, kappa, options) result(handle) &
+      & bind(C, name=namespace//"new_lpb_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon, kappa
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_lpb_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_lpb :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_lpb)
+         call new_component_lpb(pcm, epsilon=real(epsilon, wp), kappa=real(kappa, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_lpb_component", component, component_error, handle)
+   end function create_lpb_component_api
+
+   !> Create a SLIC component with optional PCM controls
+   function create_slic_component_api(verror, vcontext, epsilon, alpha, beta, gamma, mu, phi_static, options) result(handle) &
+      & bind(C, name=namespace//"new_slic_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: epsilon, alpha, beta, gamma, mu, phi_static
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_slic_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_slic :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_slic)
+         call new_component_slic(pcm, epsilon=real(epsilon, wp), alpha=real(alpha, wp), beta=real(beta, wp), &
+            & gamma=real(gamma, wp), mu=real(mu, wp), phi_static=real(phi_static, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_slic_component", component, component_error, handle)
+   end function create_slic_component_api
+
+   !> Create a NONLOCAL component with optional PCM controls
+   function create_nonlocal_component_api(verror, vcontext, eps_solvent, eps_inf, lambda, eps_solute, options) result(handle) &
+      & bind(C, name=namespace//"new_nonlocal_component")
+      type(c_ptr), value, intent(in) :: verror, options
+      !> Shared run context handle, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      real(c_double), value, intent(in) :: eps_solvent, eps_inf, lambda, eps_solute
+      type(c_ptr) :: handle
+      type(vp_component), pointer :: component
+      !> Borrowed context; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(error_type), allocatable :: component_error
+      handle = c_null_ptr
+      call begin_pcm_component(verror, vcontext, options, "new_nonlocal_component", component, param, ctx)
+      if (.not. associated(component)) return
+      allocate (model_continuum_component_nonlocal :: component%ptr)
+      select type (pcm => component%ptr)
+      type is (model_continuum_component_nonlocal)
+         call new_component_nonlocal(pcm, eps_solvent=real(eps_solvent, wp), eps_inf=real(eps_inf, wp), &
+            & lambda=real(lambda, wp), eps_solute=real(eps_solute, wp), &
+            & error=component_error, param=param, ctx=ctx)
+      end select
+      call finish_pcm_component(verror, "new_nonlocal_component", component, component_error, handle)
+   end function create_nonlocal_component_api
 
    !> Build a diagnostic tagged with its calling routine
    subroutine api_error(error, routine, msg)
@@ -2345,7 +2600,7 @@ contains
    end subroutine borrow_continuum_cavity
 
    !> Allocate either PCM-family component behind the common opaque handle
-   subroutine new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, &
+   subroutine new_pcm_component_common(verror, vcontext, epsilon, param, &
                                        use_cosmo, routine_name, vcomponent)
       !> Error handle
       type(c_ptr), value :: verror
@@ -2353,12 +2608,8 @@ contains
       type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
-      !> PCM solver enumeration
-      integer(c_int), value :: solver
-      !> Iterative solver residual threshold
-      real(c_double), value :: solver_tol
-      !> Iterative solver iteration cap
-      integer(c_int), value :: solver_maxiter
+      !> Numerical PCM controls
+      type(moist_pcm_parameters_type), intent(in) :: param
       !> Select COSMO rather than CPCM
       logical, intent(in) :: use_cosmo
       !> Public routine name used in error messages
@@ -2387,16 +2638,14 @@ contains
          select type (pcm => item)
          type is (model_continuum_component_cosmo)
             call new_component_cosmo(pcm, epsilon=real(epsilon, wp), error=component_error, &
-                                     param=moist_pcm_parameters_type(solver=int(solver), &
-                                     & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)), ctx=ctx)
+                                     param=param, ctx=ctx)
          end select
       else
          allocate (model_continuum_component_cpcm :: item)
          select type (pcm => item)
          type is (model_continuum_component_cpcm)
             call new_component_cpcm(pcm, epsilon=real(epsilon, wp), error=component_error, &
-                                    param=moist_pcm_parameters_type(solver=int(solver), &
-                                    & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)), ctx=ctx)
+                                    param=param, ctx=ctx)
          end select
       end if
       if (allocated(component_error)) then
@@ -2411,43 +2660,35 @@ contains
    end subroutine new_pcm_component_common
 
    !> Create a CPCM component handle for use with a continuum model
-   function new_cpcm_component_api(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
+   function new_cpcm_component_api(verror, vcontext, epsilon, param) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
       !> Shared run context handle, or NULL
       type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
-      !> PCM linear-solver selector
-      integer(c_int), value :: solver
-      !> Iterative solver residual threshold
-      real(c_double), value :: solver_tol
-      !> Iterative solver iteration cap
-      integer(c_int), value :: solver_maxiter
+      !> Numerical PCM controls
+      type(moist_pcm_parameters_type), intent(in) :: param
       type(c_ptr) :: vcomponent
 
-      call new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, .false., &
+      call new_pcm_component_common(verror, vcontext, epsilon, param, .false., &
                                     "new_cpcm_component", vcomponent)
 
    end function new_cpcm_component_api
 
    !> Create a COSMO component handle for use with a continuum model
-   function new_cosmo_component_api(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
+   function new_cosmo_component_api(verror, vcontext, epsilon, param) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
       !> Shared run context handle, or NULL
       type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
-      !> PCM linear-solver selector
-      integer(c_int), value :: solver
-      !> Iterative solver residual threshold
-      real(c_double), value :: solver_tol
-      !> Iterative solver iteration cap
-      integer(c_int), value :: solver_maxiter
+      !> Numerical PCM controls
+      type(moist_pcm_parameters_type), intent(in) :: param
       type(c_ptr) :: vcomponent
 
-      call new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, .true., &
+      call new_pcm_component_common(verror, vcontext, epsilon, param, .true., &
                                     "new_cosmo_component", vcomponent)
 
    end function new_cosmo_component_api
@@ -3652,86 +3893,6 @@ contains
                         "Supplied cavity is not a DROP cavity")
       end select
    end subroutine get_drop_cavity_tolerance_api
-
-   !> Assemble A-matrix and compute xi values
-   !>
-   !> - call before accessing xi values or using the A-matrix
-   !> - `ngrid_cap` is the caller's allocated grid capacity, at least the
-   !>   cavity's own ngrid
-   subroutine assemble_amat_api(verror, vcav, ngrid_cap, amat0, xi) &
-         & bind(C, name=namespace//"assemble_amat")
-      !> Required diagnostic handle
-      type(c_ptr), value :: verror
-      !> Cavity handle
-      type(c_ptr), value :: vcav
-      !> Allocated grid-point capacity
-      integer(c_int), value :: ngrid_cap
-      !> PCM interaction matrix
-      real(c_double), intent(inout), optional :: amat0(ngrid_cap, ngrid_cap)
-      !> Gaussian inverse widths
-      real(c_double), intent(inout), optional :: xi(ngrid_cap)
-      !> Decoded error handle for argument validation
-      type(vp_error), pointer :: error
-      type(vp_cavity), pointer :: cav
-      real(wp), allocatable :: amat0_local(:, :)
-      type(error_type), allocatable :: cavity_error
-      integer :: ngrid
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      if (.not. present(amat0)) then
-         call api_error(error%ptr, "assemble_amat", "Required pointer 'amat0' is missing")
-         return
-      end if
-      if (.not. present(xi)) then
-         call api_error(error%ptr, "assemble_amat", "Required pointer 'xi' is missing")
-         return
-      end if
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "assemble_amat", "DROP cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "assemble_amat", "DROP cavity is not initialized")
-         return
-      end if
-
-      associate (cavity => cav%ptr)
-         if (.not. cavity%is_built()) then
-            call api_error(error%ptr, "assemble_amat", unbuilt_cavity_message)
-            return
-         end if
-         ngrid = cavity%ngrid
-         if (ngrid_cap < ngrid) then
-            call api_error(error%ptr, "assemble_amat", &
-                           "Array capacity is too small - use ngrid value from get_cavity_sizes")
-            return
-         end if
-         if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) &
-             .or. .not. allocated(cavity%xyz)) then
-            call api_error(error%ptr, "assemble_amat", &
-                           "Cavity does not expose Gaussian surface widths")
-            return
-         end if
-
-         ! Generic Gaussian surface-charge interaction matrix
-         allocate (amat0_local(ngrid, ngrid))
-         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat0_local, cavity_error, &
-                                nthreads=cavity_num_threads(cavity))
-         if (allocated(cavity_error)) then
-            call api_error(error%ptr, "assemble_amat", cavity_error%message)
-            return
-         end if
-
-         ! Copy results to output arrays
-         amat0(:ngrid, :ngrid) = amat0_local(:, :)
-         xi(:cavity%ngrid) = cavity%xi0
-      end associate
-
-   end subroutine assemble_amat_api
 
    !> Return Gaussian widths and switching factors for a Gaussian PCM cavity
    subroutine get_cavity_gaussian_api(verror, vcav, ngrid_cap, c_xi, c_f) &
@@ -5772,7 +5933,7 @@ contains
    end function fetch_request_field
 
    !* ================================================================================= *!
-   !*                       Cavity and A-matrix gradients (Tier 3)                      *!
+   !*                            Cavity gradients (Tier 3)                              *!
    !* ================================================================================= *!
 
    !> Compute cavity gradient w.r.t. nuclear coordinates
@@ -6103,269 +6264,6 @@ contains
       end select
 
    end subroutine get_cavity_gradient_api
-
-   !> Assemble the Gaussian PCM A-matrix together with its nuclear derivatives
-   !>
-   !> - call compute_cavity_gradient first for the gradient
-   !> - arrays in Fortran shape notation (column-major: the leftmost index is
-   !>   contiguous); a C caller passes flat buffers of the same total size:
-   !>   Amat0(ngrid, ngrid)                  - A-matrix (symmetric)
-   !>   Amat1_rA(3, nsph, ngrid, ngrid)      - gradient of A-matrix
-   !>   xi(ngrid)                            - xi values
-   subroutine get_amat_gradient_api(verror, vcav, nsph_cap, ngrid_cap, &
-         & Amat0, Amat1_rA, xi) &
-         & bind(C, name=namespace//"get_amat_gradient")
-      !> Required diagnostic handle
-      type(c_ptr), value :: verror
-      !> Cavity handle
-      type(c_ptr), value :: vcav
-      !> Allocated sphere capacity
-      integer(c_int), value :: nsph_cap
-      !> Allocated grid-point capacity
-      integer(c_int), value :: ngrid_cap
-      !> PCM interaction matrix
-      real(c_double), intent(inout), optional :: Amat0(ngrid_cap, ngrid_cap)
-      !> PCM matrix derivatives with respect to nuclear coordinates
-      real(c_double), intent(inout), optional :: Amat1_rA(3, nsph_cap, ngrid_cap, ngrid_cap)
-      !> Gaussian inverse widths
-      real(c_double), intent(inout), optional :: xi(ngrid_cap)
-      !> Decoded error handle for argument validation
-      type(vp_error), pointer :: error
-      type(vp_cavity), pointer :: cav
-      type(error_type), allocatable :: cavity_error
-      real(wp), allocatable :: Amat0_f(:, :)
-      real(wp), allocatable :: Amat1_rA_f(:, :, :, :)
-      integer :: ngrid, nsph
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      if (.not. present(Amat0)) then
-         call api_error(error%ptr, "get_amat_gradient", "Required pointer 'Amat0' is missing")
-         return
-      end if
-      if (.not. present(Amat1_rA)) then
-         call api_error(error%ptr, "get_amat_gradient", "Required pointer 'Amat1_rA' is missing")
-         return
-      end if
-      if (.not. present(xi)) then
-         call api_error(error%ptr, "get_amat_gradient", "Required pointer 'xi' is missing")
-         return
-      end if
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "get_amat_gradient", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "get_amat_gradient", "Cavity is not initialized")
-         return
-      end if
-
-      associate (cavity => cav%ptr)
-         if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) &
-             .or. .not. allocated(cavity%xyz)) then
-            call api_error(error%ptr, "get_amat_gradient", &
-                           "Cavity does not provide a Gaussian PCM surface")
-            return
-         end if
-         if (.not. allocated(cavity%xi1_rA) .or. .not. allocated(cavity%f1_rA) &
-             .or. .not. allocated(cavity%xyz1_rA)) then
-            call api_error(error%ptr, "get_amat_gradient", &
-                           "Gradient not computed - call compute_cavity_gradient first")
-            return
-         end if
-
-         ngrid = cavity%ngrid
-         nsph = cavity%nsph
-
-         if (ngrid_cap < ngrid .or. nsph_cap < nsph) then
-            call api_error(error%ptr, "get_amat_gradient", &
-                           "Array capacity is too small - use get_cavity_sizes")
-            return
-         end if
-
-         allocate (Amat0_f(ngrid, ngrid), Amat1_rA_f(3, nsph, ngrid, ngrid))
-         call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
-                                              cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
-                                              Amat0_f, Amat1_rA_f, cavity_error, &
-                                              nthreads=cavity_num_threads(cavity))
-         if (allocated(cavity_error)) then
-            call api_error(error%ptr, "get_amat_gradient", cavity_error%message)
-            return
-         end if
-
-         Amat0(:ngrid, :ngrid) = Amat0_f(:, :)
-         Amat1_rA(:, :nsph, :ngrid, :ngrid) = Amat1_rA_f(:, :, :, :)
-         xi(:ngrid) = cavity%xi0(:)
-      end associate
-
-   end subroutine get_amat_gradient_api
-
-   !> Contract Gaussian PCM A-matrix derivatives with two grid vectors
-   !>
-   !> - grad_rA = sum_ij q1_i (dA_ij/dR_A) q2_j
-   !> - call compute_cavity_gradient first
-   subroutine contract_amat1_q1q2_rA_api(verror, vcav, c_q1, c_q2, c_grad_rA) &
-         & bind(C, name=namespace//"contract_amat1_q1q2_rA")
-      !> Diagnostic handle
-      type(c_ptr), value :: verror
-      type(vp_error), pointer :: error
-      !> Cavity handle
-      type(c_ptr), value :: vcav
-      type(vp_cavity), pointer :: cav
-      !> First contraction vector, length ngrid
-      type(c_ptr), value :: c_q1
-      !> Second contraction vector, length ngrid
-      type(c_ptr), value :: c_q2
-      !> Output nuclear gradient, C shape (natoms,3)
-      type(c_ptr), value :: c_grad_rA
-      real(c_double), pointer :: q1(:)
-      real(c_double), pointer :: q2(:)
-      real(c_double), pointer :: grad_rA(:, :)
-      type(error_type), allocatable :: cavity_error
-      integer :: ngrid, nsph
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "contract_amat1_q1q2_rA", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "contract_amat1_q1q2_rA", "Cavity is not initialized")
-         return
-      end if
-
-      associate (cavity => cav%ptr)
-         if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) &
-             .or. .not. allocated(cavity%xyz) .or. .not. allocated(cavity%xi1_rA) &
-             .or. .not. allocated(cavity%f1_rA) .or. .not. allocated(cavity%xyz1_rA)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_rA", &
-                           "Gaussian PCM derivatives are unavailable - "// &
-                           "call compute_cavity_gradient first")
-            return
-         end if
-
-         ngrid = cavity%ngrid
-         nsph = cavity%nsph
-
-         if (.not. c_associated(c_q1) .or. .not. c_associated(c_q2) .or. .not. c_associated(c_grad_rA)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_rA", "Null array pointer provided")
-            return
-         end if
-
-         call c_f_pointer(c_q1, q1, [ngrid])
-         call c_f_pointer(c_q2, q2, [ngrid])
-         call c_f_pointer(c_grad_rA, grad_rA, [3, nsph])
-
-         block
-            !> Gaussian-surface adjoint channels of q1^T dA q2
-            real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
-
-            allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
-            call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, &
-                                          q1, q2, w_xi, w_f, w_xyz, cavity_error, &
-                                          nthreads=cavity_num_threads(cavity))
-            if (.not. allocated(cavity_error)) then
-               call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, &
-                                              cavity%xyz1_rA, w_xi, w_f, w_xyz, &
-                                              grad_rA, cavity_error, &
-                                              nthreads=cavity_num_threads(cavity))
-            end if
-         end block
-         if (allocated(cavity_error)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_rA", cavity_error%message)
-            return
-         end if
-      end associate
-
-   end subroutine contract_amat1_q1q2_rA_api
-
-   !> Contract Gaussian PCM A-matrix derivatives to per-grid surface weights
-   !>
-   !> - weights w_xi, w_f and w_xyz satisfying
-   !>   q1^T dA q2 = sum_i w_xi_i dxi_i + w_f_i df_i + w_xyz(:,i).dxyz_i
-   subroutine contract_amat1_q1q2_surface_weights_api(verror, vcav, c_q1, c_q2, &
-         & c_w_xi, c_w_f, c_w_xyz) &
-         & bind(C, name=namespace//"contract_amat1_q1q2_surface_weights")
-      !> Diagnostic handle
-      type(c_ptr), value :: verror
-      type(vp_error), pointer :: error
-      !> Cavity handle
-      type(c_ptr), value :: vcav
-      type(vp_cavity), pointer :: cav
-      !> First contraction vector, length ngrid
-      type(c_ptr), value :: c_q1
-      !> Second contraction vector, length ngrid
-      type(c_ptr), value :: c_q2
-      !> Gaussian-width weights, length ngrid
-      type(c_ptr), value :: c_w_xi
-      !> Switching-factor weights, length ngrid
-      type(c_ptr), value :: c_w_f
-      !> Surface-position weights, C shape (ngrid,3)
-      type(c_ptr), value :: c_w_xyz
-      real(c_double), pointer :: q1(:)
-      real(c_double), pointer :: q2(:)
-      real(c_double), pointer :: w_xi(:)
-      real(c_double), pointer :: w_f(:)
-      real(c_double), pointer :: w_xyz(:, :)
-      type(error_type), allocatable :: cavity_error
-      integer :: ngrid
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", "Cavity is not initialized")
-         return
-      end if
-
-      associate (cavity => cav%ptr)
-         if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) &
-             .or. .not. allocated(cavity%xyz)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", &
-                           "Cavity does not provide a Gaussian PCM surface")
-            return
-         end if
-
-         ngrid = cavity%ngrid
-
-         if (.not. c_associated(c_q1) .or. .not. c_associated(c_q2) &
-             .or. .not. c_associated(c_w_xi) .or. .not. c_associated(c_w_f) &
-             .or. .not. c_associated(c_w_xyz)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", "Null array pointer provided")
-            return
-         end if
-
-         call c_f_pointer(c_q1, q1, [ngrid])
-         call c_f_pointer(c_q2, q2, [ngrid])
-         call c_f_pointer(c_w_xi, w_xi, [ngrid])
-         call c_f_pointer(c_w_f, w_f, [ngrid])
-         call c_f_pointer(c_w_xyz, w_xyz, [3, ngrid])
-
-         call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, &
-                                       q1, q2, w_xi, w_f, w_xyz, cavity_error, &
-                                       nthreads=cavity_num_threads(cavity))
-         if (allocated(cavity_error)) then
-            call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", cavity_error%message)
-            return
-         end if
-      end associate
-
-   end subroutine contract_amat1_q1q2_surface_weights_api
 
    !> Contract the original DROP surface channels to LSF adjoint weights
    !>
