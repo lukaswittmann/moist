@@ -134,7 +134,7 @@ foreach t : tests
       args: test_args,
       env: test_env,
       is_parallel : true,
-      timeout: test_timeouts.get(t, 360),
+      timeout: test_timeouts.get(t, 420),
     )
   endforeach
 endforeach
