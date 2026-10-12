@@ -105,7 +105,7 @@ module moist_model_moz_potential_electrostatic_solvent
    character(len=solvent_choice_len), parameter :: multipole_models(1) = [character(len=solvent_choice_len) :: "mbis"]
 
    ! ifx workaround: protected, not parameter; ifx 2025.1-2025.3 fails copies of derived-type
-   ! constants with allocatable components (forrtl 189); revert to parameter once ifx is fixed
+   ! constants with allocatable components (forrtl 189); TODO: revert to parameter once ifx is fixed
    !> Hirshfeld table charges, gas phase
    type(solvent_charges_type), protected :: coulomb_hirshfeld_gas = &
       & solvent_charges_type(environment="gas", model="hirshfeld")
