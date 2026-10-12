@@ -17,7 +17,6 @@ jobs:
   coverage:
     name: coverage (${{ matrix.leg.name }})
     runs-on: ubuntu-24.04
-    # A slow runner once took 34 min in the coupling tests (per-test cap: 4 x 360 s)
     timeout-minutes: 45
     strategy:
       fail-fast: false
