@@ -9,9 +9,9 @@ module test_radii
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_data_radii_legacy, only: get_radius_func, rad_type
    use moist_radii, only: radius_type, radius_type_static, radius_type_custom, default_cpcm_radii
-   use moist_radii_static, only: new_rahm_radii, new_gauss_radii
+   use moist_radii_static, only: new_rahm_radii
    use moist_radii, only: new_cpcm_radii, new_smd_radii, new_d3_radii
-   use moist_radii, only: new_cosmo_radii, new_bondi_radii
+   use moist_radii, only: new_cosmo_radii, new_bondi_radii, new_gauss_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
@@ -41,15 +41,22 @@ contains
                   new_unittest("custom_radii_elements_works", test_custom_elements_dropcess), &
                   new_unittest("custom_radii_cavity_integration", test_custom_radii_cavity_integration), &
                   new_unittest("custom_radii_atoms_bad_empty", test_custom_atoms_empty_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_atoms_bad_value", test_custom_atoms_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_atoms_bad_nat", test_custom_atoms_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_elements_bad_empty", test_custom_elements_empty_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_elements_bad_size", test_custom_elements_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_elements_bad_z", test_custom_elements_invalid_z_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_elements_bad_value", test_custom_elements_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("custom_radii_elements_bad_duplicate", test_custom_elements_duplicate_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_value", test_custom_atoms_nonpositive_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_nat", test_custom_atoms_size_mismatch_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_empty", test_custom_elements_empty_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_size", test_custom_elements_size_mismatch_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_z", test_custom_elements_invalid_z_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_value", test_custom_elements_nonpositive_fails, &
+                     should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_duplicate", test_custom_elements_duplicate_fails, &
+                     should_fail=.true.), &
                   new_unittest("custom_radii_elements_missing", test_custom_elements_missing_for_molecule_fails, &
-                               should_fail=.true.), &
+                     should_fail=.true.), &
                   new_unittest("custom_radii_string_guidance", test_custom_string_guidance, should_fail=.true.) &
                   ]
    end subroutine collect_radii
@@ -511,8 +518,10 @@ contains
       class(radius_type), allocatable :: model
       type(moist_error_type), allocatable :: err
       integer :: i
-      integer, parameter :: tags(5) = [rad_type%cpcm, rad_type%smd, rad_type%d3, rad_type%cosmo, rad_type%bondi]
-      character(len=8), parameter :: names(5) = [character(len=8) :: " CPCM ", " SMD ", " D3 ", " COSMO ", " BONDI "]
+      integer, parameter :: tags(6) = [rad_type%cpcm, rad_type%smd, rad_type%d3, &
+                                     rad_type%cosmo, rad_type%bondi, rad_type%gauss]
+      character(len=8), parameter :: names(6) = &
+         [character(len=8) :: " CPCM ", " SMD ", " D3 ", " COSMO ", " BONDI ", " GAUSS "]
 
       do i = 1, size(tags)
          select case (i)
@@ -526,6 +535,8 @@ contains
             call new_cosmo_radii(static_model)
          case (5)
             call new_bondi_radii(static_model)
+         case (6)
+            call new_gauss_radii(static_model)
          case default
             call test_failed(error, "invalid static constructor index")
             return
@@ -554,9 +565,6 @@ contains
       if (allocated(error)) return
       call new_rahm_radii(static_model)
       call check(error, static_model%model_tag, rad_type%rahm, more="Rahm selector")
-      if (allocated(error)) return
-      call new_gauss_radii(static_model)
-      call check(error, static_model%model_tag, rad_type%gauss, more="Gaussian selector")
       if (allocated(error)) return
       call new_radii(-99, model, err)
       call check(error, allocated(err), more="unknown integer tag must fail")

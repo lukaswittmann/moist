@@ -762,6 +762,11 @@ contains
       !* ------------------------------ Projection phase ------------------------------ *!
       call self%ctx%timer%start("Projector", category=cat_solve)
       call self%project_all_points(error)
+      if (.not. allocated(error)) then
+         call self%lsf_model%check_surface(self%xyz(:, 1:self%ngrid), &
+                                           self%converged(1:self%ngrid) .and. &
+                                           self%f(1:self%ngrid) >= self%param%wleb_cut, error)
+      end if
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
          return

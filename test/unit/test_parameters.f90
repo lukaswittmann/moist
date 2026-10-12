@@ -716,10 +716,13 @@ contains
       if (allocated(error)) return
       call check(error, cfc%m, 6)
       if (allocated(error)) return
-      call configured(rho, '{"rho_iso":0.004,"scale":120,"log_grad_out":6,"log_grad_cusp":3,"exclusion_cap":4}', error)
+      call configured(rho, '{"rho_iso":0.004,"scale":120,"log_grad_out":6,"log_grad_cusp":3,"exclusion_cap":4,' &
+         //'"core_fill":false,"core_radius_fraction":0.3}', error)
       if (allocated(error)) return
-      call check(error, maxval(abs([rho%rho_iso, rho%scale, rho%log_grad_out, rho%log_grad_cusp, rho%exclusion_cap] - &
-         [0.004_wp, 120.0_wp, 6.0_wp, 3.0_wp, 4.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, maxval(abs([rho%rho_iso, rho%scale, rho%log_grad_out, rho%log_grad_cusp, rho%exclusion_cap, &
+         rho%core_radius_fraction] - [0.004_wp, 120.0_wp, 6.0_wp, 3.0_wp, 4.0_wp, 0.3_wp])), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, .not. rho%core_fill, more="core_fill read from JSON")
       if (allocated(error)) return
       call configured(pcm, '{"solver":2,"solver_tol":0.00002,"solver_maxiter":71}', error)
       if (allocated(error)) return
@@ -930,9 +933,11 @@ contains
       call check(error, cfc%m, 6)
       if (allocated(error)) return
       call rho%new(rho_iso=0.004_wp, scale=120.0_wp, log_grad_out=6.0_wp, log_grad_cusp=3.0_wp, exclusion_cap=4.0_wp)
-      call rho%new(scale=150.0_wp)
-      call check(error, maxval(abs([rho%rho_iso, rho%scale, rho%log_grad_out, rho%log_grad_cusp, rho%exclusion_cap] - &
-         [0.004_wp, 150.0_wp, 6.0_wp, 3.0_wp, 4.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call rho%new(scale=150.0_wp, core_fill=.false., core_radius_fraction=0.3_wp)
+      call check(error, maxval(abs([rho%rho_iso, rho%scale, rho%log_grad_out, rho%log_grad_cusp, rho%exclusion_cap, &
+         rho%core_radius_fraction] - [0.004_wp, 150.0_wp, 6.0_wp, 3.0_wp, 4.0_wp, 0.3_wp])), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, .not. rho%core_fill, more="core_fill override")
    end subroutine test_optional_overrides
 
 end module test_parameters

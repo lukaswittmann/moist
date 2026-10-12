@@ -23,6 +23,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
       isodensity_max_nuclear_charge
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type
    use moist_output_format, only: format_string
    implicit none(type, external)
    private
@@ -84,6 +85,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
+      !> Core fill of the ECP nuclei in the bound structure
+      type(moist_iso_core_fill_type) :: core
    contains
       procedure, public :: new => lsf_new
       procedure, public :: update => lsf_update
@@ -100,6 +103,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
+      procedure, public :: check_surface => lsf_check_surface
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
 contains
@@ -143,6 +147,7 @@ contains
 
       call lsf_base_update(self, mol, radii)
       self%zmax = isodensity_max_nuclear_charge(mol)
+      call self%core%update(mol, radii, self%param)
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point
@@ -161,6 +166,9 @@ contains
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
       integer(c_int) :: status
+      !> Host density with the ECP core fill, and the fill ball holding the point
+      real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
+      integer :: inside
 
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
@@ -194,18 +202,24 @@ contains
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if
+      rho = real(c_rho, wp)
+      drho = real(c_drho, wp)
+      if (want_hess) d2rho = real(c_d2rho, wp)
+      if (want_third) d3rho = real(c_d3rho, wp)
+      call self%core%add(point, self%prepared_deriv, rho, drho, d2rho, d3rho, inside=inside)
+      call self%core%check(inside, rho, error)
       ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
       ! derivative inherits the sign flip; identical by construction to the lift
       ! in [[moist_cavity_drop_lsf_isodensity_internal]]
-      self%value = self%param%scale*(self%param%rho_iso - real(c_rho, wp))
-      self%grad = -self%param%scale*real(c_drho, wp)
+      self%value = self%param%scale*(self%param%rho_iso - rho)
+      self%grad = -self%param%scale*drho
       if (want_hess) then
-         self%hess = -self%param%scale*real(c_d2rho, wp)
+         self%hess = -self%param%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (want_third) then
-         self%third = -self%param%scale*real(c_d3rho, wp)
+         self%third = -self%param%scale*d3rho
       else
          self%third = 0.0_wp
       end if
@@ -384,7 +398,7 @@ contains
       !> Surface-free radius
       real(wp) :: r
 
-      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0, self%core%log_grad_bound())
    end function lsf_exclusion_radius
 
    !> Chain-rule factor between the level set and the density it is built from
@@ -407,5 +421,20 @@ contains
       factor = -self%param%scale
       available = .true.
    end function lsf_density_adjoint_factor
+
+   !> Reject projected surface points inside an ECP core fill
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  xyz       Cavity points in Bohr (3, n)
+   !> @param[in]  projected Whether each point is a converged surface projection (n)
+   !> @param[out] error     Set at the first projected point inside a fill ball
+   subroutine lsf_check_surface(self, xyz, projected, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      real(wp), intent(in) :: xyz(:, :)
+      logical, intent(in) :: projected(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%core%check_surface(xyz, projected, error)
+   end subroutine lsf_check_surface
 
 end module moist_cavity_drop_lsf_isodensity_callback

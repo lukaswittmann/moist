@@ -69,8 +69,9 @@ Radii and density sources
 -------------------------
 
 Available radii are ``CPCMRadii``, ``SMDRadii``, ``D3Radii``, ``COSMORadii``,
-``BondiRadii`` and ``CustomRadii``. Omitted radii select CPCM. Custom radii are
-in bohr, specified either in molecular atom order or by atomic number:
+``BondiRadii``, ``GaussRadii`` and ``CustomRadii``. ``GaussRadii`` uses the Gaussian
+charge scheme table, including its 1.2 scale factor. Omitted radii select CPCM.
+Custom radii are in bohr, specified either in molecular atom order or by atomic number:
 
 .. code-block:: python
 

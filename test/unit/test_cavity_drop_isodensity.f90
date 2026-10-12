@@ -36,7 +36,7 @@ module test_cavity_drop_isodensity
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
+   use test_helpers, only: fd4_scalar, fd4_offsets, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
@@ -47,6 +47,10 @@ module test_cavity_drop_isodensity
    use moist_cavity_drop_lsf_isodensity_callback, only: &
       moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
+   use moist_context, only: moist_context_type, new_context
    use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
    implicit none(type, external)
    private
@@ -178,7 +182,17 @@ contains
                   new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
-                  new_unittest("exclusion_radius_ignores_zeff", test_exclusion_radius_zeff) &
+                  new_unittest("exclusion_radius_ignores_zeff", test_exclusion_radius_zeff), &
+                  new_unittest("core_fill_removes_dip", test_core_fill_dip), &
+                  new_unittest("core_fill_fd", test_core_fill_fd), &
+                  new_unittest("core_fill_callback_matches_internal", test_core_fill_callback), &
+                  new_unittest("core_fill_guard", test_core_fill_guard), &
+                  new_unittest("core_fill_certificate", test_core_fill_certificate), &
+                  new_unittest("core_fill_cavity_unchanged", test_core_fill_cavity), &
+                  new_unittest("core_fill_surface_check", test_core_fill_surface), &
+                  new_unittest("core_fill_surface_check_callback", test_core_fill_surface_callback), &
+                  new_unittest("core_fill_skipped_anchor", test_core_fill_skipped_anchor), &
+                  new_unittest("core_fill_certificate_bound", test_core_fill_certificate_bound) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1446,7 +1460,8 @@ contains
    !> The interior certificate reads the atomic numbers, never `z_eff`
    !>
    !> ECP pseudo-densities exceed the cusp bound of `z_eff` but stay below that
-   !> of `Z`, so a structure with ECP charges certifies what one without does
+   !> of `Z`, so a structure with ECP charges certifies what one without does;
+   !> the core fill, which does depend on `z_eff`, is off
    subroutine test_exclusion_radius_zeff(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1460,6 +1475,7 @@ contains
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
       if (allocated(error)) return
       allocate (radii(mol%nat), source=2.0_wp)
+      lsf%param%core_fill = .false.
 
       ! Interior value at unit log contrast, rho = e*rho_iso
       s_in = lsf%param%scale*lsf%param%rho_iso*(1.0_wp - exp(1.0_wp))
@@ -1485,6 +1501,729 @@ contains
       call check(error, r_ecp_cb, r_bare, thr=0.0_wp, &
                  more="z_eff must not enter the callback cusp bound")
    end subroutine test_exclusion_radius_zeff
+
+   !* =================================================================================== *!
+   !*                                  ECP core fill                                      *!
+   !* =================================================================================== *!
+
+   !> Pseudo-atom LSF whose density vanishes at its nucleus
+   !>
+   !> One d shell of exponent 1/2 with every cartesian component weighted once,
+   !> so `rho ~ r^4` dips below `rho_iso` at the nucleus as an ECP pseudo-density
+   !> does; at the default isovalue the outer surface lies near 3.4 Bohr
+   !>
+   !> @param[inout] lsf       Internal isodensity LSF
+   !> @param[in]    number    Atomic number
+   !> @param[in]    z_eff     Effective nuclear charge; below `number` marks an ECP
+   !> @param[in]    core_fill Whether the ECP core fill is on
+   !> @param[out]   mol       Single atom at the origin
+   !> @param[out]   error     Set when the basis or density is rejected
+   !> @param[in]    rho_iso   Isovalue (default 1e-3)
+   !> @param[in]    core_radius_fraction Fill radius as a fraction of the atom's radius
+   subroutine build_pseudo_atom_lsf(lsf, number, z_eff, core_fill, mol, error, rho_iso, core_radius_fraction)
+      type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf
+      integer, intent(in) :: number, z_eff
+      logical, intent(in) :: core_fill
+      type(structure_type), intent(out) :: mol
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: rho_iso
+      real(wp), intent(in), optional :: core_radius_fraction
+
+      type(mctc_error), allocatable :: merr
+      type(moist_cavity_drop_lsf_isodensity_param_type) :: param
+      real(wp) :: dcart(6, 6)
+      integer :: i
+
+      call new(mol, [number], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[z_eff])
+      param = moist_cavity_drop_lsf_isodensity_param_type(core_fill=core_fill)
+      if (present(rho_iso)) then
+         param%rho_iso = rho_iso
+         param%scale = 1.0_wp/rho_iso
+      end if
+      if (present(core_radius_fraction)) param%core_radius_fraction = core_radius_fraction
+      call lsf%new(sh_atom=[1], sh_l=[2], sh_nprim=[1], exps=[0.5_wp], coeffs=[1.0_wp], &
+                   error=merr, param=param)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      dcart = 0.0_wp
+      do i = 1, 6
+         dcart(i, i) = 1.0_wp
+      end do
+      call lsf%set_density(dcart, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call lsf%update(mol, [4.0_wp])
+   end subroutine build_pseudo_atom_lsf
+
+   !> Unit probe directions, axes and diagonals
+   pure function core_fill_dirs() result(dirs)
+      real(wp) :: dirs(ndim, 7)
+      integer :: i
+
+      dirs = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, &
+                      1.0_wp, 1.0_wp, 1.0_wp, 1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, 1.0_wp, 0.3_wp, &
+                      0.2_wp, -0.7_wp, -1.0_wp], [ndim, 7])
+      do i = 1, 7
+         dirs(:, i) = dirs(:, i)/norm2(dirs(:, i))
+      end do
+   end function core_fill_dirs
+
+   !> The fill closes the dip of an ECP nucleus and leaves everything else alone
+   !>
+   !> - without the fill the nucleus lies outside the cavity: the dip itself
+   !> - with it, the whole fill ball lies inside
+   !> - beyond the ball, value and derivatives are bitwise those without the fill
+   !> - an all-electron nucleus (`z_eff = Z`) is never filled
+   subroutine test_core_fill_dip(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_off, lsf_on, lsf_ae
+      type(structure_type) :: mol
+      real(wp) :: dirs(ndim, 7), point(ndim), r, s_off, s_on
+      integer :: idir, istep
+
+      call build_pseudo_atom_lsf(lsf_off, 54, 8, .false., mol, error)
+      if (allocated(error)) return
+      call build_pseudo_atom_lsf(lsf_on, 54, 8, .true., mol, error)
+      if (allocated(error)) return
+      call build_pseudo_atom_lsf(lsf_ae, 54, 54, .true., mol, error)
+      if (allocated(error)) return
+      call lsf_off%set_max_deriv(4)
+      call lsf_on%set_max_deriv(4)
+      call lsf_ae%set_max_deriv(4)
+
+      call prepare_internal(lsf_off, [0.0_wp, 0.0_wp, 0.0_wp], error)
+      if (allocated(error)) return
+      call lsf_off%f0(s_off)
+      call check(error, s_off > 0.0_wp, more="the pseudo-atom must dip below rho_iso at its nucleus")
+      if (allocated(error)) return
+
+      dirs = core_fill_dirs()
+      do idir = 1, size(dirs, 2)
+         do istep = 0, 100
+            r = 0.05_wp*real(istep, wp)
+            point = r*dirs(:, idir)
+            call prepare_internal(lsf_on, point, error)
+            if (allocated(error)) return
+            call lsf_on%f0(s_on)
+            ! r = 2 itself rounds to either side of the cutoff
+            if (r < 1.99_wp) then
+               if (.not. (s_on < 0.0_wp)) then
+                  call test_failed(error, "the core fill ball must lie inside the cavity")
+                  return
+               end if
+            else if (r > 2.01_wp) then
+               call check_lsf_identical(error, lsf_on, lsf_off, point, "beyond the fill cutoff")
+               if (allocated(error)) return
+            end if
+            call check_lsf_identical(error, lsf_ae, lsf_off, point, "all-electron nucleus")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_core_fill_dip
+
+   !> Value and every spatial derivative of two LSFs agree bitwise at a point
+   subroutine check_lsf_identical(error, lsf_a, lsf_b, point, what)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf_a, lsf_b
+      real(wp), intent(in) :: point(ndim)
+      character(len=*), intent(in) :: what
+
+      real(wp) :: v(2), g(ndim, 2), h(ndim, ndim, 2), t(ndim, ndim, ndim, 2)
+      real(wp) :: f4(ndim, ndim, ndim, ndim, 2)
+
+      call prepare_internal(lsf_a, point, error)
+      if (allocated(error)) return
+      call lsf_a%f3_rrr(v(1), g(:, 1), h(:, :, 1), t(:, :, :, 1))
+      call lsf_a%f4_rrrr(f4(:, :, :, :, 1))
+      call prepare_internal(lsf_b, point, error)
+      if (allocated(error)) return
+      call lsf_b%f3_rrr(v(2), g(:, 2), h(:, :, 2), t(:, :, :, 2))
+      call lsf_b%f4_rrrr(f4(:, :, :, :, 2))
+      if (v(1) /= v(2) .or. any(g(:, 1) /= g(:, 2)) .or. any(h(:, :, 1) /= h(:, :, 2)) &
+          .or. any(t(:, :, :, 1) /= t(:, :, :, 2)) .or. any(f4(:, :, :, :, 1) /= f4(:, :, :, :, 2))) then
+         call test_failed(error, "core fill changed the level set: "//what)
+      end if
+   end subroutine check_lsf_identical
+
+   !> Every derivative of the filled level set matches a 4-point central FD of
+   !> the order below, where the fill dominates and where it fades out
+   subroutine test_core_fill_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> FD step, small against the 2 Bohr scale of the fill
+      real(wp), parameter :: h = 1.0e-4_wp
+      !> Relative tolerance against the largest entry of each derivative
+      real(wp), parameter :: rtol = 1.0e-8_wp
+      real(wp), parameter :: radii(4) = [0.25_wp, 0.6_wp, 0.95_wp, 1.4_wp]
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf, lsf_off
+      type(structure_type) :: mol
+      real(wp) :: dirs(ndim, 7), x0(ndim), x(ndim), fd, ref, v_off
+      real(wp) :: v0, g0(ndim), h0(ndim, ndim), t0(ndim, ndim, ndim), q0(ndim, ndim, ndim, ndim)
+      real(wp) :: v(4), g(ndim, 4), hh(ndim, ndim, 4), t(ndim, ndim, ndim, 4)
+      integer :: ir, ax, k, i, j, l
+
+      call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error)
+      if (allocated(error)) return
+      call build_pseudo_atom_lsf(lsf_off, 54, 8, .false., mol, error)
+      if (allocated(error)) return
+      call lsf%set_max_deriv(4)
+      dirs = core_fill_dirs()
+
+      do ir = 1, size(radii)
+         x0 = radii(ir)*dirs(:, 7)
+         call prepare_internal(lsf_off, x0, error)
+         if (allocated(error)) return
+         call lsf_off%f0(v_off)
+         call prepare_internal(lsf, x0, error)
+         if (allocated(error)) return
+         call lsf%f3_rrr(v0, g0, h0, t0)
+         call lsf%f4_rrrr(q0)
+         call check(error, v0 /= v_off, more="no fill at the probe: the derivatives checked are the density's alone")
+         if (allocated(error)) return
+         do ax = 1, ndim
+            do k = 1, 4
+               x = x0
+               x(ax) = x0(ax) + fd4_offsets(k)*h
+               call prepare_internal(lsf, x, error)
+               if (allocated(error)) return
+               call lsf%f3_rrr(v(k), g(:, k), hh(:, :, k), t(:, :, :, k))
+            end do
+            ref = maxval(abs(g0))
+            call fd4_scalar(v(1), v(2), v(3), v(4), h, fd, error)
+            if (allocated(error)) return
+            call check(error, g0(ax), fd, thr=rtol*ref, more="core fill gradient")
+            if (allocated(error)) return
+            ref = maxval(abs(h0))
+            do i = 1, ndim
+               call fd4_scalar(g(i, 1), g(i, 2), g(i, 3), g(i, 4), h, fd, error)
+               if (allocated(error)) return
+               call check(error, h0(i, ax), fd, thr=rtol*ref, more="core fill Hessian")
+               if (allocated(error)) return
+            end do
+            ref = maxval(abs(t0))
+            do j = 1, ndim
+               do i = 1, ndim
+                  call fd4_scalar(hh(i, j, 1), hh(i, j, 2), hh(i, j, 3), hh(i, j, 4), h, fd, error)
+                  if (allocated(error)) return
+                  call check(error, t0(i, j, ax), fd, thr=rtol*ref, more="core fill third derivative")
+                  if (allocated(error)) return
+               end do
+            end do
+            ref = maxval(abs(q0))
+            do l = 1, ndim
+               do j = 1, ndim
+                  do i = 1, ndim
+                     call fd4_scalar(t(i, j, l, 1), t(i, j, l, 2), t(i, j, l, 3), t(i, j, l, 4), &
+                                     h, fd, error)
+                     if (allocated(error)) return
+                     call check(error, q0(i, j, l, ax), fd, thr=rtol*ref, more="core fill fourth derivative")
+                     if (allocated(error)) return
+                  end do
+               end do
+            end do
+         end do
+      end do
+   end subroutine test_core_fill_fd
+
+   !> Constant density with vanishing derivatives, so the callback LSF shows the fill alone
+   function constant_density_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      type(c_ptr), value :: context
+      real(c_double), intent(in) :: point(3)
+      real(c_double), intent(out) :: rho
+      real(c_double), intent(out) :: drho(3)
+      type(c_ptr), value :: d2rho
+      type(c_ptr), value :: d3rho
+      integer(c_int) :: status
+
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+
+      status = 0_c_int
+      if (c_associated(context) .or. any(point /= point)) status = 1_c_int
+      rho = 1.0_c_double
+      drho = 0.0_c_double
+      if (c_associated(d2rho)) then
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = 0.0_c_double
+      end if
+      if (c_associated(d3rho)) then
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = 0.0_c_double
+      end if
+   end function constant_density_callback
+
+   !> The callback LSF adds the same fill as the internal one
+   !>
+   !> Each variant's fill is its filled minus its unfilled level set; compared
+   !> where the fill dominates, so the internal difference does not cancel
+   subroutine test_core_fill_callback(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: int_on, int_off
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: cb_on, cb_off
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: dirs(ndim, 7), point(ndim), radii(4)
+      real(wp) :: vi(2), gi(ndim, 2), hi(ndim, ndim, 2), ti(ndim, ndim, ndim, 2)
+      real(wp) :: vc(2), gc(ndim, 2), hc(ndim, ndim, 2), tc(ndim, ndim, ndim, 2)
+      integer :: ir, idir
+
+      call build_pseudo_atom_lsf(int_on, 54, 8, .true., mol, error)
+      if (allocated(error)) return
+      call build_pseudo_atom_lsf(int_off, 54, 8, .false., mol, error)
+      if (allocated(error)) return
+      call cb_on%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
+                     param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.true.))
+      call cb_off%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
+                      param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call cb_on%update(mol, [4.0_wp])
+      call cb_off%update(mol, [4.0_wp])
+      call int_on%set_max_deriv(3)
+      call int_off%set_max_deriv(3)
+      call cb_on%set_max_deriv(3)
+      call cb_off%set_max_deriv(3)
+
+      radii = [0.15_wp, 0.4_wp, 0.65_wp, 0.85_wp]
+      dirs = core_fill_dirs()
+      do idir = 1, size(dirs, 2)
+         do ir = 1, size(radii)
+            point = radii(ir)*dirs(:, idir)
+            call prepare_internal(int_on, point, error)
+            if (allocated(error)) return
+            call int_on%f3_rrr(vi(1), gi(:, 1), hi(:, :, 1), ti(:, :, :, 1))
+            call prepare_internal(int_off, point, error)
+            if (allocated(error)) return
+            call int_off%f3_rrr(vi(2), gi(:, 2), hi(:, :, 2), ti(:, :, :, 2))
+            call cb_on%prepare(point, lsf_err)
+            if (.not. allocated(lsf_err)) call cb_on%f3_rrr(vc(1), gc(:, 1), hc(:, :, 1), tc(:, :, :, 1))
+            if (.not. allocated(lsf_err)) call cb_off%prepare(point, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+            call cb_off%f3_rrr(vc(2), gc(:, 2), hc(:, :, 2), tc(:, :, :, 2))
+
+            call check(error, vi(1) /= vi(2), more="no fill at the probe: both variants would agree on zero")
+            if (allocated(error)) return
+            call check(error, vc(1) - vc(2), vi(1) - vi(2), thr=1.0e-10_wp*abs(vi(1) - vi(2)), &
+                       more="callback and internal core fill values")
+            if (allocated(error)) return
+            call check(error, maxval(abs((gc(:, 1) - gc(:, 2)) - (gi(:, 1) - gi(:, 2)))) <= &
+                       1.0e-10_wp*maxval(abs(gi(:, 1) - gi(:, 2))), more="core fill gradients")
+            if (allocated(error)) return
+            call check(error, maxval(abs((hc(:, :, 1) - hc(:, :, 2)) - (hi(:, :, 1) - hi(:, :, 2)))) <= &
+                       1.0e-10_wp*maxval(abs(hi(:, :, 1) - hi(:, :, 2))), more="core fill Hessians")
+            if (allocated(error)) return
+            call check(error, maxval(abs((tc(:, :, :, 1) - tc(:, :, :, 2)) - (ti(:, :, :, 1) - ti(:, :, :, 2)))) <= &
+                       1.0e-10_wp*maxval(abs(ti(:, :, :, 1) - ti(:, :, :, 2))), more="core fill third derivatives")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_core_fill_callback
+
+   !> A surface entering the fill ball aborts the evaluation
+   !>
+   !> At a large isovalue the pseudo-atom's outer surface lies inside the fill
+   !> cutoff, where the fill would move it
+   subroutine test_core_fill_guard(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+
+      call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call lsf%prepare([1.95_wp, 0.0_wp, 0.0_wp], lsf_err)
+      call check(error, allocated(lsf_err), more="a surface inside the fill ball must be refused")
+      if (allocated(error)) return
+      call check(error, index(lsf_err%message, "ECP core fill of atom 1") > 0, &
+                 more="the refusal names the filled atom: "//lsf_err%message)
+      if (allocated(error)) return
+
+      call build_pseudo_atom_lsf(lsf, 54, 8, .false., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call lsf%prepare([1.95_wp, 0.0_wp, 0.0_wp], lsf_err)
+      call check(error, .not. allocated(lsf_err), more="without the fill the point is ordinary")
+   end subroutine test_core_fill_guard
+
+   !> The exclusion certificate covers the steepness of the fill
+   !>
+   !> A light pseudo-atom's cusp bound is weaker than the fill's log-gradient, so
+   !> the fill must shrink the interior ball; every certified ball stays free of
+   !> surface
+   subroutine test_core_fill_certificate(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: probe_frac = 0.999_wp
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_on, lsf_off
+      type(structure_type) :: mol
+      real(wp) :: dirs(ndim, 7), center(ndim), probe(ndim), s_in, s_c, s_p, r
+      integer :: idir, jdir, istep, n_certified
+
+      call build_pseudo_atom_lsf(lsf_on, 10, 2, .true., mol, error)
+      if (allocated(error)) return
+      call build_pseudo_atom_lsf(lsf_off, 10, 2, .false., mol, error)
+      if (allocated(error)) return
+
+      s_in = lsf_on%param%scale*lsf_on%param%rho_iso*(1.0_wp - exp(1.0_wp))
+      if (.not. (lsf_on%exclusion_radius(s_in) < lsf_off%exclusion_radius(s_in))) then
+         call test_failed(error, "the fill's log-gradient must bound the interior ball")
+         return
+      end if
+
+      dirs = core_fill_dirs()
+      n_certified = 0
+      do idir = 1, size(dirs, 2)
+         do istep = 0, 45
+            center = 0.1_wp*real(istep, wp)*dirs(:, idir)
+            call prepare_internal(lsf_on, center, error)
+            if (allocated(error)) return
+            call lsf_on%f0(s_c)
+            r = lsf_on%exclusion_radius(s_c)
+            if (r <= 0.0_wp) cycle
+            n_certified = n_certified + 1
+            do jdir = 1, size(dirs, 2)
+               probe = center + probe_frac*r*dirs(:, jdir)
+               call prepare_internal(lsf_on, probe, error)
+               if (allocated(error)) return
+               call lsf_on%f0(s_p)
+               if (s_p*s_c <= 0.0_wp) then
+                  call test_failed(error, "exclusion radius over-claims around a filled nucleus")
+                  return
+               end if
+            end do
+         end do
+      end do
+      call check(error, n_certified > 0, more="no ball was certified: the probe loop never ran")
+   end subroutine test_core_fill_certificate
+
+   !> A DROP cavity is bitwise unchanged when a nucleus is marked as ECP
+   !>
+   !> Water's surface stays beyond the fill cutoff around its oxygen, so neither
+   !> the surface nor any projection iterate may see the fill
+   subroutine test_core_fill_cavity(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol, mol_ecp
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop), allocatable :: cavity(:)
+      type(mctc_error), allocatable :: cavity_error
+      integer, allocatable :: numbers(:), z_eff(:)
+      integer :: ivar
+      !> Level set at the oxygen nucleus, unmarked and marked
+      real(wp) :: s_nucleus(2)
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+      ! The production scale: DROP's tolerances are absolute in the level set
+      lsf%param%scale = lsf_scale
+      numbers = mol%num(mol%id)
+      z_eff = numbers
+      where (numbers == maxval(numbers)) z_eff = numbers - 2
+      call new(mol_ecp, numbers, mol%xyz, z_eff=z_eff)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      allocate (cavity(2))
+      do ivar = 1, 2
+         call new_cavity_drop(cavity(ivar), radius_model=default_cpcm_radii(), lsf_model=lsf, &
+                              error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110), ctx=ctx)
+         if (.not. allocated(cavity_error)) then
+            if (ivar == 1) call cavity(ivar)%update(mol, cavity_error)
+            if (ivar == 2) call cavity(ivar)%update(mol_ecp, cavity_error)
+         end if
+         if (allocated(cavity_error)) then
+            call test_failed(error, "DROP isodensity cavity failed: "//cavity_error%message)
+            return
+         end if
+      end do
+
+      call check(error, cavity(1)%ngrid > 0 .and. cavity(1)%ngrid == cavity(2)%ngrid, &
+                 more="the ECP mark changed the number of surface points")
+      if (allocated(error)) return
+      if (any(cavity(1)%xyz /= cavity(2)%xyz) .or. any(cavity(1)%a /= cavity(2)%a) &
+          .or. any(cavity(1)%f /= cavity(2)%f) .or. any(cavity(1)%normal0 /= cavity(2)%normal0)) then
+         call test_failed(error, "the ECP core fill changed the outer surface")
+         return
+      end if
+
+      ! Positive control: the marked oxygen is filled inside the cavities' own level sets
+      do ivar = 1, 2
+         call cavity(ivar)%lsf_model%prepare(mol%xyz(:, maxloc(numbers, 1)), cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "prepare at the oxygen failed: "//cavity_error%message)
+            return
+         end if
+         call cavity(ivar)%lsf_model%f0(s_nucleus(ivar))
+      end do
+      call check(error, s_nucleus(2) < s_nucleus(1), more="the ECP mark never reached the fill")
+   end subroutine test_core_fill_cavity
+
+   !> A converged surface point inside a fill ball aborts the cavity
+   !>
+   !> At `rho_iso = 0.4` the pseudo-atom's outer surface lies at 1.83 Bohr, inside
+   !> the 2 Bohr fill; the filled density matches `rho_iso` there only to the
+   !> projection tolerance, so the per-point guard cannot see it. A smaller
+   !> `core_radius_fraction` puts the surface back outside the ball, and then the
+   !> fill may not touch it
+   subroutine test_core_fill_surface(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Atom radius, and a fill radius below the surface distance
+      real(wp), parameter :: r_atom = 4.0_wp, x_small = 1.0_wp
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity(3)
+      class(radius_type), allocatable :: radii
+      type(mctc_error), allocatable :: cavity_error
+      integer :: ivar
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_radii_custom_atoms([r_atom], radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      ! 1: default fill, 2: no fill, 3: fill shrunk below the surface
+      do ivar = 1, 3
+         if (ivar == 3) then
+            call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error, rho_iso=0.4_wp, &
+                                       core_radius_fraction=x_small/r_atom)
+         else
+            call build_pseudo_atom_lsf(lsf, 54, 8, ivar == 1, mol, error, rho_iso=0.4_wp)
+         end if
+         if (allocated(error)) return
+         call new_cavity_drop(cavity(ivar), radius_model=radii, lsf_model=lsf, error=cavity_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         call cavity(ivar)%update(mol, cavity_error)
+         if (ivar == 1) then
+            call check(error, allocated(cavity_error), more="a surface inside the fill ball must be refused")
+            if (allocated(error)) return
+            ! The per-point guard may see an iterate inside the ball first
+            call check(error, index(cavity_error%message, "ECP core fill") > 0 .and. &
+                       index(cavity_error%message, "atom 1") > 0, &
+                       more="the refusal names the filled atom: "//cavity_error%message)
+            if (allocated(error)) return
+            deallocate (cavity_error)
+         else if (allocated(cavity_error)) then
+            call test_failed(error, "DROP isodensity cavity failed: "//cavity_error%message)
+            return
+         end if
+      end do
+
+      call check(error, cavity(2)%ngrid > 0 .and. cavity(2)%ngrid == cavity(3)%ngrid, &
+                 more="the shrunk fill changed the number of surface points")
+      if (allocated(error)) return
+      call check(error, minval(norm2(cavity(3)%xyz(:, 1:cavity(3)%ngrid), dim=1)) > x_small, &
+                 more="a surface point lies inside the shrunk fill")
+      if (allocated(error)) return
+      if (any(cavity(2)%xyz /= cavity(3)%xyz) .or. any(cavity(2)%a /= cavity(3)%a)) then
+         call test_failed(error, "a fill clear of the surface changed it")
+      end if
+   end subroutine test_core_fill_surface
+
+   !> The callback LSF rejects converged surface points inside its fill too
+   !>
+   !> Only converged points count, and `core_radius_fraction` sizes the ball; a
+   !> fraction <= 0 leaves no fill
+   subroutine test_core_fill_surface_callback(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: xyz(ndim, 2)
+
+      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[8])
+      ! One point inside the default 2 Bohr fill, one beyond it
+      xyz = reshape([1.5_wp, 0.0_wp, 0.0_wp, 0.0_wp, 2.5_wp, 0.0_wp], [ndim, 2])
+
+      call lsf%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr)
+      call lsf%update(mol, [4.0_wp])
+      call lsf%check_surface(xyz, [.false., .true.], lsf_err)
+      call check(error, .not. allocated(lsf_err), more="an unconverged point is not on the surface")
+      if (allocated(error)) return
+      call lsf%check_surface(xyz, [.true., .true.], lsf_err)
+      call check(error, allocated(lsf_err), more="a converged point inside the fill must be refused")
+      if (allocated(error)) return
+      call check(error, index(lsf_err%message, "surface point 1 lies 1.500 Bohr from the nucleus of atom 1") > 0, &
+                 more="the refusal names the point and the atom: "//lsf_err%message)
+      if (allocated(error)) return
+
+      call lsf%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_radius_fraction=0.25_wp))
+      call lsf%update(mol, [4.0_wp])
+      call lsf%check_surface(xyz, [.true., .true.], lsf_err)
+      call check(error, .not. allocated(lsf_err), more="core_radius_fraction must shrink the fill ball")
+      if (allocated(error)) return
+
+      call lsf%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_radius_fraction=0.0_wp))
+      call lsf%update(mol, [4.0_wp])
+      xyz(:, 1) = 0.0_wp
+      call lsf%check_surface(xyz, [.true., .true.], lsf_err)
+      call check(error, .not. allocated(lsf_err), more="a fraction of zero leaves no fill")
+   end subroutine test_core_fill_surface_callback
+
+   !> An anchor skipped for a small switching weight is no surface point
+   !>
+   !> Such an anchor stays at its Lebedev position until the postfilter drops it;
+   !> next to a hydrogen it lies 0.64 Bohr from the marked xenon, deep inside the
+   !> fill, and must neither abort the build nor change the cavity
+   subroutine test_core_fill_skipped_anchor(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity(2)
+      type(mctc_error), allocatable :: cavity_error
+      real(wp) :: dcart(7, 7)
+      !> Level set at the xenon nucleus, without and with the fill
+      real(wp) :: s_nucleus(2)
+      integer :: ivar, i
+
+      call new(mol, [54, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 3.10_wp], [3, 2]), z_eff=[8, 1])
+      dcart = 0.0_wp
+      do i = 1, 7
+         dcart(i, i) = 1.0_wp
+      end do
+      call new_context(ctx, nthreads=0, verbosity=0)
+
+      ! 1: no fill, 2: fill
+      do ivar = 1, 2
+         call lsf%new(sh_atom=[1, 2], sh_l=[2, 0], sh_nprim=[1, 1], exps=[0.5_wp, 0.4_wp], &
+                      coeffs=[1.0_wp, 1.0_wp], error=cavity_error, &
+                      param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=ivar == 2))
+         if (.not. allocated(cavity_error)) call lsf%set_density(dcart, cavity_error)
+         if (.not. allocated(cavity_error)) then
+            call new_cavity_drop(cavity(ivar), radius_model=default_cpcm_radii(), lsf_model=lsf, &
+                                 error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=6), ctx=ctx)
+         end if
+         if (.not. allocated(cavity_error)) call cavity(ivar)%update(mol, cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "DROP isodensity cavity failed: "//cavity_error%message)
+            return
+         end if
+      end do
+
+      call check(error, cavity(1)%ngrid > 0 .and. cavity(1)%ngrid == cavity(2)%ngrid, &
+                 more="the fill changed the number of surface points")
+      if (allocated(error)) return
+      if (any(cavity(1)%xyz /= cavity(2)%xyz) .or. any(cavity(1)%a /= cavity(2)%a)) then
+         call test_failed(error, "a fill clear of the surface changed it")
+         return
+      end if
+
+      ! Positive control: the second cavity's level set fills the xenon nucleus
+      do ivar = 1, 2
+         call cavity(ivar)%lsf_model%prepare(mol%xyz(:, 1), cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "prepare at the xenon nucleus failed: "//cavity_error%message)
+            return
+         end if
+         call cavity(ivar)%lsf_model%f0(s_nucleus(ivar))
+      end do
+      call check(error, s_nucleus(2) < s_nucleus(1), more="the fill never reached the xenon nucleus")
+   end subroutine test_core_fill_skipped_anchor
+
+   !> The fill's term in the exclusion certificate bounds `|grad g| / max(g, rho_iso)`
+   !>
+   !> `g` and its gradient are read off the callback level set over a constant
+   !> density, fill on minus fill off; the sampled supremum must stay below the
+   !> bound and come close to it for one ball. Two balls 1 Bohr apart exceed the
+   !> one-ball bound, which therefore has to count the overlap
+   subroutine test_core_fill_certificate_bound(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Samples per line
+      integer, parameter :: nsample = 4000
+
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_on, lsf_off
+      type(structure_type) :: mol
+      real(wp) :: sup(2), bound(2), dirs(ndim, 7), point(ndim), s_in
+      integer :: icase, idir, isample
+
+      dirs = core_fill_dirs()
+      do icase = 1, 2
+         if (icase == 1) then
+            call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[8])
+         else
+            call new(mol, [54, 54], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
+                     z_eff=[8, 8])
+         end if
+         call lsf_on%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr)
+         call lsf_off%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
+                          param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+         call lsf_on%update(mol, spread(4.0_wp, 1, mol%nat))
+         call lsf_off%update(mol, spread(4.0_wp, 1, mol%nat))
+         call lsf_on%set_max_deriv(1)
+         call lsf_off%set_max_deriv(1)
+         bound(icase) = lsf_on%core%log_grad_bound()
+
+         ! Rays from the first nucleus through both balls (X = 2 Bohr)
+         sup(icase) = 0.0_wp
+         do idir = 1, size(dirs, 2)
+            do isample = 1, nsample
+               point = (3.5_wp*real(isample, wp)/real(nsample, wp))*dirs(:, idir)
+               sup(icase) = max(sup(icase), fill_log_grad(lsf_on, lsf_off, point, error))
+               if (allocated(error)) return
+            end do
+         end do
+         if (icase == 1) then
+            ! The callback carries the fill into its certificate
+            s_in = lsf_on%param%scale*lsf_on%param%rho_iso*(1.0_wp - exp(1.0_wp))
+            call check(error, lsf_on%exclusion_radius(s_in) < lsf_off%exclusion_radius(s_in), &
+                       more="the callback certificate ignores the fill")
+            if (allocated(error)) return
+         end if
+      end do
+
+      call check(error, sup(1) <= bound(1) .and. sup(1) >= 0.95_wp*bound(1), &
+                 more="one ball: sampled sup outside [0.95, 1] of the bound")
+      if (allocated(error)) return
+      call check(error, sup(2) <= bound(2), more="overlapping balls exceed the bound")
+      if (allocated(error)) return
+      call check(error, sup(2) > bound(1), more="overlapping balls never exceeded one ball's bound")
+   end subroutine test_core_fill_certificate_bound
+
+   !> `|grad g| / max(g, rho_iso)` at one point, from filled minus unfilled level sets
+   function fill_log_grad(lsf_on, lsf_off, point, error) result(ratio)
+      type(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: lsf_on, lsf_off
+      real(wp), intent(in) :: point(ndim)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: ratio
+
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: s_on, s_off, g_on(ndim), g_off(ndim), g, grad_g(ndim)
+
+      ratio = 0.0_wp
+      call lsf_on%prepare(point, lsf_err)
+      if (.not. allocated(lsf_err)) call lsf_off%prepare(point, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "callback prepare failed: "//lsf_err%message)
+         return
+      end if
+      call lsf_on%f012_r(lsf0=s_on, lsf1_r=g_on)
+      call lsf_off%f012_r(lsf0=s_off, lsf1_r=g_off)
+      g = -(s_on - s_off)/lsf_on%param%scale
+      grad_g = -(g_on - g_off)/lsf_on%param%scale
+      ratio = norm2(grad_g)/max(g, lsf_on%param%rho_iso)
+   end function fill_log_grad
 
    !> Build the internal isodensity LSF over the module reference density
    !>

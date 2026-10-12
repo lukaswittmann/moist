@@ -2480,7 +2480,9 @@ contains
             write (output_unit, "(x,i12,x,a)") index, &
                "[KKT check] Constraint qualification violated - classification unreliable"
          end if
-         return ! Cannot reliably classify
+         ! Cannot reliably classify, but an infeasible point is no KKT point
+         if (present(is_kkt)) is_kkt = res_feas <= tol_feas
+         return
       end if
 
       ! Compute stationarity residual: ||grad_phi - lambda*grad_S||

@@ -274,6 +274,8 @@ typedef struct {
     double rho_iso;
     double scale;
     moist_isodensity_basis basis;  /* Only read by moist_new_isodensity_lsf */
+    bool core_fill;  /* Fill ECP nuclei (z_eff < numbers) against density dips */
+    double core_radius_fraction;  /* Fill radius as a fraction of the atom radius */
     /* --- end of 1.0 layout --- */
 } moist_isodensity_options;
 
@@ -478,6 +480,10 @@ moist_new_cosmo_radii(moist_error error) moist_API_SUFFIX__V_1_0;
 /// Create Bondi radii model
 moist_API_ENTRY moist_radii moist_API_CALL
 moist_new_bondi_radii(moist_error error) moist_API_SUFFIX__V_1_0;
+
+/// Create Gaussian charge scheme radii model (includes the 1.2 scale factor)
+moist_API_ENTRY moist_radii moist_API_CALL
+moist_new_gauss_radii(moist_error error) moist_API_SUFFIX__V_1_0;
 
 /// Create custom radii model (must be populated before use)
 moist_API_ENTRY moist_radii moist_API_CALL

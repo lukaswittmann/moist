@@ -113,12 +113,20 @@ class CFCParameters(_Parameters):
 
 @dataclass(frozen=True, kw_only=True)
 class IsodensityParameters(_Parameters):
-    """Level set ``scale * (rho_iso - rho)``; density in electrons/bohr**3."""
+    """Level set ``scale * (rho_iso - rho)``; density in electrons/bohr**3.
+
+    ``core_fill`` adds a compact density bump at every ECP nucleus
+    (``z_eff < numbers``), so a pseudo-density cannot dip below ``rho_iso``
+    there; the outer surface is left untouched. The bump reaches
+    ``core_radius_fraction`` times the atom's cavity radius (at most 2 bohr).
+    """
 
     _kind = "isodensity"
     rho_iso: float = _native_default("isodensity", "rho_iso")
     scale: float = _native_default("isodensity", "scale")
     basis: IsodensityBasis = _native_default("isodensity", "basis")
+    core_fill: bool = _native_default("isodensity", "core_fill")
+    core_radius_fraction: float = _native_default("isodensity", "core_radius_fraction")
 
     def __post_init__(self):
         value = self.basis

@@ -166,6 +166,17 @@ foreach entry : [
   )
 endforeach
 
+# ECP nuclei: the isodensity core fill against a pseudo-atom and all-electron AuH
+test(
+  'pyscf_ecp',
+  python,
+  args: pytest_args + [tests_dir / 'test_pyscf_ecp.py'],
+  depends: moist_pyext,
+  env: coupling_env,
+  suite: 'python',
+  timeout: 300,
+)
+
 # Public PySCF SCF/gradient wrapper, including cache and scanner lifetimes
 test(
   'pyscf_wrapper',

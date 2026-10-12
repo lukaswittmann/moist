@@ -251,6 +251,9 @@ module moist_cavity_drop_lsf_base
       !> Chain-rule factor `dS/drho` of a density-backed LSF, and whether this
       !> LSF has a density at all (see [[lsf_base_density_adjoint_factor]])
       procedure :: density_adjoint_factor => lsf_base_density_adjoint_factor
+      !> Reject projected surface points this LSF cannot represent (see
+      !> [[lsf_base_check_surface]])
+      procedure :: check_surface => lsf_base_check_surface
       !> Cache per-point screening / state
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list
@@ -1266,6 +1269,26 @@ contains
       factor = 0.0_wp
       available = .false.
    end function lsf_base_density_adjoint_factor
+
+   !> Reject projected surface points this LSF cannot represent
+   !>
+   !> Called once per cavity update with the cavity's points, which the cavity
+   !> marks as converged surface projections or not; the base accepts every point
+   !>
+   !> TODO: this has to be combined with the disconnected cav search at some point
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  xyz       Cavity points in Bohr (3, n)
+   !> @param[in]  projected Whether each point is a converged surface projection (n)
+   !> @param[out] error     Set when a projected point is rejected
+   subroutine lsf_base_check_surface(self, xyz, projected, error)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: xyz(:, :)
+      logical, intent(in) :: projected(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      if (self%ncenters < 0 .and. size(xyz) < 0 .and. any(projected)) return
+   end subroutine lsf_base_check_surface
 
    !> Per-atom cell-grid reach: the screening offset plus an explicit safety margin
    !>

@@ -6,6 +6,7 @@ module moist_radii
    use moist_radii_static, only: radius_type_static
    use moist_radii_static, only: new_cpcm_radii, new_smd_radii
    use moist_radii_static, only: new_d3_radii, new_cosmo_radii, new_bondi_radii
+   use moist_radii_static, only: new_gauss_radii
    use moist_radii_custom, only: radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use mctc_io_utils, only: to_lower
@@ -20,6 +21,7 @@ module moist_radii
    public :: new_d3_radii
    public :: new_cosmo_radii
    public :: new_bondi_radii
+   public :: new_gauss_radii
    public :: new_radii_custom_atoms
    public :: new_radii_custom_elements
    public :: new_radii
@@ -143,6 +145,12 @@ contains
          type is (radius_type_static)
             call new_bondi_radii(model, verbosity)
          end select
+      case (rad_type%gauss)
+         allocate (radius_type_static :: model)
+         select type (model)
+         type is (radius_type_static)
+            call new_gauss_radii(model, verbosity)
+         end select
       case default
          write (msg, "(a,i0)") "Unknown radius type tag: ", model_tag
          call fatal_error(error, trim(msg))
@@ -182,6 +190,8 @@ contains
          model_tag = rad_type%cosmo
       case ("bondi")
          model_tag = rad_type%bondi
+      case ("gauss")
+         model_tag = rad_type%gauss
       case ("custom")
          call fatal_error(error, "Use new_radii_custom_atoms or new_radii_custom_elements for custom radii")
          return

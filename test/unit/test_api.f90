@@ -70,6 +70,10 @@ module test_api
       real(c_double) :: scale
       !> Density representation of the internal LSF
       integer(c_int) :: basis
+      !> Core fill of ECP nuclei
+      logical(c_bool) :: core_fill = .true._c_bool
+      !> Core-fill radius as a fraction of the atom radius
+      real(c_double) :: core_radius_fraction = 0.5_c_double
    end type iso_options
 
    !> Frozen DROP options layout exercised through the C interface

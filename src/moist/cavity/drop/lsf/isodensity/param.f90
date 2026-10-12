@@ -31,6 +31,13 @@ module moist_cavity_drop_lsf_isodensity_param
       !> - ignored by the callback LSF
       integer :: basis = moist_iso_basis%cartesian
 
+      !> Core fill at every nucleus with `z_eff < Z`, so an ECP pseudo-density
+      !> has no dip below `rho_iso` there; see [[moist_cavity_drop_lsf_isodensity_core]]
+      logical :: core_fill = .true.
+      !> Core-fill radius `X_A` as a fraction of the atom's cavity radius `R_A`,
+      !> capped at 2 Bohr
+      real(wp) :: core_radius_fraction = 0.5_wp
+
       !* ------------------- Surface-free exclusion certificate ---------------- *!
       ! These parameters are only used in the octree solver; these are used in order
       ! to get an exclusion sphere based on the point-wise level set value
@@ -64,6 +71,8 @@ contains
       self%rho_iso = defaults%rho_iso
       self%scale = defaults%scale
       self%basis = defaults%basis
+      self%core_fill = defaults%core_fill
+      self%core_radius_fraction = defaults%core_radius_fraction
       self%log_grad_out = defaults%log_grad_out
       self%log_grad_cusp = defaults%log_grad_cusp
       self%exclusion_cap = defaults%exclusion_cap
@@ -78,6 +87,8 @@ contains
       call self%register_real_scalar("rho_iso", self%rho_iso)
       call self%register_real_scalar("scale", self%scale)
       call self%register_int_scalar("basis", self%basis)
+      call self%register_logical("core_fill", self%core_fill)
+      call self%register_real_scalar("core_radius_fraction", self%core_radius_fraction)
       call self%register_real_scalar("log_grad_out", self%log_grad_out)
       call self%register_real_scalar("log_grad_cusp", self%log_grad_cusp)
       call self%register_real_scalar("exclusion_cap", self%exclusion_cap)
@@ -89,8 +100,11 @@ contains
    !> @param[in]    rho_iso  Density isovalue (optional)
    !> @param[in]    scale    Constant level set multiplier (optional)
    !> @param[in]    basis    Density representation of the internal LSF (optional)
+   !> @param[in]    core_fill Core fill of ECP nuclei (optional)
+   !> @param[in]    core_radius_fraction Core-fill radius as a fraction of `R_A` (optional)
    subroutine new_lsf_isodensity_param(self, rho_iso, scale, log_grad_out, &
-                                       log_grad_cusp, exclusion_cap, basis)
+                                       log_grad_cusp, exclusion_cap, basis, core_fill, &
+                                       core_radius_fraction)
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(inout) :: self
       !> Density isovalue (optional override)
       real(wp), intent(in), optional :: rho_iso
@@ -104,6 +118,10 @@ contains
       real(wp), intent(in), optional :: exclusion_cap
       !> Density representation, a [[moist_iso_basis]] value (optional override)
       integer, intent(in), optional :: basis
+      !> Core fill of ECP nuclei (optional override)
+      logical, intent(in), optional :: core_fill
+      !> Core-fill radius as a fraction of the atom's cavity radius (optional override)
+      real(wp), intent(in), optional :: core_radius_fraction
 
       if (present(rho_iso)) self%rho_iso = rho_iso
       if (present(scale)) self%scale = scale
@@ -111,6 +129,8 @@ contains
       if (present(log_grad_cusp)) self%log_grad_cusp = log_grad_cusp
       if (present(exclusion_cap)) self%exclusion_cap = exclusion_cap
       if (present(basis)) self%basis = basis
+      if (present(core_fill)) self%core_fill = core_fill
+      if (present(core_radius_fraction)) self%core_radius_fraction = core_radius_fraction
    end subroutine new_lsf_isodensity_param
 
    !> Physically motivated surface-free radius for an isodensity level set
@@ -120,14 +140,17 @@ contains
    !> @param[in] self  Isodensity parameters
    !> @param[in] zmax  Largest nuclear charge in the structure
    !> @param[in] lsf0  Level set value at the evaluation point
+   !> @param[in] log_grad_core Interior bound added by the ECP core fill (0 without)
    !> @returns   r     Surface-free radius (zero when uncertified)
-   pure function isodensity_exclusion_radius(self, zmax, lsf0) result(r)
+   pure function isodensity_exclusion_radius(self, zmax, lsf0, log_grad_core) result(r)
       !> Isodensity parameters
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
       !> Largest nuclear charge in the structure
       real(wp), intent(in) :: zmax
       !> Level set value at the evaluation point
       real(wp), intent(in) :: lsf0
+      !> Interior bound added by the ECP core fill
+      real(wp), intent(in) :: log_grad_core
       !> Surface-free radius
       real(wp) :: r
 
@@ -147,8 +170,9 @@ contains
          ! Exterior: the ball stays exterior, so the cusp never enters
          kappa = self%log_grad_out
       else
-         ! Interior: the ball can reach a nucleus
-         kappa = max(self%log_grad_out, self%log_grad_cusp*zmax)
+         ! Interior: the ball can reach a nucleus; an ECP core fill g adds
+         ! |grad g| / max(g, rho_iso) on top
+         kappa = max(self%log_grad_out, self%log_grad_cusp*zmax) + log_grad_core
       end if
 
       r = min(abs(log(ratio))/kappa, self%exclusion_cap)
@@ -199,6 +223,8 @@ contains
       else
          call pp%kv("AO basis", "cartesian")
       end if
+      call pp%kv("ECP core fill", self%core_fill)
+      if (self%core_fill) call pp%kv("ECP core fill radius (of R_A)", self%core_radius_fraction)
       if (self%log_grad_out > 0.0_wp) then
          call pp%kv("Exclusion |grad ln rho| (out)", self%log_grad_out, "1/Bohr")
          call pp%kv("Exclusion cusp factor (in)", self%log_grad_cusp)

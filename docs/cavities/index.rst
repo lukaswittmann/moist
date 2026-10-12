@@ -50,8 +50,9 @@ Radius Models
 -------------
 
 Every cavity needs a radius model. ``CPCM`` radii are the default; ``SMD``,
-``COSMO``, ``Bondi``, ``D3`` and custom per-atom or per-element radii are also
-available. The cavity constructor copies the model.
+``COSMO``, ``Bondi``, ``D3``, ``Gauss`` and custom per-atom or per-element radii
+are also available. ``Gauss`` uses Gaussian charge scheme radii, including
+their 1.2 scale factor. The cavity constructor copies the model.
 
 .. tab-set::
 

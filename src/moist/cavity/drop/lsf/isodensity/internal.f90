@@ -28,6 +28,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
       isodensity_max_nuclear_charge
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type
    implicit none(type, external)
    private
 
@@ -57,6 +58,8 @@ module moist_cavity_drop_lsf_isodensity_internal
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
+      !> Core fill of the ECP nuclei in the bound structure
+      type(moist_iso_core_fill_type) :: core
       !> Per-instance evaluation scratch, sized on first use
       type(moist_iso_gto_work_type) :: work
    contains
@@ -77,6 +80,7 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
+      procedure, public :: check_surface => lsf_check_surface
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
@@ -146,6 +150,7 @@ contains
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
       self%zmax = isodensity_max_nuclear_charge(mol)
+      call self%core%update(mol, radii, self%param)
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
@@ -158,7 +163,7 @@ contains
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
-      call lsf_prepare_impl(self, point)
+      call lsf_prepare_impl(self, point, error)
    end subroutine lsf_prepare
 
    !> Shared prepare body: evaluate the level set at `point` and cache it
@@ -167,15 +172,17 @@ contains
    !>
    !> @param[inout] self       LSF instance
    !> @param[in]    point      Evaluation point in Bohr
+   !> @param[out]   error      Set when the point lies in an ECP core fill outside the cavity
    !> @param[in]    cand_atoms Optional candidate owner-atom list
-   subroutine lsf_prepare_impl(self, point, cand_atoms)
+   subroutine lsf_prepare_impl(self, point, error, cand_atoms)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
+      type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: cand_atoms(:)
 
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       real(wp) :: d4rho(ndim, ndim, ndim, ndim)
-      integer :: nderiv
+      integer :: nderiv, inside
 
       nderiv = min(max(self%max_deriv, 1), 4)
 
@@ -191,6 +198,10 @@ contains
          call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
                             cand_atoms=cand_atoms, d4rho=d4rho)
       end select
+      ! Every candidate list holds the shells of a point's nearby nuclei, so the
+      ! fill is added whatever the screening
+      call self%core%add(point, nderiv, rho, drho, d2rho, d3rho, d4rho, inside)
+      call self%core%check(inside, rho, error)
 
       self%point = point
 
@@ -221,7 +232,7 @@ contains
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
 
-      call lsf_prepare_impl(self, point, cand_atoms=candidate_indices)
+      call lsf_prepare_impl(self, point, error, cand_atoms=candidate_indices)
    end subroutine lsf_prepare_subset
 
    !> Record requested derivative order
@@ -402,7 +413,7 @@ contains
       !> Surface-free radius
       real(wp) :: r
 
-      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0, self%core%log_grad_bound())
    end function lsf_exclusion_radius
 
    !> Chain-rule factor between the level set and the density it is built from
@@ -425,5 +436,20 @@ contains
       factor = -self%param%scale
       available = .true.
    end function lsf_density_adjoint_factor
+
+   !> Reject projected surface points inside an ECP core fill
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  xyz       Cavity points in Bohr (3, n)
+   !> @param[in]  projected Whether each point is a converged surface projection (n)
+   !> @param[out] error     Set at the first projected point inside a fill ball
+   subroutine lsf_check_surface(self, xyz, projected, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      real(wp), intent(in) :: xyz(:, :)
+      logical, intent(in) :: projected(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%core%check_surface(xyz, projected, error)
+   end subroutine lsf_check_surface
 
 end module moist_cavity_drop_lsf_isodensity_internal

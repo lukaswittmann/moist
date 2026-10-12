@@ -148,6 +148,10 @@ module moist_api
       real(c_double) :: scale = 1000.0_c_double
       !> Density representation of the internal LSF; ignored by the callback LSF
       integer(c_int) :: basis = 1_c_int
+      !> Core fill of ECP nuclei (`z_eff < Z`)
+      logical(c_bool) :: core_fill = .true._c_bool
+      !> Core-fill radius as a fraction of the atom's cavity radius
+      real(c_double) :: core_radius_fraction = 0.5_c_double
    end type api_isodensity_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -270,6 +274,7 @@ module moist_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
    public :: new_structure_api, delete_structure_api, update_structure_api
    public :: new_cpcm_radii_api, new_smd_radii_api, new_d3_radii_api, new_cosmo_radii_api, new_bondi_radii_api
+   public :: new_gauss_radii_api
    public :: new_custom_radii_api, set_custom_radii_atoms_api, set_custom_radii_elements_api
    public :: delete_radii_api
    ! Solvation model API
@@ -349,6 +354,8 @@ contains
       value%rho_iso = native%rho_iso
       value%scale = native%scale
       value%basis = native%basis
+      value%core_fill = logical(native%core_fill, c_bool)
+      value%core_radius_fraction = native%core_radius_fraction
    end function default_isodensity_options
 
    !> GOSTSHYP defaults from the native parameter type
@@ -874,6 +881,8 @@ contains
       defaults%rho_iso = values%rho_iso
       defaults%scale = values%scale
       defaults%basis = values%basis
+      defaults%core_fill = values%core_fill
+      defaults%core_radius_fraction = values%core_radius_fraction
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, isodensity_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_isodensity_options")
    end subroutine init_isodensity_options_api
@@ -1162,7 +1171,9 @@ contains
       type is (moist_cavity_drop_lsf_isodensity_callback_type)
          call item%new(callback_ptr=callback, context=context, &
                        param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=real(o%rho_iso, wp), &
-                                                                         scale=real(o%scale, wp)))
+                                                                         scale=real(o%scale, wp), &
+                                                                         core_fill=logical(o%core_fill), &
+                                                                         core_radius_fraction=real(o%core_radius_fraction, wp)))
       end select
       handle = c_loc(lsf)
    end function new_isodensity_callback_lsf_api
@@ -1175,7 +1186,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
       logical :: valid
       valid = o%rho_iso > 0.0_c_double .and. o%scale > 0.0_c_double
-      if (.not. valid) call fatal_error(error, "rho_iso and scale must be positive")
+      if (.not. valid) then
+         call fatal_error(error, "rho_iso and scale must be positive")
+         return
+      end if
+      valid = .not. logical(o%core_fill) .or. o%core_radius_fraction > 0.0_c_double
+      if (.not. valid) call fatal_error(error, "core_radius_fraction must be positive")
    end function valid_isodensity_options
 
    !> Create an LSF with its own Cartesian Gaussian basis
@@ -1246,7 +1262,9 @@ contains
                        coeffs=real(coeffs, wp), error=error%ptr, &
                        param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=real(o%rho_iso, wp), &
                                                                          scale=real(o%scale, wp), &
-                                                                         basis=int(o%basis)))
+                                                                         basis=int(o%basis), &
+                                                                         core_fill=logical(o%core_fill), &
+                                                                         core_radius_fraction=real(o%core_radius_fraction, wp)))
       end select
       call prefix_api_error(error%ptr, "new_isodensity_lsf")
       if (allocated(error%ptr)) then
@@ -1823,6 +1841,18 @@ contains
       type(c_ptr) :: vradii
       call new_radii_handle_api(verror, "bondi", "new_bondi_radii", vradii)
    end function new_bondi_radii_api
+
+   !> Create Gaussian charge scheme radii model handle
+   !>
+   !> @param[in] verror diagnostic handle
+   function new_gauss_radii_api(verror) result(vradii) &
+         & bind(C, name=namespace//"new_gauss_radii")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Radii model handle
+      type(c_ptr) :: vradii
+      call new_radii_handle_api(verror, "gauss", "new_gauss_radii", vradii)
+   end function new_gauss_radii_api
 
    !> Create custom radii model handle
    !>

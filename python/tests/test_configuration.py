@@ -241,13 +241,29 @@ def test_custom_radii_are_copied_and_control_native_surface(factory, params):
 
 @pytest.mark.parametrize("radii", [
     moist.CPCMRadii(), moist.SMDRadii(), moist.D3Radii(),
-    moist.COSMORadii(), moist.BondiRadii(),
+    moist.COSMORadii(), moist.BondiRadii(), moist.GaussRadii(),
 ])
 def test_builtin_radius_models(radii):
     cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26),
                                radii=radii, context=CONTEXT)
     cavity.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert np.isfinite(cavity.area) and cavity.area > 0
+
+
+@pytest.mark.parametrize("config", [
+    moist.DROP(lsf=moist.SvdW(), radii=moist.GaussRadii(),
+               parameters=moist.DROPParameters(nleb=26)),
+    moist.ISwiG(radii=moist.GaussRadii(), parameters=moist.ISwiGParameters(nleb=26)),
+])
+def test_gauss_radii_use_scaled_table(config):
+    structure = moist.Structure(
+        [1, 3, 8], [[0., 0., 0.], [7., 0., 0.], [14., 0., 0.]], z_eff=[1, 3, 8]
+    )
+    cavity = config.build(context=CONTEXT)
+    cavity.update(structure)
+    # Gaussian table entries in angstrom, with the built-in 1.2 scaling.
+    expected = np.array([1.1, 1.82, 1.52]) * 1.2 / 0.529177210903
+    np.testing.assert_allclose(cavity.radii, expected, rtol=0, atol=1e-8)
 
 
 def test_model_copy_retains_configuration_and_callback(gaussian_density):
@@ -417,6 +433,21 @@ def test_isodensity_basis_parameter_and_spherical_guard():
     assert config.build(source=moist.InternalDensity(basis, np.outer(xy, xy)), context=CONTEXT)
 
 
+def test_isodensity_core_fill_options():
+    assert moist.IsodensityParameters().core_fill is True
+    assert moist.IsodensityParameters(core_fill=False).core_fill is False
+    assert moist.IsodensityParameters().core_radius_fraction == 0.5
+    assert moist.IsodensityParameters(core_radius_fraction=0.3).core_radius_fraction == 0.3
+
+
+def test_isodensity_rejects_empty_core_fill_radius():
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                                exponents=[1.], coefficients=[1.])
+    lsf = moist.Isodensity(parameters=moist.IsodensityParameters(core_radius_fraction=0.0))
+    with pytest.raises(RuntimeError, match="core_radius_fraction must be positive"):
+        moist.DROP(lsf=lsf).build(source=moist.InternalDensity(basis, [[1.]]), context=CONTEXT)
+
+
 def test_internal_isodensity_rejects_callback_order():
     basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                                 exponents=[1.], coefficients=[1.])
@@ -448,7 +479,7 @@ def test_custom_radii_element_mapping_handles_reordered_atoms():
 @pytest.mark.parametrize("radii,kind", [
     (moist.CPCMRadii(), "cpcm"), (moist.SMDRadii(), "smd"),
     (moist.D3Radii(), "d3"), (moist.COSMORadii(), "cosmo"),
-    (moist.BondiRadii(), "bondi"),
+    (moist.BondiRadii(), "bondi"), (moist.GaussRadii(), "gauss"),
 ])
 def test_builtin_radii_select_their_native_radius_set(radii, kind):
     parameters = moist.ISwiGParameters(nleb=26)

@@ -3920,6 +3920,61 @@ cleanup:
     return result;
 }
 
+/* Gaussian radii reach both cavity types and survive release of the handle */
+int test_gauss_radii(void)
+{
+    moist_error error = moist_new_error();
+    moist_radii radii = NULL;
+    moist_cavity cavity = NULL;
+    moist_structure mol = NULL;
+    moist_lsf lsf = NULL;
+    moist_drop_options drop;
+    moist_iswig_options iswig;
+    double values[H2O_NATOMS];
+    const double expected[H2O_NATOMS] = {1.52, 1.1, 1.1};
+    int ngrid = 0, nsph = 0, failed = 1;
+
+    REQUIRE(moist_new_gauss_radii(NULL) == NULL);
+    moist_init_drop_options(error, &drop, sizeof drop);
+    REQUIRE(!moist_check_error(error));
+    moist_init_iswig_options(error, &iswig, sizeof iswig);
+    REQUIRE(!moist_check_error(error));
+    drop.nleb = iswig.nleb = 26;
+    mol = make_h2o(error);
+    REQUIRE(mol && !moist_check_error(error));
+    lsf = moist_new_svdw_lsf(error, NULL);
+    REQUIRE(lsf && !moist_check_error(error));
+
+    for (int kind = 0; kind < 2; ++kind) {
+        radii = moist_new_gauss_radii(error);
+        REQUIRE(radii && !moist_check_error(error));
+        cavity = kind == 0
+            ? moist_new_drop_cavity(error, fixture_context, lsf, radii, &drop)
+            : moist_new_iswig_cavity(error, fixture_context, radii, &iswig);
+        REQUIRE(cavity && !moist_check_error(error));
+        moist_delete(radii);
+        REQUIRE(radii == NULL);
+        moist_update_cavity(error, cavity, mol);
+        REQUIRE(!moist_check_error(error));
+        moist_get_cavity_sizes(error, cavity, &ngrid, &nsph);
+        REQUIRE(!moist_check_error(error) && ngrid > 0 && nsph == H2O_NATOMS);
+        moist_get_cavity_field_real(error, cavity, "radii", values);
+        REQUIRE(!moist_check_error(error));
+        for (int atom = 0; atom < H2O_NATOMS; ++atom)
+            REQUIRE(fabs(values[atom] - expected[atom] * 1.2 / 0.529177210903) < 1e-8);
+        moist_delete(cavity);
+    }
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    moist_delete(cavity);
+    moist_delete(radii);
+    moist_delete(lsf);
+    moist_delete(mol);
+    moist_delete(error);
+    return failed;
+}
+
 #undef REQUIRE
 
 /* -1 selects version text; nonnegative values select one of the four banners */
@@ -4228,6 +4283,8 @@ int test_options_padding(void)
         MARK_FIELD(isodensity, rho_iso);
         MARK_FIELD(isodensity, scale);
         MARK_FIELD(isodensity, basis);
+        MARK_FIELD(isodensity, core_fill);
+        MARK_FIELD(isodensity, core_radius_fraction);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_isodensity_options(error, &value, sizeof value);
@@ -4426,6 +4483,7 @@ static const struct {
     {"delete_resets_handle",                 test_delete_resets_handle},
     {"drop_cavity",                          test_drop_cavity},
     {"custom_radii",                         test_custom_radii},
+    {"gauss_radii",                          test_gauss_radii},
     {"h2o_cavity",                           test_h2o_cavity},
     {"cavity_gradient",                      test_cavity_gradient},
     {"isodensity_internal_cavity",           test_isodensity_internal_cavity},

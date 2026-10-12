@@ -48,7 +48,7 @@ from .parameters import (
     GOSTSHYPParameters,
     SvdWParameters,
 )
-from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, Radii, SMDRadii
+from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, GaussRadii, Radii, SMDRadii
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, LevelSet
 
 __all__ = [
@@ -67,6 +67,7 @@ __all__ = [
     "D3Radii",
     "COSMORadii",
     "BondiRadii",
+    "GaussRadii",
     "CustomRadii",
     "LevelSet",
     "CavityConfiguration",

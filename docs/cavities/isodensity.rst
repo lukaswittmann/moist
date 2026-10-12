@@ -48,6 +48,28 @@ Two implementations are available:
 
 Both implementations share ``moist_cavity_drop_lsf_isodensity_param_type`` and build the same :math:`S` from it.
 
+ECP nuclei
+----------
+
+With an effective core potential, the pseudo-density can fall below :math:`\rho_\mathrm{iso}` at the
+nucleus, which gives the level set a small inner cavity.
+MOIST therefore adds, at every nucleus whose effective charge ``z_eff`` is below its atomic number,
+
+.. math::
+
+   g(\mathbf r) = 100\,\rho_\mathrm{iso}\,\bigl(1 - |\mathbf r - \mathbf R_A| / X_A\bigr)^5,
+   \qquad X_A = \min(f R_A,\ 2\ \mathrm{bohr}),
+
+and nothing beyond :math:`X_A` (:math:`R_A` is the atom's cavity radius, :math:`f` is
+``core_radius_fraction``, default 0.5).
+The fill has a cusp at the nucleus, so the nucleus is no stationary point of the level set a projector could settle on.
+As the outer surface is further out, it is left unchanged; a converged surface point inside this area
+stops the cavity build with an error naming the atom.
+A smaller ``core_radius_fraction`` admits a surface that comes closer to an ECP nucleus.
+Structures carry ``z_eff`` from the C and Python constructors; without it no atom is filled.
+``core_fill`` (default on) switches the fill off: ``param%core_fill`` (Fortran), ``options.core_fill`` (C)
+or ``IsodensityParameters(core_fill=False)`` (Python); ``core_radius_fraction`` is set the same way.
+
 Construction
 ------------
 
