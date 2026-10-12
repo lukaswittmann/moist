@@ -282,6 +282,7 @@ contains
             append_ok = .true.
             block
                type(error_type), allocatable :: proj_error
+               character(len=128) :: report
 
                ! Actually project point (can return multiple branches)
                call projectors(thread_slot)%project_point( &
@@ -302,13 +303,11 @@ contains
                                   thread_error(thread_slot)%e)
                   append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
                else if (allocated(proj_error)) then
-                  !$omp critical (projection_warning_print)
-                  print "(a,i0)", "Warning: Projection failed for gridpoint ", i
-                  print "(a)", proj_error%message
-                  print "(a)", "Debug info:"
-                  print "(a,i0)", "  gridpoint ID: ", i
-                  print "(a,3(es12.4))", "  anchor: ", self%anchorxyz(:, i)
-                  !$omp end critical (projection_warning_print)
+                  write (report, "(i0)") i
+                  call self%ctx%warning("Projection failed for gridpoint "//trim(report)//": "//proj_error%message)
+                  write (report, "(a,i0,a,3es12.4)") "Failed projection, gridpoint ID: ", i, &
+                     ", anchor: ", self%anchorxyz(:, i)
+                  call self%ctx%debug_message(trim(report))
                   ! A failed projection is not fatal: keep the anchor but flag it not
                   ! converged so it is later assigned f=0 and excluded from the quadrature
                   ! Only the workspace write below can abort the run

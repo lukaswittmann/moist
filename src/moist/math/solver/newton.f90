@@ -423,6 +423,7 @@ contains
          call fatal_error(error, "Newton solver [code 3]: Maximum iterations reached")
       case (4)
          ! Stopped by user
+         ! TODO: route through ctx%warning once a context is reachable here
          write (*, *) "Newton solver stopped by user."
          ! call fatal_error(error, "Newton solver [code 4]: Stopped by user")
       case (5)

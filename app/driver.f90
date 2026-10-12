@@ -85,8 +85,7 @@ contains
       !* ---------------------------- Thread configuration --------------------------- *!
       if (config%num_threads > 0) then
 !$       if (.false.) then
-            write (ctx%unit, "(a)") &
-               "[Warn] Program compiled without OpenMP support, ignoring --threads"
+            call ctx%warning("Program compiled without OpenMP support, ignoring --threads")
 !$       else
 ! #ifdef WITH_MKL
 ! !$       call mkl_set_num_threads(config%num_threads)
@@ -145,8 +144,7 @@ contains
                if (config%verbosity > 0) write (output_unit, "(a)") &
                   "[Info] Molecular charge read from '"//filename//"'"
             else
-               if (config%verbosity > 0) write (output_unit, "(a)") &
-                  "[Warn] Could not read molecular charge read from '"//filename//"'"
+               call ctx%warning("Could not read molecular charge from '"//filename//"'")
             end if
             close (unit)
          end if

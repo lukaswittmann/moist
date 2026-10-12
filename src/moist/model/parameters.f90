@@ -265,6 +265,7 @@ contains
       !$omp critical (moist_parameter_documents)
       call work%collect_document(error)
       if (allocated(error)) then
+         ! TODO: route through ctx%warning once a context is reachable here
          call pp%section("[Warning] Cannot collect parameters: "//error%message)
       else
          root => cast_to_table(work%document)

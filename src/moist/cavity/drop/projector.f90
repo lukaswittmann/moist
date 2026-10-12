@@ -2474,6 +2474,7 @@ contains
       norm_grad_S = sqrt(dot_product(grad_S, grad_S))
       if (norm_grad_S < tol_grad) then
          if (self%verbosity >= 2) then
+            ! TODO: route through ctx%warning once a context is reachable here
             write (output_unit, "(x,i12,x,a,es12.4)") index, &
                "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
             write (output_unit, "(x,i12,x,a)") index, &

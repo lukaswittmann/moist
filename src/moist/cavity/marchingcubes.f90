@@ -1304,6 +1304,7 @@ contains
       open (file=filename, newunit=unit, status="replace", action="write", &
             iostat=stat)
       if (stat /= 0) then
+         ! TODO: route through ctx%warning once a context is reachable here
          write (error_unit, "(a)") &
             "[Warning] Could not open OBJ file: "//trim(filename)
          return
@@ -1342,6 +1343,7 @@ contains
       open (file=filename, newunit=unit, status="replace", action="write", &
             iostat=stat)
       if (stat /= 0) then
+         ! TODO: route through ctx%warning once a context is reachable here
          write (error_unit, "(a)") &
             "[Warning] Could not open PQR file: "//trim(filename)
          return

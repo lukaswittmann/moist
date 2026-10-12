@@ -454,7 +454,11 @@ contains
       if (present(unit)) iunit = unit
 
       if (.not. allocated(self%total_area) .or. .not. allocated(self%total_volume)) then
-         write (iunit, "(a)") "[Warning] Cavity not fully initialized"
+         if (associated(self%ctx)) then
+            call self%ctx%warning("Cavity not fully initialized")
+         else
+            write (iunit, "(a)") "[Warning] Cavity not fully initialized"
+         end if
          return
       end if
 

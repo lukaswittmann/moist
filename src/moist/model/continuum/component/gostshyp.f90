@@ -579,9 +579,9 @@ contains
 
       if (associated(self%ctx)) then
          if (counts(2) > 0) then
-            write (report, "(a,i0,a,i0,a)") "GOSTSHYP warning: ", counts(2), &
+            write (report, "(a,i0,a,i0,a)") "GOSTSHYP: ", counts(2), &
                & " negative pressure amplitudes; ", counts(3), " suppressed"
-            call self%ctx%message_flush(trim(report), level=1)
+            call self%ctx%warning(trim(report))
          end if
          write (report, "(a,i0,a,i0,a,i0,a,i0,a,i0)") "GOSTSHYP: ", counts(1), &
             & " regularized of ", cavity%ngrid, "; negative candidates: ", counts(2), &

@@ -143,6 +143,7 @@ contains
       block
          logical, allocatable :: mask(:)
          integer :: n_small_density
+         character(len=256) :: report
 
          allocate (mask(self%ngrid))
          mask = self%rho_grid(1:self%ngrid) < 1.0e-10_wp
@@ -152,11 +153,11 @@ contains
             self%rho_grid = self%rho_grid_anchor
          end where
 
-         if ((n_small_density > 0) .and. (self%ctx%verbosity >= 1)) then
-            write (self%ctx%unit, "(A, I0, A)") &
-               "Warning: ", n_small_density, &
+         if (n_small_density > 0) then
+            write (report, "(i0,a)") n_small_density, &
                " grid points have very small soft densities. "// &
                "Using hard sphere density for these points. Results may be unreliable."
+            call self%ctx%warning(trim(report))
          end if
 
       end block
