@@ -433,6 +433,12 @@ class Structure:
     Coordinates and lattice vectors are in Bohr.  Positions use the natural
     NumPy shape ``(natoms, 3)``; the wrapper converts that row-major memory to
     the native Fortran ``(3, natoms)`` view without an intermediate transpose.
+
+    ``numbers`` identify the elements; ``z_eff`` are the nuclear charges of the
+    host Hamiltonian, the atomic numbers minus any core electrons an effective
+    core potential replaces.  ``z_eff`` is required so that an ECP host cannot
+    fall back to the bare atomic numbers by omission; all-electron hosts pass
+    ``z_eff=numbers``.
     """
 
     def __init__(
@@ -441,6 +447,8 @@ class Structure:
         positions: np.ndarray,
         lattice: Optional[np.ndarray] = None,
         periodic: Optional[np.ndarray] = None,
+        *,
+        z_eff: np.ndarray,
     ) -> None:
         _numbers = np.asarray(numbers)
         if _numbers.ndim != 1:
@@ -450,6 +458,14 @@ class Structure:
         if np.any(_numbers < 1) or np.any(_numbers > 118):
             raise ValueError("atomic numbers must be between 1 and 118")
         natoms = int(_numbers.size)
+
+        _z_eff = np.asarray(z_eff)
+        if _z_eff.shape != (natoms,):
+            raise ValueError(f"z_eff must have shape ({natoms},)")
+        if _z_eff.dtype.kind not in "iu":
+            raise ValueError("z_eff must be an integer vector")
+        if np.any(_z_eff < 1) or np.any(_z_eff > _numbers):
+            raise ValueError("z_eff must be between 1 and the atomic number")
 
         _positions = self._positions_array(positions, natoms)
         _lattice = self._lattice_array(lattice)
@@ -463,6 +479,7 @@ class Structure:
 
         self._natoms = natoms
         self._numbers = np.array(_numbers, dtype=np.int32, order="C", copy=True)
+        self._z_eff = np.array(_z_eff, dtype=np.int32, order="C", copy=True)
         self._positions = _positions
         self._lattice = _lattice
         self._periodic = (
@@ -471,6 +488,7 @@ class Structure:
         self._handle = library.new_structure(
             self._natoms,
             self._numbers,
+            self._z_eff,
             self._positions,
             self._lattice,
             self._periodic,
@@ -496,6 +514,7 @@ class Structure:
         """Return whether two structures describe exactly the same native update."""
         return (
             np.array_equal(self._numbers, other._numbers)
+            and np.array_equal(self._z_eff, other._z_eff)
             and np.array_equal(self._positions, other._positions)
             and self._optional_array_equal(self._lattice, other._lattice)
             and self._optional_array_equal(self._periodic, other._periodic)
@@ -519,6 +538,10 @@ class Structure:
     @property
     def numbers(self) -> np.ndarray:
         return self._numbers.copy()
+
+    @property
+    def z_eff(self) -> np.ndarray:
+        return self._z_eff.copy()
 
     @property
     def positions(self) -> np.ndarray:

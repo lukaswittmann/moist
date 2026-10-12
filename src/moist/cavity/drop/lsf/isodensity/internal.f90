@@ -26,7 +26,8 @@ module moist_cavity_drop_lsf_isodensity_internal
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
+      isodensity_max_nuclear_charge
    implicit none(type, external)
    private
 
@@ -144,10 +145,7 @@ contains
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
-      self%zmax = 0.0_wp
-      if (allocated(mol%num)) then
-         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
-      end if
+      self%zmax = isodensity_max_nuclear_charge(mol)
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator

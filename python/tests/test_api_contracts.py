@@ -30,7 +30,7 @@ def _model(components=None):
     model = moist.SolvationModel(CONTEXT, moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26),
                                                    context=CONTEXT),
                                 components or [moist.ModelComponentPV(1e-4)])
-    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
+    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1])
     model.update(structure)
     return model, structure
 
@@ -141,7 +141,7 @@ def test_independent_answers():
 @pytest.mark.parametrize("numbers", [[1.2], [1.], [True], [2**32+1], [0], [119]])
 def test_atomic_numbers_not_coerced(numbers):
     with pytest.raises(ValueError):
-        moist.Structure(numbers, [[0., 0., 0.]])
+        moist.Structure(numbers, [[0., 0., 0.]], z_eff=numbers)
 
 
 def test_response_without_pcm_has_no_potential_adjoint():
@@ -171,7 +171,7 @@ def test_internal_density_matches_callback_and_updates_model(gaussian_density):
     offsets, powers = cavity.isodensity_layout()
     np.testing.assert_array_equal(offsets, [0, 1])
     np.testing.assert_array_equal(powers, [[0, 0, 0]])
-    structure = moist.Structure([1], [[0., 0., 0.]])
+    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
     reference = config.build(source=gaussian_density, context=CONTEXT)
     cavity.update(structure)
     reference.update(structure)
@@ -228,7 +228,7 @@ def test_internal_basis_layout():
 
 def test_diagnostic_contractions_match_explicit_anchor_tensors():
     cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
-    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
+    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1])
     cavity.update(structure)
     cavity.assemble_amat()
     cavity.compute_cavity_gradient()
@@ -244,7 +244,7 @@ def test_diagnostic_contractions_match_explicit_anchor_tensors():
         xyz[1, 2] += shift
         moved = moist.CavityDROP(parameters=moist.DROPParameters(
             nleb=26, tolerance=FD_PROJECTION_TOL), context=CONTEXT)
-        moved.update(moist.Structure(structure.numbers, xyz))
+        moved.update(moist.Structure(structure.numbers, xyz, z_eff=structure.z_eff))
         matrix, _ = moved.assemble_amat()
         # Tighter projection can recover extra points. Keep the original
         # point IDs and fixed charges; extra points have zero charge.
@@ -278,7 +278,7 @@ def _gaussian_amat(xi, f, xyz):
 def test_amat_surface_weights_are_the_surface_derivatives_of_q1_a_q2():
     """The three weight channels are d(q1^T A q2) by xi, f and each point position."""
     cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
-    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]]))
+    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1]))
     xi, f, xyz = cavity.get("xi0"), cavity.get("f"), cavity.get("xyz")
     # The written-out matrix has to be the one moist assembles, or the
     # differences below would test the transcription instead of moist.

@@ -212,7 +212,7 @@ module test_api
          integer(c_int), intent(inout), optional :: nsph
       end subroutine moist_get_cavity_sizes
 
-      function moist_new_structure(verror, natoms, numbers, positions, &
+      function moist_new_structure(verror, natoms, numbers, z_eff, positions, &
             & lattice, periodic) result(vmol) &
             & bind(C, name="moist_new_structure")
          import :: c_ptr, c_int, c_double, c_bool
@@ -220,6 +220,7 @@ module test_api
          type(c_ptr), value :: verror
          integer(c_int), value :: natoms
          integer(c_int), intent(in), optional :: numbers(natoms)
+         integer(c_int), intent(in), optional :: z_eff(natoms)
          real(c_double), intent(in), optional :: positions(3, natoms)
          real(c_double), intent(in), optional :: lattice(3, 3)
          logical(c_bool), intent(in), optional :: periodic(3)
@@ -603,6 +604,7 @@ contains
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
+                  new_unittest("structure_effective_charges", test_structure_effective_charges), &
                   new_unittest("missing_pointers_results", test_missing_pointers_results), &
                   new_unittest("missing_pointers_gradients", test_missing_pointers_gradients), &
                   new_unittest("unbuilt_cavity_guards", test_unbuilt_cavity_guards), &
@@ -783,7 +785,7 @@ contains
       allocate (err)
       verror = c_loc(err)
 
-      vmol = moist_new_structure(verror, 3_c_int, numbers, positions)
+      vmol = moist_new_structure(verror, 3_c_int, numbers, numbers, positions)
       block
          type(c_ptr) :: lsf
          lsf = moist_new_svdw_lsf(verror, c_null_ptr)
@@ -1512,7 +1514,7 @@ contains
       allocate (err)
       verror = c_loc(err)
 
-      vmol = moist_new_structure(verror, 3_c_int, numbers, cb_centers)
+      vmol = moist_new_structure(verror, 3_c_int, numbers, numbers, cb_centers)
       block
          type(c_ptr) :: lsf
          type(iso_options), target :: options
@@ -2120,7 +2122,7 @@ contains
       borrowed = c_null_ptr
       context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
       own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
-      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, positions)
+      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, numbers, positions)
       checks: block
          call c_f_pointer(context, shared)
          call c_f_pointer(own_context, own)
@@ -2366,9 +2368,10 @@ contains
       !> Returned structure handle
       type(c_ptr) :: verror, vmol
       !> Expected diagnostics, one per case
-      character(len=80), parameter :: needles(8) = [character(len=80) :: &
+      character(len=80), parameter :: needles(9) = [character(len=80) :: &
          & "[moist_new_structure] Required pointer 'numbers' is missing", &
          & "[moist_new_structure] Required pointer 'positions' is missing", &
+         & "[moist_new_structure] Required pointer 'z_eff' is missing", &
          & "[moist_update_structure] Required pointer 'positions' is missing", &
          & "[moist_update_structure] Molecular structure data is missing", &
          & "[moist_update_structure] Invalid molecular structure data provided", &
@@ -2387,20 +2390,22 @@ contains
          vmol = c_null_ptr
          select case (icase)
          case (1)
-            vmol = moist_new_structure(verror, 2_c_int, positions=positions)
+            vmol = moist_new_structure(verror, 2_c_int, z_eff=numbers, positions=positions)
          case (2)
-            vmol = moist_new_structure(verror, 2_c_int, numbers)
+            vmol = moist_new_structure(verror, 2_c_int, numbers, numbers)
          case (3)
-            call update_structure_api(verror, c_null_ptr)
+            vmol = moist_new_structure(verror, 2_c_int, numbers, positions=positions)
          case (4)
-            call update_structure_api(verror, c_null_ptr, positions)
+            call update_structure_api(verror, c_null_ptr)
          case (5)
-            call update_structure_api(verror, c_loc(empty), positions)
+            call update_structure_api(verror, c_null_ptr, positions)
          case (6)
-            call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
+            call update_structure_api(verror, c_loc(empty), positions)
          case (7)
-            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
+            call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
          case (8)
+            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
+         case (9)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
          case default
             error stop "test_api: unhandled case in test_structure_radii_guards"
@@ -2413,6 +2418,46 @@ contains
       deallocate (err)
 
    end subroutine test_structure_radii_guards
+
+   !> Effective charges reach the native structure apart from the elements, and a
+   !> charge outside 1..Z is refused
+   subroutine test_structure_effective_charges(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(vp_structure), pointer :: mol
+      !> HI, iodine behind a 28-electron core
+      integer(c_int), parameter :: numbers(2) = [53_c_int, 1_c_int]
+      integer(c_int), parameter :: z_eff(2) = [25_c_int, 1_c_int]
+      real(c_double), parameter :: positions(3, 2) = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                                                              0.0_c_double, 0.0_c_double, 3.04_c_double], [3, 2])
+      type(c_ptr) :: verror, vmol
+
+      allocate (err)
+      verror = c_loc(err)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, z_eff, positions)
+      call check(error, .not. allocated(err%ptr) .and. c_associated(vmol), "structure with ECP charges")
+      if (.not. allocated(error)) then
+         call c_f_pointer(vmol, mol)
+         call check(error, all(mol%ptr%num(mol%ptr%id) == numbers), "elements stay the atomic numbers")
+         if (.not. allocated(error)) then
+            call check(error, allocated(mol%ptr%z_eff), "native structure carries z_eff")
+         end if
+         if (.not. allocated(error)) then
+            call check(error, all(mol%ptr%z_eff == z_eff), "native z_eff matches the input")
+         end if
+      end if
+      call moist_delete_structure(vmol)
+      if (allocated(error)) then
+         deallocate (err)
+         return
+      end if
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers + 1_c_int, positions)
+      call expect_error(error, err, "[moist_new_structure] Effective nuclear charges must lie between")
+      call moist_delete_structure(vmol)
+      deallocate (err)
+
+   end subroutine test_structure_effective_charges
 
    !> Omit one required pointer at a time and expect the entry point to name it
    !>
@@ -3063,7 +3108,7 @@ contains
       vresp = c_null_ptr
       vfresh = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
@@ -3136,7 +3181,7 @@ contains
       verror = c_loc(err)
       vcav = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
@@ -3391,7 +3436,7 @@ contains
       allocate (stub_model :: stub%ptr)
       vcpl = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vlow = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)

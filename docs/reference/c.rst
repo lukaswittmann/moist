@@ -32,10 +32,14 @@ options with the caller's ``sizeof`` before assigning fields:
    moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
    moist_add_model_component(error, model, pcm);  /* model owns a copy */
    moist_delete(pcm);
-   moist_structure mol = moist_new_structure(error, natoms, numbers, positions,
+   moist_structure mol = moist_new_structure(error, natoms, numbers, z_eff, positions,
                                              NULL, NULL);  /* NULL: molecular */
    moist_update_model(error, model, mol);
    moist_delete(mol);  /* the cavity and components copy the structure */
+
+``numbers`` are the elements and ``z_eff`` the nuclear charges of the host
+Hamiltonian: the atomic numbers minus the core electrons an effective core
+potential replaces. Both are required; all-electron hosts pass ``numbers`` twice.
 
 Add every component before the first ``moist_update_model``; later additions
 are rejected.

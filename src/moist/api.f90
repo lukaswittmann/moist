@@ -1629,7 +1629,7 @@ contains
    end subroutine get_error_api
 
    !> Create new molecular structure data (quantities in Bohr)
-   function new_structure_api(verror, natoms, numbers, positions, &
+   function new_structure_api(verror, natoms, numbers, z_eff, positions, &
          & c_lattice, c_periodic) result(vmol) &
          & bind(C, name=namespace//"new_structure")
       !> Required diagnostic handle
@@ -1638,6 +1638,8 @@ contains
       integer(c_int), value, intent(in) :: natoms
       !> Atomic numbers
       integer(c_int), intent(in), optional :: numbers(natoms)
+      !> Effective nuclear charges, atomic numbers minus ECP core electrons
+      integer(c_int), intent(in), optional :: z_eff(natoms)
       !> Atomic positions in Bohr, shape (3,natoms)
       real(c_double), intent(in), optional :: positions(3, natoms)
       !> Optional lattice vectors in Bohr
@@ -1660,6 +1662,10 @@ contains
          call api_error(error%ptr, "new_structure", "Required pointer 'numbers' is missing")
          return
       end if
+      if (.not. present(z_eff)) then
+         call api_error(error%ptr, "new_structure", "Required pointer 'z_eff' is missing")
+         return
+      end if
       if (.not. present(positions)) then
          call api_error(error%ptr, "new_structure", "Required pointer 'positions' is missing")
          return
@@ -1674,7 +1680,7 @@ contains
       end if
 
       allocate (mol)
-      call new(mol%ptr, numbers, positions, lattice=lattice, periodic=periodic)
+      call new(mol%ptr, numbers, positions, lattice=lattice, periodic=periodic, z_eff=z_eff)
       vmol = c_loc(mol)
 
       call verify_structure(error%ptr, mol%ptr)
@@ -6349,7 +6355,7 @@ contains
 
    end subroutine c_f_character_ptr
 
-   !> Reject coincident atoms before accepting a molecular geometry
+   !> Reject coincident atoms and effective charges outside 1..Z before accepting a geometry
    subroutine verify_structure(error, mol)
       !> Diagnostic on failure
       type(error_type), allocatable, intent(out) :: error
@@ -6364,6 +6370,16 @@ contains
       end do
       if (stat > 0) then
          call fatal_error(error, "Too close interatomic distances found")
+         return
+      end if
+      if (allocated(mol%z_eff)) then
+         if (size(mol%z_eff) /= mol%nat) then
+            call fatal_error(error, "Effective nuclear charges do not match the number of atoms")
+            return
+         end if
+         if (any(mol%z_eff < 1 .or. mol%z_eff > mol%num(mol%id))) then
+            call fatal_error(error, "Effective nuclear charges must lie between 1 and the atomic number")
+         end if
       end if
    end subroutine verify_structure
 

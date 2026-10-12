@@ -42,7 +42,7 @@ int main()
     if (!cavity || moist_check_error(error) != moist_success) return fail(__LINE__);
     const int numbers[] = {1};
     const double positions[] = {0.0, 0.0, 0.0};
-    moist_structure structure = moist_new_structure(error, 1, numbers, positions,
+    moist_structure structure = moist_new_structure(error, 1, numbers, numbers, positions,
                                                    nullptr, nullptr);
     if (!structure || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_radii radii = moist_new_cpcm_radii(error);

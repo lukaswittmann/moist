@@ -34,7 +34,7 @@ module test_cavity_drop_isodensity
                                           c_associated, c_f_pointer, c_null_funptr
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type
+   use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
@@ -177,7 +177,8 @@ contains
                   new_unittest("internal_fourth_gating", test_internal_fourth_gating), &
                   new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
-                  new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate) &
+                  new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
+                  new_unittest("exclusion_radius_ignores_zeff", test_exclusion_radius_zeff) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1441,6 +1442,49 @@ contains
       call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  more="log_grad_out = 0 must certify nothing")
    end subroutine test_exclusion_radius_gate
+
+   !> The interior certificate reads the atomic numbers, never `z_eff`
+   !>
+   !> ECP pseudo-densities exceed the cusp bound of `z_eff` but stay below that
+   !> of `Z`, so a structure with ECP charges certifies what one without does
+   subroutine test_exclusion_radius_zeff(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
+      type(structure_type) :: mol, mol_ecp
+      integer, allocatable :: numbers(:), z_eff(:)
+      real(wp), allocatable :: radii(:)
+      real(wp) :: s_in, r_bare, r_ecp, r_ecp_cb
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+      allocate (radii(mol%nat), source=2.0_wp)
+
+      ! Interior value at unit log contrast, rho = e*rho_iso
+      s_in = lsf%param%scale*lsf%param%rho_iso*(1.0_wp - exp(1.0_wp))
+      r_bare = lsf%exclusion_radius(s_in)
+
+      ! The heaviest element behind a two-electron core
+      numbers = mol%num(mol%id)
+      z_eff = numbers
+      where (numbers == maxval(numbers)) z_eff = numbers - 2
+      call new(mol_ecp, numbers, mol%xyz, z_eff=z_eff)
+
+      call lsf%update(mol_ecp, radii)
+      r_ecp = lsf%exclusion_radius(s_in)
+
+      ! No `prepare`, so the null callback is never called
+      call lsf_cb%new(callback_ptr=c_null_funptr, context=c_null_ptr, param=lsf%param)
+      call lsf_cb%update(mol_ecp, radii)
+      r_ecp_cb = lsf_cb%exclusion_radius(s_in)
+
+      call check(error, r_ecp, r_bare, thr=0.0_wp, &
+                 more="z_eff must not enter the internal cusp bound")
+      if (allocated(error)) return
+      call check(error, r_ecp_cb, r_bare, thr=0.0_wp, &
+                 more="z_eff must not enter the callback cusp bound")
+   end subroutine test_exclusion_radius_zeff
 
    !> Build the internal isodensity LSF over the module reference density
    !>

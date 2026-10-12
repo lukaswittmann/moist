@@ -156,7 +156,9 @@ Neither needs an update.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
-its :doc:`fields`. ``Structure`` copies input arrays on
+its :doc:`fields`. ``Structure(numbers, positions, z_eff=...)`` requires the
+nuclear charges of the host Hamiltonian, the atomic numbers minus any ECP core
+electrons; all-electron hosts pass ``z_eff=numbers``. ``Structure`` copies input arrays on
 construction and update; mutating an input NumPy array cannot change the
 stored geometry, call ``update`` explicitly. See :doc:`coupling` for the
 protocol Python drives with ``for request in coupling``,

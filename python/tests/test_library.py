@@ -174,7 +174,7 @@ def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
 
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
     numbers, positions = water
-    structure = Structure(numbers, positions)
+    structure = Structure(numbers, positions, z_eff=numbers)
     cavity = _isodensity(callback, rho_iso, **kwargs)
     cavity.update(structure)
     return cavity.cavity
@@ -186,7 +186,7 @@ def test_isodensity_cavity_accepts_a_density_source(water) -> None:
     source = _GaussianSource(positions)
     cavity = _isodensity(source)
 
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
@@ -310,7 +310,7 @@ def test_callback_failure_stops_further_calls(water) -> None:
 
 def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
     """A cavity whose callback failed once must rebuild cleanly afterwards."""
-    structure = Structure(*water)
+    structure = Structure(*water, z_eff=water[0])
     cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     flaky_lsf.arm()
 
@@ -324,7 +324,7 @@ def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
 
 def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) -> None:
     """A failed second build must not leave the first surface readable as current."""
-    structure = Structure(*water)
+    structure = Structure(*water, z_eff=water[0])
     cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     cavity.update(structure)
     assert cavity.snapshot().ngrid > 0
@@ -339,7 +339,7 @@ def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) ->
 
 def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> None:
     """Model updates propagate callback failures and invalidate their live view."""
-    structure = Structure(*water)
+    structure = Structure(*water, z_eff=water[0])
     model = SolvationModel(
         CONTEXT, _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
     )

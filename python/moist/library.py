@@ -161,6 +161,7 @@ def error_check(func):
 def new_structure(
     natoms: int,
     numbers: np.ndarray,
+    z_eff: np.ndarray,
     positions: np.ndarray,
     lattice: Optional[np.ndarray],
     periodic: Optional[np.ndarray],
@@ -169,6 +170,7 @@ def new_structure(
         error_check(lib.moist_new_structure)(
             natoms,
             _cast("int*", numbers),
+            _cast("int*", z_eff),
             _cast("double*", positions),
             _cast("double*", lattice),
             _cast("bool*", periodic),

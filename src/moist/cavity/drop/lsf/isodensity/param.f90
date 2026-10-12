@@ -9,6 +9,7 @@ module moist_cavity_drop_lsf_isodensity_param
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_basis
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
+   use mctc_io, only: structure_type
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none(type, external)
@@ -16,6 +17,7 @@ module moist_cavity_drop_lsf_isodensity_param
 
    public :: moist_cavity_drop_lsf_isodensity_param_type
    public :: isodensity_exclusion_radius
+   public :: isodensity_max_nuclear_charge
 
    !> Isodensity level set function parameters
    type, extends(moist_model_parameters_type) :: moist_cavity_drop_lsf_isodensity_param_type
@@ -151,6 +153,25 @@ contains
 
       r = min(abs(log(ratio))/kappa, self%exclusion_cap)
    end function isodensity_exclusion_radius
+
+   !> Largest nuclear charge entering the interior cusp bound
+   !>
+   !> The atomic number, not `z_eff`: ECP pseudo-densities reach `|grad ln rho|`
+   !> of 3 `z_eff` (Hf, def2-SVP) but stay below `Z`
+   !>
+   !> @param[in] mol   Molecular structure
+   !> @returns   zmax  Largest atomic number (zero for an empty structure)
+   pure function isodensity_max_nuclear_charge(mol) result(zmax)
+      !> Molecular structure
+      type(structure_type), intent(in) :: mol
+      !> Largest atomic number
+      real(wp) :: zmax
+
+      zmax = 0.0_wp
+      if (allocated(mol%num)) then
+         if (size(mol%num) > 0) zmax = real(maxval(mol%num), wp)
+      end if
+   end function isodensity_max_nuclear_charge
 
    !> Print the isodensity parameters in the verbose cavity diagnostics
    !>

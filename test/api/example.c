@@ -236,7 +236,7 @@ static double h2o_positions[3 * H2O_NATOMS] = {
 
 static moist_structure make_h2o(moist_error error)
 {
-    return moist_new_structure(error, H2O_NATOMS, h2o_numbers, h2o_positions,
+    return moist_new_structure(error, H2O_NATOMS, h2o_numbers, h2o_numbers, h2o_positions,
                                NULL, NULL);
 }
 
@@ -304,7 +304,7 @@ int test_drop_cavity(void)
     int numbers[1] = {1};
     double positions[3] = {0.0, 0.0, 0.0};
 
-    mol = moist_new_structure(error, natoms, numbers, positions, NULL, NULL);
+    mol = moist_new_structure(error, natoms, numbers, numbers, positions, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -2747,7 +2747,7 @@ int test_error_origins(void)
     moist_component component = NULL;
     moist_lsf lsf = NULL;
     moist_cavity cavity = NULL;
-    const int numbers[2] = {1, 1};
+    const int numbers[2] = {1, 1}, overcharged[2] = {1, 2};
     const double coincident[6] = {0}, positions[6] = {0, 0, 0, 2, 0, 0};
     moist_pcm_options pcm = {0};
     moist_drop_options drop = {0};
@@ -2796,10 +2796,16 @@ int test_error_origins(void)
     iso.rho_iso = -1;
     lsf = moist_new_isodensity_lsf(error, 0, NULL, NULL, NULL, NULL, NULL, &iso);
     REQUIRE_ORIGIN("moist_new_isodensity_lsf");
-    mol = moist_new_structure(error, 2, numbers, coincident, NULL, NULL);
+    mol = moist_new_structure(error, 2, numbers, numbers, coincident, NULL, NULL);
     REQUIRE_ORIGIN("moist_new_structure");
     moist_delete_structure(&mol);
-    mol = moist_new_structure(error, 2, numbers, positions, NULL, NULL);
+    mol = moist_new_structure(error, 2, numbers, NULL, positions, NULL, NULL);
+    REQUIRE_ORIGIN("moist_new_structure");
+    if (mol) goto cleanup;
+    mol = moist_new_structure(error, 2, numbers, overcharged, positions, NULL, NULL);
+    REQUIRE_ORIGIN("moist_new_structure");
+    moist_delete_structure(&mol);
+    mol = moist_new_structure(error, 2, numbers, numbers, positions, NULL, NULL);
     if (!mol || moist_check_error(error)) goto cleanup;
     moist_update_structure(error, mol, coincident, NULL);
     REQUIRE_ORIGIN("moist_update_structure");
@@ -2887,7 +2893,7 @@ int test_model_density_rejection(void)
     if (!cavity || moist_check_error(error)) goto cleanup;
     moist_set_isodensity_density(error, cavity, 1, &density);
     if (moist_check_error(error)) goto cleanup;
-    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
+    mol = moist_new_structure(error, 1, &hydrogen, &hydrogen, position, NULL, NULL);
     if (!mol || moist_check_error(error)) goto cleanup;
     model = moist_new_model(error, fixture_context, cavity);
     pcm = moist_new_cpcm_component(error, NULL, 32, NULL);
@@ -2937,7 +2943,7 @@ int test_parts_without_context(void)
     const int hydrogen = 1;
     const double position[3] = {0};
     int failed = 1;
-    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
+    mol = moist_new_structure(error, 1, &hydrogen, &hydrogen, position, NULL, NULL);
     cavity = moist_new_iswig_cavity(error, NULL, NULL, NULL);
     pv = moist_new_pv_component(error, NULL, 1e-4);
     if (!mol || !cavity || !pv || moist_check_error(error)) goto cleanup;

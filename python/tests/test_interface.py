@@ -72,6 +72,7 @@ def diatomic() -> Callable[..., Structure]:
         return Structure(
             np.array([1, 1], dtype=np.int32),
             np.array([[0.0, 0.0, -half], [0.0, 0.0, half]]),
+            z_eff=np.array([1, 1], dtype=np.int32),
         )
 
     return build
@@ -90,7 +91,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     Regenerate deliberately if the default surface is meant to change.
     """
     cavity = CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT)
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
     result = cavity.cavity
 
     assert len(result.a) == 70
@@ -157,7 +158,7 @@ def test_public_cavity_types_accept_their_optional_arguments(
     numbers: np.ndarray,
     positions: np.ndarray,
 ) -> None:
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
     result = cavity.snapshot()
 
     assert isinstance(result, snapshot_type)
@@ -188,6 +189,7 @@ def branching_cross() -> Structure:
             ]
         )
         * aatoau,
+        z_eff=np.array([6, 6, 6, 6, 6]),
     )
 
 
@@ -196,7 +198,7 @@ def test_cavity_declares_its_own_results(
 ) -> None:
     """Every declared field describes itself well enough to be read blind."""
     cavity = CavityDROP(context=CONTEXT)
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
 
     fields = cavity.fields()
     assert fields
@@ -216,7 +218,7 @@ def test_named_results_agree_with_the_snapshot(
 ) -> None:
     """The typed snapshot is a view of the same declarations, not a second read."""
     cavity = CavityDROP(context=CONTEXT)
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
 
     snapshot = cavity.snapshot()
     results = cavity.results()
@@ -235,7 +237,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """A property that was never requested must not read back as zeros."""
-    structure = Structure(numbers, positions)
+    structure = Structure(numbers, positions, z_eff=numbers)
 
     plain = CavityDROP(context=CONTEXT)
     plain.update(structure)
@@ -282,7 +284,7 @@ def test_named_results_reach_every_cavity_type(
 ) -> None:
     """The field API is a cavity feature, not a DROP one."""
     cavity = CavityISwiG(context=CONTEXT)
-    cavity.update(Structure(numbers, positions))
+    cavity.update(Structure(numbers, positions, z_eff=numbers))
 
     names = {field.name for field in cavity.fields()}
     assert {"xyz", "a", "owner", "numbering"} <= names
@@ -314,7 +316,7 @@ def test_cavity_specific_options_reach_the_native_implementations(
     numbers: np.ndarray,
     positions: np.ndarray,
 ) -> None:
-    structure = Structure(numbers, positions)
+    structure = Structure(numbers, positions, z_eff=numbers)
 
     def surface(cavity: Cavity) -> CavitySnapshot:
         cavity.update(structure)
@@ -341,12 +343,12 @@ def test_cavity_specific_options_reach_the_native_implementations(
 
 def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
     with raises(ValueError, match="positions must have shape"):
-        Structure(np.array([1, 1]), positions)
+        Structure(np.array([1, 1]), positions, z_eff=np.array([1, 1]))
 
     with raises(ValueError, match="positions must have shape"):
-        Structure(numbers, np.random.default_rng().random(7))
+        Structure(numbers, np.random.default_rng().random(7), z_eff=numbers)
 
-    structure = Structure(numbers, positions)
+    structure = Structure(numbers, positions, z_eff=numbers)
 
     with raises(ValueError, match="positions must have shape"):
         structure.update(np.random.default_rng().random(7))
@@ -355,10 +357,34 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
         structure.update(positions, np.random.default_rng().random(7))
 
     with raises(ValueError, match="positions must have shape"):
-        Structure(np.array([1, 1]), np.zeros((3, 2)))
+        Structure(np.array([1, 1]), np.zeros((3, 2)), z_eff=np.array([1, 1]))
 
     with raises(ValueError, match="numbers must have shape"):
-        Structure(numbers.reshape(1, -1), positions)
+        Structure(numbers.reshape(1, -1), positions, z_eff=numbers)
+
+
+def test_structure_requires_effective_charges(numbers: np.ndarray, positions: np.ndarray) -> None:
+    with raises(TypeError, match="z_eff"):
+        Structure(numbers, positions)
+
+    with raises(ValueError, match="z_eff must have shape"):
+        Structure(numbers, positions, z_eff=numbers[:-1])
+
+    with raises(ValueError, match="z_eff must be an integer vector"):
+        Structure(numbers, positions, z_eff=numbers.astype(np.float64))
+
+    with raises(ValueError, match="z_eff must be between"):
+        Structure(numbers, positions, z_eff=numbers + 1)
+
+    with raises(ValueError, match="z_eff must be between"):
+        Structure(numbers, positions, z_eff=np.zeros_like(numbers))
+
+    # Oxygen behind a two-electron core: elements stay, charges follow the ECP
+    z_eff = numbers - np.array([2, 0, 0])
+    structure = Structure(numbers, positions, z_eff=z_eff)
+    z_eff[:] = 1
+    np.testing.assert_array_equal(structure.numbers, numbers)
+    np.testing.assert_array_equal(structure.z_eff, [6, 1, 1])
 
 
 # -----------------------------------------------------------------------------
@@ -591,7 +617,7 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     positions: np.ndarray,
 ) -> None:
     """COSMO composes like CPCM but applies its distinct screening factor."""
-    structure = Structure(numbers, positions)
+    structure = Structure(numbers, positions, z_eff=numbers)
     epsilon = 32.0
     results = {}
 
@@ -1016,7 +1042,7 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
                    parameters=_DROP_NLEB26, source=gaussian_density, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(1.0e-4)],
     )
-    model.update(Structure(np.array([1]), np.zeros((1, 3))))
+    model.update(Structure(np.array([1]), np.zeros((1, 3)), z_eff=np.array([1])))
     ngrid = model.cavity.ngrid
     rng = np.random.default_rng(3)
     coupling = model.new_coupling()

@@ -433,10 +433,13 @@ moist_delete_error(moist_error* error) moist_API_SUFFIX__V_1_0;
 **/
 
 /// Create new molecular structure data (quantities in Bohr)
+/// numbers are the elements; z_eff the nuclear charges of the host Hamiltonian,
+/// numbers minus ECP core electrons (pass numbers for all-electron hosts)
 moist_API_ENTRY moist_structure moist_API_CALL
 moist_new_structure(moist_error error,
                     int natoms,
                     const int* numbers /* [natoms] */,
+                    const int* z_eff /* [natoms] */,
                     const double* positions /* : row-major (natoms, 3) */,
                     const double* lattice /* : row-major (3, 3), vectors in rows */,
                     const bool* periodic /* [3] */) moist_API_SUFFIX__V_1_0;

@@ -660,6 +660,9 @@ contains
    !> potential adjoint: every
    !> host quantity is a total, so nothing else in the component sees them
    !>
+   !> The host's charges `z_eff` (atomic numbers minus ECP core electrons) when
+   !> the structure carries them, else the atomic numbers
+   !>
    !> @param[in]  self PCM component instance
    !> @param[out] za   Nuclear charges (nat)
    subroutine pcm_component_nuclear_charges(self, za)
@@ -673,6 +676,12 @@ contains
 
       nat = self%mol_solu%nat
       allocate (za(nat))
+      if (allocated(self%mol_solu%z_eff)) then
+         if (size(self%mol_solu%z_eff) == nat) then
+            za(:) = real(self%mol_solu%z_eff, wp)
+            return
+         end if
+      end if
       do iatom = 1, nat
          za(iatom) = real(self%mol_solu%num(self%mol_solu%id(iatom)), wp)
       end do

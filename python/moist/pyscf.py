@@ -168,11 +168,17 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def structure(self) -> Structure:
-        """Return the molecular structure in moist's representation (bohr)."""
-        numbers = self.mol.atom_charges()
+        """Return the molecular structure in moist's representation (bohr).
+
+        ``numbers`` are the elements and ``z_eff`` the nuclear charges of the
+        Hamiltonian, ``atom_charges()``; they differ only under an ECP.
+        """
+        from pyscf import gto
+
         if self.mol.has_ecp():
             raise ValueError("effective core potentials are not supported")
-        return Structure(numbers, self.mol.atom_coords())
+        numbers = [gto.charge(self.mol.atom_pure_symbol(i)) for i in range(self.mol.natm)]
+        return Structure(numbers, self.mol.atom_coords(), z_eff=self.mol.atom_charges())
 
     def _density_matrix(self) -> np.ndarray:
         if self.dm is None:

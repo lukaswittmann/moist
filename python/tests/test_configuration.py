@@ -116,7 +116,7 @@ def test_shared_context_lifetime(config, baseline):
     del context
     gc.collect()
     assert owner() is not None
-    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    model.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert model.cavity.snapshot().ngrid > 0
     assert model.context.nthreads == 2
     del model
@@ -137,7 +137,7 @@ def test_parts_keep_their_own_context(baseline):
     assert model.cavity.context is context
     del other
     gc.collect()
-    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    model.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert model.context.nthreads == 1
     assert context.nthreads == 2
     del model, cavity, component, context
@@ -152,7 +152,7 @@ def test_parts_without_context_run_on_the_model(config):
     cavity = config.build()
     component = moist.ModelComponentPV(1e-4)
     assert cavity.context is None and component.context is None
-    structure = moist.Structure([1], [[0., 0., 0.]])
+    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
     with pytest.raises(RuntimeError, match="Cavity has no context"):
         cavity.update(structure)
     model = moist.SolvationModel(CONTEXT, cavity, [component])
@@ -205,7 +205,7 @@ def test_all_drop_surfaces_share_parameters(lsf, gaussian_density):
     config = moist.DROP(lsf=lsf, parameters=parameters)
     source = gaussian_density if config.density_dependent else None
     cavity = config.build(source=source, context=CONTEXT)
-    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    cavity.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert cavity.snapshot().ngrid > 0
     assert cavity.parameters == parameters
     tolerance = library.ffi.new("double *")
@@ -228,7 +228,7 @@ def test_custom_radii_are_copied_and_control_native_surface(factory, params):
     radii = moist.CustomRadii(values)
     values[:] = 7
     by_element = moist.CustomRadii([2.5], numbers=[1])
-    structure = moist.Structure([1], [[0., 0., 0.]])
+    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
     cavities = [factory(parameters=params,
                         radii=item, context=CONTEXT) for item in (radii, by_element)]
     for cavity in cavities:
@@ -246,7 +246,7 @@ def test_custom_radii_are_copied_and_control_native_surface(factory, params):
 def test_builtin_radius_models(radii):
     cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26),
                                radii=radii, context=CONTEXT)
-    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    cavity.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert np.isfinite(cavity.area) and cavity.area > 0
 
 
@@ -255,7 +255,7 @@ def test_model_copy_retains_configuration_and_callback(gaussian_density):
                               parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
     model = moist.SolvationModel(CONTEXT, cavity, [moist.ModelComponentPV(1e-4)])
     del cavity
-    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    model.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
     energy = np.array(0.)
@@ -281,7 +281,7 @@ def test_low_level_model_retains_callback_owner(gaussian_density):
     del cavity
     gc.collect()
     assert owner() is not None
-    structure = moist.Structure([1], [[0., 0., 0.]])
+    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
     library.update_model(model, structure._as_handle())
     assert library.get_cavity_sizes(library.get_model_cavity(model))[0] > 0
     del model
@@ -295,7 +295,7 @@ def test_parameter_replacement_creates_independent_live_state():
     assert config.parameters.nleb == 26
     assert finer.parameters.nleb == 50
     first, second = config.build(context=CONTEXT), config.build(context=CONTEXT)
-    first.update(moist.Structure([1], [[0., 0., 0.]]))
+    first.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     with pytest.raises(RuntimeError, match="not been successfully updated"):
         second.snapshot()
     assert pickle.loads(pickle.dumps(config)) == config
@@ -306,12 +306,13 @@ def test_structure_owns_input_buffers_on_construction_and_update():
     positions = np.array([[0., 0., 0.]])
     lattice = np.eye(3) * 20
     periodic = np.zeros(3, dtype=np.bool_)
-    structure = moist.Structure(numbers, positions, lattice, periodic)
+    structure = moist.Structure(numbers, positions, lattice, periodic, z_eff=numbers)
     numbers[:] = 8
     positions[:] = 10
     lattice[:] = 40
     periodic[:] = True
     np.testing.assert_array_equal(structure.numbers, [1])
+    np.testing.assert_array_equal(structure.z_eff, [1])
     np.testing.assert_array_equal(structure.positions, [[0., 0., 0.]])
     np.testing.assert_array_equal(structure.lattice, np.eye(3) * 20)
     np.testing.assert_array_equal(structure.periodic, [False, False, False])
@@ -372,7 +373,7 @@ def test_configuration_build_preserves_radii_and_parameters(factory, parameters)
     cavity = config.build(context=CONTEXT)
     assert cavity.parameters == parameters
     assert cavity.radius_model is radii
-    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    cavity.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     np.testing.assert_array_equal(cavity.radii, [2.5])
 
 
@@ -393,7 +394,7 @@ def test_isodensity_configuration_callback_object_and_order(monkeypatch, gaussia
     monkeypatch.setattr(library, "new_drop_cavity_isodensity_callback", capture)
     cavity = config.build(source=source, pass_order=True, context=CONTEXT)
     assert observed == {"callback": gaussian_density, "pass_order": True}
-    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    cavity.update(moist.Structure([1], [[0., 0., 0.]], z_eff=[1]))
     assert cavity.snapshot().ngrid > 0
     with pytest.raises(TypeError, match="requires a callable"):
         config.build(source=object(), context=CONTEXT)
@@ -440,7 +441,7 @@ def test_custom_radii_element_mapping_handles_reordered_atoms():
     assert radii.numbers == (1, 8)
     config = moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii)
     cavity = config.build(context=CONTEXT)
-    cavity.update(moist.Structure([8, 1], [[0., 0., 0.], [7., 0., 0.]]))
+    cavity.update(moist.Structure([8, 1], [[0., 0., 0.], [7., 0., 0.]], z_eff=[8, 1]))
     np.testing.assert_array_equal(cavity.radii, [3., 2.5])
 
 
@@ -451,7 +452,7 @@ def test_custom_radii_element_mapping_handles_reordered_atoms():
 ])
 def test_builtin_radii_select_their_native_radius_set(radii, kind):
     parameters = moist.ISwiGParameters(nleb=26)
-    structure = moist.Structure([1, 3, 8], [[0., 0., 0.], [7., 0., 0.], [14., 0., 0.]])
+    structure = moist.Structure([1, 3, 8], [[0., 0., 0.], [7., 0., 0.], [14., 0., 0.]], z_eff=[1, 3, 8])
     actual = moist.CavityISwiG(parameters=parameters, radii=radii, context=CONTEXT)
     actual.update(structure)
     expected = library.new_iswig_cavity(parameters,

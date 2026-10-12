@@ -21,7 +21,8 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
+      isodensity_max_nuclear_charge
    use moist_output_format, only: format_string
    implicit none(type, external)
    private
@@ -141,10 +142,7 @@ contains
       real(wp), intent(in) :: radii(:)
 
       call lsf_base_update(self, mol, radii)
-      self%zmax = 0.0_wp
-      if (allocated(mol%num)) then
-         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
-      end if
+      self%zmax = isodensity_max_nuclear_charge(mol)
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point

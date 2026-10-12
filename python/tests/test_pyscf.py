@@ -855,6 +855,17 @@ def test_ecp_molecule_is_rejected_before_element_lookup():
         host.structure()
 
 
+@pytest.mark.host
+def test_host_structure_separates_elements_from_ecp_charges(monkeypatch):
+    mol = gto.M(atom="I 0 0 0; H 0 0 3.04", basis="def2-svp", ecp="def2-svp", verbose=0)
+    # Past the guard: the mapping it hands moist once ECPs are admitted
+    monkeypatch.setattr(mol, "has_ecp", lambda: False)
+    structure = PySCFHost(mol).structure()
+    np.testing.assert_array_equal(structure.numbers, [53, 1])
+    np.testing.assert_array_equal(structure.z_eff, mol.atom_charges())
+    assert structure.z_eff[0] == 53 - mol.atom_nelec_core(0) < 53
+
+
 def _energy(model, coupling):
     energy = np.array(0.0)
     model.get_energy(coupling, energy)

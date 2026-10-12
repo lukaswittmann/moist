@@ -76,6 +76,7 @@ contains
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
          & new_unittest("cpcm_molecular_surface_weights", test_cpcm_molecular_surface_weights), &
          & new_unittest("cpcm_nuclear_gradient", test_cpcm_nuclear_gradient), &
+         & new_unittest("cpcm_nuclear_gradient_ecp", test_cpcm_nuclear_gradient_ecp), &
          & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
@@ -2071,9 +2072,27 @@ contains
    end subroutine test_cpcm_molecular_surface_weights
 
 !> Check the complete CPCM nuclear gradient against finite differences
+   subroutine test_cpcm_nuclear_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_cpcm_nuclear_gradient(error, core=0)
+   end subroutine test_cpcm_nuclear_gradient
+
+!> Check the CPCM nuclear gradient of an ECP host against finite differences
+!>
+!> The host potential is that of `z_eff`, so the direct term must use `z_eff`
+   subroutine test_cpcm_nuclear_gradient_ecp(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_cpcm_nuclear_gradient(error, core=2)
+   end subroutine test_cpcm_nuclear_gradient_ecp
+
+!> Check the complete CPCM nuclear gradient against finite differences
 !>
 !> This exercises the component entry point end to end with the point-charge
-!> potential of the nuclear charges Z supplied through the coupling trace and
+!> potential of the nuclear charges supplied through the coupling trace and
 !> re-evaluated on every displaced cavity. Both terms in
 !>
 !>    dE/dR_A = q^T dphi/dR_A
@@ -2081,10 +2100,15 @@ contains
 !>
 !> are active because rebuilding the iSwiG cavity moves its  grid points and changes
 !> its switching factors while the source charges move with the nuclei
-   subroutine test_cpcm_nuclear_gradient(error)
+!>
+!> @param[out] error Test failure
+!> @param[in]  core  ECP core electrons on one displaced atom (0: all-electron)
+   subroutine check_cpcm_nuclear_gradient(error, core)
 
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> ECP core electrons on one displaced atom
+      integer, intent(in) :: core
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -2096,9 +2120,11 @@ contains
       type(cavity_type_iswig) :: cavity
       !> Point-charge potential trace, refilled on every displaced cavity
       type(coupling_type) :: coupling
-      !> Point charges generating the potential: the nuclear charges Z, so the
-      !> analytic gradient's moving sources coincide with the potential's
+      !> Point charges generating the potential: the host's nuclear charges, so
+      !> the analytic gradient's moving sources coincide with the potential's
       real(wp), allocatable :: qat(:)
+      !> Effective nuclear charges of the ECP variant
+      integer, allocatable :: z_eff(:)
       !> Atom index used to fill the charges
       integer :: iat
       !> Analytic PCM nuclear gradient
@@ -2141,9 +2167,20 @@ contains
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
+      if (core > 0) then
+         ! The core goes on an atom the finite differences below displace: only
+         ! its own direct term carries its charge
+         z_eff = mols(1)%num(mols(1)%id)
+         iat = findloc(z_eff(:min(2, mols(1)%nat)) > core, .true., dim=1)
+         call check(error, iat > 0, more="ECP variant needs a displaced atom heavier than its core")
+         if (allocated(error)) return
+         z_eff(iat) = z_eff(iat) - core
+         mols(1)%z_eff = z_eff
+      end if
       allocate (qat(mols(1)%nat))
       do iat = 1, mols(1)%nat
          qat(iat) = real(mols(1)%num(mols(1)%id(iat)), wp)
+         if (core > 0) qat(iat) = real(mols(1)%z_eff(iat), wp)
       end do
 
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb)
@@ -2298,7 +2335,7 @@ contains
          end if
       end subroutine displaced_energy
 
-   end subroutine test_cpcm_nuclear_gradient
+   end subroutine check_cpcm_nuclear_gradient
 
 !> Check the external-potential CPCM nuclear gradient against finite differences
 !>

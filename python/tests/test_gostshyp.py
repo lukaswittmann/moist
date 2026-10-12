@@ -574,7 +574,7 @@ def test_params_update_drops_the_previous_surfaces_moments():
     displaced = mol.atom_coords()
     displaced[0, 2] += 0.05
     numbers = np.asarray(mol.atom_charges(), dtype=np.int64)
-    wall.model.update(Structure(numbers, displaced))
+    wall.model.update(Structure(numbers, displaced, z_eff=numbers))
 
     # Vacuous unless the surface really moved while keeping its point count --
     # exactly the case a shape check cannot distinguish.
@@ -824,7 +824,7 @@ def test_gradient_surface_channel_matches_fd(system, basis):
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
         model = SolvationModel(CONTEXT, cavity_config().build(source=host), [ModelComponentGOSTSHYP(PRESSURE)])
-        model.update(Structure(numbers, displaced))
+        model.update(Structure(numbers, displaced, z_eff=numbers))
         return component_energy(model, mol, dm), model.cavity.ngrid
 
     for index in sampled_coordinates(mol.natm):
