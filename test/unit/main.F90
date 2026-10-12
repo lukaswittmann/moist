@@ -60,12 +60,14 @@ program tester
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
    use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
-   use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
-   use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
-   use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
-   use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
    use test_model_component_pcm_electrostatics, only: collect_model_component_pcm_electrostatics
    use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
+   use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
+   use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
+   use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
+   use test_model_component_pcm_solvers, only: collect_model_component_pcm_solvers
+   use test_model_component_pcm_layers, only: collect_model_component_pcm_layers
+   use test_model_component_pcm_native_golden, only: collect_model_component_pcm_native_golden
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_continuum, only: collect_model_continuum
@@ -137,15 +139,15 @@ program tester
       & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &
       & new_testsuite("cavity_reference", collect_cavity_reference), &
       & new_testsuite("cavity_surface_adjoint", collect_cavity_surface_adjoint), &
-      & new_testsuite("model_component_pcm_amat", collect_model_component_pcm_amat), &
-      & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
-      & new_testsuite("model_component_pcm_amat_assembly", &
-         collect_model_component_pcm_amat_assembly), &
-      & new_testsuite("model_component_pcm_amat_adjoint", &
-         collect_model_component_pcm_amat_adjoint), &
       & new_testsuite("model_component_pcm_electrostatics", &
          collect_model_component_pcm_electrostatics), &
       & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
+      & new_testsuite("model_component_pcm_amat_assembly", collect_model_component_pcm_amat_assembly), &
+      & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
+      & new_testsuite("model_component_pcm_amat_adjoint", collect_model_component_pcm_amat_adjoint), &
+      & new_testsuite("model_component_pcm_solvers", collect_model_component_pcm_solvers), &
+      & new_testsuite("model_component_pcm_layers", collect_model_component_pcm_layers), &
+      & new_testsuite("model_component_pcm_native_golden", collect_model_component_pcm_native_golden), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_continuum", collect_model_continuum), &

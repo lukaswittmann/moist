@@ -365,7 +365,7 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     surface = Isodensity(parameters=IsodensityParameters(rho_iso=8e-4)) if density_dependent else SvdW()
     radii = CustomRadii([3., 2.5, 2.5])
     config = DROP(lsf=surface, parameters=parameters, radii=radii)
-    terms = [ModelComponentCPCM(32, parameters=PCMParameters(solver="lu"))]
+    terms = [ModelComponentCPCM(32, parameters=PCMParameters(solver="dense"))]
     mf = mol.RHF().MOIST(cavity=config, components=terms, context=CONTEXT)
     dm = mf.get_init_guess()
     result = mf.with_moist.evaluate(dm)

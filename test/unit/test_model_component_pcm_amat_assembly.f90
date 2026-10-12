@@ -4,10 +4,10 @@ module test_model_component_pcm_amat_assembly
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
+   use test_pcm_conductor_probe, only: probe_conductor_matrix
    use test_helpers, only: get_test_structures, center_at_origin, &
                            get_test_cavity_iswig, rel_deviation
-   use test_model_component_pcm_amat, only: count_branches, nmol, nleb_survey
+   use test_pcm_conductor_probe, only: count_branches, nmol, nleb_survey
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -115,7 +115,7 @@ contains
       type(moist_error_type), allocatable :: err
       !> Structure and matrix indices, grid size
       integer :: imol, i, j, ngrid
-      !> Largest relative deviation and largest asymmetry
+      !> Largest relative deviation and entry-scaled asymmetry
       real(wp) :: dev, asym
       !> Failure context
       character(len=128) :: context
@@ -132,7 +132,7 @@ contains
 
          ngrid = cavity%ngrid
          allocate (amat(ngrid, ngrid))
-         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+         call probe_conductor_matrix(cavity%xi0, cavity%f, cavity%xyz, amat, err)
          if (allocated(err)) then
             call test_failed(error, "assembly failed: "//err%message)
             return
@@ -144,17 +144,18 @@ contains
          call check(error, dev, 0.0_wp, thr=ref_thr, more=trim(context))
          if (allocated(error)) return
 
-         ! The lower triangle is written by the blocked mirror rather than by
-         ! the kernel, so an indexing slip there shows up only as asymmetry
+         ! Generated kernels evaluate both triangles independently; scale by
+         ! each pair, so large diagonal entries cannot hide off-diagonal errors
          asym = 0.0_wp
          do j = 1, ngrid
             do i = j + 1, ngrid
-               asym = max(asym, abs(amat(i, j) - amat(j, i)))
+               asym = max(asym, abs(amat(i, j) - amat(j, i)) &
+                  & /max(tiny(1.0_wp), abs(amat(i, j)), abs(amat(j, i))))
             end do
          end do
          write (context, "(a,i0,a)") "structure ", imol, &
-            ": mirrored triangle does not match the assembled one"
-         call check(error, asym, 0.0_wp, thr=0.0_wp, more=trim(context))
+            ": independently assembled triangles differ beyond roundoff"
+         call check(error, asym, 0.0_wp, thr=8.0_wp*epsilon(1.0_wp), more=trim(context))
          if (allocated(error)) return
 
          deallocate (amat)
@@ -235,7 +236,7 @@ contains
 
       ngrid = cavity%ngrid
       allocate (amat(ngrid, ngrid))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+      call probe_conductor_matrix(cavity%xi0, cavity%f, cavity%xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "assembly failed: "//err%message)
          return
@@ -267,7 +268,7 @@ contains
       xyz(:, 3) = [1.7_wp, -0.4_wp, 0.9_wp]
       xyz(:, 4) = [-3.1_wp, 2.2_wp, -1.4_wp]
 
-      call assemble_pcm_amat(xi, f, xyz, amat, err)
+      call probe_conductor_matrix(xi, f, xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "assembly failed: "//err%message)
          return

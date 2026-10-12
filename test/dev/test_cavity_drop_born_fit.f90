@@ -20,8 +20,9 @@ module test_cavity_drop_born_fit
    use moist_cavity_drop_lsf_svdw, only : moist_cavity_drop_lsf_svdw_type
    use moist_math_grid_angular_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
-   use moist_model_continuum_component_pcm_solvers, only : solve_pcm_cholesky
-   use moist_model_continuum_component_pcm_amat, only : assemble_pcm_amat
+   use moist_model_continuum_component_pcm_solvers, only : pcm_dense_solver
+   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only : conductor_state, &
+      & conductor_assemble, conductor_medium, conductor_solve
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
@@ -360,10 +361,11 @@ contains
       character(len=:), allocatable, intent(out) :: message
 
       type(mctc_error), allocatable :: cavity_error
-      real(wp), allocatable :: amat(:, :)
+      type(conductor_state) :: pcm
+      type(pcm_dense_solver) :: solver
       real(wp), allocatable :: phi(:)
-      real(wp), allocatable :: rhs(:)
       real(wp), allocatable :: sigma(:)
+      real(wp), allocatable :: grad_phi(:)
       integer :: igrid
 
       cavity%iswig%swx = zeta
@@ -373,26 +375,27 @@ contains
          return
       end if
 
-      allocate(amat(cavity%ngrid, cavity%ngrid))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, cavity_error)
+      call conductor_assemble(pcm, cavity%xyz, cavity%xi0, cavity%f, cavity_error, solver)
       if (allocated(cavity_error)) then
-         message = "DROP A-matrix assembly failed: " // trim(cavity_error%message)
+         message = "DROP conductor assembly failed: " // trim(cavity_error%message)
+         return
+      end if
+      call conductor_medium(pcm, feps, cavity_error)
+      if (allocated(cavity_error)) then
+         message = "DROP conductor medium failed: " // trim(cavity_error%message)
          return
       end if
 
-      allocate(phi(cavity%ngrid), rhs(cavity%ngrid), sigma(cavity%ngrid))
+      allocate(phi(cavity%ngrid), sigma(cavity%ngrid), grad_phi(cavity%ngrid))
       do igrid = 1, cavity%ngrid
          phi(igrid) = source_charge / norm2(cavity%xyz(:, igrid))
       end do
 
-      rhs = -feps * phi
-      call solve_pcm_cholesky(amat, rhs, sigma, error=cavity_error)
+      call conductor_solve(pcm, phi, energy, sigma, grad_phi, cavity_error)
       if (allocated(cavity_error)) then
-         message = "CPCM Cholesky solve failed: " // trim(cavity_error%message)
+         message = "DROP conductor solve failed: " // trim(cavity_error%message)
          return
       end if
-
-      energy = 0.5_wp * dot_product(sigma, phi)
    end subroutine compute_drop_born_energy
 
    !> Analytical Born solvation energy for a central unit charge in a sphere

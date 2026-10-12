@@ -9,7 +9,7 @@
 !>    contracted energy `q1^T A q2` on a molecular surface, where a grid point has
 !>    hundreds of partners spread across both kernel branches
 !>  * the nuclear gradient against a contraction of the dense derivative tensor
-!>    [[assemble_pcm_amat_with_gradient]] builds entry by entry, which is a
+!>    [[probe_conductor_matrix_gradient]] builds entry by entry, which is a
 !>    second, independent route to the same number
 !>  * the nuclear contraction against hand-computed values, one weight channel
 !>    at a time, on manufactured derivatives for three points and two atoms
@@ -18,13 +18,13 @@ module test_model_component_pcm_amat_adjoint
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
-                                             assemble_pcm_amat_with_gradient, &
-                                             pcm_amat_surface_weights, &
-                                             pcm_amat_nuclear_gradient
+   use test_pcm_conductor_probe, only: probe_conductor_matrix, &
+                                       probe_conductor_matrix_gradient, &
+                                       probe_conductor_bilinear_weights, &
+                                       probe_conductor_nuclear_gradient
    use test_helpers, only: get_test_structures, center_at_origin, fd4_scalar, &
                            fd4_offsets, get_test_cavity_iswig, rel_deviation
-   use test_model_component_pcm_amat, only: count_branches, nmol, nleb_survey
+   use test_pcm_conductor_probe, only: count_branches, nmol, nleb_survey
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -118,7 +118,7 @@ contains
 
       ngrid = size(xi)
       allocate (amat(ngrid, ngrid), aq(ngrid))
-      call assemble_pcm_amat(xi, f, xyz, amat, err)
+      call probe_conductor_matrix(xi, f, xyz, amat, err)
       energy = 0.0_wp
       if (allocated(err)) return
       aq = matmul(amat, q2)
@@ -182,7 +182,7 @@ contains
       call make_charges(ngrid, q1, q2)
 
       allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
-      call pcm_amat_surface_weights(xi, f, xyz, q1, q2, w_xi, w_f, w_xyz, err)
+      call probe_conductor_bilinear_weights(xi, f, xyz, q1, q2, w_xi, w_f, w_xyz, err)
       if (allocated(err)) then
          call test_failed(error, "surface-weight assembly failed: "//err%message)
          return
@@ -307,12 +307,12 @@ contains
 
       allocate (amat(ngrid, ngrid), amat_dense(ngrid, ngrid))
       allocate (amat1_rA(3, nsph, ngrid, ngrid))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+      call probe_conductor_matrix(cavity%xi0, cavity%f, cavity%xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "assembly failed: "//err%message)
          return
       end if
-      call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
+      call probe_conductor_matrix_gradient(cavity%xi0, cavity%f, cavity%xyz, &
                                            cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
                                            amat_dense, amat1_rA, err)
       if (allocated(err)) then
@@ -330,16 +330,16 @@ contains
       end do
 
       allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
-      call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, q1, q2, &
-                                    w_xi, w_f, w_xyz, err)
+      call probe_conductor_bilinear_weights(cavity%xi0, cavity%f, cavity%xyz, q1, q2, &
+                                            w_xi, w_f, w_xyz, err)
       if (allocated(err)) then
          call test_failed(error, "surface-weight assembly failed: "//err%message)
          return
       end if
 
       allocate (grad(3, nsph), grad_ref(3, nsph))
-      call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
-                                     w_xi, w_f, w_xyz, grad, err)
+      call probe_conductor_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
+                                            w_xi, w_f, w_xyz, grad, err)
       if (allocated(err)) then
          call test_failed(error, "adjoint contraction failed: "//err%message)
          return
@@ -434,7 +434,7 @@ contains
             return
          end select
 
-         call pcm_amat_nuclear_gradient(xi1, f1, xyz1, w_xi, w_f, w_xyz, grad, err)
+         call probe_conductor_nuclear_gradient(xi1, f1, xyz1, w_xi, w_f, w_xyz, grad, err)
          if (allocated(err)) then
             call test_failed(error, "manufactured nuclear contraction failed: "// &
                              err%message)

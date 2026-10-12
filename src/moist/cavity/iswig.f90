@@ -56,8 +56,12 @@ module moist_cavity_iswig
       real(wp) :: cached_swx = 0.0_wp
       real(wp), allocatable :: ang_grid(:, :) ! (3, num_leb)
       real(wp), allocatable :: ang_weight(:)  ! (num_leb), solid-angle weights summing to 4*pi
+      !> Whether the next update should expose principal curvatures
+      logical :: need_curvature = .false.
 
    contains
+      !> Request surface geometry for the next update
+      procedure :: configure => configure_cavity_iswig
       procedure :: update => update_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
       !> Contract surface-observable adjoints into the nuclear gradient
@@ -70,6 +74,25 @@ module moist_cavity_iswig
    end type cavity_type_iswig
 
 contains
+
+   !> Enable optional surface geometry for the next update
+   !>
+   !> @param[in,out] self iSwiG cavity
+   !> @param[in] normal Request normals, which iSwiG already stores
+   !> @param[in] curvature Request principal curvatures
+   !> @param[out] error Configuration error
+   subroutine configure_cavity_iswig(self, normal, curvature, error)
+      !> iSwiG cavity
+      class(cavity_type_iswig), intent(inout) :: self
+      !> Request normals, which iSwiG already stores
+      logical, intent(in), optional :: normal
+      !> Request principal curvatures
+      logical, intent(in), optional :: curvature
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+
+      if (present(curvature)) self%need_curvature = self%need_curvature .or. curvature
+   end subroutine configure_cavity_iswig
 
    !> Restore compiled parameter defaults
    !>
@@ -142,8 +165,8 @@ contains
       if (present(ctx)) self%ctx => ctx
       self%label = "vdW iSwiG"
       self%param = settings
-      if (allocated(self%radius_model)) deallocate(self%radius_model)
-      allocate(self%radius_model, source=radius_model)
+      if (allocated(self%radius_model)) deallocate (self%radius_model)
+      allocate (self%radius_model, source=radius_model)
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
       self%updated = .false.
@@ -215,6 +238,8 @@ contains
       if (allocated(self%f1_rA)) deallocate (self%f1_rA)
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
       if (allocated(self%v1_rA)) deallocate (self%v1_rA)
+      if (allocated(self%k1)) deallocate (self%k1)
+      if (allocated(self%k2)) deallocate (self%k2)
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
@@ -267,6 +292,11 @@ contains
       if (allocated(error)) return
       self%updated = .true.
       self%built = .true.
+
+      if (self%need_curvature) then
+         self%k1 = 1.0_wp/self%radii(self%owner)
+         self%k2 = self%k1
+      end if
 
    end subroutine update_cavity_iswig
 

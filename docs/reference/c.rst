@@ -47,12 +47,35 @@ the ``nuclear_charges`` request (:ref:`coupling-requests`).
 Add every component before the first ``moist_update_model``; later additions
 are rejected.
 
-SvdW, CFC, isodensity, DROP, iSwiG and PCM settings have separate
+PCM constructors use one ``moist_pcm_options`` layout. Initialize it with
+``moist_init_pcm_options`` before changing fields. ``solver`` is
+``moist_pcm_solver_dense`` (default) or ``moist_pcm_solver_iterative``;
+``storage`` is ``moist_pcm_storage_auto`` (default), ``dense`` or
+``matrix_free``. The remaining controls are ``solver_tol``,
+``solver_maxiter``, ``solver_restart``, ``memory_budget_gib`` (integer GiB),
+``newton_tol`` and ``newton_maxiter``. See :doc:`/models/components/pcm/index`
+for defaults and solver behavior.
+
+The available PCM constructors are ``moist_new_cpcm_component`` and
+``moist_new_cosmo_component``; ``moist_new_iefpcm_component`` and
+``moist_new_ssvpe_component``; ``moist_new_dpcm_component`` and
+``moist_new_dpcm_original_component``; ``moist_new_lpb_component``;
+``moist_new_slic_component``; and ``moist_new_nonlocal_component``. The first
+six take ``epsilon``. LPB adds ``kappa``; SLIC takes ``epsilon, alpha, beta,
+gamma, mu, phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda,
+eps_solute``. Every constructor ends with an optional options pointer.
+
+SvdW, CFC, isodensity, DROP, iSwiG, PCM, and GOSTSHYP settings have separate
 options types. ``struct_size`` is set by the initializer; do not modify it.
-The complete 1.0 layout is the minimum size; existing fields keep their offsets
-and meanings, and future libraries default fields an older struct lacks.
+The complete layout in the installed header is the minimum size.
 Larger structs are accepted;
 unknown trailing fields are ignored by constructors and untouched by initializers.
+
+The generated PCM implementation changes ``moist_pcm_options`` and the solver
+IDs: ``dense = 1`` and ``iterative = 2``. Rebuild callers against the current
+header and initialize the complete options struct; the old PCM layout is
+rejected. The inversion, LU, and Cholesky selectors are replaced by ``dense``,
+which chooses the factorization required by the generated operator.
 
 ``moist_new_context(error, nthreads, verbosity, debug)`` creates the :ref:`run context <api-context>`.
 C has no optional arguments; ``0, 2, false`` gives the library defaults: the calling thread's ``omp_get_max_threads()``, the normal printout (:ref:`levels <verbosity>`) and no debug stream.
@@ -123,8 +146,8 @@ For example, positions and gradients are ``[natoms][3]``; grid vectors are
 of the host loop -- the coupling and response entries below and the cavity
 and model field getters -- take no size: moist reads or writes exactly the documented
 shape, and the host allocates it. ``moist_get_cavity_results``,
-``moist_get_cavity_gaussian``, ``moist_assemble_amat``,
-``moist_get_model_gradient`` and the gradient-tensor getters take ``int``
+``moist_get_cavity_gaussian``, ``moist_get_model_gradient`` and the
+gradient-tensor getters take ``int``
 capacities, which may exceed the logical size; padding remains untouched.
 The ``moist_contract_*`` entries use the cavity's own ``ngrid`` and ``nsph``.
 The header defines shapes and strides.
@@ -203,10 +226,10 @@ with the conventions of the model field getters; only real fields exist.
 ``gaussian_moments`` declares ``width[ngrid]``; ``density_matrix`` declares
 ``nbasis``, a real scalar giving both matrix dimensions. ``_count`` and ``_info`` enumerate whatever the current item declares,
 so ``count`` sizes a buffer for any item. The items of the
-:ref:`response table <coupling-response>` declare ``w_phi[ngrid]`` of
-``potential_adjoint``; ``w_rho[ngrid]``, ``w_grad_rho[ngrid][3]`` and
+:ref:`response table <coupling-response>` declare ``w_phi[ngrid]`` and, when computed,
+``w_dphi_dr[ngrid][3]`` of ``potential_adjoint``; ``w_rho[ngrid]``, ``w_grad_rho[ngrid][3]`` and
 ``w_hess_rho[ngrid][3][3]`` of ``density``; ``w_overlap[ngrid]`` and
-``w_normal_deriv[ngrid]`` of ``gaussian_amplitude``. ``w_hess_rho`` is
+``w_normal_deriv[ngrid]`` of ``gaussian_amplitude``. ``w_hess_rho`` and request output ``d2phi_dr2`` use
 ``[point][b][a]`` for native ``(a,b,point)`` and need not be symmetric;
 ``_real`` writes exactly the ``count`` elements ``_info`` reports. No current
 item or request, a field it does not declare and a NULL buffer are errors
@@ -256,7 +279,7 @@ including answers submitted earlier in the same pass.
    moist_get_model_energy(err, model, cpl, &energy);
 
    moist_prepare_model_response(err, model, cpl);
-   /* Walk the requests again as above: a density-dependent cavity also needs dphi_dr, dphi_dxi. */
+   /* Walk the requests again as above; answer the required derivatives. */
    moist_get_model_response(err, model, cpl, resp);
    while (moist_next_response_item(err, resp)) {
        char item[MOIST_NAME_MAX + 1];
@@ -332,8 +355,7 @@ caller-owned buffers; initialize them before the first call. Failure leaves the
 accumulator unchanged. If a component fails during energy evaluation, only
 earlier components' energies remain available.
 
-The full derivative tensors of ``moist_get_cavity_gradient`` and
-``moist_get_amat_gradient`` are diagnostic facilities. Normal host integration
+The full derivative tensors of ``moist_get_cavity_gradient`` are diagnostic facilities. Normal host integration
 uses model gradients and response weights, keeping cavity-motion contractions
 inside MOIST. Their dimensions reverse the native axes exactly; consult the
 header for each axis's meaning. The ``r_iI1_rA`` and ``rho1_rA`` outputs of

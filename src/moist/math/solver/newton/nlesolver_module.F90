@@ -65,6 +65,7 @@ module nlesolver_module
    integer, parameter, public :: NLESOLVER_SPARSITY_LUSOL = 3 !! [[nlesolver_type:sparsity_mode]] : assume sparse (use LUSOL sparse solver).
    integer, parameter, public :: NLESOLVER_SPARSITY_LSMR = 4 !! [[nlesolver_type:sparsity_mode]] : assume sparse (use LSMR sparse solver).
    integer, parameter, public :: NLESOLVER_SPARSITY_CUSTOM_SPARSE = 5 !! [[nlesolver_type:sparsity_mode]] : assume sparse (use a user provided sparse solver).
+   integer, parameter, public :: NLESOLVER_SPARSITY_CUSTOM_STEP = 6 !! [[nlesolver_type:sparsity_mode]] : the user computes the Newton step.
    !integer,parameter,public :: NLESOLVER_SPARSITY_CUSTOM_DENSE  = 6 !! [[nlesolver_type:sparsity_mode]] : assume dense (use a user provided dense solver). [not available]
    ! if add will have to update code below where sparsity_modes /= 1 is assumed sparse
 
@@ -154,6 +155,7 @@ module nlesolver_module
                                                              !! * 3 - assume sparse (use LUSOL sparse solver).
                                                              !! * 4 - assume sparse (use LSMR sparse solver).
                                                              !! * 5 - assume sparse (use a user provided sparse solver).
+                                                             !! * 6 - the user computes the Newton step (`custom_step`).
       integer :: n_nonzeros = -1 !! number of nonzero Jacobian elements (used for `sparsity_mode > 1`)
       integer, dimension(:), allocatable :: irow !! sparsity pattern nonzero elements row indices.
       integer, dimension(:), allocatable :: icol !! sparsity pattern nonzero elements column indices
@@ -189,6 +191,9 @@ module nlesolver_module
 
       ! custom sparse solver:
       procedure(sparse_solver_func), pointer :: custom_solver_sparse => null() !! user-supplied sparse linear solver routine (used for `sparsity_mode=5`)
+
+      ! custom Newton step:
+      procedure(step_func), pointer :: custom_step => null() !! user-supplied Newton step (used for `sparsity_mode=6`)
 
       procedure(norm_func), pointer :: norm => null() !! function for computing the norm of the `f` vector
 
@@ -226,6 +231,17 @@ module nlesolver_module
          real(wp), dimension(n_cols), intent(out) :: x !! solution (size is `n`)
          integer, intent(out) :: istat !! status code (=0 for success)
       end subroutine sparse_solver_func
+
+      subroutine step_func(me, x, fvec, p, istat)
+            !! compute the Newton step `p = -J(x)^-1 fvec` without forming `J` (for `sparsity_mode=6`).
+         import :: nlesolver_type, wp
+         implicit none(type, external)
+         class(nlesolver_type), intent(inout) :: me
+         real(wp), dimension(:), intent(in)  :: x     !! current variables
+         real(wp), dimension(:), intent(in)  :: fvec  !! function vector at `x`
+         real(wp), dimension(:), intent(out) :: p     !! Newton step
+         integer, intent(out)               :: istat !! status flag (0 if there were no errors)
+      end subroutine step_func
 
       subroutine func_func(me, x, f)
             !! compute the function
@@ -464,7 +480,7 @@ contains
                                              sparsity_mode, irow, icol, &
                                              atol, btol, conlim, damp, itnlim, nout, &
                                              lusol_method, localSize, custom_solver_sparse, &
-                                             bounds_mode, xlow, xupp, norm_mode)
+                                             bounds_mode, xlow, xupp, norm_mode, custom_step)
 
       implicit none
 
@@ -540,6 +556,8 @@ contains
                                              !! At most `min(m,n)` vectors will be allocated.
       procedure(sparse_solver_func), optional :: custom_solver_sparse !! for `sparsity_mode=5`, this is the
                                                                    !! user-provided linear solver.
+      procedure(step_func), optional :: custom_step !! for `sparsity_mode=6`, this is the
+                                                 !! user-provided Newton step.
       integer, intent(in), optional :: bounds_mode  !! how to handle the `x` variable bounds:
                                                 !!
                                                 !!  * 0 = ignore bounds
@@ -672,10 +690,20 @@ contains
       if (allocated(me%icol)) deallocate (me%icol)
 
       if (present(custom_solver_sparse)) me%custom_solver_sparse => custom_solver_sparse
+      if (present(custom_step)) me%custom_step => custom_step
 
       if (present(sparsity_mode)) then
          me%sparsity_mode = sparsity_mode
-         if (sparsity_mode > NLESOLVER_SPARSITY_DENSE) then ! sparse solver method
+         if (sparsity_mode == NLESOLVER_SPARSITY_CUSTOM_STEP) then
+            if (.not. associated(me%custom_step)) then
+               call me%set_status(istat=-19, string="Error: must specify custom_step for sparsity_mode = 6")
+               return
+            end if
+            if (me%use_broyden) then
+               call me%set_status(istat=-19, string="Error: the Broyden update needs a Jacobian (sparsity_mode = 6)")
+               return
+            end if
+         else if (sparsity_mode > NLESOLVER_SPARSITY_DENSE) then ! sparse solver method
             if (present(irow) .and. present(icol) .and. present(grad_sparse)) then
                if (size(irow) == size(icol)) then
                   me%n_nonzeros = size(irow)
@@ -775,7 +803,8 @@ contains
          call me%set_status(istat=-11, string="Error: gradient routine is not associated")
          return
       end if
-      if (me%sparsity_mode > NLESOLVER_SPARSITY_DENSE .and. .not. associated(me%grad_sparse)) then
+      if (me%sparsity_mode > NLESOLVER_SPARSITY_DENSE .and. me%sparsity_mode /= NLESOLVER_SPARSITY_CUSTOM_STEP &
+          .and. .not. associated(me%grad_sparse)) then
          call me%set_status(istat=-11, string="Error: gradient routine is not associated")
          return
       end if
@@ -793,6 +822,8 @@ contains
       if (me%sparsity_mode == NLESOLVER_SPARSITY_DENSE) then
          ! dense
          if (alloc_stat == 0) allocate (fjac(me%m, me%n), stat=alloc_stat)
+      else if (me%sparsity_mode == NLESOLVER_SPARSITY_CUSTOM_STEP) then
+         ! no Jacobian: the user computes the step
       else
          ! sparse
          if (alloc_stat == 0) allocate (fjac_sparse(me%n_nonzeros), stat=alloc_stat)
@@ -919,6 +950,8 @@ contains
                select case (me%sparsity_mode)
                case (NLESOLVER_SPARSITY_DENSE)
                   call me%grad(x, fjac)
+               case (NLESOLVER_SPARSITY_CUSTOM_STEP)
+                  ! no Jacobian: the user computes the step below
                case default ! sparse
                   call me%grad_sparse(x, fjac_sparse)
                end select
@@ -987,6 +1020,10 @@ contains
                case default
                   info = 0
                end select
+
+            case (NLESOLVER_SPARSITY_CUSTOM_STEP)
+               ! a user-provided Newton step:
+               call me%custom_step(x, fvec, p, info)
 
             case (NLESOLVER_SPARSITY_CUSTOM_SPARSE)
                if (associated(me%custom_solver_sparse)) then
@@ -1429,7 +1466,10 @@ contains
       ! compute the gradient of the function to be minimized
       ! (which in this case is 1/2 the norm of fvec). Use the chain
       ! rule and the Jacobian matrix already computed.
-      if (present(fjac)) then
+      if (me%sparsity_mode == NLESOLVER_SPARSITY_CUSTOM_STEP) then
+         ! no Jacobian: along a Newton step p, grad(f)^T p = (J p)^T fvec = -fvec^T fvec
+         gradf = zero ! not used
+      else if (present(fjac)) then
          ! dense
          do i = 1, me%n
             gradf(i) = dot_product(fvec, fjac(:, i))
@@ -1440,7 +1480,11 @@ contains
             gradf(i) = dot_product(fvec, pack(fjac_sparse, mask=me%icol == i))
          end do
       end if
-      slope = dot_product(search_direction, gradf)
+      if (me%sparsity_mode == NLESOLVER_SPARSITY_CUSTOM_STEP) then
+         slope = -dot_product(fvec, fvec)
+      else
+         slope = dot_product(search_direction, gradf)
+      end if
       t = -me%c*slope
 
       ! if (me%verbose) then

@@ -48,7 +48,7 @@ def test_parameter_types_and_nonfinite_values():
         moist.DROPParameters(nleb=26.5)
     with pytest.raises(ValueError, match="finite"):
         moist.DROPParameters(tolerance=float("nan"))
-    assert moist.PCMParameters(solver="lu").solver is moist.PCMSolver.LU
+    assert moist.PCMParameters(solver="dense").solver is moist.PCMSolver.DENSE
     with pytest.raises(ValueError):
         moist.PCMParameters(solver=2.5)
     with pytest.raises(ValueError, match="finite"):
@@ -242,16 +242,48 @@ def test_model_requires_context(make):
         make()
 
 
+@pytest.mark.parametrize("component_type, physical", [
+    (moist.ModelComponentCPCM, (32.0,)),
+    (moist.ModelComponentCOSMO, (32.0,)),
+    (moist.ModelComponentIEFPCM, (32.0,)),
+    (moist.ModelComponentSSVPE, (32.0,)),
+    (moist.ModelComponentDPCM, (32.0,)),
+    (moist.ModelComponentDPCMOriginal, (32.0,)),
+    (moist.ModelComponentLPB, (32.0, 0.1)),
+    (moist.ModelComponentSLIC, (32.0, 0.1, 0.2, 0.3, 0.0, 0.0)),
+    (moist.ModelComponentNonlocal, (32.0, 2.0, 1.0, 1.0)),
+])
+def test_pcm_optional_context_and_lifetime(component_type, physical):
+    component = component_type(*physical)
+    assert component.context is None
+    with pytest.raises(TypeError, match="context must be a Context"):
+        component_type(*physical, context=object())
+
+    context = moist.Context(nthreads=1)
+    owner = weakref.ref(context._as_handle())
+    component = component_type(*physical, context=context)
+    assert component.context is context
+    handle = component._as_handle()
+    del component, context
+    gc.collect()
+    assert owner() is not None
+    del handle
+    gc.collect()
+    assert owner() is None
+
+
 @pytest.mark.parametrize("component", [moist.ModelComponentCPCM, moist.ModelComponentCOSMO])
 def test_pcm_iterative_controls_round_trip(component):
     defaults = moist.PCMParameters()
     assert defaults.solver_tol > 0.0 and defaults.solver_maxiter >= 1
+    assert defaults.memory_budget_gib == 4
     parameters = moist.PCMParameters(
-        solver="iterative", solver_tol=1e-8, solver_maxiter=200)
+        solver="iterative", solver_tol=1e-8, solver_maxiter=200, memory_budget_gib=5)
     term = component(32, parameters=parameters)
     assert term.parameters.solver is moist.PCMSolver.ITERATIVE
     assert term.parameters.solver_tol == 1e-8
     assert term.parameters.solver_maxiter == 200
+    assert term.parameters.memory_budget_gib == 5
     with pytest.raises(RuntimeError):
         component(32, parameters=moist.PCMParameters(solver_maxiter=0))
 
