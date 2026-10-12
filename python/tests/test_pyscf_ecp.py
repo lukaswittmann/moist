@@ -8,7 +8,7 @@ surface (``core_fill``):
 - a pseudo-atom whose density vanishes as ``r**4`` at its nucleus shows the
   sheet and its removal without any SCF
 - AuH, 60 of gold's electrons behind the def2 ECP, reproduces the cavity of
-  its all-electron x2c-SVPall (X2C) density
+  its all-electron ANO-RCC (X2C) density
 
 Each test fails without an active fill:
 
@@ -113,7 +113,7 @@ def test_pseudo_atom_inner_sheet_is_filled():
 
 
 # -----------------------------------------------------------------------------
-# AuH: def2-SVP with a 60-electron ECP against all-electron x2c-SVPall
+# AuH: def2-SVP with a 60-electron ECP against all-electron ANO-RCC
 # -----------------------------------------------------------------------------
 
 AUH = "Au 0 0 0; H 0 0 1.524"
@@ -142,7 +142,8 @@ def auh_ecp():
 
 @pytest.fixture(scope="module")
 def auh_all_electron():
-    mol = gto.M(atom=AUH, basis="x2c-svpall", verbose=0)
+    # ANO-RCC ships with PySCF; x2c-SVPall would need basis-set-exchange
+    mol = gto.M(atom=AUH, basis={"Au": "ano@7s6p4d2f", "H": "ano@2s1p"}, verbose=0)
     assert not mol.has_ecp()
     return mol, _host(mol, scf.RHF(mol).x2c()), _structure(mol, mol.atom_charges())
 
@@ -154,11 +155,11 @@ def test_auh_ecp_cavity_matches_all_electron(auh_ecp, auh_all_electron):
     all_electron = _cavity(ae_host, ae_structure)
     gold = mol.atom_coord(0)
 
-    # Measured 1.0 % in area and 0.06 bohr in closest approach (def2-SVP vs
-    # x2c-SVPall); the ECP only replaces the core, so the outer density agrees
-    assert ecp.area == pytest.approx(all_electron.area, rel=0.02)
+    # Measured 0.3 % in area and 0.03 bohr in closest approach (def2-SVP vs
+    # ANO-RCC); the ECP only replaces the core, so the outer density agrees
+    assert ecp.area == pytest.approx(all_electron.area, rel=0.01)
     closest = [np.linalg.norm(c.xyz - gold, axis=1).min() for c in (ecp, all_electron)]
-    assert closest[0] == pytest.approx(closest[1], abs=0.15)
+    assert closest[0] == pytest.approx(closest[1], abs=0.1)
 
 
 def test_auh_core_fill_leaves_outer_surface_untouched(auh_ecp):

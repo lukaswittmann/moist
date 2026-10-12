@@ -1917,7 +1917,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity(:)
       type(mctc_error), allocatable :: cavity_error
       integer, allocatable :: numbers(:), z_eff(:)
-      integer :: ivar
+      integer :: ivar, iox
       !> Level set at the oxygen nucleus, unmarked and marked
       real(wp) :: s_nucleus(2)
 
@@ -1955,8 +1955,10 @@ contains
       end if
 
       ! Positive control: the marked oxygen is filled inside the cavities' own level sets
+      ! (gfortran 14.2 and 15.2 -fcheck=bounds read a garbage maxloc index in an argument)
+      iox = maxloc(numbers, 1)
       do ivar = 1, 2
-         call cavity(ivar)%lsf_model%prepare(mol%xyz(:, maxloc(numbers, 1)), cavity_error)
+         call cavity(ivar)%lsf_model%prepare(mol%xyz(:, iox), cavity_error)
          if (allocated(cavity_error)) then
             call test_failed(error, "prepare at the oxygen failed: "//cavity_error%message)
             return
