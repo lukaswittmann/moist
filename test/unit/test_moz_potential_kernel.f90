@@ -3,6 +3,7 @@
 !> - 1D and 3D Ng-split LJ and fixed-charge tables against dev-fork formulas
 !> - Split identity, category rules and r = 0 guards
 !> - 1D and 3D reverse modes against finite differences
+!> - 3D tail phased like the grid's own transform; total gradient with the grid following the solute
 module test_moz_potential_kernel
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
@@ -11,7 +12,10 @@ module test_moz_potential_kernel
    use moist_channels_response, only: response_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
-   use moist_math_grid_3d_base, only: moist_math_grid_3d_type
+   use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type
+   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_point_grid, &
+      & molecular_grid_set_kgrid
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential, only: moz_potential_type
@@ -21,7 +25,7 @@ module test_moz_potential_kernel
    use moist_model_moz_potential_kernel_ng, only: ng_real_tail, ng_fourier_envelope
    use moist_model_moz_potential_kernel_table_1d, only: evaluate_table_1d, evaluate_table_1d_adjoint
    use moist_model_moz_potential_sites, only: potential_sites_type
-   use test_helpers, only: check_moist_error, fd4_scalar, fd4_offsets
+   use test_helpers, only: check_moist_error, fd4_scalar, fd4_offsets, get_qc_handymod_recipe
    use test_moz_fixtures, only: ref_lj
    implicit none(type, external)
    private
@@ -83,11 +87,13 @@ contains
       testsuite = [new_unittest("ng_tail_series", check_ng_tail_series), &
          & new_unittest("table_1d_reference", check_table_1d_reference), &
          & new_unittest("table_3d_reference", check_table_3d_reference), &
+         & new_unittest("table_3d_phase_convention", check_table_3d_phase_convention), &
          & new_unittest("split_identity", check_split_identity), &
          & new_unittest("single_categories", check_single_categories), &
          & new_unittest("category_mismatch", check_category_mismatch), &
          & new_unittest("r0_guards", check_r0_guards), &
          & new_unittest("adjoint_3d_fd", check_adjoint_3d_fd), &
+         & new_unittest("adjoint_3d_moved_grid_fd", check_adjoint_3d_moved_grid_fd), &
          & new_unittest("custom_field_adjoint_fd", check_custom_field_adjoint_fd), &
          & new_unittest("adjoint_1d_fd", check_adjoint_1d_fd), &
          & new_unittest("adjoint_1d_field_fd", check_adjoint_1d_field_fd), &
@@ -500,6 +506,110 @@ contains
          & 1.0e-12_wp, "3D Im uk_lr")
    end subroutine check_table_3d_reference
 
+   !> Phase the analytic tail like the grid's own transform
+   !>
+   !> - Gaussian solute charges through `fft_r2k` carry the structure factor of uk_lr
+   !> - Cartesian FFT and molecular NUFFT with the centroid reference
+   !> - Molecular reference at least 0.5 bohr from point(1), else the check is blind
+   subroutine check_table_3d_phase_convention(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol_u, mol_v
+      type(moz_potential_type) :: pot_u, pot_v
+      type(moist_math_grid_3d_cartesian_type), target :: cart
+      type(moist_math_grid_3d_molecular_type), target :: molecular
+      character(len=32) :: buffer
+      real(wp) :: dev
+
+      call make_solute(mol_u)
+      call make_solvent(mol_v)
+      call make_potential(pot_u, mol_u, err, q=q_u)
+      if (.not. allocated(err)) call make_potential(pot_v, mol_v, err, q=q_v)
+      if (.not. allocated(err)) call new_cartesian_point_grid(cart, err, nx=32, ny=32, nz=32, dr=0.3_wp, &
+         & margin=0.0_wp)
+      if (.not. allocated(err)) call cart%update(mol_u, err)
+      if (.not. allocated(err)) call new_molecular_point_grid(molecular, err)
+      if (.not. allocated(err)) call molecular%update(mol_u, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, norm2(molecular%get_kref() - molecular%point(1)) > 0.5_wp, &
+         & more="molecular phase reference too close to point(1)")
+      if (allocated(error)) return
+
+      call tail_phase_deviation(cart, mol_u, pot_u, pot_v, dev, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      write (buffer, "(es12.4)") dev
+      ! Measured 6.8e-15
+      call check(error, dev < 1.0e-12_wp, more="Cartesian tail phase deviation "//trim(buffer))
+      if (allocated(error)) return
+      call tail_phase_deviation(molecular, mol_u, pot_u, pot_v, dev, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      write (buffer, "(es12.4)") dev
+      ! Quadrature-limited: 4.9e-4 at the default recipe (50, 110); phasing from point(1) gives 0.96
+      call check(error, dev < 5.0e-3_wp, more="molecular tail phase deviation "//trim(buffer))
+   end subroutine check_table_3d_phase_convention
+
+   !> Largest |rho_k - exp(-k^2/(4 beta)) uk_lr/(q_v E(k))| / sum|q_a| over 0 < |k| <= 4/bohr
+   !>
+   !> - rho = sum_a q_a (beta/pi)^(3/2) exp(-beta |r - r_a|^2), transformed by the grid
+   !>
+   !> @param[in]  grid   updated grid with reciprocal points
+   !> @param[in]  mol_u  solute
+   !> @param[in]  pot_u  solute potential with charges `q_u`
+   !> @param[in]  pot_v  solvent potential with charges `q_v`
+   !> @param[out] dev    largest deviation
+   !> @param[out] err    table or transform failure
+   subroutine tail_phase_deviation(grid, mol_u, pot_u, pot_v, dev, err)
+      !> Updated grid with reciprocal points
+      class(moist_math_grid_3d_type), intent(in), target :: grid
+      !> Solute
+      type(structure_type), intent(in) :: mol_u
+      !> Solute potential with charges
+      type(moz_potential_type), intent(in) :: pot_u
+      !> Solvent potential with charges
+      type(moz_potential_type), intent(in) :: pot_v
+      !> Largest deviation
+      real(wp), intent(out) :: dev
+      !> Table or transform failure
+      type(moist_error), allocatable, intent(out) :: err
+      !> Exponent of the Gaussian charges, 1/bohr^2
+      real(wp), parameter :: beta = 2.0_wp
+      !> Largest |k| compared, 1/bohr
+      real(wp), parameter :: kmax = 4.0_wp
+      class(moist_math_grid_3d_trafo_type), allocatable :: trafo
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), rho(:, :)
+      complex(wp), allocatable :: uk_lr(:, :), rho_k(:, :)
+      real(wp) :: k(3), k2
+      integer :: g, j, a
+
+      dev = huge(1.0_wp)
+      call tables_3d(grid, pot_u, pot_v, lb, .true., u_sr, ur_lr, uk_lr, err)
+      if (allocated(err)) return
+      allocate (rho(grid%ngrid, 1), rho_k(grid%npts_k, 1))
+      do g = 1, grid%ngrid
+         rho(g, 1) = 0.0_wp
+         do a = 1, size(q_u)
+            rho(g, 1) = rho(g, 1) + q_u(a)*(beta/pi)**1.5_wp*exp(-beta*sum((grid%point(g) - mol_u%xyz(:, a))**2))
+         end do
+      end do
+      call grid%new_trafo(trafo, err)
+      if (.not. allocated(err)) call trafo%prepare(1, err)
+      if (.not. allocated(err)) call trafo%fft_r2k(rho, rho_k, err)
+      if (allocated(trafo)) call trafo%destroy()
+      if (allocated(err)) return
+      dev = 0.0_wp
+      do j = 1, grid%npts_k
+         k = grid%kpoint(j)
+         k2 = sum(k**2)
+         if (k2 < 1.0e-20_wp .or. k2 > kmax**2) cycle
+         dev = max(dev, abs(rho_k(j, 1) - exp(-0.25_wp*k2/beta)*uk_lr(j, 1)/(q_v(1)*ng_fourier_envelope(k2, alpha))))
+      end do
+      dev = dev/sum(abs(q_u))
+   end subroutine tail_phase_deviation
+
    !> Check unsplit identity u_sr + ur_lr and zero tails without split
    subroutine check_split_identity(error)
       !> Test error
@@ -715,7 +825,7 @@ contains
    !> @param[in]     ng_split  optional split flag; split when absent
    subroutine eval_functional(grid, mol, pot_u, pot_v, w_sr, w_lr, w_k, val, err, mixing, ng_split)
       !> Grid
-      type(moist_math_grid_3d_cartesian_type), intent(in) :: grid
+      class(moist_math_grid_3d_type), intent(in) :: grid
       !> Solute structure at which the solute potential is updated
       type(structure_type), intent(in) :: mol
       !> Solute potential
@@ -973,7 +1083,7 @@ contains
       real(wp), allocatable :: gradient(:, :)
       type(structure_type) :: moved_mol
       real(wp), parameter :: h = 1.0e-4_wp
-      !> Grid points probed: the phase reference, points near atoms, the last point
+      !> Grid points probed: the first point, points near atoms, the last point
       integer :: probe(4)
       real(wp) :: val(4), fd, total(3)
       character(len=32) :: case_label
@@ -1024,13 +1134,119 @@ contains
          end do
       end do
 
-      ! Table invariance under rigid translation of grid and solute
-      total = sum(acc%w_xyz, dim=2) + sum(gradient, dim=2)
+      ! Table invariance under rigid translation of grid, phase reference and solute
+      total = sum(acc%w_xyz, dim=2) + sum(gradient, dim=2) + acc%w_kref
       call check(error, maxval(abs(total)) < 1.0e-10_wp, more=trim(case_label)//" translation invariance")
       if (allocated(error)) return
       call check(error, all(acc%w_w == 0.0_wp) .and. all(acc%w_xi == 0.0_wp), &
          & more=trim(case_label)//" parameter-built tables touched the weight or width adjoints")
    end subroutine check_adjoint_3d_case
+
+   !> Compare the total nuclear gradient with four-point central differences, the grid following the solute
+   !>
+   !> - Solute gradient plus `get_volume_gradient` of the grid adjoint
+   !> - Grid updated at every displaced geometry; point membership fixed
+   !> - Cartesian grid; molecular grids with the centroid and the point(1) phase reference
+   !> - Charges only, split on: the pair potential is singular next to the molecular nuclei
+   subroutine check_adjoint_3d_moved_grid_fd(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol_u, mol_v
+      type(moz_potential_type) :: pot_u, pot_v
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(moist_math_grid_3d_molecular_type) :: centroid, first
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+
+      call make_solute(mol_u)
+      call make_solvent(mol_v)
+      call make_potential(pot_u, mol_u, err, q=q_u)
+      if (.not. allocated(err)) call make_potential(pot_v, mol_v, err, q=q_v)
+      if (.not. allocated(err)) call make_grid(cart, mol_u, err)
+      if (.not. allocated(err)) call get_qc_handymod_recipe(recipe, err, nrad=5, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_point_grid(centroid, err, recipe=recipe, weight_threshold=0.0_wp)
+      if (.not. allocated(err)) call centroid%update(mol_u, err)
+      if (.not. allocated(err)) call new_molecular_point_grid(first, err, recipe=recipe, weight_threshold=0.0_wp, &
+         & reciprocal=.false.)
+      if (.not. allocated(err)) call first%update(mol_u, err)
+      if (.not. allocated(err)) call molecular_grid_set_kgrid(first, 0.5_wp, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_moved_grid_case(error, cart, mol_u, pot_u, pot_v, "Cartesian")
+      if (allocated(error)) return
+      call check_moved_grid_case(error, centroid, mol_u, pot_u, pot_v, "molecular, centroid reference")
+      if (allocated(error)) return
+      call check_moved_grid_case(error, first, mol_u, pot_u, pot_v, "molecular, point(1) reference")
+   end subroutine check_adjoint_3d_moved_grid_fd
+
+   !> Check one grid of `check_adjoint_3d_moved_grid_fd`
+   !>
+   !> @param[out]    error  test error
+   !> @param[in]     grid   grid updated at `mol_u`
+   !> @param[in]     mol_u  solute
+   !> @param[in,out] pot_u  solute potential
+   !> @param[in]     pot_v  solvent potential
+   !> @param[in]     what   case label
+   subroutine check_moved_grid_case(error, grid, mol_u, pot_u, pot_v, what)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Grid updated at the solute
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Solute
+      type(structure_type), intent(in) :: mol_u
+      !> Solute potential
+      type(moz_potential_type), intent(inout) :: pot_u
+      !> Solvent potential
+      type(moz_potential_type), intent(in) :: pot_v
+      !> Case label
+      character(len=*), intent(in) :: what
+      real(wp), parameter :: h = 1.0e-4_wp
+      type(moist_error), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(response_type) :: response
+      type(volume_adjoint_type) :: acc
+      class(moist_math_grid_3d_type), allocatable :: moved
+      type(structure_type) :: moved_mol
+      real(wp), allocatable :: w_sr(:, :), w_lr(:, :), gradient(:, :)
+      complex(wp), allocatable :: w_k(:, :)
+      real(wp) :: val(4), fd
+      character(len=128) :: label
+      integer :: a, c, s
+
+      call weights_3d(grid%ngrid, grid%npts_k, 2, w_sr, w_lr, w_k)
+      allocate (gradient(3, 3), source=0.0_wp)
+      call acc%init(grid%ngrid)
+      call adjoint_3d(grid, pot_u, pot_v, lb, .true., coupling, w_sr, w_lr, w_k, response, err, &
+         & gradient=gradient, grid_adjoint=acc)
+      if (.not. allocated(err)) call grid%get_volume_gradient(acc, gradient, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+
+      allocate (moved, source=grid)
+      do a = 1, 3
+         do c = 1, 3
+            do s = 1, 4
+               moved_mol = mol_u
+               moved_mol%xyz(c, a) = moved_mol%xyz(c, a) + fd4_offsets(s)*h
+               call moved%update(moved_mol, err)
+               call check_moist_error(error, err)
+               if (allocated(error)) return
+               if (moved%ngrid /= grid%ngrid) then
+                  call test_failed(error, what//": displaced update changed point membership")
+                  return
+               end if
+               call eval_functional(moved, moved_mol, pot_u, pot_v, w_sr, w_lr, w_k, val(s), err)
+               call check_moist_error(error, err)
+               if (allocated(error)) return
+            end do
+            call fd4_scalar(val(1), val(2), val(3), val(4), h, fd, error)
+            if (allocated(error)) return
+            write (label, "(a, a, i0, a, i0)") what, ": total gradient atom ", a, " component ", c
+            call check_close(error, [gradient(c, a)], [fd], 1.0e-7_wp, trim(label))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_moved_grid_case
 
    !> Compare parameter-field adjoint with four-point central differences in grid coordinates
    !>
@@ -1051,7 +1267,7 @@ contains
       real(wp), allocatable :: w_sr(:, :), w_lr(:, :), gradient(:, :)
       complex(wp), allocatable :: w_k(:, :)
       real(wp), parameter :: h = 1.0e-4_wp
-      !> Grid points probed: the phase reference, points near atoms, the last point
+      !> Grid points probed: the first point, points near atoms, the last point
       integer :: probe(4)
       real(wp) :: val(4), fd
       character(len=96) :: label

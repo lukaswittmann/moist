@@ -4,7 +4,7 @@
 !>   Gaussian, molecular point and molecular Gaussian
 !> - Gradient: every adjoint channel of a linear grid observable, see
 !>   `check_grid_gradient_fd`
-!> - Hessian: fixed position and weight adjoints, see `check_grid_hessian_fd`
+!> - Hessian: fixed position, weight and phase-reference adjoints, see `check_grid_hessian_fd`
 !> - Partition schemes besides the default Becke on a small molecule, and the
 !>   Gaussian width term for tiny retained weights
 module test_math_grid_3d_derivatives
@@ -20,7 +20,7 @@ module test_math_grid_3d_derivatives
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid, &
       & new_cartesian_gaussian_grid
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_point_grid, &
-      & new_molecular_gaussian_grid, partition_becke, partition_ssf, partition_pvoronoi
+      & new_molecular_gaussian_grid, molecular_grid_set_kgrid, partition_becke, partition_ssf, partition_pvoronoi
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
    implicit none(type, external)
    private
@@ -248,6 +248,8 @@ contains
    !> - 3, 4: molecular point and Gaussian grids, Becke partition unless `scheme`
    !>   is given, small recipe, thresholds that keep point membership under the
    !>   stencil steps
+   !> - Phase reference: centroid on the molecular point grid (automatic k-grid),
+   !>   `point(1)` on the molecular Gaussian grid (`set_kgrid` without reference)
    !>
    !> @param[in]  kind     grid kind, 1..4
    !> @param[in]  mol      geometry to update with
@@ -294,7 +296,7 @@ contains
          allocate (molecular)
          if (.not. allocated(merr)) then
             if (kind == 3) then
-               call new_molecular_point_grid(molecular, merr, recipe=recipe, reciprocal=.false., &
+               call new_molecular_point_grid(molecular, merr, recipe=recipe, &
                   & weight_threshold=1.0e-5_wp, pruning_threshold=0.01_wp, partition=scheme, becke_k=becke_k)
             else
                call new_molecular_gaussian_grid(molecular, merr, recipe=recipe, reciprocal=.false., &
@@ -304,6 +306,7 @@ contains
          end if
          molecular%nthreads = 1
          if (.not. allocated(merr)) call molecular%update(mol, merr)
+         if (kind == 4 .and. .not. allocated(merr)) call molecular_grid_set_kgrid(molecular, 0.5_wp, merr)
          call check_moist_error(error, merr, "molecular grid setup")
          if (allocated(error)) return
          call move_alloc(molecular, grid)
@@ -312,8 +315,10 @@ contains
 
    !> Reverse grid gradient of every adjoint channel against finite differences
    !>
-   !> - Linear synthetic energy `E = sum(w_xyz*xyz) + sum(w_w*w) + sum(w_xi*xi0)`
-   !>   with fixed seeds; channels: positions, weights, widths (Gaussian grids), all
+   !> - Linear synthetic energy
+   !>   `E = sum(w_xyz*xyz) + sum(w_w*w) + sum(w_xi*xi0) + w_kref.get_kref()`
+   !>   with fixed seeds; channels: positions, weights, widths (Gaussian grids),
+   !>   all, phase reference (grids with reciprocal points)
    !> - Six-point O(h**6) stencil with `GRADIENT_STEP`; every step must keep point
    !>   membership and move each point rigidly with its owner (molecular) or the
    !>   centroid (Cartesian); each displaced grid serves every channel
@@ -331,7 +336,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: nchannel = 4
+      integer, parameter :: nchannel = 5
       class(moist_math_grid_3d_type), allocatable :: moved
       type(structure_type) :: displaced
       type(volume_adjoint_type) :: acc(nchannel)
@@ -342,7 +347,7 @@ contains
       integer :: channel, i, a, c, k
 
       allocate (gradient(3, mol%nat, nchannel), fd(3, mol%nat, nchannel), again(3, mol%nat))
-      active = [.true., .true., allocated(grid%xi0), .true.]
+      active = [.true., .true., allocated(grid%xi0), .true., grid%npts_k > 0]
       do channel = 1, nchannel
          if (.not. active(channel)) cycle
          call acc(channel)%init(grid%ngrid)
@@ -356,6 +361,7 @@ contains
                acc(channel)%w_xi(i) = 0.04_wp*sin(0.37_wp*real(i, wp))*grid%w(i)
             end if
          end do
+         if (grid%npts_k > 0 .and. (channel == 4 .or. channel == 5)) acc(channel)%w_kref = [0.3_wp, -0.7_wp, 0.45_wp]
          gradient(:, :, channel) = 0.0_wp
          call grid%get_volume_gradient(acc(channel), gradient(:, :, channel), merr)
          call check_moist_error(error, merr, "reverse contraction")
@@ -364,7 +370,7 @@ contains
          call grid%get_volume_gradient(acc(channel), again, merr)
          call check_moist_error(error, merr, "additive contraction")
          if (allocated(error)) return
-         expected = sum(acc(channel)%w_xyz, dim=2)
+         expected = sum(acc(channel)%w_xyz, dim=2) + acc(channel)%w_kref
          total = sum(gradient(:, :, channel), dim=2)
          do c = 1, 3
             call check(error, total(c), expected(c), thr_abs=IDENTITY_ABS_THR, thr_rel=IDENTITY_REL_THR, &
@@ -420,8 +426,8 @@ contains
 
    !> Nuclear volume Hessian against finite differences of the reverse gradient
    !>
-   !> - Fixed position and weight adjoints; width adjoints stay zero because
-   !>   geometry-dependent width curvature is unsupported
+   !> - Fixed position, weight and phase-reference adjoints; width adjoints stay
+   !>   zero because geometry-dependent width curvature is unsupported
    !> - Full Hessian symmetric, Hessian-vector product equal to the full Hessian
    !>   times the direction, rigid translation in the nullspace
    !> - Six-point O(h**6) stencil of `get_volume_gradient` with `HESSIAN_STEP`
@@ -454,6 +460,7 @@ contains
       do i = 1, grid%ngrid
          acc%w_w(i) = cos(0.2_wp*real(i, wp))
       end do
+      if (grid%npts_k > 0) acc%w_kref = [0.3_wp, -0.7_wp, 0.45_wp]
       hessian = 0.0_wp
       call grid%get_volume_hessian(acc, hessian, merr)
       call check_moist_error(error, merr, "full nuclear Hessian")
@@ -584,7 +591,7 @@ contains
       !> Synthetic energy
       real(wp) :: energy
 
-      energy = sum(acc%w_xyz*grid%xyz) + sum(acc%w_w*grid%w)
+      energy = sum(acc%w_xyz*grid%xyz) + sum(acc%w_w*grid%w) + dot_product(acc%w_kref, grid%get_kref())
       if (allocated(grid%xi0)) energy = energy + sum(acc%w_xi*grid%xi0)
    end function grid_observable_energy
 

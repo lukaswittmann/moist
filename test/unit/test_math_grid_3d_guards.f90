@@ -76,6 +76,8 @@ contains
                   new_unittest("volume_adjoint_sizes", test_volume_adjoint_sizes), &
                   new_unittest("point_grid_rejects_width_adjoint", test_point_grid_width_adjoint_fails, &
                      & should_fail=.true.), &
+                  new_unittest("no_reciprocal_rejects_kref_adjoint", test_no_reciprocal_kref_adjoint_fails, &
+                     & should_fail=.true.), &
                   new_unittest("hessian_rejects_width_adjoint", test_hessian_width_adjoint_fails, &
                      & should_fail=.true.), &
                   new_unittest("hessian_rejects_becke1_at_nucleus", test_hessian_becke1_nucleus_fails, &
@@ -651,6 +653,30 @@ contains
       if (any(gradient /= 0.25_wp)) return
       call expect_error(error, merr, "point grids have no Gaussian-width channel")
    end subroutine test_point_grid_width_adjoint_fails
+
+   !> Grid without reciprocal points rejects a phase-reference adjoint and leaves the gradient unchanged
+   subroutine test_no_reciprocal_kref_adjoint_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      real(wp) :: gradient(3, 3)
+
+      call make_molecule(mol)
+      gradient = 0.25_wp
+      call get_qc_handymod_recipe(recipe, merr, nrad=3, degree=5)
+      if (.not. allocated(merr)) call new_molecular_point_grid(grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
+      if (allocated(merr)) return
+      call acc%init(grid%ngrid)
+      acc%w_kref = 1.0_wp
+      call grid%get_volume_gradient(acc, gradient, merr)
+      if (any(gradient /= 0.25_wp)) return
+      call expect_error(error, merr, "no phase-reference channel")
+   end subroutine test_no_reciprocal_kref_adjoint_fails
 
    !> Molecular Gaussian-grid Hessian rejects width adjoints and leaves the Hessian unchanged
    subroutine test_hessian_width_adjoint_fails(error)

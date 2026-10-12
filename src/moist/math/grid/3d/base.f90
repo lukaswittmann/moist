@@ -37,6 +37,9 @@ module moist_math_grid_3d_base
    !>   `kx/ky/kz` layout
    !> - `kpoint(j)` ordering matches the reciprocal-space field layout
    !>   produced by the grid's transform engine
+   !> - Transform phases measured from `get_kref()`:
+   !>   `f_k = sum_j w_j f(r_j) exp(-i k.(r_j - kref))`; analytic reciprocal
+   !>   tables use the same reference
    type, abstract :: moist_math_grid_3d_type
       !> Number of real-space points
       integer :: ngrid = 0
@@ -79,6 +82,8 @@ module moist_math_grid_3d_base
       procedure :: point => grid_point
       !> Reciprocal-space coordinate (1/bohr) of k-point j (1..npts_k)
       procedure(grid_kpoint_i), deferred :: kpoint
+      !> Phase reference of the transforms (bohr)
+      procedure(grid_get_kref_i), deferred :: get_kref
       !> Weighted volume integral of a scalar integrand sampled at the points
       procedure :: integrate => grid_integrate
       !> Integration weight (volume element) of grid point i
@@ -162,6 +167,18 @@ module moist_math_grid_3d_base
          !> Coordinate of k-point j
          real(wp) :: k(3)
       end function grid_kpoint_i
+
+      !> Phase reference of the transforms (bohr)
+      !>
+      !> @param[in] self Grid instance
+      pure function grid_get_kref_i(self) result(kref)
+         import :: moist_math_grid_3d_type, wp
+         implicit none(type, external)
+         !> Grid instance
+         class(moist_math_grid_3d_type), intent(in) :: self
+         !> Real-space phase origin (bohr)
+         real(wp) :: kref(3)
+      end function grid_get_kref_i
 
       !> Allocate the transform engine matching this grid and bind it to `self`
       !>
@@ -292,13 +309,19 @@ contains
          return
       end if
       if (.not. all(ieee_is_finite(acc%w_xyz)) .or. .not. all(ieee_is_finite(acc%w_w)) &
-         & .or. .not. all(ieee_is_finite(acc%w_xi))) then
+         & .or. .not. all(ieee_is_finite(acc%w_xi)) .or. .not. all(ieee_is_finite(acc%w_kref))) then
          call fatal_error(error, "volume adjoint: adjoints must be finite")
          return
       end if
       if (.not. allocated(self%xi0)) then
          if (any(acc%w_xi /= 0.0_wp)) then
             call fatal_error(error, "volume adjoint: point grids have no Gaussian-width channel")
+            return
+         end if
+      end if
+      if (self%npts_k < 1) then
+         if (any(acc%w_kref /= 0.0_wp)) then
+            call fatal_error(error, "volume adjoint: grids without reciprocal points have no phase-reference channel")
             return
          end if
       end if

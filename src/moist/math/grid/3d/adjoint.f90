@@ -1,4 +1,4 @@
-!> Volumetric position, quadrature-weight and Gaussian-width adjoints
+!> Volumetric position, quadrature-weight, Gaussian-width and phase-reference adjoints
 module moist_math_grid_3d_adjoint
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -7,7 +7,7 @@ module moist_math_grid_3d_adjoint
 
    public :: volume_adjoint_type
 
-   !> Adjoint weights for volumetric point positions, quadrature weights and widths
+   !> Adjoint weights for volumetric point positions, quadrature weights, widths and phase reference
    type :: volume_adjoint_type
       !> Weights for point positions r_i (3, ngrid)
       real(wp), allocatable :: w_xyz(:, :)
@@ -15,6 +15,8 @@ module moist_math_grid_3d_adjoint
       real(wp), allocatable :: w_w(:)
       !> Weights for Gaussian widths xi_i (ngrid)
       real(wp), allocatable :: w_xi(:)
+      !> Weights for the transform phase reference `get_kref()` (3)
+      real(wp) :: w_kref(3) = 0.0_wp
    contains
       !> Allocate every channel and initialize it to zero
       procedure :: init => init_volume_adjoint
@@ -47,6 +49,7 @@ contains
       allocate (self%w_xyz(3, ngrid), source=0.0_wp)
       allocate (self%w_w(ngrid), source=0.0_wp)
       allocate (self%w_xi(ngrid), source=0.0_wp)
+      self%w_kref = 0.0_wp
 
    end subroutine init_volume_adjoint
 
@@ -60,6 +63,7 @@ contains
       if (allocated(self%w_xyz)) self%w_xyz = 0.0_wp
       if (allocated(self%w_w)) self%w_w = 0.0_wp
       if (allocated(self%w_xi)) self%w_xi = 0.0_wp
+      self%w_kref = 0.0_wp
 
    end subroutine zero_volume_adjoint
 
@@ -70,7 +74,8 @@ contains
    !> @param[in]    w_xyz Optional position weights (3, ngrid)
    !> @param[in]    w_w   Optional integration-weight weights (ngrid)
    !> @param[in]    w_xi  Optional Gaussian-width weights (ngrid)
-   subroutine add_volume_weights(self, error, w_xyz, w_w, w_xi)
+   !> @param[in]    w_kref Optional phase-reference weights (3)
+   subroutine add_volume_weights(self, error, w_xyz, w_w, w_xi, w_kref)
       !> Accumulator
       class(volume_adjoint_type), intent(inout) :: self
       !> Error handling
@@ -81,6 +86,8 @@ contains
       real(wp), intent(in), optional :: w_w(:)
       !> Optional Gaussian-width weights
       real(wp), intent(in), optional :: w_xi(:)
+      !> Optional phase-reference weights
+      real(wp), intent(in), optional :: w_kref(3)
 
       !> Number of grid points
       integer :: ngrid
@@ -113,6 +120,7 @@ contains
       if (present(w_xyz)) self%w_xyz = self%w_xyz + w_xyz
       if (present(w_w)) self%w_w = self%w_w + w_w
       if (present(w_xi)) self%w_xi = self%w_xi + w_xi
+      if (present(w_kref)) self%w_kref = self%w_kref + w_kref
 
    end subroutine add_volume_weights
 

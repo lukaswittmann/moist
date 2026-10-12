@@ -10,7 +10,7 @@
 !> - u_pair: 12-6 potential with interaction mixing, once per atom pair
 !> - q_a, q_v: solute and solvent tail charges
 !> - Full solute field phi: supplied grid field, otherwise point-charge field of tail charges
-!> - Phase reference r0: first grid point; zero k = 0 mode
+!> - Phase reference r0: the grid's transform phase reference `get_kref`; zero k = 0 mode
 !> - No split or no solute tail charges: zero tails, full field in u_sr
 !> - Category rules from 1D tables; caller validation of alpha and mixing rule
 !> - Pair potential or point-charge field: grid points at least 1e-6 bohr from solute atoms
@@ -19,7 +19,7 @@
 !> - Field adjoint: w_phi = sum_v q_v w_sr(:, v)
 !> - w_q: solute tail-charge adjoint
 !> - Geometry derivatives: dL/dr_a to solute gradient, dL/dr_g to grid adjoint for site-built pieces
-!> - Grid point 1 contribution through r0; fixed k-points
+!> - r0 contribution to the phase-reference channel of the grid adjoint; fixed k-points
 !> - Further adjoint propagation: `moz_potential_type%compute_adjoint`
 module moist_model_moz_potential_kernel_table_3d
    use mctc_env, only: wp, error_type, fatal_error
@@ -239,6 +239,8 @@ contains
       real(wp), allocatable :: grad_t(:, :, :), wq_point_t(:, :), wq_tail_t(:, :)
       !> Solute gradient of the reciprocal tail (3, nu)
       real(wp), allocatable :: grad_k(:, :)
+      !> Adjoint of the phase reference r0 (3)
+      real(wp) :: w_kref(3)
       !> Summed solute gradient and charge adjoints
       real(wp), allocatable :: grad(:, :), wq_point(:), wq_tail(:)
       !> Scratch per thread
@@ -301,6 +303,7 @@ contains
       wq_point = sum(wq_point_t, dim=2)
       wq_tail = sum(wq_tail_t, dim=2)
 
+      w_kref = 0.0_wp
       if (inp%tails) then
          grad_t = 0.0_wp
          wq_tail_t = 0.0_wp
@@ -309,13 +312,13 @@ contains
          if (geom) then
             grad_k = sum(grad_t, dim=3)
             grad = grad + grad_k
-            ! Reciprocal phase reference r0 at grid point 1
-            w_xyz(:, 1) = w_xyz(:, 1) - sum(grad_k, dim=2)
+            ! The tail depends on r_a - r0 only
+            w_kref = -sum(grad_k, dim=2)
          end if
       end if
 
       if (geom) then
-         call grid_adjoint%add_weights(error, w_xyz=w_xyz)
+         call grid_adjoint%add_weights(error, w_xyz=w_xyz, w_kref=w_kref)
          if (allocated(error)) return
          gradient = gradient + grad
       end if
@@ -676,7 +679,7 @@ contains
       complex(wp), intent(inout) :: uk_lr(:, :)
       real(wp) :: r0(3), kvec(3), env, kdotr, re_sum, im_sum, k_phase
       integer :: j, a, v, nt
-      r0 = grid%point(1)
+      r0 = grid%get_kref()
       nt = grid%team_size()
       !$omp parallel do default(shared) schedule(static) num_threads(nt) &
       !$omp private(j, kvec, env, kdotr, re_sum, im_sum, k_phase, a, v)
@@ -736,7 +739,7 @@ contains
       real(wp) :: r0(3), kvec(3), env, kdotr
       complex(wp) :: c, ce
       integer :: j, a, v, it
-      r0 = grid%point(1)
+      r0 = grid%get_kref()
       !$omp parallel do default(shared) schedule(static) num_threads(nt) &
       !$omp private(j, kvec, env, kdotr, c, ce, a, v, it)
       do j = 1, grid%npts_k

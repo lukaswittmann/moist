@@ -58,7 +58,7 @@ module moist_math_grid_3d_cartesian
       real(wp), private :: dky = 0.0_wp
       !> Reciprocal-space spacing along z, inverse bohr
       real(wp), private :: dkz = 0.0_wp
-      !> Real-space coordinate of grid point (1, 1, 1)
+      !> Box corner; grid point (1, 1, 1) sits at `origin + dr/2`
       real(wp), private :: origin(3) = 0.0_wp
       !> Reciprocal frequencies along x, inverse bohr, length nkx
       real(wp), allocatable, private :: kx(:)
@@ -74,10 +74,12 @@ module moist_math_grid_3d_cartesian
       procedure :: get_volume_hessian => get_volume_hessian_cartesian
       procedure :: kind_name => cartesian_kind_name
       procedure :: kpoint => cartesian_grid_3d_kpoint
+      !> Phase reference of the FFT: grid point (1, 1, 1), bohr
+      procedure :: get_kref => cartesian_get_kref
       procedure :: destroy => cartesian_grid_3d_dealloc
       procedure :: integrate_field => cartesian_grid_3d_integrate_field
       procedure :: new_trafo => cartesian_grid_3d_new_trafo
-      !> Real-space coordinate of grid point (1, 1, 1), bohr
+      !> Box corner, bohr; grid point (1, 1, 1) sits at `origin + dr/2`
       procedure :: get_origin => cartesian_get_origin
       !> Real-space cell volume `dr**3`, bohr**3
       procedure :: get_cell_volume => cartesian_get_cell_volume
@@ -212,8 +214,8 @@ contains
 
    !> Contract centroid-following point adjoints into the nuclear gradient
    !>
-   !> Every point moves with the centroid and weights and widths are constant,
-   !> so each atom receives `sum(w_xyz, dim=2)/natom`
+   !> Every point and the phase reference move with the centroid and weights and
+   !> widths are constant, so each atom receives `(sum(w_xyz, dim=2) + w_kref)/natom`
    !>
    !> @param[in] self Successfully updated grid
    !> @param[in] acc Volume-observable adjoints
@@ -236,7 +238,7 @@ contains
 
       call self%check_volume_adjoint(acc, error, vector=gradient)
       if (allocated(error)) return
-      contribution = sum(acc%w_xyz, dim=2)/real(self%natom, wp)
+      contribution = (sum(acc%w_xyz, dim=2) + acc%w_kref)/real(self%natom, wp)
       if (.not. all(ieee_is_finite(contribution))) then
          call fatal_error(error, "cartesian domain: non-finite gradient contraction")
          return
@@ -704,7 +706,7 @@ contains
       result = self%dv*result
    end subroutine cartesian_grid_3d_integrate_field
 
-   !> Real-space coordinate of grid point (1, 1, 1)
+   !> Box corner; grid point (1, 1, 1) sits at `origin + dr/2`
    !>
    !> @param[in] self Grid instance
    pure function cartesian_get_origin(self) result(origin)
@@ -714,6 +716,17 @@ contains
       real(wp) :: origin(3)
       origin = self%origin
    end function cartesian_get_origin
+
+   !> Phase reference of the FFT, grid point (1, 1, 1)
+   !>
+   !> @param[in] self Grid instance
+   pure function cartesian_get_kref(self) result(kref)
+      !> Grid instance
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Real-space phase origin (bohr)
+      real(wp) :: kref(3)
+      kref = self%origin + 0.5_wp*self%dr
+   end function cartesian_get_kref
 
    !> Real-space cell volume, zero before a successful update
    !>

@@ -222,7 +222,7 @@ contains
 
    !> Check forward transform of a nucleus-localised Gaussian against the analytic FT
    !>
-   !> - `f(r) = exp(-a |r - c|^2)` with `r0 = point(1)`
+   !> - `f(r) = exp(-a |r - c|^2)` with `r0 = get_kref()`
    !> - `F(k) = (pi/a)^(3/2) exp(-k^2/(4a)) exp(-i k.(c - r0))`
    !> - Pins measure, sign, phase reference and k ordering of the NUFFT
    subroutine test_forward_analytic(error)

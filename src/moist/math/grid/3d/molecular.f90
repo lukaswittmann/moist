@@ -145,7 +145,7 @@ module moist_math_grid_3d_molecular
       real(wp), private :: dkx = 0.0_wp, dky = 0.0_wp, dkz = 0.0_wp
       !> Phase reference: real-space point the transform phases are measured from
       !>
-      !> Explicit k-grid setup uses `point(1)`; updates use solute centroid
+      !> `point(1)` after `set_kgrid` without reference; otherwise centroid plus `kref_offset`
       real(wp), private :: kref(3) = 0.0_wp
       !> Requested FINUFFT relative tolerance for transforms on this grid
       !>
@@ -215,7 +215,7 @@ module moist_math_grid_3d_molecular
    !> FINUFFT NUFFT for nonuniform molecular points
    !> Forward strengths `w_j*f(r_j)` match Cartesian `dV*FFT`
    !> Backward scale `dkx*dky*dkz/(2*pi)^3`
-   !> Both use `kref` for Cartesian/`potential_3d` phase convention
+   !> Both measure phases from `kref` (`get_kref`)
    !>
    !> Uniform-box dual lattice permits type 1 forward and type 2 backward
    !> `want_type12 = .false.` selects equivalent, costlier type 3
@@ -399,10 +399,12 @@ contains
          & xi0_factor=xi0_factor)
    end subroutine new_molecular_gaussian_grid
 
-   !> Contract molecular point, weight and Gaussian-width adjoints
+   !> Contract molecular point, weight, Gaussian-width and phase-reference adjoints
    !>
    !> - Fixed retained membership and atomic recipes
    !> - Recomputed partition state; no persistent nuclear Jacobians
+   !> - Phase reference: centroid plus offset gives `w_kref/natom` to every atom;
+   !>   `point(1)` gives `w_kref` to its owner
    !>
    !> @param[in] self Successfully updated molecular grid
    !> @param[in] acc Volume-observable adjoints
@@ -419,7 +421,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer, allocatable :: numbers(:)
-      integer :: stat
+      integer :: stat, iat
 
       call self%check_volume_adjoint(acc, error, vector=gradient)
       if (allocated(error)) return
@@ -436,6 +438,14 @@ contains
       else
          call self%partition%grid_gradient(self%xyz, self%molecule%xyz, numbers, self%owner, self%atomic_w, &
             & acc%w_xyz, acc%w_w, gradient, error, nthreads=self%team_size())
+      end if
+      if (allocated(error) .or. .not. self%has_kgrid) return
+      if (self%centered_period) then
+         do iat = 1, self%natom
+            gradient(:, iat) = gradient(:, iat) + acc%w_kref/real(self%natom, wp)
+         end do
+      else
+         gradient(:, self%owner(1)) = gradient(:, self%owner(1)) + acc%w_kref
       end if
    end subroutine get_volume_gradient_molecular
 
@@ -1517,7 +1527,7 @@ contains
    !> - Per axis: `L = extent + 2*buffer`; smallest even N with `N*dr >= L`
    !> - Reciprocal spacing `dk = 2*pi/(N*dr)`
    !> - CMCL modes: kx fastest, frequencies -N/2 .. N/2-1
-   !> - Default phase reference `point(1)` matches Cartesian/`potential_3d`
+   !> - Phase reference `point(1)` without `reference`, followed across updates
    !> - Automatic reciprocal setup uses solute centroid
    !> - Explicit setup preserves chosen reference across updates
    !>
@@ -1731,7 +1741,7 @@ contains
 
    !> Build FINUFFT plans for `ntrans = nv` transforms
    !>
-   !> Both routes use `x_j = xyz(:,j) - kref` for Cartesian phase convention
+   !> Both routes use `x_j = xyz(:,j) - kref`, the phase convention of `get_kref`
    !>
    !> - Type 1/2 default: uniform-box dual lattice `k = m*dk`,
    !>   `dk = 2*pi/(nk*dr)`, `m = -N/2 .. N/2-1`
@@ -1783,7 +1793,7 @@ contains
       ngrid = self%grid%ngrid
 
       ! Shifted real-space coordinates
-      ! `kref` shift preserves Cartesian FFT phase on both routes
+      ! `kref` shift gives both routes the phase convention of `get_kref`
       npts_k = self%grid%npts_k
       allocate (self%xj(ngrid), stat=stat)
       if (stat == 0) allocate (self%yj(ngrid), stat=stat)
