@@ -4079,13 +4079,12 @@ struct drop_options_1_0 {
     double branch_weight_s;
     double rho_grid_h;
     int wleb_prune_level;
-    int reserved0;
 };
 
 struct cfc_options_1_0 {
     size_t struct_size;
     double a1, a2, c;
-    int m, reserved0;
+    int m;
 };
 
 struct pcm_options_1_0 {
@@ -4115,11 +4114,6 @@ int test_options_1_0_prefix(void)
     if (!lsf || moist_check_error(error)) goto cleanup;
     cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, (const moist_drop_options *)&future.prefix);
     if (!cavity || moist_check_error(error)) goto cleanup;
-    /* Reserved inputs stay ignored, including residue from pre-reservation callers */
-    moist_delete(cavity);
-    future.prefix.reserved0 = 123;
-    cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, (const moist_drop_options *)&future.prefix);
-    if (!cavity || moist_check_error(error)) goto cleanup;
 
     memset(&cfc, 0x5a, sizeof cfc);
     moist_init_cfc_options(error, (moist_cfc_options *)&cfc.prefix, sizeof cfc.prefix);
@@ -4127,7 +4121,6 @@ int test_options_1_0_prefix(void)
     for (size_t i = sizeof cfc.prefix; i < sizeof cfc; ++i)
         if (((unsigned char *)&cfc)[i] != 0x5a) goto cleanup;
     moist_delete(lsf);
-    cfc.prefix.reserved0 = 123;
     lsf = moist_new_cfc_lsf(error, (const moist_cfc_options *)&cfc.prefix);
     if (!lsf || moist_check_error(error)) goto cleanup;
 
@@ -4148,7 +4141,7 @@ cleanup:
     return failed;
 }
 
-/* Check every byte outside meaningful fields, including reserved members */
+/* Check every byte outside meaningful fields, i.e. padding */
 static int padding_is_zero(const void *value, const unsigned char *fields, size_t size)
 {
     const unsigned char *bytes = value;
@@ -4228,6 +4221,7 @@ int test_options_padding(void)
         MARK_FIELD(isodensity, struct_size);
         MARK_FIELD(isodensity, rho_iso);
         MARK_FIELD(isodensity, scale);
+        MARK_FIELD(isodensity, basis);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_isodensity_options(error, &value, sizeof value);

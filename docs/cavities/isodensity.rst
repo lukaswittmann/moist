@@ -41,6 +41,11 @@ Two implementations are available:
    The QM host supplies the GTO basis set and, for every SCF step, the current density matrix in Cartesian-monomial layout (``moist_get_isodensity_cart_layout``, ``moist_set_isodensity_density``).
    MOIST evaluates the density and its spatial derivatives internally, including shell and spatial screening.
 
+   ``basis`` selects the representation the density is contracted in:
+   - ``cartesian`` (default) works for every host.
+   - ``spherical`` contracts over the :math:`2l+1` harmonic polynomials of each shell instead of the :math:`(l+1)(l+2)/2` monomials, which is exact for a host with spherical basis functions.
+   It is set as ``basis=moist_iso_basis%spherical`` (Fortran, ``use moist, only: moist_iso_basis``), ``options.basis = moist_isodensity_basis_spherical`` (C) or ``IsodensityParameters(basis="spherical")`` (Python).
+
 Both implementations share ``moist_cavity_drop_lsf_isodensity_param_type`` and build the same :math:`S` from it.
 
 Construction

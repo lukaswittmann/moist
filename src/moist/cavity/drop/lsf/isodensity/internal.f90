@@ -24,7 +24,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
-   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
    implicit none(type, external)
@@ -56,17 +56,8 @@ module moist_cavity_drop_lsf_isodensity_internal
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
-      !> Per-instance scratch AO-derivative table (ncart, 0:nslot-1), sized to the
-      !> highest order this instance has been asked for so far
-      real(wp), allocatable :: phi(:, :)
-      !> Per-instance scratch density-weighted value vector (ncart)
-      real(wp), allocatable :: t0(:)
-      !> Per-instance scratch density-weighted gradient vectors (ncart, 3)
-      real(wp), allocatable :: tm(:, :)
-      !> Per-instance scratch density-weighted Hessian vectors (ncart, 6)
-      real(wp), allocatable :: tmm(:, :)
-      !> Per-instance scratch active-component index list (ncart)
-      integer, allocatable :: act(:)
+      !> Per-instance evaluation scratch, sized on first use
+      type(moist_iso_gto_work_type) :: work
    contains
       procedure, public :: new => lsf_new
       procedure, public :: set_density => lsf_set_density
@@ -117,25 +108,20 @@ contains
 
       self%radius_dependent = .false.
 
-      call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
-      if (allocated(error)) return
-      !> The per-instance scratch is sized from `gto%ncart`, so a re-configured
-      !> basis invalidates it; dropping it here makes `lsf_prepare_impl` size it
-      !> again, while keeping it would let a larger basis write past its end
-      if (allocated(self%phi)) deallocate (self%phi)
-      if (allocated(self%t0)) deallocate (self%t0)
-      if (allocated(self%tm)) deallocate (self%tm)
-      if (allocated(self%tmm)) deallocate (self%tmm)
-      if (allocated(self%act)) deallocate (self%act)
       self%param = moist_cavity_drop_lsf_isodensity_param_type()
       if (present(param)) self%param = param
+      call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error, basis=self%param%basis)
+      if (allocated(error)) return
+      !> Scratch sized for the previous basis; resized on first use
+      self%work = moist_iso_gto_work_type()
    end subroutine lsf_new
 
    !> Install the cartesian-monomial density matrix for the current SCF step
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    dcart Density matrix in the cartesian-monomial basis
-   !> @param[out]   error Set on a size mismatch
+   !> @param[out]   error Set on a size mismatch or, in the spherical
+   !>                     representation, a density outside the spherical subspace
    subroutine lsf_set_density(self, dcart, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: dcart(:, :)
@@ -191,36 +177,21 @@ contains
 
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       real(wp) :: d4rho(ndim, ndim, ndim, ndim)
-      integer :: nderiv, nslot
+      integer :: nderiv
 
       nderiv = min(max(self%max_deriv, 1), 4)
-      nslot = moist_iso_gto_nslot(nderiv)
-
-      if (.not. allocated(self%phi)) then
-         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
-         allocate (self%t0(self%gto%ncart))
-         allocate (self%tm(self%gto%ncart, 3))
-         allocate (self%act(self%gto%ncart))
-      else if (size(self%phi, 2) < nslot) then
-         deallocate (self%phi)
-         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
-      end if
-      if (nderiv >= 4 .and. .not. allocated(self%tmm)) allocate (self%tmm(self%gto%ncart, 6))
 
       select case (nderiv)
       case (:1)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, cand_atoms=cand_atoms)
       case (2)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
       case (3)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                            cand_atoms=cand_atoms)
       case default
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms, &
-                            d4rho=d4rho, tmm=self%tmm)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                            cand_atoms=cand_atoms, d4rho=d4rho)
       end select
 
       self%point = point

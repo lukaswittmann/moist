@@ -68,6 +68,8 @@ module test_api
       real(c_double) :: rho_iso
       !> Level-set scale
       real(c_double) :: scale
+      !> Density representation of the internal LSF
+      integer(c_int) :: basis
    end type iso_options
 
    !> Frozen DROP options layout exercised through the C interface
@@ -90,8 +92,6 @@ module test_api
       real(c_double) :: rho_grid_h
       !> Lebedev pruning level
       integer(c_int) :: wleb_prune_level
-      !> Reserved ABI storage
-      integer(c_int) :: reserved0
    end type drop_options
 
    !> Test double: a cavity whose arrays the test fills by hand
@@ -1516,7 +1516,7 @@ contains
       block
          type(c_ptr) :: lsf
          type(iso_options), target :: options
-         options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double)
+         options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double, 1_c_int)
          lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
                                                c_loc(ctx), c_loc(options))
          vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
@@ -2177,11 +2177,13 @@ contains
    end subroutine test_parts_without_context
 
    !> LSF constructors refuse a missing callback, non-positive isodensity
-   !> controls and every malformed basis, and return no handle
+   !> controls, an unknown density representation and every malformed basis, and
+   !> return no handle
    !>
    !> The basis cases walk the shell guard (no shells, each NULL basis array), both
    !> halves of the primitive guard (a zero count, a sum past `huge`) and the
    !> basis constructor's own rejection of an unsupported angular momentum
+   !> - Positive control: the callback constructor ignores the representation
    subroutine test_lsf_constructor_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2193,7 +2195,7 @@ contains
       !> Returned LSF handle
       type(c_ptr) :: lsf
       !> Expected diagnostics, one per case
-      character(len=48), parameter :: needles(12) = [character(len=48) :: &
+      character(len=48), parameter :: needles(13) = [character(len=48) :: &
          & "Callback is missing", "rho_iso and scale must be positive", &
          & "Missing basis arrays or invalid shell count", &
          & "Missing basis arrays or invalid shell count", "Invalid primitive counts", &
@@ -2202,7 +2204,8 @@ contains
          & "Missing basis arrays or invalid shell count", &
          & "Missing basis arrays or invalid shell count", &
          & "Missing basis arrays or invalid shell count", &
-         & "Missing basis arrays or invalid shell count"]
+         & "Missing basis arrays or invalid shell count", &
+         & "must be cartesian or spherical"]
       integer :: icase
 
       allocate (err)
@@ -2217,7 +2220,7 @@ contains
          case (1)
             lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_null_funptr, c_null_ptr, c_null_ptr)
          case (2)
-            options = iso_options(c_sizeof(options), -1.0_c_double, 1000.0_c_double)
+            options = iso_options(c_sizeof(options), -1.0_c_double, 1000.0_c_double, 1_c_int)
             lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
                                                   c_null_ptr, c_loc(options))
          case (3)
@@ -2240,7 +2243,7 @@ contains
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
          case (8)
-            options = iso_options(c_sizeof(options), 1.0e-3_c_double, -1.0_c_double)
+            options = iso_options(c_sizeof(options), 1.0e-3_c_double, -1.0_c_double, 1_c_int)
             lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
                                                   c_null_ptr, c_loc(options))
          case (9)
@@ -2255,6 +2258,10 @@ contains
          case (12)
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_null_ptr, c_loc(coeffs), c_null_ptr)
+         case (13)
+            options = iso_options(c_sizeof(options), 1.0e-3_c_double, 1000.0_c_double, 7_c_int)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_loc(options))
          case default
             error stop "test_api: unhandled case in test_lsf_constructor_guards"
          end select
@@ -2263,6 +2270,17 @@ contains
          call moist_delete_lsf(lsf)
          if (allocated(error)) exit
       end do
+      if (.not. allocated(error)) then
+         options = iso_options(c_sizeof(options), 1.0e-3_c_double, 1000.0_c_double, 7_c_int)
+         lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
+                                                 c_null_ptr, c_loc(options))
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Callback LSF rejected an unused basis: "//err%ptr%message)
+         else if (.not. c_associated(lsf)) then
+            call test_failed(error, "Callback LSF returned no handle for an unused basis")
+         end if
+         call moist_delete_lsf(lsf)
+      end if
       deallocate (err)
 
    end subroutine test_lsf_constructor_guards

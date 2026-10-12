@@ -84,8 +84,6 @@ module moist_api
       real(c_double) :: rho_grid_h = 1.0_c_double
       !> Lebedev pruning level
       integer(c_int) :: wleb_prune_level = 0_c_int
-      !> Reserved ABI storage; initialized to zero and ignored on input
-      integer(c_int) :: reserved0 = 0_c_int
    end type api_drop_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -135,8 +133,6 @@ module moist_api
       real(c_double) :: c = 5.0_c_double
       !> Pair-term polynomial power
       integer(c_int) :: m = 4_c_int
-      !> Reserved ABI storage; initialized to zero and ignored on input
-      integer(c_int) :: reserved0 = 0_c_int
    end type api_cfc_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -150,6 +146,8 @@ module moist_api
       real(c_double) :: rho_iso = 1.0e-3_c_double
       !> Positive level-set scaling factor
       real(c_double) :: scale = 1000.0_c_double
+      !> Density representation of the internal LSF; ignored by the callback LSF
+      integer(c_int) :: basis = 1_c_int
    end type api_isodensity_options_v1_0
 
    !> Minimum valid caller size, independent of future library extensions
@@ -350,6 +348,7 @@ contains
       type(moist_cavity_drop_lsf_isodensity_param_type) :: native
       value%rho_iso = native%rho_iso
       value%scale = native%scale
+      value%basis = native%basis
    end function default_isodensity_options
 
    !> GOSTSHYP defaults from the native parameter type
@@ -697,7 +696,6 @@ contains
       defaults%branch_weight_s = values%branch_weight_s
       defaults%rho_grid_h = values%rho_grid_h
       defaults%wleb_prune_level = values%wleb_prune_level
-      defaults%reserved0 = values%reserved0
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, drop_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_drop_options")
    end subroutine init_drop_options_api
@@ -832,7 +830,6 @@ contains
       defaults%a2 = values%a2
       defaults%c = values%c
       defaults%m = values%m
-      defaults%reserved0 = values%reserved0
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, cfc_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_cfc_options")
    end subroutine init_cfc_options_api
@@ -876,6 +873,7 @@ contains
       defaults%struct_size = bytes
       defaults%rho_iso = values%rho_iso
       defaults%scale = values%scale
+      defaults%basis = values%basis
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, isodensity_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_isodensity_options")
    end subroutine init_isodensity_options_api
@@ -1247,7 +1245,8 @@ contains
          call item%new(sh_atom=int(atoms) + 1, sh_l=int(angular), sh_nprim=int(primitives), exps=real(exps, wp), &
                        coeffs=real(coeffs, wp), error=error%ptr, &
                        param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=real(o%rho_iso, wp), &
-                                                                         scale=real(o%scale, wp)))
+                                                                         scale=real(o%scale, wp), &
+                                                                         basis=int(o%basis)))
       end select
       call prefix_api_error(error%ptr, "new_isodensity_lsf")
       if (allocated(error%ptr)) then

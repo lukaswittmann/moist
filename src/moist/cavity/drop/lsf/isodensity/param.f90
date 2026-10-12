@@ -6,6 +6,7 @@
 !>
 !> and differ only in where the density comes from; so they use the same parameters
 module moist_cavity_drop_lsf_isodensity_param
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_basis
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
    use, intrinsic :: iso_fortran_env, only: output_unit
@@ -22,6 +23,11 @@ module moist_cavity_drop_lsf_isodensity_param
       real(wp) :: rho_iso = 1.0E-3_wp
       !> Constant multiplier applied to the level set value and derivatives
       real(wp) :: scale = 1.0_wp / 1.0E-3_wp
+      !> Density representation of the internal LSF, a [[moist_iso_basis]] value
+      !>
+      !> - spherical needs a host with spherical basis functions
+      !> - ignored by the callback LSF
+      integer :: basis = moist_iso_basis%cartesian
 
       !* ------------------- Surface-free exclusion certificate ---------------- *!
       ! These parameters are only used in the octree solver; these are used in order
@@ -55,6 +61,7 @@ contains
 
       self%rho_iso = defaults%rho_iso
       self%scale = defaults%scale
+      self%basis = defaults%basis
       self%log_grad_out = defaults%log_grad_out
       self%log_grad_cusp = defaults%log_grad_cusp
       self%exclusion_cap = defaults%exclusion_cap
@@ -68,6 +75,7 @@ contains
 
       call self%register_real_scalar("rho_iso", self%rho_iso)
       call self%register_real_scalar("scale", self%scale)
+      call self%register_int_scalar("basis", self%basis)
       call self%register_real_scalar("log_grad_out", self%log_grad_out)
       call self%register_real_scalar("log_grad_cusp", self%log_grad_cusp)
       call self%register_real_scalar("exclusion_cap", self%exclusion_cap)
@@ -78,8 +86,9 @@ contains
    !> @param[inout] self     Isodensity parameter instance
    !> @param[in]    rho_iso  Density isovalue (optional)
    !> @param[in]    scale    Constant level set multiplier (optional)
+   !> @param[in]    basis    Density representation of the internal LSF (optional)
    subroutine new_lsf_isodensity_param(self, rho_iso, scale, log_grad_out, &
-                                       log_grad_cusp, exclusion_cap)
+                                       log_grad_cusp, exclusion_cap, basis)
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(inout) :: self
       !> Density isovalue (optional override)
       real(wp), intent(in), optional :: rho_iso
@@ -91,12 +100,15 @@ contains
       real(wp), intent(in), optional :: log_grad_cusp
       !> Cap on the certified radius in Bohr (optional override)
       real(wp), intent(in), optional :: exclusion_cap
+      !> Density representation, a [[moist_iso_basis]] value (optional override)
+      integer, intent(in), optional :: basis
 
       if (present(rho_iso)) self%rho_iso = rho_iso
       if (present(scale)) self%scale = scale
       if (present(log_grad_out)) self%log_grad_out = log_grad_out
       if (present(log_grad_cusp)) self%log_grad_cusp = log_grad_cusp
       if (present(exclusion_cap)) self%exclusion_cap = exclusion_cap
+      if (present(basis)) self%basis = basis
    end subroutine new_lsf_isodensity_param
 
    !> Physically motivated surface-free radius for an isodensity level set
@@ -149,6 +161,7 @@ contains
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Pretty printer
       type(prettyprinter) :: pp
       !> Effective output unit
       integer :: iu
@@ -160,6 +173,11 @@ contains
       call pp%push("Implicit surface (isodensity):")
       call pp%kv("Isovalue (rho_iso)", self%rho_iso, use_exp=.true.)
       call pp%kv("Scale", self%scale)
+      if (self%basis == moist_iso_basis%spherical) then
+         call pp%kv("AO basis", "spherical")
+      else
+         call pp%kv("AO basis", "cartesian")
+      end if
       if (self%log_grad_out > 0.0_wp) then
          call pp%kv("Exclusion |grad ln rho| (out)", self%log_grad_out, "1/Bohr")
          call pp%kv("Exclusion cusp factor (in)", self%log_grad_cusp)

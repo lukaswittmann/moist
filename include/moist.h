@@ -94,6 +94,16 @@ typedef enum {
     moist_pcm_solver_iterative = 4
 } moist_pcm_solver;
 
+/// Density representation of the internal isodensity LSF
+/// Mirrors the Fortran `moist_iso_basis` enumerator in
+/// src/moist/cavity/drop/lsf/isodensity/gto.f90; numeric values are ABI
+typedef enum {
+    /// Cartesian monomials
+    moist_isodensity_basis_cartesian = 1,
+    /// Harmonic polynomials, 2l+1 per shell
+    moist_isodensity_basis_spherical = 2
+} moist_isodensity_basis;
+
 /// DROP cavity class
 typedef struct moist_cavity_s* moist_cavity;
 
@@ -202,7 +212,7 @@ moist_get_context_num_threads(moist_error error, moist_context context,
  * - Future libraries accept older prefixes and default appended fields
  * - Larger structs accepted; unknown trailing fields ignored on input and
  *   untouched by initializers
- * - Initializers zero reserved fields and padding within the supported layout
+ * - Initializers zero padding within the supported layout
  */
 typedef struct {
     size_t struct_size;
@@ -214,7 +224,6 @@ typedef struct {
     double branch_weight_s;
     double rho_grid_h;
     int wleb_prune_level;
-    int reserved0;  /* Initialized to zero, ignored on input, do not reuse */
     /* --- end of 1.0 layout --- */
 } moist_drop_options;
 
@@ -253,7 +262,6 @@ typedef struct {
     double a2;
     double c;
     int m;
-    int reserved0;  /* Initialized to zero, ignored on input, do not reuse */
     /* --- end of 1.0 layout --- */
 } moist_cfc_options;
 
@@ -265,6 +273,7 @@ typedef struct {
     size_t struct_size;
     double rho_iso;
     double scale;
+    moist_isodensity_basis basis;  /* Only read by moist_new_isodensity_lsf */
     /* --- end of 1.0 layout --- */
 } moist_isodensity_options;
 
@@ -884,6 +893,8 @@ moist_get_isodensity_cart_layout(moist_error error,
 /// Install the cartesian-monomial density matrix for the internal isodensity LSF
 /// `dcart` is the ncart-by-ncart density matrix, row-major (ncart, ncart): element
 /// (p,q) at `[p*ncart + q]`. Call before each moist_update_cavity
+/// With moist_isodensity_basis_spherical, a density outside the span of the
+/// spherical functions (a host with cartesian basis functions) is an error
 moist_API_ENTRY void moist_API_CALL
 moist_set_isodensity_density(moist_error error,
                              moist_cavity cavity,

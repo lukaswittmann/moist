@@ -23,7 +23,7 @@ def test_parameters_cover_native_options_and_defaults(kind):
     parameters = kind()
     native = library._options(parameters._kind)
     members = {name for name, _ in library.ffi.typeof(native[0]).fields}
-    members -= {"struct_size", "reserved0"}
+    members -= {"struct_size"}
     assert {item.name for item in fields(parameters)} == members
     assert asdict(parameters) == {name: getattr(native, name) for name in members}
     assert pickle.loads(pickle.dumps(parameters)) == parameters
@@ -397,6 +397,23 @@ def test_isodensity_configuration_callback_object_and_order(monkeypatch, gaussia
     assert cavity.snapshot().ngrid > 0
     with pytest.raises(TypeError, match="requires a callable"):
         config.build(source=object(), context=CONTEXT)
+
+
+def test_isodensity_basis_parameter_and_spherical_guard():
+    assert moist.IsodensityParameters().basis is moist.IsodensityBasis.CARTESIAN
+    assert moist.IsodensityParameters(basis="spherical").basis is moist.IsodensityBasis.SPHERICAL
+    with pytest.raises(ValueError, match="Unknown isodensity basis"):
+        moist.IsodensityParameters(basis="pure")
+    # One d shell; monomials xx xy xz yy yz zz
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[2], shell_nprim=[1],
+                                exponents=[1.], coefficients=[1.])
+    config = moist.DROP(lsf=moist.Isodensity(parameters=moist.IsodensityParameters(basis="spherical")),
+                        parameters=moist.DROPParameters(nleb=26))
+    r2 = np.array([1., 0., 0., 1., 0., 1.])
+    with pytest.raises(RuntimeError, match="spherical subspace"):
+        config.build(source=moist.InternalDensity(basis, np.outer(r2, r2)), context=CONTEXT)
+    xy = np.array([0., 1., 0., 0., 0., 0.])
+    assert config.build(source=moist.InternalDensity(basis, np.outer(xy, xy)), context=CONTEXT)
 
 
 def test_internal_isodensity_rejects_callback_order():

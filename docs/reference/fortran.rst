@@ -403,8 +403,9 @@ rules.
 The ``moist`` umbrella module re-exports what the evaluation loop needs: every
 parameter type, ``cavity_type_drop`` and ``new_cavity_drop``, ``radius_type``
 and the generic ``new_radii``, the model and component types with their
-constructors and ``solver_type``, the coupling and request types, the response
-type with its items, ``field_query_type``, and ``wp``, ``error_type``,
+constructors and ``solver_type``, the isodensity ``moist_iso_basis``, the
+coupling and request types, the response type with its items,
+``field_query_type``, and ``wp``, ``error_type``,
 ``fatal_error`` and ``structure_type`` from mctc-lib. Everything else the
 examples above use -- the context, the other cavities, the concrete radii and
 LSF types, the diagnostics -- comes from its own module.

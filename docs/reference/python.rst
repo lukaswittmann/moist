@@ -181,6 +181,9 @@ Shell atom indices and offsets are zero-based; ``powers`` has shape ``(ncart,3)`
 Coefficients include primitive normalization. The matrix must already be transformed
 into the queried Cartesian-monomial layout; a host's spherical AO density cannot
 be passed directly. Both basis and density inputs are copied.
+For a host with spherical basis functions, ``IsodensityParameters(basis="spherical")``
+(``IsodensityBasis.SPHERICAL``) contracts that matrix over the :math:`2l+1` spherical
+functions per shell (faster); a matrix from a Cartesian-basis host is then rejected.
 
 Assign ``source.density_matrix`` before each cavity or model update. Updates
 install it on the correct native owner; merely assigning it does not change an

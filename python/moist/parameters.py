@@ -24,6 +24,16 @@ class PCMSolver(IntEnum):
     ITERATIVE = library.lib.moist_pcm_solver_iterative
 
 
+class IsodensityBasis(IntEnum):
+    """Density representation of the internal isodensity LSF, from the C ABI.
+
+    ``SPHERICAL`` requires a host with spherical basis functions.
+    """
+
+    CARTESIAN = library.lib.moist_isodensity_basis_cartesian
+    SPHERICAL = library.lib.moist_isodensity_basis_spherical
+
+
 @lru_cache(maxsize=None)
 def _default(kind, name):
     return getattr(library._options(kind), name)
@@ -108,6 +118,18 @@ class IsodensityParameters(_Parameters):
     _kind = "isodensity"
     rho_iso: float = _native_default("isodensity", "rho_iso")
     scale: float = _native_default("isodensity", "scale")
+    basis: IsodensityBasis = _native_default("isodensity", "basis")
+
+    def __post_init__(self):
+        value = self.basis
+        if isinstance(value, str):
+            try:
+                value = IsodensityBasis[value.upper()]
+            except KeyError as exc:
+                raise ValueError(f"Unknown isodensity basis {value!r}") from exc
+        object.__setattr__(self, "basis", IsodensityBasis(value))
+        super().__post_init__()
+        object.__setattr__(self, "basis", IsodensityBasis(self.basis))
 
 
 @dataclass(frozen=True, kw_only=True)
