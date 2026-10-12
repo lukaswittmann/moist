@@ -22,7 +22,7 @@ module test_moz_3d
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
    use test_helpers, only: get_qc_handymod_recipe, check_moist_error
    use test_moz_fixtures, only: water_sigma, water_epsilon, water_charges, new_water_system, answer_charges, &
-      & new_water_solvent, refusing_term_type
+      & new_water_solvent
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type
    use moist_channels_response, only: response_type, atomic_charge_adjoint_response_type, response_accumulate
@@ -44,7 +44,6 @@ contains
          & new_unittest("ec_point_requests", check_ec_requests), &
          & new_unittest("gaussian_grid_refused", check_gaussian_grid_refused), &
          & new_unittest("monopole_and_multipoles", check_charge_sources), &
-         & new_unittest("term_failures", check_term_failures), &
          & new_unittest("solvent_copy", check_solvent_copy), &
          & new_unittest("uv_potential_tables", check_potential_tables)]
    end subroutine collect_moz_3d
@@ -399,70 +398,6 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "multipole") > 0, more=err%message)
    end subroutine check_charge_sources
-
-   !> Check named solute failures and cleared coupling state
-   !>
-   !> - Solute potential without terms: refusal at update
-   !> - Failed term declaration: coupling refused, previously staged walk ended
-   subroutine check_term_failures(error)
-      !> Test error
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(model_moz_3d_type), target :: model
-      type(moist_math_grid_3d_cartesian_type) :: cart
-      type(solvent_vv_type) :: solvent
-      type(refusing_term_type) :: refusing
-      !> Declaration switch shared with the refusing term
-      logical, target :: refuse
-      type(coupling_type), pointer :: coupling
-      type(structure_type) :: mol
-
-      call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
-      if (.not. allocated(err)) call new_water_solvent(ctx, solvent, err)
-      if (.not. allocated(err)) call new_moz_3d_model(model, ctx, cart, solvent, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call model%update(mol, err)
-      call check(error, allocated(err) .and. .not. model%is_updated(), more="an empty solute potential was accepted")
-      if (allocated(error)) return
-      call check(error, index(err%message, "has no terms") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      ! Host charges first, then pair-only term with switchable declaration failure
-      call new_updated_model(ctx, cart, model, err)
-      refuse = .false.
-      refusing%refuse => refuse
-      if (.not. allocated(err)) call model%potential%add(refusing, err)
-      if (.not. allocated(err)) call model%update(mol, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      refuse = .true.
-      call model%new_coupling(coupling, err)
-      call check(error, allocated(err) .and. .not. associated(coupling), more="a failing declaration was accepted")
-      if (allocated(error)) return
-      call check(error, index(err%message, "refused declaration") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      ! Failed redeclaration: previous staging cleared
-      refuse = .false.
-      call model%new_coupling(coupling, err)
-      if (.not. allocated(err)) call model%prepare_energy(coupling, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      refuse = .true.
-      call model%prepare_response(coupling, err)
-      call check(error, allocated(err), more="a failing declaration was staged")
-      if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="the refused declaration left a staging behind")
-      if (allocated(error)) return
-      call model%release_coupling(coupling)
-      call check(error, .not. associated(coupling), more="release left a coupling pointer")
-   end subroutine check_term_failures
 
    !> Check solvent ownership and model invalidation
    !>

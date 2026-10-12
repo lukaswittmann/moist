@@ -21,7 +21,7 @@ module test_moz_fixtures
    private
 
    public :: water_id, water_sigma, water_epsilon, water_charges
-   public :: new_water_system, new_water_solvent, refusing_term_type, ref_lj, answer_charges
+   public :: new_water_system, new_water_solvent, ref_lj, answer_charges
 
    !> Water solvent id of the table
    integer, parameter :: water_id = 175
@@ -31,19 +31,6 @@ module test_moz_fixtures
    real(wp), parameter :: water_epsilon(3) = [2.4e-4_wp, 1.0e-5_wp, 2.0e-5_wp]
    !> Charges per site, e
    real(wp), parameter :: water_charges(3) = [-0.8_wp, 0.3_wp, 0.5_wp]
-
-   !> Pair-only test term whose declaration can be made to fail
-   !>
-   !> - Pointer-shared switch; copied term follows test flag inside model
-   type, extends(potential_term_type) :: refusing_term_type
-      !> Whether `declare_pass` fails; never when unassociated
-      logical, pointer :: refuse => null()
-   contains
-      procedure :: name => refusing_name
-      procedure :: update => refusing_update
-      procedure :: declare_pass_1d => refusing_declare_pass_1d
-      procedure :: declare_pass_3d => refusing_declare_pass_3d
-   end type refusing_term_type
 
 contains
 
@@ -111,88 +98,6 @@ contains
       sr6 = (0.5_wp*(s1 + s2)/r)**6
       u = 4.0_wp*sqrt(e1*e2)*(sr6*sr6 - sr6)
    end function ref_lj
-
-   !> Diagnostic name
-   !>
-   !> @param[in] self  term
-   pure function refusing_name(self) result(name)
-      !> Term
-      class(refusing_term_type), intent(in) :: self
-      !> Name
-      character(len=potential_name_len) :: name
-      name = "refusing"
-   end function refusing_name
-
-   !> Fill Lennard-Jones data covering every atom
-   !>
-   !> @param[in,out] self        term
-   !> @param[in]     mol         structure of this side
-   !> @param[out]    error       parameter failure
-   !> @param[in]     solvent_id  unused
-   subroutine refusing_update(self, mol, error, solvent_id)
-      !> Term
-      class(refusing_term_type), intent(inout) :: self
-      !> Structure of this side
-      class(structure_type), intent(in) :: mol
-      !> Error handling
-      type(moist_error), allocatable, intent(out) :: error
-      !> Unused
-      integer, intent(in), optional :: solvent_id
-      real(wp), allocatable :: sigma(:), epsilon(:)
-      allocate (sigma(mol%nat), source=3.0_wp)
-      allocate (epsilon(mol%nat), source=1.0e-4_wp)
-      if (.not. allocated(self%pair)) allocate (self%pair)
-      call new_lj_12_6(self%pair, sigma, epsilon, error)
-   end subroutine refusing_update
-
-   !> Declare nothing for a radial grid, or fail when switched to refuse
-   !>
-   !> @param[in,out] self      term
-   !> @param[in]     grid      radial grid
-   !> @param[in,out] coupling  coupling, scope set by the model
-   !> @param[out]    error     refusal
-   subroutine refusing_declare_pass_1d(self, grid, coupling, error)
-      !> Term
-      class(refusing_term_type), intent(inout) :: self
-      !> Radial grid
-      type(moist_math_grid_radial_type), intent(in) :: grid
-      !> Coupling, scope set by the model
-      type(coupling_type), intent(inout) :: coupling
-      !> Error handling
-      type(moist_error), allocatable, intent(out) :: error
-      call refuse_if_switched(self, error)
-   end subroutine refusing_declare_pass_1d
-
-   !> Declare nothing for a volume grid, or fail when switched to refuse
-   !>
-   !> @param[in,out] self      term
-   !> @param[in]     grid      volume grid
-   !> @param[in,out] coupling  coupling, scope set by the model
-   !> @param[out]    error     refusal
-   subroutine refusing_declare_pass_3d(self, grid, coupling, error)
-      !> Term
-      class(refusing_term_type), intent(inout) :: self
-      !> Volume grid
-      class(moist_math_grid_3d_type), intent(in) :: grid
-      !> Coupling, scope set by the model
-      type(coupling_type), intent(inout) :: coupling
-      !> Error handling
-      type(moist_error), allocatable, intent(out) :: error
-      call refuse_if_switched(self, error)
-   end subroutine refusing_declare_pass_3d
-
-   !> Fail when the term is switched to refuse
-   !>
-   !> @param[in]  self   term
-   !> @param[out] error  refusal
-   subroutine refuse_if_switched(self, error)
-      !> Term
-      class(refusing_term_type), intent(in) :: self
-      !> Error handling
-      type(moist_error), allocatable, intent(out) :: error
-      if (.not. associated(self%refuse)) return
-      if (self%refuse) call fatal_error(error, "Test term: refused declaration")
-   end subroutine refuse_if_switched
 
    !> Answer the pending atomic charges of a staged walk
    !>

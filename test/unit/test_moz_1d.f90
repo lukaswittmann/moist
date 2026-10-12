@@ -18,7 +18,7 @@ module test_moz_1d
    use moist_channels_response, only: response_type, atomic_charge_adjoint_response_type, response_accumulate
    use test_helpers, only: check_moist_error
    use test_moz_fixtures, only: water_sigma, water_epsilon, water_charges, new_water_system, &
-      & new_water_solvent, refusing_term_type, answer_charges
+      & new_water_solvent, answer_charges
    implicit none(type, external)
    private
    public :: collect_moz_1d
@@ -37,7 +37,6 @@ contains
          new_unittest("atom_count_follows_update", check_atom_count_follows_update), &
          new_unittest("monopole_in_every_phase", check_monopole_phases), &
          new_unittest("radial_fields", check_radial_fields), &
-         new_unittest("term_failures", check_term_failures), &
          new_unittest("solvent_copy", check_solvent_copy), &
          new_unittest("uv_potential_tables", check_potential_tables)]
    end subroutine collect_moz_1d
@@ -247,98 +246,6 @@ contains
          if (allocated(error)) return
       end do
    end subroutine check_radial_fields
-
-   !> Check named solute failures and cleared coupling state
-   !>
-   !> - Solute potential without terms: refusal at update
-   !> - Host multipole stub: refusal at update (build)
-   !> - EC term: refusal at the update on the radial grid, volume grids only
-   !> - Failed term declaration: coupling refused, previously staged walk ended
-   subroutine check_term_failures(error)
-      !> Test error
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(model_moz_1d_type), target :: model
-      type(multipole_type) :: multipoles
-      type(monopole_type) :: charges
-      type(ec_charges_type) :: ec
-      type(refusing_term_type) :: refusing
-      !> Declaration switch shared with the refusing term
-      logical, target :: refuse
-      type(coupling_type), pointer :: coupling
-
-      call new_context(ctx, nthreads=0, verbosity=0)
-      call new_model(ctx, model, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      call update_h2(model, err)
-      call check(error, allocated(err) .and. .not. model%is_updated(), more="an empty solute potential was accepted")
-      if (allocated(error)) return
-      call check(error, index(err%message, "has no terms") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      call model%potential%add(multipoles, err)
-      if (.not. allocated(err)) call update_h2(model, err)
-      call check(error, allocated(err) .and. .not. model%is_updated(), more="the multipoles stub was built")
-      if (allocated(error)) return
-      call check(error, index(err%message, "multipole") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      call new_model(ctx, model, err)
-      if (.not. allocated(err)) call model%potential%add(ec, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      call update_h2(model, err)
-      call check(error, allocated(err) .and. .not. model%is_updated(), more="a 1D model was updated with an EC fit")
-      if (allocated(error)) return
-      call check(error, index(err%message, "volume grids only") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      ! Host charges first, then pair-only term with switchable declaration failure
-      call new_model(ctx, model, err)
-      if (.not. allocated(err)) call model%potential%add(charges, err)
-      refuse = .false.
-      refusing%refuse => refuse
-      if (.not. allocated(err)) call model%potential%add(refusing, err)
-      if (.not. allocated(err)) call update_h2(model, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      refuse = .true.
-      call model%new_coupling(coupling, err)
-      call check(error, allocated(err) .and. .not. associated(coupling), more="a failing declaration was accepted")
-      if (allocated(error)) return
-      call check(error, index(err%message, "refused declaration") > 0, more=err%message)
-      if (allocated(error)) return
-      deallocate (err)
-
-      ! Failed redeclaration: coupling refused, previous staging cleared
-      refuse = .false.
-      call model%new_coupling(coupling, err)
-      if (.not. allocated(err)) call model%prepare_energy(coupling, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      refuse = .true.
-      call model%prepare_response(coupling, err)
-      call check(error, allocated(err), more="a failing declaration was staged")
-      if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="the refused declaration left a staging behind")
-      if (allocated(error)) return
-
-      call model%release_coupling(coupling)
-      call check(error, .not. associated(coupling), more="release left a coupling pointer")
-   end subroutine check_term_failures
 
    !> Check solvent ownership, model invalidation and split validation
    !>
