@@ -4,11 +4,12 @@ module test_model_component_pcm_electrostatics
       & ieee_get_halting_mode, ieee_set_halting_mode
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
-   use mctc_io, only: structure_type
+   use mctc_io, only: structure_type, new
+   use moist_cavity_iswig, only: cavity_type_iswig
    use moist_model_continuum_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
-      & pcm_electrostatic_direct_gradient
+      & pcm_electrostatic_direct_gradient, pcm_electrostatic_normal_direct_gradient
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
-                           fd4_scalar, fd4_offsets
+                           fd4_scalar, fd4_offsets, point_charge_field
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -32,9 +33,112 @@ contains
                   new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes), &
                   new_unittest("direct_gradient", test_direct_gradient), &
                   new_unittest("gaussian_zero_width", test_gaussian_zero_width), &
-                  new_unittest("gaussian_gradient_vs_fd", test_gaussian_gradient_vs_fd) &
+                  new_unittest("gaussian_gradient_vs_fd", test_gaussian_gradient_vs_fd), &
+                  new_unittest("normal_direct_gradient", test_normal_direct_gradient), &
+                  new_unittest("point_charge_host_second_derivatives", test_point_charge_host_second_derivatives) &
                   ]
    end subroutine collect_model_component_pcm_electrostatics
+
+   !> The fixed-surface normal-gradient nuclear term matches finite differences
+   subroutine test_normal_direct_gradient(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(structure_type) :: mol
+      type(cavity_type_iswig) :: cavity
+      real(wp), allocatable :: grad_phi(:, :), dxi(:), hessian(:, :, :), mixed(:, :)
+      real(wp) :: center(3, 1), grad(3, 1), w_grad(3, 1), value_plus, value_minus
+      real(wp) :: step, fd
+      integer :: axis, mode
+
+      center(:, 1) = [0.1_wp, -0.2_wp, 0.3_wp]
+      call new(mol, [1], center)
+      cavity%ngrid = 1
+      allocate (cavity%xyz(3, 1), cavity%xi0(1))
+      cavity%xyz(:, 1) = [1.4_wp, -0.7_wp, 0.5_wp]
+      cavity%xi0(1) = 0.8_wp
+      w_grad(:, 1) = [0.4_wp, -0.3_wp, 0.2_wp]
+      step = 1.0e-5_wp
+
+      do mode = 1, 2
+         if (mode == 1) then
+            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, center, w_grad, &
+               & [0.7_wp], grad, err, xi=cavity%xi0)
+         else
+            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, center, w_grad, &
+               & [0.7_wp], grad, err)
+         end if
+         if (allocated(err)) then
+            call test_failed(error, err%message)
+            return
+         end if
+         do axis = 1, 3
+            mol%xyz(axis, 1) = center(axis, 1) + step
+            call point_charge_field(cavity, [0.7_wp], mol, mode == 1, grad_phi, dxi, hessian, mixed)
+            value_plus = dot_product(w_grad(:, 1), grad_phi(:, 1))
+            mol%xyz(axis, 1) = center(axis, 1) - step
+            call point_charge_field(cavity, [0.7_wp], mol, mode == 1, grad_phi, dxi, hessian, mixed)
+            value_minus = dot_product(w_grad(:, 1), grad_phi(:, 1))
+            mol%xyz(axis, 1) = center(axis, 1)
+            fd = (value_plus - value_minus)/(2.0_wp*step)
+            call check(error, grad(axis, 1), fd, thr=1.0e-9_wp)
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_normal_direct_gradient
+
+   !> The test host's Hessian and mixed derivative follow its own potential.
+   subroutine test_point_charge_host_second_derivatives(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_iswig) :: cavity
+      real(wp), allocatable :: gradient(:, :), dxi(:), hessian(:, :, :), mixed(:, :)
+      real(wp), allocatable :: plus_gradient(:, :), minus_gradient(:, :), scratch(:)
+      real(wp), allocatable :: scratch_hessian(:, :, :), scratch_mixed(:, :)
+      real(wp) :: center(3, 1), reference(3, 3), h
+      integer :: axis
+
+      center(:, 1) = 0.0_wp
+      call new(mol, [1], center)
+      cavity%ngrid = 1
+      allocate (cavity%xyz(3, 1), cavity%xi0(1))
+      cavity%xyz(:, 1) = [1.4_wp, -0.7_wp, 0.5_wp]
+      cavity%xi0(1) = 0.8_wp
+      h = 1.0e-5_wp
+
+      call point_charge_field(cavity, [0.7_wp], mol, .true., gradient, dxi, hessian, mixed)
+      do axis = 1, 3
+         cavity%xyz(axis, 1) = cavity%xyz(axis, 1) + h
+         call point_charge_field(cavity, [0.7_wp], mol, .true., plus_gradient, scratch, scratch_hessian, scratch_mixed)
+         cavity%xyz(axis, 1) = cavity%xyz(axis, 1) - 2.0_wp*h
+         call point_charge_field(cavity, [0.7_wp], mol, .true., minus_gradient, scratch, scratch_hessian, scratch_mixed)
+         cavity%xyz(axis, 1) = cavity%xyz(axis, 1) + h
+         call check(error, maxval(abs((plus_gradient(:, 1) - minus_gradient(:, 1))/(2.0_wp*h) &
+                                      - hessian(:, axis, 1))), 0.0_wp, thr=1.0e-10_wp)
+         if (allocated(error)) return
+      end do
+      cavity%xi0(1) = cavity%xi0(1) + h
+      call point_charge_field(cavity, [0.7_wp], mol, .true., plus_gradient, scratch, scratch_hessian, scratch_mixed)
+      cavity%xi0(1) = cavity%xi0(1) - 2.0_wp*h
+      call point_charge_field(cavity, [0.7_wp], mol, .true., minus_gradient, scratch, scratch_hessian, scratch_mixed)
+      cavity%xi0(1) = cavity%xi0(1) + h
+      call check(error, maxval(abs((plus_gradient(:, 1) - minus_gradient(:, 1))/(2.0_wp*h) &
+                                   - mixed(:, 1))), 0.0_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+
+      call point_charge_field(cavity, [0.7_wp], mol, .false., gradient, dxi, hessian, mixed)
+      reference = 0.0_wp
+      do axis = 1, 3
+         reference(axis, axis) = -0.7_wp/norm2(cavity%xyz(:, 1))**3
+      end do
+      do axis = 1, 3
+         reference(:, axis) = reference(:, axis) &
+                              + 2.1_wp*cavity%xyz(:, 1)*cavity%xyz(axis, 1)/norm2(cavity%xyz(:, 1))**5
+      end do
+      call check(error, maxval(abs(hessian(:, :, 1) - reference)), 0.0_wp, thr=1.0e-12_wp)
+      if (allocated(error)) return
+      call check(error, maxval(abs(mixed)), 0.0_wp, thr=1.0e-15_wp)
+
+   end subroutine test_point_charge_host_second_derivatives
 
    !> Check the direct-plus-host-weight contraction by finite differences
    subroutine test_nuclear_gradient_vs_fd(error)
@@ -59,7 +163,7 @@ contains
       integer :: iatom, iaxis, i, k, ngrid, nsph
       !> Stencil values, finite difference, and saved coordinate
       real(wp) :: vals(4), fd, saved
-         !> Finite-difference step
+      !> Finite-difference step
       real(wp), parameter :: step = 1.0e-3_wp
       !> Failure context
       character(len=128) :: context
@@ -538,7 +642,7 @@ contains
       call pcm_electrostatic_direct_gradient(xyz, nuclei, [1.0_wp], [1.0_wp], &
          & gradient, err, xi=[0.0_wp])
       call ieee_set_halting_mode(ieee_divide_by_zero, halt_on_zero)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, maxval(abs(gradient)), 0.0_wp, thr=0.0_wp)
    end subroutine test_gaussian_zero_width

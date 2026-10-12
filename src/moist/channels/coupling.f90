@@ -162,14 +162,14 @@ module moist_channels_coupling
       end subroutine request_declare
    end interface
 
-   !> Raw point_potential calculation: phi(ngrid), dphi_dr(3, ngrid)
+   !> Raw point_potential calculation: phi, dphi_dr and d2phi_dr2
    type, extends(coupling_request_type) :: point_potential_request_type
    contains
       procedure :: name => point_potential_name
       procedure, private :: declare => point_potential_declare
    end type point_potential_request_type
 
-   !> Raw gaussian_potential calculation: phi, dphi_dr(3, ngrid), dphi_dxi
+   !> Raw gaussian_potential calculation: phi and its spatial/width derivatives
    type, extends(coupling_request_type) :: gaussian_potential_request_type
    contains
       procedure :: name => gaussian_potential_name
@@ -740,6 +740,8 @@ contains
       call self%add("phi", error)
       if (allocated(error)) return
       call self%add("dphi_dr", [3], error)
+      if (allocated(error)) return
+      call self%add("d2phi_dr2", [3, 3], error)
    end subroutine point_potential_declare
 
    !> Name of the gaussian_potential calculation
@@ -767,6 +769,10 @@ contains
       call self%add("dphi_dr", [3], error)
       if (allocated(error)) return
       call self%add("dphi_dxi", error)
+      if (allocated(error)) return
+      call self%add("d2phi_dr2", [3, 3], error)
+      if (allocated(error)) return
+      call self%add("d2phi_dr_dxi", [3], error)
    end subroutine gaussian_potential_declare
 
    !> Name of the gaussian_moments calculation

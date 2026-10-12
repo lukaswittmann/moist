@@ -33,72 +33,74 @@ contains
    subroutine collect_channels(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         new_unittest("registry_release", test_registry_release), &
-         new_unittest("registry_release_tail_and_foreign", test_registry_release_tail), &
-         new_unittest("shared_requests_and_compaction", test_shared_requests), &
-         new_unittest("direct_potential_read", test_direct_potential_read), &
-         new_unittest("partial_outputs_and_phase_reuse", test_partial), &
-         new_unittest("one_output_per_answer", test_partial_copies), &
-         new_unittest("snapshot_keeps_answers_unless_resized", test_snapshot_change), &
-         new_unittest("staging_supersedes_the_walk", test_restaging), &
-         new_unittest("rejected_answer_and_retry", test_rejected), &
-         new_unittest("unknown_output_and_rank", test_unknown_output), &
-         new_unittest("failed_preparation_leaves_no_staging", test_failed_preparation), &
-         new_unittest("declaration_errors_are_returned", test_declaration_errors), &
-         new_unittest("register_ignores_callers_answers", test_register_neutralises_copy), &
-         new_unittest("scoped_registration_and_expired_view", test_scope), &
-         new_unittest("repeat_registration_merges", test_repeat_registration), &
-         new_unittest("repeat_registration_conflict_refused", test_repeat_conflict), &
-         new_unittest("distinct_keys_keep_distinct_inputs", test_distinct_keys), &
-         new_unittest("point_and_gaussian_are_distinct", test_distinct_kinds), &
-         new_unittest("energy_spatial_derivative", test_energy_derivative), &
-         new_unittest("unrequired_registration_survives", test_empty_registration), &
-         new_unittest("walk_unstaged_is_empty", test_walk_unstaged), &
-         new_unittest("walk_one_visit_per_pass_in_order", test_walk_order), &
-         new_unittest("walk_rewind_retries_rejected_output", test_walk_rewind), &
-         new_unittest("walk_answered_pass_visits_nothing", test_walk_complete), &
-         new_unittest("walk_early_exit_resumes", test_walk_resume), &
-         new_unittest("walk_reset_by_staging_and_invalidation", test_walk_reset), &
-         new_unittest("answer_without_current_request", test_answer_outside_window), &
-         new_unittest("request_outside_window_is_placeholder", test_placeholder), &
-         new_unittest("unknown_output_is_not_missing", test_unknown_not_missing), &
-         new_unittest("staging_messages", test_staging_messages), &
-         new_unittest("missing_outputs_named", test_missing_named), &
-         new_unittest("register_without_begin", test_register_unprepared), &
-         new_unittest("placeholder_request_not_registered", test_register_placeholder), &
-         new_unittest("view_errors_named", test_view_errors), &
-         new_unittest("response_walk_empty", test_response_walk_empty), &
-         new_unittest("response_accumulate", test_response_accumulate), &
-         new_unittest("response_walk_rewinds_and_resumes", test_response_walk_passes), &
-         new_unittest("response_walk_reset_by_accumulate_and_clear", test_response_walk_reset), &
-         new_unittest("response_item_is_a_copy", test_response_item_copy), &
-         new_unittest("response_add_rejects_shape", test_response_add_rejects_shape), &
-         new_unittest("response_density_every_rank", test_response_density_ranks), &
-         new_unittest("response_add_rejects_vector_shape", test_response_vector_shape), &
-         new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add), &
-         new_unittest("atom_extent_register_answer_read", test_atom_extent_round_trip), &
-         new_unittest("atom_extent_rejects_grid_shape", test_atom_extent_rejection), &
-         new_unittest("mixed_grid_and_atom_pass", test_mixed_extents), &
-         new_unittest("snapshot_without_grid", test_snapshot_without_grid), &
-         new_unittest("snapshot_refuses_outputs_without_a_count", test_missing_extent), &
-         new_unittest("response_atomic_multipole_adjoint", test_response_multipole_adjoint), &
-         new_unittest("atomic_charges_answer_and_read", test_atomic_charges), &
-         new_unittest("radial_potential_answer_and_read", test_radial_potential), &
-         new_unittest("radial_potential_refuses_missing_counts", test_radial_potential_counts), &
-         new_unittest("response_atomic_charge_adjoint", test_response_charge_adjoint), &
-         new_unittest("response_radial_potential_adjoint", test_response_radial_adjoint), &
-         new_unittest("response_items_declare_their_arrays", test_response_list_fields), &
-         new_unittest("response_unfilled_arrays_not_declared", test_response_list_partial), &
-         new_unittest("placeholders_declare_nothing", test_placeholders_list_nothing), &
-         new_unittest("request_inputs_declared", test_request_list_fields), &
-         new_unittest("field_query_add_real3", test_field_query_add_real3), &
-         new_unittest("gaussian_all_channels", test_gaussian_all_channels), &
-         new_unittest("multipole_all_channels", test_multipole_all_channels), &
-         new_unittest("view_expires_on_arm_and_invalidate", test_view_staging_expiry), &
-         new_unittest("field_query_types_and_growth", test_field_query_types), &
-         new_unittest("registration_resets_scope_and_masks", test_registration_resets_scope_and_masks), &
-         new_unittest("compaction_remaps_and_forgets", test_compaction_remaps_and_forgets), &
-         new_unittest("checked_walk_copies", test_checked_walk_copies)]
+                  new_unittest("registry_release", test_registry_release), &
+                  new_unittest("registry_release_tail_and_foreign", test_registry_release_tail), &
+                  new_unittest("shared_requests_and_compaction", test_shared_requests), &
+                  new_unittest("direct_potential_read", test_direct_potential_read), &
+                  new_unittest("potential_second_derivatives", test_potential_second_derivatives), &
+                  new_unittest("potential_gradient_adjoint", test_potential_gradient_adjoint), &
+                  new_unittest("partial_outputs_and_phase_reuse", test_partial), &
+                  new_unittest("one_output_per_answer", test_partial_copies), &
+                  new_unittest("snapshot_keeps_answers_unless_resized", test_snapshot_change), &
+                  new_unittest("staging_supersedes_the_walk", test_restaging), &
+                  new_unittest("rejected_answer_and_retry", test_rejected), &
+                  new_unittest("unknown_output_and_rank", test_unknown_output), &
+                  new_unittest("failed_preparation_leaves_no_staging", test_failed_preparation), &
+                  new_unittest("declaration_errors_are_returned", test_declaration_errors), &
+                  new_unittest("register_ignores_callers_answers", test_register_neutralises_copy), &
+                  new_unittest("scoped_registration_and_expired_view", test_scope), &
+                  new_unittest("repeat_registration_merges", test_repeat_registration), &
+                  new_unittest("repeat_registration_conflict_refused", test_repeat_conflict), &
+                  new_unittest("distinct_keys_keep_distinct_inputs", test_distinct_keys), &
+                  new_unittest("point_and_gaussian_are_distinct", test_distinct_kinds), &
+                  new_unittest("energy_spatial_derivative", test_energy_derivative), &
+                  new_unittest("unrequired_registration_survives", test_empty_registration), &
+                  new_unittest("walk_unstaged_is_empty", test_walk_unstaged), &
+                  new_unittest("walk_one_visit_per_pass_in_order", test_walk_order), &
+                  new_unittest("walk_rewind_retries_rejected_output", test_walk_rewind), &
+                  new_unittest("walk_answered_pass_visits_nothing", test_walk_complete), &
+                  new_unittest("walk_early_exit_resumes", test_walk_resume), &
+                  new_unittest("walk_reset_by_staging_and_invalidation", test_walk_reset), &
+                  new_unittest("answer_without_current_request", test_answer_outside_window), &
+                  new_unittest("request_outside_window_is_placeholder", test_placeholder), &
+                  new_unittest("unknown_output_is_not_missing", test_unknown_not_missing), &
+                  new_unittest("staging_messages", test_staging_messages), &
+                  new_unittest("missing_outputs_named", test_missing_named), &
+                  new_unittest("register_without_begin", test_register_unprepared), &
+                  new_unittest("placeholder_request_not_registered", test_register_placeholder), &
+                  new_unittest("view_errors_named", test_view_errors), &
+                  new_unittest("response_walk_empty", test_response_walk_empty), &
+                  new_unittest("response_accumulate", test_response_accumulate), &
+                  new_unittest("response_walk_rewinds_and_resumes", test_response_walk_passes), &
+                  new_unittest("response_walk_reset_by_accumulate_and_clear", test_response_walk_reset), &
+                  new_unittest("response_item_is_a_copy", test_response_item_copy), &
+                  new_unittest("response_add_rejects_shape", test_response_add_rejects_shape), &
+                  new_unittest("response_density_every_rank", test_response_density_ranks), &
+                  new_unittest("response_add_rejects_vector_shape", test_response_vector_shape), &
+                  new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add), &
+                  new_unittest("atom_extent_register_answer_read", test_atom_extent_round_trip), &
+                  new_unittest("atom_extent_rejects_grid_shape", test_atom_extent_rejection), &
+                  new_unittest("mixed_grid_and_atom_pass", test_mixed_extents), &
+                  new_unittest("snapshot_without_grid", test_snapshot_without_grid), &
+                  new_unittest("snapshot_refuses_outputs_without_a_count", test_missing_extent), &
+                  new_unittest("response_atomic_multipole_adjoint", test_response_multipole_adjoint), &
+                  new_unittest("atomic_charges_answer_and_read", test_atomic_charges), &
+                  new_unittest("radial_potential_answer_and_read", test_radial_potential), &
+                  new_unittest("radial_potential_refuses_missing_counts", test_radial_potential_counts), &
+                  new_unittest("response_atomic_charge_adjoint", test_response_charge_adjoint), &
+                  new_unittest("response_radial_potential_adjoint", test_response_radial_adjoint), &
+                  new_unittest("response_items_declare_their_arrays", test_response_list_fields), &
+                  new_unittest("response_unfilled_arrays_not_declared", test_response_list_partial), &
+                  new_unittest("placeholders_declare_nothing", test_placeholders_list_nothing), &
+                  new_unittest("request_inputs_declared", test_request_list_fields), &
+                  new_unittest("field_query_add_real3", test_field_query_add_real3), &
+                  new_unittest("gaussian_all_channels", test_gaussian_all_channels), &
+                  new_unittest("multipole_all_channels", test_multipole_all_channels), &
+                  new_unittest("view_expires_on_arm_and_invalidate", test_view_staging_expiry), &
+                  new_unittest("field_query_types_and_growth", test_field_query_types), &
+                  new_unittest("registration_resets_scope_and_masks", test_registration_resets_scope_and_masks), &
+                  new_unittest("compaction_remaps_and_forgets", test_compaction_remaps_and_forgets), &
+                  new_unittest("checked_walk_copies", test_checked_walk_copies)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -252,7 +254,7 @@ contains
       call check(error, first%is_missing("phi") .and. first%is_missing("dphi_dr"), &
          & more="the earlier copy saw a later answer")
       if (allocated(error)) return
-      call check(error, .not. second%is_missing("phi") .and. .not. second%is_missing("dphi_dr"))
+      call check(error,.not. second%is_missing("phi") .and. .not. second%is_missing("dphi_dr"))
    end subroutine test_partial_copies
 
    !> Only a new grid size drops answers; the coupling holds no grid values
@@ -271,7 +273,7 @@ contains
       call check(error, coupling%next())
       if (allocated(error)) return
       associate (item => coupling%request())
-         call check(error, .not. item%is_missing("phi") .and. item%is_missing("dphi_dr"))
+         call check(error,.not. item%is_missing("phi") .and. item%is_missing("dphi_dr"))
       end associate
       if (allocated(error)) return
       call coupling_snapshot(coupling, ngrid=3)
@@ -415,7 +417,7 @@ contains
       call coupling_register(coupling, "", point, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="a failed preparation left a walk")
+      call check(error,.not. coupling%next(), more="a failed preparation left a walk")
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, err)
       call check(error, allocated(err))
@@ -434,7 +436,7 @@ contains
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "re-preparation")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="phi was lost by the failed preparation")
+      call check(error,.not. coupling%next(), more="phi was lost by the failed preparation")
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "retained phi")
@@ -471,7 +473,7 @@ contains
       if (allocated(error)) return
       call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
-      call check(error, .not. coupling%next(), more="a false condition still required phi")
+      call check(error,.not. coupling%next(), more="a false condition still required phi")
       if (allocated(error)) return
       call coupling_arm(coupling, 4, err)
       call check(error, allocated(err))
@@ -495,7 +497,7 @@ contains
       call check_moist_error(error, err, "phi answer")
       if (allocated(error)) return
       item = first%request()
-      call check(error, .not. item%is_missing("phi"), more="the copy should carry the answer state")
+      call check(error,.not. item%is_missing("phi"), more="the copy should carry the answer state")
       if (allocated(error)) return
       ! Fix the grid size before registering: a later change of ngrid would
       ! invalidate every answer and hide a carried-over one
@@ -612,7 +614,7 @@ contains
       if (.not. allocated(err)) call coupling%answer("dphi_dr", spread([3.0_wp, 4.0_wp], 1, 3), err)
       call check_moist_error(error, err, "answers")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="the merged request is still missing an output")
+      call check(error,.not. coupling%next(), more="the merged request is still missing an output")
       if (allocated(error)) return
       call coupling_make_view(coupling, 1, view)
       call view%read("potential", "phi", phi, err)
@@ -693,7 +695,7 @@ contains
       if (allocated(error)) return
       do while (other%next())
          associate (item => other%request())
-            call check(error, .not. item%is_missing("pt"), more="a refused repeat merged its requirements")
+            call check(error,.not. item%is_missing("pt"), more="a refused repeat merged its requirements")
          end associate
          if (allocated(error)) return
       end do
@@ -794,7 +796,7 @@ contains
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="an unrequired output was walked")
+      call check(error,.not. coupling%next(), more="an unrequired output was walked")
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "optional registration survives")
@@ -964,12 +966,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(coupling_type) :: empty, registered
-      call check(error, .not. empty%next(), more="a fresh coupling was walked")
+      call check(error,.not. empty%next(), more="a fresh coupling was walked")
       if (allocated(error)) return
       call three_requests(registered, err)
       call check_moist_error(error, err, "fixture")
       if (allocated(error)) return
-      call check(error, .not. registered%next(), more="an unstaged coupling was walked")
+      call check(error,.not. registered%next(), more="an unstaged coupling was walked")
       if (allocated(error)) return
       call check(error, current_name(registered), "no_current_request")
    end subroutine test_walk_unstaged
@@ -1007,7 +1009,7 @@ contains
       if (allocated(error)) return
       call check(error, current_name(coupling), "gaussian_potential")
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
    end subroutine test_walk_order
 
    !> The end of a pass rewinds: a second loop retries exactly what is still
@@ -1094,7 +1096,7 @@ contains
       if (allocated(error)) return
       call check(error, current_name(coupling), "gaussian_moments")
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
       if (allocated(error)) return
       ! Nothing was answered, so the next pass starts over from the first request
       call check(error, coupling%next())
@@ -1141,7 +1143,7 @@ contains
       call coupling_invalidate(coupling)
       call check(error, current_name(coupling), "no_current_request")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="an invalidated coupling was walked")
+      call check(error,.not. coupling%next(), more="an invalidated coupling was walked")
    end subroutine test_walk_reset
 
    !> An answer outside a `next()` window is refused with the documented text
@@ -1161,7 +1163,7 @@ contains
       ! After the pass has ended
       call check(error, coupling%next())
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
       if (allocated(error)) return
       call coupling%answer("phi", spread([1.0_wp, 2.0_wp], 1, 1), err)
       call check(error, allocated(err))
@@ -1197,16 +1199,16 @@ contains
       class default
          call check(error, request%name(), "no_current_request")
          if (allocated(error)) return
-         call check(error, .not. request%is_missing("phi"))
+         call check(error,.not. request%is_missing("phi"))
          if (allocated(error)) return
       end select
-      call check(error, .not. matched, more="the placeholder matched a request kind")
+      call check(error,.not. matched, more="the placeholder matched a request kind")
       if (allocated(error)) return
       call check(error, coupling%next())
       if (allocated(error)) return
       call check(error, current_name(coupling), "point_potential")
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
       if (allocated(error)) return
       call check(error, current_name(coupling), "no_current_request", more="the end of a pass kept a request")
    end subroutine test_placeholder
@@ -1221,7 +1223,7 @@ contains
       call check(error, coupling%next())
       if (allocated(error)) return
       associate (item => coupling%request())
-         call check(error, .not. item%is_missing("bogus") .and. item%is_missing("phi"))
+         call check(error,.not. item%is_missing("bogus") .and. item%is_missing("phi"))
       end associate
       if (allocated(error)) return
       call coupling%answer("bogus", [1.0_wp, 2.0_wp], err)
@@ -1320,7 +1322,7 @@ contains
       type(moist_error_type), allocatable :: err
       type(response_type) :: response
       class(response_item_type), allocatable :: item
-      call check(error, .not. response%next(), more="a never-filled response has an item")
+      call check(error,.not. response%next(), more="a never-filled response has an item")
       if (allocated(error)) return
       call check(error, item_name(response), "no_current_item")
       if (allocated(error)) return
@@ -1330,7 +1332,7 @@ contains
       call check(error, err%message, "No current response item - call next() first")
       if (allocated(error)) return
       call response_clear(response)
-      call check(error, .not. response%next(), more="a cleared response has an item")
+      call check(error,.not. response%next(), more="a cleared response has an item")
    end subroutine test_response_walk_empty
 
    !> Accumulation keeps one item per kind in first-seen order: a repeated kind
@@ -1445,7 +1447,7 @@ contains
       call response_clear(response)
       call check(error, item_name(response), "no_current_item", more="clear kept the current item")
       if (allocated(error)) return
-      call check(error, .not. response%next(), more="a cleared response has an item")
+      call check(error,.not. response%next(), more="a cleared response has an item")
    end subroutine test_response_walk_reset
 
    !> `item()` is a copy: editing it leaves the response unchanged, and past the
@@ -1480,7 +1482,7 @@ contains
       if (allocated(error)) return
       call check(error, trim(copy%name()), "potential_adjoint")
       if (allocated(error)) return
-      call check(error, .not. response%next(), more="the pass did not end after the only item")
+      call check(error,.not. response%next(), more="the pass did not end after the only item")
       if (allocated(error)) return
       call check(error, item_name(response), "no_current_item", more="an item is current after the pass")
    end subroutine test_response_item_copy
@@ -1539,7 +1541,7 @@ contains
       call check_moist_error(error, err, "density value weights")
       if (allocated(error)) return
 
-      hess = reshape([(real(i, wp), i = 1, 18)], [3, 3, 2])
+      hess = reshape([(real(i, wp), i=1, 18)], [3, 3, 2])
       full%w_rho = [10.0_wp, 20.0_wp]
       full%w_grad_rho = reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2])
       full%w_hess_rho = hess
@@ -1688,15 +1690,15 @@ contains
       call check_moist_error(error, err, "mint")
       if (allocated(error)) return
       call registry%release(middle)
-      call check(error, .not. associated(middle))
+      call check(error,.not. associated(middle))
       if (allocated(error)) return
       call check(error, registry%owns(first) .and. registry%owns(last))
       if (allocated(error)) return
       call registry%release(last)
-      call check(error, .not. associated(last))
+      call check(error,.not. associated(last))
       if (allocated(error)) return
       call registry%release(first)
-      call check(error, .not. associated(first))
+      call check(error,.not. associated(first))
       if (allocated(error)) return
       do i = 1, 100
          call registry%mint(first, err)
@@ -1704,7 +1706,7 @@ contains
          call check_moist_error(error, err, "reuse after release")
          if (allocated(error)) return
          call registry%release(first)
-         call check(error, .not. associated(first))
+         call check(error,.not. associated(first))
          if (allocated(error)) return
       end do
       call registry%clear()
@@ -1736,7 +1738,7 @@ contains
       if (allocated(error)) return
       ! The newest node is the head, so the oldest is two links down
       call registry%release(oldest)
-      call check(error, .not. associated(oldest), more="the released tail kept its pointer")
+      call check(error,.not. associated(oldest), more="the released tail kept its pointer")
       if (allocated(error)) return
       call check(error, registry%owns(middle) .and. registry%owns(newest), &
          & more="releasing the tail dropped another collection")
@@ -1745,7 +1747,7 @@ contains
       call registry%release(stray)
       call check(error, associated(stray, foreign), more="releasing a foreign collection nullified it")
       if (allocated(error)) return
-      call check(error, .not. registry%owns(foreign), more="the registry claims a foreign collection")
+      call check(error,.not. registry%owns(foreign), more="the registry claims a foreign collection")
       if (allocated(error)) return
       call check(error, registry%owns(middle) .and. registry%owns(newest), &
          & more="releasing a foreign collection dropped an owned one")
@@ -1840,6 +1842,93 @@ contains
       call check(error, allocated(err))
    end subroutine test_direct_potential_read
 
+   !> Check the spatial Hessian and mixed width derivative use the raw protocol
+   subroutine test_potential_second_derivatives(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(point_potential_request_type) :: point
+      type(gaussian_potential_request_type) :: gaussian
+      real(wp), allocatable :: hessian(:, :, :), mixed(:, :)
+      real(wp) :: values(3, 3, 2)
+      integer :: i
+
+      values = reshape([(real(i, wp), i=1, 18)], [3, 3, 2])
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 1)
+      call request_require(point, moist_phase_gradient, "d2phi_dr2", err)
+      call check_moist_error(error, err, "point Hessian declaration")
+      if (allocated(error)) return
+      call coupling_register(coupling, "point", point, err)
+      call check_moist_error(error, err, "point Hessian registration")
+      if (allocated(error)) return
+      call request_require(gaussian, moist_phase_gradient, "d2phi_dr_dxi", err)
+      call check_moist_error(error, err, "Gaussian mixed declaration")
+      if (allocated(error)) return
+      call coupling_register(coupling, "gaussian", gaussian, err)
+      call check_moist_error(error, err, "Gaussian mixed registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, 2)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "gradient staging")
+      if (allocated(error)) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      call coupling%answer("d2phi_dr2", values(:, 1, :), err)
+      call check(error, allocated(err), more="rank-two Hessian answer was accepted")
+      if (allocated(error)) return
+      call coupling%answer("d2phi_dr2", values, err)
+      call check_moist_error(error, err, "point Hessian answer")
+      if (allocated(error)) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      call coupling%answer("d2phi_dr_dxi", values(:, 1, :), err)
+      call check_moist_error(error, err, "Gaussian mixed answer")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, view)
+      call view%read("point", "d2phi_dr2", hessian, err)
+      call check_moist_error(error, err, "point Hessian read")
+      if (allocated(error)) return
+      call check(error, all(hessian == values))
+      if (allocated(error)) return
+      call coupling_close_view(coupling)
+      call coupling_make_view(coupling, 1, view)
+      call view%read("gaussian", "d2phi_dr_dxi", mixed, err)
+      call check_moist_error(error, err, "Gaussian mixed read")
+      if (allocated(error)) return
+      call check(error, all(mixed == values(:, 1, :)))
+   end subroutine test_potential_second_derivatives
+
+   !> Potential-gradient adjoints accumulate with a checked spatial shape
+   subroutine test_potential_gradient_adjoint(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(response_type) :: response
+      type(potential_adjoint_response_type) :: charge
+      integer :: i
+      charge%w_phi = [1.0_wp, 2.0_wp]
+      charge%w_dphi_dr = 1.0_wp*reshape([(real(i, wp), i=1, 6)], [3, 2])
+      call response_accumulate(response, charge, err)
+      call check_moist_error(error, err, "first gradient adjoint")
+      if (allocated(error)) return
+      call response_accumulate(response, charge, err)
+      call check_moist_error(error, err, "second gradient adjoint")
+      if (allocated(error)) return
+      call check(error, response%next())
+      if (allocated(error)) return
+      select type (item => response%item())
+      type is (potential_adjoint_response_type)
+         call check(error, all(item%w_dphi_dr == 2.0_wp*charge%w_dphi_dr))
+      class default
+         call test_failed(error, "potential adjoint missing")
+      end select
+      if (allocated(error)) return
+      charge%w_dphi_dr = reshape([1.0_wp, 2.0_wp], [1, 2])
+      call response_accumulate(response, charge, err)
+      call check(error, allocated(err), more="wrong gradient-adjoint shape was accepted")
+   end subroutine test_potential_gradient_adjoint
+
    !> A quiet NaN, built without arithmetic that would trap
    function ieee_nan() result(nan)
       use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
@@ -1928,7 +2017,7 @@ contains
       call coupling%answer("q", [0.5_wp, -0.25_wp, -0.25_wp], err)
       call check_moist_error(error, err, "q answer")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="everything answered, the pass must end")
+      call check(error,.not. coupling%next(), more="everything answered, the pass must end")
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "energy completeness")
@@ -2052,7 +2141,7 @@ contains
       call coupling_register(coupling, "multipoles", multipoles, err)
       call coupling_snapshot(coupling, natom=2)
       call coupling_arm(coupling, moist_phase_energy, err)
-      call check(error, .not. coupling%next(), more="an unchanged snapshot dropped the answer")
+      call check(error,.not. coupling%next(), more="an unchanged snapshot dropped the answer")
       if (allocated(error)) return
       ! A new atom count drops it
       call coupling_begin_registration(coupling)
@@ -2389,7 +2478,7 @@ contains
          & more="the shaped answer was not read back unchanged")
       if (allocated(error)) return
       call coupling_close_view(coupling)
-      call check(error, .not. coupling%next(), more="everything answered, the pass must end")
+      call check(error,.not. coupling%next(), more="everything answered, the pass must end")
    end subroutine test_radial_potential
 
    !> The (ngrid, natom) output needs both counts: a snapshot without one of
@@ -2566,7 +2655,7 @@ contains
       integer, intent(in) :: nfield
       call check(error, query%nfield, nfield, owner//" declares a different number of arrays")
       if (allocated(error)) return
-      call check(error, .not. allocated(query%rvals) .and. .not. allocated(query%ivals) &
+      call check(error,.not. allocated(query%rvals) .and. .not. allocated(query%ivals) &
          & .and. .not. allocated(query%lvals), more=owner//": listing copied a payload")
    end subroutine check_listing
 
@@ -2659,7 +2748,7 @@ contains
       type(field_query_type) :: query
       call query%fetch(name)
       call item%list_fields(query)
-      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+      call check(error,.not. query%found .and. .not. allocated(query%rvals), &
          & more=trim(item%name())//" declares '"//name//"'")
    end subroutine check_item_absent
 
@@ -2687,6 +2776,16 @@ contains
       call check_declared(error, query, 1, "w_phi", [3])
       if (allocated(error)) return
       call check_item_fetch(error, adjoint, "w_phi", [3], seq(:3))
+      if (allocated(error)) return
+      call check_item_absent(error, adjoint, "w_dphi_dr")
+      if (allocated(error)) return
+      adjoint%w_dphi_dr = reshape(seq(:9), [3, 3])
+      call list_item(adjoint, query)
+      call check_listing(error, query, "potential_adjoint with spatial weights", 2)
+      if (allocated(error)) return
+      call check_declared(error, query, 2, "w_dphi_dr", [3, 3])
+      if (allocated(error)) return
+      call check_item_fetch(error, adjoint, "w_dphi_dr", [3, 3], seq(:9))
       if (allocated(error)) return
 
       density%w_rho = 100.0_wp + seq(:2)
@@ -2836,7 +2935,7 @@ contains
       if (allocated(error)) return
       call query%fetch("width")
       call request%list_fields(query)
-      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+      call check(error,.not. query%found .and. .not. allocated(query%rvals), &
          & more="the placeholder request declares 'width'")
    end subroutine test_placeholders_list_nothing
 
@@ -2881,7 +2980,7 @@ contains
             if (allocated(error)) return
             call query%fetch("width")
             call request%list_fields(query)
-            call check(error, .not. query%found, more=trim(request%name())//" declares 'width'")
+            call check(error,.not. query%found, more=trim(request%name())//" declares 'width'")
          end select
          if (allocated(error)) return
       end do
@@ -2941,13 +3040,13 @@ contains
 
       call query%fetch("missing")
       call declare_mixed(query, vector, tensor, missing)
-      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+      call check(error,.not. query%found .and. .not. allocated(query%rvals), &
          & more="an unallocated array was fetched")
       if (allocated(error)) return
 
       call query%fetch("unknown")
       call declare_mixed(query, vector, tensor, missing)
-      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+      call check(error,.not. query%found .and. .not. allocated(query%rvals), &
          & more="an undeclared name was fetched")
    end subroutine test_field_query_add_real3
 
@@ -3207,7 +3306,7 @@ contains
       call query%add_real_scalar("scalar", "Real scalar", scalar)
       call check_fetched(error, query, "scalar", [integer ::], [3.5_wp])
       if (allocated(error)) return
-      call check(error, .not. allocated(query%lvals), more="logical payload carried into real fetch")
+      call check(error,.not. allocated(query%lvals), more="logical payload carried into real fetch")
       if (allocated(error)) return
       call query%fetch("integer")
       call query%add_int_scalar("integer", "Integer scalar", integer_scalar)
@@ -3232,7 +3331,7 @@ contains
       if (allocated(error)) return
       call query%fetch("flags")
       call query%add_bool("flags", "Absent logicals", flags)
-      call check(error, .not. query%found .and. .not. allocated(query%lvals))
+      call check(error,.not. query%found .and. .not. allocated(query%lvals))
       if (allocated(error)) return
       ! 70 descriptors grow the storage past every doubling up to 64 entries
       call query%enumerate()
@@ -3284,7 +3383,7 @@ contains
       call coupling_arm(coupling, moist_phase_gradient, err)
       call check_moist_error(error, err, "reduced requirements")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="obsolete gradient requirements retained")
+      call check(error,.not. coupling%next(), more="obsolete gradient requirements retained")
       if (allocated(error)) return
       call coupling_make_view(coupling, 0, view)
       call view%read("potential", "phi", values, err)

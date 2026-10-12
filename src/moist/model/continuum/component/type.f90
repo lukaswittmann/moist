@@ -47,10 +47,14 @@ module moist_model_continuum_component_type
       type(error_type), allocatable :: error
    contains
 
+      !> Configure surface data needed before the cavity is updated
+      procedure :: configure_cavity => configure_component_cavity_default
       procedure(update_component), deferred :: update
       procedure(get_component_energy), deferred :: get_energy
       procedure(get_component_response), deferred :: get_response
       procedure(get_component_gradient), deferred :: get_gradient
+      !> Explicit forward-Jacobian reference path
+      procedure :: get_forward_gradient => get_component_forward_gradient_default
       !> Internal emission hook: accumulate the response items that depend only
       !> on the potential adjoint; called by a component's own `get_response` and
       !> `get_gradient`, while the public phase accessors are `get_energy`,
@@ -185,6 +189,46 @@ module moist_model_continuum_component_type
    end interface
 
 contains
+
+   !> Use the component's legacy forward implementation
+   !>
+   !> @param[in,out] self Solvation component
+   !> @param[in] coupling Scoped host data
+   !> @param[in,out] cavity Live model cavity
+   !> @param[in,out] response Host trace-response accumulator
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, nat)
+   !> @param[out] error Allocated on failure
+   subroutine get_component_forward_gradient_default(self, coupling, cavity, response, gradient, error)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Scoped host data
+      class(coupling_view_type), intent(in) :: coupling
+      !> Live model cavity
+      class(cavity_type), intent(inout) :: cavity
+      !> Host trace-response accumulator
+      type(response_type), intent(inout) :: response
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%get_gradient(coupling, cavity, response, gradient, error)
+   end subroutine get_component_forward_gradient_default
+
+   !> Default component requests no optional cavity geometry
+   !>
+   !> @param[in,out] self Solvation component
+   !> @param[in,out] cavity Cavity to configure
+   !> @param[out] error Configuration error
+   subroutine configure_component_cavity_default(self, cavity, error)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Cavity to configure
+      class(cavity_type), intent(inout) :: cavity
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine configure_component_cavity_default
 
    !* ================================================================================= *!
    !*                                 Component hooks                                 *!

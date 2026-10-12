@@ -108,7 +108,7 @@ Requests and outputs
 --------------------
 
 Requests, outputs and response items are addressed by their name in every language.
-The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr`` is ``(ngrid, 3)`` and ``mt`` is ``(ngrid, 3, 3)``.
+The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr`` and ``d2phi_dr_dxi`` are ``(ngrid, 3)``, while ``d2phi_dr2`` and ``mt`` are ``(ngrid, 3, 3)``.
 
 .. list-table:: Requests, their grid inputs and their outputs
    :header-rows: 1
@@ -118,18 +118,18 @@ The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr
      - Host outputs
    * - ``point_potential``
      - ``xyz``
-     - ``phi(ngrid)``, ``dphi_dr(3, ngrid)``
+     - ``phi(ngrid)``, ``dphi_dr(3, ngrid)``, ``d2phi_dr2(3, 3, ngrid)``
    * - ``gaussian_potential``
      - ``xyz``, ``xi0``
-     - ``phi``, ``dphi_dr``, ``dphi_dxi(ngrid)``
+     - ``phi``, ``dphi_dr``, ``dphi_dxi(ngrid)``, ``d2phi_dr2``, ``d2phi_dr_dxi(3, ngrid)``
    * - ``gaussian_moments``
      - ``xyz`` and the request's own ``width(ngrid)``
      - ``gt(ngrid)``, ``pt(3, ngrid)``, ``mt(3, 3, ngrid)``, ``rt(3, ngrid)``
 
 Both potential requests carry the total nuclear plus electronic potential.
-``dphi_dr`` is its derivative with respect to the evaluation point, without a charge multiplication or electric-field sign change.
+``dphi_dr`` is its derivative with respect to the evaluation point, without a charge multiplication or electric-field sign change. ``d2phi_dr2`` is its spatial Hessian; ``d2phi_dr_dxi`` differentiates that same spatial derivative with respect to the Gaussian inverse width ``xi``.
 
-PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fock matrix and nuclear gradient. ``dphi_dxi`` differentiates the inverse length ``xi`` in bohr**-1, not the exponent ``xi**2``.
+PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fock matrix and nuclear gradient, including the normal derivative :math:`v_n=\mathbf n\cdot\nabla\phi` needed by some variants. ``dphi_dxi`` differentiates the inverse length ``xi`` in bohr**-1, not the exponent ``xi**2``.
 The point operator is a separate request for components requiring bare Coulomb potentials.
 
 Gaussian moment widths are exponents in bohr**-2, chosen by GOSTSHYP as ``pi*ln(2)/a`` from the per-point area.
@@ -159,7 +159,7 @@ The host contracts each with its own derivative of the quantity it is conjugate 
      - Arrays
      - Present when
    * - ``potential_adjoint``
-     - ``w_phi(ngrid)``
+     - ``w_phi(ngrid)``, ``w_dphi_dr(3, ngrid)``
      - Any electrostatic component is present
    * - ``density``
      - ``w_rho(ngrid)``, ``w_grad_rho(3, ngrid)``, ``w_hess_rho(3, 3, ngrid)``
@@ -169,7 +169,7 @@ The host contracts each with its own derivative of the quantity it is conjugate 
      - ``w_overlap(ngrid)``, ``w_normal_deriv(ngrid)``
      - A GOSTSHYP component is present
 
-The potential adjoint ``w_phi = dE/dphi`` is the induced surface charge of a stationary PCM (CPCM, COSMO); a non-symmetric response matrix (IEF-PCM, SS(V)PE) emits the symmetrized adjoint instead, which the host contracts identically.
+The potential adjoint ``w_phi = dE/dphi`` is the induced surface charge of a stationary PCM (CPCM, COSMO); a non-symmetric response matrix (IEF-PCM, SS(V)PE) emits the symmetrized adjoint instead, which the host contracts identically. Variants that use :math:`v_n` also return ``w_dphi_dr``. Otherwise this field is absent from the native field list and is ``None`` in Python. The host contracts this vector with its derivative of the raw spatial potential gradient, including the electronic contribution to the Fock matrix and the nuclear contribution to the gradient.
 Density adjoints already include the level-set scale; do not apply it again.
 A geometric cavity produces no ``density`` item at all: that absence is the physical answer and is distinguishable from an item of zeros.
 
@@ -246,4 +246,3 @@ Responses are replaced by the current phase's items; they are not accumulators.
 
 The host contracts the potential adjoint, the density weights and the Gaussian amplitudes with its own integral and basis derivatives at fixed surface geometry.
 MOIST accounts for cavity motion.
-

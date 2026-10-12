@@ -15,7 +15,7 @@ module test_math_solvers
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_solver_type, only: solver_base_type
 
-   use moist_math_solver_newton, only: new_newton_solver
+   use moist_math_solver_newton, only: new_newton_solver, newton_linesearch_backtrack, newton_linesearch_exact
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_solver_lbfgsb, only: new_lbfgsb_solver
    use moist_math_solver_slsqp_multi_tangent, only: new_slsqp_multi_tangent_solver
@@ -102,6 +102,8 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
          & new_unittest("rosenbrock_newton", test_rosenbrock_newton), &
+         & new_unittest("newton_custom_step", test_newton_custom_step), &
+         & new_unittest("newton_custom_step_linesearch", test_newton_custom_step_linesearch), &
          & new_unittest("circle_newton_lagrangian", test_circle_newton_lagrangian), &
          & new_unittest("rosenbrock_slsqp", test_rosenbrock_slsqp), &
          & new_unittest("circle_slsqp_explicit", test_circle_slsqp_explicit), &
@@ -139,6 +141,102 @@ contains
          & new_unittest("octree_negative_slack_is_an_error", test_octree_negative_slack) &
          & ]
    end subroutine collect_math_solvers
+
+   !> Solve a linear residual with a caller-provided Newton step.
+   subroutine test_newton_custom_step(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: x(1)
+      integer :: context
+
+      context = 0
+      x = 0.0_wp
+      call new_newton_solver(solver, n=1, m=1, error=solver_error, &
+                             func_ctx=custom_step_residual, step_ctx=custom_step_direction, &
+                             context=context, tol=1.0e-12_wp)
+      if (allocated(solver_error)) then
+         call check(error, .false., message=solver_error%message)
+         return
+      end if
+      call solver%solve(x, solver_error)
+      if (allocated(solver_error)) then
+         call check(error, .false., message=solver_error%message)
+         return
+      end if
+      call check(error, x(1), 2.0_wp, thr=1.0e-12_wp)
+   end subroutine test_newton_custom_step
+
+   !> Residual for the custom step test.
+   subroutine custom_step_residual(x, f, context)
+      real(wp), intent(in) :: x(:)
+      real(wp), intent(out) :: f(:)
+      class(*), intent(in) :: context
+      f = x - 2.0_wp
+   end subroutine custom_step_residual
+
+   !> Exact Newton direction for the custom step test.
+   subroutine custom_step_direction(x, f, p, context)
+      real(wp), intent(in) :: x(:)
+      real(wp), intent(in) :: f(:)
+      real(wp), intent(out) :: p(:)
+      class(*), intent(in) :: context
+      p = -f
+   end subroutine custom_step_direction
+
+   !> Nonlinear custom steps with backtracking and exact line searches
+   subroutine test_newton_custom_step_linesearch(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      integer, parameter :: modes(2) = [newton_linesearch_backtrack, newton_linesearch_exact]
+      real(wp) :: x(1), f(1)
+      integer :: context, mode
+
+      context = 0
+      do mode = 1, size(modes)
+         ! Full Newton step overshoots the root, exercising step-length selection
+         x = 0.5_wp
+         call new_newton_solver(solver, n=1, m=1, error=solver_error, &
+                                func_ctx=custom_nonlinear_residual, step_ctx=custom_nonlinear_direction, &
+                                context=context, linesearch=modes(mode), tol=1.0e-12_wp)
+         if (allocated(solver_error)) then
+            call check(error, .false., message=solver_error%message)
+            return
+         end if
+         call solver%solve(x, solver_error)
+         if (allocated(solver_error)) then
+            call check(error, .false., message=solver_error%message)
+            return
+         end if
+         call check(error, x(1), 2.0_wp, thr=1.0e-10_wp, &
+                    message="Custom Newton root, line search="//to_string(modes(mode)))
+         if (allocated(error)) return
+         call custom_nonlinear_residual(x, f, context)
+         call check(error, abs(f(1)) < 1.0e-10_wp, &
+                    message="Custom Newton residual, line search="//to_string(modes(mode)))
+         if (allocated(error)) return
+      end do
+   end subroutine test_newton_custom_step_linesearch
+
+   !> Quadratic residual with a positive root at x = 2
+   subroutine custom_nonlinear_residual(x, f, context)
+      real(wp), intent(in) :: x(:)
+      real(wp), intent(out) :: f(:)
+      class(*), intent(in) :: context
+
+      f = x**2 - 4.0_wp
+   end subroutine custom_nonlinear_residual
+
+   !> Exact Newton direction for the quadratic residual
+   subroutine custom_nonlinear_direction(x, f, p, context)
+      real(wp), intent(in) :: x(:)
+      real(wp), intent(in) :: f(:)
+      real(wp), intent(out) :: p(:)
+      class(*), intent(in) :: context
+
+      p = -f/(2.0_wp*x)
+   end subroutine custom_nonlinear_direction
 
    !* ================================================================================= *!
    !*                Test Problem 1: Rosenbrock Function (Unconstrained)                *!
@@ -1500,10 +1598,10 @@ contains
             call lbfgsb_rosenbrock_eval(x, f, g)
          else if (task(1:5) == "NEW_X" .and. max_nfg > 0) then
             if (isave(34) >= max_nfg) then
-              task = "STOP: total f and g evaluation limit reached"
+               task = "STOP: total f and g evaluation limit reached"
             end if
             if (dsave(13) <= 1.0e-10_wp*(1.0_wp + abs(f))) then
-              task = "STOP: projected gradient sufficiently small"
+               task = "STOP: projected gradient sufficiently small"
             end if
          end if
       end do

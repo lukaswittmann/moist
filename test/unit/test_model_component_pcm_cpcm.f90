@@ -12,10 +12,13 @@ module test_model_component_pcm_cpcm
    use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
    use moist_channels_response, only: response_type
    use moist_model_continuum_component_pcm_type, only: solver_type
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
-   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
+      & model_continuum_component_cosmo, new_component_cosmo
    use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
+   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only: conductor_state, &
+      & conductor_assemble, conductor_medium, conductor_solve
+   use test_pcm_conductor_probe, only: probe_conductor_matrix, &
+      & probe_conductor_bilinear_weights, probe_conductor_nuclear_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop_lsf_isodensity_internal, only: &
@@ -33,7 +36,6 @@ module test_model_component_pcm_cpcm
       & fd4_scalar, fd4_offsets, get_test_cavity_iswig, build_test_cavity, &
       & fill_point_charge_potential, fill_point_charge_field, set_host_potential, &
       & fill_missing_with_zeros, stage_point_charge_energy
-   use, intrinsic :: iso_fortran_env, only: int64
    implicit none(type, external)
    private
 
@@ -47,7 +49,41 @@ module test_model_component_pcm_cpcm
    real(wp), parameter :: sw_phi(ngrid_sw) = [-0.31_wp, 0.22_wp, -0.17_wp, 0.41_wp, &
                                               -0.28_wp, 0.13_wp, -0.36_wp]
 
+   !> iSwiG fixture with manufactured nuclear width derivatives
+   !>
+   !> Ordinary iSwiG widths are fixed under nuclear motion. The width-channel
+   !> regression supplies its own xi1_rA, contracted through the cavity callback.
+   type, extends(cavity_type_iswig) :: width_gradient_cavity
+   contains
+      procedure :: get_surface_gradient => fixture_surface_gradient
+   end type width_gradient_cavity
+
 contains
+
+   !> Contract the usual iSwiG adjoint and the manufactured width channel
+   !>
+   !> @param[in] self Test cavity, optionally carrying xi1_rA
+   !> @param[in] acc Surface weights (ngrid)
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, nat)
+   !> @param[out] error Allocated on failure
+   subroutine fixture_surface_gradient(self, acc, gradient, error)
+      !> Test cavity
+      class(width_gradient_cavity), intent(in) :: self
+      !> Accumulated surface adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+      integer :: igrid
+
+      call self%cavity_type_iswig%get_surface_gradient(acc, gradient, error)
+      if (allocated(error)) return
+      if (.not. allocated(self%xi1_rA)) return
+      do igrid = 1, self%ngrid
+         gradient = gradient + acc%w_xi(igrid)*self%xi1_rA(:, :, igrid)
+      end do
+   end subroutine fixture_surface_gradient
 
 !> Collect all exported unit tests
    subroutine collect_model_component_pcm_cpcm(testsuite)
@@ -64,11 +100,9 @@ contains
          & new_unittest("cpcm_external_potential", test_cpcm_external_potential), &
          & new_unittest("cpcm_external_potential_requires_input", test_cpcm_external_potential_requires_input, &
             should_fail=.true.), &
-         & new_unittest("cpcm_external_matrix", test_cpcm_external_matrix), &
          & new_unittest("cpcm_requires_update", test_cpcm_requires_update, should_fail=.true.), &
          & new_unittest("cpcm_invalid_solver", test_cpcm_invalid_solver, should_fail=.true.), &
          & new_unittest("pcm_rejects_dielectric_below_one", test_pcm_invalid_epsilon), &
-         & new_unittest("cpcm_iterative_rejects_non_spd_matrix", test_cpcm_iterative_not_spd, should_fail=.true.), &
          & new_unittest("cpcm_reallocates_on_grid_change", test_cpcm_reallocate_on_ngrid_change), &
          & new_unittest("cpcm_grid_mismatch_guards", test_cpcm_grid_mismatch_guards), &
          & new_unittest("cpcm_records_shared_timer_tree", test_cpcm_timer_tree), &
@@ -81,7 +115,6 @@ contains
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
          & new_unittest("cpcm_coincident_points", test_cpcm_coincident_points) &
-         ! & new_unittest("cpcm_solver_timing", test_cpcm_timing) &
          & ]
 
    end subroutine collect_model_component_pcm_cpcm
@@ -127,7 +160,7 @@ contains
 
       do ileb = 1, size(nlebs)
          call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
-            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(ileb)), ctx=ctx)
+                               param=moist_cavity_iswig_parameters_type(num_leb=nlebs(ileb)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "Cavity initialization failed: "//err%message)
             return
@@ -139,7 +172,7 @@ contains
          end if
 
          call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                                 param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -223,9 +256,9 @@ contains
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
       real(wp), parameter :: epsilon = 78.4_wp
-      integer :: solvers(4)
-      character(len=20) :: solver_names(4)
-      real(wp) :: energies(4)
+      integer :: solvers(2)
+      character(len=20) :: solver_names(2)
+      real(wp) :: energies(2)
       real(wp), allocatable :: charges(:, :)
       real(wp) :: energy_array
       real(wp) :: charge_rms
@@ -236,10 +269,8 @@ contains
       call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
-      solvers = [solver_type%inversion, solver_type%lu, &
-                 solver_type%cholesky, solver_type%iterative]
-      solver_names = ["inversion ", "lu        ", &
-                      "cholesky  ", "iterative "]
+      solvers = [solver_type%dense, solver_type%iterative]
+      solver_names = ["dense     ", "iterative "]
 
       ! Get test molecule
       call get_structure(mol, "MB16-43", "01")
@@ -247,7 +278,7 @@ contains
       ! Build cavity
       call new_cosmo_radii(radius_model)
       call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity initialization failed: "//err%message)
          return
@@ -259,12 +290,12 @@ contains
       end if
 
       ! Allocate storage for all solver results
-      allocate (charges(cavity%ngrid, 4))
+      allocate (charges(cavity%ngrid, 2))
 
-      ! Test all 4 solvers
-      do i = 1, 4
+      ! Compare the dense and iterative generated solvers
+      do i = 1, 2
          call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
+                                 param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
@@ -292,15 +323,14 @@ contains
          charges(:, i) = pcm_model%q
       end do
 
-      ! Compare all solver pairs (using first solver as reference)
-      do i = 2, 4
-         ! Compare energies to first solver (inversion)
+      ! Compare with the dense solver
+      do i = 2, 2
          call check(error, energies(i), energies(1), thr=thr, &
                     message=trim(solver_names(i))//" energy differs from "// &
                     trim(solver_names(1)))
          if (allocated(error)) return
 
-         ! Compare charges to first solver (inversion)
+         ! Compare charges to the dense solver
          charge_rms = sqrt(sum((charges(:, i) - charges(:, 1))**2)/real(cavity%ngrid, wp))
          call check(error, charge_rms, 0.0_wp, thr=thr2, &
                     message=trim(solver_names(i))//" charges differ from "// &
@@ -327,8 +357,8 @@ contains
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
-      integer :: solvers(4)
-      character(len=20) :: solver_names(4)
+      integer :: solvers(2)
+      character(len=20) :: solver_names(2)
       real(wp) :: energy_array
       integer :: i
 
@@ -337,10 +367,8 @@ contains
 
       call new_context(ctx, nthreads=0)
 
-      solvers = [solver_type%inversion, solver_type%lu, &
-                 solver_type%cholesky, solver_type%iterative]
-      solver_names = ["inversion ", "lu        ", &
-                      "cholesky  ", "iterative "]
+      solvers = [solver_type%dense, solver_type%iterative]
+      solver_names = ["dense     ", "iterative "]
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -349,9 +377,9 @@ contains
          return
       end if
 
-      do i = 1, 4
+      do i = 1, 2
          call new_component_cpcm(pcm_model, epsilon=1.0_wp, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
+                                 param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
@@ -417,7 +445,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_internal, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Internal CPCM initialization failed: "//err%message)
          return
@@ -442,7 +470,7 @@ contains
       allocate (q_ref, source=pcm_internal%q)
 
       call new_component_cpcm(pcm_external, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "External-potential CPCM initialization failed: "//err%message)
          return
@@ -515,7 +543,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -551,90 +579,6 @@ contains
    end subroutine test_cpcm_external_potential_requires_input
 
 !> Test that supplying an external matrix reproduces the cavity-assembled result
-   subroutine test_cpcm_external_matrix(error)
-
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-
-      type(structure_type) :: mol
-      type(model_continuum_component_cpcm) :: pcm_internal, pcm_external
-      type(cavity_type_iswig) :: cavity
-      type(coupling_type) :: coupling
-      type(radius_type_static) :: radius_model
-      real(wp), parameter :: qat_vals(*) = [&
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
-      real(wp) :: energy_internal, energy_external, charge_rms
-      real(wp), allocatable :: amat_ref(:, :), q_ref(:)
-
-      !> Run context owned here and borrowed by the cavity and component
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0)
-
-      call get_structure(mol, "MB16-43", "01")
-      call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "Cavity setup failed: "//err%message)
-         return
-      end if
-
-      call new_component_cpcm(pcm_internal, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
-      if (allocated(err)) then
-         call test_failed(error, "Internal CPCM initialization failed: "//err%message)
-         return
-      end if
-
-      call pcm_internal%update(mol, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "Internal CPCM update failed: "//err%message)
-         return
-      end if
-      call stage_point_charge_energy(error, pcm_internal, cavity, qat_vals, mol, coupling)
-      if (allocated(error)) return
-
-      energy_internal = 0.0_wp
-      call pcm_internal%get_energy(component_view(coupling), cavity, energy_internal, err)
-      if (allocated(err)) then
-         call test_failed(error, "Internal CPCM energy failed: "//err%message)
-         return
-      end if
-
-      allocate (amat_ref, source=pcm_internal%amat)
-      allocate (q_ref, source=pcm_internal%q)
-
-      call new_component_cpcm(pcm_external, epsilon=78.4_wp, external_matrix=amat_ref, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
-      if (allocated(err)) then
-         call test_failed(error, "External-matrix CPCM initialization failed: "//err%message)
-         return
-      end if
-
-      call pcm_external%update(mol, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "External-matrix CPCM update failed: "//err%message)
-         return
-      end if
-
-      energy_external = 0.0_wp
-      call pcm_external%get_energy(component_view(coupling), cavity, energy_external, err)
-      if (allocated(err)) then
-         call test_failed(error, "External-matrix CPCM energy failed: "//err%message)
-         return
-      end if
-
-      call check(error, energy_external, energy_internal, thr=thr, &
-         & message="External matrix energy differs from cavity-assembled matrix")
-      if (allocated(error)) return
-
-      charge_rms = sqrt(sum((pcm_external%q - q_ref)**2)/real(size(q_ref), wp))
-      call check(error, charge_rms, 0.0_wp, thr=thr2, &
-         & message="External matrix surface charges differ from cavity-assembled matrix")
-      if (allocated(error)) return
-
-   end subroutine test_cpcm_external_matrix
 
 !> Test that get_energy() reports an error when update() has not been called
    subroutine test_cpcm_requires_update(error)
@@ -671,117 +615,20 @@ contains
 
 !> Test that invalid solver identifiers are rejected during the solve step
    subroutine test_cpcm_invalid_solver(error)
-
-      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
-
-      type(structure_type) :: mol
       type(model_continuum_component_cpcm) :: pcm_model
-      type(cavity_type_iswig) :: cavity
-      type(coupling_type) :: coupling
-      type(radius_type_static) :: radius_model
-      real(wp), parameter :: qat_vals(*) = [&
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
-      real(wp) :: energy_array
-
-      !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, nthreads=0)
-
-      call get_structure(mol, "MB16-43", "01")
-      call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "Cavity setup failed: "//err%message)
-         return
-      end if
-
+      call new_context(ctx)
       call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=-1), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=-1), ctx=ctx)
       if (allocated(err)) then
-         call test_failed(error, "CPCM initialization unexpectedly failed: "//err%message)
-         return
+         call test_failed(error, "Invalid solver correctly rejected: "//err%message)
       end if
-
-      call pcm_model%update(mol, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "CPCM update failed: "//err%message)
-         return
-      end if
-      call stage_point_charge_energy(error, pcm_model, cavity, qat_vals, mol, coupling)
-      if (allocated(error)) return
-
-      energy_array = 0.0_wp
-      call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-      if (.not. allocated(err)) return
-
-      if (index(err%message, "Unknown solver type") == 0) return
-
-      call test_failed(error, "Invalid solver correctly rejected: "//trim(err%message))
-
    end subroutine test_cpcm_invalid_solver
 
    !> Test that the CG solver reports an error for a non-SPD system matrix
-   subroutine test_cpcm_iterative_not_spd(error)
-
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-
-      type(structure_type) :: mol
-      type(model_continuum_component_cpcm) :: pcm_model
-      type(cavity_type_iswig) :: cavity
-      type(coupling_type) :: coupling
-      type(radius_type_static) :: radius_model
-      real(wp), parameter :: qat_vals(*) = [&
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
-      real(wp), allocatable :: bad_amat(:, :)
-      real(wp) :: energy_array
-      integer :: i
-
-      !> Run context owned here and borrowed by the cavity and component
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0)
-
-      call get_structure(mol, "MB16-43", "01")
-      call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "Cavity setup failed: "//err%message)
-         return
-      end if
-
-      ! Negative-definite external matrix: -identity
-      allocate (bad_amat(cavity%ngrid, cavity%ngrid), source=0.0_wp)
-      do i = 1, cavity%ngrid
-         bad_amat(i, i) = -1.0_wp
-      end do
-
-      call new_component_cpcm(pcm_model, epsilon=78.4_wp, external_matrix=bad_amat, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%iterative), ctx=ctx)
-      if (allocated(err)) then
-         call test_failed(error, "CPCM initialization failed: "//err%message)
-         return
-      end if
-
-      call pcm_model%update(mol, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "CPCM update failed: "//err%message)
-         return
-      end if
-      call stage_point_charge_energy(error, pcm_model, cavity, qat_vals, mol, coupling)
-      if (allocated(error)) return
-
-      energy_array = 0.0_wp
-      call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-      if (.not. allocated(err)) return
-
-      call test_failed(error, "Non-SPD matrix was correctly rejected: "//err%message)
-
-   end subroutine test_cpcm_iterative_not_spd
 
 !> Test that a PCM instance can be reused safely when the cavity grid size changes
    subroutine test_cpcm_reallocate_on_ngrid_change(error)
@@ -819,7 +666,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_reused, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Reused CPCM initialization failed: "//err%message)
          return
@@ -858,14 +705,8 @@ contains
          return
       end if
 
-      if (size(pcm_reused%amat, 1) /= cavity_large%ngrid .or. &
-          & size(pcm_reused%amat, 2) /= cavity_large%ngrid) then
-         call test_failed(error, "PCM matrix was not resized to the new grid")
-         return
-      end if
-
       call new_component_cpcm(pcm_fresh, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -945,7 +786,7 @@ contains
       if (allocated(error)) return
 
       call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -966,7 +807,7 @@ contains
       if (allocated(error)) return
       energy = 0.0_wp
       call pcm_model%get_energy(component_view(coupling_small), cavity_large, energy, err)
-      call check_refusal("External potential size mismatch")
+      call check_refusal("potential size mismatch")
       if (allocated(error)) return
       call check(error, energy, 0.0_wp, thr=0.0_wp, &
          & more="refused energy was accumulated")
@@ -1047,7 +888,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1153,7 +994,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1224,7 +1065,7 @@ contains
 
       ! Same statement against an independently constructed model
       call new_component_cpcm(pcm_fresh, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -1279,9 +1120,9 @@ contains
       type(coupling_type) :: coupling
       real(wp) :: energy_array
       type(radius_type_static) :: radius_model
-      integer :: solvers(4)
-      character(len=20) :: solver_names(4)
-      real(wp) :: energies(4)
+      integer :: solvers(2)
+      character(len=20) :: solver_names(2)
+      real(wp) :: energies(2)
       integer :: i
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
@@ -1289,15 +1130,13 @@ contains
       call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
-      solvers = [solver_type%inversion, solver_type%lu, &
-                 solver_type%cholesky, solver_type%iterative]
-      solver_names = ["inversion ", "lu        ", &
-                      "cholesky  ", "iterative "]
+      solvers = [solver_type%dense, solver_type%iterative]
+      solver_names = ["dense     ", "iterative "]
 
       ! Build cavity and point-charge potential trace
       call new_cosmo_radii(radius_model)
       call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity initialization failed: "//err%message)
          return
@@ -1308,10 +1147,10 @@ contains
          return
       end if
 
-      ! Test all 4 solvers
-      do i = 1, 4
+      ! Test both generated solver choices
+      do i = 1, 2
          call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
+                                 param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed for "// &
                              trim(solver_names(i))//" solver")
@@ -1359,216 +1198,6 @@ contains
 
    end subroutine test_all_solvers
 
-!> Benchmark timing for all PCM solvers on polyalanine structures
-   subroutine test_cpcm_timing(error)
-
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-
-      type(structure_type) :: mol
-      type(model_continuum_component_cpcm) :: pcm_model
-      type(cavity_type_iswig) :: cavity
-      type(coupling_type) :: coupling
-      real(wp) :: energy_array
-      real(wp), allocatable :: qat(:)
-      type(radius_type_static) :: radius_model
-      real(wp), parameter :: epsilon = 78.4_wp
-      integer :: n_ala, ii
-      integer(int64) :: t1, t2, rate
-      real(wp) :: time_lu, time_cholesky, time_iterative, time_inversion
-      real(wp) :: energy_lu, energy_cholesky, energy_iterative, energy_inversion
-      real(wp) :: dE_lu, dE_cholesky, dE_iterv
-      real(wp) :: rms_lu, rms_cholesky, rms_iterv
-      real(wp), allocatable :: charges_lu(:), charges_cholesky(:)
-      real(wp), allocatable :: charges_iterative(:), charges_inversion(:)
-      character(len=10) :: n_str
-      !> Local run context borrowed by the cavities built here
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0)
-
-      ! Print header
-      print "(a)", ""
-      print "(a)", "CPCM Solver Timing Benchmark (Polyalanine)"
-      print "(a)", "==========================================="
-      print "(a7, a10, 4(a11), 3(a11), 3(a11))", "N_Ala", "N_Grid", &
-         "t_inv (s)", "t_lu (s)", "t_chol (s)", "t_iter (s)", &
-         "dE_lu", "dE_chol", "dE_iter", &
-         "rms_lu", "rms_chol", "rms_iter"
-      print "(a7, a10, 10(a11))", "------", "---------", &
-         "----------", "----------", "----------", "----------", &
-         "----------", "----------", "----------", &
-         "----------", "----------", "----------"
-
-      call system_clock(count_rate=rate)
-
-      ! Loop over polyalanine structures: 4, 8, 12, ..., 100
-      ! Use steps that give us structures around 50-100
-      do n_ala = 4, 100, 4
-
-         ! Get structure from mstore
-         write (n_str, "(a, i2.2)") "polyala_", n_ala
-         call get_structure(mol, "POLYALANINE", trim(n_str))
-
-         ! Prepare charges (simple uniform distribution)
-         allocate (qat(mol%nat))
-         qat = 0.0_wp
-         do ii = 1, mol%nat
-            qat(ii) = 0.3_wp*sin(real(ii, wp))
-         end do
-
-         ! Build cavity
-         call new_cosmo_radii(radius_model)
-         call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
-            param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "Cavity initialization failed: "//err%message)
-            return
-         end if
-         call cavity%update(mol, error=err)
-         if (allocated(err)) then
-            call test_failed(error, "Cavity update failed: "//err%message)
-            return
-         end if
-         ! One coupling per cavity, staged with a throwaway component; the
-         ! timed components below share it
-         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed (staging)")
-            return
-         end if
-         call stage_point_charge_energy(error, pcm_model, cavity, qat, mol, coupling)
-         if (allocated(error)) return
-
-         ! ===== Time LU solver (reference) =====
-         call system_clock(t1)
-         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed (lu)")
-            return
-         end if
-         call pcm_model%update(mol, cavity, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM update failed (lu): "//err%message)
-            return
-         end if
-         energy_array = 0.0_wp
-         call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM energy failed (lu): "//err%message)
-            return
-         end if
-         energy_lu = energy_array
-         allocate (charges_lu(cavity%ngrid))
-         charges_lu = pcm_model%q
-         call system_clock(t2)
-         time_lu = real(t2 - t1, wp)/real(rate, wp)
-
-         ! ===== Time Cholesky solver =====
-         call system_clock(t1)
-         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed (cholesky)")
-            return
-         end if
-         call pcm_model%update(mol, cavity, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM update failed (cholesky): "//err%message)
-            return
-         end if
-         energy_array = 0.0_wp
-         call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM energy failed (cholesky): "//err%message)
-            return
-         end if
-         energy_cholesky = energy_array
-         allocate (charges_cholesky(cavity%ngrid))
-         charges_cholesky = pcm_model%q
-         call system_clock(t2)
-         time_cholesky = real(t2 - t1, wp)/real(rate, wp)
-
-         ! ===== Time iterative solver =====
-         call system_clock(t1)
-         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%iterative), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed (iterative)")
-            return
-         end if
-         call pcm_model%update(mol, cavity, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM update failed (iterative): "//err%message)
-            return
-         end if
-         energy_array = 0.0_wp
-         call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM energy failed (iterative): "//err%message)
-            return
-         end if
-         energy_iterative = energy_array
-         allocate (charges_iterative(cavity%ngrid))
-         charges_iterative = pcm_model%q
-         call system_clock(t2)
-         time_iterative = real(t2 - t1, wp)/real(rate, wp)
-
-         ! ===== Time inversion solver =====
-         call system_clock(t1)
-         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%inversion), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed (inversion)")
-            return
-         end if
-         call pcm_model%update(mol, cavity, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM update failed (inversion): "//err%message)
-            return
-         end if
-         energy_array = 0.0_wp
-         call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM energy failed (inversion): "//err%message)
-            return
-         end if
-         energy_inversion = energy_array
-         allocate (charges_inversion(cavity%ngrid))
-         charges_inversion = pcm_model%q
-         call system_clock(t2)
-         time_inversion = real(t2 - t1, wp)/real(rate, wp)
-
-         ! Compute comparison metrics (all relative to inversion solver as reference)
-         dE_lu = abs(energy_lu - energy_inversion)
-         dE_cholesky = abs(energy_cholesky - energy_inversion)
-         dE_iterv = abs(energy_iterative - energy_inversion)
-
-         rms_lu = sqrt(sum((charges_lu - charges_inversion)**2)/real(cavity%ngrid, wp))
-         rms_cholesky = sqrt(sum((charges_cholesky - charges_inversion)**2)/real(cavity%ngrid, wp))
-         rms_iterv = sqrt(sum((charges_iterative - charges_inversion)**2)/real(cavity%ngrid, wp))
-
-         ! Print results: N_Ala, N_Grid, times (invers, lu, cholesky, iterv),
-         !                dE (lu, cholesky, iterv), rms (lu, cholesky, iterv)
-         print "(i7, i10, 4(f11.3), 3(e11.2), 3(e11.2))", n_ala, cavity%ngrid, &
-            time_inversion, time_lu, time_cholesky, time_iterative, &
-            dE_lu, dE_cholesky, dE_iterv, &
-            rms_lu, rms_cholesky, rms_iterv
-
-         ! Cleanup for next iteration
-         deallocate (qat, charges_lu, charges_cholesky, &
-                     charges_iterative, charges_inversion)
-
-      end do
-
-      print "(a)", "==========================================="
-      print "(a)", ""
-
-   end subroutine test_cpcm_timing
-
 !* ================================================================================= *!
 !*                    Dielectric validation, adjoints and gradients                  *!
 !* ================================================================================= *!
@@ -1615,14 +1244,14 @@ contains
 
       ! The vacuum limit is a valid model, not an error
       call new_component_cpcm(pcm_model, 1.0_wp, error=err, ctx=ctx)
-      call check(error, .not. allocated(err), "CPCM rejected the vacuum limit eps = 1")
+      call check(error,.not. allocated(err), "CPCM rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, pcm_model%feps, 0.0_wp, thr=thr, &
          & message="CPCM f(eps) is not zero at eps = 1")
       if (allocated(error)) return
 
       call new_component_cosmo(cosmo_model, 1.0_wp, error=err, ctx=ctx)
-      call check(error, .not. allocated(err), "COSMO rejected the vacuum limit eps = 1")
+      call check(error,.not. allocated(err), "COSMO rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, cosmo_model%feps, 0.0_wp, thr=thr, &
          & message="COSMO f(eps) is not zero at eps = 1")
@@ -1633,8 +1262,6 @@ contains
 !>
 !> Drives `get_surface_weights` on a hand-built DROP surface and differences it
 !> with the shared 4-point harness against an independently coded CPCM energy
-!> The type-bound `amat_surface_weights` / `amat_nuclear_gradient` pair is then
-!> cross-checked against the same weights contracted by hand
    subroutine test_cpcm_surface_weights(error)
 
       !> Error handling
@@ -1660,14 +1287,9 @@ contains
 
       !> Dummy molecular geometry
       real(wp) :: xyz_mol(3, 1)
-      !> Raw A-matrix surface weights from the type-bound interface
-      real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
-      !> Type-bound and independently contracted A-matrix nuclear gradients
-      real(wp) :: grad_rA(3, 1), grad_ref(3, 1)
-      !> Grid point, nuclear-displacement and Cartesian-component indices
       integer :: igrid, iaxis, icoord
-      !> Largest deviation between the two nuclear-gradient contractions
-      real(wp) :: gradient_deviation
+      real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
+      real(wp) :: grad_rA(3, 1), grad_ref(3, 1), gradient_deviation
 
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
@@ -1690,7 +1312,7 @@ contains
       allocate (cavity%normal0, source=sw_normals)
 
       call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1743,7 +1365,8 @@ contains
       if (allocated(error)) return
 
       allocate (w_xi(ngrid_sw), w_f(ngrid_sw), w_xyz(3, ngrid_sw))
-      call pcm_model%amat_surface_weights(cavity, w_xi, w_f, w_xyz, err)
+      call probe_conductor_bilinear_weights(cavity%xi0, cavity%f, cavity%xyz, &
+         & pcm_model%q, pcm_model%q, w_xi, w_f, w_xyz, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM A-matrix surface weights failed: "//err%message)
          return
@@ -1772,7 +1395,8 @@ contains
          end do
       end do
 
-      call pcm_model%amat_nuclear_gradient(cavity, grad_rA, err)
+      call probe_conductor_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
+         & w_xi, w_f, w_xyz, grad_rA, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM A-matrix nuclear gradient failed: "//err%message)
          return
@@ -1953,7 +1577,7 @@ contains
       end do
 
       call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2117,7 +1741,7 @@ contains
       type(structure_type) :: trial
       !> PCM component and molecular cavity
       type(model_continuum_component_cpcm) :: pcm_model
-      type(cavity_type_iswig) :: cavity
+      type(width_gradient_cavity) :: cavity
       !> Point-charge potential trace, refilled on every displaced cavity
       type(coupling_type) :: coupling
       !> Point charges generating the potential: the host's nuclear charges, so
@@ -2128,9 +1752,9 @@ contains
       !> Atom index used to fill the charges
       integer :: iat
       !> Analytic PCM nuclear gradient
-      real(wp), allocatable :: gradient(:, :)
+      real(wp), allocatable :: gradient(:, :), forward_gradient(:, :)
       !> Manufactured width-gradient probes and raw host width derivative
-      real(wp), allocatable :: width_gradient(:, :, :), width_derivative(:)
+      real(wp), allocatable :: width_gradient(:, :, :), width_derivative(:), width_forward(:, :)
       !> Surface point and probe index for the width contraction
       integer :: width_point, iprobe
       !> Saved cavity width derivative at the probe point and expected probe difference
@@ -2183,13 +1807,13 @@ contains
          if (core > 0) qat(iat) = real(mols(1)%z_eff(iat), wp)
       end do
 
-      call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb)
+      call get_test_cavity_iswig(mols(1), cavity%cavity_type_iswig, err, nleb=nleb)
       if (allocated(err)) then
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
       call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2228,11 +1852,30 @@ contains
          & more="CPCM nuclear gradient is zero, the test is vacuous")
       if (allocated(error)) return
 
+      call check(error,.not. allocated(cavity%xyz1_rA), &
+                 more="reverse CPCM gradient built a surface nuclear Jacobian")
+      if (allocated(error)) return
+      allocate (forward_gradient(3, mols(1)%nat), source=0.0_wp)
+      call pcm_model%get_forward_gradient(component_view(coupling), cavity, response, forward_gradient, err)
+      call check(error,.not. allocated(err), more="forward CPCM nuclear gradient failed")
+      if (allocated(error)) return
+      call check(error, allocated(cavity%xyz1_rA), more="forward CPCM gradient did not build its Jacobian")
+      if (allocated(error)) return
+      call check(error, maxval(abs(forward_gradient - gradient)), 0.0_wp, thr=thr2, &
+                 more="forward and reverse CPCM nuclear gradients differ")
+      if (allocated(error)) return
+
       ! Isolate the raw host width contraction using a manufactured cavity
       ! derivative; the identical matrix and direct terms cancel between probes,
       ! leaving q_i dphi/dxi_i xi1_rA(:, :, i) at the probe point
+      call cavity%get_gradient(err)
+      if (allocated(err)) then
+         call test_failed(error, "Width-gradient fixture setup failed: "//err%message)
+         return
+      end if
       width_point = maxloc(abs(pcm_model%q), dim=1)
       allocate (width_gradient(3, mols(1)%nat, 2), source=0.0_wp)
+      allocate (width_forward(3, mols(1)%nat), source=0.0_wp)
       allocate (width_derivative(cavity%ngrid), source=0.0_wp)
       saved_xi1 = cavity%xi1_rA(:, :, width_point)
       cavity%xi1_rA(2, 1, width_point) = 0.37_wp
@@ -2263,6 +1906,13 @@ contains
             call test_failed(error, "Width-gradient probe failed: "//err%message)
             return
          end if
+         width_forward = 0.0_wp
+         call pcm_model%get_forward_gradient(component_view(coupling), cavity, response, width_forward, err)
+         call check(error,.not. allocated(err), more="forward manufactured width gradient failed")
+         if (allocated(error)) return
+         call check(error, maxval(abs(width_forward - width_gradient(:, :, iprobe))), 0.0_wp, thr=thr2, &
+                    more="forward and reverse manufactured width gradients differ")
+         if (allocated(error)) return
       end do
       ! Absolute 5e-12 with a 10x looser fallback relative to max|gradient|: the
       ! charges are bitwise identical between probes, but the adjoint contraction
@@ -2293,6 +1943,9 @@ contains
             call check(error, gradient(iaxis, iatom), fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
             if (allocated(error)) return
+            call check(error, forward_gradient(iaxis, iatom), fd, &
+               & thr_abs=fd_atol, thr_rel=fd_rtol, more="forward "//trim(context))
+            if (allocated(error)) return
          end do
       end do
 
@@ -2312,7 +1965,7 @@ contains
          !> Local library error handling
          type(moist_error_type), allocatable :: local_err
 
-         call get_test_cavity_iswig(displaced_mol, cavity, local_err, nleb=nleb)
+         call get_test_cavity_iswig(displaced_mol, cavity%cavity_type_iswig, local_err, nleb=nleb)
          if (allocated(local_err)) then
             call test_failed(error, "Displaced cavity setup failed: "//local_err%message)
             return
@@ -2404,7 +2057,7 @@ contains
       end if
 
       call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2489,6 +2142,13 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(bad_gradient - 1.0_wp)), 0.0_wp, thr=0.0_wp, &
          & more="rejected external CPCM gradient modified the accumulator")
+      if (allocated(error)) return
+      deallocate (err)
+      call pcm_model%get_forward_gradient(component_view(coupling), cavity, response, bad_gradient, err)
+      call check(error, allocated(err), more="forward CPCM accepted a malformed position weight")
+      if (allocated(error)) return
+      call check(error, maxval(abs(bad_gradient - 1.0_wp)), 0.0_wp, thr=0.0_wp, &
+                 more="rejected forward CPCM gradient modified the accumulator")
       if (allocated(error)) return
       deallocate (err)
 
@@ -2657,7 +2317,7 @@ contains
             return
          end if
          call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                                 param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -2773,7 +2433,7 @@ contains
          do ieps = 1, size(epsilons)
             feps = (epsilons(ieps) - 1.0_wp)/epsilons(ieps)
             call new_component_cpcm(pcm_model, epsilon=epsilons(ieps), error=err, &
-               param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                                    param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
             if (allocated(err)) then
                call test_failed(error, "CPCM initialization failed: "//err%message)
                return
@@ -2814,42 +2474,25 @@ contains
 
    end subroutine test_cpcm_dielectric_scaling
 
-!> Bit-coincident  grid points must not poison the CPCM matrix
-!>
-!> In symmetric molecules two Lebedev points owned by different spheres can land
-!> at bit-identical coordinates (the Td axis of NH4+/PH4+, a linear anion at
-!> certain radii scales). A literal erf(xi_ij r_ij)/r_ij kernel evaluates 0/0
-!> there and the NaN propagates into every downstream solve. moist evaluates the
-!> off-diagonal through the Boys function instead, A_ij = 2/sqrt(pi) xi_ij F0(T)
-!> with T = (xi_ij r_ij)^2, which is regular at T = 0 and returns exactly the
-!> zero-separation limit 2 xi_ij/sqrt(pi). This pins that property
+!> Coincident surface points must remain finite in the generated kernel
    subroutine test_cpcm_coincident_points(error)
-
-      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
-
-      type(cavity_type_drop) :: cavity
-
-      !> Three  grid points, the first two bit-identical with distinct widths
+      type(conductor_state) :: state
       integer, parameter :: ngrid_c = 3
       real(wp), parameter :: xis(ngrid_c) = [0.65_wp, 0.83_wp, 0.71_wp]
       real(wp), parameter :: fs(ngrid_c) = [0.91_wp, 0.88_wp, 0.79_wp]
       real(wp), parameter :: xyz(3, ngrid_c) = reshape([ &
-                                               1.5_wp, 0.0_wp, 0.0_wp, &
-                                               1.5_wp, 0.0_wp, 0.0_wp, &
-                                               -1.1_wp, 0.7_wp, 0.3_wp], [3, ngrid_c])
-
+                                                       1.5_wp, 0.0_wp, 0.0_wp, &
+                                                       1.5_wp, 0.0_wp, 0.0_wp, &
+                                                       -1.1_wp, 0.7_wp, 0.3_wp], [3, ngrid_c])
+      real(wp), parameter :: v(ngrid_c) = [-0.31_wp, 0.22_wp, -0.17_wp]
+      real(wp) :: energy, q(ngrid_c), grad_v(ngrid_c)
       real(wp), allocatable :: amat(:, :)
       real(wp) :: xi_ij, expected
 
-      cavity%ngrid = ngrid_c
-      allocate (cavity%xi0, source=xis)
-      allocate (cavity%f, source=fs)
-      allocate (cavity%xyz, source=xyz)
-
       allocate (amat(ngrid_c, ngrid_c))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+      call probe_conductor_matrix(xis, fs, xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM matrix assembly failed: "//err%message)
          return
@@ -2868,6 +2511,29 @@ contains
 
       call check(error, amat(2, 1), expected, thr=thr, &
          & message="the CPCM matrix must stay symmetric at coincident  grid points")
+
+      if (allocated(error)) return
+
+      call conductor_assemble(state, xyz, xis, fs, err)
+      if (allocated(err)) then
+         call test_failed(error, "Generated conductor assembly failed: "//err%message)
+         return
+      end if
+      call conductor_medium(state, 0.9_wp, err)
+      if (allocated(err)) then
+         call test_failed(error, "Generated conductor medium failed: "//err%message)
+         return
+      end if
+      call conductor_solve(state, v, energy, q, grad_v, err)
+      if (allocated(err)) then
+         call test_failed(error, "Generated conductor solve failed: "//err%message)
+         return
+      end if
+      call check(error, all(q == q) .and. all(abs(q) < huge(1.0_wp)), &
+         & "coincident grid points produced non-finite surface charges")
+      if (allocated(error)) return
+      call check(error, energy == energy .and. abs(energy) < huge(1.0_wp), &
+         & "coincident grid points produced non-finite energy")
 
    contains
 

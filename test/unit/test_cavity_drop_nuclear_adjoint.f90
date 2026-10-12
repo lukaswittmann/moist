@@ -37,7 +37,8 @@ module test_cavity_drop_nuclear_adjoint
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
+      & model_continuum_component_cosmo, new_component_cosmo, model_continuum_component_pcm_conductor
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use test_helpers, only: stage_model_point_charge_energy, fill_missing_with_zeros, &
@@ -106,6 +107,7 @@ contains
                   new_unittest("branching_channels", test_branching_channels), &
                   new_unittest("branching_xi_fd", test_branching_xi_fd), &
                   new_unittest("model_forward_reverse", test_model_forward_reverse), &
+                  new_unittest("cosmo_model_forward_reverse", test_cosmo_model_forward_reverse), &
                   new_unittest("shape_guard", test_shape_guard) &
                   ]
 
@@ -289,8 +291,8 @@ contains
       do inum = 1, max_num
          if (.not. usable(inum)) cycle
          num_deriv = num_deriv + wmap(inum)* &
-            (8.0_wp*(xi_store(inum, 3) - xi_store(inum, 2)) - &
-             (xi_store(inum, 4) - xi_store(inum, 1)))/(12.0_wp*XI_FD_STEP)
+                     (8.0_wp*(xi_store(inum, 3) - xi_store(inum, 2)) - &
+                      (xi_store(inum, 4) - xi_store(inum, 1)))/(12.0_wp*XI_FD_STEP)
       end do
       if (.not. ieee_is_finite(num_deriv)) then
          call test_failed(error, "branching xi FD reference is not finite")
@@ -364,19 +366,34 @@ contains
 
    end subroutine test_branching_xi_fd
 
-   !> Model-level gradient: reverse path must equal the legacy forward path
+   !> CPCM and PV gradients through the forward and reverse model paths
    !>
-   !> This is the only test that drives `continuum_get_gradient` over a cavity
-   !> that supports the surface contraction -- the model suite uses an iSwiG
-   !> cavity, which falls back to the forward path -- so it is what actually
-   !> exercises the component hooks `get_gradient_surface_weights` and
-   !> `get_direct_gradient`
-   !>
-   !> The two paths are required to agree, not merely to be close: the
-   !> gradient-side surface weights were chosen to reproduce exactly the set
-   !> of terms the forward path assembles
+   !> @param[out] error Test failure
    subroutine test_model_forward_reverse(error)
-      !> Error handle
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_model_forward_reverse(.false., error)
+   end subroutine test_model_forward_reverse
+
+   !> COSMO and PV gradients through the forward and reverse model paths
+   !>
+   !> @param[out] error Test failure
+   subroutine test_cosmo_model_forward_reverse(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_model_forward_reverse(.true., error)
+   end subroutine test_cosmo_model_forward_reverse
+
+   !> Compare model gradients and host responses from independent cavity paths
+   !>
+   !> @param[in] use_cosmo Select COSMO instead of CPCM
+   !> @param[out] error Test failure
+   subroutine check_model_forward_reverse(use_cosmo, error)
+      !> Dielectric scaling choice
+      logical, intent(in) :: use_cosmo
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       !> Dielectric constant and pressure of the probe model
@@ -388,7 +405,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(model_continuum_type), target :: model_rev, model_fwd
-      type(model_continuum_component_cpcm) :: pcm_component
+      class(model_continuum_component_pcm_conductor), allocatable :: pcm_component
       type(model_continuum_component_pv) :: pv_component
       type(coupling_type), pointer :: coupling
       !> Host part of the gradient phase from each path
@@ -411,8 +428,19 @@ contains
       if (allocated(error)) return
       nat = mol%nat
 
-      call new_component_cpcm(pcm_component, epsilon=epsilon_r, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      if (use_cosmo) then
+         allocate (model_continuum_component_cosmo :: pcm_component)
+      else
+         allocate (model_continuum_component_cpcm :: pcm_component)
+      end if
+      select type (pcm_component)
+      type is (model_continuum_component_cosmo)
+         call new_component_cosmo(pcm_component, epsilon=epsilon_r, error=err, &
+                                  param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
+      type is (model_continuum_component_cpcm)
+         call new_component_cpcm(pcm_component, epsilon=epsilon_r, error=err, &
+                                 param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
+      end select
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -452,6 +480,9 @@ contains
          call test_failed(error, "reverse-mode model gradient failed: "//err%message)
          return
       end if
+      call check(error,.not. allocated(cav_rev%xyz1_rA), &
+                 more="reverse model built a surface nuclear Jacobian")
+      if (allocated(error)) return
       call stage_model_point_charge_energy(error, model_fwd, qat_vals, mol, coupling)
       if (allocated(error)) return
       call model_fwd%prepare_gradient(coupling, err)
@@ -461,6 +492,10 @@ contains
          call test_failed(error, "forward model gradient failed: "//err%message)
          return
       end if
+
+      call check(error, allocated(cav_fwd%xyz1_rA), &
+                 more="forward model did not build a surface nuclear Jacobian")
+      if (allocated(error)) return
 
       ! Both paths publish the host part of the phase
       call copy_potential_adjoint(response_rev, charge_rev)
@@ -496,14 +531,14 @@ contains
          end do
       end do
 
-   end subroutine test_model_forward_reverse
+   end subroutine check_model_forward_reverse
 
-   !> Assemble a CPCM + PV model on a DROP cavity
+   !> Assemble a conductor PCM + PV model on a DROP cavity
    !>
    !> @param[out]   model  Model to build
    !> @param[in]    cavity Cavity template copied into the model
    !> @param[in]    ctx    Run context owned by the caller
-   !> @param[in]    pcmc   CPCM component template
+   !> @param[in]    pcmc   Conductor PCM component template
    !> @param[in]    pvc    PV component template
    !> @param[in]    mol    Molecular structure
    !> @param[out]   error  Error handle
@@ -515,7 +550,7 @@ contains
       !> Run context owned by the caller
       type(moist_context_type), intent(in), target :: ctx
       !> Component templates
-      type(model_continuum_component_cpcm), intent(in) :: pcmc
+      class(model_continuum_component_pcm_conductor), intent(in) :: pcmc
       type(model_continuum_component_pv), intent(in) :: pvc
       !> Molecular structure
       type(structure_type), intent(in) :: mol
@@ -873,12 +908,14 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
-            blend_3b=gamma_loc))
+                                                                            blend_3b=gamma_loc))
          call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc, &
-            do_fine=.true.), ctx=ctx)
+                              error=cav_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
+                                                                      proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, &
+                                                                      wleb_prune_level=prune_loc, &
+                                                                      do_fine=.true.), ctx=ctx)
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)

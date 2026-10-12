@@ -1,0 +1,154 @@
+!> Nonlocal electrostatics component backed by generated boundary operators
+module moist_model_continuum_component_pcm_nonlocal
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use mctc_env, only: wp, error_type, fatal_error
+   use moist_context, only: moist_context_type
+   use moist_cavity_type, only: cavity_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
+   use moist_model_continuum_component_pcm_solvers, only: pcm_solver
+   use moist_model_continuum_component_pcm_kernel_gauss_nonlocal, only: nonlocal_pcm_state, &
+      & nonlocal_pcm_assemble, nonlocal_pcm_medium, nonlocal_pcm_solve, nonlocal_pcm_weights
+   use moist_model_continuum_component_pcm_kernel_point_nonlocal, only: nonlocal_pcm_point_state, &
+      & nonlocal_pcm_point_assemble, nonlocal_pcm_point_medium, nonlocal_pcm_point_solve, &
+      & nonlocal_pcm_point_weights
+   implicit none(type, external)
+   private
+
+   public :: model_continuum_component_nonlocal, new_component_nonlocal
+
+   !> Three-field nonlocal boundary system
+   type, extends(pcm_layer_base) :: model_continuum_component_nonlocal
+      real(wp) :: eps_inf = 1.0_wp
+      real(wp) :: eps_solute = 1.0_wp
+      real(wp) :: lambda = 1.0_wp
+      real(wp), allocatable :: u(:), w_ext(:)
+      type(nonlocal_pcm_state) :: gauss
+      type(nonlocal_pcm_point_state) :: point
+   contains
+      procedure :: assemble_layer => nonlocal_assemble_layer
+      procedure :: solve_layer => nonlocal_solve_layer
+      procedure :: layer_weights => nonlocal_layer_weights
+      procedure :: is_inert => nonlocal_is_inert
+   end type model_continuum_component_nonlocal
+
+contains
+
+   !> Construct nonlocal electrostatics from permittivities and correlation length
+   subroutine new_component_nonlocal(self, eps_solvent, eps_inf, lambda, error, param, eps_solute, ctx)
+      type(model_continuum_component_nonlocal), intent(out) :: self
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
+      real(wp), intent(in) :: eps_solvent, eps_inf, lambda
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_pcm_parameters_type), intent(in), optional :: param
+      real(wp), intent(in), optional :: eps_solute
+      type(moist_pcm_parameters_type) :: settings
+
+      if (.not. ieee_is_finite(eps_solvent) .or. eps_solvent < 1.0_wp .or. &
+          & .not. ieee_is_finite(eps_inf) .or. eps_inf < 1.0_wp .or. &
+          & .not. ieee_is_finite(lambda) .or. lambda <= 0.0_wp) then
+         call fatal_error(error, "Nonlocal PCM requires permittivities >= 1 and positive lambda")
+         return
+      end if
+      if (present(eps_solute)) then
+         if (.not. ieee_is_finite(eps_solute) .or. eps_solute < 1.0_wp) then
+            call fatal_error(error, "Nonlocal PCM solute permittivity must be >= 1")
+            return
+         end if
+         self%eps_solute = eps_solute
+      end if
+      if (present(param)) settings = param
+      call settings%validate(error)
+      if (allocated(error)) return
+      if (present(ctx)) self%ctx => ctx
+      self%epsilon = eps_solvent
+      self%feps = pcm_layer_feps(eps_solvent)
+      self%eps_inf = eps_inf
+      self%lambda = lambda
+      self%param = settings
+      self%needs_normal = .true.
+      self%needs_curvature = .false.
+      self%needs_switching = .false.
+      self%name = "Nonlocal electrostatics"
+   end subroutine new_component_nonlocal
+
+   !> Assemble Gaussian or point boundary operators
+   subroutine nonlocal_assemble_layer(self, cavity, solver, error)
+      class(model_continuum_component_nonlocal), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(pcm_solver), intent(in) :: solver
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      associate (r => cavity%xyz(:, 1:ngrid), n => cavity%normal0(:, 1:ngrid), &
+         & a => cavity%a(1:ngrid))
+         if (self%smeared) then
+            call nonlocal_pcm_assemble(self%gauss, r, n, cavity%xi0(1:ngrid), a, error, solver)
+            if (allocated(error)) return
+            call nonlocal_pcm_medium(self%gauss, self%epsilon, self%eps_inf, &
+               & self%lambda, self%eps_solute, error)
+         else
+            call nonlocal_pcm_point_assemble(self%point, r, n, a, error, solver)
+            if (allocated(error)) return
+            call nonlocal_pcm_point_medium(self%point, self%epsilon, self%eps_inf, &
+               & self%lambda, self%eps_solute, error)
+         end if
+      end associate
+   end subroutine nonlocal_assemble_layer
+
+   !> Solve the three fields and retain both host-trace adjoints
+   subroutine nonlocal_solve_layer(self, error)
+      class(model_continuum_component_nonlocal), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ngrid
+
+      ngrid = size(self%phi)
+      if (allocated(self%u)) deallocate (self%u)
+      if (allocated(self%w_ext)) deallocate (self%w_ext)
+      allocate (self%u(ngrid), self%w_ext(ngrid))
+      if (self%smeared) then
+         call nonlocal_pcm_solve(self%gauss, self%phi, self%vn, self%kernel_energy, &
+            & self%u, self%q, self%w_ext, self%qsym, self%qn, error)
+      else
+         call nonlocal_pcm_point_solve(self%point, self%phi, self%vn, self%kernel_energy, &
+            & self%u, self%q, self%w_ext, self%qsym, self%qn, error)
+      end if
+   end subroutine nonlocal_solve_layer
+
+   !> Accumulate the operator response at fixed host traces
+   subroutine nonlocal_layer_weights(self, cavity, acc, error)
+      class(model_continuum_component_nonlocal), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_xi(:), w_a(:)
+      real(wp) :: w_eps, w_eps_inf, w_lambda, w_eps_solute
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_a(ngrid))
+      if (self%smeared) then
+         allocate (w_xi(ngrid))
+         call nonlocal_pcm_weights(self%gauss, w_xyz, w_n, w_xi, w_a, w_eps, &
+            & w_eps_inf, w_lambda, w_eps_solute, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_xi=w_xi, w_a=w_a)
+      else
+         call nonlocal_pcm_point_weights(self%point, w_xyz, w_n, w_a, w_eps, &
+            & w_eps_inf, w_lambda, w_eps_solute, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_a=w_a)
+      end if
+   end subroutine nonlocal_layer_weights
+
+   !> Vacuum bulk remains active when the other permittivities differ
+   pure function nonlocal_is_inert(self) result(inert)
+      class(model_continuum_component_nonlocal), intent(in) :: self
+      logical :: inert
+      inert = self%epsilon == 1.0_wp .and. self%eps_inf == 1.0_wp .and. self%eps_solute == 1.0_wp
+   end function nonlocal_is_inert
+
+end module moist_model_continuum_component_pcm_nonlocal

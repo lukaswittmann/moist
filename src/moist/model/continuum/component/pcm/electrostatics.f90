@@ -17,8 +17,71 @@ module moist_model_continuum_component_pcm_electrostatics
 
    public :: pcm_electrostatic_nuclear_gradient
    public :: pcm_electrostatic_direct_gradient
+   public :: pcm_electrostatic_normal_direct_gradient
 
 contains
+
+   !> Fixed-surface nuclear derivative of a potential spatial-gradient adjoint
+   !>
+   !> The Gaussian branch differentiates Z*erf(xi*r)/r, matching the potential
+   !> used by the host. Omitting xi selects the point-charge potential.
+   subroutine pcm_electrostatic_normal_direct_gradient(xyz, sphxyz, w_grad, za, grad_rA, error, xi)
+      real(wp), intent(in) :: xyz(:, :)
+      real(wp), intent(in) :: sphxyz(:, :)
+      real(wp), intent(in) :: w_grad(:, :)
+      real(wp), intent(in) :: za(:)
+      real(wp), intent(out) :: grad_rA(:, :)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: xi(:)
+      integer :: i, katom, ngrid, nsph
+      real(wp) :: rvec(3), r2, r, x, aterm, c0, c1, projection, sqrt_pi
+
+      grad_rA = 0.0_wp
+      ngrid = size(w_grad, 2)
+      nsph = size(za)
+      if (size(w_grad, 1) /= 3 .or. size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          any(shape(grad_rA) /= [3, nsph])) then
+         call fatal_error(error, "pcm_electrostatic_normal_direct_gradient: array shape mismatch")
+         return
+      end if
+      if (present(xi)) then
+         if (size(xi) /= ngrid) then
+            call fatal_error(error, "pcm_electrostatic_normal_direct_gradient: width shape mismatch")
+            return
+         end if
+      end if
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      do i = 1, ngrid
+         do katom = 1, nsph
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            r = sqrt(r2)
+            if (present(xi)) then
+               x = xi(i)*r
+               if (abs(x) < 1.0e-3_wp) then
+                  c0 = 4.0_wp*xi(i)**3/(3.0_wp*sqrt_pi) &
+                     & *(1.0_wp - 0.6_wp*x*x + 3.0_wp*x**4/14.0_wp)
+                  c1 = -8.0_wp*xi(i)**5/(5.0_wp*sqrt_pi) &
+                     & + 8.0_wp*xi(i)**7*r2/(7.0_wp*sqrt_pi)
+               else
+                  aterm = erf(x) - 2.0_wp*x*exp(-x*x)/sqrt_pi
+                  c0 = aterm/(r2*r)
+                  c1 = 4.0_wp*xi(i)**3*exp(-x*x)/(sqrt_pi*r2) &
+                     & - 3.0_wp*aterm/(r2*r2*r)
+               end if
+            else
+               if (r2 <= 1.0e-30_wp) cycle
+               c0 = 1.0_wp/(r2*r)
+               c1 = -3.0_wp/(r2*r2*r)
+            end if
+            projection = dot_product(rvec, w_grad(:, i))
+            grad_rA(:, katom) = grad_rA(:, katom) + za(katom) &
+               & *(c0*w_grad(:, i) + c1*projection*rvec)
+         end do
+      end do
+   end subroutine pcm_electrostatic_normal_direct_gradient
 
    !> Nuclear gradient of the electrostatic surface coupling at fixed surface
    !>

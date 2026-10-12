@@ -186,6 +186,10 @@ contains
          call fatal_error(error, "Continuum model has no cavity")
          return
       end if
+      do i = 1, size(self%components)
+         call self%components(i)%item%configure_cavity(self%cavity, error)
+         if (allocated(error)) return
+      end do
       call self%cavity%update(mol, error)
       if (allocated(error)) return
       do i = 1, size(self%components)
@@ -313,7 +317,7 @@ contains
    !> - in reverse mode (the default) the components never see `get_gradient`,
    !>   so that part is collected through their `get_response` after the
    !>   cavity contraction
-   !> - in forward mode every component emits it from its own `get_gradient`
+   !> - in forward mode every component emits it from `get_forward_gradient`
    !> - the two branches are exclusive, so nothing is counted twice
    !> - the coupling must be staged by `prepare_gradient`; a stale mandatory
    !>   request of the gradient phase is then reported by name
@@ -390,8 +394,8 @@ contains
       else
          do i = 1, size(self%components)
             call coupling_make_view(coupling, i, view)
-            call self%components(i)%item%get_gradient(view, self%cavity, response, local, &
-                                                      error)
+            call self%components(i)%item%get_forward_gradient(view, self%cavity, response, local, &
+                                                              error)
             call coupling_close_view(coupling)
             if (allocated(error)) return
          end do

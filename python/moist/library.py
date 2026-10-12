@@ -472,6 +472,42 @@ def new_cosmo_component(epsilon: float, parameters, *, context=None) -> Componen
                       context=context)
 
 
+def _new_pcm_component(name: str, values: tuple[float, ...], parameters, *, context=None) -> ComponentHandle:
+    """Call one PCM constructor with physical values and shared numerical controls."""
+    return _construct(f"{name}_component", ComponentHandle,
+                      *(float(value) for value in values), parameters._as_options(), context=context)
+
+
+def new_iefpcm_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("iefpcm", (epsilon,), parameters, context=context)
+
+
+def new_ssvpe_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("ssvpe", (epsilon,), parameters, context=context)
+
+
+def new_dpcm_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("dpcm", (epsilon,), parameters, context=context)
+
+
+def new_dpcm_original_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("dpcm_original", (epsilon,), parameters, context=context)
+
+
+def new_lpb_component(epsilon: float, kappa: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("lpb", (epsilon, kappa), parameters, context=context)
+
+
+def new_slic_component(epsilon: float, alpha: float, beta: float, gamma: float,
+                       mu: float, phi_static: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("slic", (epsilon, alpha, beta, gamma, mu, phi_static), parameters, context=context)
+
+
+def new_nonlocal_component(eps_solvent: float, eps_inf: float, lambda_: float,
+                           eps_solute: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("nonlocal", (eps_solvent, eps_inf, lambda_, eps_solute), parameters, context=context)
+
+
 def new_pv_component(pressure: float, *, context=None) -> ComponentHandle:
     """Create a pressure-volume component whose energy is pressure times volume."""
 
@@ -1138,25 +1174,6 @@ def get_coupling_request_field_real(
     )
 
 
-def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
-    """Assemble the Gaussian CPCM A-matrix and return it with xi values.
-
-    Works for every Gaussian-discretized cavity, not only DROP.
-    """
-
-    ngrid, _ = get_cavity_sizes(cavity)
-    amat = np.zeros((ngrid, ngrid), dtype=np.float64, order="C")
-    xi = np.zeros(ngrid, dtype=np.float64)
-
-    error_check(lib.moist_assemble_amat)(
-        cavity.handle,
-        ngrid,
-        _cast("double*", amat),
-        _cast("double*", xi),
-    )
-    return amat, xi
-
-
 def get_cavity_gaussian(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
     """Return Gaussian widths and switching factors in native cavity order."""
 
@@ -1187,18 +1204,6 @@ def compute_anchor_gradient(cavity: CavityHandle) -> None:
 def compute_cavity_gradient(cavity):
     """Build diagnostic forward derivatives; normal model gradients avoid this."""
     error_check(lib.moist_compute_cavity_gradient)(cavity.handle)
-
-
-def contract_amat_nuclear_gradient(cavity, q1, q2):
-    """Contract diagnostic forward derivatives after compute_cavity_gradient."""
-    ngrid, nsph = get_cavity_sizes(cavity)
-    arrays = [np.asarray(q, dtype=np.float64, order="C") for q in (q1, q2)]
-    if any(a.shape != (ngrid,) for a in arrays):
-        raise ValueError("q1 and q2 must have shape (ngrid,)")
-    gradient = np.zeros((nsph, 3))
-    error_check(lib.moist_contract_amat1_q1q2_rA)(cavity.handle,
-        *[_cast("double*", a) for a in arrays], _cast("double*", gradient))
-    return gradient
 
 
 def contract_pcm_nuclear_gradient(cavity, w_phi, w_xyz, charges):
@@ -1262,34 +1267,6 @@ def get_anchor_gradient(cavity: CavityHandle) -> dict:
         "A_tot1_rA": A_tot1_rA,
         "V_tot1_rA": V_tot1_rA,
     }
-
-
-def contract_amat1_q1q2_surface_weights(
-    cavity: CavityHandle,
-    q1: np.ndarray,
-    q2: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Contract Gaussian PCM A-matrix derivatives to per-grid surface weights."""
-
-    ngrid, _ = get_cavity_sizes(cavity)
-    _q1 = np.ascontiguousarray(q1, dtype=np.float64)
-    _q2 = np.ascontiguousarray(q2, dtype=np.float64)
-    if _q1.shape != (ngrid,) or _q2.shape != (ngrid,):
-        raise ValueError("q1 and q2 must have shape (ngrid,)")
-
-    w_xi = np.zeros(ngrid, dtype=np.float64)
-    w_f = np.zeros(ngrid, dtype=np.float64)
-    w_xyz = np.zeros((ngrid, 3), dtype=np.float64, order="C")
-
-    error_check(lib.moist_contract_amat1_q1q2_surface_weights)(
-        cavity.handle,
-        _cast("double*", _q1),
-        _cast("double*", _q2),
-        _cast("double*", w_xi),
-        _cast("double*", w_f),
-        _cast("double*", w_xyz),
-    )
-    return w_xi, w_f, w_xyz
 
 
 def contract_surface_lsf_weights(

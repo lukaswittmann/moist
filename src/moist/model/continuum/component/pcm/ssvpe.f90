@@ -1,0 +1,121 @@
+!> SS(V)PE component backed by generated Gaussian and point kernels
+module moist_model_continuum_component_pcm_ssvpe
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use mctc_env, only: wp, error_type, fatal_error
+   use moist_context, only: moist_context_type
+   use moist_cavity_type, only: cavity_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
+   use moist_model_continuum_component_pcm_solvers, only: pcm_solver
+   use moist_model_continuum_component_pcm_kernel_gauss_ssvpe, only: ssvpe_complex_state, &
+      & ssvpe_assemble, ssvpe_medium, ssvpe_solve, ssvpe_weights
+   use moist_model_continuum_component_pcm_kernel_point_ssvpe, only: ssvpe_point_complex_state, &
+      & ssvpe_point_assemble, ssvpe_point_medium, ssvpe_point_solve, &
+      & ssvpe_point_weights
+   implicit none(type, external)
+   private
+
+   public :: model_continuum_component_ssvpe, new_component_ssvpe
+
+   !> Concrete SS(V)PE component
+   type, extends(pcm_layer_base) :: model_continuum_component_ssvpe
+      type(ssvpe_complex_state) :: gauss
+      type(ssvpe_point_complex_state) :: point
+   contains
+      procedure :: assemble_layer => ssvpe_assemble_layer
+      procedure :: solve_layer => ssvpe_solve_layer
+      procedure :: layer_weights => ssvpe_layer_weights
+   end type model_continuum_component_ssvpe
+
+contains
+
+   !> Construct SS(V)PE from physical and numerical parameters
+   subroutine new_component_ssvpe(self, epsilon, error, param, ctx)
+      type(model_continuum_component_ssvpe), intent(out) :: self
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
+      real(wp), intent(in) :: epsilon
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_pcm_parameters_type), intent(in), optional :: param
+      type(moist_pcm_parameters_type) :: settings
+
+      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+         call fatal_error(error, "SS(V)PE epsilon must be >= 1")
+         return
+      end if
+      if (present(param)) settings = param
+      call settings%validate(error)
+      if (allocated(error)) return
+      if (present(ctx)) self%ctx => ctx
+      self%epsilon = epsilon
+      self%feps = pcm_layer_feps(epsilon)
+      self%param = settings
+      self%name = "SS(V)PE"
+   end subroutine new_component_ssvpe
+
+   !> Assemble the SS(V)PE operators
+   subroutine ssvpe_assemble_layer(self, cavity, solver, error)
+      class(model_continuum_component_ssvpe), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(pcm_solver), intent(in) :: solver
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      associate (r => cavity%xyz(:, 1:ngrid), n => cavity%normal0(:, 1:ngrid), &
+         & k1 => cavity%k1(1:ngrid), k2 => cavity%k2(1:ngrid), &
+         & a => cavity%a(1:ngrid))
+         if (self%smeared) then
+            associate (xi => cavity%xi0(1:ngrid), f => cavity%f(1:ngrid))
+               call ssvpe_assemble(self%gauss%ssvpe_state, r, n, k1, k2, xi, f, a, error, solver)
+               if (allocated(error)) return
+               call ssvpe_medium(self%gauss%ssvpe_state, self%epsilon, error)
+            end associate
+         else
+            call ssvpe_point_assemble(self%point%ssvpe_point_state, r, n, k1, k2, a, error, solver)
+            if (allocated(error)) return
+            call ssvpe_point_medium(self%point%ssvpe_point_state, self%epsilon, error)
+         end if
+      end associate
+   end subroutine ssvpe_assemble_layer
+
+   !> Solve the current SS(V)PE host traces
+   subroutine ssvpe_solve_layer(self, error)
+      class(model_continuum_component_ssvpe), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      if (self%smeared) then
+         call ssvpe_solve(self%gauss%ssvpe_state, self%phi, self%kernel_energy, self%q, self%qsym, error)
+      else
+         call ssvpe_point_solve(self%point%ssvpe_point_state, self%phi, self%kernel_energy, self%q, self%qsym, error)
+      end if
+   end subroutine ssvpe_solve_layer
+
+   !> Accumulate SS(V)PE operator surface weights
+   subroutine ssvpe_layer_weights(self, cavity, acc, error)
+      class(model_continuum_component_ssvpe), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
+      real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
+      real(wp) :: w_eps
+      integer :: ngrid
+
+      ngrid = cavity%ngrid
+      allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
+      if (self%smeared) then
+         allocate (w_xi(ngrid), w_f(ngrid), source=0.0_wp)
+         call ssvpe_weights(self%gauss%ssvpe_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, w_eps, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
+            & w_k2=w_k2, w_a=w_a, w_xi=w_xi, w_f=w_f)
+      else
+         call ssvpe_point_weights(self%point%ssvpe_point_state, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, error)
+         if (allocated(error)) return
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
+            & w_k2=w_k2, w_a=w_a)
+      end if
+   end subroutine ssvpe_layer_weights
+
+end module moist_model_continuum_component_pcm_ssvpe

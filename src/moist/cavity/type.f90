@@ -63,6 +63,10 @@ module moist_cavity_type
       real(wp), allocatable :: xi0(:)
       !> Outward unit normal of each surface point (3, ngrid)
       real(wp), allocatable :: normal0(:, :)
+      !> First principal curvature at each surface point (ngrid)
+      real(wp), allocatable :: k1(:)
+      !> Second principal curvature at each surface point (ngrid)
+      real(wp), allocatable :: k2(:)
       !> Point volume element, bohr**3 (ngrid)
       !>
       !> Divergence-theorem partition of the enclosed volume,
@@ -85,6 +89,8 @@ module moist_cavity_type
       !> - contracting over the grid gives the total-volume nuclear gradient
       real(wp), allocatable :: v1_rA(:, :, :)
    contains
+      !> Request optional surface geometry before update
+      procedure :: configure => configure_cavity_default
       procedure(update_cavity), deferred :: update
       procedure(get_cavity_gradient), deferred :: get_gradient
       !> Declare the readable results this cavity currently holds
@@ -137,6 +143,33 @@ module moist_cavity_type
    end interface
 
 contains
+
+   !> Reject optional properties unsupported by a cavity implementation
+   !>
+   !> @param[in,out] self Cavity instance
+   !> @param[in] normal Request surface normals
+   !> @param[in] curvature Request principal curvatures
+   !> @param[out] error Unsupported property error
+   subroutine configure_cavity_default(self, normal, curvature, error)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Request surface normals
+      logical, intent(in), optional :: normal
+      !> Request principal curvatures
+      logical, intent(in), optional :: curvature
+      !> Unsupported property error
+      type(error_type), allocatable, intent(out) :: error
+
+      if (present(normal)) then
+         if (normal) then
+            call fatal_error(error, "This cavity does not provide surface normals")
+            return
+         end if
+      end if
+      if (present(curvature)) then
+         if (curvature) call fatal_error(error, "This cavity does not provide principal curvatures")
+      end if
+   end subroutine configure_cavity_default
 
    !> Output unit for a cavity: the borrowed run context's unit when one is
    !> attached, otherwise the standard output unit
@@ -208,6 +241,8 @@ contains
       call query%add_real("f", "Gaussian switching factor per grid point (ngrid)", self%f)
       call query%add_real("xi0", "Gaussian width per grid point (ngrid)", self%xi0)
       call query%add_real2("normal0", "Outward unit normal per grid point (3, ngrid)", self%normal0)
+      call query%add_real("k1", "First principal curvature (ngrid)", self%k1)
+      call query%add_real("k2", "Second principal curvature (ngrid)", self%k2)
       call query%add_real("v", "Grid point volume element, bohr**3 (ngrid)", self%v)
       call query%add_int("owner", "Sphere each grid point belongs to, 0-based (ngrid)", &
          & self%owner, zero_based=.true.)
