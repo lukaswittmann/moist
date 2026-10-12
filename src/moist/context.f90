@@ -25,7 +25,7 @@ module moist_context
 
    !> Shared run context: owned at the top level, borrowed by every model/cavity
    type :: moist_context_type
-      !> Output unit for informational messages (errors still go to error_unit)
+      !> Output unit for informational messages (errors and warnings go to error_unit)
       integer :: unit = output_unit
       !> Output unit for debug dumps; defaults to `unit` (a separate `debugfile`
       !> splits the two streams)
@@ -67,6 +67,8 @@ module moist_context
       procedure :: message_flush => context_message_flush
       !> Write a debug message to the debug unit when debug is enabled
       procedure :: debug_message => context_debug_message
+      !> Write a warning to stderr, copied into the log when it is a file
+      procedure :: warning => context_warning
       !> OpenMP thread count fixed at construction
       procedure :: get_num_threads => context_get_num_threads
       !> Render the run settings via the pretty printer
@@ -302,6 +304,32 @@ contains
       end if
 
    end subroutine context_debug_message
+
+   !> Write a warning to stderr, copied into the log when it is a file
+   !>
+   !> Not gated by verbosity; a terminal run shows the warning once on stderr,
+   !> an owned logfile or a host-supplied unit receives a second copy in place
+   !>
+   !> Both writes flush inside the same critical as `message`, so the warning
+   !> lands before a later crash
+   !>
+   !> @param[in]  msg  warning text, without the `[Warning]` prefix
+   subroutine context_warning(self, msg)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Warning text
+      character(len=*), intent(in) :: msg
+
+      !$omp critical(moist_context_io)
+      write (error_unit, '("[Warning]", 1x, a)') msg
+      flush (error_unit)
+      if (self%unit /= output_unit .and. self%unit /= error_unit) then
+         write (self%unit, '("[Warning]", 1x, a)') msg
+         flush (self%unit)
+      end if
+      !$omp end critical(moist_context_io)
+
+   end subroutine context_warning
 
    !> OpenMP thread count for the run
    !>
