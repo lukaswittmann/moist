@@ -33,7 +33,7 @@ contains
       ! Build iSwig atom-atom neighbour list (sorted by distance for early exit)
       call self%iswig%update(self%mol, self%radii, wleb_max=maxval(self%anchor_wleb0))
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Molecular cell grid:")
@@ -82,7 +82,7 @@ contains
       call self%grid_adj_list%init(cutoff=cutoff)
       call self%grid_adj_list%update(self%xyz(:, 1:self%ngrid))
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Grid neighbour list:")
@@ -222,7 +222,7 @@ contains
       !> Total switching function
       self%f = self%iswig_f0
 
-      if (self%ctx%verbosity > 1) then
+      if (self%ctx%verbosity(4)) then
          n_iswig_removed = count(self%iswig_f0 < self%param%wleb_cut)
          n_anchor_additional = count((self%iswig_f0 >= self%param%wleb_cut) .and. &
                                      (self%f < self%param%wleb_cut))

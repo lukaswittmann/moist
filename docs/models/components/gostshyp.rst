@@ -33,8 +33,8 @@ Negative pressure amplitudes are retained by default.
 Enabling ``suppress_negative_amplitudes`` sets that branch to zero within the calculation;
 the trace switch is identically zero around :math:`f = 0`, so the cut is smooth.
 
-Each energy evaluation reports regularized, negative candidate, suppressed and switched-off point counts at verbosity 2.
-A negative-amplitude warning is visible at verbosity 1.
+Each energy evaluation reports regularized, negative candidate, suppressed and switched-off point counts at :ref:`verbosity <verbosity>` 4.
+A negative-amplitude warning always prints.
 
 The component supports static DROP, isodensity DROP and iSwiG cavities, including Fock contributions and analytic  nuclear gradients.
 

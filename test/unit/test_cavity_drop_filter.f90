@@ -2,7 +2,7 @@
 module test_cavity_drop_filter
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
-   use moist_context, only: moist_context_type
+   use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
@@ -249,7 +249,7 @@ contains
       integer, parameter :: n = 4
       integer :: i
 
-      ctx%verbosity = 0
+      call new_context(ctx, nthreads=0, verbosity=0)
       cav%ctx => ctx
       cav%ngrid = n
       cav%param%wleb_cut = 0.5_wp
@@ -750,7 +750,7 @@ contains
 
       integer :: i, j
 
-      ctx%verbosity = 0
+      call new_context(ctx, nthreads=0, verbosity=0)
       cav%ctx => ctx
       cav%ngrid = n
 

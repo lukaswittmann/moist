@@ -1936,8 +1936,8 @@ contains
       call check(error, c_associated(context), "context constructor succeeds")
       if (allocated(error)) return
       call c_f_pointer(context, shared)
-      call check(error, shared%ctx%verbosity == 2 .and. shared%ctx%debug .and. &
-         & shared%ctx%get_num_threads() == baseline, "context takes the logging arguments")
+      call check(error, shared%ctx%verbosity() == 6 .and. shared%ctx%debug .and. &
+         & shared%ctx%get_num_threads() == baseline, "context takes the logging arguments, debug raises the verbosity")
       call delete_context_api(context)
       if (allocated(error)) return
       lsf = moist_new_svdw_lsf(c_loc(err), c_null_ptr)
@@ -2055,7 +2055,7 @@ contains
          if (allocated(error)) exit checks
          call c_f_pointer(second, second_model)
          call check(error, associated(second_model%ptr%ctx, other%ctx) .and. &
-            & second_model%ptr%ctx%verbosity == 1 .and. .not. second_model%ptr%ctx%debug, &
+            & second_model%ptr%ctx%verbosity() == 1 .and. .not. second_model%ptr%ctx%debug, &
             & "model from a borrowed cavity uses its own context")
          if (allocated(error)) exit checks
          select type (item => second_model%ptr)
@@ -3645,32 +3645,51 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
       type(c_ptr) :: verror, viswig, vmodel, vpcm, vpv
+      !> Contexts at verbosity 1 and 3 and the models built on them, and a
+      !> silent model
+      type(c_ptr) :: context, vdetailed, vsilent
       !> Model handle holding a model of another family
       type(vp_model), pointer :: stub
-      !> Full copy and a buffer too small for it
-      character(kind=c_char), allocatable :: text(:)
+      !> Full copy, detailed copy and a buffer too small for them
+      character(kind=c_char), allocatable :: text(:), dtext(:)
       character(kind=c_char) :: small(8)
       !> Reported and full text length
       integer(c_size_t) :: length, full, i
-      !> Full copy as Fortran text
-      character(len=:), allocatable :: printout
+      !> Full copy as Fortran text, normal and detailed
+      character(len=:), allocatable :: printout, detailed
 
       allocate (err, stub)
       verror = c_loc(err)
       allocate (stub_model :: stub%ptr)
 
-      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
-      vmodel = model_on_context(verror, viswig)
+      ! Without a context of its own the cavity follows each model's verbosity
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr, c_null_ptr)
+      context = new_context_api(verror, 0_c_int, 1_c_int, .false._c_bool)
+      vmodel = moist_new_model(verror, context, viswig)
+      call delete_context_api(context)
+      vsilent = model_on_context(verror, viswig)
       vpcm = new_cpcm_component_api(verror, c_null_ptr, 78.0_c_double, 3_c_int, 1.0e-10_c_double, 50_c_int)
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpcm)
       if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vpv)
+      context = new_context_api(verror, 0_c_int, 3_c_int, .false._c_bool)
+      vdetailed = moist_new_model(verror, context, viswig)
+      call delete_context_api(context)
+      if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vdetailed, vpcm)
 
       checks: block
          if (allocated(err%ptr)) then
             call test_failed(error, "Model setup failed: "//err%ptr%message)
             exit checks
          end if
+
+         ! Nothing at verbosity 0
+         length = 7_c_size_t
+         call get_model_parameters_text_api(verror, vsilent, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "silent parameters text length")
+         if (allocated(error)) exit checks
+         call check(error, length == 0_c_size_t, more="verbosity 0 returns parameters text")
+         if (allocated(error)) exit checks
 
          length = 0_c_size_t
          call get_model_parameters_text_api(verror, vmodel, capacity=0_c_size_t, length=length)
@@ -3691,8 +3710,28 @@ contains
             printout(i:i) = text(i)
          end do
          call check(error, index(printout, "Cavity (vdW iSwiG):") > 0 .and. index(printout, "Component 1 (CPCM):") > 0 &
-            & .and. index(printout, "Component 2 (PV):") > 0 .and. index(printout, "solver_tol") > 0, &
+            & .and. index(printout, "Component 2 (PV):") > 0 .and. index(printout, "num_leb") > 0 &
+            & .and. index(printout, "Epsilon") > 0, &
             & more="parameters text lacks a section: "//printout)
+         if (allocated(error)) exit checks
+
+         ! The detailed settings follow the context verbosity: absent at 1, listed at 3
+         call check(error, index(printout, "solver_maxiter") == 0 .and. index(printout, "cut_a") == 0, &
+            & more="normal parameters text lists detailed settings: "//printout)
+         if (allocated(error)) exit checks
+         call get_model_parameters_text_api(verror, vdetailed, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "detailed parameters text length")
+         if (allocated(error)) exit checks
+         allocate (dtext(length + 1))
+         call get_model_parameters_text_api(verror, vdetailed, dtext, length + 1, length)
+         call expect_success(error, err, "detailed parameters text copy")
+         if (allocated(error)) exit checks
+         allocate (character(len=length) :: detailed)
+         do i = 1, length
+            detailed(i:i) = dtext(i)
+         end do
+         call check(error, index(detailed, "solver_maxiter") > 0 .and. index(detailed, "cut_a") > 0, &
+            & more="detailed parameters text lacks detailed settings: "//detailed)
          if (allocated(error)) exit checks
          call check(error, printout(full:full) == new_line("a"), more="parameters text does not end in a newline")
          if (allocated(error)) exit checks
@@ -3722,6 +3761,8 @@ contains
          call expect_error(error, err, "[moist_get_model_parameters_text] Length output is required")
       end block checks
 
+      call delete_solvation_model_api(vdetailed)
+      call delete_solvation_model_api(vsilent)
       call delete_solvation_model_api(vmodel)
       call delete_solvation_component_api(vpv)
       call delete_solvation_component_api(vpcm)

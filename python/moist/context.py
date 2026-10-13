@@ -13,15 +13,30 @@ class Context:
     threading are left alone. Every model requires a context; a cavity or
     component takes one optionally and otherwise runs on its model's. Each
     retains its context and takes its verbosity and debug settings from it.
+
+    ``verbosity`` runs from ``0`` (silent) to ``6`` (debug), ``2`` by default, see
+    the API reference for the levels; ``debug=True`` raises it to ``6``.
     """
 
-    def __init__(self, nthreads: int = 0, verbosity: int = 0, debug: bool = False) -> None:
+    def __init__(self, nthreads: int = 0, verbosity: int = 2, debug: bool = False) -> None:
         self._handle = library.new_context(nthreads, verbosity, debug)
 
     @property
     def nthreads(self) -> int:
         """Thread count fixed at construction."""
         return library.get_context_num_threads(self._handle)
+
+    def print_timer(self, simple: bool = False) -> None:
+        """Print the recorded timings to the native output at this context's verbosity.
+
+        Nothing prints at verbosity 0, the top-level phases at 1 and the
+        whole tree from 4. ``simple=True`` prints a compact list of seconds
+        per step, at most two levels deep. The output is written by the native
+        library to the process standard output, not to ``sys.stdout``.
+        """
+        if not isinstance(simple, bool):
+            raise TypeError("simple must be a bool")
+        library.print_context_timer(self._handle, simple)
 
     def _as_handle(self) -> library.ContextHandle:
         return self._handle

@@ -105,7 +105,7 @@ Replace the cavity configuration to change settings; this clears cached results:
    ))
 
 ``mf.MOIST(..., context=...)`` is required: the :class:`~moist.Context` sets
-threads, verbosity and debug for the cavity and model, and
+threads, verbosity and debug for the cavity and model (:ref:`api-context`), and
 ``mf.with_moist.set(context=...)`` replaces it. ``set`` takes only ``cavity``,
 ``components`` and ``context``; cavity settings live on the cavity
 configuration, so ``set(nleb=302)`` raises ``TypeError``.

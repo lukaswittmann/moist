@@ -16,7 +16,7 @@ options with the caller's ``sizeof`` before assigning fields:
 .. code-block:: c
 
    moist_error error = moist_new_error();
-   moist_context context = moist_new_context(error, 4, 0, false);  /* nthreads, verbosity, debug */
+   moist_context context = moist_new_context(error, 4, 2, false);  /* nthreads, verbosity, debug */
    moist_drop_options options;
    moist_init_drop_options(error, &options, sizeof options);
    /* Check moist_check_error(error) after each fallible call. */
@@ -51,9 +51,12 @@ and meanings, and future libraries default fields an older struct lacks.
 Larger structs are accepted;
 unknown trailing fields are ignored by constructors and untouched by initializers.
 
-``moist_new_context(error, nthreads, verbosity, debug)`` mirrors the Fortran ``new_context(ctx, nthreads=, verbosity=, debug=)``; C has no optional arguments, so pass ``0, 0, false`` for the defaults.
-The thread count is fixed for the context's lifetime: a positive count is used as given, ``0`` takes the calling thread's ``omp_get_max_threads()`` at construction, and a negative count is an error.
+``moist_new_context(error, nthreads, verbosity, debug)`` creates the :ref:`run context <api-context>`.
+C has no optional arguments; ``0, 2, false`` gives the library defaults: the calling thread's ``omp_get_max_threads()``, the normal printout (:ref:`levels <verbosity>`) and no debug stream.
+A negative thread count is an error.
 ``verbosity`` and ``debug`` are the only logging settings; the options structs carry none.
+``moist_print_context_timer(error, context)`` prints the timings recorded on a context on the process standard output;
+``moist_print_context_timer_simple`` prints the compact form.
 
 Every cavity, component and model constructor takes the context as its second argument.
 ``moist_new_model`` refuses a NULL context; a cavity or component accepts NULL.
@@ -63,8 +66,6 @@ A cavity borrowed with ``moist_get_model_cavity`` retains the context its copy r
 
 Every handle retains its context, and a model retains those of its parts, so the public context handle can be deleted.
 ``moist_get_context_num_threads`` reports the count the context was constructed with.
-The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes the host's OpenMP runtime. BLAS/LAPACK threading is the host's to configure (``OMP_NUM_THREADS``, ``MKL_NUM_THREADS``, ``OPENBLAS_NUM_THREADS`` or the vendor's API).
-Without OpenMP, MOIST's kernels are serial; the math backends may still use threads.
 
 Ownership
 ---------
@@ -304,6 +305,7 @@ Settings printout
 
 ``moist_get_model_parameters_text`` returns continuum settings without an update:
 the cavity, then components numbered from 1, with descriptions, solvent inputs and registered settings.
+It follows the context's :ref:`verbosity <verbosity>`: empty at 0, the normal settings from 1, every setting from 3.
 Use ``moist_get_banner`` buffer rules to retrieve and print the text.
 Other model families are errors.
 

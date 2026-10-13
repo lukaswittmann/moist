@@ -207,7 +207,7 @@ contains
 
       !*------------------------- Project all points------------------------- *!
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          plp = new_prettylistprinter([12, 8, 12, 12], &
                                      [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
                                      unit=self%ctx%unit)
@@ -232,7 +232,7 @@ contains
       ! init() sets solver tolerances and branching cutoffs
       call projectors(thread_slot)%init(self%param, self%lsf_model, &
                                         branch_sep_cut=self%param%branch_sep_cut, &
-                                        verbosity=self%ctx%verbosity, &
+                                        verbosity=self%ctx%verbosity(), &
                                         debug=self%ctx%debug, tol=self%param%proj_tol, maxiter=self%param%proj_maxiter)
       call proj_buffers(thread_slot)%init(nloc, thread_error(thread_slot)%e)
       if (.not. allocated(thread_error(thread_slot)%e)) then
@@ -267,7 +267,7 @@ contains
 
          ! f below cutoff; downstream weight filtering will remove that point
          if (self%f(i) < self%param%wleb_cut) then
-            if (self%ctx%verbosity >= 3) then
+            if (self%ctx%verbosity(5)) then
                !$omp critical (projection_warning_print)
                write (self%ctx%unit, "(x,a,i0,a)") &
                   "Skipping projection for gridpoint ", i, " (f below cutoff)"
@@ -363,7 +363,7 @@ contains
          ! Progress is reported only by thread 1, extrapolating its own count to all threads (est_done)
          local_done = local_done + 1
          if (thread_slot == 1) then
-            if (self%ctx%verbosity >= 2) then
+            if (self%ctx%verbosity(4)) then
                est_done = min(nmax_anchor, local_done*nthreads)
                now_time = drop_wall_time()
 
@@ -432,7 +432,7 @@ contains
          return
       end if
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          call plp%separator()
          call plp%begin_row()
          call plp%add(nmax_anchor)
@@ -526,7 +526,7 @@ contains
       n_branched_anchor = sum(thread_branched_anchor)
       n_branched_points = sum(thread_branched_points)
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Projection results:")

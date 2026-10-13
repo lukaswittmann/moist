@@ -538,11 +538,16 @@ contains
    !>
    !> @param[in] self Model
    !> @param[in] unit Output unit; defaults to the run context's unit
-   subroutine continuum_print_parameters(self, unit)
+   !> @param[in] level Verbosity level; settings above it are left out, nothing
+   !>                  prints at 0 and 1 prints the normal settings (default: each part's context
+   !>                  verbosity)
+   subroutine continuum_print_parameters(self, unit, level)
       !> Model
       class(model_continuum_type), intent(in), target :: self
       !> Output unit
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
 
       !> Effective output unit
       integer :: iu
@@ -552,9 +557,9 @@ contains
       iu = output_unit
       if (associated(self%ctx)) iu = self%ctx%unit
       if (present(unit)) iu = unit
-      if (allocated(self%cavity)) call self%cavity%print_parameters(iu)
+      if (allocated(self%cavity)) call self%cavity%print_parameters(iu, level)
       do i = 1, self%component_count()
-         call self%components(i)%item%print_parameters(iu, i)
+         call self%components(i)%item%print_parameters(iu, i, level)
       end do
 
    end subroutine continuum_print_parameters

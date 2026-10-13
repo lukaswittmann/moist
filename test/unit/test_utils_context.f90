@@ -19,9 +19,10 @@ contains
       testsuite = [ &
                   new_unittest("defaults_and_settings", test_defaults_and_settings), &
                   new_unittest("shared_timer_tree", test_shared_timer_tree), &
-                  new_unittest("writes_guard", test_writes_guard), &
+                  new_unittest("verbosity_guard", test_verbosity_guard), &
                   new_unittest("profile_flag", test_profile_flag), &
                   new_unittest("report_depth", test_report_depth), &
+                  new_unittest("timer_print", test_timer_print), &
                   new_unittest("threads_default", test_threads_default), &
                   new_unittest("threads_explicit", test_threads_explicit), &
                   new_unittest("threads_fixed", test_threads_fixed), &
@@ -43,7 +44,7 @@ contains
       type(moist_context_type) :: ctx
 
       call new_context(ctx, nthreads=0)
-      call check(error, ctx%verbosity == 1, "default verbosity is 1")
+      call check(error, ctx%verbosity() == 2, "default verbosity is 2")
       if (allocated(error)) return
       call check(error,.not. ctx%debug, "default debug is false")
       if (allocated(error)) return
@@ -52,10 +53,22 @@ contains
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, nthreads=0, verbosity=3, debug=.true.)
-      call check(error, ctx%verbosity == 3, "explicit verbosity applied")
+      call new_context(ctx, nthreads=0, verbosity=3)
+      call check(error, ctx%verbosity() == 3, "explicit verbosity applied")
       if (allocated(error)) return
+      call ctx%delete()
+
+      ! debug raises the verbosity to the debug level
+      call new_context(ctx, nthreads=0, verbosity=2, debug=.true.)
       call check(error, ctx%debug, "explicit debug applied")
+      if (allocated(error)) return
+      call check(error, ctx%verbosity() == 6, "debug raises verbosity to 6")
+      if (allocated(error)) return
+      call ctx%delete()
+
+      ! the debug verbosity alone does not enable debug
+      call new_context(ctx, nthreads=0, verbosity=6)
+      call check(error,.not. ctx%debug, "verbosity 6 leaves debug off")
       call ctx%delete()
    end subroutine test_defaults_and_settings
 
@@ -87,54 +100,49 @@ contains
       call ctx%delete()
    end subroutine test_shared_timer_tree
 
-   !> writes(level) follows the verbosity>=level (or debug) print guard
-   subroutine test_writes_guard(error)
+   !> verbosity(level) follows the verbosity>=level print guard
+   subroutine test_verbosity_guard(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
       call new_context(ctx, nthreads=0, verbosity=2)
-      call check(error, ctx%writes(1), "level 1 writes at verbosity 2")
+      call check(error, ctx%verbosity(1), "level 1 writes at verbosity 2")
       if (allocated(error)) return
-      call check(error, ctx%writes(2), "level 2 writes at verbosity 2")
+      call check(error, ctx%verbosity(2), "level 2 writes at verbosity 2")
       if (allocated(error)) return
-      call check(error,.not. ctx%writes(3), "level 3 is silent at verbosity 2")
+      call check(error,.not. ctx%verbosity(3), "level 3 is silent at verbosity 2")
       if (allocated(error)) return
       call ctx%delete()
 
-      ! debug unlocks the diagnostic band even at low verbosity
+      ! debug unlocks every level even at zero verbosity
       call new_context(ctx, nthreads=0, verbosity=0, debug=.true.)
-      call check(error, ctx%writes(3), "debug unlocks level 3")
-      if (allocated(error)) return
-      call check(error,.not. ctx%writes(4), "debug does not unlock profiling band")
+      call check(error, ctx%verbosity(6), "debug unlocks level 6")
       if (allocated(error)) return
       call ctx%delete()
-   end subroutine test_writes_guard
 
-   !> do_profile follows verbosity >= 4 by default and honours an explicit override
+      call new_context(ctx, nthreads=0, verbosity=5)
+      call check(error,.not. ctx%verbosity(6), "level 6 is silent at verbosity 5")
+      if (allocated(error)) return
+      call ctx%delete()
+   end subroutine test_verbosity_guard
+
+   !> do_profile is off by default at any verbosity and set only explicitly
    subroutine test_profile_flag(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      ! below the threshold: detailed profiling off
-      call new_context(ctx, nthreads=0, verbosity=3)
-      call check(error,.not. ctx%do_profile, "verbosity 3 disables profiling")
+      call new_context(ctx, nthreads=0, verbosity=6)
+      call check(error,.not. ctx%do_profile, "verbosity 6 leaves profiling off")
       if (allocated(error)) return
       call ctx%delete()
 
-      ! at/above the threshold: detailed profiling on
-      call new_context(ctx, nthreads=0, verbosity=4)
-      call check(error, ctx%do_profile, "verbosity 4 enables profiling")
+      call new_context(ctx, nthreads=0, debug=.true.)
+      call check(error,.not. ctx%do_profile, "debug leaves profiling off")
       if (allocated(error)) return
       call ctx%delete()
 
-      ! explicit override wins over the verbosity default
-      call new_context(ctx, nthreads=0, verbosity=1, do_profile=.true.)
-      call check(error, ctx%do_profile, "explicit do_profile overrides low verbosity")
-      if (allocated(error)) return
-      call ctx%delete()
-
-      call new_context(ctx, nthreads=0, verbosity=5, do_profile=.false.)
-      call check(error,.not. ctx%do_profile, "explicit do_profile overrides high verbosity")
+      call new_context(ctx, nthreads=0, verbosity=0, do_profile=.true.)
+      call check(error, ctx%do_profile, "explicit do_profile enables profiling")
       call ctx%delete()
    end subroutine test_profile_flag
 
@@ -168,6 +176,81 @@ contains
       call check(error, ctx%report_depth() > 1000, "verbosity 4 -> unbounded depth")
       call ctx%delete()
    end subroutine test_report_depth
+
+   !> timer%print and timer%print_simple write to the context unit at the
+   !> context's report depth and stay silent at verbosity 0
+   subroutine test_timer_print(error)
+      type(error_type), allocatable, intent(out) :: error
+      logical :: outer, inner, full
+      integer :: k
+      logical, parameter :: simple(2) = [.false., .true.]
+      character(len=*), parameter :: label(2) = ["full  ", "simple"]
+
+      do k = 1, 2
+         call print_nested_timer(0, simple(k), outer, inner, full, error)
+         if (allocated(error)) return
+         call check(error,.not. outer .and. .not. inner, trim(label(k))//": verbosity 0 prints no timings")
+         if (allocated(error)) return
+
+         call print_nested_timer(1, simple(k), outer, inner, full, error)
+         if (allocated(error)) return
+         call check(error, outer .and. .not. inner, trim(label(k))//": verbosity 1 prints the top level only")
+         if (allocated(error)) return
+
+         call print_nested_timer(4, simple(k), outer, inner, full, error)
+         if (allocated(error)) return
+         call check(error, outer .and. inner, trim(label(k))//": verbosity 4 prints the nested phase")
+         if (allocated(error)) return
+         call check(error, full .neqv. simple(k), trim(label(k))//": report format")
+         if (allocated(error)) return
+      end do
+   end subroutine test_timer_print
+
+   !> Time a nested pair of phases on a context writing to a scratch unit, print
+   !> the timer and report which phases appear
+   !>
+   !> @param[in]  verbosity  context verbosity
+   !> @param[in]  simple     print the simple report instead of the full one
+   !> @param[out] outer      whether the top-level phase was printed
+   !> @param[out] inner      whether the nested phase was printed
+   !> @param[out] full       whether the full report's share column was printed
+   !> @param[out] error      scratch-unit failure
+   subroutine print_nested_timer(verbosity, simple, outer, inner, full, error)
+      integer, intent(in) :: verbosity
+      logical, intent(in) :: simple
+      logical, intent(out) :: outer, inner, full
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      integer :: iu, stat
+      character(256) :: line
+
+      outer = .false.
+      inner = .false.
+      full = .false.
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the timer report opens")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0, verbosity=verbosity, unit=iu)
+      call ctx%timer%start("outer_phase")
+      call ctx%timer%start("inner_step")
+      call ctx%timer%stop()
+      call ctx%timer%stop()
+      if (simple) then
+         call ctx%timer%print_simple()
+      else
+         call ctx%timer%print()
+      end if
+      call ctx%delete()
+      rewind (iu)
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         outer = outer .or. index(line, "outer_phase") > 0
+         inner = inner .or. index(line, "inner_step") > 0
+         full = full .or. index(line, "%tot") > 0
+      end do
+      close (iu)
+   end subroutine print_nested_timer
 
    !> A fresh context reports at least one thread (1 without OpenMP), and records
    !> a start timestamp

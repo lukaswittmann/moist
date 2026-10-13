@@ -180,7 +180,7 @@ contains
       class(cavity_type), intent(in) :: self
 
       if (.not. associated(self%ctx) .or. .not. allocated(self%radius_model)) return
-      if (self%ctx%verbosity >= 2) call self%radius_model%print(unit=self%ctx%unit)
+      if (self%ctx%verbosity(2)) call self%radius_model%print(unit=self%ctx%unit)
 
    end subroutine print_cavity_radii
 
@@ -492,21 +492,32 @@ contains
    !>
    !> @param[in] self Cavity instance
    !> @param[in] unit Output unit; defaults to the run context's unit
-   subroutine print_cavity_parameters(self, unit)
+   !> @param[in] level Verbosity level; settings above it are left out, nothing
+   !>                  prints at 0 and 1 prints the normal settings (default: the context's
+   !>                  verbosity, every setting without a context)
+   subroutine print_cavity_parameters(self, unit, level)
       !> Cavity instance
       class(cavity_type), intent(in), target :: self
       !> Output unit
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
 
       !> Section printer
       type(prettyprinter) :: pp
       !> Registered settings, when the cavity has any
       class(moist_model_parameters_type), pointer :: param
-      !> Effective output unit
-      integer :: iu
+      !> Effective output unit and verbosity level
+      integer :: iu, lvl
 
       iu = cavity_unit(self)
       if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (associated(self%ctx)) lvl = self%ctx%verbosity()
+      if (present(level)) lvl = level
+      ! Silent at 0; from 1 an explicit request shows at least the normal settings
+      if (lvl < 1) return
+      lvl = max(2, lvl)
 
       pp = new_prettyprinter(unit=iu)
       if (allocated(self%label)) then
@@ -515,7 +526,7 @@ contains
          call pp%push("Cavity:")
       end if
       param => self%parameters()
-      if (associated(param)) call param%print_table(pp)
+      if (associated(param)) call param%print_table(pp, lvl)
       call pp%pop()
       call pp%blank()
 

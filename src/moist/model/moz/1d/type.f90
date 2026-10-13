@@ -111,7 +111,7 @@ contains
       end if
       call self%potential%update(mol, self%rgrid, error)
       if (allocated(error)) return
-      if (self%ctx%writes(2)) then
+      if (self%ctx%verbosity(2)) then
          call self%ctx%message("Solute potential parameters", 2)
          call self%potential%print_table(self%ctx%unit, error)
          if (allocated(error)) return

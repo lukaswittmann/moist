@@ -69,7 +69,7 @@ module moist_cavity_drop_projector
       integer :: slsqp_max_iter = 100
       integer :: newton_max_iter = 100
 
-      !> Verbosity level (0=silent, 1=default, 2=user events, 3=diagnostics)
+      !> Verbosity level of the run context; per-point traces print at 5
       integer :: verbosity = 1
 
       !> Enable full debug output (solver iterations, stability tables, etc.)
@@ -1145,7 +1145,7 @@ contains
       self%ssd_cache_valid = .false.
 
       if (allocated(error)) then
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(x,i12,x,a,a)") index, &
                "[multi-SLSQP] Failed: ", trim(error%message)
          end if
@@ -1258,7 +1258,7 @@ contains
       if (present(converged)) converged = .not. allocated(error)
 
       if (allocated(error)) then
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(x,i12,x,a,a)") index, &
                "[single-SLSQP] Failed: ", trim(error%message)
             write (output_unit, "(x,i12,x,a)") index, &
@@ -1493,7 +1493,7 @@ contains
          else
             rho_start = rho_fallback
          end if
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             if (traced_ok) then
                write (output_unit, "(x,i12,x,a,es10.3,a,f8.4)") index, &
                   "[octree] Phase-0 point is not a surface crossing (S = ", tmp_val(1), &
@@ -1548,7 +1548,7 @@ contains
 
       n_octree = self%octree%n_seeds
 
-      if (self%verbosity >= 3) then
+      if (self%verbosity >= 5) then
          write (output_unit, "(x,i12,x,a,i0,a,i0,a,es10.3)") index, &
             "[octree] ", n_octree, " seed(s) from ", self%octree%n_boxes_visited, &
             " boxes, certified rho <= ", self%octree%rho_max_final
@@ -1690,7 +1690,7 @@ contains
                n_failed = n_failed + 1
                failed_indices(n_failed) = i_seed
                seed_error_msgs(n_failed) = error%message
-               if (self%verbosity >= 3) then
+               if (self%verbosity >= 5) then
                   write (output_unit, "(x,i12,x,a,i0,a,a)") index, &
                      "[refinement] Dropping branch ", i_seed, &
                      ": ", trim(error%message)
@@ -1723,7 +1723,7 @@ contains
          ! Print collected errors when all seeds failed (no error propagation
          ! here - let the caller handle fallback via n_points == 0)
          if (n_points == 0 .and. n_failed > 0) then
-            if (self%verbosity >= 3) then
+            if (self%verbosity >= 5) then
                write (output_unit, "(x,i12,x,a,i0,a,i0,a)") &
                   index, "[refinement] All ", n_failed, " of ", n_seeds, &
                   " seed(s) failed:"
@@ -1849,7 +1849,7 @@ contains
       ! A solver error is treated like "0 candidates"
       if (allocated(error)) then
          if (level >= 7) return
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(x,i12,x,a,a)") index, &
                "[solver-fail] Falling back to multistart: ", trim(error%message)
          end if
@@ -1868,7 +1868,7 @@ contains
       !> Fallback: retry with regular multistart (level 7) if the chosen solver produced 0 points
 
       if (n_points == 0 .and. level < 7) then
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(x,i12,x,a)") &
                index, "[fallback] Previous run produced 0 points, retrying with multistart"
          end if
@@ -1889,7 +1889,7 @@ contains
          call self%refine_seeds(level, anchor, owner, index, xl, xu, &
                                 rho_max, x_seeds, n_seeds, work, n_points, error)
          if (allocated(error)) return
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(1x,i12,x,a,i0,a)") &
                index, "[fallback] Multistart produced ", n_points, " candidate points"
          end if
@@ -2241,7 +2241,7 @@ contains
       ! Solve the coupled KKT nonlinear system for [x, lambda]
       call solver%solve(z_solution, error)
       if (allocated(error)) then
-         if (self%verbosity >= 3) then
+         if (self%verbosity >= 5) then
             write (output_unit, "(x,i12,x,a,a)") index, "[Newton] ", trim(error%message)
          end if
          return
@@ -2262,7 +2262,7 @@ contains
             )
 
          if (allocated(error)) then
-            if (self%verbosity >= 3) then
+            if (self%verbosity >= 5) then
                write (output_unit, "(x,i12,x,a,a)") index, "[optimality] ", trim(error%message)
             end if
             deallocate (error)
@@ -2279,7 +2279,7 @@ contains
          end if
 
          if (is_saddle) then
-            if (self%verbosity >= 3) then
+            if (self%verbosity >= 5) then
                write (output_unit, "(1x,i12,x,a)") &
                   index, "[optimality] Saddle point detected, attempting escape ..."
             end if
@@ -2333,7 +2333,7 @@ contains
                is_kkt=is_kkt &
                )
 
-            if (self%verbosity >= 3) then
+            if (self%verbosity >= 5) then
                if (is_saddle .and. is_kkt) then
                   write (output_unit, "(1x,i12,x,a)") &
                      index, "[optimality] Failed to escape saddle point!"
@@ -2344,7 +2344,7 @@ contains
             end if
 
             if (allocated(error)) then
-               if (self%verbosity >= 3) then
+               if (self%verbosity >= 5) then
                   write (output_unit, "(x,i12,x,a,a)") index, &
                      "[optimality] Newton after escape failed: ", trim(error%message)
                end if
@@ -2473,7 +2473,7 @@ contains
       ! Check constraint qualification: ||grad_S|| > tol_grad
       norm_grad_S = sqrt(dot_product(grad_S, grad_S))
       if (norm_grad_S < tol_grad) then
-         if (self%verbosity >= 2) then
+         if (self%verbosity >= 5) then
             ! TODO: route through ctx%warning once a context is reachable here
             write (output_unit, "(x,i12,x,a,es12.4)") index, &
                "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
@@ -2501,7 +2501,7 @@ contains
       end if
 
       if (res_feas > tol_feas .or. res_stat > tol_stat) then
-         if (self%verbosity >= 3 .or. self%debug) then
+         if (self%verbosity >= 5 .or. self%debug) then
             write (output_unit, "(x,i12,x,a)") index, &
                "[KKT check] Not at KKT point - skipping classification"
             write (output_unit, "(x,i12,x,a,es12.4,a,es12.4,a)") index, &

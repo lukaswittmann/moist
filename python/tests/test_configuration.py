@@ -101,6 +101,27 @@ def test_context_leaves_the_runtime_alone(baseline):
     assert second.nthreads == baseline + 2
 
 
+def test_context_prints_its_timer(capfd):
+    """The timer report follows the context verbosity on the native output."""
+    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
+    for verbosity in (0, 1):
+        context = moist.Context(verbosity=verbosity)
+        model = moist.SolvationModel(context, moist.CavityISwiG(), [moist.ModelComponentPV(1e-4)])
+        model.update(structure)
+        capfd.readouterr()
+        context.print_timer()
+        out = capfd.readouterr().out
+        assert ("moist timings" in out) == (verbosity > 0)
+        assert verbosity > 0 or out == ""
+        context.print_timer(simple=True)
+        out = capfd.readouterr().out
+        assert ("Timings (moist):" in out) == (verbosity > 0)
+        assert "%tot" not in out
+        assert verbosity > 0 or out == ""
+    with pytest.raises(TypeError):
+        context.print_timer(simple=1)
+
+
 @pytest.mark.parametrize("config", [
     moist.DROP(lsf=moist.SvdW(), parameters=moist.DROPParameters(nleb=26)),
     moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26)),
@@ -523,11 +544,15 @@ def test_gostshyp_settings_and_validation():
 
 
 def test_gostshyp_registered_parameter_printout():
-    model = moist.SolvationModel(CONTEXT, moist.CavityISwiG(),
+    names = ("regularization_start", "regularization_end", "suppress_negative_amplitudes")
+    normal = moist.SolvationModel(CONTEXT, moist.CavityISwiG(),
+                                 [moist.ModelComponentGOSTSHYP(1e-3)])
+    assert not any(line.split()[:1] == [name] for line in normal.parameters_text().splitlines()
+                   for name in names)
+    model = moist.SolvationModel(moist.Context(verbosity=3), moist.CavityISwiG(),
                                 [moist.ModelComponentGOSTSHYP(1e-3)])
     lines = [line.split() for line in model.parameters_text().splitlines()]
-    rows = {name: [line for line in lines if line[:1] == [name]]
-            for name in ("regularization_start", "regularization_end", "suppress_negative_amplitudes")}
+    rows = {name: [line for line in lines if line[:1] == [name]] for name in names}
     assert all(len(found) == 1 for found in rows.values())
     assert float(rows["regularization_start"][0][-1]) == 1e-12
     assert float(rows["regularization_end"][0][-1]) == 1e-10

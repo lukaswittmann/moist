@@ -51,8 +51,103 @@ contains
    subroutine register_vector_entries(self)
       class(vector_parameters_type), intent(inout), target :: self
       call self%register_real_vector("weights", self%weights)
-      call self%register_string("label", self%label)
+      call self%register_string("label", self%label, level=2)
    end subroutine register_vector_entries
+
+   !> Print a parameter table into a scratch unit and read its lines back
+   !>
+   !> @param[in] param Parameter values
+   !> @param[out] lines Printed lines
+   !> @param[out] nline Number of printed lines
+   !> @param[in] level Verbosity level of the printout
+   subroutine capture_table(param, lines, nline, level)
+      class(moist_model_parameters_type), intent(in) :: param
+      character(len=*), intent(out) :: lines(:)
+      integer, intent(out) :: nline
+      integer, intent(in), optional :: level
+      type(prettyprinter) :: pp
+      integer :: unit
+
+      open (newunit=unit, status="scratch", action="readwrite")
+      pp = new_prettyprinter(unit=unit)
+      call param%print_table(pp, level)
+      call read_printout(unit, lines, nline)
+      close (unit)
+   end subroutine capture_table
+
+   !> A table printed for a verbosity keeps the fields at or below it
+   subroutine test_print_levels(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vector_parameters_type) :: vector
+      type(moist_gostshyp_parameters_type) :: gostshyp
+      character(len=128) :: lines(64)
+      integer :: nline, unit
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(cavity_type_iswig) :: iswig
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(cavity_type_drop) :: drop
+
+      call capture_table(vector, lines, nline)
+      call check(error, printed_entry(lines, "label", "default") .and. printed_entry(lines, "weights(1)", "1."), &
+         & "a table without a level lists every field")
+      if (allocated(error)) return
+
+      call capture_table(vector, lines, nline, level=2)
+      call check(error, printed_entry(lines, "label", "default"), "level 2 keeps the normal field")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "weights(1)", "1."), "level 2 drops the detailed field")
+      if (allocated(error)) return
+
+      ! Every GOSTSHYP setting is detailed: the normal table is empty
+      call capture_table(gostshyp, lines, nline, level=2)
+      call check(error, nline, 0, "a table without normal fields prints nothing")
+      if (allocated(error)) return
+      call capture_table(gostshyp, lines, nline, level=3)
+      call check(error, printed_entry(lines, "regularization_start", ""), "level 3 lists the detailed fields")
+      if (allocated(error)) return
+
+      ! Nothing prints at verbosity 0
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call iswig%print_parameters(unit)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, nline, 0, "verbosity 0 prints settings")
+      if (allocated(error)) return
+      call ctx%delete()
+
+      ! From verbosity 1 an explicit request prints the normal settings
+      call new_context(ctx, nthreads=0, verbosity=1)
+      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call iswig%print_parameters(unit)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "num_leb", "110"), "verbosity 1 omits the normal settings")
+      if (allocated(error)) return
+      call check(error, .not. printed_entry(lines, "cut_a", ""), "verbosity 1 lists the detailed settings")
+      if (allocated(error)) return
+
+      call lsf%new()
+      call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call drop%print_parameters(unit)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Number of Leb. points", "194"), &
+         & "verbosity 1 omits the normal DROP settings")
+      if (allocated(error)) return
+      call check(error, .not. printed_entry(lines, "Projection tol.", ""), "verbosity 1 lists the detailed DROP settings")
+      call ctx%delete()
+   end subroutine test_print_levels
 
    !> Check vector values and escaped fixed-length strings survive serialization
    subroutine test_vector_and_string(error)
@@ -167,6 +262,7 @@ contains
          new_unittest("file-roundtrip", test_roundtrip), &
          new_unittest("copies-and-errors", test_copies_and_errors), &
          new_unittest("vector-and-string", test_vector_and_string), &
+         new_unittest("print-levels", test_print_levels), &
          new_unittest("invalid-fields", test_invalid_fields), &
          new_unittest("file-formats", test_file_formats), &
          new_unittest("drop-contracts", test_drop_contracts), &

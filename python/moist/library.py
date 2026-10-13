@@ -217,6 +217,13 @@ def get_context_num_threads(context):
     return value[0]
 
 
+def print_context_timer(context, simple=False):
+    if simple:
+        error_check(lib.moist_print_context_timer_simple)(context.handle)
+    else:
+        error_check(lib.moist_print_context_timer)(context.handle)
+
+
 def _construct(kind, handle_type, *args, context, required=False):
     """Call ``moist_new_<kind>``; ``context=None`` passes NULL unless required."""
     if context is None and not required:

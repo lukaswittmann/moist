@@ -417,7 +417,7 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_cavity_marchingcubes_parameters_type), intent(inout), target :: self
 
-      call self%register_real_scalar("spacing", self%spacing)
+      call self%register_real_scalar("spacing", self%spacing, level=2)
       call self%register_alloc_string("obj_file", self%obj_file)
       call self%register_alloc_string("pqr_file", self%pqr_file)
    end subroutine register_parameter_entries
@@ -539,28 +539,28 @@ contains
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file, pqr_file=self%param%pqr_file)
       else if (allocated(self%param%obj_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file)
       else if (allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                pqr_file=self%param%pqr_file)
       else
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads())
       end if
 
@@ -646,7 +646,7 @@ contains
    !> @param[out] volume          Enclosed volume
    !> @param[in]  target_spacing  Finest grid spacing (optional, default 0.2)
    !> @param[in]  debug           Enable debug output (optional)
-   !> @param[in]  verbosity       Verbosity level; >=2 enables progress output (optional)
+   !> @param[in]  verbosity       Verbosity level; >=4 enables progress output (optional)
    !> @param[in]  nthreads        OpenMP team size (optional, default omp_get_max_threads)
    !> @param[in]  obj_file        Wavefront OBJ mesh output path (optional)
    !> @param[in]  pqr_file        PQR file output path with triangle centroids (optional)
@@ -737,7 +737,7 @@ contains
       if (present(debug)) dbg = debug
       verbose_level = 0
       if (present(verbosity)) verbose_level = verbosity
-      if (verbose_level >= 2) dbg = .true.
+      if (verbose_level >= 4) dbg = .true.
       export_mesh = present(obj_file) .or. present(pqr_file)
 
       ! Compute initial grid bounds from atomic radii and one padding layer

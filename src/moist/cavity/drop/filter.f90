@@ -75,7 +75,7 @@ contains
       nremoved = ncur - nvalid
       call compact_grid_arrays(self, ncur, keep, nvalid)
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%kv(name//" removed", nremoved, "points")
@@ -167,7 +167,7 @@ contains
          pre_avg_branches = 0.0_wp
       end if
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Branch weighting (initial):")
@@ -187,7 +187,7 @@ contains
       post_nbranch_max = 0
 
       ! Per-branched-group detail table
-      if (self%ctx%verbosity >= 3 .and. pre_n_branched_groups > 0) then
+      if (self%ctx%verbosity(5) .and. pre_n_branched_groups > 0) then
          plp_branch = new_prettylistprinter([12, 10, 10, 16, 16, 16], &
                                             [character(len=16) :: "anchor_id", "owner", "branch", &
                                             "phi", "distance", "weight"], &
@@ -279,7 +279,7 @@ contains
          end if
 
          ! Per-group diagnostics
-         if (self%ctx%verbosity >= 3) then
+         if (self%ctx%verbosity(5)) then
             call plp_branch%blank()
             call plp_branch%print_header()
             call plp_branch%separator()
@@ -334,7 +334,7 @@ contains
          post_nbranch_max = 0
       end if
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          call pp%push("Branch weighting (final):")
          call pp%kv("Branched anchors", post_n_multi_groups, "(still multi-branch)")
          call pp%kv("Collapsed to single", post_n_collapsed_groups, "(no longer branched)")

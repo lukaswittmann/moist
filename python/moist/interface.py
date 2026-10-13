@@ -1419,8 +1419,9 @@ class SolvationModel:
     def parameters_text(self) -> str:
         """Return the native settings printout: the cavity, then every component.
 
-        Component sections are headed by their 1-based position; no update is
-        needed.
+        Component sections are headed by their 1-based position. Empty at
+        context verbosity 0, the normal settings from 1, the detailed ones
+        from 3. No update is needed.
         """
         return library.get_model_parameters_text(self._model)
 

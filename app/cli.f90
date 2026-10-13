@@ -61,8 +61,9 @@ module moist_cli
 
       logical :: writeenergy = .false.
 
-      integer :: verbosity = 2
+      integer :: verbosity = 4
       logical :: debug = .false.
+      logical :: profile = .false.
 
       !> Number of OpenMP threads (0 = use default)
       integer :: num_threads = 0
@@ -205,6 +206,7 @@ subroutine get_arguments(config, error)
    if (args%has_key("verbose")) call args%get("verbose", verbose_count)
    if (args%has_key("quiet")) call args%get("quiet", quiet_count)
    if (args%has_key("debug")) call args%get("debug", config%debug)
+   if (args%has_key("profile")) call args%get("profile", config%profile)
    if (args%has_key("threads")) call args%get("threads", config%num_threads)
    config%verbosity = config%verbosity + verbose_count - quiet_count
 
@@ -375,7 +377,11 @@ contains
          group_idx=grp_general)
 
       call parent%add_argument("-d", "--debug", action="store_true", dest="debug", &
-         help="Enable debug output", &
+         help="Enable debug output (raises the verbosity to 6)", &
+         group_idx=grp_general)
+
+      call parent%add_argument("--profile", action="store_true", dest="profile", &
+         help="Record fine-grained profiling timers", &
          group_idx=grp_general)
 
       call parent%add_argument("-t", "--threads", data_type="integer", &

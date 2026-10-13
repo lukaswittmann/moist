@@ -268,7 +268,8 @@ module moist_api
 
    public :: vp_error, vp_structure, vp_cavity, vp_radii, vp_model, vp_component
    public :: vp_coupling, vp_response, vp_context
-   public :: new_context_api, delete_context_api, get_context_num_threads_api
+   public :: new_context_api, delete_context_api, get_context_num_threads_api, print_context_timer_api, &
+      & print_context_timer_simple_api
    public :: create_drop_cavity_api, create_iswig_cavity_api, create_model_api
    public :: get_version_api, get_version_string_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
@@ -608,6 +609,56 @@ contains
       call c_f_pointer(handle, context)
       nthreads = int(context%ctx%get_num_threads(), c_int)
    end subroutine get_context_num_threads_api
+
+   !> Print the timings recorded on a context at its verbosity and to its unit
+   !>
+   !> @param[in] verror diagnostic handle
+   !> @param[in] handle context handle
+   subroutine print_context_timer_api(verror, handle) bind(C, name=namespace//"print_context_timer")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Context handle
+      type(c_ptr), value, intent(in) :: handle
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded context handle
+      type(vp_context), pointer :: context
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(handle)) then
+         call api_error(error%ptr, "print_context_timer", "Context handle is missing")
+         return
+      end if
+      call c_f_pointer(handle, context)
+      call context%ctx%timer%print("moist")
+   end subroutine print_context_timer_api
+
+   !> Print the simple timing report of a context at its verbosity and to its unit
+   !>
+   !> @param[in] verror diagnostic handle
+   !> @param[in] handle context handle
+   subroutine print_context_timer_simple_api(verror, handle) bind(C, name=namespace//"print_context_timer_simple")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Context handle
+      type(c_ptr), value, intent(in) :: handle
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded context handle
+      type(vp_context), pointer :: context
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(handle)) then
+         call api_error(error%ptr, "print_context_timer_simple", "Context handle is missing")
+         return
+      end if
+      call c_f_pointer(handle, context)
+      call context%ctx%timer%print_simple("moist")
+   end subroutine print_context_timer_simple_api
 
    !> Retain a shared run context for a new cavity, component or model
    !>
@@ -4967,7 +5018,8 @@ contains
 
    !> Render the parameter printout of a continuum model as text
    !>
-   !> Prints into a scratch unit, then joins its lines, each ending in a newline
+   !> Prints into a scratch unit, then joins its lines, each ending in a newline;
+   !> the detailed settings follow the context verbosity, the normal ones always print
    !>
    !> @param[in]  continuum Continuum model
    !> @param[out] text      Printout, unallocated on error

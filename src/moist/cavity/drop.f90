@@ -612,22 +612,33 @@ contains
    !>
    !> @param[in] self DROP cavity instance
    !> @param[in] unit Output unit; defaults to the run context's unit
-   subroutine print_parameters_drop(self, unit)
+   !> @param[in] level Verbosity level; below 3 only the normal settings print,
+   !>                  nothing at 0 (default: the context's
+   !>                  verbosity, every setting without a context)
+   subroutine print_parameters_drop(self, unit, level)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in), target :: self
       !> Output unit
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
 
       !> Header printer
       type(prettyprinter) :: pp
       !> Level-set kind shown in the header
       character(len=:), allocatable :: lsf_kind
-      !> Effective output unit
-      integer :: iu
+      !> Effective output unit and verbosity level
+      integer :: iu, lvl
 
       iu = output_unit
       if (associated(self%ctx)) iu = self%ctx%unit
       if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (associated(self%ctx)) lvl = self%ctx%verbosity()
+      if (present(level)) lvl = level
+      ! Silent at 0; from 1 an explicit request shows at least the normal settings
+      if (lvl < 1) return
+      lvl = max(2, lvl)
       lsf_kind = "none"
       if (allocated(self%lsf_model)) then
          lsf_kind = "unnamed"
@@ -659,12 +670,12 @@ contains
          type is (moist_cavity_drop_lsf_cfc_type)
             call m%param%print(unit=iu)
          type is (moist_cavity_drop_lsf_isodensity_internal_type)
-            call m%param%print(unit=iu)
+            call m%param%print(unit=iu, level=lvl)
          type is (moist_cavity_drop_lsf_isodensity_callback_type)
-            call m%param%print(unit=iu)
+            call m%param%print(unit=iu, level=lvl)
          end select
       end if
-      call self%param%print(unit=iu)
+      call self%param%print(unit=iu, level=lvl)
 
    end subroutine print_parameters_drop
 
@@ -818,7 +829,7 @@ contains
 
       !> Setup grid point adjacency list for density computation
       call self%ctx%timer%start("Grid adj. list")
-      if (self%param%do_grid_density .or. self%ctx%verbosity >= 3) then
+      if (self%param%do_grid_density .or. self%ctx%verbosity(3)) then
          call self%setup_grid_adj_list(error)
       end if
       if (allocated(error)) then
@@ -875,7 +886,7 @@ contains
       call self%ctx%timer%stop("Properties")
 
       !> Run grid diagnostics
-      if (self%ctx%verbosity >= 3) then
+      if (self%ctx%verbosity(3)) then
          call self%ctx%timer%start("Analysis", category=cat_properties)
          call self%analyze_cavity(error)
          if (allocated(error)) then
@@ -908,7 +919,7 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)
 
-      if (self%ctx%verbosity > 1) write (self%ctx%unit, "(a)") "[Info] Computing gradients ..."
+      if (self%ctx%verbosity(3)) write (self%ctx%unit, "(a)") "[Info] Computing gradients ..."
       call self%compute_gradient_drop(error)
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)

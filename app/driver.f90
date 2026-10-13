@@ -79,7 +79,8 @@ contains
       !> Open the run context; every cavity/model borrows it, so all sub-timers
       !> started later nest under the "total" node opened here. A positive
       !> --threads is applied to the OpenMP runtime by the context.
-      call new_context(ctx, nthreads=config%num_threads, verbosity=config%verbosity, debug=config%debug)
+      call new_context(ctx, nthreads=config%num_threads, verbosity=config%verbosity, debug=config%debug, &
+         & do_profile=config%profile)
       call ctx%timer%start("total")
 
       !* ---------------------------- Thread configuration --------------------------- *!
@@ -90,7 +91,7 @@ contains
 ! #ifdef WITH_MKL
 ! !$       call mkl_set_num_threads(config%num_threads)
 ! #endif
-!$          if (config%verbosity > 0) then
+!$          if (ctx%verbosity(1)) then
 !$             write (ctx%unit, '(a,i0,a)') &
 !$                "[Info] OpenMP threads set to ", config%num_threads, ""
 !$          end if
@@ -111,7 +112,7 @@ contains
                                               temperature=config%temperature, pressure_si=config%pressure_si, &
                                               error=error)
          if (allocated(error)) return
-         call system%print()
+         if (ctx%verbosity(1)) call system%print()
          return
       end if
 
@@ -141,7 +142,7 @@ contains
             read (unit, *, iostat=stat) tmp_wp
             if (stat == 0) then
                mol%charge = tmp_wp
-               if (config%verbosity > 0) write (output_unit, "(a)") &
+               if (ctx%verbosity(1)) write (output_unit, "(a)") &
                   "[Info] Molecular charge read from '"//filename//"'"
             else
                call ctx%warning("Could not read molecular charge from '"//filename//"'")
@@ -165,7 +166,7 @@ contains
             class(radius_type), allocatable :: radius_model
 
             ! Print header
-            call cavity_header(output_unit, trim(config%mode))
+            if (ctx%verbosity(1)) call cavity_header(output_unit, trim(config%mode))
 
             ! Instantiate the appropriate cavity type
             if (to_lower(config%mode) == "numsa") then
@@ -264,7 +265,7 @@ contains
             end if
 
             ! Settings of the constructed cavity
-            if (ctx%verbosity > 1) call cavity%print_parameters()
+            if (ctx%verbosity(1)) call cavity%print_parameters()
 
             ! Use polymorphic cavity methods
             call cavity%update(mol, error=error)
@@ -277,7 +278,7 @@ contains
             end if
 
             ! Print results; with no unit the cavity follows its own context
-            call cavity%print()
+            if (ctx%verbosity(1)) call cavity%print()
 
             ! Write cavity files (xyz, csv, pqr) only when --dump is given.
             ! Marching cubes has no grid points to dump; it already wrote its
@@ -292,7 +293,8 @@ contains
             end if
 
          end block
-         call report_run_timings()
+         call ctx%timer%stop("total")
+         call ctx%timer%print("moist")
          call ctx%delete()
          return
       end if
@@ -335,21 +337,6 @@ contains
       ! Exit, no models implemented in the current preview version
       call fatal_error(error, "No solvation models implemented in the current preview version")
       return
-
-      call report_run_timings()
-      call ctx%delete()
-
-   contains
-
-      !> Stop the top-level timer and print the accumulated timing tree. Every
-      !> cavity/model sub-timer nests under "total" (opened at run start), so this
-      !> prints the full hierarchical breakdown for the run.
-      subroutine report_run_timings()
-         call ctx%timer%stop("total")
-         if (config%verbosity > 0) then
-            call ctx%timer%write(output_unit, "moist", max_depth=ctx%report_depth())
-         end if
-      end subroutine report_run_timings
 
    end subroutine run_main
 

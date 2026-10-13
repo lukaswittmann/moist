@@ -190,9 +190,11 @@ typedef struct moist_lsf_s* moist_lsf;
 /// nthreads is fixed for the context's lifetime: > 0 as given, 0 takes the
 /// calling thread's omp_get_max_threads at construction, negative is an error.
 /// The count sizes MOIST's own OpenMP regions; the host's OpenMP runtime and
-/// the BLAS/LAPACK threading are left alone. verbosity and debug are the only
-/// logging settings. Every model constructor requires a context, a cavity or
-/// component constructor takes one optionally; each retains it
+/// the BLAS/LAPACK threading are left alone. verbosity (0 silent ... 6 debug,
+/// 2 is the library default; levels in the API reference) and debug are the
+/// only logging settings; debug raises the verbosity to 6. Every model
+/// constructor requires a context, a cavity or component constructor takes one
+/// optionally; each retains it
 moist_API_ENTRY moist_context moist_API_CALL
 moist_new_context(moist_error error, int nthreads, int verbosity,
                   bool debug) moist_API_SUFFIX__V_1_0;
@@ -201,6 +203,16 @@ moist_delete_context(moist_context *context) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL
 moist_get_context_num_threads(moist_error error, moist_context context,
                              int *nthreads) moist_API_SUFFIX__V_1_0;
+/// Print the timings recorded on a context to its output: nothing at
+/// verbosity 0, the top-level phases at 1, the whole tree from 4
+moist_API_ENTRY void moist_API_CALL
+moist_print_context_timer(moist_error error,
+                          moist_context context) moist_API_SUFFIX__V_1_0;
+/// Print the timings recorded on a context as a compact list of seconds per
+/// step, at most two levels deep, at the context's verbosity and to its output
+moist_API_ENTRY void moist_API_CALL
+moist_print_context_timer_simple(moist_error error,
+                                 moist_context context) moist_API_SUFFIX__V_1_0;
 
 /* Options: pass NULL to a constructor for defaults, or initialize with
  * moist_init_*_options(error, &options, sizeof options) before overriding fields
@@ -1187,8 +1199,9 @@ moist_get_model_component_field_real(moist_error error,
 /// following moist_get_banner
 /// The cavity section first, then one section per component headed by its
 /// 1-based position: name, description, solvent inputs and registered
-/// settings, one "key ... value" line each. Needs no update. A model of
-/// another family is an error; the host chooses where to print
+/// settings, one "key ... value" line each. Empty at context verbosity 0, the
+/// normal settings from 1, the detailed ones from 3. Needs no update. A model
+/// of another family is an error; the host chooses where to print
 moist_API_ENTRY void moist_API_CALL
 moist_get_model_parameters_text(moist_error error, moist_model model,
                                 char* buffer, size_t capacity,

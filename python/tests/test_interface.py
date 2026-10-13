@@ -573,6 +573,11 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
     assert stream.getvalue() == text
     assert capsys.readouterr().out == ""
 
+    # Nothing prints at verbosity 0
+    silent = SolvationModel(moist.Context(verbosity=0), CavityDROP(parameters=_DROP_NLEB26),
+                            [ModelComponentPV(2.5e-4)])
+    assert silent.parameters_text() == ""
+
 
 def test_component_views_keep_their_model(diatomic) -> None:
     """Models built from the same configurations keep separate energies."""

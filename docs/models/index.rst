@@ -115,7 +115,7 @@ their own, so their copies in the model use that; a part constructed with
 
 Call ``model%update(mol, error)`` with the current structure, then create a host coupling with ``model%new_coupling(coupling, error)``; energies, responses and gradients are computed one phase at a time on that coupling, as described in :doc:`/reference/coupling`.
 ``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).
-``model%print_parameters(unit)`` prints the settings at any time: the cavity section followed by each component.; ``unit`` defaults to the run context's unit.
+``model%print_parameters(unit)`` prints the settings at any time, at the context's :ref:`verbosity <verbosity>`: the cavity section followed by each component; ``unit`` defaults to the run context's unit.
 
 Components
 ----------

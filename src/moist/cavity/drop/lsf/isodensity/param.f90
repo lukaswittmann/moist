@@ -202,17 +202,25 @@ contains
    !> @param[in] self  Isodensity parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
    !>                  context pass `ctx%unit` so this honours a log file
-   subroutine print_lsf_isodensity_param(self, unit)
+   !> @param[in] level Verbosity level; below 3 only the normal settings print
+   !>                  (default: all)
+   subroutine print_lsf_isodensity_param(self, unit, level)
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       !> Pretty printer
       type(prettyprinter) :: pp
       !> Effective output unit
       integer :: iu
+      !> Whether the detailed settings print
+      logical :: detailed
 
       iu = output_unit
       if (present(unit)) iu = unit
+      detailed = .true.
+      if (present(level)) detailed = level >= 3
 
       pp = new_prettyprinter(unit=iu)
       call pp%push("Implicit surface (isodensity):")
@@ -224,8 +232,8 @@ contains
          call pp%kv("AO basis", "cartesian")
       end if
       call pp%kv("ECP core fill", self%core_fill)
-      if (self%core_fill) call pp%kv("ECP core fill radius (of R_A)", self%core_radius_fraction)
-      if (self%log_grad_out > 0.0_wp) then
+      if (detailed .and. self%core_fill) call pp%kv("ECP core fill radius (of R_A)", self%core_radius_fraction)
+      if (detailed .and. self%log_grad_out > 0.0_wp) then
          call pp%kv("Exclusion |grad ln rho| (out)", self%log_grad_out, "1/Bohr")
          call pp%kv("Exclusion cusp factor (in)", self%log_grad_cusp)
          call pp%kv("Exclusion radius cap", self%exclusion_cap, "Bohr")

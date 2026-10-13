@@ -16,7 +16,7 @@ A term that cannot parametrise an atom leaves the atom uncovered; later terms fi
 * The update fails, naming the atoms, only when an atom is left without Lennard-Jones parameters, or without a charge once any term supplies charges.
 
 The order of ``add`` calls is the order of preference: put the specific force field first and the broad fallback last.
-With verbosity 2 the update prints a table of every site with its charge, sigma, epsilon and the term that supplied each.
+With :ref:`verbosity <verbosity>` 2 the update prints a table of every site with its charge, sigma, epsilon and the term that supplied each.
 
 ``monopole_type`` uses host-supplied atomic charges to build a point-charge potential in the 1D and 3D models.
 ``multipole_type`` uses host-supplied atomic multipoles, respectively. For 1D models; this averages out so that only the monopole term actually contributes.

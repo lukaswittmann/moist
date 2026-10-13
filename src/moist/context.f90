@@ -7,11 +7,21 @@
 !> Bundles the run-wide settings that were previously duplicated on each
 !> type:
 !>
-!>   * `verbosity` - the project-wide output level (0=silent, 1=summary,
-!>     2=user events, 3=diagnostics),
-!>   * `debug`     - a diagnostic flag OR-ed with the top verbosity level,
+!>   * `verbosity` - the project-wide output level, see below,
+!>   * `debug`     - the debug-stream flag; it raises `verbosity` to 6,
 !>   * `timer`     - the profiling timer; because the context is shared by
 !>     pointer, every borrower appends into this one timer tree
+!>
+!> Verbosity levels; a host calls moist once per SCF iteration and geometry
+!> step, so each level also bounds how often it prints:
+!>
+!>   0  silent          nothing (warnings always print)
+!>   1  minimal         header block and results, once per run
+!>   2  normal          key parameters once per run, a summary per geometry
+!>   3  detailed        all parameters and per-geometry tables
+!>   4  solver summary  one block per inner solve (DROP projection, ...)
+!>   5  solver trace    per-iteration and per-point lines of inner solves
+!>   6  debug           everything; the debug stream itself needs `debug`
 !>
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
@@ -30,11 +40,12 @@ module moist_context
       !> Output unit for debug dumps; defaults to `unit` (a separate `debugfile`
       !> splits the two streams)
       integer :: debug_unit = output_unit
-      !> Verbosity level (0=silent, 1=summary, 2=user events, 3=diagnostics)
-      integer :: verbosity = 1
-      !> Debug flag; OR-ed with the top verbosity level at diagnostic sites
+      !> Verbosity level (0=silent ... 6=debug, see the module header); read
+      !> through `verbosity()`
+      integer, private :: level = 2
+      !> Debug flag; enables the debug stream and raises the verbosity to 6
       logical :: debug = .false.
-      !> Detailed-profiling flag, default verbosity >= 4
+      !> Detailed-profiling flag, independent of the verbosity
       !>
       !> - when set, fine-grained (per-part) timers are recorded on top of the
       !>   coarse module timings, e.g. the individual gradient sub-steps in
@@ -59,8 +70,12 @@ module moist_context
    contains
       !> Tear down the owned timer and close any owned files
       procedure :: delete => delete_context
-      !> Predicate for the "print at level N" guard idiom
-      procedure :: writes => context_writes
+      !> Verbosity level of the run
+      procedure, private :: context_get_verbosity
+      !> Whether output at a given level prints
+      procedure, private :: context_writes
+      !> `verbosity()` returns the level, `verbosity(n)` whether level n prints
+      generic :: verbosity => context_get_verbosity, context_writes
       !> Write a message to the context output unit, gated by verbosity
       procedure :: message => context_message
       !> Write a message like `message`, then flush the output unit
@@ -94,10 +109,10 @@ contains
    !>
    !> @param[out] self       context to initialize
    !> @param[in]  nthreads   thread count; absent or <= 0 takes the current OpenMP setting
-   !> @param[in]  verbosity  output level (default 1)
-   !> @param[in]  debug      diagnostic flag (default .false.)
+   !> @param[in]  verbosity  output level (default 2)
+   !> @param[in]  debug      diagnostic flag (default .false.), raises the verbosity to 6
    !> @param[in]  unit       already-open output unit (default output_unit)
-   !> @param[in]  do_profile detailed-profiling flag; defaults to verbosity >= 4
+   !> @param[in]  do_profile detailed-profiling flag (default .false.)
    !> @param[in]  logfile    path of a main output file for the context to own
    !> @param[in]  debugfile  path of a separate debug output file to own
    subroutine new_context(self, nthreads, verbosity, debug, unit, do_profile, logfile, debugfile)
@@ -111,7 +126,7 @@ contains
       logical, intent(in), optional :: debug
       !> Output unit for informational messages
       integer, intent(in), optional :: unit
-      !> Detailed-profiling flag; defaults to verbosity >= 4
+      !> Detailed-profiling flag (default .false.)
       logical, intent(in), optional :: do_profile
       !> Path of a main output file to open and own
       character(*), intent(in), optional :: logfile
@@ -124,13 +139,10 @@ contains
       !> Scratch unit / iostat for opening owned files
       integer :: iu, stat
 
-      if (present(verbosity)) self%verbosity = verbosity
+      if (present(verbosity)) self%level = verbosity
       if (present(debug)) self%debug = debug
+      if (self%debug) self%level = max(self%level, 6)
       if (present(unit)) self%unit = unit
-
-      !> Detailed profiling follows the verbosity by default (level >= 4, i.e.
-      !> the "show everything" band), but a caller may force it on/off
-      self%do_profile = self%verbosity >= 4
       if (present(do_profile)) self%do_profile = do_profile
 
       !> Thread count, resolved once; the OpenMP runtime itself is never changed
@@ -166,7 +178,9 @@ contains
          end if
       end if
 
-      call self%timer%new(verbose=self%verbosity > 1)
+      ! The timer report follows the verbosity: silent at 0, deeper from 1 on
+      call self%timer%new(verbose=self%level > 1, unit=self%unit, &
+         & print_depth=merge(self%report_depth(), -1, self%level >= 1))
 
    end subroutine new_context
 
@@ -192,11 +206,20 @@ contains
 
    end subroutine delete_context
 
-   !> Return whether output at the given level should be emitted
+   !> Verbosity level of the run, `ctx%verbosity()`
+   pure function context_get_verbosity(self) result(level)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Verbosity level
+      integer :: level
+
+      level = self%level
+
+   end function context_get_verbosity
+
+   !> Return whether output at the given level should be emitted, `ctx%verbosity(level)`
    !>
-   !> Mirrors the established `if (verbosity >= level .or. debug)` guard: a
-   !> message tagged with `level` prints when the run verbosity reaches it, and
-   !> the debug flag additionally unlocks the diagnostic band (level <= 3)
+   !> A message tagged with `level` prints when the run verbosity reaches it
    !>
    !> @param[in]  level  verbosity level of the message
    pure function context_writes(self, level) result(do_write)
@@ -207,7 +230,7 @@ contains
       !> Whether the message should be written
       logical :: do_write
 
-      do_write = self%verbosity >= level .or. (self%debug .and. level <= 3)
+      do_write = self%level >= level
 
    end function context_writes
 
@@ -223,10 +246,10 @@ contains
       !> Deepest node level to print
       integer :: d
 
-      if (self%verbosity >= 4) then
+      if (self%level >= 4) then
          d = huge(1)
       else
-         d = max(0, self%verbosity - 1)
+         d = max(0, self%level - 1)
       end if
 
    end function context_report_depth
@@ -248,7 +271,7 @@ contains
       lvl = 1
       if (present(level)) lvl = level
 
-      if (self%writes(lvl)) then
+      if (self%verbosity(lvl)) then
          !$omp critical(moist_context_io)
          write (self%unit, "(a)") msg
          !$omp end critical(moist_context_io)
@@ -276,7 +299,7 @@ contains
       lvl = 1
       if (present(level)) lvl = level
 
-      if (self%writes(lvl)) then
+      if (self%verbosity(lvl)) then
          !$omp critical(moist_context_io)
          write (self%unit, "(a)") msg
          flush (self%unit)
@@ -387,7 +410,7 @@ contains
 
       pp = new_prettyprinter(unit=iu, col_value=28)
       call pp%push("MOIST settings:")
-      call pp%kv("Verbosity", self%verbosity)
+      call pp%kv("Verbosity", self%level)
       call pp%kv("Debug", self%debug)
       call pp%kv("Detailed profiling", self%do_profile)
       call pp%kv("OMP threads", nthreads)

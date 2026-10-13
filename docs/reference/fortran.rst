@@ -45,9 +45,8 @@ Cavities extend ``cavity_type``; continuum components extend
 ``moist_model_continuum_component_type``). Constructors are specific to each type; evaluation uses
 the shared interfaces.
 
-``moist_context_type`` controls threads, logging and timing and must outlive everything that borrows it.
+``moist_context_type`` is the :ref:`run context <api-context>` and must outlive everything that borrows it.
 A model takes it as its first argument after ``self``; cavities and components take it as the optional trailing ``ctx=``.
-A cavity or component copied into a model keeps its own context, or runs on the model's when it has none; used standalone without one, it returns an error.
 
 .. code-block:: fortran
 
@@ -57,7 +56,13 @@ A cavity or component copied into a model keeps its own context, or runs on the 
    type(moist_context_type), target :: ctx
    type(error_type), allocatable :: error
 
-   call new_context(ctx, nthreads=0, verbosity=1)  ! nthreads: 0 takes the current OpenMP setting
+   call new_context(ctx, nthreads=0, verbosity=2)  ! nthreads <= 0 takes the current OpenMP setting
+
+``verbosity`` defaults to 2 (:ref:`levels <verbosity>`) and ``debug`` to ``.false.``.
+``unit=`` or ``logfile=`` redirect the messages, ``debugfile=`` the debug stream; ``do_profile=.true.`` records the fine-grained timers.
+``ctx%verbosity()`` returns the level and ``ctx%verbosity(n)`` whether level ``n`` prints, for hosts that gate their own output on it.
+``call ctx%timer%print()`` and ``call ctx%timer%print_simple()`` write the recorded timings to the context's unit.
+The command-line program's ``-v``/``-q`` raise or lower its default verbosity of 4.
 
 Cavities
 --------

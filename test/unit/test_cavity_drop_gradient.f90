@@ -216,7 +216,7 @@ contains
       call check(error, associated(cavity%ctx, ctx), &
                  "DROP cavity does not borrow the caller-owned run context")
       if (allocated(error)) return
-      call check(error, cavity%ctx%verbosity == 0, &
+      call check(error, cavity%ctx%verbosity() == 0, &
                  "DROP cavity does not observe the context verbosity")
       if (allocated(error)) return
 

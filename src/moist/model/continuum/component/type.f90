@@ -530,13 +530,18 @@ contains
    !> @param[in] self  Solvation component
    !> @param[in] unit  Output unit; defaults to the run context's unit
    !> @param[in] index 1-based position in a model, shown in the header
-   subroutine print_component_parameters(self, unit, index)
+   !> @param[in] level Verbosity level; settings above it are left out, nothing
+   !>                  prints at 0 and 1 prints the normal settings (default: the context's
+   !>                  verbosity, every setting without a context)
+   subroutine print_component_parameters(self, unit, index, level)
       !> Solvation component
       class(model_continuum_component_type), intent(in), target :: self
       !> Output unit
       integer, intent(in), optional :: unit
       !> 1-based position in a model
       integer, intent(in), optional :: index
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
 
       !> Section printer
       type(prettyprinter) :: pp
@@ -546,12 +551,18 @@ contains
       character(len=:), allocatable :: name, header
       !> Index as text
       character(len=12) :: label
-      !> Effective output unit
-      integer :: iu
+      !> Effective output unit and verbosity level
+      integer :: iu, lvl
 
       iu = output_unit
       if (associated(self%ctx)) iu = self%ctx%unit
       if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (associated(self%ctx)) lvl = self%ctx%verbosity()
+      if (present(level)) lvl = level
+      ! Silent at 0; from 1 an explicit request shows at least the normal settings
+      if (lvl < 1) return
+      lvl = max(2, lvl)
       name = ""
       if (allocated(self%name)) name = self%name
       if (present(index)) then
@@ -568,7 +579,7 @@ contains
       if (self%scale /= 1.0_wp) call pp%kv("scale", self%scale)
       call self%print_inputs(pp)
       param => self%parameters()
-      if (associated(param)) call param%print_table(pp)
+      if (associated(param)) call param%print_table(pp, lvl)
       call pp%pop()
       call pp%blank()
 

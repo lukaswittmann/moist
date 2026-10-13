@@ -593,16 +593,24 @@ contains
    !> @param[in] self Parameter container to display
    !> @param[in] unit Output unit (default `output_unit`); callers holding a run
    !>                 context pass `ctx%unit` so this honours a log file
-   subroutine print_parameters(self, unit)
+   !> @param[in] level Verbosity level; below 3 only the normal settings print
+   !>                  (default: all)
+   subroutine print_parameters(self, unit, level)
       class(moist_cavity_drop_parameters_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       type(prettyprinter) :: pp
       !> Effective output unit
       integer :: iu
+      !> Whether the detailed settings print
+      logical :: detailed
 
       iu = output_unit
       if (present(unit)) iu = unit
+      detailed = .true.
+      if (present(level)) detailed = level >= 3
 
       pp = new_prettyprinter(unit=iu)
 
@@ -614,60 +622,68 @@ contains
 
       call pp%push("Tolerance:")
       call pp%kv("Main tolerance", self%tolerance)
-      call pp%kv("Projection tol.", self%proj_tol)
-      call pp%kv("Screening threshold", self%screening_threshold)
-      call pp%kv("Weight cutoff", self%wleb_cut)
-      call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
-      call pp%pop()
-
-      call pp%push("Switching:")
-      call pp%kv("f_crit start", self%w_0ls_from)
-      call pp%kv("f_crit end", self%w_0ls_to)
-      call pp%kv("f_foc start", self%w_0tra_from)
-      call pp%kv("f_foc end", self%w_0tra_to)
-      call pp%kv("Wleb switch level", self%wleb_prune_level)
-      if (self%wleb_prune_level > 0) then
-         call pp%kv("Wleb switch from", self%wleb_prune_from)
-         call pp%kv("Wleb switch to", self%wleb_prune_to)
+      if (detailed) then
+         call pp%kv("Projection tol.", self%proj_tol)
+         call pp%kv("Screening threshold", self%screening_threshold)
+         call pp%kv("Weight cutoff", self%wleb_cut)
+         call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
       end if
       call pp%pop()
 
-      call pp%push("Gaussians:")
-      call pp%kv("xi_born", self%iswig_xi_born)
-      call pp%pop()
+      if (detailed) then
+         call pp%push("Switching:")
+         call pp%kv("f_crit start", self%w_0ls_from)
+         call pp%kv("f_crit end", self%w_0ls_to)
+         call pp%kv("f_foc start", self%w_0tra_from)
+         call pp%kv("f_foc end", self%w_0tra_to)
+         call pp%kv("Wleb switch level", self%wleb_prune_level)
+         if (self%wleb_prune_level > 0) then
+            call pp%kv("Wleb switch from", self%wleb_prune_from)
+            call pp%kv("Wleb switch to", self%wleb_prune_to)
+         end if
+         call pp%pop()
 
-      call pp%push("Objective function:")
-      call pp%kv("Alpha", self%phi_alpha)
-      call pp%pop()
+         call pp%push("Gaussians:")
+         call pp%kv("xi_born", self%iswig_xi_born)
+         call pp%pop()
+
+         call pp%push("Objective function:")
+         call pp%kv("Alpha", self%phi_alpha)
+         call pp%pop()
+      end if
 
       call pp%push("Projection settings:")
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
-      call pp%kv("Maximum iterations", self%proj_maxiter)
-      if (self%proj_level >= 9) then
-         call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
-         call pp%kv("Octree box budget", self%octree_max_boxes)
-         call pp%kv("Octree seed mode", self%octree_seed_mode)
+      if (detailed) then
+         call pp%kv("Maximum iterations", self%proj_maxiter)
+         if (self%proj_level >= 9) then
+            call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
+            call pp%kv("Octree box budget", self%octree_max_boxes)
+            call pp%kv("Octree seed mode", self%octree_seed_mode)
+         end if
       end if
       call pp%pop()
 
-      call pp%push("Branching:")
-      call pp%kv("Softmax scale", self%branch_weight_s)
-      call pp%kv("Weight floor", self%branch_weight_floor)
-      call pp%kv("Max. objective excess", self%branch_dphi_max)
-      call pp%pop()
+      if (detailed) then
+         call pp%push("Branching:")
+         call pp%kv("Softmax scale", self%branch_weight_s)
+         call pp%kv("Weight floor", self%branch_weight_floor)
+         call pp%kv("Max. objective excess", self%branch_dphi_max)
+         call pp%pop()
 
-      call pp%push("Screening:")
-      call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
-      call pp%kv("Cell grid fraction", self%cell_grid_fraction)
-      call pp%pop()
+         call pp%push("Screening:")
+         call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
+         call pp%kv("Cell grid fraction", self%cell_grid_fraction)
+         call pp%pop()
 
-      call pp%push("Optional properties:")
-      call pp%kv("Grid point density", self%do_grid_density)
-      call pp%kv("Curvature", self%do_curvature)
-      call pp%kv("Surface normals", self%do_normal)
-      call pp%kv("r_iI distances", self%do_r_iI)
-      call pp%kv("rho displacements", self%do_rho)
-      call pp%pop()
+         call pp%push("Optional properties:")
+         call pp%kv("Grid point density", self%do_grid_density)
+         call pp%kv("Curvature", self%do_curvature)
+         call pp%kv("Surface normals", self%do_normal)
+         call pp%kv("r_iI distances", self%do_r_iI)
+         call pp%kv("rho displacements", self%do_rho)
+         call pp%pop()
+      end if
       call pp%blank()
 
    end subroutine print_parameters

@@ -113,8 +113,8 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_cavity_numsa_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("num_leb", self%num_leb)
-      call self%register_real_scalar("probe", self%probe)
+      call self%register_int_scalar("num_leb", self%num_leb, level=2)
+      call self%register_real_scalar("probe", self%probe, level=2)
       call self%register_real_scalar("offset", self%offset)
       call self%register_real_scalar("smoothing", self%smoothing)
       call self%register_real_scalar("tolsesp", self%tolsesp)

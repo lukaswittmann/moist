@@ -128,7 +128,7 @@ contains
       end if
       if (allocated(error)) return
       if (.not. associated(self%ctx)) return
-      if (self%ctx%writes(2)) then
+      if (self%ctx%verbosity(2)) then
          call self%ctx%message("Solvent potential parameters", 2)
          call self%potential%print_table(self%ctx%unit, error)
          if (allocated(error)) return

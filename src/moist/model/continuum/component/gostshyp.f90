@@ -586,7 +586,7 @@ contains
          write (report, "(a,i0,a,i0,a,i0,a,i0,a,i0)") "GOSTSHYP: ", counts(1), &
             & " regularized of ", cavity%ngrid, "; negative candidates: ", counts(2), &
             & "; suppressed: ", counts(3), "; switched off: ", counts(4)
-         call self%ctx%message_flush(trim(report), level=2)
+         call self%ctx%message_flush(trim(report), level=4)
       end if
 
    end subroutine gostshyp_get_energy

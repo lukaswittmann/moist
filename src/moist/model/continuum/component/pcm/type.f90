@@ -198,8 +198,8 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_pcm_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("solver", self%solver)
-      call self%register_real_scalar("solver_tol", self%solver_tol)
+      call self%register_int_scalar("solver", self%solver, level=2)
+      call self%register_real_scalar("solver_tol", self%solver_tol, level=2)
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
    end subroutine register_parameter_entries
 

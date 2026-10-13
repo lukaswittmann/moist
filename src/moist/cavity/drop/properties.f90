@@ -684,7 +684,7 @@ contains
             end if
             call pp%pop()
 
-            if (self%ctx%verbosity >= 3) then
+            if (self%ctx%verbosity(3)) then
                if (npatch > 0) then
                   call pp%blank()
                   call pp%push("Per-patch curvatures")

@@ -3655,6 +3655,9 @@ int test_coupling_protocol_gostshyp(void)
     moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
     moist_component gostshyp = moist_new_gostshyp_component(error, NULL, 1.0e-4, NULL);
     moist_model model = NULL;
+    /* The same components on a context at the library default verbosity */
+    moist_context shown_context = NULL;
+    moist_model shown = NULL;
     moist_coupling cpl = NULL;
     moist_response response = NULL;
     moist_cavity borrowed = NULL;
@@ -3818,20 +3821,28 @@ int test_coupling_protocol_gostshyp(void)
         if (expect_failure(&error, "Component index out of range",
                            "component past the list")) goto cleanup;
     }
-    /* The settings printout: query the length, then copy; a short buffer
-     * truncates successfully and still reports the full length */
+    /* The settings printout is empty at verbosity 0. At the library default:
+     * query the length, then copy; a short buffer truncates successfully and
+     * still reports the full length */
     {
-        size_t length = 0, full = 0;
+        size_t length = 7, full = 0;
         char head[16];
-        moist_get_model_parameters_text(error, model, NULL, 0, &full);
+        moist_get_model_parameters_text(error, model, NULL, 0, &length);
+        REQUIRE(!moist_check_error(error) && length == 0);
+        shown_context = moist_new_context(error, 0, 2, false);
+        shown = moist_new_model(error, shown_context, cav);
+        moist_add_model_component(error, shown, pcm);
+        moist_add_model_component(error, shown, gostshyp);
+        REQUIRE(shown && !moist_check_error(error));
+        moist_get_model_parameters_text(error, shown, NULL, 0, &full);
         REQUIRE(!moist_check_error(error) && full > 0);
         settings = malloc(full + 1);
         REQUIRE(settings);
-        moist_get_model_parameters_text(error, model, settings, full + 1, &length);
+        moist_get_model_parameters_text(error, shown, settings, full + 1, &length);
         REQUIRE(!moist_check_error(error) && length == full && strlen(settings) == full);
         REQUIRE(strstr(settings, "Component 1 (CPCM):") && strstr(settings, "Component 2 (GOSTSHYP):"));
         REQUIRE(strstr(settings, "Epsilon") && strstr(settings, "Eh/bohr^3") && strstr(settings, "GPa"));
-        moist_get_model_parameters_text(error, model, head, sizeof head, &length);
+        moist_get_model_parameters_text(error, shown, head, sizeof head, &length);
         REQUIRE(!moist_check_error(error) && length == full);
         REQUIRE(strlen(head) == sizeof head - 1 && strncmp(head, settings, sizeof head - 1) == 0);
         fputs(settings, stdout);
@@ -3912,6 +3923,8 @@ cleanup:
     moist_delete_cavity(&borrowed);
     moist_delete_response(&response);
     moist_delete_model(&model);
+    moist_delete_model(&shown);
+    moist_delete_context(&shown_context);
     moist_delete_component(&gostshyp);
     moist_delete_component(&pcm);
     moist_delete_cavity(&cav);
@@ -4084,6 +4097,15 @@ int test_context(void)
     if (!moist_check_error(error)) goto cleanup;
     moist_get_context_num_threads(NULL, context, &count);
     if (count != 123) goto cleanup;
+    /* The timer report follows the context: silent at verbosity 0 */
+    moist_print_context_timer(error, context);
+    if (moist_check_error(error)) goto cleanup;
+    moist_print_context_timer(error, NULL);
+    if (!moist_check_error(error)) goto cleanup;
+    moist_print_context_timer_simple(error, context);
+    if (moist_check_error(error)) goto cleanup;
+    moist_print_context_timer_simple(error, NULL);
+    if (!moist_check_error(error)) goto cleanup;
     moist_delete(context);
     lsf = moist_new_svdw_lsf(error, NULL);
     mol = make_h2o(error);

@@ -88,7 +88,7 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_cavity_iswig_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("num_leb", self%num_leb)
+      call self%register_int_scalar("num_leb", self%num_leb, level=2)
       call self%register_real_scalar("cut_a", self%cut_a)
       call self%register_real_scalar("cut_f", self%cut_f)
    end subroutine register_parameter_entries

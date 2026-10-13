@@ -42,16 +42,13 @@ the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
 ``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
 negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
-``Context(nthreads=0, verbosity=0, debug=False)`` mirrors the Fortran
-``new_context(ctx, nthreads=, verbosity=, debug=)``. The thread count is fixed for
-the context's lifetime: a positive count is used as given, ``0`` (the default)
-takes the calling thread's OpenMP setting at construction (``OMP_NUM_THREADS``
-unless the host changed it) and a negative count raises. Everything built on a
-context retains it.
-
-The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes
-the host's OpenMP runtime. BLAS/LAPACK threading is the host's task to configure.
-Without OpenMP, MOIST itself is serial; the math backend may still use threads.
+``Context(nthreads=0, verbosity=2, debug=False)`` creates the
+:ref:`run context <api-context>`. The defaults take the calling thread's OpenMP
+setting (``OMP_NUM_THREADS`` unless the host changed it), print the normal
+output (:ref:`levels <verbosity>`) and leave the debug stream off; a negative thread
+count raises. Everything built on a context retains it.
+``context.print_timer()`` prints the recorded timings on the process standard
+output; ``context.print_timer(simple=True)`` prints the compact form.
 
 ``SolvationModel(context, cavity, components)`` requires the context as its first argument.
 Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
