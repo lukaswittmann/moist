@@ -659,7 +659,7 @@ contains
       end associate
    end subroutine adjoint_block
 
-   !> Form the analytic reciprocal tail, phased over solute centres
+   !> Form the analytic reciprocal tail, phased over solute centers
    !>
    !> @param[in]     grid     volume grid with reciprocal points
    !> @param[in]     coord_u  solute coordinates, bohr (3, nu)

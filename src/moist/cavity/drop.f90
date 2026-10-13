@@ -228,7 +228,7 @@ module moist_cavity_drop
       !> consumed in the response phase, not only in the gradient
       procedure :: has_field_dependent_geometry => drop_field_dependent
       !> Contract surface-coordinate weights into the nuclear gradient
-      procedure :: get_surface_gradient => get_surface_gradient_drop
+      procedure :: contract_surface_gradient => get_surface_gradient_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop

@@ -16,7 +16,7 @@ module moist_cavity_type
    implicit none(type, external)
    private
 
-   public :: cavity_type, list_cavity_fields_base
+   public :: cavity_type, list_cavity_fields_base, add_volume_origin_gradient
    public :: write_cavity_xyz_debug, write_cavity_csv_debug, write_cavity_pqr_debug
 
    !> Abstract base type containing minimal cavity/surface information
@@ -66,7 +66,8 @@ module moist_cavity_type
       !> Point volume element, bohr**3 (ngrid)
       !>
       !> Divergence-theorem partition of the enclosed volume,
-      !> v_i = a_i (r_i . n_i)/3, so that `total_volume` is `sum(v)`
+      !> v_i = a_i ((r_i - c) . n_i)/3 with `c` from `get_volume_origin`, so that
+      !> `total_volume` is `sum(v)`
       real(wp), allocatable :: v(:)
 
       !> Total surface area, bohr**2
@@ -83,6 +84,7 @@ module moist_cavity_type
       !> Nuclear derivatives of surface point volumes (3, nsph, ngrid)
       !>
       !> - contracting over the grid gives the total-volume nuclear gradient
+      !> - include the motion of the volume origin, so every atom is reached
       real(wp), allocatable :: v1_rA(:, :, :)
    contains
       procedure(update_cavity), deferred :: update
@@ -91,8 +93,11 @@ module moist_cavity_type
       procedure :: list_fields => list_cavity_fields_base
       !> Map accumulated surface-observable adjoints to host response channels
       procedure :: get_surface_response => get_cavity_surface_response_default
-      !> Contract accumulated surface-observable adjoints into the nuclear gradient
-      procedure :: get_surface_gradient => get_cavity_surface_gradient_default
+      !> Contract accumulated surface-observable adjoints into the nuclear gradient:
+      !> the cavity's surface channels, then the volume-origin channel
+      procedure, non_overridable :: get_surface_gradient => get_cavity_surface_gradient
+      !> Contract the per-point surface channels into the nuclear gradient
+      procedure :: contract_surface_gradient => contract_cavity_surface_gradient_default
       !> Declare the cavity's own host requests (none by default)
       procedure :: declare_coupling => declare_cavity_coupling_default
       !> Whether the surface geometry responds to the host field (DROP), so that
@@ -114,6 +119,8 @@ module moist_cavity_type
       procedure, non_overridable :: print_radii => print_cavity_radii
       !> Fail without a run context; called first by every `update`
       procedure, non_overridable :: require_context => require_cavity_context
+      !> Origin of the divergence-theorem volume, the centroid of the sphere centers
+      procedure, non_overridable :: get_volume_origin => get_cavity_volume_origin
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -168,6 +175,49 @@ contains
          & "Cavity has no context: pass one at construction or use it through a model")
 
    end subroutine require_cavity_context
+
+   !> Origin `c` of the divergence-theorem volume `V = sum_i a_i ((r_i - c) . n_i)/3`
+   !>
+   !> - the discrete surface leaves `sum_i a_i n_i` nonzero, so `V` depends on `c`
+   !>   and a fixed origin makes it change linearly under rigid translation
+   !> - the centroid of the sphere centers moves with the molecule; each center
+   !>   enters with weight `1/nsph`, which the volume derivatives must carry
+   !>
+   !> @param[in] self Cavity instance holding the sphere centers
+   !> @return Volume origin, bohr
+   pure function get_cavity_volume_origin(self) result(origin)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Volume origin, bohr
+      real(wp) :: origin(3)
+
+      origin = sum(self%sphxyz(:, :self%nsph), dim=2)/real(max(1, self%nsph), wp)
+
+   end function get_cavity_volume_origin
+
+   !> Add a volume-origin adjoint to the nuclear gradient
+   !>
+   !> - the origin of `get_volume_origin` moves with every atom by `dc/dR_A = I/nsph`,
+   !>   so `w_c = dE/dc` reaches each atom as `w_c/nsph`
+   !> - serves the reverse contraction and the forward `*_rA` arrays alike; the
+   !>   map is constant, so a second-order pass reuses it unchanged
+   !>
+   !> @param[in]    w_c      Adjoint of the volume origin (3)
+   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+   pure subroutine add_volume_origin_gradient(w_c, gradient)
+      !> Adjoint of the volume origin
+      real(wp), intent(in) :: w_c(3)
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+
+      !> Atom index
+      integer :: iat
+
+      do iat = 1, size(gradient, 2)
+         gradient(:, iat) = gradient(:, iat) + w_c/real(size(gradient, 2), wp)
+      end do
+
+   end subroutine add_volume_origin_gradient
 
    !> Print the radius model at verbosity 2 and above
    !>
@@ -240,7 +290,32 @@ contains
 
    end subroutine get_cavity_surface_response_default
 
-   !> Default reverse-mode nuclear-gradient hook
+   !> Contract accumulated surface-observable adjoints into the nuclear gradient
+   !>
+   !> - the cavity's `contract_surface_gradient` maps the per-point channels
+   !> - the volume-origin channel is mapped here, the same for every cavity
+   !>
+   !> @param[in]    self     Cavity instance
+   !> @param[in]    acc      Surface-observable adjoints
+   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[out]   error    Error handling
+   subroutine get_cavity_surface_gradient(self, acc, gradient, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%contract_surface_gradient(acc, gradient, error)
+      if (allocated(error)) return
+      call add_volume_origin_gradient(acc%w_c, gradient)
+
+   end subroutine get_cavity_surface_gradient
+
+   !> Default reverse-mode surface contraction
    !>
    !> Cavities that do not implement the surface-adjoint contraction must be
    !> reached through the forward path instead; returning silently here would
@@ -250,7 +325,7 @@ contains
    !> @param[in]    acc      Surface-observable adjoints, unused
    !> @param[inout] gradient Nuclear-gradient accumulator, unchanged
    !> @param[out]   error    Error handling
-   subroutine get_cavity_surface_gradient_default(self, acc, gradient, error)
+   subroutine contract_cavity_surface_gradient_default(self, acc, gradient, error)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
@@ -262,7 +337,7 @@ contains
 
       call fatal_error(error, "This cavity does not provide a reverse-mode surface gradient")
 
-   end subroutine get_cavity_surface_gradient_default
+   end subroutine contract_cavity_surface_gradient_default
 
    !> Default geometry query: the surface does not respond to the host field
    !>

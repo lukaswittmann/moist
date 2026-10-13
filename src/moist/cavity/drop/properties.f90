@@ -183,8 +183,11 @@ contains
       real(wp) :: area_i, volume_i
       real(wp), allocatable :: asph_local(:), vsph_local(:)
       integer :: nthreads
+      !> Volume origin moving with the molecule
+      real(wp) :: origin(3)
 
       nthreads = self%ctx%get_num_threads()
+      origin = self%get_volume_origin()
       if (allocated(self%a)) deallocate (self%a)
       allocate (self%a(self%ngrid), source=0.0_wp)
       if (allocated(self%asph)) deallocate (self%asph)
@@ -210,7 +213,7 @@ contains
 
          ! Compute volume element using divergence theorem
          volume_i = 1.0_wp/3.0_wp*area_i &
-                    *dot_product(self%xyz(:, i), self%normal0(:, i))
+                    *dot_product(self%xyz(:, i) - origin, self%normal0(:, i))
          self%v(i) = volume_i
 
          ! Accumulate per sphere in thread-local buffers

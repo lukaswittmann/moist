@@ -78,7 +78,8 @@ contains
       if (allocated(error)) return
       call check(error, all(acc%w_xyz == 0.0_wp) .and. all(acc%w_n == 0.0_wp) &
          & .and. all(acc%w_w == 0.0_wp) .and. all(acc%w_xi == 0.0_wp) .and. all(acc%w_f == 0.0_wp) &
-         & .and. all(acc%w_a == 0.0_wp) .and. all(acc%w_k1 == 0.0_wp) .and. all(acc%w_k2 == 0.0_wp))
+         & .and. all(acc%w_a == 0.0_wp) .and. all(acc%w_k1 == 0.0_wp) .and. all(acc%w_k2 == 0.0_wp) &
+         & .and. size(acc%w_c) == 3 .and. all(acc%w_c == 0.0_wp))
       if (allocated(error)) return
 
       acc%w_a = 1.0_wp
@@ -95,10 +96,12 @@ contains
       acc%w_a = 6.0_wp
       acc%w_k1 = 7.0_wp
       acc%w_k2 = 8.0_wp
+      acc%w_c = 9.0_wp
       call acc%zero()
       call check(error, all(acc%w_xyz == 0.0_wp) .and. all(acc%w_n == 0.0_wp) &
          & .and. all(acc%w_w == 0.0_wp) .and. all(acc%w_xi == 0.0_wp) .and. all(acc%w_f == 0.0_wp) &
-         & .and. all(acc%w_a == 0.0_wp) .and. all(acc%w_k1 == 0.0_wp) .and. all(acc%w_k2 == 0.0_wp))
+         & .and. all(acc%w_a == 0.0_wp) .and. all(acc%w_k1 == 0.0_wp) .and. all(acc%w_k2 == 0.0_wp) &
+         & .and. all(acc%w_c == 0.0_wp))
    end subroutine test_storage
 
    !> add_surface_weights sums repeated contributions channel by channel
@@ -110,15 +113,16 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(cavity_surface_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
-      real(wp) :: v3(3, 2), s(2)
+      real(wp) :: v3(3, 2), s(2), c(3)
 
       call acc%init(2)
       v3 = reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2])
       s = [0.5_wp, -1.5_wp]
+      c = [0.25_wp, -0.75_wp, 1.25_wp]
       call acc%add_surface_weights(err, w_xi=s, w_f=s, w_xyz=v3, w_n=-v3, w_k1=2.0_wp*s, &
-         & w_k2=3.0_wp*s, w_a=4.0_wp*s, w_w=5.0_wp*s)
+         & w_k2=3.0_wp*s, w_a=4.0_wp*s, w_w=5.0_wp*s, w_c=c)
       if (.not. allocated(err)) call acc%add_surface_weights(err, w_xi=s, w_f=s, w_xyz=v3, w_n=-v3, &
-         & w_k1=2.0_wp*s, w_k2=3.0_wp*s, w_a=4.0_wp*s, w_w=5.0_wp*s)
+         & w_k1=2.0_wp*s, w_k2=3.0_wp*s, w_a=4.0_wp*s, w_w=5.0_wp*s, w_c=c)
       if (.not. allocated(err)) call acc%add_surface_weights(err, w_f=s)
       if (.not. allocated(err)) call acc%add_surface_weights(err)
       if (allocated(err)) then
@@ -127,7 +131,7 @@ contains
       end if
       call check(error, all(acc%w_xyz == 2.0_wp*v3) .and. all(acc%w_n == -2.0_wp*v3) .and. all(acc%w_xi == 2.0_wp*s) &
          & .and. all(acc%w_f == 3.0_wp*s) .and. all(acc%w_k1 == 4.0_wp*s) .and. all(acc%w_k2 == 6.0_wp*s) &
-         & .and. all(acc%w_a == 8.0_wp*s) .and. all(acc%w_w == 10.0_wp*s), &
+         & .and. all(acc%w_a == 8.0_wp*s) .and. all(acc%w_w == 10.0_wp*s) .and. all(acc%w_c == 2.0_wp*c), &
          & "add_surface_weights did not accumulate channel by channel")
    end subroutine test_accumulate
 
@@ -138,7 +142,8 @@ contains
       type(cavity_surface_adjoint_type) :: acc
       integer :: channel
 
-      do channel = 1, 8
+      ! Each case drops one channel
+      do channel = 1, 9
          call acc%init(3)
          select case (channel)
          case (1)
@@ -157,6 +162,8 @@ contains
             deallocate (acc%w_k1)
          case (8)
             deallocate (acc%w_k2)
+         case (9)
+            deallocate (acc%w_c)
          case default
             call test_failed(error, "invalid surface channel selector")
             return
@@ -165,7 +172,10 @@ contains
                     "missing surface channel "//to_string(channel)//" accepted")
          if (allocated(error)) return
       end do
-      do channel = 1, 10
+      ! Each case gives one channel a wrong size: the grid channels 4 points
+      ! instead of 3, the vector channels 2 rows instead of 3, w_c 2 entries
+      ! instead of 3
+      do channel = 1, 11
          call acc%init(3)
          select case (channel)
          case (1)
@@ -198,6 +208,9 @@ contains
          case (10)
             deallocate (acc%w_n)
             allocate (acc%w_n(2, 3), source=0.0_wp)
+         case (11)
+            deallocate (acc%w_c)
+            allocate (acc%w_c(2), source=0.0_wp)
          case default
             call test_failed(error, "invalid surface channel selector")
             return
@@ -221,7 +234,7 @@ contains
       scalar = 1.0_wp
       short_vector = 1.0_wp
       long_vector = 1.0_wp
-      do channel = 1, 10
+      do channel = 1, 11
          call acc%init(3)
          select case (channel)
          case (1)
@@ -254,6 +267,9 @@ contains
          case (10)
             call acc%add_surface_weights(err, w_n=long_vector)
             expected = "normal weight shape mismatch"
+         case (11)
+            call acc%add_surface_weights(err, w_c=scalar)
+            expected = "origin weight size mismatch"
          case default
             call test_failed(error, "invalid surface channel selector")
             return

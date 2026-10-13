@@ -11,6 +11,16 @@ where :math:`P` is the applied pressure and :math:`V` the total cavity volume.
 The component declares no host requests and requires an updated cavity that
 provides ``total_volume``.
 
+On grid cavities (iSwiG, DROP) the volume is the divergence-theorem sum
+
+.. math::
+
+   V = \frac{1}{3} \sum_i a_i \, (\mathbf r_i - \mathbf c) \cdot \mathbf n_i,
+   \qquad \mathbf c = \frac{1}{N} \sum_A \mathbf R_A,
+
+measured from the nuclear centroid :math:`\mathbf c`.
+The discrete surface leaves :math:`\sum_i a_i \mathbf n_i` nonzero, so a fixed origin would make :math:`V` change under rigid translation.
+
 Its surface weights make the energy fully variational on the :doc:`ρ-DROP isodensity cavity </cavities/isodensity>`; analytic nuclear gradients work on static and isodensity cavities.
 
 Parameters

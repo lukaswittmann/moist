@@ -8,7 +8,7 @@ module moist_cavity_iswig
    use, intrinsic :: iso_fortran_env, only: output_unit
 
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
-   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -60,7 +60,7 @@ module moist_cavity_iswig
       procedure :: update => update_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
       !> Contract surface-observable adjoints into the nuclear gradient
-      procedure :: get_surface_gradient => get_surface_gradient_iswig
+      procedure :: contract_surface_gradient => get_surface_gradient_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
       !> Declare the readable results an iSwiG cavity holds
       procedure :: list_fields => list_cavity_fields_iswig
@@ -232,6 +232,7 @@ contains
       call setup_iswig_surface( &
          nsph=self%nsph, &
          centers=self%sphxyz, &
+         origin=self%get_volume_origin(), &
          radii=self%radii, &
          cut_a=self%param%cut_a, &
          cut_f=self%param%cut_f, &
@@ -266,6 +267,8 @@ contains
    !> - they differ only in the weight applied:
    !>   area:   dA/ds  = sum_p  R^2 * w * (df/ds)
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
+   !> - r_dot_p is measured from the volume origin, whose own motion adds
+   !>   dv_p/dc = -a_p n_p/3 through `add_volume_origin_gradient`
    subroutine compute_gradient_iswig(self, error)
       class(cavity_type_iswig), intent(inout) :: self
       !> Error handling
@@ -277,8 +280,11 @@ contains
       real(wp) :: dx, dy, dz, dvec(3)
       real(wp) :: dfdR, dswitch
       real(wp) :: area_weight, vol_weight
+      !> Volume origin and the per-point volume derivative wrt. it
+      real(wp) :: origin(3), dv_dc(3)
 
       nsph = size(self%radii)
+      origin = self%get_volume_origin()
 
       if (allocated(self%area_grad)) deallocate (self%area_grad)
       if (allocated(self%volume_grad)) deallocate (self%volume_grad)
@@ -313,11 +319,11 @@ contains
          rx = px - self%sphxyz(1, iat)
          ry = py - self%sphxyz(2, iat)
          rz = pz - self%sphxyz(3, iat)
-         r_dot_p = rx*px + ry*py + rz*pz
+         r_dot_p = rx*(px - origin(1)) + ry*(py - origin(2)) + rz*(pz - origin(3))
 
          ! Per-grid point weights for each gradient type:
          !   area:   R^2 w df/dR
-         !   volume: R w (n dot c)/3 df/dR
+         !   volume: R w (n . (p - c))/3 df/dR, c the volume origin
          area_weight = 1.0_wp
          vol_weight = r_dot_p/(3.0_wp*r_own)
 
@@ -369,6 +375,11 @@ contains
 
          self%v1_rA(:, iat, ip) = self%v1_rA(:, iat, ip) &
             & + r_own*weight*self%f(ip)/3.0_wp*[rx, ry, rz]
+
+         ! Volume-origin term, reaching every atom
+         dv_dc = -self%a(ip)*self%normal0(:, ip)/3.0_wp
+         call add_volume_origin_gradient(dv_dc, self%volume_grad)
+         call add_volume_origin_gradient(dv_dc, self%v1_rA(:, :, ip))
       end do
 
    end subroutine compute_gradient_iswig
@@ -529,7 +540,7 @@ contains
 
    !> Compute the iswig surface using cached Lebedev data and precomputed factors
    subroutine setup_iswig_surface( &
-      nsph, centers, radii, &
+      nsph, centers, origin, radii, &
       cut_a, cut_f, &
       zeta_born, ang_grid, ang_weight, &
       ngrid, owner, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
@@ -537,6 +548,8 @@ contains
 
       integer, intent(in) :: nsph
       real(wp), intent(in) :: centers(3, nsph)
+      !> Volume origin, bohr
+      real(wp), intent(in) :: origin(3)
       real(wp), intent(in) :: radii(nsph)
       real(wp), intent(in) :: cut_a, cut_f
       real(wp), intent(in) :: zeta_born
@@ -646,13 +659,14 @@ contains
 
          ! Points sit on their owner sphere, so the outward unit normal is the
          ! radial direction and the volume element is the divergence-theorem
-         ! contribution a_i (r_i . n_i)/3 that the total below accumulates
+         ! contribution a_i ((r_i - c) . n_i)/3 that the total below accumulates
          normal0(1, ipt) = rx/radii(owner(ipt))
          normal0(2, ipt) = ry/radii(owner(ipt))
          normal0(3, ipt) = rz/radii(owner(ipt))
 
          v(ipt) = a(ipt)* &
-                  (rx*grid_xyz(1, ipt) + ry*grid_xyz(2, ipt) + rz*grid_xyz(3, ipt))/ &
+                  (rx*(grid_xyz(1, ipt) - origin(1)) + ry*(grid_xyz(2, ipt) - origin(2)) &
+                   + rz*(grid_xyz(3, ipt) - origin(3)))/ &
                   (3.0_wp*radii(owner(ipt)))
          total_volume = total_volume + v(ipt)
       end do

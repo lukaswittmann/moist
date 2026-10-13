@@ -143,9 +143,11 @@ contains
    !> Add pressure-scaled total-volume surface adjoints
    !>
    !> The enclosed volume is the divergence-theorem sum over the grid points,
-   !> `V = sum_i a_i (r_i . n_i)/3`, so its surface adjoints follow directly from
-   !> the per-point geometry; the area channel carries `dV/da_i = (r_i . n_i)/3`,
-   !> the cavity folds it into whichever primitive channels it is built from
+   !> `V = sum_i a_i ((r_i - c) . n_i)/3` with `c` the cavity's volume origin, so
+   !> its surface adjoints follow directly from the per-point geometry; the area
+   !> channel carries `dV/da_i = ((r_i - c) . n_i)/3`, the cavity folds it into
+   !> whichever primitive channels it is built from, and the origin channel
+   !> carries `dV/dc = -sum_i a_i n_i/3`
    !>
    !> @param[inout] self     Component instance
    !> @param[in]    coupling Host coupling data, unused
@@ -166,26 +168,32 @@ contains
 
       !> Pressure-scaled adjoints of the grid point areas, positions, and normals
       real(wp), allocatable :: w_a(:), w_xyz(:, :), w_n(:, :)
+      !> Volume origin and its pressure-scaled adjoint
+      real(wp) :: origin(3), w_c(3)
       !> Grid point index
       integer :: igrid
 
       if (self%pressure == 0.0_wp) return
       if (.not. allocated(cavity%a) .or. .not. allocated(cavity%xyz) .or. &
-          .not. allocated(cavity%normal0)) then
+          .not. allocated(cavity%normal0) .or. .not. allocated(cavity%sphxyz)) then
          call fatal_error(error, "Cavity volume surface data are incomplete")
          return
       end if
 
+      origin = cavity%get_volume_origin()
       allocate (w_a(cavity%ngrid))
       allocate (w_xyz(3, cavity%ngrid))
       allocate (w_n(3, cavity%ngrid))
+      w_c = 0.0_wp
       do igrid = 1, cavity%ngrid
          w_a(igrid) = self%pressure/3.0_wp &
-            & *dot_product(cavity%xyz(:, igrid), cavity%normal0(:, igrid))
+            & *dot_product(cavity%xyz(:, igrid) - origin, cavity%normal0(:, igrid))
          w_xyz(:, igrid) = (self%pressure*cavity%a(igrid)/3.0_wp)*cavity%normal0(:, igrid)
-         w_n(:, igrid) = (self%pressure*cavity%a(igrid)/3.0_wp)*cavity%xyz(:, igrid)
+         w_n(:, igrid) = (self%pressure*cavity%a(igrid)/3.0_wp)*(cavity%xyz(:, igrid) - origin)
+         ! The volume reads positions only as r_i - c
+         w_c = w_c - w_xyz(:, igrid)
       end do
-      call acc%add_surface_weights(error, w_a=w_a, w_xyz=w_xyz, w_n=w_n)
+      call acc%add_surface_weights(error, w_a=w_a, w_xyz=w_xyz, w_n=w_n, w_c=w_c)
 
    end subroutine pv_get_surface_weights
 

@@ -333,7 +333,7 @@ def component_energy(model, mol, dm):
     """The model's energy on its current surface, answered by a fresh host for ``mol`` and ``dm``.
 
     The component applies its own widths, switches and trace window, so none
-    of its numerics is restated here. Moving ``mol`` moves the basis centres
+    of its numerics is restated here. Moving ``mol`` moves the basis centers
     while the grid stays where it is.
     """
     moments = GaussianMoments(PySCFHost(mol))
@@ -545,7 +545,7 @@ def test_params_window_only_moves_points_inside_it(system, basis):
         assert energy(start, end) == pytest.approx(wall.energy, rel=1e-12), (start, end)
     assert energy(magnitude.max(), 2.0 * magnitude.max()) == 0.0
 
-    # Windows centred on the tenth and the half quantile of the points still on
+    # Windows centered on the tenth and the half quantile of the points still on
     for quantile in np.quantile(magnitude, (0.1, 0.5)):
         banded = energy(0.5 * quantile, 2.0 * quantile)
         assert 0.0 < banded < wall.energy, quantile

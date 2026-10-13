@@ -1,7 +1,7 @@
 !> Generic accumulation of adjoints with respect to cavity-surface quantities
 !>
 !> Owns surface positions, widths, areas, switching factors, normals and
-!> curvatures for the cavity reverse pass
+!> curvatures for the cavity reverse pass, plus the volume origin
 module moist_cavity_surface_adjoint
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -12,7 +12,7 @@ module moist_cavity_surface_adjoint
 
    !> Adjoint weights for the common quantities of a discretized cavity surface
    !>
-   !> Owns every surface channel
+   !> Owns every surface channel and the volume-origin channel
    type :: cavity_surface_adjoint_type
       !> Weights for point positions r_i (3, ngrid)
       real(wp), allocatable :: w_xyz(:, :)
@@ -30,6 +30,8 @@ module moist_cavity_surface_adjoint
       real(wp), allocatable :: w_k1(:)
       !> Weights for the second principal curvature k2_i (ngrid)
       real(wp), allocatable :: w_k2(:)
+      !> Weights for the nuclear-centered volume origin c (3)
+      real(wp), allocatable :: w_c(:)
    contains
       !> Allocate every surface-adjoint channel and initialize it to zero
       procedure :: init => init_surface_adjoint
@@ -62,6 +64,7 @@ contains
       if (allocated(self%w_n)) deallocate (self%w_n)
       if (allocated(self%w_k1)) deallocate (self%w_k1)
       if (allocated(self%w_k2)) deallocate (self%w_k2)
+      if (allocated(self%w_c)) deallocate (self%w_c)
 
       allocate (self%w_xyz(3, ngrid), source=0.0_wp)
       allocate (self%w_w(ngrid), source=0.0_wp)
@@ -71,6 +74,7 @@ contains
       allocate (self%w_n(3, ngrid), source=0.0_wp)
       allocate (self%w_k1(ngrid), source=0.0_wp)
       allocate (self%w_k2(ngrid), source=0.0_wp)
+      allocate (self%w_c(3), source=0.0_wp)
 
    end subroutine init_surface_adjoint
 
@@ -89,6 +93,7 @@ contains
       if (allocated(self%w_n)) self%w_n = 0.0_wp
       if (allocated(self%w_k1)) self%w_k1 = 0.0_wp
       if (allocated(self%w_k2)) self%w_k2 = 0.0_wp
+      if (allocated(self%w_c)) self%w_c = 0.0_wp
 
    end subroutine zero_surface_adjoint
 
@@ -104,7 +109,8 @@ contains
    !> @param[in]    w_k2  Optional second-principal-curvature weights (ngrid)
    !> @param[in]    w_a   Optional surface-area weights (ngrid)
    !> @param[in]    w_w   Optional integration-weight weights (ngrid)
-   subroutine add_surface_weights(self, error, w_xi, w_f, w_xyz, w_n, w_k1, w_k2, w_a, w_w)
+   !> @param[in]    w_c   Optional volume-origin weights (3)
+   subroutine add_surface_weights(self, error, w_xi, w_f, w_xyz, w_n, w_k1, w_k2, w_a, w_w, w_c)
       !> Surface-adjoint accumulator
       class(cavity_surface_adjoint_type), intent(inout) :: self
       !> Error handling
@@ -113,6 +119,8 @@ contains
       real(wp), intent(in), optional :: w_xi(:), w_f(:), w_k1(:), w_k2(:), w_a(:), w_w(:)
       !> Optional vector surface weights
       real(wp), intent(in), optional :: w_xyz(:, :), w_n(:, :)
+      !> Optional volume-origin weights
+      real(wp), intent(in), optional :: w_c(:)
 
       !> Number of surface grid points
       integer :: ngrid
@@ -171,6 +179,12 @@ contains
             return
          end if
       end if
+      if (present(w_c)) then
+         if (size(w_c) /= 3) then
+            call fatal_error(error, "add_surface_weights: origin weight size mismatch")
+            return
+         end if
+      end if
 
       if (present(w_xi)) self%w_xi = self%w_xi + w_xi
       if (present(w_f)) self%w_f = self%w_f + w_f
@@ -180,6 +194,7 @@ contains
       if (present(w_k2)) self%w_k2 = self%w_k2 + w_k2
       if (present(w_a)) self%w_a = self%w_a + w_a
       if (present(w_w)) self%w_w = self%w_w + w_w
+      if (present(w_c)) self%w_c = self%w_c + w_c
 
    end subroutine add_surface_weights
 
@@ -196,7 +211,8 @@ contains
       initialized = allocated(self%w_xi) .and. allocated(self%w_f) .and. &
                     allocated(self%w_a) .and. allocated(self%w_w) .and. &
                     allocated(self%w_xyz) .and. allocated(self%w_n) .and. &
-                    allocated(self%w_k1) .and. allocated(self%w_k2)
+                    allocated(self%w_k1) .and. allocated(self%w_k2) .and. &
+                    allocated(self%w_c)
       if (.not. initialized) return
 
       ngrid = size(self%w_xi)
@@ -204,7 +220,8 @@ contains
                     size(self%w_a) == ngrid .and. size(self%w_w) == ngrid .and. &
                     size(self%w_xyz, 1) == 3 .and. size(self%w_xyz, 2) == ngrid .and. &
                     size(self%w_n, 1) == 3 .and. size(self%w_n, 2) == ngrid .and. &
-                    size(self%w_k1) == ngrid .and. size(self%w_k2) == ngrid
+                    size(self%w_k1) == ngrid .and. size(self%w_k2) == ngrid .and. &
+                    size(self%w_c) == 3
 
    end function surface_adjoint_is_initialized
 

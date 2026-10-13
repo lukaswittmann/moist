@@ -7,7 +7,7 @@
 !> - Charge models: hirshfeld, resp, mbis, chelpg
 !> - Environments: gas, solvent, conductor
 !> - `coulomb_spce`: SPC/E charges for neutral water only
-!> - `multipoles_mbis_<environment>`: stub for atom-centred multipoles in 6D MOZ, no kernel yet
+!> - `multipoles_mbis_<environment>`: stub for atom-centered multipoles in 6D MOZ, no kernel yet
 module moist_model_moz_potential_electrostatic_solvent
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
@@ -84,7 +84,7 @@ module moist_model_moz_potential_electrostatic_solvent
       procedure :: accumulate_adjoint_3d => solvent_model_charges_adjoint_3d
    end type solvent_model_charges_type
 
-   !> Atom-centred multipoles of a table solvent; TODO for the 6D MOZ, errors at update
+   !> Atom-centered multipoles of a table solvent; TODO for the 6D MOZ, errors at update
    type, extends(potential_term_type) :: solvent_multipoles_type
       !> Environment of the table: gas, solvent or conductor; blank until constructed
       character(len=solvent_choice_len) :: environment = ""
@@ -267,7 +267,7 @@ contains
       if (allocated(error)) return
       call require_table_solvent("Solvent multipoles", solvent_id, error)
       if (allocated(error)) return
-      ! TODO: atom-centred multipoles for the 6D MOZ (moist_data_solvents: get_solvent_multipoles)
+      ! TODO: atom-centered multipoles for the 6D MOZ (moist_data_solvents: get_solvent_multipoles)
       call fatal_error(error, "Solvent multipoles are not implemented yet; they are needed for the 6D MOZ")
    end subroutine solvent_multipoles_update
 

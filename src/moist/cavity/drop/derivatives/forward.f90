@@ -12,6 +12,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
+   use moist_cavity_type, only: add_volume_origin_gradient
    implicit none(type, external)
 
 contains
@@ -109,6 +110,8 @@ contains
 
       !> Volume derivatives
       real(wp) :: r_hat_dot_r, grad_r_hat_dot_r(3)
+      !> Volume origin moving with the molecule
+      real(wp) :: origin(3)
 
       !> Thread-local buffer for normal derivatives (used by volume gradient)
       real(wp), allocatable :: dn_dR_buf(:, :, :)
@@ -196,6 +199,11 @@ contains
       ! Thread-local accumulators (replace atomics for A_tot and V_tot)
       real(wp), allocatable :: A_tot_local(:, :), V_tot_local(:, :)
 
+      ! Volume-origin term dv_i/dc and its per-sphere sums (shared and thread-local)
+      real(wp) :: dv_dc(3)
+      real(wp), allocatable :: dv_dc_sph(:, :), dv_dc_sph_local(:, :)
+      integer :: isph
+
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -262,6 +270,9 @@ contains
 
       call abort%reset()
 
+      origin = self%get_volume_origin()
+      allocate (dv_dc_sph(3, self%nsph), source=0.0_wp)
+
       ! Pre-resolve the per-grid point timer handles under the "Gradients" node
       ! once, before the parallel region:
       !
@@ -311,7 +322,7 @@ contains
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
       !$omp& Hq1_curv, Hq2_curv, S11_curv, S12_curv, S22_curv, half_diff_curv, &
       !$omp& disc_curv, dH_curv, dS11_c, dS12_c, dS22_c, dKM_c, d_disc_c, &
-      !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
+      !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, lsf_error, do_timing)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
@@ -330,6 +341,7 @@ contains
       allocate (kkt_rhs_batch(4, 3*self%nsph))
       allocate (A_tot_local(3, self%nsph), source=0.0_wp)
       allocate (V_tot_local(3, self%nsph), source=0.0_wp)
+      allocate (dv_dc_sph_local(3, self%nsph), source=0.0_wp)
 
       !> The anchor_xi depends only on the nuclear geometry of the anchor system
       anchor_xi_local = 0.0_wp
@@ -379,8 +391,8 @@ contains
          G_lagrangian = phi1_r - lambda_val*lsf1_r
          H_lagrangian = phi2_rr - lambda_val*lsf2_rr
 
-         ! Compute r_i . n_i
-         r_hat_dot_r = dot_product(point, self%normal0(:, igrid))
+         ! Compute (r_i - c) . n_i, c the volume origin
+         r_hat_dot_r = dot_product(point - origin, self%normal0(:, igrid))
 
          if (do_timing) call self%ctx%timer%stop(h_prim)
 
@@ -886,21 +898,22 @@ contains
          !* ---------------------- v_i derivative ---------------------- *!
          if (do_timing) call self%ctx%timer%start(h_vol)
 
-         ! New volume formula: v_i = (1/3) * a_i * (r_i . n_i)
-         ! where n_i = dS / | dS| is the surface normal
+         ! New volume formula: v_i = (1/3) * a_i * ((r_i - c) . n_i)
+         ! where n_i = dS / | dS| is the surface normal and c the volume origin
 
-         ! Screening: a_i1_rA, dn_dR_buf, xyz1_rA all zero for inactive atoms
+         ! Screening: a_i1_rA, dn_dR_buf, xyz1_rA all zero for inactive atoms;
+         ! the origin's own motion reaches every atom and is added below
          do i = 1, n_active
             iatom = active_idx(i)
             do iaxis = 1, 3
-               ! Derivative of r_i . n_i:
-               ! d(r_i . n_i)/dr_A = dr_i/dr_A . n_i + r_i . dn_i/dr_A
+               ! Derivative of (r_i - c) . n_i at fixed c:
+               ! dr_i/dr_A . n_i + (r_i - c) . dn_i/dr_A
                ! Read normal derivative from thread-local buffer
                grad_r_hat_dot_r(iaxis) = &
                   +dot_product(self%xyz1_rA(:, iaxis, iatom, igrid), self%normal0(:, igrid)) &
-                  + dot_product(point, dn_dR_buf(:, iatom, iaxis))
+                  + dot_product(point - origin, dn_dR_buf(:, iatom, iaxis))
 
-               ! Volume derivative: dv_i/dr_A = (1/3) * [da_i/dr_A * (r_i.n_i) + a_i * d(r_i.n_i)/dr_A]
+               ! Volume derivative: dv_i/dr_A = (1/3) * [da_i/dr_A * ((r_i-c).n_i) + a_i * d((r_i-c).n_i)/dr_A]
                self%v1_rA(iaxis, iatom, igrid) = (1.0_wp/3.0_wp)*( &
                                                  self%a_i1_rA(iaxis, iatom, igrid)*r_hat_dot_r &
                                                  + self%a(igrid)*grad_r_hat_dot_r(iaxis))
@@ -925,17 +938,25 @@ contains
             end do
          end do
 
+         !* -------- Volume-origin term -------- *!
+         ! dv_i/dc = -a_i n_i/3 reaches every atom, LSF-active or not; the sphere
+         ! and total sums are spread over the atoms once after the loop
+         dv_dc = -self%a(igrid)*self%normal0(:, igrid)/3.0_wp
+         call add_volume_origin_gradient(dv_dc, self%v1_rA(:, :, igrid))
+         dv_dc_sph_local(:, owner_idx) = dv_dc_sph_local(:, owner_idx) + dv_dc
+
       end do ! igrid
       !$omp end do
 
       !$omp critical (gradient_reduction)
       self%A_tot1_rA = self%A_tot1_rA + A_tot_local
       self%V_tot1_rA = self%V_tot1_rA + V_tot_local
+      dv_dc_sph = dv_dc_sph + dv_dc_sph_local
       !$omp end critical (gradient_reduction)
 
       deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA, anchor_xi_local)
-      deallocate (kkt_rhs_batch, A_tot_local, V_tot_local)
+      deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
       !$omp end parallel
 
       if (abort%requested) then
@@ -947,6 +968,13 @@ contains
          end if
          return
       end if
+
+      ! Spread the sphere and total volume-origin terms over every atom; summed
+      ! over the atoms they cancel the net force a nonzero sum_i a_i n_i leaves
+      do isph = 1, self%nsph
+         call add_volume_origin_gradient(dv_dc_sph(:, isph), self%vsph1_rA(:, isph, :))
+      end do
+      call add_volume_origin_gradient(sum(dv_dc_sph, dim=2), self%V_tot1_rA)
 
       !* ========================= Branch-weight post-pass ========================= *!
       call self%ctx%timer%start(h_bw)
@@ -1019,7 +1047,7 @@ contains
                owner_m = self%owner(im_grid)
                factor_m = self%wleb(im_grid)/self%wbranch(im_grid)
                area_fac_m = self%radii(owner_m)**2*self%f(im_grid)
-               rn_m = dot_product(self%xyz(:, im_grid), self%normal0(:, im_grid))
+               rn_m = dot_product(self%xyz(:, im_grid) - origin, self%normal0(:, im_grid))
                ! xi = swx/(R*sqrt(wleb)) -> branch weight of dxi/dwleb = -xi/(2*wleb)
                if (self%wleb(im_grid) > tiny(1.0_wp)) then
                   xi_fac_m = -0.5_wp*self%xi0(im_grid)/self%wleb(im_grid)
