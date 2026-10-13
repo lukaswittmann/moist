@@ -1846,6 +1846,8 @@ contains
                                      index, x_slsqp, x_seeds, n_seeds, error)
       end if
 
+      if (allocated(self%abort_error)) return
+
       ! A solver error is treated like "0 candidates"
       if (allocated(error)) then
          if (level >= 7) return
@@ -1864,6 +1866,7 @@ contains
       call self%refine_seeds(level, anchor, owner, index, xl, xu, &
                              rho_max, x_seeds, n_seeds, work, n_points, error)
       if (allocated(error)) return
+      if (allocated(self%abort_error)) return
 
       !> Fallback: retry with regular multistart (level 7) if the chosen solver produced 0 points
 

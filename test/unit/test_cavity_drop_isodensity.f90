@@ -190,6 +190,7 @@ contains
                   new_unittest("core_fill_certificate", test_core_fill_certificate), &
                   new_unittest("core_fill_cavity_unchanged", test_core_fill_cavity), &
                   new_unittest("core_fill_surface_check", test_core_fill_surface), &
+                  new_unittest("core_fill_seed_abort", test_core_fill_seed_abort), &
                   new_unittest("core_fill_surface_check_callback", test_core_fill_surface_callback), &
                   new_unittest("core_fill_skipped_anchor", test_core_fill_skipped_anchor), &
                   new_unittest("core_fill_certificate_bound", test_core_fill_certificate_bound) &
@@ -2037,6 +2038,49 @@ contains
          call test_failed(error, "a fill clear of the surface changed it")
       end if
    end subroutine test_core_fill_surface
+
+   !> Every projector reports a fill refusal as an error, wherever it meets it
+   !>
+   !> The single-SLSQP seed search (level 2) reaches the fill first, at first
+   !> order; refining after that abort read second order from the first-order
+   !> cache and ended in an `error stop`. Level 9 exhausts its octree budget
+   !> before it reaches the fill
+   subroutine test_core_fill_seed_abort(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+      type(mctc_error), allocatable :: cavity_error
+      character(len=8) :: label
+      integer :: level
+
+      ! One thread: the first anchor to fail decides where the abort is latched
+      call new_context(ctx, nthreads=1, verbosity=0)
+      call new_radii_custom_atoms([4.0_wp], radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      do level = 1, 8
+         write (label, "(i0)") level
+         call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error, rho_iso=0.4_wp)
+         if (allocated(error)) return
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=level), ctx=ctx)
+         if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+         call check(error, allocated(cavity_error), &
+                    more="level "//trim(label)//" built a surface inside the fill ball")
+         if (allocated(error)) return
+         call check(error, index(cavity_error%message, "ECP core fill") > 0, &
+                    more="level "//trim(label)//": "//cavity_error%message)
+         if (allocated(error)) return
+         deallocate (cavity_error)
+      end do
+   end subroutine test_core_fill_seed_abort
 
    !> The callback LSF rejects converged surface points inside its fill too
    !>
