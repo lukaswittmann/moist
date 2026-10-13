@@ -1133,6 +1133,9 @@ contains
 
       ! Solve and extract candidates
       if (level == 6) then
+         ! KKT seed: the caller's starting point with a zero multiplier
+         z_seed(1:3) = x_slsqp
+         z_seed(4) = 0.0_wp
          call solver%solve(z_seed, error)
          x_slsqp = z_seed(1:3)
       else
