@@ -47,6 +47,7 @@ from moist.interface import (
     ModelComponentGOSTSHYP,
     ModelComponentPV,
     Response,
+    SolvationModel,
 )
 from moist.pyscf import (
     CFC, DROP, ISwiG, Isodensity, SvdW,
@@ -263,17 +264,52 @@ def solvated_rhf(mol, epsilon):
     return mean_field
 
 
-@pytest.mark.conventions
-def test_pyscf_host_is_an_isodensity_cavity_source():
-    """A host is the density source of an isodensity cavity built from it."""
-    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    host = make_host(mol, dm=dm)
+@pytest.mark.host
+@pytest.mark.parametrize("cart", [False, True])
+def test_internal_density_reproduces_the_callback_cavity(cart):
+    """The host's basis conversion: moist's evaluator builds the callback's cavity.
 
-    cavity = cavity_config(True).build(source=host, context=CONTEXT)
-    cavity.update(host.structure())
+    cc-pVTZ brings f shells and general contractions; ``cart`` covers both
+    AO conventions.
+    """
+    mol = molecule("water", "cc-pvtz").copy()
+    mol.cart = cart
+    host = make_host(mol, dm=scf.RHF(mol).run(verbose=0).make_rdm1())
+    internal = cavity_config(True).build(source=host.internal_density(), context=CONTEXT)
+    callback = cavity_config(True).build(source=host, context=CONTEXT)
+    for cavity in (internal, callback):
+        cavity.update(host.structure())
 
-    assert cavity.density_dependent
-    assert cavity.ngrid > 0
+    # Measured 9e-16
+    np.testing.assert_allclose(internal.xyz, callback.xyz, rtol=0.0, atol=1e-10)
+    assert internal.area == pytest.approx(callback.area, rel=1e-12)
+
+
+@pytest.mark.isodensity
+@pytest.mark.cpcm_pv
+def test_internal_density_reproduces_the_callback_model():
+    """Energy, Fock and every gradient channel agree between the two density sources.
+
+    The level set's higher spatial derivatives enter only here, through the
+    density weights.
+    """
+    system, basis = CASES[1]
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    internal = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
+    # The same driver on the host's density callback
+    callback = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
+    callback.source = None
+    callback.model = SolvationModel(
+        CONTEXT, cavity_config(True).build(source=callback.host), callback.components)
+
+    # Measured 1e-14 relative
+    expected, actual = callback.evaluate(dm), internal.evaluate(dm)
+    assert actual.energy == pytest.approx(expected.energy, rel=1e-12)
+    np.testing.assert_allclose(actual.fock, expected.fock, rtol=0.0, atol=1e-12)
+    expected, actual = callback.gradient_channels(dm), internal.gradient_channels(dm)
+    assert actual.keys() == expected.keys() == {"model", "potential", "density"}
+    for name, reference in expected.items():
+        np.testing.assert_allclose(actual[name], reference, rtol=0.0, atol=1e-12, err_msg=name)
 
 
 @pytest.mark.isodensity

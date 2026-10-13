@@ -66,6 +66,10 @@ For an isodensity surface, change the cavity arguments:
    mf.kernel()
 
 The wrapper binds the current density before rebuilding the isodensity surface.
+MOIST evaluates it with its internal Gaussian evaluator: the PySCF basis is
+converted once to Cartesian monomials (``PySCFHost.basis``) and every density
+is transformed to them (``PySCFHost.cartesian_density``).
+``PySCFHost.density`` remains as a callback source.
 Static surfaces are reused across density changes. Energy and Fock include all
 required cavity-response terms. The default ``rho_iso`` is ``1e-3``
 electrons/bohr**3, as in C and Fortran. Radius models can be selected with

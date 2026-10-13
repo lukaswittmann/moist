@@ -5,9 +5,9 @@ PySCF mean-field objects.  Everything the integration needs is in this one
 file, top to bottom:
 
 1. :class:`PySCFHost` -- the AO-basis integrals: the surface potential and its
-   raw derivatives, the density callback an isodensity cavity evaluates, and
-   the contractions of MOIST's response items into Fock and nuclear-gradient
-   contributions.
+   raw derivatives, the basis and density an isodensity cavity evaluates with
+   moist's internal Gaussian evaluator, and the contractions of MOIST's
+   response items into Fock and nuclear-gradient contributions.
 2. :class:`GaussianMoments` -- the GOSTSHYP half of the host: the three-center
    Gaussian moment integrals a ``gaussian_moments`` request asks for, and the
    contraction of the returned amplitudes.
@@ -49,6 +49,7 @@ from .interface import (
     _immutable_array,
 )
 from .context import Context, _resolve_context
+from .density import GaussianBasis, InternalDensity
 
 __all__ = [
     "DROP", "ISwiG", "SvdW", "CFC", "Isodensity",
@@ -143,16 +144,50 @@ def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart", *, normalized=Fals
 
 
 # -----------------------------------------------------------------------------
-# The host: AO-basis integrals and the density callback
+# The basis of moist's internal isodensity evaluator
+# -----------------------------------------------------------------------------
+
+#: Real-harmonic factors libcint folds into its Cartesian s and p functions
+_CART_SP_FACTOR = (_S_NORM, math.sqrt(3.0) * _S_NORM)
+
+
+def _cartesian_basis(mol) -> GaussianBasis:
+    """Return ``mol``'s basis as moist's Cartesian monomials, one shell per contraction.
+
+    The coefficients carry libcint's radial normalization and its s/p factors,
+    so every monomial is the Cartesian function libcint evaluates; moist's
+    per-shell component order is libcint's.
+    """
+    from pyscf import gto
+
+    atoms, angular, nprim, exponents, coefficients = [], [], [], [], []
+    for shell in range(mol.nbas):
+        l, alpha = mol.bas_angular(shell), mol.bas_exp(shell)
+        contraction = mol.bas_ctr_coeff(shell) * gto.gto_norm(l, alpha)[:, None]
+        if l < 2:
+            contraction = contraction * _CART_SP_FACTOR[l]
+        for column in contraction.T:
+            atoms.append(mol.bas_atom(shell))
+            angular.append(l)
+            nprim.append(len(alpha))
+            exponents.extend(alpha)
+            coefficients.extend(column)
+    return GaussianBasis(shell_atom=atoms, shell_l=angular, shell_nprim=nprim,
+                         exponents=exponents, coefficients=coefficients)
+
+
+# -----------------------------------------------------------------------------
+# The host: AO-basis integrals and the density source
 # -----------------------------------------------------------------------------
 
 
 class PySCFHost:
     """The AO-basis half of the coupling for one PySCF molecule.
 
-    The density matrix is mutable state (:attr:`dm`).  It must be current
-    *before* every cavity build, and the level-set callback reads it on every
-    point evaluation.
+    The density matrix is mutable state (:attr:`dm`).  An isodensity cavity
+    evaluates it with moist's internal Gaussian evaluator, through
+    :meth:`internal_density`; :meth:`density` is the same density as a
+    callback, which reads :attr:`dm` on every point evaluation.
 
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     """
@@ -160,6 +195,9 @@ class PySCFHost:
     def __init__(self, mol) -> None:
         self.mol = mol
         self.dm: Optional[np.ndarray] = None
+        #: ``mol``'s basis on moist's Cartesian monomials
+        self.basis = _cartesian_basis(mol)
+        self._c2s = None if mol.cart else mol.cart2sph_coeff()
         self._gto_prefix = "GTOval_cart_deriv" if mol.cart else "GTOval_sph_deriv"
         self._aoslice = mol.aoslice_by_atom()
 
@@ -193,8 +231,26 @@ class PySCFHost:
     # level set
     # ------------------------------------------------------------------
 
+    def cartesian_density(self, dm=None) -> np.ndarray:
+        """Return ``dm`` (default :attr:`dm`) on :attr:`basis`, ``(ncart, ncart)``."""
+        dm = self._density_matrix() if dm is None else np.asarray(dm)
+        if self._c2s is not None:
+            # Same dirty BLAS status flags as in `density`
+            with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
+                dm = self._c2s @ dm @ self._c2s.T
+        # Symmetric only to rounding; InternalDensity checks it to 1e-12
+        return 0.5 * (dm + dm.T)
+
+    def internal_density(self, dm=None) -> InternalDensity:
+        """Return ``dm`` (default :attr:`dm`) as a source for moist's internal isodensity.
+
+        The source keeps a copy: assign ``host.cartesian_density(dm)`` to its
+        ``density_matrix`` before updating at a new density.
+        """
+        return InternalDensity(self.basis, self.cartesian_density(dm))
+
     def density(self, point: np.ndarray, order: int):
-        """Evaluate the density for an isodensity cavity built with ``source=host``.
+        """Evaluate the density as a callback, for an isodensity cavity built with ``source=host``.
 
         Returns the bare ``rho`` and its spatial derivatives up to ``order``
         only.  moist owns the level set built from it: it subtracts
@@ -718,9 +774,12 @@ class PySCFSolvation:
         self.context = _resolve_context(context)
         self.host = PySCFHost(mol)
         self.host.structure()  # Validate the molecular representation before use.
-        self.model = SolvationModel(
-            self.context, cavity.build(source=self.host if cavity.density_dependent else None), items,
-        )
+        #: Internal density source of an isodensity cavity; zero until the first evaluation
+        self.source: Optional[InternalDensity] = None
+        if cavity.density_dependent:
+            ncart = self.host.basis.ncart
+            self.source = InternalDensity(self.host.basis, np.zeros((ncart, ncart)))
+        self.model = SolvationModel(self.context, cavity.build(source=self.source), items)
         self.coupling = None
         #: The GOSTSHYP half, created the first time a moment request appears
         self.moments: Optional[GaussianMoments] = None
@@ -840,6 +899,8 @@ class PySCFSolvation:
         self._dm = density
         self.host.dm = density
         try:
+            if self.source is not None:
+                self.source.density_matrix = self.host.cartesian_density()
             if self.coupling is None or self.configuration.density_dependent:
                 self.model.update(self.host.structure())
             if self.coupling is None:

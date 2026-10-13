@@ -823,6 +823,7 @@ def test_gradient_surface_channel_matches_fd(system, basis):
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
+        # Only the callback can hold it: the internal density follows the structure.
         model = SolvationModel(CONTEXT, cavity_config().build(source=host), [ModelComponentGOSTSHYP(PRESSURE)])
         model.update(Structure(numbers, displaced, z_eff=numbers))
         return component_energy(model, mol, dm), model.cavity.ngrid
@@ -1011,8 +1012,7 @@ def test_conventions_anchor_area_derivatives_sum_to_the_total():
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
-    host.dm = dm
-    cavity = cavity_config().build(source=host, context=CONTEXT)
+    cavity = cavity_config().build(source=host.internal_density(dm), context=CONTEXT)
     cavity.update(host.structure())
 
     cavity.compute_anchor_gradient()

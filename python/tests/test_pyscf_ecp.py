@@ -151,8 +151,8 @@ def auh_all_electron():
 def test_auh_ecp_cavity_matches_all_electron(auh_ecp, auh_all_electron):
     mol, host, structure = auh_ecp
     _, ae_host, ae_structure = auh_all_electron
-    ecp = _cavity(host, structure)
-    all_electron = _cavity(ae_host, ae_structure)
+    ecp = _cavity(host.internal_density(), structure)
+    all_electron = _cavity(ae_host.internal_density(), ae_structure)
     gold = mol.atom_coord(0)
 
     # Measured 0.3 % in area and 0.03 bohr in closest approach (def2-SVP vs
@@ -164,9 +164,10 @@ def test_auh_ecp_cavity_matches_all_electron(auh_ecp, auh_all_electron):
 
 def test_auh_core_fill_leaves_outer_surface_untouched(auh_ecp):
     _, host, structure = auh_ecp
-    _assert_same_surface(_cavity(host, structure), _cavity(host, structure, core_fill=False))
+    source = host.internal_density()
+    _assert_same_surface(_cavity(source, structure), _cavity(source, structure, core_fill=False))
     # The ECP density stays below 0.2 beyond 1.8 bohr from gold
-    _assert_fill_active(host, structure, 0.25)
+    _assert_fill_active(source, structure, 0.25)
 
 
 def test_auh_inner_sheet_is_filled(auh_ecp):
@@ -174,5 +175,5 @@ def test_auh_inner_sheet_is_filled(auh_ecp):
     gold = mol.atom_coord(0)
     # Without the fill the sheet exists: the ECP density dips below rho_iso at the nucleus
     assert host.density(gold, 1)[0] < IsodensityParameters().rho_iso
-    deflated = _assert_matches_default_projector(host, structure, nleb=26)
+    deflated = _assert_matches_default_projector(host.internal_density(), structure, nleb=26)
     assert _inner_points(deflated, gold) == 0

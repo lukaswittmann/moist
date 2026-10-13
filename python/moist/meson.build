@@ -115,7 +115,7 @@ test(
 
 # Test MOIST--QM coupling (using PySCF) (mainly isodensity cavity + models)
 #
-#   host          the adapter's own derivative orders, moist not involved
+#   host          the adapter's own derivative orders and basis conversion
 #   vdw           electrostatic conventions on a density-independent cavity
 #   isodensity_*  the level-set chain rule, one target per component set
 #   conventions   channel semantics and the negative controls
