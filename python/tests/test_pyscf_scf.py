@@ -113,12 +113,13 @@ def test_scf_energy_fock_and_spin_contract(mol, method, cavity):
 
 @pytest.mark.parametrize("cavity,builds", [("svdw-drop", 1), ("rho-drop", 2)])
 def test_cache_by_density_value_and_geometry(mol, monkeypatch, cavity, builds):
+    # A geometric cavity is built once per geometry, an isodensity one per density
     calls = []
-    update = SolvationModel.update
-    def counted(self, structure):
-        calls.append(structure)
-        return update(self, structure)
-    monkeypatch.setattr(SolvationModel, "update", counted)
+    build = SolvationModel.build
+    def counted(self, coupling):
+        calls.append(coupling)
+        return build(self, coupling)
+    monkeypatch.setattr(SolvationModel, "build", counted)
     mf = attach(mol.RHF(), cavity)
     dm = mf.get_init_guess()
     first = mf.with_moist.evaluate(dm)
@@ -391,8 +392,10 @@ def test_density_fit_preserves_context(mol):
     assert fitted.with_moist.components == mf.with_moist.components
 
 
-def test_host_rejects_fractional_atomic_numbers(mol, monkeypatch):
+def test_host_charges_reach_the_coupling_not_the_structure(mol, monkeypatch):
     host = PySCFHost(mol)
     monkeypatch.setattr(mol, "atom_charges", lambda: np.array([8.5, 1., 1.]))
-    with pytest.raises(ValueError, match="integer vector"):
-        host.structure()
+    # The elements come from the atom symbols, the charges of the Hamiltonian
+    # are the nuclear_charges answer as they are
+    np.testing.assert_array_equal(host.structure().numbers, [8, 1, 1])
+    np.testing.assert_array_equal(host.nuclear_charges, [8.5, 1., 1.])

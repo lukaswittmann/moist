@@ -97,8 +97,9 @@ MOIST also supports custom atom-wise and element-wise radii:
       & element_radii, error)
    if (allocated(error)) error stop error%message
 
-Call ``update`` after geometry changes. For ρ-DROP, first set the new density
-on the cavity-owned LSF. ``get_gradient`` prepares nuclear-derivative arrays.
+Call ``update`` after geometry changes, then follow the :ref:`coupling-build`.
+``get_gradient`` prepares nuclear-derivative arrays. The example below uses a
+geometric cavity, which ``update`` builds directly.
 
 .. code-block:: fortran
 
@@ -209,12 +210,13 @@ The host supplies the shell layout once and a new ``dcart`` for every SCF densit
    use moist_cavity_drop_lsf_isodensity_internal, only : &
       & moist_cavity_drop_lsf_isodensity_internal_type
 
-   use moist, only: moist_cavity_drop_lsf_isodensity_param_type
+   use moist, only: moist_cavity_drop_lsf_isodensity_param_type, &
+      & coupling_type, density_matrix_request_type, nuclear_charge_request_type
 
    type(moist_cavity_drop_lsf_isodensity_internal_type) :: rho_lsf
    type(cavity_type_drop) :: cavity
    integer, allocatable :: sh_atom(:), sh_l(:), sh_nprim(:)
-   real(wp), allocatable :: exps(:), coeffs(:), dcart(:, :)
+   real(wp), allocatable :: exps(:), coeffs(:), dcart(:, :), z(:)
    real(wp), parameter :: rho_iso = 1.0e-3_wp
 
    ! sh_atom, sh_l, sh_nprim, exps, coeffs, and dcart (from QM side)
@@ -227,14 +229,30 @@ The host supplies the shell layout once and a new ``dcart`` for every SCF densit
       & lsf_model=rho_lsf, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
-Set the density at each SCF step:
+.. _isodensity-build-fortran:
+
+Answer the :ref:`coupling-build` with the host density matrix ``dcart`` and
+nuclear charges ``z``:
 
 .. code-block:: fortran
 
-   select type (lsf => cavity%lsf_model)
-   type is (moist_cavity_drop_lsf_isodensity_internal_type)
-      call lsf%set_density(dcart, error)
-   end select
+   type(coupling_type), target :: coupling
+
+   call cavity%update(mol, error)
+   if (allocated(error)) error stop error%message
+   ! At each SCF step
+   call cavity%prepare_build(coupling, error)
+   if (allocated(error)) error stop error%message
+   do while (coupling%next())
+      select type (request => coupling%request())
+      type is (density_matrix_request_type)
+         call coupling%answer("dcart", dcart, error)
+      type is (nuclear_charge_request_type)
+         call coupling%answer("z", z, error)
+      end select
+      if (allocated(error)) error stop error%message
+   end do
+   call cavity%build(coupling, error)
    if (allocated(error)) error stop error%message
 
 Alternatively, a callback-backed LSF calls a supplied function with the
@@ -273,7 +291,7 @@ coefficients for the host's integrals.
      - Response items it produces
    * - CPCM, COSMO
      - ``gaussian_potential`` with independently required ``phi``,
-       ``dphi_dr`` and ``dphi_dxi`` outputs
+       ``dphi_dr`` and ``dphi_dxi`` outputs; ``nuclear_charges`` (``z``) for gradients
      - ``potential_adjoint`` (``w_phi``, :math:`\mathrm{d}E/\mathrm{d}\phi`;
        the induced charges for a stationary PCM)
    * - PV
@@ -396,14 +414,10 @@ constructed above:
    call model%add_component(gostshyp, error)
    if (allocated(error)) error stop error%message
 
-Add all components before the first ``model%update``. After a successful update,
-create a coupling with ``model%new_coupling``. For each phase, call
-``prepare_*``, answer the missing outputs of each request that
-``do while (coupling%next())`` makes current, call ``get_*``, and contract
-each item that ``do while (response%next())`` makes current. Grid inputs are
-the public arrays of ``model%cavity`` (``xyz``, ``xi0``, ``normal0``, ``a``,
-``f``). See :ref:`coupling-fortran` for the evaluation loop and ownership
-rules.
+Add all components before the first ``model%update``. After updating, create
+a coupling with ``model%new_coupling`` and follow the :ref:`coupling-build`
+using ``model%prepare_build`` and ``model%build``. See :ref:`coupling-fortran`
+for evaluation and ownership; grid inputs are read from ``model%cavity``.
 
 The ``moist`` umbrella module re-exports what the evaluation loop needs: every
 parameter type, ``cavity_type_drop`` and ``new_cavity_drop``, ``radius_type``
@@ -433,7 +447,9 @@ on a cavity fixed with respect to the density. ``host_potential`` and
 
 The model must have ``target`` and outlive its couplings. Create a coupling
 after a successful model update; ``model%release_coupling(coupling)`` releases
-it early. Grid inputs are read from ``model%cavity``.
+it early. Grid inputs are read from ``model%cavity``. PCM asks for
+``nuclear_charge_request_type`` (``z(natom)``) in the gradient phase unless the
+build phase already answered it.
 
 ``coupling%request()`` returns a copy of the current request carrying its
 kind, outputs, requirement state and inputs such as the moment width. Later

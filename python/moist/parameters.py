@@ -115,8 +115,9 @@ class CFCParameters(_Parameters):
 class IsodensityParameters(_Parameters):
     """Level set ``scale * (rho_iso - rho)``; density in electrons/bohr**3.
 
-    ``core_fill`` adds a compact density bump at every ECP nucleus
-    (``z_eff < numbers``), so a pseudo-density cannot dip below ``rho_iso``
+    ``core_fill`` adds a compact density bump at every ECP nucleus (host
+    nuclear charge below the atomic number, answered through the
+    ``nuclear_charges`` request), so a pseudo-density cannot dip below ``rho_iso``
     there; the outer surface is left untouched. The bump reaches
     ``core_radius_fraction`` times the atom's cavity radius (at most 2 bohr).
     """

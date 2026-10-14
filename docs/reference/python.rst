@@ -77,10 +77,9 @@ Custom radii are in bohr, specified either in molecular atom order or by atomic 
    atom_radii = CustomRadii([2.67, 2.33, 2.33])
    element_radii = CustomRadii([2.33, 2.67], numbers=[1, 8])
 
-An isodensity cavity takes its live density source separately from its LSF
-settings. The source is a callable or an object with ``density(point, order)``;
-it returns the bare density and its spatial derivatives, through the requested
-order (1, 2 or 3). See :doc:`/cavities/isodensity` for the density convention.
+An isodensity cavity takes its density separately from its LSF settings: a ``GaussianBasis`` for moist's internal evaluator (``basis=``, see below), or a callback source (``source=``), a callable or an object with ``density(point, order)``.
+A callback returns the bare density and its spatial derivatives, through the requested order (1, 2 or 3), and stays outside the coupling.
+See :doc:`/cavities/isodensity` for the density convention.
 
 .. code-block:: python
 
@@ -137,7 +136,7 @@ returns a fresh ``Response``.
 ``model.components`` contains live views in construction order: ``name``,
 one-line ``description``, ``energy`` (the latest ``get_energy`` contribution in
 Hartree) and ``configuration`` (the original component). ``energy`` raises
-``KeyError`` before evaluation and after ``update``; ``fields()``, ``get(name)``
+``KeyError`` before evaluation and after an update or deferred rebuild; ``fields()``, ``get(name)``
 and ``describe(name)`` work as on a cavity:
 
 .. code-block:: python
@@ -154,14 +153,10 @@ Neither needs an update.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
-its :doc:`fields`. ``Structure(numbers, positions, z_eff=...)`` requires the
-nuclear charges of the host Hamiltonian, the atomic numbers minus any ECP core
-electrons; all-electron hosts pass ``z_eff=numbers``. ``Structure`` copies input arrays on
-construction and update; mutating an input NumPy array cannot change the
-stored geometry, call ``update`` explicitly. See :doc:`coupling` for the
-protocol Python drives with ``for request in coupling``,
-``coupling.answer(**outputs)`` and ``for item in response``, and
-:ref:`coupling-requests` for every output's shape.
+its :doc:`fields`. ``Structure(numbers, positions)`` stores elements and
+geometry, copying input arrays. Call ``update`` to change the geometry.
+Supply nuclear charges through the ``nuclear_charges`` request
+(:ref:`coupling-requests`).
 
 Internal Gaussian density
 -------------------------
@@ -169,12 +164,11 @@ Internal Gaussian density
 The same ``IsodensityParameters`` control both callback and native Gaussian
 sources. Basis data and the live density are separate from those settings::
 
-   from moist import GaussianBasis, InternalDensity, DROP, Isodensity
+   from moist import GaussianBasis, DROP, Isodensity
 
    basis = GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                          exponents=[0.5], coefficients=[1.0])
-   source = InternalDensity(basis, [[1.0]])
-   cavity = DROP(lsf=Isodensity()).build(context=context, source=source)
+   cavity = DROP(lsf=Isodensity()).build(context=context, basis=basis)
    shell_offsets, powers = cavity.isodensity_layout()
 
 Shell atom indices and offsets are zero-based; ``powers`` has shape ``(ncart,3)``.
@@ -185,10 +179,10 @@ For a host with spherical basis functions, ``IsodensityParameters(basis="spheric
 (``IsodensityBasis.SPHERICAL``) contracts that matrix over the :math:`2l+1` spherical
 functions per shell (faster); a matrix from a Cartesian-basis host is then rejected.
 
-Assign ``source.density_matrix`` before each cavity or model update. Updates
-install it on the correct native owner; merely assigning it does not change an
-already completed evaluation. Internal evaluation supplies spatial density
-derivatives. The host still supplies its own basis-center derivative contractions.
+Supply the density matrix and nuclear charges through the :ref:`coupling-build`,
+as shown below. Standalone cavities expose the same calls as models.
+MOIST evaluates spatial density derivatives; the host supplies basis-center
+derivative contractions.
 
 ``get_version_string()`` returns the linked library's full release string;
 ``get_banner(style)`` returns its banner without printing (``full``, ``short``,
@@ -200,10 +194,11 @@ Host coupling
 -------------
 
 The shared :doc:`coupling` protocol defines the requests, response items and
-phase lifecycle. Create a coupling after updating the model; the coupling
-keeps its model alive.
+phase lifecycle. Create a coupling after updating the model; it keeps the
+model alive. Prepare it again after ``model.update`` invalidates its answers.
 
-The outline below shows the Python calls. ``host_potential`` and ``host_fock``
+The outline below shows the Python calls; ``dcart`` is the host's density matrix
+in the layout above. ``host_potential`` and ``host_fock``
 stand for host integral routines; complete the derivative request and
 contraction loops for the chosen model. On a density-dependent cavity, retain
 the response-phase ``DensityResponse`` before obtaining the gradient response
@@ -213,15 +208,29 @@ and use it for the additional density derivative contractions described in
 Python mirrors the same names. Iterating a coupling advances the native
 cursor: each step yields a snapshot of the current request, and the loop ends
 with the pass. ``coupling.answer`` takes the outputs of the current request
-by keyword with the grid axis first. Iterating a response yields its items.
+by keyword with the grid axis first (the atom axis for ``z``). Iterating a response yields its items.
 Grid inputs are read from ``model.cavity``.
 
 .. code-block:: python
 
    import numpy as np
-   from moist import GaussianPotentialRequest, PotentialAdjointResponse
+   from moist import (
+       DensityMatrixRequest, GaussianPotentialRequest,
+       NuclearChargesRequest, PotentialAdjointResponse,
+   )
 
+   model.update(structure)
    coupling = model.new_coupling()
+   model.prepare_build(coupling)
+   for request in coupling:
+       if isinstance(request, DensityMatrixRequest):
+           coupling.answer(dcart=dcart)
+       elif isinstance(request, NuclearChargesRequest):
+           coupling.answer(z=host_nuclear_charges)
+       else:
+           raise NotImplementedError(f"unsupported request {request.name}")
+   model.build(coupling)
+
    model.prepare_energy(coupling)
    for request in coupling:
        if isinstance(request, GaussianPotentialRequest):
@@ -244,7 +253,10 @@ Grid inputs are read from ``model.cavity``.
 
    model.prepare_gradient(coupling)
    for request in coupling:
-       ...  # answer the missing derivative outputs the same way
+       if isinstance(request, NuclearChargesRequest):
+           coupling.answer(z=host_nuclear_charges)
+       else:
+           ...  # answer the missing derivative outputs the same way
    gradient = np.zeros((natoms, 3))
    response = model.get_gradient(coupling, gradient)
    for item in response:
@@ -252,15 +264,16 @@ Grid inputs are read from ``model.cavity``.
 
 Each request is a snapshot taken when it is yielded: ``name`` is a class
 attribute, ``missing`` the frozenset of output names missing at that moment,
-and ``GaussianMomentRequest.width`` an immutable copy of the widths. An output
+``GaussianMomentRequest.width`` an immutable copy of the widths and
+``DensityMatrixRequest.nbasis`` the size of ``dcart``. An output
 the request does not have is never in ``missing``.
 ``coupling.answer(**outputs)`` accepts any subset of the current request's
 outputs, and ``None`` skips one. An unknown keyword raises ``TypeError`` and
 no current request ``RuntimeError``, both before anything is submitted. The
-rest go in declaration order, each validated on its own: the first rejection --
-``ValueError`` for a wrong shape, ``RuntimeError`` for a native one -- leaves
-that output missing, keeps the outputs submitted before it and skips the rest
-of the call. A ``break`` leaves the pass for the next loop to resume;
+rest go in declaration order. Python validation errors (such as a wrong shape
+or asymmetric ``dcart``) leave any previous answer intact; native rejections
+(such as non-finite values) clear that output. Either stops the call, keeping
+earlier submissions and skipping later ones. A ``break`` leaves the pass for the next loop to resume;
 a loop that ran to the end lets the next one start a new pass.
 
 A ``Response`` is a plain value copied out of the native result: iterating it

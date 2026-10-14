@@ -12,7 +12,7 @@ module moist_cavity_numsa
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
-   use moist_cavity_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type, update_cavity_base
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
@@ -148,6 +148,12 @@ contains
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radii)
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_numsa
 
    !> Construction settings of the cavity
@@ -167,7 +173,6 @@ contains
    !>
    !> @param[inout] self   The cavity object to update
    !> @param[in]    mol    Molecular structure with coordinates
-   !> @param[in]    radii  Atomic radii (typically vdW radii) in bohr (nat)
    subroutine update_cavity_numsa(self, mol, error)
       class(cavity_type_numsa), intent(inout) :: self
       type(structure_type), intent(in) :: mol
@@ -178,6 +183,8 @@ contains
       real(wp), allocatable :: dsdr(:, :, :)
       integer :: iat, jatom
 
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -228,6 +235,8 @@ contains
       end do
 
       deallocate (surface, dsdr)
+      self%updated = .true.
+      self%built = .true.
 
    end subroutine update_cavity_numsa
 

@@ -26,7 +26,8 @@ module test_api
       & new_pv_component_api, delete_solvation_component_api, &
       & general_model_add_component_api, new_coupling_api, delete_coupling_api, &
       & new_response_api, delete_response_api, general_model_get_gradient_api, &
-      & set_isodensity_density_api, get_drop_cavity_tolerance_api, &
+      & get_drop_cavity_tolerance_api, new_cavity_coupling_api, prepare_cavity_build_api, &
+      & build_cavity_api, prepare_solvation_model_build_api, build_solvation_model_api, &
       & compute_cavity_gradient_api, compute_anchor_gradient_api, &
       & get_anchor_gradient_api, get_cavity_gradient_api, get_amat_gradient_api, &
       & contract_amat1_q1q2_surface_weights_api, &
@@ -49,7 +50,7 @@ module test_api
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot, &
       & coupling_register, coupling_arm, request_require, moist_phase_energy, &
       & atomic_charge_request_type, radial_potential_request_type, &
-      & point_potential_request_type, gaussian_moment_request_type
+      & point_potential_request_type, gaussian_moment_request_type, nuclear_charge_request_type
    use moist_channels_response, only: density_response_type, &
       & potential_adjoint_response_type, response_accumulate, response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
@@ -119,7 +120,7 @@ module test_api
    !> whose `update` never marks it usable
    type, extends(solvation_model_type) :: stub_model
    contains
-      !> Accept any structure, but never mark the model updated
+      !> Refuse every build, so the model is never updated
       procedure :: update => stub_model_update
       !> Contribute no energy
       procedure :: get_energy => stub_model_energy
@@ -216,7 +217,7 @@ module test_api
          integer(c_int), intent(inout), optional :: nsph
       end subroutine moist_get_cavity_sizes
 
-      function moist_new_structure(verror, natoms, numbers, z_eff, positions, &
+      function moist_new_structure(verror, natoms, numbers, positions, &
             & lattice, periodic) result(vmol) &
             & bind(C, name="moist_new_structure")
          import :: c_ptr, c_int, c_double, c_bool
@@ -224,7 +225,6 @@ module test_api
          type(c_ptr), value :: verror
          integer(c_int), value :: natoms
          integer(c_int), intent(in), optional :: numbers(natoms)
-         integer(c_int), intent(in), optional :: z_eff(natoms)
          real(c_double), intent(in), optional :: positions(3, natoms)
          real(c_double), intent(in), optional :: lattice(3, 3)
          logical(c_bool), intent(in), optional :: periodic(3)
@@ -522,25 +522,6 @@ module test_api
          type(c_ptr) :: model
       end function moist_new_model
 
-      !> C binding for moist_set_model_isodensity_density
-      !>
-      !> @param[in] verror Native error
-      !> @param[in] model Native model
-      !> @param[in] ncart Native density dimension
-      !> @param[in] density Native density buffer
-      subroutine moist_set_model_isodensity_density(verror, model, ncart, density) bind(C)
-         import :: c_ptr, c_int
-         implicit none(type, external)
-         !> Native error
-         type(c_ptr), value, intent(in) :: verror
-         !> Native model
-         type(c_ptr), value, intent(in) :: model
-         !> Native density dimension
-         integer(c_int), value, intent(in) :: ncart
-         !> Native density buffer
-         type(c_ptr), value, intent(in) :: density
-      end subroutine moist_set_model_isodensity_density
-
    end interface
 
    !* ================================================================================= *!
@@ -608,7 +589,6 @@ contains
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
-                  new_unittest("structure_effective_charges", test_structure_effective_charges), &
                   new_unittest("missing_pointers_results", test_missing_pointers_results), &
                   new_unittest("missing_pointers_gradients", test_missing_pointers_gradients), &
                   new_unittest("unbuilt_cavity_guards", test_unbuilt_cavity_guards), &
@@ -789,14 +769,14 @@ contains
       allocate (err)
       verror = c_loc(err)
 
-      vmol = moist_new_structure(verror, 3_c_int, numbers, numbers, positions)
+      vmol = moist_new_structure(verror, 3_c_int, numbers, positions)
       block
          type(c_ptr) :: lsf
          lsf = moist_new_svdw_lsf(verror, c_null_ptr)
          vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
-      call moist_update_cavity(verror, vcav, vmol)
+      call update_cavity_through_api(verror, vcav, vmol)
       call moist_get_cavity_sizes(verror, vcav, ngrid, nsph)
 
       if (allocated(err%ptr)) then
@@ -820,6 +800,81 @@ contains
       deallocate (err)
 
    end subroutine drop_water_cavity
+
+   !> Update a standalone cavity and run its build phase through the C protocol
+   !>
+   !> The build walk answers `nuclear_charges` with the atomic numbers, the
+   !> charges of an all-electron host
+   !>
+   !> @param[in] verror Error handle, set on failure
+   !> @param[in] vcav   Cavity handle
+   !> @param[in] vmol   Structure handle
+   subroutine update_cavity_through_api(verror, vcav, vmol)
+      type(c_ptr), intent(in) :: verror, vcav, vmol
+      type(vp_error), pointer :: err
+      type(c_ptr) :: vcpl
+
+      call c_f_pointer(verror, err)
+      call moist_update_cavity(verror, vcav, vmol)
+      if (allocated(err%ptr)) return
+      vcpl = new_cavity_coupling_api(verror, vcav)
+      if (allocated(err%ptr)) return
+      call prepare_cavity_build_api(verror, vcav, vcpl)
+      if (.not. allocated(err%ptr)) call answer_build_walk(verror, vcpl, vmol)
+      if (.not. allocated(err%ptr)) call build_cavity_api(verror, vcav, vcpl)
+      call delete_coupling_api(vcpl)
+
+   end subroutine update_cavity_through_api
+
+   !> Update a model and run its build phase through the C protocol
+   !>
+   !> @param[in] verror Error handle, set on failure
+   !> @param[in] vmodel Model handle
+   !> @param[in] vmol   Structure handle
+   subroutine update_model_through_api(verror, vmodel, vmol)
+      type(c_ptr), intent(in) :: verror, vmodel, vmol
+      type(vp_error), pointer :: err
+      type(c_ptr) :: vcpl
+
+      call c_f_pointer(verror, err)
+      call update_solvation_model_api(verror, vmodel, vmol)
+      if (allocated(err%ptr)) return
+      vcpl = new_coupling_api(verror, vmodel)
+      if (allocated(err%ptr)) return
+      call prepare_solvation_model_build_api(verror, vmodel, vcpl)
+      if (.not. allocated(err%ptr)) call answer_build_walk(verror, vcpl, vmol)
+      if (.not. allocated(err%ptr)) call build_solvation_model_api(verror, vmodel, vcpl)
+      call delete_coupling_api(vcpl)
+
+   end subroutine update_model_through_api
+
+   !> Answer the staged build phase: `nuclear_charges` with the atomic numbers
+   !>
+   !> @param[in] verror Error handle, set on failure
+   !> @param[in] vcpl   Coupling staged by a `prepare_*_build`
+   !> @param[in] vmol   Structure handle supplying the atomic numbers
+   subroutine answer_build_walk(verror, vcpl, vmol)
+      type(c_ptr), intent(in) :: verror, vcpl, vmol
+      type(vp_error), pointer :: err
+      type(vp_structure), pointer :: mol
+      type(vp_coupling), pointer :: cpl
+      real(c_double), allocatable :: z(:)
+      character(kind=c_char), allocatable, target :: name_z(:)
+
+      call c_f_pointer(verror, err)
+      call c_f_pointer(vmol, mol)
+      call c_f_pointer(vcpl, cpl)
+      z = real(mol%ptr%num(mol%ptr%id), c_double)
+      name_z = c_string("z")
+      do while (next_coupling_request_api(verror, vcpl))
+         select type (request => cpl%ptr%request())
+         type is (nuclear_charge_request_type)
+            call coupling_answer_api(verror, vcpl, c_loc(name_z), z)
+         end select
+         if (allocated(err%ptr)) return
+      end do
+
+   end subroutine answer_build_walk
 
    !> Null-terminate a Fortran string into a buffer c_loc can be taken of
    function c_string(text) result(buffer)
@@ -1518,7 +1573,7 @@ contains
       allocate (err)
       verror = c_loc(err)
 
-      vmol = moist_new_structure(verror, 3_c_int, numbers, numbers, cb_centers)
+      vmol = moist_new_structure(verror, 3_c_int, numbers, cb_centers)
       block
          type(c_ptr) :: lsf
          type(iso_options), target :: options
@@ -1528,7 +1583,7 @@ contains
          vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
-      call moist_update_cavity(verror, vcav, vmol)
+      call update_cavity_through_api(verror, vcav, vmol)
 
    end subroutine run_iso_callback_update
 
@@ -1625,7 +1680,7 @@ contains
          deallocate (err%ptr)
          ctx%calls = 0
          ctx%fail_after = huge(1)
-         call moist_update_cavity(verror, vcav, vmol)
+         call update_cavity_through_api(verror, vcav, vmol)
          if (allocated(err%ptr)) then
             call test_failed(error, "Cavity stayed broken after the callback recovered: " &
                              //err%ptr%message)
@@ -2126,7 +2181,7 @@ contains
       borrowed = c_null_ptr
       context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
       own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
-      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, numbers, positions)
+      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, positions)
       checks: block
          call c_f_pointer(context, shared)
          call c_f_pointer(own_context, own)
@@ -2136,7 +2191,7 @@ contains
          call check(error, c_associated(cavity) .and. c_associated(plain) .and. c_associated(owned), &
             & "parts are created with and without a context")
          if (allocated(error)) exit checks
-         call moist_update_cavity(c_loc(err), cavity, vmol)
+         call update_cavity_through_api(c_loc(err), cavity, vmol)
          call check(error, allocated(err%ptr), "standalone update without a context fails")
          if (allocated(error)) exit checks
          call check(error, index(err%ptr%message, "Cavity has no context") > 0, &
@@ -2159,7 +2214,7 @@ contains
          call check(error, shared%references == 3 .and. own%references == 3, &
             & "model retains its context for its cavity copy and the component's own")
          if (allocated(error)) exit checks
-         call update_solvation_model_api(c_loc(err), vmodel, vmol)
+         call update_model_through_api(c_loc(err), vmodel, vmol)
          call check(error, .not. allocated(err%ptr), "model update runs every part")
          if (allocated(error)) exit checks
          borrowed = get_solvation_model_cavity_api(c_loc(err), vmodel)
@@ -2372,10 +2427,9 @@ contains
       !> Returned structure handle
       type(c_ptr) :: verror, vmol
       !> Expected diagnostics, one per case
-      character(len=80), parameter :: needles(9) = [character(len=80) :: &
+      character(len=80), parameter :: needles(8) = [character(len=80) :: &
          & "[moist_new_structure] Required pointer 'numbers' is missing", &
          & "[moist_new_structure] Required pointer 'positions' is missing", &
-         & "[moist_new_structure] Required pointer 'z_eff' is missing", &
          & "[moist_update_structure] Required pointer 'positions' is missing", &
          & "[moist_update_structure] Molecular structure data is missing", &
          & "[moist_update_structure] Invalid molecular structure data provided", &
@@ -2394,22 +2448,20 @@ contains
          vmol = c_null_ptr
          select case (icase)
          case (1)
-            vmol = moist_new_structure(verror, 2_c_int, z_eff=numbers, positions=positions)
+            vmol = moist_new_structure(verror, 2_c_int, positions=positions)
          case (2)
-            vmol = moist_new_structure(verror, 2_c_int, numbers, numbers)
+            vmol = moist_new_structure(verror, 2_c_int, numbers)
          case (3)
-            vmol = moist_new_structure(verror, 2_c_int, numbers, positions=positions)
-         case (4)
             call update_structure_api(verror, c_null_ptr)
-         case (5)
+         case (4)
             call update_structure_api(verror, c_null_ptr, positions)
-         case (6)
+         case (5)
             call update_structure_api(verror, c_loc(empty), positions)
-         case (7)
+         case (6)
             call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
-         case (8)
+         case (7)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
-         case (9)
+         case (8)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
          case default
             error stop "test_api: unhandled case in test_structure_radii_guards"
@@ -2422,46 +2474,6 @@ contains
       deallocate (err)
 
    end subroutine test_structure_radii_guards
-
-   !> Effective charges reach the native structure apart from the elements, and a
-   !> charge outside 1..Z is refused
-   subroutine test_structure_effective_charges(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(vp_error), pointer :: err
-      type(vp_structure), pointer :: mol
-      !> HI, iodine behind a 28-electron core
-      integer(c_int), parameter :: numbers(2) = [53_c_int, 1_c_int]
-      integer(c_int), parameter :: z_eff(2) = [25_c_int, 1_c_int]
-      real(c_double), parameter :: positions(3, 2) = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
-                                                              0.0_c_double, 0.0_c_double, 3.04_c_double], [3, 2])
-      type(c_ptr) :: verror, vmol
-
-      allocate (err)
-      verror = c_loc(err)
-      vmol = moist_new_structure(verror, 2_c_int, numbers, z_eff, positions)
-      call check(error, .not. allocated(err%ptr) .and. c_associated(vmol), "structure with ECP charges")
-      if (.not. allocated(error)) then
-         call c_f_pointer(vmol, mol)
-         call check(error, all(mol%ptr%num(mol%ptr%id) == numbers), "elements stay the atomic numbers")
-         if (.not. allocated(error)) then
-            call check(error, allocated(mol%ptr%z_eff), "native structure carries z_eff")
-         end if
-         if (.not. allocated(error)) then
-            call check(error, all(mol%ptr%z_eff == z_eff), "native z_eff matches the input")
-         end if
-      end if
-      call moist_delete_structure(vmol)
-      if (allocated(error)) then
-         deallocate (err)
-         return
-      end if
-
-      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers + 1_c_int, positions)
-      call expect_error(error, err, "[moist_new_structure] Effective nuclear charges must lie between")
-      call moist_delete_structure(vmol)
-      deallocate (err)
-
-   end subroutine test_structure_effective_charges
 
    !> Omit one required pointer at a time and expect the entry point to name it
    !>
@@ -2681,8 +2693,9 @@ contains
    end subroutine drop_unbuilt_cavities
 
    !> Readers refuse a cavity that was never built, updates refuse a missing or
-   !> empty structure, and the A-matrix assembly refuses a missing or empty
-   !> handle; no caller buffer is written
+   !> empty structure, the build phase a missing coupling, and the A-matrix
+   !> assembly refuses a missing or empty handle; no caller buffer is written.
+   !> A coupling needs no update: minting one on the fresh cavity succeeds
    subroutine test_unbuilt_cavity_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2698,13 +2711,15 @@ contains
       logical :: wrote
       real(c_double), parameter :: sentinel = -12345.0_c_double
       !> Expected diagnostics, one per case
-      character(len=64), parameter :: needles(6) = [character(len=64) :: &
-         & "[moist_get_cavity_sizes] Cavity is not built yet", &
-         & "[moist_get_cavity_results] Cavity is not built yet", &
+      character(len=128), parameter :: needles(8) = [character(len=128) :: &
+         & "[moist_get_cavity_sizes] Cavity is not built - update it, then run its build phase", &
+         & "[moist_get_cavity_results] Cavity is not built - update it, then run its build phase", &
          & "[moist_update_cavity] Molecular structure data is missing", &
          & "[moist_update_cavity] Invalid number of atoms", &
          & "[moist_assemble_amat] DROP cavity handle is missing", &
-         & "[moist_assemble_amat] DROP cavity is not initialized"]
+         & "[moist_assemble_amat] DROP cavity is not initialized", &
+         & "[moist_prepare_cavity_build] Coupling handle is missing", &
+         & "[moist_build_cavity] Coupling handle is missing"]
       integer :: icase
 
       call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
@@ -2735,6 +2750,10 @@ contains
             call moist_assemble_amat(verror, c_null_ptr, 1_c_int, amat0, xi)
          case (6)
             call moist_assemble_amat(verror, c_loc(empty_cav), 1_c_int, amat0, xi)
+         case (7)
+            call prepare_cavity_build_api(verror, vdrop, c_null_ptr)
+         case (8)
+            call build_cavity_api(verror, vdrop, c_null_ptr)
          case default
             error stop "test_api: unhandled case in test_unbuilt_cavity_guards"
          end select
@@ -2745,30 +2764,42 @@ contains
          if (allocated(error)) exit
       end do
 
+      if (.not. allocated(error)) then
+         block
+            type(c_ptr) :: minted
+            minted = new_cavity_coupling_api(verror, vdrop)
+            if (allocated(err%ptr)) then
+               call test_failed(error, "minting on a fresh cavity failed: "//err%ptr%message)
+               deallocate (err%ptr)
+            else
+               call check(error, c_associated(minted), more="minting on a fresh cavity returned null")
+            end if
+            call delete_coupling_api(minted)
+         end block
+      end if
+
       deallocate (empty_cav)
       call drop_unbuilt_cavities(err, vdrop, viswig)
 
    end subroutine test_unbuilt_cavity_guards
 
    !> DROP-only entry points name a missing handle or output, an empty cavity
-   !> and the wrong cavity or LSF type, and leave the tolerance output alone
+   !> and the wrong cavity type, and leave the tolerance output alone
    subroutine test_drop_only_entry_points(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
       !> Handle whose cavity pointer is null
       type(vp_cavity), pointer :: empty_cav
       type(c_ptr) :: verror, vdrop, viswig
-      !> Tolerance output and a one-component density
-      real(c_double), target :: tolerance, dcart(1, 1)
+      !> Tolerance output
+      real(c_double), target :: tolerance
       real(c_double), parameter :: sentinel = -12345.0_c_double
       !> Expected diagnostics, one per case
-      character(len=96), parameter :: needles(6) = [character(len=96) :: &
+      character(len=96), parameter :: needles(4) = [character(len=96) :: &
          & "[moist_get_drop_cavity_tolerance] Cavity handle is missing", &
          & "[moist_get_drop_cavity_tolerance] Output pointer is missing", &
          & "[moist_get_drop_cavity_tolerance] Cavity is not initialized", &
-         & "[moist_get_drop_cavity_tolerance] Supplied cavity is not a DROP cavity", &
-         & "[moist_set_isodensity_density] Cavity LSF is not the internal isodensity type", &
-         & "[moist_set_isodensity_density] Cavity is not DROP type"]
+         & "[moist_get_drop_cavity_tolerance] Supplied cavity is not a DROP cavity"]
       integer :: icase
 
       call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
@@ -2777,7 +2808,6 @@ contains
          return
       end if
       allocate (empty_cav)
-      dcart = 1.0_c_double
 
       do icase = 1, size(needles)
          tolerance = sentinel
@@ -2790,10 +2820,6 @@ contains
             call get_drop_cavity_tolerance_api(verror, c_loc(empty_cav), c_loc(tolerance))
          case (4)
             call get_drop_cavity_tolerance_api(verror, viswig, c_loc(tolerance))
-         case (5)
-            call set_isodensity_density_api(verror, vdrop, 1_c_int, c_loc(dcart))
-         case (6)
-            call set_isodensity_density_api(verror, viswig, 1_c_int, c_loc(dcart))
          case default
             error stop "test_api: unhandled case in test_drop_only_entry_points"
          end select
@@ -2998,9 +3024,9 @@ contains
    end subroutine test_stub_cavity_guards
 
    !> Model entry points name a missing or empty cavity, a missing or empty
-   !> model, a model not updated yet, a stub model rejected by a continuum-only
-   !> entry point, and an invalid density buffer, and a failed constructor
-   !> returns no handle
+   !> model, a missing structure or coupling, a model not updated yet, a
+   !> model-owned cavity asked for a coupling and a stub model rejected by a
+   !> continuum-only entry point, and a failed constructor returns no handle
    subroutine test_model_handle_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -3008,11 +3034,9 @@ contains
       type(vp_cavity), pointer :: empty_cav
       !> Model handles that were never constructed and one holding a stub
       type(vp_model), pointer :: empty_model, stub
-      type(c_ptr) :: verror, vdrop, viswig, vmodel, handle
-      !> One-component density
-      real(c_double), target :: density(1)
+      type(c_ptr) :: verror, vdrop, viswig, vmodel, handle, vborrowed
       !> Expected diagnostics, one per case
-      character(len=80), parameter :: needles(12) = [character(len=80) :: &
+      character(len=112), parameter :: needles(11) = [character(len=112) :: &
          & "[moist_new_model] Cavity handle is missing", &
          & "[moist_new_model] Cavity is not initialized", &
          & "[moist_update_model] Model is not initialized", &
@@ -3021,10 +3045,9 @@ contains
          & "[moist_get_model_cavity] Model is not initialized", &
          & "[moist_get_model_cavity] This solvation model type does not expose a cavity", &
          & "[moist_new_coupling] Model is not initialized", &
-         & "[moist_set_model_isodensity_density] Model is not a continuum solvation model", &
          & "[moist_new_coupling] Solvation model must be updated first", &
-         & "[moist_set_model_isodensity_density] Invalid density buffer", &
-         & "[moist_set_model_isodensity_density] Invalid density buffer"]
+         & "[moist_build_model] Coupling handle is missing", &
+         & "[moist_new_cavity_coupling] Cannot modify a model-owned cavity"]
       integer :: icase
 
       call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
@@ -3040,7 +3063,16 @@ contains
       end if
       allocate (empty_cav, empty_model, stub)
       allocate (stub_model :: stub%ptr)
-      density = 1.0_c_double
+      vborrowed = get_solvation_model_cavity_api(verror, vmodel)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Borrowed cavity failed: "//err%ptr%message)
+         deallocate (stub%ptr)
+         deallocate (stub, empty_model, empty_cav)
+         call moist_delete_cavity(vborrowed)
+         call delete_solvation_model_api(vmodel)
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
 
       do icase = 1, size(needles)
          handle = c_null_ptr
@@ -3062,13 +3094,11 @@ contains
          case (8)
             handle = new_coupling_api(verror, c_loc(empty_model))
          case (9)
-            call moist_set_model_isodensity_density(verror, c_loc(stub), 1_c_int, c_loc(density))
-         case (10)
             handle = new_coupling_api(verror, vmodel)
+         case (10)
+            call build_solvation_model_api(verror, vmodel, c_null_ptr)
          case (11)
-            call moist_set_model_isodensity_density(verror, vmodel, 0_c_int, c_loc(density))
-         case (12)
-            call moist_set_model_isodensity_density(verror, vmodel, 1_c_int, c_null_ptr)
+            handle = new_cavity_coupling_api(verror, vborrowed)
          case default
             error stop "test_api: unhandled case in test_model_handle_guards"
          end select
@@ -3079,6 +3109,7 @@ contains
 
       deallocate (stub%ptr)
       deallocate (stub, empty_model, empty_cav)
+      call moist_delete_cavity(vborrowed)
       call delete_solvation_model_api(vmodel)
       call drop_unbuilt_cavities(err, vdrop, viswig)
 
@@ -3087,10 +3118,6 @@ contains
    !> Refusals that need an updated continuum model: a component added after the
    !> update, a gradient read on a model that was never updated, and a NULL
    !> gradient buffer
-   !>
-   !> Also pins the NULL-error guard of `moist_set_model_isodensity_density`:
-   !> with a handle the call would invalidate the model, so a coupling that
-   !> still builds afterwards shows it returned before touching anything
    subroutine test_model_phase_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -3098,26 +3125,25 @@ contains
       !> H2, coordinates in Bohr
       integer(c_int) :: numbers(2)
       real(c_double) :: positions(3, 2)
-      !> Gradient buffer, seeded so any write is visible, and a density
-      real(c_double), target :: gradient(3, 2), density(1)
+      !> Gradient buffer, seeded so any write is visible
+      real(c_double), target :: gradient(3, 2)
       real(c_double), parameter :: sentinel = -12345.0_c_double
 
       numbers = 1_c_int
       positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
                            0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
-      density = 1.0_c_double
       allocate (err)
       verror = c_loc(err)
       vcpl = c_null_ptr
       vresp = c_null_ptr
       vfresh = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpv)
-      call update_solvation_model_api(verror, vmodel, vmol)
+      call update_model_through_api(verror, vmodel, vmol)
 
       checks: block
          if (allocated(err%ptr)) then
@@ -3130,7 +3156,6 @@ contains
             & "[moist_add_model_component] Components cannot be added after model update")
          if (allocated(error)) exit checks
 
-         call moist_set_model_isodensity_density(c_null_ptr, vmodel, 1_c_int, c_loc(density))
          vcpl = new_coupling_api(verror, vmodel)
          if (allocated(err%ptr)) then
             call test_failed(error, "Coupling on the updated model failed: "//err%ptr%message)
@@ -3185,12 +3210,12 @@ contains
       verror = c_loc(err)
       vcav = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpv)
-      call update_solvation_model_api(verror, vmodel, vmol)
+      call update_model_through_api(verror, vmodel, vmol)
 
       checks: block
          if (allocated(err%ptr)) then
@@ -3440,7 +3465,7 @@ contains
       allocate (stub_model :: stub%ptr)
       vcpl = c_null_ptr
 
-      vmol = moist_new_structure(verror, 2_c_int, numbers, numbers, positions)
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
       viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       vmodel = model_on_context(verror, viswig)
       vlow = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
@@ -3523,7 +3548,7 @@ contains
          call check_untouched(error, any(low /= sentinel), "energy read before evaluation")
          if (allocated(error)) exit checks
 
-         call update_solvation_model_api(verror, vmodel, vmol)
+         call update_model_through_api(verror, vmodel, vmol)
          if (.not. allocated(err%ptr)) vcpl = new_coupling_api(verror, vmodel)
          if (.not. allocated(err%ptr)) call general_model_prepare_energy_api(verror, vmodel, vcpl)
          energy = seed
@@ -3594,7 +3619,7 @@ contains
          if (allocated(error)) exit checks
 
          ! An update clears the energies, never the components
-         call update_solvation_model_api(verror, vmodel, vmol)
+         call update_model_through_api(verror, vmodel, vmol)
          if (.not. allocated(err%ptr)) call get_model_component_field_count_api(verror, vmodel, 0_c_int, nfield)
          if (.not. allocated(err%ptr)) call get_model_component_count_api(verror, vmodel, ncomponents)
          call expect_success(error, err, "count after update")
@@ -4617,7 +4642,7 @@ contains
       !> Stub model
       class(stub_model), intent(inout) :: self
       !> Ignored structure
-      class(structure_type), intent(in) :: mol
+      type(structure_type), intent(in) :: mol
       !> Never set
       type(moist_error_type), allocatable, intent(out) :: error
    end subroutine stub_model_update

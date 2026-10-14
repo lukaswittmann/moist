@@ -12,8 +12,8 @@ module moist_model_continuum_component_pcm_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       & response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & gaussian_potential_request_type, moist_phase_energy, moist_phase_response, &
-      & moist_phase_gradient, coupling_register, request_require
+      & gaussian_potential_request_type, nuclear_charge_request_type, moist_phase_energy, &
+      & moist_phase_response, moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
@@ -126,9 +126,6 @@ module moist_model_continuum_component_pcm_type
 
       !> Nuclear gradient contributions that bypass the cavity surface
       procedure :: get_direct_gradient => pcm_component_get_direct_gradient
-
-      !> Nuclear charges of the solute, the moving sources of the potential
-      procedure :: nuclear_charges => pcm_component_nuclear_charges
 
       !> Contract the current PCM charges to Gaussian-surface weights
       procedure :: amat_surface_weights => pcm_component_amat_surface_weights
@@ -633,7 +630,8 @@ contains
       if (allocated(error)) return
       call read_host_position_weight(coupling, w_phi, w_xyz, error)
       if (allocated(error)) return
-      call self%nuclear_charges(za)
+      call read_host_nuclear_charges(coupling, nat, za, error)
+      if (allocated(error)) return
 
       call pcm_electrostatic_nuclear_gradient(cavity%xyz, &
          & self%mol_solu%xyz, cavity%xyz1_rA, w_phi, w_xyz, &
@@ -653,40 +651,37 @@ contains
 
    end subroutine pcm_component_get_gradient
 
-   !> Nuclear charges of the solute
+   !> Nuclear charges of the solute, answered by the host
    !>
    !> The moving sources of the host potential are the solute nuclei, which
    !> enter only the direct nuclear gradient at fixed surface, weighted by the
-   !> potential adjoint: every
-   !> host quantity is a total, so nothing else in the component sees them
+   !> potential adjoint: every host quantity is a total, so nothing else in the
+   !> component sees them
    !>
-   !> The host's charges `z_eff` (atomic numbers minus ECP core electrons) when
-   !> the structure carries them, else the atomic numbers
+   !> The charges of the host Hamiltonian, `nuclear_charges` `z`: the atomic
+   !> numbers minus the core electrons an ECP replaces
    !>
-   !> @param[in]  self PCM component instance
-   !> @param[out] za   Nuclear charges (nat)
-   subroutine pcm_component_nuclear_charges(self, za)
-      !> PCM component instance
-      class(model_continuum_component_pcm), intent(in) :: self
+   !> @param[in]  coupling Scoped raw host primitives
+   !> @param[in]  nat      Number of solute atoms
+   !> @param[out] za       Nuclear charges (nat)
+   !> @param[out] error    Missing answer or atom-count mismatch
+   subroutine read_host_nuclear_charges(coupling, nat, za, error)
+      !> Scoped raw host primitives
+      class(coupling_view_type), intent(in) :: coupling
+      !> Number of solute atoms
+      integer, intent(in) :: nat
       !> Nuclear charges
       real(wp), allocatable, intent(out) :: za(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-      !> Number of solute atoms and atom index
-      integer :: nat, iatom
-
-      nat = self%mol_solu%nat
-      allocate (za(nat))
-      if (allocated(self%mol_solu%z_eff)) then
-         if (size(self%mol_solu%z_eff) == nat) then
-            za(:) = real(self%mol_solu%z_eff, wp)
-            return
-         end if
+      call coupling%read("nuclear_charges", "z", za, error)
+      if (allocated(error)) return
+      if (size(za) /= nat) then
+         call fatal_error(error, "PCM nuclear charges do not match the solute atom count")
       end if
-      do iatom = 1, nat
-         za(iatom) = real(self%mol_solu%num(self%mol_solu%id(iatom)), wp)
-      end do
 
-   end subroutine pcm_component_nuclear_charges
+   end subroutine read_host_nuclear_charges
 
    !> Contract the raw spatial derivative with this component's potential adjoint
    !>
@@ -802,7 +797,8 @@ contains
 
       call self%potential_adjoint(w_phi, error)
       if (allocated(error)) return
-      call self%nuclear_charges(za)
+      call read_host_nuclear_charges(coupling, nat, za, error)
+      if (allocated(error)) return
       allocate (grad_direct(3, nat))
       call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
          & w_phi, za, grad_direct, error, xi=cavity%xi0)
@@ -1015,7 +1011,8 @@ contains
    !> Declare Gaussian potential outputs independently for each phase
    !>
    !> Spatial and width derivatives are needed in the response only when the
-   !> level set follows the density, and in every nuclear gradient
+   !> level set follows the density, and in every nuclear gradient; the
+   !> nuclear charges only in the gradient
    !>
    !> @param[in]    self     PCM component instance
    !> @param[in]    cavity   Cavity the model is built on
@@ -1031,6 +1028,7 @@ contains
       !> Registration error
       type(error_type), allocatable, intent(out) :: error
       type(gaussian_potential_request_type) :: potential
+      type(nuclear_charge_request_type) :: charges
       call request_require(potential, moist_phase_energy, "phi", error)
       if (allocated(error)) return
       call request_require(potential, moist_phase_response, "phi", error)
@@ -1046,6 +1044,10 @@ contains
       call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
       if (allocated(error)) return
       call coupling_register(coupling, "potential", potential, error)
+      if (allocated(error)) return
+      call request_require(charges, moist_phase_gradient, "z", error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "nuclear_charges", charges, error)
    end subroutine pcm_component_declare_coupling
 
    !> Set external matrix (bypasses internal assembly)

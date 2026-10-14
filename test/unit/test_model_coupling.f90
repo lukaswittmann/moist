@@ -16,7 +16,11 @@ module test_model_coupling
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
-      gaussian_potential_request_type, gaussian_moment_request_type, request_name_len
+      gaussian_potential_request_type, gaussian_moment_request_type, request_name_len, &
+      nuclear_charge_request_type, density_matrix_request_type, coupling_view_type, &
+      coupling_make_view, coupling_close_view
+   use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
+   use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       & response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -29,7 +33,7 @@ module test_model_coupling
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_radii, only: radius_type_static, default_cpcm_radii
+   use moist_radii, only: radius_type_static, default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: build_test_cavity, fill_point_charge_potential, fill_point_charge_field, &
       & copy_potential_adjoint
@@ -79,7 +83,12 @@ contains
          new_unittest("model_staging_restarts_walk", test_model_restart), &
          new_unittest("phase_answer_reuse_and_energy_refresh", test_phase_reuse), &
          new_unittest("model_update_ends_walk", test_model_update_walk), &
-         new_unittest("model_accessors_name_the_problem", test_model_messages)]
+         new_unittest("model_accessors_name_the_problem", test_model_messages), &
+         new_unittest("build_answers_survive_energy_cycles", test_build_answers_kept), &
+         new_unittest("gradient_charges_go_with_energy_staging", test_gradient_charges_reasked), &
+         new_unittest("failed_build_leaves_the_model_unbuilt", test_model_failed_build), &
+         new_unittest("component_failure_drops_the_surface", test_component_failure_drops_surface), &
+         new_unittest("update_drops_build_answers", test_update_drops_build_answers)]
    end subroutine collect_model_coupling
 
    subroutine test_invalidation(error)
@@ -871,5 +880,514 @@ contains
       if (allocated(error)) return
       call model%release_coupling(coupling)
    end subroutine test_model_messages
+
+   !> Count the nuclear_charges requests a pass visits, answering nothing
+   !>
+   !> @param[inout] coupling Staged coupling; the pass ends and rewinds
+   function count_charge_visits(coupling) result(visits)
+      !> Staged coupling
+      type(coupling_type), intent(inout) :: coupling
+      !> Visited nuclear_charges requests
+      integer :: visits
+      visits = 0
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (nuclear_charge_request_type)
+            visits = visits + 1
+         end select
+      end do
+   end function count_charge_visits
+
+   !> The build phase answers the density matrix and the nuclear charges once:
+   !> two energy cycles later the gradient reads `z` without asking for it
+   !>
+   !> Internal isodensity cavity around a pseudo atom (one d shell) with the
+   !> core fill on, so `z` is required in the build phase; `z = Z` marks no
+   !> ECP nucleus, the surface stays that of the bare density. Before the
+   !> build, the energy staging names the build phase and the missing output
+   subroutine test_build_answers_kept(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+      type(model_continuum_type), target :: model
+      type(coupling_type), pointer :: coupling
+      class(cavity_type), pointer :: cav
+      type(response_type) :: response
+      real(wp) :: dcart(6, 6), energy
+      real(wp), allocatable :: gradient(:, :)
+      integer :: i, icycle, nvisit
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      dcart = 0.0_wp
+      do i = 1, 6
+         dcart(i, i) = 1.0_wp
+      end do
+      call lsf%new(sh_atom=[1], sh_l=[2], sh_nprim=[1], exps=[0.5_wp], coeffs=[1.0_wp], error=err, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.4_wp, scale=2.5_wp))
+      if (failed(error, err, "LSF setup")) return
+      call new_radii_custom_atoms([4.0_wp], radii, err)
+      if (failed(error, err, "radii setup")) return
+      call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=err, &
+                           param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      if (failed(error, err, "cavity setup")) return
+      call cpcm_model(model, cavity, ctx, mol, .false., error, configure_only=.true.)
+      if (allocated(error)) return
+
+      ! The update leaves the cavity without a surface until the build
+      call model%update(mol, err)
+      if (failed(error, err, "model update")) return
+      cav => model%cavity
+      call check(error, model%is_updated() .and. .not. model%is_built(), &
+         & more="the model built without its density matrix")
+      if (allocated(error)) return
+      call model%new_coupling(coupling, err)
+      if (failed(error, err, "coupling of the updated model")) return
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+
+      call model%prepare_build(coupling, err)
+      if (failed(error, err, "build staging")) return
+      nvisit = 0
+      do while (coupling%next())
+         nvisit = nvisit + 1
+         select type (request => coupling%request())
+         type is (density_matrix_request_type)
+            call coupling%answer("dcart", dcart, err)
+         type is (nuclear_charge_request_type)
+            call coupling%answer("z", [54.0_wp], err)
+         class default
+            call test_failed(error, "the build phase asked for "//trim(request%name()))
+            return
+         end select
+         if (failed(error, err, "build answer")) return
+      end do
+      call check(error, nvisit, 2, more="the build phase asks for the density matrix and the charges")
+      if (allocated(error)) return
+      call model%build(coupling, err)
+      if (failed(error, err, "model build")) return
+      call check(error, model%is_built() .and. cav%ngrid > 0, more="the pseudo atom has no surface")
+      if (allocated(error)) return
+
+      do icycle = 1, 2
+         call model%prepare_energy(coupling, err)
+         if (failed(error, err, "energy staging")) return
+         call check(error, count_charge_visits(coupling), 0, more="the energy phase asked for z")
+         if (allocated(error)) return
+         call fill_point_charge_potential(cav, coupling, [0.3_wp], mol)
+         energy = 0.0_wp
+         call model%get_energy(coupling, energy, err)
+         if (failed(error, err, "energy")) return
+      end do
+
+      call model%prepare_gradient(coupling, err)
+      if (failed(error, err, "gradient staging")) return
+      call check(error, count_charge_visits(coupling), 0, &
+         & more="the gradient asked again for z answered in the build phase")
+      if (allocated(error)) return
+      call fill_point_charge_field(cav, coupling, [0.3_wp], mol)
+      allocate (gradient(3, mol%nat), source=0.0_wp)
+      call model%get_gradient(coupling, response, gradient, err)
+      if (failed(error, err, "gradient with build-phase charges")) return
+      call model%release_coupling(coupling)
+   end subroutine test_build_answers_kept
+
+   !> Negative control: on a cavity without build-phase requests, `z` comes
+   !> in the gradient phase and goes with the next energy staging
+   subroutine test_gradient_charges_reasked(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      type(radius_type_static) :: radii
+      type(cavity_type_iswig) :: cavity
+      type(model_continuum_type), target :: model
+      type(coupling_type), pointer :: coupling
+      class(cavity_type), pointer :: cav
+      type(response_type) :: response
+      real(wp), allocatable :: gradient(:, :)
+      real(wp) :: energy
+      integer :: icycle
+
+      call iswig_fixture(ctx, mol, radii, cavity, error)
+      if (allocated(error)) return
+      call cpcm_model(model, cavity, ctx, mol, .false., error)
+      if (allocated(error)) return
+      cav => model%cavity
+      call model%new_coupling(coupling, err)
+      if (failed(error, err, "coupling")) return
+      allocate (gradient(3, mol%nat), source=0.0_wp)
+      do icycle = 1, 2
+         call model%prepare_energy(coupling, err)
+         if (failed(error, err, "energy staging")) return
+         call fill_point_charge_potential(cav, coupling, qat_vals, mol)
+         energy = 0.0_wp
+         call model%get_energy(coupling, energy, err)
+         if (failed(error, err, "energy")) return
+         call model%prepare_gradient(coupling, err)
+         if (failed(error, err, "gradient staging")) return
+         call check(error, count_charge_visits(coupling), 1, more="the gradient phase did not ask for z")
+         if (allocated(error)) return
+         call fill_point_charge_field(cav, coupling, qat_vals, mol)
+         call model%get_gradient(coupling, response, gradient, err)
+         if (failed(error, err, "gradient")) return
+      end do
+      call model%release_coupling(coupling)
+   end subroutine test_gradient_charges_reasked
+
+   !> Stage the energy phase of an updated model that is not built
+   !>
+   !> The staging is refused by name
+   !>
+   !> @param[inout] model    Updated model, not built
+   !> @param[inout] coupling Coupling of the model
+   !> @param[out]   error    testdrive failure
+   subroutine check_model_energy_refused(model, coupling, error)
+      !> Updated model, not built
+      type(model_continuum_type), intent(inout) :: model
+      !> Coupling of the model
+      type(coupling_type), intent(inout), target :: coupling
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_error_type), allocatable :: err
+
+      call check(error, model%is_updated() .and. .not. model%is_built(), &
+         & more="the model is not updated or already built")
+      if (allocated(error)) return
+      call model%prepare_energy(coupling, err)
+      call check(error, allocated(err), more="an unbuilt model staged its energy")
+      if (allocated(error)) return
+      call check(error, err%message, "Solvation model must be built first")
+      if (allocated(error)) return
+      err%stat = 0
+      deallocate (err)
+
+   end subroutine check_model_energy_refused
+
+   !> CPCM model over an internal isodensity pseudo atom, not updated yet
+   !>
+   !> One d shell with the core fill on, so the build phase asks for the
+   !> density matrix and the nuclear charges
+   !>
+   !> @param[out] model Model to build
+   !> @param[in]  ctx   Run context owned by the caller
+   !> @param[out] mol   Single atom at the origin
+   !> @param[out] error testdrive failure
+   subroutine pseudo_atom_model(model, ctx, mol, error)
+      !> Model to build
+      type(model_continuum_type), intent(out) :: model
+      !> Run context owned by the caller
+      type(moist_context_type), intent(in), target :: ctx
+      !> Single atom at the origin
+      type(structure_type), intent(out) :: mol
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_error_type), allocatable :: err
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+
+      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call lsf%new(sh_atom=[1], sh_l=[2], sh_nprim=[1], exps=[0.5_wp], coeffs=[1.0_wp], error=err, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.4_wp, scale=2.5_wp))
+      if (failed(error, err, "LSF setup")) return
+      call new_radii_custom_atoms([4.0_wp], radii, err)
+      if (failed(error, err, "radii setup")) return
+      call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=err, &
+                           param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      if (failed(error, err, "cavity setup")) return
+      call cpcm_model(model, cavity, ctx, mol, .false., error, configure_only=.true.)
+
+   end subroutine pseudo_atom_model
+
+   !> Answer the build phase of the pseudo atom: every cartesian d component
+   !> once, `z = Z`
+   !>
+   !> @param[inout] coupling Coupling staged for the build phase
+   !> @param[out]   err      Refused answer
+   subroutine answer_pseudo_atom_build(coupling, err)
+      !> Coupling staged for the build phase
+      type(coupling_type), intent(inout) :: coupling
+      !> Refused answer
+      type(moist_error_type), allocatable, intent(out) :: err
+
+      real(wp) :: dcart(6, 6)
+      integer :: i
+
+      dcart = 0.0_wp
+      do i = 1, 6
+         dcart(i, i) = 1.0_wp
+      end do
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (density_matrix_request_type)
+            call coupling%answer("dcart", dcart, err)
+         type is (nuclear_charge_request_type)
+            call coupling%answer("z", [54.0_wp], err)
+         end select
+         if (allocated(err)) return
+      end do
+
+   end subroutine answer_pseudo_atom_build
+
+   !> A model whose cavity defers its surface is not built from `prepare_build`
+   !> until a `build` succeeds
+   !>
+   !> - staging the build phase unbuilds it, so skipping the build leaves the
+   !>   energy refused
+   !> - a build refused for a missing output leaves it unbuilt
+   !> - so does a build of a coupling staged for another phase
+   !> - control: a geometric model stays built through `prepare_build`, and
+   !>   after an answered build the energy is evaluated
+   subroutine test_model_failed_build(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx, ctx_iswig
+      type(structure_type) :: mol, mol_iswig
+      type(radius_type_static) :: radii
+      type(cavity_type_iswig) :: iswig
+      type(model_continuum_type), target :: model, geometric
+      type(coupling_type), pointer :: coupling
+      class(cavity_type), pointer :: cav
+      real(wp) :: energy
+
+      ! Control: the geometric model keeps its surface
+      call iswig_fixture(ctx_iswig, mol_iswig, radii, iswig, error)
+      if (allocated(error)) return
+      call cpcm_model(geometric, iswig, ctx_iswig, mol_iswig, .false., error)
+      if (allocated(error)) return
+      call geometric%new_coupling(coupling, err)
+      if (failed(error, err, "geometric coupling")) return
+      call geometric%prepare_build(coupling, err)
+      if (failed(error, err, "geometric build staging")) return
+      cav => geometric%cavity
+      call check(error, geometric%is_built() .and. cav%is_built(), more="prepare_build dropped a geometric surface")
+      if (allocated(error)) return
+      call geometric%prepare_energy(coupling, err)
+      if (failed(error, err, "geometric energy staging without a build")) return
+      call fill_point_charge_potential(cav, coupling, qat_vals, mol_iswig)
+      energy = 0.0_wp
+      call geometric%get_energy(coupling, energy, err)
+      if (failed(error, err, "geometric energy without a build")) return
+      call geometric%release_coupling(coupling)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call pseudo_atom_model(model, ctx, mol, error)
+      if (allocated(error)) return
+      call model%update(mol, err)
+      if (failed(error, err, "model update")) return
+      cav => model%cavity
+      call model%new_coupling(coupling, err)
+      if (failed(error, err, "coupling")) return
+      call build_and_evaluate(error)
+      if (allocated(error)) return
+
+      ! Staged but not built
+      call model%prepare_build(coupling, err)
+      if (failed(error, err, "build staging")) return
+      call check(error, .not. model%is_built(), more="prepare_build kept the previous surface")
+      if (allocated(error)) return
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+
+      ! Built without the answers
+      call model%prepare_build(coupling, err)
+      if (.not. allocated(err)) call model%build(coupling, err)
+      call check(error, allocated(err), more="a build without its answers succeeded")
+      if (allocated(error)) return
+      call check(error, index(err%message, "density_matrix: missing required outputs: dcart") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      err%stat = 0
+      deallocate (err)
+      call check(error, .not. model%is_built(), more="a failed build left a surface")
+      if (allocated(error)) return
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+
+      ! Built again, then a build of the coupling staged for the energy phase
+      call build_and_evaluate(error)
+      if (allocated(error)) return
+      call model%build(coupling, err)
+      call check(error, allocated(err), more="a build of an energy staging succeeded")
+      if (allocated(error)) return
+      call check(error, index(err%message, "staged for the energy phase") > 0, more=err%message)
+      if (allocated(error)) return
+      err%stat = 0
+      deallocate (err)
+      call check(error, .not. model%is_built(), more="a refused build left a surface")
+      if (allocated(error)) return
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+
+   contains
+
+      !> Run the answered build phase, then evaluate the energy
+      subroutine build_and_evaluate(error)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+
+         call model%prepare_build(coupling, err)
+         if (.not. allocated(err)) call answer_pseudo_atom_build(coupling, err)
+         if (.not. allocated(err)) call model%build(coupling, err)
+         if (.not. allocated(err)) call model%prepare_energy(coupling, err)
+         if (failed(error, err, "control: build and energy staging")) return
+         call check(error, model%is_built(), more="control: the build left no surface")
+         if (allocated(error)) return
+         call fill_point_charge_potential(cav, coupling, [0.3_wp], mol)
+         energy = 0.0_wp
+         call model%get_energy(coupling, energy, err)
+         if (failed(error, err, "control: energy after the build")) return
+      end subroutine build_and_evaluate
+
+   end subroutine test_model_failed_build
+
+   !> A component that fails to update in the build leaves the model unbuilt
+   !>
+   !> The CPCM component carries a 1x1 external matrix, the pseudo atom's
+   !> surface more points, so the component update in `build` fails after the
+   !> cavity projected; the model stays unbuilt and the energy is refused.
+   !> Negative control: the same model without an external matrix builds and
+   !> evaluates
+   subroutine test_component_failure_drops_surface(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+      type(model_continuum_component_cpcm) :: cpcm
+      type(model_continuum_type), target :: model, control
+      type(coupling_type), pointer :: coupling
+      class(cavity_type), pointer :: cav
+      real(wp) :: energy
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+
+      ! Control: no external matrix
+      call pseudo_atom_model(control, ctx, mol, error)
+      if (allocated(error)) return
+      call control%update(mol, err)
+      if (.not. allocated(err)) call control%new_coupling(coupling, err)
+      if (.not. allocated(err)) call control%prepare_build(coupling, err)
+      if (.not. allocated(err)) call answer_pseudo_atom_build(coupling, err)
+      if (.not. allocated(err)) call control%build(coupling, err)
+      if (.not. allocated(err)) call control%prepare_energy(coupling, err)
+      if (failed(error, err, "control: build and energy staging")) return
+      cav => control%cavity
+      call fill_point_charge_potential(cav, coupling, [0.3_wp], mol)
+      energy = 0.0_wp
+      call control%get_energy(coupling, energy, err)
+      if (failed(error, err, "control: energy")) return
+      call control%release_coupling(coupling)
+
+      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call lsf%new(sh_atom=[1], sh_l=[2], sh_nprim=[1], exps=[0.5_wp], coeffs=[1.0_wp], error=err, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.4_wp, scale=2.5_wp))
+      if (failed(error, err, "LSF setup")) return
+      call new_radii_custom_atoms([4.0_wp], radii, err)
+      if (failed(error, err, "radii setup")) return
+      call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=err, &
+                           param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      if (failed(error, err, "cavity setup")) return
+      call new_continuum_model(model, ctx, cavity, err)
+      if (failed(error, err, "model setup")) return
+      call new_component_cpcm(cpcm, epsilon=eps_model, external_matrix=reshape([1.0_wp], [1, 1]), &
+         error=err, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      if (.not. allocated(err)) call model%add_component(cpcm, err)
+      if (failed(error, err, "CPCM with an external matrix")) return
+
+      call model%update(mol, err)
+      if (.not. allocated(err)) call model%new_coupling(coupling, err)
+      if (.not. allocated(err)) call model%prepare_build(coupling, err)
+      if (.not. allocated(err)) call answer_pseudo_atom_build(coupling, err)
+      if (failed(error, err, "build staging")) return
+      call model%build(coupling, err)
+      call check(error, allocated(err), more="a build with a mis-sized external matrix succeeded")
+      if (allocated(error)) return
+      call check(error, index(err%message, "External PCM matrix dimension mismatch") > 0, more=err%message)
+      if (allocated(error)) return
+      err%stat = 0
+      deallocate (err)
+      cav => model%cavity
+      call check(error, .not. model%is_built(), more="a failed component update left the model built")
+      if (allocated(error)) return
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+   end subroutine test_component_failure_drops_surface
+
+   !> A model update drops the answers of the build phase
+   !>
+   !> The density matrix the cavity scope reads after the build is gone after
+   !> the next update, the walk ends, the energy is refused and the build
+   !> phase asks for both outputs again
+   subroutine test_update_drops_build_answers(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      type(model_continuum_type), target :: model
+      type(coupling_type), pointer :: coupling
+      type(coupling_view_type) :: view
+      real(wp), allocatable :: dcart(:, :)
+      integer :: nvisit
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call pseudo_atom_model(model, ctx, mol, error)
+      if (allocated(error)) return
+      call model%update(mol, err)
+      if (.not. allocated(err)) call model%new_coupling(coupling, err)
+      if (failed(error, err, "update and coupling")) return
+      call model%prepare_build(coupling, err)
+      if (.not. allocated(err)) call answer_pseudo_atom_build(coupling, err)
+      if (.not. allocated(err)) call model%build(coupling, err)
+      if (failed(error, err, "build")) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_matrix", "dcart", dcart, err)
+      call coupling_close_view(coupling)
+      if (failed(error, err, "control: density read after the build")) return
+
+      call model%update(mol, err)
+      if (failed(error, err, "second update")) return
+      call check(error, .not. coupling%next(), more="the update left the walk running")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_matrix", "dcart", dcart, err)
+      call coupling_close_view(coupling)
+      call check(error, allocated(err), more="the update kept the density matrix of the build")
+      if (allocated(error)) return
+      err%stat = 0
+      deallocate (err)
+      call check_model_energy_refused(model, coupling, error)
+      if (allocated(error)) return
+      call model%prepare_build(coupling, err)
+      if (failed(error, err, "second build staging")) return
+      nvisit = 0
+      do while (coupling%next())
+         nvisit = nvisit + 1
+      end do
+      call check(error, nvisit, 2, more="the build phase did not ask for both outputs again")
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+   end subroutine test_update_drops_build_answers
 
 end module test_model_coupling

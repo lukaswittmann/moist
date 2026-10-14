@@ -7,9 +7,7 @@ module moist_model_continuum_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
-   use moist_cavity_drop, only: cavity_type_drop
-   use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
-   use moist_model_type, only: solvation_model_type
+   use moist_model_type, only: solvation_model_type, model_build
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
@@ -45,7 +43,6 @@ module moist_model_continuum_type
       final :: destroy_model
       procedure :: atom_count => model_atom_count
       procedure :: use_forward_gradient => model_use_forward_gradient
-      procedure :: set_isodensity_density => set_cavity_density
       procedure :: add_component
       !> Number of components, available before the first update
       procedure :: component_count => continuum_component_count
@@ -56,6 +53,10 @@ module moist_model_continuum_type
       !> Publish the results of one component, e.g. its latest energy
       procedure :: list_component_fields => continuum_list_component_fields
       procedure :: update => continuum_update
+      !> Whether the cavity waits for the build phase
+      procedure :: defers_build => continuum_defers_build
+      !> Read the build phase, then complete a cavity that waited for it and the components
+      procedure :: build => continuum_build
       procedure :: get_energy => continuum_get_energy
       procedure :: get_response => continuum_get_response
       procedure :: get_gradient => continuum_get_gradient
@@ -101,6 +102,7 @@ contains
       if (.not. associated(self%cavity%ctx)) self%cavity%ctx => ctx
       allocate (self%components(0))
       self%updated = .false.
+      self%built = .false.
       self%configured = .false.
 
    end subroutine new_continuum_model
@@ -163,7 +165,7 @@ contains
 
    end subroutine clear_component_energies
 
-   !> Update the cavity and every component
+   !> Update the cavity and, unless it waits for the build phase, every component
    !>
    !> @param[in,out] self Instance
    !> @param[in] mol Molecular structure
@@ -172,12 +174,9 @@ contains
       !> Continuum model
       class(model_continuum_type), intent(inout) :: self
       !> Molecular structure
-      class(structure_type), intent(in) :: mol
+      type(structure_type), intent(in) :: mol
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-
-      !> Component index
-      integer :: i
 
       call self%invalidate()
       call clear_component_energies(self)
@@ -188,13 +187,84 @@ contains
       end if
       call self%cavity%update(mol, error)
       if (allocated(error)) return
-      do i = 1, size(self%components)
-         call self%components(i)%item%update(mol, self%cavity, error)
+      ! A cavity waiting for the build phase leaves the components to it
+      if (.not. self%cavity%defers_build()) then
+         call update_components(self, error)
          if (allocated(error)) return
-      end do
+      end if
       self%updated = .true.
+      self%built = .not. self%defers_build()
 
    end subroutine continuum_update
+
+   !> Whether the cavity waits for the build phase
+   !>
+   !> @param[in] self Instance
+   function continuum_defers_build(self) result(defers)
+      !> Continuum model
+      class(model_continuum_type), intent(in) :: self
+      !> Whether `update` leaves the surface and the components to `build`
+      logical :: defers
+
+      defers = .false.
+      if (allocated(self%cavity)) defers = self%cavity%defers_build()
+
+   end function continuum_defers_build
+
+   !> Read the build phase, then complete a cavity that waited for it and
+   !> every component
+   !>
+   !> - the base protocol first; a model that `update` built completely
+   !>   stays built
+   !> - otherwise built only once the cavity and every component are, then
+   !>   the coupling records the new point count
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Coupling staged by `prepare_build`; the cavity reads its own scope
+   !> @param[out] error Error handling
+   subroutine continuum_build(self, coupling, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
+      !> Coupling staged by `prepare_build`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call model_build(self, coupling, error)
+      if (allocated(error)) return
+      ! Built completely by `update`, components included
+      if (.not. self%defers_build()) return
+      call clear_component_energies(self)
+      call self%cavity%build(coupling, error)
+      if (allocated(error)) return
+      call update_components(self, error)
+      if (allocated(error)) return
+      self%built = .true.
+      ! The answers of the build phase survive the new point count
+      call self%declare_pass(coupling, error)
+
+   end subroutine continuum_build
+
+   !> Update every component on the built cavity and its structure
+   !>
+   !> @param[in,out] self Instance
+   !> @param[out] error Error handling
+   subroutine update_components(self, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Component index
+      integer :: i
+
+      ! `cavity%mol` is passed beside `cavity`: components must not modify it
+      do i = 1, size(self%components)
+         call self%components(i)%item%update(self%cavity%mol, self%cavity, error)
+         if (allocated(error)) return
+      end do
+
+   end subroutine update_components
 
    !> Accumulate the energy of every component
    !>
@@ -407,7 +477,9 @@ contains
 
    !> Declare cavity and component requests, then record the extents
    !>
-   !> Calculations with matching inputs are shared between components
+   !> - calculations with matching inputs are shared between components
+   !> - until the model and its cavity are built only the cavity declares:
+   !>   the requests of the build phase belong to its level set
    !>
    !> @param[in,out] self     Updated continuum model
    !> @param[in,out] coupling Coupling to declare
@@ -422,17 +494,22 @@ contains
 
       !> Component index
       integer :: i
+      !> Counts the snapshot records; unallocated ones are absent
+      integer, allocatable :: ngrid, natom
 
       call coupling_begin_registration(coupling)
       call coupling_set_scope(coupling, 0)
       call self%cavity%declare_coupling(coupling, error)
       if (allocated(error)) return
-      do i = 1, size(self%components)
-         call coupling_set_scope(coupling, i)
-         call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
-         if (allocated(error)) return
-      end do
-      call coupling_snapshot(coupling, ngrid=self%cavity%ngrid, natom=self%cavity%nsph)
+      if (self%is_built() .and. self%cavity%is_built()) then
+         do i = 1, size(self%components)
+            call coupling_set_scope(coupling, i)
+            call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
+            if (allocated(error)) return
+         end do
+      end if
+      call self%cavity%snapshot_counts(ngrid, natom)
+      call coupling_snapshot(coupling, ngrid=ngrid, natom=natom)
 
    end subroutine declare_continuum_pass
 
@@ -598,33 +675,5 @@ contains
       logical, intent(in) :: enabled
       self%force_forward_gradient = enabled
    end subroutine model_use_forward_gradient
-
-   !> Install density data and invalidate the model
-   !>
-   !> @param[in,out] self Model owning the cavity
-   !> @param[in] density Cartesian-monomial density matrix
-   !> @param[out] error Incompatible cavity or density
-   subroutine set_cavity_density(self, density, error)
-      !> Model owning the cavity
-      class(model_continuum_type), intent(inout), target :: self
-      !> Cartesian-monomial density matrix
-      real(wp), intent(in) :: density(:, :)
-      !> Incompatible cavity or density
-      type(error_type), allocatable, intent(out) :: error
-      call self%invalidate()
-      if (allocated(self%cavity)) then
-         select type (cavity => self%cavity)
-         type is (cavity_type_drop)
-            if (allocated(cavity%lsf_model)) then
-               select type (lsf => cavity%lsf_model)
-               type is (moist_cavity_drop_lsf_isodensity_internal_type)
-                  call lsf%set_density(density, error)
-                  return
-               end select
-            end if
-         end select
-      end if
-      call fatal_error(error, "Model requires an internal isodensity cavity")
-   end subroutine set_cavity_density
 
 end module moist_model_continuum_type

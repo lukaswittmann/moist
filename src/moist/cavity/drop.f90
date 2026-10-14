@@ -11,7 +11,10 @@ module moist_cavity_drop
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
-   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, update_cavity_base, build_cavity_base, &
+      & cavity_declare_pass
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
+      & coupling_close_view
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_fields, only: field_query_type
@@ -57,9 +60,6 @@ module moist_cavity_drop
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
 
       !* ----------------------------- Atomic sphere data ----------------------------- *!
-
-      !> Molecular structure
-      type(structure_type) :: mol
 
       !> Per-cell candidate atom lists for point-to-atom screening
       type(moist_cell_grid_type) :: mol_cell_grid
@@ -212,8 +212,14 @@ module moist_cavity_drop
       real(wp), allocatable :: anchor_xi0(:)
 
    contains
-      !> Update cavity for new geometry
+      !> Build the cavity for a new geometry
       procedure :: update => update_cavity_drop
+      !> Whether the level set requires build-phase answers before the projection
+      procedure :: defers_build => drop_defers_build
+      !> Read the build-phase answers and project the deferred surface
+      procedure :: build => build_cavity_drop
+      !> Declare the build-phase requests of the level set
+      procedure :: declare_coupling => declare_coupling_drop
       !> Compute area gradient w.r.t. nuclear coordinates
       procedure :: get_gradient => get_gradient_drop
 
@@ -589,6 +595,12 @@ contains
       !> Set up branch weight model
       call self%branch_weight%init(self%param%branch_weight_s)
 
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_drop
 
    !> Construction settings of the cavity
@@ -683,18 +695,19 @@ contains
    !*                          Update Cavity (construct cavity)                         *!
    !* ================================================================================= *!
 
-   !> Update cavity for new geometry
+   !> Take a new geometry: radii and sphere centres, then the surface unless
+   !> the level set waits for build-phase answers
    !>
-   !> @param[inout] self  Cavity instance
-   !> @param[in]    mol   Molecular structure
+   !> @param[inout] self     Cavity instance
+   !> @param[in]    mol      Molecular structure
+   !> @param[out]   error    Error handling
    subroutine update_cavity_drop(self, mol, error)
       class(cavity_type_drop), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
-      !> Timer stack depth at entry; error paths unwind back to it (below)
-      integer :: d0
-
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -709,9 +722,100 @@ contains
       self%radii = self%radius_model%f0
 
       !> Set centers of spheres
-      self%mol = mol
       if (allocated(self%sphxyz)) deallocate (self%sphxyz)
       allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
+
+      !> The projection waits for the density matrix or the nuclear charges
+      if (.not. self%defers_build()) then
+         call project_surface_drop(self, error)
+         if (allocated(error)) return
+      end if
+      self%updated = .true.
+      self%built = .not. self%defers_build()
+
+   end subroutine update_cavity_drop
+
+   !> Whether the level set requires build-phase answers before the projection
+   !>
+   !> @param[in] self Cavity instance
+   function drop_defers_build(self) result(defers)
+      !> Cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Whether `update` leaves the projection to `build`
+      logical :: defers
+
+      defers = .false.
+      if (allocated(self%lsf_model)) defers = self%lsf_model%requires_build_inputs()
+
+   end function drop_defers_build
+
+   !> Read the build phase, then project a deferred surface
+   !>
+   !> - `build_cavity_base` first; a surface that `update` projected stays
+   !> - otherwise built once the level set read its answers and the
+   !>   projection succeeded, then the coupling records the new point count
+   !>
+   !> @param[inout] self     Updated cavity
+   !> @param[inout] coupling Coupling staged by `prepare_build`
+   !> @param[out]   error    Error handling
+   subroutine build_cavity_drop(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_drop), intent(inout) :: self
+      !> Coupling staged by `prepare_build`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Cavity-scoped read interface
+      type(coupling_view_type) :: view
+
+      call build_cavity_base(self, coupling, error)
+      if (allocated(error)) return
+      if (.not. self%defers_build()) return
+      call coupling_make_view(coupling, 0, view)
+      call self%lsf_model%read_build(view, self%mol, error)
+      call coupling_close_view(coupling)
+      if (allocated(error)) return
+      call project_surface_drop(self, error)
+      if (allocated(error)) return
+      self%built = .true.
+      ! The answers of the build phase survive the new point count
+      call cavity_declare_pass(self, coupling, error)
+
+   end subroutine build_cavity_drop
+
+   !> Project the surface of the stored structure, radii and sphere centres
+   !>
+   !> @param[inout] self  Cavity instance
+   !> @param[out]   error Error handling
+   subroutine project_surface_drop(self, error)
+      !> Cavity instance
+      class(cavity_type_drop), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Timer stack depth at entry; error paths unwind back to it (below)
+      integer :: d0
+
+      ! The previous surface and its derivatives go before the projection
+      ! re-allocates them: the getters test `A_tot1_rA` for availability
+      call self%clear_surface()
+      if (allocated(self%wleb1_rA)) deallocate (self%wleb1_rA)
+      if (allocated(self%cpjac_scal1_rA)) deallocate (self%cpjac_scal1_rA)
+      if (allocated(self%xyz2_rArB)) deallocate (self%xyz2_rArB)
+      if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
+      if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
+      if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
+      if (allocated(self%k1_rA)) deallocate (self%k1_rA)
+      if (allocated(self%k2_rA)) deallocate (self%k2_rA)
+      if (allocated(self%a_i1_rA)) deallocate (self%a_i1_rA)
+      if (allocated(self%asph1_rA)) deallocate (self%asph1_rA)
+      if (allocated(self%A_tot1_rA)) deallocate (self%A_tot1_rA)
+      if (allocated(self%vsph1_rA)) deallocate (self%vsph1_rA)
+      if (allocated(self%V_tot1_rA)) deallocate (self%V_tot1_rA)
+      if (allocated(self%w_f1_rA)) deallocate (self%w_f1_rA)
+      if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
+      if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
 
       !> Refresh LSF geometry caches
       call self%lsf_model%update(self%mol, self%radii)
@@ -896,7 +1000,24 @@ contains
          call self%ctx%timer%stop("Analysis")
       end if
 
-   end subroutine update_cavity_drop
+   end subroutine project_surface_drop
+
+   !> Declare the build-phase requests of the level set at the cavity scope
+   !>
+   !> @param[in]    self     Cavity instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine declare_coupling_drop(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Coupling being declared
+      type(coupling_type), intent(inout) :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (allocated(self%lsf_model)) call self%lsf_model%declare_coupling(coupling, error)
+
+   end subroutine declare_coupling_drop
 
    !* ================================================================================= *!
    !*                                 First derivatives                                 *!
@@ -1084,6 +1205,8 @@ contains
       type(field_query_type), intent(inout) :: query
 
       call list_cavity_fields_base(self, query)
+      ! Everything below belongs to the surface of the latest build
+      if (.not. self%built) return
 
       !> Grid layout and provenance
       call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
@@ -1181,11 +1304,17 @@ contains
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
       if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
       if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
+      if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
       if (allocated(self%a_i1_rA)) deallocate (self%a_i1_rA)
       if (allocated(self%v1_rA)) deallocate (self%v1_rA)
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
       if (allocated(self%f1_rA)) deallocate (self%f1_rA)
+      if (allocated(self%wleb1_rA)) deallocate (self%wleb1_rA)
+      if (allocated(self%w_f1_rA)) deallocate (self%w_f1_rA)
       if (allocated(self%cpjac_scal0)) deallocate (self%cpjac_scal0)
+      if (allocated(self%cpjac_scal1_rA)) deallocate (self%cpjac_scal1_rA)
+      if (allocated(self%k1_rA)) deallocate (self%k1_rA)
+      if (allocated(self%k2_rA)) deallocate (self%k2_rA)
       if (allocated(self%A_tot1_rA)) deallocate (self%A_tot1_rA)
       if (allocated(self%asph1_rA)) deallocate (self%asph1_rA)
       if (allocated(self%V_tot1_rA)) deallocate (self%V_tot1_rA)
@@ -1195,19 +1324,8 @@ contains
       call self%mol_cell_grid%destroy()
       call self%grid_adj_list%destroy()
 
-      ! Deallocate structure_type allocatable components
-      if (allocated(self%mol%id)) deallocate (self%mol%id)
-      if (allocated(self%mol%num)) deallocate (self%mol%num)
-      if (allocated(self%mol%sym)) deallocate (self%mol%sym)
-      if (allocated(self%mol%xyz)) deallocate (self%mol%xyz)
-      if (allocated(self%mol%lattice)) deallocate (self%mol%lattice)
-      if (allocated(self%mol%periodic)) deallocate (self%mol%periodic)
-      if (allocated(self%mol%bond)) deallocate (self%mol%bond)
-      if (allocated(self%mol%comment)) deallocate (self%mol%comment)
-      if (allocated(self%mol%sdf)) deallocate (self%mol%sdf)
-      if (allocated(self%mol%pdb)) deallocate (self%mol%pdb)
-
       ! Deallocate inherited allocatable components from base cavity_type
+      if (allocated(self%mol)) deallocate (self%mol)
       if (allocated(self%asph)) deallocate (self%asph)
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)

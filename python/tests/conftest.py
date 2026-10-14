@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+import moist
+
 #: Marker name -> description. Each is also a meson test target; see
 #: python/moist/meson.build.
 MARKERS = {
@@ -52,3 +54,30 @@ def gaussian_density():
         return tuple(result)
 
     return evaluate
+
+
+def _build_with(owner, dcart=None, z=None, *, coupling=None):
+    """Run the build phase of a cavity or model as a host would; return the coupling.
+
+    Answers only what the walk asks for: ``density_matrix`` with ``dcart``,
+    ``nuclear_charges`` with ``z``.  A request whose answer was not given, or
+    any other request, raises instead of being skipped.
+    """
+    if coupling is None:
+        coupling = owner.new_coupling()
+    owner.prepare_build(coupling)
+    for request in coupling:
+        if isinstance(request, moist.DensityMatrixRequest) and dcart is not None:
+            coupling.answer(dcart=dcart)
+        elif isinstance(request, moist.NuclearChargesRequest) and z is not None:
+            coupling.answer(z=z)
+        else:
+            raise AssertionError(f"the build phase asked for {request.name!r}, which the test does not answer")
+    owner.build(coupling)
+    return coupling
+
+
+@pytest.fixture
+def build_with():
+    """Return the host build-phase helper, :func:`_build_with`."""
+    return _build_with

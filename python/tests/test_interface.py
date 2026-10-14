@@ -72,7 +72,6 @@ def diatomic() -> Callable[..., Structure]:
         return Structure(
             np.array([1, 1], dtype=np.int32),
             np.array([[0.0, 0.0, -half], [0.0, 0.0, half]]),
-            z_eff=np.array([1, 1], dtype=np.int32),
         )
 
     return build
@@ -91,7 +90,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     Regenerate deliberately if the default surface is meant to change.
     """
     cavity = CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT)
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
     result = cavity.cavity
 
     assert len(result.a) == 70
@@ -158,7 +157,7 @@ def test_public_cavity_types_accept_their_optional_arguments(
     numbers: np.ndarray,
     positions: np.ndarray,
 ) -> None:
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
     result = cavity.snapshot()
 
     assert isinstance(result, snapshot_type)
@@ -189,7 +188,6 @@ def branching_cross() -> Structure:
             ]
         )
         * aatoau,
-        z_eff=np.array([6, 6, 6, 6, 6]),
     )
 
 
@@ -198,7 +196,7 @@ def test_cavity_declares_its_own_results(
 ) -> None:
     """Every declared field describes itself well enough to be read blind."""
     cavity = CavityDROP(context=CONTEXT)
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
 
     fields = cavity.fields()
     assert fields
@@ -218,7 +216,7 @@ def test_named_results_agree_with_the_snapshot(
 ) -> None:
     """The typed snapshot is a view of the same declarations, not a second read."""
     cavity = CavityDROP(context=CONTEXT)
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
 
     snapshot = cavity.snapshot()
     results = cavity.results()
@@ -237,7 +235,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """A property that was never requested must not read back as zeros."""
-    structure = Structure(numbers, positions, z_eff=numbers)
+    structure = Structure(numbers, positions)
 
     plain = CavityDROP(context=CONTEXT)
     plain.update(structure)
@@ -284,7 +282,7 @@ def test_named_results_reach_every_cavity_type(
 ) -> None:
     """The field API is a cavity feature, not a DROP one."""
     cavity = CavityISwiG(context=CONTEXT)
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
 
     names = {field.name for field in cavity.fields()}
     assert {"xyz", "a", "owner", "numbering"} <= names
@@ -316,7 +314,7 @@ def test_cavity_specific_options_reach_the_native_implementations(
     numbers: np.ndarray,
     positions: np.ndarray,
 ) -> None:
-    structure = Structure(numbers, positions, z_eff=numbers)
+    structure = Structure(numbers, positions)
 
     def surface(cavity: Cavity) -> CavitySnapshot:
         cavity.update(structure)
@@ -343,12 +341,12 @@ def test_cavity_specific_options_reach_the_native_implementations(
 
 def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
     with raises(ValueError, match="positions must have shape"):
-        Structure(np.array([1, 1]), positions, z_eff=np.array([1, 1]))
+        Structure(np.array([1, 1]), positions)
 
     with raises(ValueError, match="positions must have shape"):
-        Structure(numbers, np.random.default_rng().random(7), z_eff=numbers)
+        Structure(numbers, np.random.default_rng().random(7))
 
-    structure = Structure(numbers, positions, z_eff=numbers)
+    structure = Structure(numbers, positions)
 
     with raises(ValueError, match="positions must have shape"):
         structure.update(np.random.default_rng().random(7))
@@ -357,34 +355,10 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
         structure.update(positions, np.random.default_rng().random(7))
 
     with raises(ValueError, match="positions must have shape"):
-        Structure(np.array([1, 1]), np.zeros((3, 2)), z_eff=np.array([1, 1]))
+        Structure(np.array([1, 1]), np.zeros((3, 2)))
 
     with raises(ValueError, match="numbers must have shape"):
-        Structure(numbers.reshape(1, -1), positions, z_eff=numbers)
-
-
-def test_structure_requires_effective_charges(numbers: np.ndarray, positions: np.ndarray) -> None:
-    with raises(TypeError, match="z_eff"):
-        Structure(numbers, positions)
-
-    with raises(ValueError, match="z_eff must have shape"):
-        Structure(numbers, positions, z_eff=numbers[:-1])
-
-    with raises(ValueError, match="z_eff must be an integer vector"):
-        Structure(numbers, positions, z_eff=numbers.astype(np.float64))
-
-    with raises(ValueError, match="z_eff must be between"):
-        Structure(numbers, positions, z_eff=numbers + 1)
-
-    with raises(ValueError, match="z_eff must be between"):
-        Structure(numbers, positions, z_eff=np.zeros_like(numbers))
-
-    # Oxygen behind a two-electron core: elements stay, charges follow the ECP
-    z_eff = numbers - np.array([2, 0, 0])
-    structure = Structure(numbers, positions, z_eff=z_eff)
-    z_eff[:] = 1
-    np.testing.assert_array_equal(structure.numbers, numbers)
-    np.testing.assert_array_equal(structure.z_eff, [6, 1, 1])
+        Structure(numbers.reshape(1, -1), positions)
 
 
 # -----------------------------------------------------------------------------
@@ -437,9 +411,9 @@ def _item(response, kind):
 
 def _answer_zeros(model, coupling):
     """Answer every missing output with zeros of the declared shape."""
-    ngrid = model.cavity.ngrid
     for request in coupling:
-        coupling.answer(**{name: np.zeros((ngrid, *request._outputs[name]))
+        leading = coupling._shape(request._extent)
+        coupling.answer(**{name: np.zeros((*leading, *request._outputs[name]))
                            for name in request.missing})
 
 
@@ -622,7 +596,7 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     positions: np.ndarray,
 ) -> None:
     """COSMO composes like CPCM but applies its distinct screening factor."""
-    structure = Structure(numbers, positions, z_eff=numbers)
+    structure = Structure(numbers, positions)
     epsilon = 32.0
     results = {}
 
@@ -803,7 +777,8 @@ def test_request_outputs_are_named_and_ordered(diatomic) -> None:
 
     model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
                            [ModelComponentCPCM(32.0)])
-    model.update(diatomic())
+    structure = diatomic()
+    model.update(structure)
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
     ngrid = model.cavity.ngrid
@@ -811,6 +786,13 @@ def test_request_outputs_are_named_and_ordered(diatomic) -> None:
     visited = []
     for request in coupling:
         visited.append(request.name)
+        if isinstance(request, moist.NuclearChargesRequest):
+            # The PCM direct term asks for the host's nuclear charges, one per atom
+            assert tuple(request._outputs) == ("z",)
+            assert request.missing == {"z"}
+            coupling.answer(z=structure.numbers.astype(float))
+            assert _still_missing(coupling, request) == set()
+            continue
         assert request.name == "gaussian_potential"
         assert tuple(request._outputs) == ("phi", "dphi_dr", "dphi_dxi")
         assert request.missing == set(request._outputs)
@@ -826,7 +808,7 @@ def test_request_outputs_are_named_and_ordered(diatomic) -> None:
         # ``None`` skips an output rather than un-answering it.
         coupling.answer(phi=None)
         assert _still_missing(coupling, request) == set()
-    assert visited == ["gaussian_potential"]
+    assert visited == ["gaussian_potential", "nuclear_charges"]
     # Nothing is left for another pass.
     assert list(coupling) == []
 
@@ -922,13 +904,54 @@ def test_getters_require_the_phase_they_were_staged_for(diatomic) -> None:
         _energy(model, coupling)
 
 
+def test_coupling_needs_an_updated_model(diatomic) -> None:
+    """A coupling is minted on an updated model and survives later updates unstaged.
+
+    The update is geometric: on this iSwiG cavity the model is complete without
+    a build walk.
+    """
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
+    with raises(RuntimeError, match="not been successfully updated"):
+        model.new_coupling()
+    model.update(diatomic())
+    coupling = model.new_coupling()
+    assert list(coupling) == []
+    model.update(diatomic())
+    assert list(coupling) == []
+    model.prepare_energy(coupling)
+    _answer_potential(coupling, np.zeros(model.cavity.ngrid))
+    assert _energy(model, coupling) == approx(0.0)
+
+
+def test_model_build_walk_left_unanswered_fails_by_name(build_with) -> None:
+    """The build phase is the host's: an unanswered walk fails ``build`` naming the output.
+
+    Before the build the cavity holds no surface; answered, the model builds.
+    """
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                                exponents=[.5], coefficients=[1.])
+    cavity = moist.DROP(lsf=Isodensity(), parameters=_DROP_NLEB26).build(basis=basis, context=CONTEXT)
+    model = SolvationModel(CONTEXT, cavity, [ModelComponentPV(1.0e-4)])
+    model.update(Structure(np.array([1]), np.zeros((1, 3))))
+    coupling = model.new_coupling()
+    model.prepare_build(coupling)
+    assert sorted(request.name for request in coupling) == ["density_matrix", "nuclear_charges"]
+    with raises(RuntimeError, match="density_matrix: missing required outputs: dcart"):
+        model.build(coupling)
+    with raises(RuntimeError, match="not built"):
+        model.cavity.snapshot()
+    build_with(model, dcart=np.ones((1, 1)), z=[1.], coupling=coupling)
+    assert model.cavity.ngrid > 0
+
+
 def test_each_phase_walks_what_it_still_owes(diatomic) -> None:
     """A walk visits a request only while the staged phase lacks one of its outputs.
 
     Nothing is owed before staging.  The energy phase owes the potential; the
     response phase keeps the valid energy answer and owes nothing more on a
     cavity that ignores the host; the gradient phase owes the two raw
-    derivatives.
+    derivatives and the nuclear charges of the PCM direct term.
     """
 
     structure = diatomic()
@@ -955,8 +978,8 @@ def test_each_phase_walks_what_it_still_owes(diatomic) -> None:
     assert list(coupling) == []
 
     model.prepare_gradient(coupling)
-    (request,) = list(coupling)
-    assert request.missing == {"dphi_dr", "dphi_dxi"}
+    assert [(request.name, request.missing) for request in coupling] == [
+        ("gaussian_potential", {"dphi_dr", "dphi_dxi"}), ("nuclear_charges", {"z"})]
 
 
 def test_native_cursor_queries_are_checked(diatomic) -> None:
@@ -1039,7 +1062,7 @@ def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
         library.next_response_item(library.ResponseHandle.null())
 
 
-def test_response_arrays_are_read_by_name(gaussian_density) -> None:
+def test_response_arrays_are_read_by_name(gaussian_density, build_with) -> None:
     """The cursor walks the items; each lists its arrays, read by name in the listed shape."""
 
     model = SolvationModel(
@@ -1047,10 +1070,11 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
                    parameters=_DROP_NLEB26, source=gaussian_density, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(1.0e-4)],
     )
-    model.update(Structure(np.array([1]), np.zeros((1, 3)), z_eff=np.array([1])))
+    model.update(Structure(np.array([1]), np.zeros((1, 3))))
+    coupling = model.new_coupling()
+    build_with(model, z=[1.], coupling=coupling)
     ngrid = model.cavity.ngrid
     rng = np.random.default_rng(3)
-    coupling = model.new_coupling()
     for prepare in (model.prepare_energy, model.prepare_response):
         prepare(coupling)
         for request in coupling:
@@ -1249,8 +1273,10 @@ def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
 
     with raises(RuntimeError, match="model-owned cavity"):
         model.cavity.update(structure)
-    with raises(RuntimeError, match="borrowed cavity"):
+    with raises(RuntimeError, match="Cannot modify a model-owned cavity"):
         library.update_cavity(model.cavity._as_handle(), structure._as_handle())
+    with raises(RuntimeError, match="Cannot modify a model-owned cavity"):
+        library.new_cavity_coupling(model.cavity._as_handle())
 
     borrowed = library.error_check(library.lib.moist_get_model_cavity)(
         model._model.handle
@@ -1261,6 +1287,13 @@ def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
 
     assert borrowed_ref[0] == library.ffi.NULL
     assert model.cavity.area == original_area
+
+
+def _answer_charges(coupling, structure):
+    """Answer the nuclear charges of an all-electron host in a pass of their own."""
+    for request in coupling:
+        if isinstance(request, moist.NuclearChargesRequest):
+            coupling.answer(z=structure.numbers.astype(float))
 
 
 def _gaussian_answers(ngrid):
@@ -1276,9 +1309,11 @@ def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
     """A value that is no number never reaches the library, so nothing stored changes."""
     model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
                            [ModelComponentCPCM(32.0)])
-    model.update(diatomic())
+    structure = diatomic()
+    model.update(structure)
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
+    _answer_charges(coupling, structure)
     valid = _gaussian_answers(model.cavity.ngrid)
     for request in coupling:
         coupling.answer(**valid)
@@ -1296,9 +1331,11 @@ def test_native_rejection_leaves_the_output_missing(diatomic, output):
     """A native rejection un-answers exactly that output; the others survive."""
     model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
                            [ModelComponentCPCM(32.0)])
-    model.update(diatomic())
+    structure = diatomic()
+    model.update(structure)
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
+    _answer_charges(coupling, structure)
     valid = _gaussian_answers(model.cavity.ngrid)
     for request in coupling:
         coupling.answer(**valid)
@@ -1524,8 +1561,10 @@ def test_cursor_staging_restarts_a_half_walked_pass(two_requests, phase):
     getattr(model, f"prepare_{phase}")(coupling)
     with raises(RuntimeError, match="No current coupling request"):
         coupling.answer(phi=np.zeros(model.cavity.ngrid))
-    # The walk starts over at the first request instead of resuming after it.
-    assert _walk(coupling) == BOTH
+    # The walk starts over at the first request instead of resuming after it;
+    # the gradient also asks for the nuclear charges of the PCM direct term
+    expected = BOTH if phase != "gradient" else [BOTH[0], "nuclear_charges", BOTH[1]]
+    assert _walk(coupling) == expected
 
 
 def test_cursor_model_update_ends_the_walk(two_requests, diatomic):
@@ -1602,6 +1641,8 @@ def test_answer_rejects_a_wrong_shape(two_requests):
     model.prepare_gradient(coupling)
     visited = []
     for request in coupling:
+        if isinstance(request, moist.NuclearChargesRequest):
+            continue  # one output over the atoms; see test_independent_answers
         visited.append(request.name)
         for name, extents in request._outputs.items():
             good = (ngrid, *extents)
@@ -1642,6 +1683,8 @@ def test_answer_forwards_each_declared_output_in_order(two_requests, monkeypatch
     monkeypatch.setattr(library, "answer_coupling_request", capture)
     visited = []
     for request in coupling:
+        if isinstance(request, moist.NuclearChargesRequest):
+            continue  # one output over the atoms; see test_independent_answers
         visited.append(request.name)
         declared = shapes[request.name]
         assert request._outputs == {name: shape[1:] for name, shape in declared.items()}

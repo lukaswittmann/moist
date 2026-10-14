@@ -39,6 +39,8 @@ from .interface import (
     DensityResponse,
     GaussianAmplitudeResponse,
     GaussianMomentRequest,
+    NuclearChargesRequest,
+    DensityMatrixRequest,
     GaussianPotentialRequest,
     PointPotentialRequest,
     PotentialAdjointResponse,
@@ -49,7 +51,7 @@ from .interface import (
     _immutable_array,
 )
 from .context import Context, _resolve_context
-from .density import GaussianBasis, InternalDensity
+from .density import GaussianBasis
 
 __all__ = [
     "DROP", "ISwiG", "SvdW", "CFC", "Isodensity",
@@ -185,15 +187,17 @@ class PySCFHost:
     """The AO-basis half of the coupling for one PySCF molecule.
 
     The density matrix is mutable state (:attr:`dm`).  An isodensity cavity
-    evaluates it with moist's internal Gaussian evaluator, through
-    :meth:`internal_density`; :meth:`density` is the same density as a
-    callback, which reads :attr:`dm` on every point evaluation.
+    built over :attr:`basis` evaluates it with moist's internal Gaussian
+    evaluator: :meth:`answer_build` answers its ``dcart`` in the build phase.
+    :meth:`density` is the same density as a callback, which reads :attr:`dm`
+    on every point evaluation.
 
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     """
 
     def __init__(self, mol) -> None:
         self.mol = mol
+        #: Current AO density matrix; set before evaluating the host.
         self.dm: Optional[np.ndarray] = None
         #: ``mol``'s basis on moist's Cartesian monomials
         self.basis = _cartesian_basis(mol)
@@ -208,15 +212,16 @@ class PySCFHost:
     def structure(self) -> Structure:
         """Return the molecular structure in moist's representation (bohr).
 
-        ``numbers`` are the elements and ``z_eff`` the nuclear charges of the
-        Hamiltonian, ``atom_charges()``; they differ only under an ECP.
+        ``numbers`` are the elements; the nuclear charges of the Hamiltonian,
+        ``atom_charges()``, are answered through the ``nuclear_charges``
+        coupling request instead.
         """
         from pyscf import gto
 
         if self.mol.has_ecp():
             raise ValueError("effective core potentials are not supported")
         numbers = [gto.charge(self.mol.atom_pure_symbol(i)) for i in range(self.mol.natm)]
-        return Structure(numbers, self.mol.atom_coords(), z_eff=self.mol.atom_charges())
+        return Structure(numbers, self.mol.atom_coords())
 
     def _density_matrix(self) -> np.ndarray:
         if self.dm is None:
@@ -238,16 +243,31 @@ class PySCFHost:
             # Same dirty BLAS status flags as in `density`
             with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
                 dm = self._c2s @ dm @ self._c2s.T
-        # Symmetric only to rounding; InternalDensity checks it to 1e-12
+        # Symmetric only to rounding; Coupling.answer checks it to 1e-12
         return 0.5 * (dm + dm.T)
 
-    def internal_density(self, dm=None) -> InternalDensity:
-        """Return ``dm`` (default :attr:`dm`) as a source for moist's internal isodensity.
+    def answer_build(self, coupling: Coupling, request) -> None:
+        """Answer a request of ``coupling`` that needs no surface, at :attr:`dm`.
 
-        The source keeps a copy: assign ``host.cartesian_density(dm)`` to its
-        ``density_matrix`` before updating at a new density.
+        ``density_matrix`` (build phase) with :meth:`cartesian_density`,
+        ``nuclear_charges`` (build or gradient phase) with
+        :attr:`nuclear_charges`; anything else raises.
         """
-        return InternalDensity(self.basis, self.cartesian_density(dm))
+        if isinstance(request, DensityMatrixRequest):
+            coupling.answer(dcart=self.cartesian_density())
+        elif isinstance(request, NuclearChargesRequest):
+            coupling.answer(z=self.nuclear_charges)
+        else:
+            raise NotImplementedError(f"PySCF host cannot answer {request.name!r} without a surface")
+
+    @property
+    def nuclear_charges(self) -> np.ndarray:
+        """Nuclear charges of the Hamiltonian, ``mol.atom_charges()``, ``(natm,)``.
+
+        The answer to the ``nuclear_charges`` request; they differ from the
+        atomic numbers only under an ECP.
+        """
+        return np.asarray(self.mol.atom_charges(), dtype=np.float64)
 
     def density(self, point: np.ndarray, order: int):
         """Evaluate the density as a callback, for an isodensity cavity built with ``source=host``.
@@ -729,7 +749,7 @@ class GaussianMoments:
 
 
 # -----------------------------------------------------------------------------
-# The driver: one model, one coupling, the six-step protocol
+# The driver: one model, one coupling, the host protocol
 # -----------------------------------------------------------------------------
 
 
@@ -774,12 +794,9 @@ class PySCFSolvation:
         self.context = _resolve_context(context)
         self.host = PySCFHost(mol)
         self.host.structure()  # Validate the molecular representation before use.
-        #: Internal density source of an isodensity cavity; zero until the first evaluation
-        self.source: Optional[InternalDensity] = None
-        if cavity.density_dependent:
-            ncart = self.host.basis.ncart
-            self.source = InternalDensity(self.host.basis, np.zeros((ncart, ncart)))
-        self.model = SolvationModel(self.context, cavity.build(source=self.source), items)
+        # An isodensity cavity runs moist's internal evaluator over the host basis
+        live = cavity.build(basis=self.host.basis) if cavity.density_dependent else cavity.build()
+        self.model = SolvationModel(self.context, live, items)
         self.coupling = None
         #: The GOSTSHYP half, created the first time a moment request appears
         self.moments: Optional[GaussianMoments] = None
@@ -830,6 +847,10 @@ class PySCFSolvation:
     def _answer(self, request) -> None:
         """Answer the missing outputs of the current request on the cavity grid."""
         coupling = self.coupling
+        if isinstance(request, (DensityMatrixRequest, NuclearChargesRequest)):
+            # Build-phase answers and the charges need no surface
+            self.host.answer_build(coupling, request)
+            return
         cavity = self.model.cavity
         coords = cavity.xyz
         if isinstance(request, PointPotentialRequest):
@@ -873,6 +894,12 @@ class PySCFSolvation:
         for request in self.coupling:
             self._answer(request)
 
+    def _build(self) -> None:
+        """Run the build phase at the current density."""
+        self.model.prepare_build(self.coupling)
+        self._answer_requests()
+        self.model.build(self.coupling)
+
     def _density(self, dm) -> np.ndarray:
         density = np.asarray(dm)
         n = self.mol.nao_nr()
@@ -889,8 +916,10 @@ class PySCFSolvation:
     def evaluate(self, dm) -> Result:
         """Return the energy and Fock contribution at the density ``dm``.
 
-        Rebuilds a density-dependent cavity, then runs the energy and the
-        response phase.  The result is cached until the density changes.
+        The first evaluation updates the model, then every evaluation of a
+        density-dependent cavity, and the first of any other, runs the build
+        phase; then the energy and the response phase.  The result is cached
+        until the density changes.
         """
         density = self._density(dm)
         if self._result is not None and np.array_equal(density, self._dm):
@@ -899,12 +928,12 @@ class PySCFSolvation:
         self._dm = density
         self.host.dm = density
         try:
-            if self.source is not None:
-                self.source.density_matrix = self.host.cartesian_density()
-            if self.coupling is None or self.configuration.density_dependent:
-                self.model.update(self.host.structure())
             if self.coupling is None:
+                self.model.update(self.host.structure())
                 self.coupling = self.model.new_coupling()
+                self._build()
+            elif self.configuration.density_dependent:
+                self._build()
             cpl = self.coupling
 
             self.model.prepare_energy(cpl)

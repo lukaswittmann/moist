@@ -8,7 +8,8 @@ module moist_cavity_iswig
    use, intrinsic :: iso_fortran_env, only: output_unit
 
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
-   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient, &
+      & update_cavity_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -105,6 +106,8 @@ contains
 
       call list_cavity_fields_base(self, query)
 
+      ! Everything below belongs to the surface of the latest build
+      if (.not. self%built) return
       call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
          & self%param%num_leb)
       call query%add_int("numbering", "Stable point id, kept when points are removed (ngrid)", &
@@ -141,6 +144,12 @@ contains
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radius_model)
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_iswig
 
    !> Construction settings of the cavity
@@ -190,6 +199,8 @@ contains
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -255,6 +266,8 @@ contains
          error=error &
          )
       if (allocated(error)) return
+      self%updated = .true.
+      self%built = .true.
 
    end subroutine update_cavity_iswig
 

@@ -42,7 +42,7 @@ int main()
     if (!cavity || moist_check_error(error) != moist_success) return fail(__LINE__);
     const int numbers[] = {1};
     const double positions[] = {0.0, 0.0, 0.0};
-    moist_structure structure = moist_new_structure(error, 1, numbers, numbers, positions,
+    moist_structure structure = moist_new_structure(error, 1, numbers, positions,
                                                    nullptr, nullptr);
     if (!structure || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_radii radii = moist_new_cpcm_radii(error);
@@ -59,6 +59,12 @@ int main()
     if (moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_coupling coupling = moist_new_coupling(error, model);
     if (!coupling || moist_check_error(error) != moist_success) return fail(__LINE__);
+    // The build phase of a PV model on a geometric cavity asks for nothing
+    moist_prepare_model_build(error, model, coupling);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
+    if (moist_next_coupling_request(error, coupling)) return fail(__LINE__);
+    moist_build_model(error, model, coupling);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_response response = moist_new_response(error);
     if (!response || moist_check_error(error) != moist_success) return fail(__LINE__);
     if (!delete_handle(coupling, "coupling") ||

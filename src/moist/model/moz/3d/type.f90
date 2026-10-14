@@ -111,7 +111,7 @@ contains
       !> Model
       class(model_moz_3d_type), intent(inout) :: self
       !> Solute structure
-      class(structure_type), intent(in) :: mol
+      type(structure_type), intent(in) :: mol
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       call self%invalidate()
@@ -134,6 +134,7 @@ contains
          call self%ctx%message("", 2)
       end if
       self%updated = .true.
+      self%built = .true.
    end subroutine moz_3d_update
 
    !> Site count of the latest valid structure, from the solute potential

@@ -31,7 +31,7 @@ module moist_cavity_drop_lsf_isodensity_param
       !> - ignored by the callback LSF
       integer :: basis = moist_iso_basis%cartesian
 
-      !> Core fill at every nucleus with `z_eff < Z`, so an ECP pseudo-density
+      !> Core fill at every nucleus whose host charge `z` is below `Z`, so an ECP pseudo-density
       !> has no dip below `rho_iso` there; see [[moist_cavity_drop_lsf_isodensity_core]]
       logical :: core_fill = .true.
       !> Core-fill radius `X_A` as a fraction of the atom's cavity radius `R_A`,
@@ -57,9 +57,23 @@ module moist_cavity_drop_lsf_isodensity_param
       procedure, public :: new => new_lsf_isodensity_param
       !> Print the parameters
       procedure, public :: print => print_lsf_isodensity_param
+      !> Whether the core fill is on, so the host's nuclear charges are required
+      procedure, public :: fills_core => lsf_isodensity_fills_core
    end type moist_cavity_drop_lsf_isodensity_param_type
 
 contains
+
+   !> Whether the core fill is on: `core_fill` and a positive radius fraction
+   !>
+   !> @param[in] self Isodensity parameters
+   pure function lsf_isodensity_fills_core(self) result(on)
+      !> Isodensity parameters
+      class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
+      !> Whether ECP nuclei are filled
+      logical :: on
+
+      on = self%core_fill .and. self%core_radius_fraction > 0.0_wp
+   end function lsf_isodensity_fills_core
 
    !> Restore compiled parameter defaults
    !>
@@ -180,8 +194,8 @@ contains
 
    !> Largest nuclear charge entering the interior cusp bound
    !>
-   !> The atomic number, not `z_eff`: ECP pseudo-densities reach `|grad ln rho|`
-   !> of 3 `z_eff` (Hf, def2-SVP) but stay below `Z`
+   !> The atomic number, not the host's nuclear charge `z`: ECP pseudo-densities
+   !> reach `|grad ln rho|` of 3 `z` (Hf, def2-SVP) but stay below `Z`
    !>
    !> @param[in] mol   Molecular structure
    !> @returns   zmax  Largest atomic number (zero for an empty structure)

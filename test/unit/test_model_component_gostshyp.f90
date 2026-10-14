@@ -335,6 +335,8 @@ contains
       cavity%ngrid = ngrid_sw
       cavity%nsph = 1
       allocate (cavity%a, source=sw_areas)
+      ! The hand-built surface counts as built
+      cavity%built = .true.
       allocate (cavity%xi0, source=sw_xis)
       allocate (cavity%f, source=sw_fs)
       allocate (cavity%xyz, source=sw_xyz)

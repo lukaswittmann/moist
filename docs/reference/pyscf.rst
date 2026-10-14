@@ -127,8 +127,8 @@ Driving a model at a fixed density
 ----------------------------------
 
 Outside an SCF, :class:`~moist.pyscf.PySCFSolvation` evaluates a model at a
-given density matrix. It owns the model and one coupling and runs the six
-steps of the :doc:`coupling` protocol itself, answering every request with
+given density matrix. It owns the model and one coupling and runs the
+:doc:`coupling` protocol itself, answering every request with
 PySCF integrals on the cavity grid:
 
 .. code-block:: python
@@ -139,6 +139,7 @@ PySCF integrals on the cavity grid:
        mol,
        DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=194)),
        [ModelComponentCPCM(80.0)],
+       context=context,
    )
    result = solvation.evaluate(dm)      # energy and Fock contribution
    gradient = solvation.gradient(dm)    # (natoms, 3), at fixed dm
@@ -154,6 +155,8 @@ only when the model produces it; an item the driver does not know raises.
 
 API
 ---
+
+.. py:module:: moist.pyscf
 
 .. autofunction:: moist.pyscf.moist_for_scf
 

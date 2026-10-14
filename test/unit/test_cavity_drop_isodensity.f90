@@ -39,6 +39,10 @@ module test_cavity_drop_isodensity
    use test_helpers, only: fd4_scalar, fd4_offsets, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
+   use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
+      & nuclear_charge_request_type, gaussian_potential_request_type, coupling_view_type, &
+      & coupling_make_view, coupling_close_view
+   use moist_channels_fields, only: field_query_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_work_type, &
                                                    moist_iso_gto_nslot, moist_iso_gto_nrhs
@@ -48,9 +52,11 @@ module test_cavity_drop_isodensity
       moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
    use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
    implicit none(type, external)
    private
@@ -182,7 +188,7 @@ contains
                   new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
-                  new_unittest("exclusion_radius_ignores_zeff", test_exclusion_radius_zeff), &
+                  new_unittest("exclusion_radius_ignores_host_charges", test_exclusion_radius_host_charges), &
                   new_unittest("core_fill_removes_dip", test_core_fill_dip), &
                   new_unittest("core_fill_fd", test_core_fill_fd), &
                   new_unittest("core_fill_callback_matches_internal", test_core_fill_callback), &
@@ -193,7 +199,16 @@ contains
                   new_unittest("core_fill_seed_abort", test_core_fill_seed_abort), &
                   new_unittest("core_fill_surface_check_callback", test_core_fill_surface_callback), &
                   new_unittest("core_fill_skipped_anchor", test_core_fill_skipped_anchor), &
-                  new_unittest("core_fill_certificate_bound", test_core_fill_certificate_bound) &
+                  new_unittest("core_fill_certificate_bound", test_core_fill_certificate_bound), &
+                  new_unittest("unbuilt_cavity_refuses_staging", test_unbuilt_cavity_staging), &
+                  new_unittest("build_keeps_the_updated_structure", test_build_keeps_structure), &
+                  new_unittest("update_drops_the_previous_surface", test_update_drops_surface), &
+                  new_unittest("failed_build_leaves_the_cavity_unbuilt", test_failed_build_unbuilds), &
+                  new_unittest("build_invalidates_the_other_couplings", test_build_invalidates_others), &
+                  new_unittest("rebuild_follows_the_density", test_rebuild_follows_density), &
+                  new_unittest("core_fill_refuses_charges_out_of_range", test_core_fill_charge_range), &
+                  new_unittest("marchingcubes_follows_the_density", test_marchingcubes_follows_density), &
+                  new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1458,19 +1473,19 @@ contains
                  more="log_grad_out = 0 must certify nothing")
    end subroutine test_exclusion_radius_gate
 
-   !> The interior certificate reads the atomic numbers, never `z_eff`
+   !> The interior certificate reads the atomic numbers, never the host charges `z`
    !>
-   !> ECP pseudo-densities exceed the cusp bound of `z_eff` but stay below that
-   !> of `Z`, so a structure with ECP charges certifies what one without does;
-   !> the core fill, which does depend on `z_eff`, is off
-   subroutine test_exclusion_radius_zeff(error)
+   !> ECP pseudo-densities exceed the cusp bound of `z` but stay below that of
+   !> `Z`, so ECP charges certify what all-electron ones do; the core fill,
+   !> which does depend on `z`, is off
+   subroutine test_exclusion_radius_host_charges(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
-      type(structure_type) :: mol, mol_ecp
-      integer, allocatable :: numbers(:), z_eff(:)
-      real(wp), allocatable :: radii(:)
+      type(structure_type) :: mol
+      integer, allocatable :: numbers(:)
+      real(wp), allocatable :: radii(:), z(:)
       real(wp) :: s_in, r_bare, r_ecp, r_ecp_cb
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
@@ -1484,28 +1499,75 @@ contains
 
       ! The heaviest element behind a two-electron core
       numbers = mol%num(mol%id)
-      z_eff = numbers
-      where (numbers == maxval(numbers)) z_eff = numbers - 2
-      call new(mol_ecp, numbers, mol%xyz, z_eff=z_eff)
+      z = real(numbers, wp)
+      where (numbers == maxval(numbers)) z = z - 2.0_wp
 
-      call lsf%update(mol_ecp, radii)
+      call lsf%set_nuclear_charges(z)
+      call lsf%update(mol, radii)
       r_ecp = lsf%exclusion_radius(s_in)
 
       ! No `prepare`, so the null callback is never called
       call lsf_cb%new(callback_ptr=c_null_funptr, context=c_null_ptr, param=lsf%param)
-      call lsf_cb%update(mol_ecp, radii)
+      call lsf_cb%set_nuclear_charges(z)
+      call lsf_cb%update(mol, radii)
       r_ecp_cb = lsf_cb%exclusion_radius(s_in)
 
       call check(error, r_ecp, r_bare, thr=0.0_wp, &
-                 more="z_eff must not enter the internal cusp bound")
+                 more="z must not enter the internal cusp bound")
       if (allocated(error)) return
       call check(error, r_ecp_cb, r_bare, thr=0.0_wp, &
-                 more="z_eff must not enter the callback cusp bound")
-   end subroutine test_exclusion_radius_zeff
+                 more="z must not enter the callback cusp bound")
+   end subroutine test_exclusion_radius_host_charges
 
    !* =================================================================================== *!
    !*                                  ECP core fill                                      *!
    !* =================================================================================== *!
+
+   !> Update an isodensity cavity and run its build phase, answered as a host would
+   !>
+   !> `density_matrix` with `dcart` and `nuclear_charges` with `z`, whichever
+   !> the cavity asks for
+   !>
+   !> @param[inout] cavity DROP cavity to build
+   !> @param[in]    mol    Molecular structure
+   !> @param[in]    dcart  Host density matrix in the cartesian-monomial basis
+   !> @param[in]    z      Host nuclear charges (nat)
+   !> @param[out]   err    Refused answer or failed build
+   subroutine update_iso_cavity(cavity, mol, dcart, z, err)
+      type(cavity_type_drop), intent(inout) :: cavity
+      type(structure_type), intent(in) :: mol
+      real(wp), intent(in) :: dcart(:, :)
+      real(wp), intent(in) :: z(:)
+      type(mctc_error), allocatable, intent(out) :: err
+
+      type(coupling_type), target :: coupling
+
+      call cavity%update(mol, err)
+      if (allocated(err)) return
+      call cavity%prepare_build(coupling, err)
+      if (allocated(err)) return
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (density_matrix_request_type)
+            call coupling%answer("dcart", dcart, err)
+         type is (nuclear_charge_request_type)
+            call coupling%answer("z", z, err)
+         end select
+         if (allocated(err)) return
+      end do
+      call cavity%build(coupling, err)
+   end subroutine update_iso_cavity
+
+   !> Density matrix of the pseudo atom: every cartesian d component once
+   pure function pseudo_atom_density() result(dcart)
+      real(wp) :: dcart(6, 6)
+      integer :: i
+
+      dcart = 0.0_wp
+      do i = 1, 6
+         dcart(i, i) = 1.0_wp
+      end do
+   end function pseudo_atom_density
 
    !> Pseudo-atom LSF whose density vanishes at its nucleus
    !>
@@ -1515,15 +1577,15 @@ contains
    !>
    !> @param[inout] lsf       Internal isodensity LSF
    !> @param[in]    number    Atomic number
-   !> @param[in]    z_eff     Effective nuclear charge; below `number` marks an ECP
+   !> @param[in]    z         Host nuclear charge; below `number` marks an ECP
    !> @param[in]    core_fill Whether the ECP core fill is on
    !> @param[out]   mol       Single atom at the origin
    !> @param[out]   error     Set when the basis or density is rejected
    !> @param[in]    rho_iso   Isovalue (default 1e-3)
    !> @param[in]    core_radius_fraction Fill radius as a fraction of the atom's radius
-   subroutine build_pseudo_atom_lsf(lsf, number, z_eff, core_fill, mol, error, rho_iso, core_radius_fraction)
+   subroutine build_pseudo_atom_lsf(lsf, number, z, core_fill, mol, error, rho_iso, core_radius_fraction)
       type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf
-      integer, intent(in) :: number, z_eff
+      integer, intent(in) :: number, z
       logical, intent(in) :: core_fill
       type(structure_type), intent(out) :: mol
       type(error_type), allocatable, intent(out) :: error
@@ -1535,7 +1597,7 @@ contains
       real(wp) :: dcart(6, 6)
       integer :: i
 
-      call new(mol, [number], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[z_eff])
+      call new(mol, [number], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       param = moist_cavity_drop_lsf_isodensity_param_type(core_fill=core_fill)
       if (present(rho_iso)) then
          param%rho_iso = rho_iso
@@ -1557,6 +1619,7 @@ contains
          call test_failed(error, merr%message)
          return
       end if
+      call lsf%set_nuclear_charges([real(z, wp)])
       call lsf%update(mol, [4.0_wp])
    end subroutine build_pseudo_atom_lsf
 
@@ -1578,7 +1641,7 @@ contains
    !> - without the fill the nucleus lies outside the cavity: the dip itself
    !> - with it, the whole fill ball lies inside
    !> - beyond the ball, value and derivatives are bitwise those without the fill
-   !> - an all-electron nucleus (`z_eff = Z`) is never filled
+   !> - an all-electron nucleus (`z = Z`) is never filled
    subroutine test_core_fill_dip(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1782,6 +1845,8 @@ contains
                      param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.true.))
       call cb_off%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
                       param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call cb_on%set_nuclear_charges([8.0_wp])
+      call cb_off%set_nuclear_charges([8.0_wp])
       call cb_on%update(mol, [4.0_wp])
       call cb_off%update(mol, [4.0_wp])
       call int_on%set_max_deriv(3)
@@ -1913,23 +1978,23 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
-      type(structure_type) :: mol, mol_ecp
+      type(structure_type) :: mol
       type(moist_context_type), target :: ctx
       type(cavity_type_drop), allocatable :: cavity(:)
       type(mctc_error), allocatable :: cavity_error
-      integer, allocatable :: numbers(:), z_eff(:)
+      integer, allocatable :: numbers(:)
+      real(wp), allocatable :: z(:), dcart(:, :)
       integer :: ivar, iox
       !> Level set at the oxygen nucleus, unmarked and marked
       real(wp) :: s_nucleus(2)
 
-      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error, dcart)
       if (allocated(error)) return
       ! The production scale: DROP's tolerances are absolute in the level set
       lsf%param%scale = lsf_scale
       numbers = mol%num(mol%id)
-      z_eff = numbers
-      where (numbers == maxval(numbers)) z_eff = numbers - 2
-      call new(mol_ecp, numbers, mol%xyz, z_eff=z_eff)
+      z = real(numbers, wp)
+      where (numbers == maxval(numbers)) z = z - 2.0_wp
 
       call new_context(ctx, nthreads=0, verbosity=0)
       allocate (cavity(2))
@@ -1937,8 +2002,8 @@ contains
          call new_cavity_drop(cavity(ivar), radius_model=default_cpcm_radii(), lsf_model=lsf, &
                               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110), ctx=ctx)
          if (.not. allocated(cavity_error)) then
-            if (ivar == 1) call cavity(ivar)%update(mol, cavity_error)
-            if (ivar == 2) call cavity(ivar)%update(mol_ecp, cavity_error)
+            if (ivar == 1) call update_iso_cavity(cavity(ivar), mol, dcart, real(numbers, wp), cavity_error)
+            if (ivar == 2) call update_iso_cavity(cavity(ivar), mol, dcart, z, cavity_error)
          end if
          if (allocated(cavity_error)) then
             call test_failed(error, "DROP isodensity cavity failed: "//cavity_error%message)
@@ -2012,7 +2077,7 @@ contains
             call test_failed(error, cavity_error%message)
             return
          end if
-         call cavity(ivar)%update(mol, cavity_error)
+         call update_iso_cavity(cavity(ivar), mol, pseudo_atom_density(), [8.0_wp], cavity_error)
          if (ivar == 1) then
             call check(error, allocated(cavity_error), more="a surface inside the fill ball must be refused")
             if (allocated(error)) return
@@ -2071,7 +2136,9 @@ contains
          if (allocated(error)) return
          call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, &
                               param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=level), ctx=ctx)
-         if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+         if (.not. allocated(cavity_error)) then
+            call update_iso_cavity(cavity, mol, pseudo_atom_density(), [8.0_wp], cavity_error)
+         end if
          call check(error, allocated(cavity_error), &
                     more="level "//trim(label)//" built a surface inside the fill ball")
          if (allocated(error)) return
@@ -2094,11 +2161,12 @@ contains
       type(mctc_error), allocatable :: lsf_err
       real(wp) :: xyz(ndim, 2)
 
-      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[8])
+      call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       ! One point inside the default 2 Bohr fill, one beyond it
       xyz = reshape([1.5_wp, 0.0_wp, 0.0_wp, 0.0_wp, 2.5_wp, 0.0_wp], [ndim, 2])
 
       call lsf%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr)
+      call lsf%set_nuclear_charges([8.0_wp])
       call lsf%update(mol, [4.0_wp])
       call lsf%check_surface(xyz, [.false., .true.], lsf_err)
       call check(error, .not. allocated(lsf_err), more="an unconverged point is not on the surface")
@@ -2143,7 +2211,7 @@ contains
       real(wp) :: s_nucleus(2)
       integer :: ivar, i
 
-      call new(mol, [54, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 3.10_wp], [3, 2]), z_eff=[8, 1])
+      call new(mol, [54, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 3.10_wp], [3, 2]))
       dcart = 0.0_wp
       do i = 1, 7
          dcart(i, i) = 1.0_wp
@@ -2155,12 +2223,13 @@ contains
          call lsf%new(sh_atom=[1, 2], sh_l=[2, 0], sh_nprim=[1, 1], exps=[0.5_wp, 0.4_wp], &
                       coeffs=[1.0_wp, 1.0_wp], error=cavity_error, &
                       param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=ivar == 2))
-         if (.not. allocated(cavity_error)) call lsf%set_density(dcart, cavity_error)
          if (.not. allocated(cavity_error)) then
             call new_cavity_drop(cavity(ivar), radius_model=default_cpcm_radii(), lsf_model=lsf, &
                                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=6), ctx=ctx)
          end if
-         if (.not. allocated(cavity_error)) call cavity(ivar)%update(mol, cavity_error)
+         if (.not. allocated(cavity_error)) then
+            call update_iso_cavity(cavity(ivar), mol, dcart, [8.0_wp, 1.0_wp], cavity_error)
+         end if
          if (allocated(cavity_error)) then
             call test_failed(error, "DROP isodensity cavity failed: "//cavity_error%message)
             return
@@ -2207,14 +2276,15 @@ contains
       dirs = core_fill_dirs()
       do icase = 1, 2
          if (icase == 1) then
-            call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), z_eff=[8])
+            call new(mol, [54], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
          else
-            call new(mol, [54, 54], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]), &
-                     z_eff=[8, 8])
+            call new(mol, [54, 54], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
          end if
          call lsf_on%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr)
          call lsf_off%new(callback_ptr=c_funloc(constant_density_callback), context=c_null_ptr, &
                           param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+         call lsf_on%set_nuclear_charges(spread(8.0_wp, 1, mol%nat))
+         call lsf_off%set_nuclear_charges(spread(8.0_wp, 1, mol%nat))
          call lsf_on%update(mol, spread(4.0_wp, 1, mol%nat))
          call lsf_off%update(mol, spread(4.0_wp, 1, mol%nat))
          call lsf_on%set_max_deriv(1)
@@ -2311,12 +2381,14 @@ contains
    end subroutine build_internal_lsf
 
    !> Build an internal LSF from one of the realistic molecular basis tests
-   subroutine build_molecular_internal_lsf(lsf, test, threshold, mol, error)
+   subroutine build_molecular_internal_lsf(lsf, test, threshold, mol, error, density)
       type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf
       integer, intent(in) :: test
       real(wp), intent(in) :: threshold
       type(structure_type), intent(out) :: mol
       type(error_type), allocatable, intent(out) :: error
+      !> Density matrix installed in the LSF, for a host that answers it again
+      real(wp), allocatable, intent(out), optional :: density(:, :)
 
       type(moist_iso_gto_type) :: gto
       type(mctc_error), allocatable :: merr
@@ -2342,6 +2414,7 @@ contains
       end if
       lsf%screening_threshold = threshold
       call lsf%update(mol, radii)
+      if (present(density)) density = dcart
    end subroutine build_molecular_internal_lsf
 
    !> Build the callback isodensity LSF over the module reference density
@@ -3137,5 +3210,778 @@ contains
          if (allocated(error)) return
       end do
    end subroutine run_callback_fourth_cap
+
+   !* =================================================================================== *!
+   !*                                  Update protocol                                    *!
+   !* =================================================================================== *!
+
+   !> Pseudo-atom DROP cavity over the internal LSF, not updated yet
+   !>
+   !> At `rho_iso = 0.4` the surface lies near 1.83 Bohr; the coarsest grid
+   !> keeps every build cheap
+   !>
+   !> @param[inout] cavity Cavity to construct
+   !> @param[out]   mol    Single atom at the origin
+   !> @param[in]    ctx    Run context, borrowed by the cavity
+   !> @param[out]   error  Set when the radii, the LSF or the cavity are rejected
+   subroutine new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      type(cavity_type_drop), intent(inout) :: cavity
+      type(structure_type), intent(out) :: mol
+      type(moist_context_type), intent(in), target :: ctx
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      class(radius_type), allocatable :: radii
+      type(mctc_error), allocatable :: cavity_error
+
+      call build_pseudo_atom_lsf(lsf, 54, 54, .false., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call new_radii_custom_atoms([4.0_wp], radii, cavity_error)
+      if (.not. allocated(cavity_error)) then
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      end if
+      if (allocated(cavity_error)) call test_failed(error, "pseudo-atom cavity setup: "//cavity_error%message)
+   end subroutine new_pseudo_atom_cavity
+
+   !> Answer every density_matrix request of a staged walk
+   !>
+   !> @param[inout] coupling Staged coupling; the walk ends and rewinds
+   !> @param[in]    dcart    Density matrix in the cartesian-monomial basis
+   !> @param[out]   err      Refused answer
+   subroutine answer_density(coupling, dcart, err)
+      type(coupling_type), intent(inout) :: coupling
+      real(wp), intent(in) :: dcart(:, :)
+      type(mctc_error), allocatable, intent(out) :: err
+
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (density_matrix_request_type)
+            call coupling%answer("dcart", dcart, err)
+            if (allocated(err)) return
+         end select
+      end do
+   end subroutine answer_density
+
+   !> Run the build phase of an updated cavity with one density matrix
+   !>
+   !> @param[inout] cavity   Updated cavity
+   !> @param[inout] coupling Coupling to stage and answer
+   !> @param[in]    dcart    Density matrix in the cartesian-monomial basis
+   !> @param[out]   err      Refused staging, answer or build
+   subroutine build_with_density(cavity, coupling, dcart, err)
+      type(cavity_type_drop), intent(inout) :: cavity
+      type(coupling_type), intent(inout), target :: coupling
+      real(wp), intent(in) :: dcart(:, :)
+      type(mctc_error), allocatable, intent(out) :: err
+
+      call cavity%prepare_build(coupling, err)
+      if (.not. allocated(err)) call answer_density(coupling, dcart, err)
+      if (.not. allocated(err)) call cavity%build(coupling, err)
+   end subroutine build_with_density
+
+   !> Read the density matrix a coupling holds at the cavity scope
+   !>
+   !> @param[inout] coupling Coupling to read
+   !> @param[out]   dcart    Density matrix read back
+   !> @param[out]   err      Missing answer
+   subroutine read_density(coupling, dcart, err)
+      type(coupling_type), intent(inout), target :: coupling
+      real(wp), allocatable, intent(out) :: dcart(:, :)
+      type(mctc_error), allocatable, intent(out) :: err
+
+      type(coupling_view_type) :: view
+
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_matrix", "dcart", dcart, err)
+      call coupling_close_view(coupling)
+   end subroutine read_density
+
+   !> Stage the energy phase of a bare CPCM component and answer its potential
+   !>
+   !> On a cavity without a surface the snapshot has no point count, so the
+   !> potential is refused by name; on one with a surface it is taken
+   !>
+   !> @param[inout] cpcm     CPCM component
+   !> @param[inout] cavity   Cavity the component runs on
+   !> @param[inout] coupling Coupling of the component
+   !> @param[in]    refused  Whether the potential must be refused
+   !> @param[out]   error    testdrive failure
+   subroutine check_energy_staging(cpcm, cavity, coupling, refused, error)
+      type(model_continuum_component_cpcm), intent(inout) :: cpcm
+      type(cavity_type_drop), intent(inout) :: cavity
+      type(coupling_type), intent(inout), target :: coupling
+      logical, intent(in) :: refused
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: err
+      real(wp), allocatable :: phi(:)
+      integer :: nvisit
+
+      call cpcm%prepare_energy(cavity, coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "energy staging failed: "//err%message)
+         return
+      end if
+      allocate (phi(max(cavity%ngrid, 1)), source=0.0_wp)
+      nvisit = 0
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (gaussian_potential_request_type)
+            nvisit = nvisit + 1
+            call coupling%answer("phi", phi, err)
+         end select
+         if (allocated(err)) exit
+      end do
+      call check(error, nvisit, 1, more="the energy phase did not ask for the potential")
+      if (allocated(error)) return
+      if (refused) then
+         call check(error, allocated(err), more="a cavity without a surface took a potential")
+         if (allocated(error)) return
+         call check(error, index(err%message, "phi needs a point count; the snapshot has none") > 0, &
+                    more=err%message)
+      else if (allocated(err)) then
+         call test_failed(error, "the built cavity refused its potential: "//err%message)
+      end if
+   end subroutine check_energy_staging
+
+   !> Spherical Gaussian density `exp(-r**2/2)` around the origin
+   !>
+   !> At the default isovalue the surface lies at 3.72 Bohr, inside a 4 Bohr
+   !> sphere, so a callback cavity built over it is never empty
+   function gaussian_density_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      type(c_ptr), value :: context
+      real(c_double), intent(in) :: point(3)
+      real(c_double), intent(out) :: rho
+      real(c_double), intent(out) :: drho(3)
+      type(c_ptr), value :: d2rho
+      type(c_ptr), value :: d3rho
+      integer(c_int) :: status
+
+      !> Exponent of the Gaussian
+      real(wp), parameter :: alpha = 0.5_wp
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+      real(wp) :: g, delta(3, 3)
+      integer :: i, j, k
+
+      status = 0_c_int
+      if (c_associated(context)) status = 1_c_int
+      g = exp(-alpha*sum(point**2))
+      rho = g
+      drho = -2.0_wp*alpha*point*g
+      delta = 0.0_wp
+      do i = 1, 3
+         delta(i, i) = 1.0_wp
+      end do
+      if (c_associated(d2rho)) then
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         do j = 1, 3
+            do i = 1, 3
+               hptr(i, j) = (4.0_wp*alpha**2*point(i)*point(j) - 2.0_wp*alpha*delta(i, j))*g
+            end do
+         end do
+      end if
+      if (c_associated(d3rho)) then
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  tptr(i, j, k) = (-8.0_wp*alpha**3*point(i)*point(j)*point(k) &
+                                   + 4.0_wp*alpha**2*(point(i)*delta(j, k) + point(j)*delta(i, k) &
+                                                      + point(k)*delta(i, j)))*g
+               end do
+            end do
+         end do
+      end if
+   end function gaussian_density_callback
+
+   !> An isodensity cavity waiting for its build phase holds no surface
+   !>
+   !> - the internal LSF always waits for the density matrix: `update` leaves
+   !>   no surface, so a bare component's energy staging has no point count
+   !>   and refuses the potential by name, before and after `prepare_build`
+   !> - the callback LSF waits only while the core fill is on: with it on the
+   !>   build phase asks for the nuclear charges and the build projects; with
+   !>   it off `update` builds the surface, the build walk is empty and the
+   !>   build changes nothing
+   subroutine test_unbuilt_cavity_staging(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+      type(model_continuum_component_cpcm) :: cpcm
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      integer :: ivar, ngrid
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_radii_custom_atoms([4.0_wp], radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call build_pseudo_atom_lsf(lsf, 54, 54, .false., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, &
+                           param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cavity%is_updated() .and. .not. cavity%is_built() .and. cavity%ngrid == 0, &
+                 more="the internal LSF built its surface without the density matrix")
+      if (allocated(error)) return
+
+      call new_component_cpcm(cpcm, epsilon=78.4_wp, error=cavity_error, ctx=ctx)
+      if (.not. allocated(cavity_error)) call cpcm%new_coupling(cavity, coupling, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "component setup failed: "//cavity_error%message)
+         return
+      end if
+      call check_energy_staging(cpcm, cavity, coupling, .true., error)
+      if (allocated(error)) return
+      call cavity%prepare_build(coupling, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "build staging failed: "//cavity_error%message)
+         return
+      end if
+      call check_energy_staging(cpcm, cavity, coupling, .true., error)
+      if (allocated(error)) return
+
+      ! 1: fill on, 2: fill off
+      do ivar = 1, 2
+         call lsf_cb%new(callback_ptr=c_funloc(gaussian_density_callback), context=c_null_ptr, &
+                         param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=ivar == 1))
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf_cb, error=cavity_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+         if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+         if (.not. allocated(cavity_error)) call cavity%prepare_build(coupling, cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "callback cavity update failed: "//cavity_error%message)
+            return
+         end if
+         if (ivar == 1) then
+            call check(error, .not. cavity%is_built() .and. cavity%ngrid == 0, &
+                       more="the filled callback LSF built without z")
+            if (allocated(error)) return
+            call check(error, coupling%next(), more="the filled callback LSF asked for nothing")
+            if (allocated(error)) return
+            select type (request => coupling%request())
+            type is (nuclear_charge_request_type)
+               ! z = Z marks no ECP nucleus, so nothing is filled
+               call coupling%answer("z", [54.0_wp], cavity_error)
+            class default
+               call test_failed(error, "the filled callback LSF asked for "//trim(request%name()))
+               return
+            end select
+            if (.not. allocated(cavity_error)) call cavity%build(coupling, cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, "filled callback build failed: "//cavity_error%message)
+               return
+            end if
+            call check(error, cavity%is_built() .and. cavity%ngrid > 0, &
+                       more="the filled callback LSF has no surface after its build")
+            if (allocated(error)) return
+         else
+            call check(error, cavity%is_built() .and. cavity%ngrid > 0, &
+                       more="the unfilled callback LSF did not build its surface at update")
+            if (allocated(error)) return
+            call check(error, .not. coupling%next(), &
+                       more="the unfilled callback LSF asked for something in the build phase")
+            if (allocated(error)) return
+            ngrid = cavity%ngrid
+            call cavity%build(coupling, cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, "empty build failed: "//cavity_error%message)
+               return
+            end if
+            call check(error, cavity%is_built() .and. cavity%ngrid == ngrid, &
+                       more="the empty build changed the geometric surface")
+            if (allocated(error)) return
+         end if
+      end do
+   end subroutine test_unbuilt_cavity_staging
+
+   !> The build projects the structure of `update`, not a later change of it
+   !>
+   !> The pseudo atom's surface is centred on its nucleus: built after the
+   !> caller moved its own copy of the atom, the surface stays centred where
+   !> the atom was at `update`; negative control: a cavity updated at the moved
+   !> position is centred there
+   subroutine test_build_keeps_structure(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol, updated, moved
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity, control
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      !> Centroid of each projected surface
+      real(wp) :: centre(3), centre_moved(3)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call new_pseudo_atom_cavity(control, moved, ctx, error)
+      if (allocated(error)) return
+      call cavity%update(mol, cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%prepare_build(coupling, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      updated = mol
+      mol%xyz(1, 1) = mol%xyz(1, 1) + 1.0_wp
+      moved = mol
+      call answer_density(coupling, pseudo_atom_density(), cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%build(coupling, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "build failed: "//cavity_error%message)
+         return
+      end if
+      call check(error, cavity%is_built() .and. cavity%ngrid > 0, more="the pseudo atom has no surface")
+      if (allocated(error)) return
+      centre = sum(cavity%xyz, dim=2)/cavity%ngrid
+
+      call update_iso_cavity(control, moved, pseudo_atom_density(), [54.0_wp], cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "control build failed: "//cavity_error%message)
+         return
+      end if
+      call check(error, control%ngrid > 0, more="the moved pseudo atom has no surface")
+      if (allocated(error)) return
+      centre_moved = sum(control%xyz, dim=2)/control%ngrid
+      call check(error, norm2(centre_moved - moved%xyz(:, 1)) < 1.0e-6_wp, &
+                 more="control: the surface is not centred on its atom")
+      if (allocated(error)) return
+      call check(error, norm2(centre - updated%xyz(:, 1)) < 1.0e-6_wp, &
+                 more="the build projected the structure changed after update")
+   end subroutine test_build_keeps_structure
+
+   !> An update drops the surface of the previous structure
+   !>
+   !> The internal LSF defers its projection, so between `update` and `build`
+   !> the cavity is updated but not built and publishes only the spheres;
+   !> positive control: the built cavity before publishes its surface
+   subroutine test_update_drops_surface(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(field_query_type) :: query
+      type(mctc_error), allocatable :: cavity_error
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call update_iso_cavity(cavity, mol, pseudo_atom_density(), [54.0_wp], cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "first build failed: "//cavity_error%message)
+         return
+      end if
+      call query%enumerate()
+      call cavity%list_fields(query)
+      call check(error, cavity%ngrid > 0 .and. query%index_of("xyz") > 0 .and. &
+                 query%index_of("wleb") > 0, more="control: the built cavity publishes no surface")
+      if (allocated(error)) return
+
+      mol%xyz(1, 1) = mol%xyz(1, 1) + 0.5_wp
+      call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "second update failed: "//cavity_error%message)
+         return
+      end if
+      call check(error, cavity%is_updated() .and. .not. cavity%is_built(), &
+                 more="the update kept the surface of the previous structure")
+      if (allocated(error)) return
+      call query%enumerate()
+      call cavity%list_fields(query)
+      call check(error, query%index_of("xyz") == 0 .and. query%index_of("ngrid") == 0 .and. &
+                 query%index_of("area") == 0 .and. query%index_of("wleb") == 0 .and. &
+                 query%index_of("numbering") == 0, more="the unbuilt cavity publishes a surface")
+      if (allocated(error)) return
+      call check(error, query%index_of("nsph") > 0 .and. query%index_of("radii") > 0 .and. &
+                 query%index_of("sphxyz") > 0, more="the unbuilt cavity hides its spheres")
+      if (allocated(error)) return
+      call check(error, all(cavity%sphxyz(:, 1) == mol%xyz(:, 1)), &
+                 more="the spheres do not follow the new structure")
+   end subroutine test_update_drops_surface
+
+   !> A deferring cavity is not built from `prepare_build` until a `build`
+   !> succeeds
+   !>
+   !> - staging the build phase unbuilds it, so skipping the build leaves an
+   !>   energy staging without a point count
+   !> - a build refused for a missing output leaves it unbuilt
+   !> - so does a build of a coupling staged for another phase
+   !> - positive control: after an answered build the potential is taken
+   subroutine test_failed_build_unbuilds(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(model_continuum_component_cpcm) :: cpcm
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call new_component_cpcm(cpcm, epsilon=78.4_wp, error=cavity_error, ctx=ctx)
+      if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+      if (.not. allocated(cavity_error)) call cpcm%new_coupling(cavity, coupling, cavity_error)
+      if (.not. allocated(cavity_error)) &
+         & call build_with_density(cavity, coupling, pseudo_atom_density(), cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "control: build failed: "//cavity_error%message)
+         return
+      end if
+      call check_energy_staging(cpcm, cavity, coupling, .false., error)
+      if (allocated(error)) return
+
+      ! Staged but not built
+      call cavity%prepare_build(coupling, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "build staging failed: "//cavity_error%message)
+         return
+      end if
+      call check(error, .not. cavity%is_built(), more="prepare_build kept the previous surface")
+      if (allocated(error)) return
+      call check_energy_staging(cpcm, cavity, coupling, .true., error)
+      if (allocated(error)) return
+
+      ! Built without the density matrix
+      call cavity%prepare_build(coupling, cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%build(coupling, cavity_error)
+      call check(error, allocated(cavity_error), more="a build without the density matrix succeeded")
+      if (allocated(error)) return
+      call check(error, index(cavity_error%message, "density_matrix: missing required outputs: dcart") > 0, &
+                 more=cavity_error%message)
+      if (allocated(error)) return
+      deallocate (cavity_error)
+      call check(error, .not. cavity%is_built(), more="a failed build left a surface")
+      if (allocated(error)) return
+      call check_energy_staging(cpcm, cavity, coupling, .true., error)
+      if (allocated(error)) return
+
+      ! Built again, then a build of the coupling staged for the energy phase
+      call build_with_density(cavity, coupling, pseudo_atom_density(), cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "rebuild failed: "//cavity_error%message)
+         return
+      end if
+      call check_energy_staging(cpcm, cavity, coupling, .false., error)
+      if (allocated(error)) return
+      call cavity%build(coupling, cavity_error)
+      call check(error, allocated(cavity_error), more="a build of an energy staging succeeded")
+      if (allocated(error)) return
+      call check(error, index(cavity_error%message, "staged for the energy phase") > 0, &
+                 more=cavity_error%message)
+      if (allocated(error)) return
+      deallocate (cavity_error)
+      call check(error, .not. cavity%is_built(), more="a refused build left a surface")
+      if (allocated(error)) return
+      call check_energy_staging(cpcm, cavity, coupling, .true., error)
+   end subroutine test_failed_build_unbuilds
+
+   !> A build invalidates every other coupling of the cavity and keeps the
+   !> answers of its own
+   !>
+   !> Two couplings answer the density matrix; building one drops the answer
+   !> of the other, which can then no longer build; the built one still holds
+   !> its density matrix. Positive control: the other coupling holds its
+   !> answer before the build
+   subroutine test_build_invalidates_others(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop), target :: cavity
+      type(coupling_type), pointer :: built, other
+      type(mctc_error), allocatable :: cavity_error
+      real(wp), allocatable :: dcart(:, :)
+
+      nullify (built, other)
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call cavity%update(mol, cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%new_coupling(built, cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%new_coupling(other, cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%prepare_build(other, cavity_error)
+      if (.not. allocated(cavity_error)) call answer_density(other, pseudo_atom_density(), cavity_error)
+      if (.not. allocated(cavity_error)) call read_density(other, dcart, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "control: the other coupling holds no density: "//cavity_error%message)
+         call release(cavity, built, other)
+         return
+      end if
+
+      call build_with_density(cavity, built, pseudo_atom_density(), cavity_error)
+      if (.not. allocated(cavity_error)) call read_density(built, dcart, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "the built coupling lost its density: "//cavity_error%message)
+         call release(cavity, built, other)
+         return
+      end if
+      call check(error, all(dcart == pseudo_atom_density()), more="the built coupling's density changed")
+      if (.not. allocated(error)) then
+         call read_density(other, dcart, cavity_error)
+         call check(error, allocated(cavity_error), more="the build kept the other coupling's answer")
+      end if
+      if (.not. allocated(error)) then
+         deallocate (cavity_error)
+         call cavity%build(other, cavity_error)
+         call check(error, allocated(cavity_error), more="the invalidated coupling still built")
+      end if
+      call release(cavity, built, other)
+
+   contains
+
+      !> Release both couplings
+      subroutine release(cavity, built, other)
+         type(cavity_type_drop), intent(inout), target :: cavity
+         type(coupling_type), pointer, intent(inout) :: built, other
+
+         if (associated(built)) call cavity%release_coupling(built)
+         if (associated(other)) call cavity%release_coupling(other)
+      end subroutine release
+
+   end subroutine test_build_invalidates_others
+
+   !> A rebuild at a fixed structure follows the density
+   !>
+   !> Twice the density matrix moves the pseudo atom's surface points and its
+   !> area; the same density matrix again rebuilds the first surface
+   subroutine test_rebuild_follows_density(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      !> Scaling of the density matrix of each build: density, doubled, density again
+      real(wp), parameter :: scaling(3) = [1.0_wp, 2.0_wp, 1.0_wp]
+      !> Total area after each build
+      real(wp) :: area(3)
+      !> Surface points of the first build
+      real(wp), allocatable :: xyz(:, :)
+      integer :: ibuild
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "update failed: "//cavity_error%message)
+         return
+      end if
+      do ibuild = 1, 3
+         call build_with_density(cavity, coupling, scaling(ibuild)*pseudo_atom_density(), cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "build failed: "//cavity_error%message)
+            return
+         end if
+         call check(error, cavity%ngrid > 0, more="the pseudo atom has no surface")
+         if (allocated(error)) return
+         area(ibuild) = cavity%total_area
+         if (ibuild == 1) xyz = cavity%xyz
+         if (ibuild == 2) then
+            call check(error, abs(area(2) - area(1)) > 1.0e-3_wp*area(1), &
+                       more="twice the density left the area unchanged")
+            if (allocated(error)) return
+            if (all(shape(cavity%xyz) == shape(xyz))) then
+               call check(error, maxval(abs(cavity%xyz - xyz)) > 1.0e-3_wp, &
+                          more="twice the density left the surface points in place")
+               if (allocated(error)) return
+            end if
+         end if
+      end do
+      call check(error, area(3), area(1), thr=1.0e-10_wp*area(1), &
+                 more="the same density rebuilt a different area")
+      if (allocated(error)) return
+      call check(error, all(shape(cavity%xyz) == shape(xyz)), &
+                 more="the same density rebuilt a different point count")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cavity%xyz - xyz)) <= 1.0e-10_wp, &
+                 more="the same density rebuilt different surface points")
+   end subroutine test_rebuild_follows_density
+
+   !> The core fill refuses nuclear charges outside (0, Z] by name
+   !>
+   !> An ECP removes core electrons, so a charge above the atomic number or
+   !> not positive is no host Hamiltonian's; positive control: `z = Z` builds
+   subroutine test_core_fill_charge_range(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      class(radius_type), allocatable :: radii
+      type(mctc_error), allocatable :: cavity_error
+      !> Answered charges: above Z, zero, Z
+      real(wp), parameter :: charges(3) = [54.5_wp, 0.0_wp, 54.0_wp]
+      character(len=*), parameter :: refusals(2) = [character(len=48) :: &
+         & "nuclear_charges: z(1) = 54.5 exceeds Z = 54", "nuclear_charges: z(1) = 0 is not positive"]
+      integer :: icase
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_radii_custom_atoms([4.0_wp], radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call build_pseudo_atom_lsf(lsf, 54, 54, .true., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, &
+                           param=moist_cavity_drop_parameters_type(num_leb=6, proj_level=1), ctx=ctx)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      do icase = 1, size(charges)
+         call update_iso_cavity(cavity, mol, pseudo_atom_density(), [charges(icase)], cavity_error)
+         if (icase < size(charges)) then
+            call check(error, allocated(cavity_error), more="the build took "//trim(refusals(icase)))
+            if (allocated(error)) return
+            call check(error, cavity_error%message, trim(refusals(icase)))
+            if (allocated(error)) return
+            deallocate (cavity_error)
+            call check(error, .not. cavity%is_built(), more="a refused charge left a surface")
+            if (allocated(error)) return
+         else if (allocated(cavity_error)) then
+            call test_failed(error, "control: z = Z was refused: "//cavity_error%message)
+            return
+         end if
+      end do
+      call check(error, cavity%is_built() .and. cavity%ngrid > 0, more="control: z = Z built no surface")
+   end subroutine test_core_fill_charge_range
+
+   !> A marching-cubes cavity over the internal LSF defers like DROP
+   !>
+   !> `update` leaves no surface; each build integrates the density of its own
+   !> answers: twice the density matrix changes the area at a fixed structure,
+   !> the same density matrix again reproduces the first
+   subroutine test_marchingcubes_follows_density(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_marchingcubes) :: cavity
+      class(radius_type), allocatable :: radii
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      !> Scaling of the density matrix of each build: density, doubled, density again
+      real(wp), parameter :: scaling(3) = [1.0_wp, 2.0_wp, 1.0_wp]
+      !> Total area after each build
+      real(wp) :: area(3)
+      integer :: ibuild
+
+      call new_context(ctx, nthreads=1, verbosity=0)
+      call new_radii_custom_atoms([4.0_wp], radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call build_pseudo_atom_lsf(lsf, 54, 54, .false., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      call new_cavity_marchingcubes(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, ctx=ctx)
+      if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "marching-cubes update failed: "//cavity_error%message)
+         return
+      end if
+      call check(error, cavity%defers_build() .and. .not. cavity%is_built(), &
+                 more="the marching-cubes cavity integrated without the density matrix")
+      if (allocated(error)) return
+      do ibuild = 1, 3
+         call cavity%prepare_build(coupling, cavity_error)
+         if (.not. allocated(cavity_error)) &
+            & call answer_density(coupling, scaling(ibuild)*pseudo_atom_density(), cavity_error)
+         if (.not. allocated(cavity_error)) call cavity%build(coupling, cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "marching-cubes build failed: "//cavity_error%message)
+            return
+         end if
+         call check(error, cavity%is_built(), more="the marching-cubes build left no surface")
+         if (allocated(error)) return
+         area(ibuild) = cavity%total_area
+      end do
+      call check(error, area(1) > 0.0_wp, more="the pseudo atom has no isosurface")
+      if (allocated(error)) return
+      call check(error, abs(area(2) - area(1)) > 1.0e-3_wp*area(1), &
+                 more="twice the density left the marching-cubes area unchanged")
+      if (allocated(error)) return
+      call check(error, area(3), area(1), thr=1.0e-10_wp*area(1), &
+                 more="the same density integrated a different area")
+   end subroutine test_marchingcubes_follows_density
+
+   !> A rebuild drops the nuclear derivatives of the previous surface
+   !>
+   !> After `get_gradient` the DROP totals and the base position derivatives
+   !> are allocated; `prepare_build`, and after another build `update`, leave
+   !> the cavity unbuilt, and the projection of the next build drops both
+   !> before it re-allocates the surface, so no reader can pair a stale total
+   !> with a missing or resized position derivative
+   subroutine test_rebuild_drops_derivatives(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      integer :: icase
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, error)
+      if (allocated(error)) return
+      call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "update failed: "//cavity_error%message)
+         return
+      end if
+      ! 1: unbuilt by prepare_build, 2: unbuilt by update
+      do icase = 1, 2
+         call build_with_density(cavity, coupling, pseudo_atom_density(), cavity_error)
+         if (.not. allocated(cavity_error)) call cavity%get_gradient(cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "build and gradient failed: "//cavity_error%message)
+            return
+         end if
+         call check(error, allocated(cavity%A_tot1_rA) .and. allocated(cavity%xyz1_rA), &
+                    more="control: the gradient left its derivatives unallocated")
+         if (allocated(error)) return
+         if (icase == 1) then
+            call cavity%prepare_build(coupling, cavity_error)
+         else
+            call cavity%update(mol, cavity_error)
+         end if
+         if (allocated(cavity_error)) then
+            call test_failed(error, "rebuild staging failed: "//cavity_error%message)
+            return
+         end if
+         call check(error, .not. cavity%is_built(), more="the rebuild staging left the cavity built")
+         if (allocated(error)) return
+         call build_with_density(cavity, coupling, pseudo_atom_density(), cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "rebuild failed: "//cavity_error%message)
+            return
+         end if
+         call check(error, .not. allocated(cavity%A_tot1_rA) .and. .not. allocated(cavity%xyz1_rA), &
+                    more="the rebuild kept the derivatives of the previous surface")
+         if (allocated(error)) return
+      end do
+   end subroutine test_rebuild_drops_derivatives
 
 end module test_cavity_drop_isodensity

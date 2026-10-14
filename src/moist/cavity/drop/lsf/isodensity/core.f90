@@ -1,8 +1,9 @@
 !> Core fill for ECP nuclei of the isodensity level set
 !>
 !> An ECP pseudo-density can fall below `rho_iso` at its own nucleus, which
-!> gives the level set a spurious inner sheet. Every atom with `z_eff < Z`
-!> receives the compact bump
+!> gives the level set a spurious inner sheet. Every atom whose nuclear charge
+!> `z`, answered by the host through the `nuclear_charges` coupling request, is
+!> below its atomic number `Z` receives the compact bump
 !>
 !>    g(r) = A (1 - |r - R| / X)^5,   |r - R| < X,   A = 100 rho_iso
 !>
@@ -31,7 +32,7 @@ module moist_cavity_drop_lsf_isodensity_core
    implicit none(type, external)
    private
 
-   public :: moist_iso_core_fill_type
+   public :: moist_iso_core_fill_type, iso_check_nuclear_charges
 
    integer, parameter :: ndim = 3
 
@@ -78,16 +79,86 @@ module moist_cavity_drop_lsf_isodensity_core
 
 contains
 
+   !> Refuse nuclear charges outside (0, Z] by name
+   !>
+   !> An ECP removes core electrons, so `0 < z <= Z`; `z < Z` then marks an
+   !> ECP nucleus
+   !>
+   !> @param[in]  mol   Molecular structure supplying `Z`
+   !> @param[in]  z     Nuclear charges of the host Hamiltonian (nat)
+   !> @param[out] error First charge out of range, e.g. "z(3) = 80.5 exceeds Z = 79"
+   subroutine iso_check_nuclear_charges(mol, z, error)
+      !> Molecular structure supplying `Z`
+      type(structure_type), intent(in) :: mol
+      !> Nuclear charges of the host Hamiltonian
+      real(wp), intent(in) :: z(:)
+      !> First charge out of range
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Atom index and its atomic number
+      integer :: iat, number
+      !> Formatted index, charge and atomic number
+      character(len=32) :: sat, sz, snum
+
+      do iat = 1, min(size(z), mol%nat)
+         number = mol%num(mol%id(iat))
+         if (z(iat) > 0.0_wp .and. z(iat) <= real(number, wp)) cycle
+         write (sat, "(i0)") iat
+         write (snum, "(i0)") number
+         call format_charge(z(iat), sz)
+         if (z(iat) > 0.0_wp) then
+            call fatal_error(error, "nuclear_charges: z("//trim(sat)//") = "//trim(sz)// &
+               & " exceeds Z = "//trim(snum))
+         else
+            call fatal_error(error, "nuclear_charges: z("//trim(sat)//") = "//trim(sz)// &
+               & " is not positive")
+         end if
+         return
+      end do
+
+   end subroutine iso_check_nuclear_charges
+
+   !> Shortest decimal form of a charge: no trailing zeros, no trailing point
+   !>
+   !> @param[in]  value Charge
+   !> @param[out] text  Formatted charge, left adjusted
+   subroutine format_charge(value, text)
+      !> Charge
+      real(wp), intent(in) :: value
+      !> Formatted charge
+      character(len=*), intent(out) :: text
+
+      !> Last character kept
+      integer :: last
+
+      write (text, "(f0.6)") value
+      if (index(text, ".") == 0) return
+      last = len_trim(text)
+      do while (last > 1 .and. text(last:last) == "0")
+         last = last - 1
+      end do
+      if (text(last:last) == ".") last = last - 1
+      if (last < 1) then
+         text = "0"
+         return
+      end if
+      text = text(:last)
+      if (text(1:1) == ".") text = "0"//text
+      if (text(1:2) == "-.") text = "-0"//text(2:)
+
+   end subroutine format_charge
+
    !> Select the ECP nuclei of a structure and size their fill
    !>
-   !> ECP nuclei are those with `z_eff < Z`; without `z_eff`, or with a fill
-   !> radius fraction <= 0, there are none
+   !> ECP nuclei are those with `z < Z`; without `z`, or with a fill radius
+   !> fraction <= 0, there are none
    !>
    !> @param[inout] self  Core fill
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Cavity radius of each atom in Bohr
    !> @param[in]    param Isodensity parameters
-   subroutine iso_core_fill_update(self, mol, radii, param)
+   !> @param[in]    z     Nuclear charges of the host Hamiltonian (nat)
+   subroutine iso_core_fill_update(self, mol, radii, param, z)
       class(moist_iso_core_fill_type), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
@@ -95,6 +166,8 @@ contains
       real(wp), intent(in) :: radii(:)
       !> Isodensity parameters
       type(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: param
+      !> Nuclear charges of the host Hamiltonian
+      real(wp), intent(in), optional :: z(:)
 
       !> Atom and fill indices, overlapping balls of one fill
       integer :: iat, ic, jc, nb
@@ -105,13 +178,13 @@ contains
       self%overlap = 1
       self%rho_iso = param%rho_iso
       if (.not. param%core_fill .or. param%core_radius_fraction <= 0.0_wp) return
-      if (.not. allocated(mol%z_eff)) return
-      if (size(mol%z_eff) /= mol%nat .or. size(radii) < mol%nat) return
+      if (.not. present(z)) return
+      if (size(z) /= mol%nat .or. size(radii) < mol%nat) return
 
       allocate (ecp(mol%nat))
       do iat = 1, mol%nat
          ! A ball too small to square is no ball
-         ecp(iat) = mol%z_eff(iat) < mol%num(mol%id(iat)) .and. &
+         ecp(iat) = z(iat) < real(mol%num(mol%id(iat)), wp) .and. &
                     min(param%core_radius_fraction*radii(iat), max_radius)**2 > 0.0_wp
       end do
       if (.not. any(ecp)) return

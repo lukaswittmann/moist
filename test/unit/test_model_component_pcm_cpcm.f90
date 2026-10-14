@@ -9,7 +9,8 @@ module test_model_component_pcm_cpcm
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
+   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type, &
+      & nuclear_charge_request_type
    use moist_channels_response, only: response_type
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
@@ -1684,6 +1685,9 @@ contains
       cavity%nsph = mol%nat
       cavity%ngrid = ngrid_sw
       allocate (cavity%a, source=sw_areas)
+      ! The hand-built surface counts as updated and built
+      cavity%updated = .true.
+      cavity%built = .true.
       allocate (cavity%xi0, source=sw_xis)
       allocate (cavity%f, source=sw_fs)
       allocate (cavity%xyz, source=sw_xyz)
@@ -2081,7 +2085,8 @@ contains
 
 !> Check the CPCM nuclear gradient of an ECP host against finite differences
 !>
-!> The host potential is that of `z_eff`, so the direct term must use `z_eff`
+!> The host potential is that of the reduced charges `z`, so the direct term
+!> must use the `z` the host answers in `nuclear_charges`
    subroutine test_cpcm_nuclear_gradient_ecp(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2123,8 +2128,8 @@ contains
       !> Point charges generating the potential: the host's nuclear charges, so
       !> the analytic gradient's moving sources coincide with the potential's
       real(wp), allocatable :: qat(:)
-      !> Effective nuclear charges of the ECP variant
-      integer, allocatable :: z_eff(:)
+      !> Nuclear charges of the ECP variant
+      integer, allocatable :: zat(:)
       !> Atom index used to fill the charges
       integer :: iat
       !> Analytic PCM nuclear gradient
@@ -2167,21 +2172,16 @@ contains
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
+      zat = mols(1)%num(mols(1)%id)
       if (core > 0) then
          ! The core goes on an atom the finite differences below displace: only
          ! its own direct term carries its charge
-         z_eff = mols(1)%num(mols(1)%id)
-         iat = findloc(z_eff(:min(2, mols(1)%nat)) > core, .true., dim=1)
+         iat = findloc(zat(:min(2, mols(1)%nat)) > core, .true., dim=1)
          call check(error, iat > 0, more="ECP variant needs a displaced atom heavier than its core")
          if (allocated(error)) return
-         z_eff(iat) = z_eff(iat) - core
-         mols(1)%z_eff = z_eff
+         zat(iat) = zat(iat) - core
       end if
-      allocate (qat(mols(1)%nat))
-      do iat = 1, mols(1)%nat
-         qat(iat) = real(mols(1)%num(mols(1)%id(iat)), wp)
-         if (core > 0) qat(iat) = real(mols(1)%z_eff(iat), wp)
-      end do
+      qat = real(zat, wp)
 
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb)
       if (allocated(err)) then
@@ -2250,8 +2250,13 @@ contains
          end if
          width_derivative(width_point) = real(iprobe - 1, wp)*0.23_wp
          do while (coupling%next())
-            call coupling%answer("dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid), err)
-            if (.not. allocated(err)) call coupling%answer("dphi_dxi", width_derivative, err)
+            select type (request => coupling%request())
+            type is (gaussian_potential_request_type)
+               call coupling%answer("dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid), err)
+               if (.not. allocated(err)) call coupling%answer("dphi_dxi", width_derivative, err)
+            type is (nuclear_charge_request_type)
+               call coupling%answer("z", qat, err)
+            end select
             if (allocated(err)) then
                call test_failed(error, "Width-gradient input failed: "//err%message)
                return
@@ -2438,6 +2443,17 @@ contains
          call test_failed(error, "Gradient staging failed: "//err%message)
          return
       end if
+      ! The nuclear charges of the external potential in a pass of their own
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (nuclear_charge_request_type)
+            call coupling%answer("z", real(mols(1)%num(mols(1)%id), wp), err)
+            if (allocated(err)) then
+               call test_failed(error, "Answering the nuclear charges failed: "//err%message)
+               return
+            end if
+         end select
+      end do
       ! One step of the walk: the potential request stays current below, so
       ! the mis-shaped answer further down replaces this one
       if (.not. coupling%next()) then

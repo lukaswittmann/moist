@@ -9,7 +9,7 @@ The electron-isodensity surface (:math:`\rho`-DROP)
    S(\mathbf r) = \alpha[\rho_\mathrm{iso} - \rho(\mathbf r)].
 
 ``rho_iso`` (:math:`\rho_\mathrm{iso}`, default ``1.0e-3`` bohr\ :sup:`-3`) is the
-cavity-defining isodensity valu.
+cavity-defining isodensity value.
 Values of :math:`\rho_\mathrm{iso}` from :math:`4\times10^{-4}` to
 :math:`5\times10^{-3}` are used in the literature.
 
@@ -21,7 +21,7 @@ while :math:`\alpha=1/\rho_\mathrm{iso}`, so both should be changed together.
 
 .. Note::
 
-   :math:`\rho`-DROP requires the electron density, so it *has* to be coupled to a QM host, and the cavity has to be updated after every density change.
+   :math:`\rho`-DROP requires a QM host's density; see :ref:`coupling-build` for rebuilding at each density change.
    Components evaluated on a :math:`\rho`-DROP cavity must also implement their surface weights (the derivatives of the model energy with respect to the surface quantities ) to obtain the variational cavity response.
    These weights are already available for every currently implemented model and component.
    Those weights are contracted directly with the DROP adjoint.
@@ -38,7 +38,7 @@ Two implementations are available:
    This route is the slower one: per-point call overhead and no vectorization across points.
 
 **Internal** (``moist_cavity_drop_lsf_isodensity_internal_type``)
-   The QM host supplies the GTO basis set and, for every SCF step, the current density matrix in Cartesian-monomial layout (``moist_get_isodensity_cart_layout``, ``moist_set_isodensity_density``).
+   The QM host supplies the GTO basis at construction and the current density matrix through the :ref:`coupling-build` at each SCF step.
    MOIST evaluates the density and its spatial derivatives internally, including shell and spatial screening.
 
    ``basis`` selects the representation the density is contracted in:
@@ -53,7 +53,7 @@ ECP nuclei
 
 With an effective core potential, the pseudo-density can fall below :math:`\rho_\mathrm{iso}` at the
 nucleus, which gives the level set a small inner cavity.
-MOIST therefore adds, at every nucleus whose effective charge ``z_eff`` is below its atomic number,
+MOIST therefore adds, at every nucleus whose nuclear charge ``z`` is below its atomic number,
 
 .. math::
 
@@ -66,7 +66,7 @@ The fill has a cusp at the nucleus, so the nucleus is no stationary point of the
 As the outer surface is further out, it is left unchanged; a converged surface point inside this area
 stops the cavity build with an error naming the atom.
 A smaller ``core_radius_fraction`` admits a surface that comes closer to an ECP nucleus.
-Structures carry ``z_eff`` from the C and Python constructors; without it no atom is filled.
+The host supplies ``z`` through the ``nuclear_charges`` request (:ref:`coupling-build`).
 ``core_fill`` (default on) switches the fill off: ``param%core_fill`` (Fortran), ``options.core_fill`` (C)
 or ``IsodensityParameters(core_fill=False)`` (Python); ``core_radius_fraction`` is set the same way.
 
@@ -116,7 +116,7 @@ normalization folded into the coefficients.
       .. code-block:: python
 
          from moist import (
-             CavityDROP, CPCMRadii, GaussianBasis, InternalDensity,
+             CavityDROP, CPCMRadii, GaussianBasis,
              Isodensity, IsodensityParameters,
          )
 
@@ -128,25 +128,12 @@ normalization folded into the coefficients.
              context=context,
              lsf=Isodensity(parameters=IsodensityParameters(rho_iso=1.0e-3)),
              radii=CPCMRadii(),
-             source=InternalDensity(basis, density_matrix),
+             basis=basis,
          )
 
 The Fortran and C level sets still have to be passed to the DROP cavity constructor; see :ref:`drop-construction`.
 
-The cavity constructor *copies* the level set, so a new density must be set on the cavity-owned copy, not on the LSF built above.
-In Fortran that works via ``cavity%lsf_model``:
-
-.. code-block:: fortran
-
-   select type (lsf => cavity%lsf_model)
-   type is (moist_cavity_drop_lsf_isodensity_internal_type)
-      call lsf%set_density(dcart, error)
-   end select
-   if (allocated(error)) error stop error%message
-
-C uses ``moist_set_isodensity_density`` on the cavity, and Python assigns
-``InternalDensity.density_matrix`` on the source object the cavity holds. The
-Cartesian-monomial layout the matrix must use is reported by
+The density matrix uses the Cartesian-monomial layout reported by
 ``moist_get_isodensity_cart_layout`` / ``cavity.isodensity_layout()``.
 
 A **callback** level set is available as well

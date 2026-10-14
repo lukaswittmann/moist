@@ -16,10 +16,15 @@
 !> - request kinds are a closed set: `declare` is private, so new kinds are
 !>   defined in this module only
 !> - every output has an extent kind: most run over the evaluation points of
-!>   the domain (`ngrid`), the per-atom outputs of `atomic_charges` and
-!>   `atomic_multipoles` over the solute atoms (`natom`), the site-resolved
-!>   `radial_potential` over both (`ngrid, natom`); the snapshot records the
-!>   counts the domain has, and an output whose count it did not record is refused
+!>   the domain (`ngrid`), the per-atom outputs of `atomic_charges`,
+!>   `atomic_multipoles` and `nuclear_charges` over the solute atoms (`natom`),
+!>   the site-resolved `radial_potential` over both (`ngrid, natom`); the
+!>   snapshot records the counts the domain has, and an output whose count it
+!>   did not record is refused; the `density_matrix` runs over a size its
+!>   request carries as an input (`nbasis, nbasis`)
+!> - the build phase carries what the host pushes before the domain is built
+!>   (density matrix, nuclear charges); its answers survive the energy staging
+!>   and stay until the next `prepare_build` clears the coupling
 module moist_channels_coupling
    use, intrinsic :: iso_fortran_env, only: int64
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -32,25 +37,30 @@ module moist_channels_coupling
    public :: point_potential_request_type, gaussian_potential_request_type
    public :: gaussian_moment_request_type, atomic_multipole_request_type
    public :: atomic_charge_request_type, radial_potential_request_type
+   public :: nuclear_charge_request_type, density_matrix_request_type
    public :: coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom
+   public :: coupling_extent_request_pair
    public :: current_request, answer_flat, current_output_extent
    public :: coupling_register, request_require
    public :: coupling_begin_registration, coupling_set_scope, coupling_snapshot
    public :: coupling_arm, coupling_invalidate, coupling_check_mandatory
    public :: coupling_make_view, coupling_close_view
-   public :: moist_phase_energy, moist_phase_response, moist_phase_gradient
+   public :: moist_phase_energy, moist_phase_response, moist_phase_gradient, moist_phase_build
+   public :: moist_n_phases
    public :: request_name_len, output_name_len
 
-   !> Supported phases
-   integer, parameter :: moist_n_phases = 3
+   !> Supported phases, numbered in the order a host runs them
+   integer, parameter :: moist_n_phases = 4
    !> No phase is staged
    integer, parameter :: moist_phase_none = 0
+   !> Build phase: host state pushed before the domain is built
+   integer, parameter :: moist_phase_build = 1
    !> Energy phase
-   integer, parameter :: moist_phase_energy = 1
+   integer, parameter :: moist_phase_energy = 2
    !> Electronic response phase
-   integer, parameter :: moist_phase_response = 2
+   integer, parameter :: moist_phase_response = 3
    !> Nuclear gradient phase
-   integer, parameter :: moist_phase_gradient = 3
+   integer, parameter :: moist_phase_gradient = 4
 
    !> Diagnostic name capacity
    integer, parameter :: request_name_len = 32
@@ -66,11 +76,15 @@ module moist_channels_coupling
    integer, parameter :: coupling_extent_atom = 2
    !> Trailing extent kind: the evaluation points of every solute atom, (ngrid, natom)
    integer, parameter :: coupling_extent_grid_atom = 3
+   !> Trailing extent kind: pairs over a size the request carries as an input,
+   !> (n, n), e.g. the basis functions of the `density_matrix`
+   integer, parameter :: coupling_extent_request_pair = 4
+
    !> Largest caller rank of an output: its leading extents and two trailing ones
    integer, parameter :: max_rank = max_lead + 2
    !> Recorded count of an extent the snapshot did not give
    integer, parameter :: no_extent = -1
-   
+
    !> Diagnostic for an answer or query outside a `next()` window
    character(len=*), parameter :: no_current_request = &
       & "No current coupling request - call next() first"
@@ -88,13 +102,16 @@ module moist_channels_coupling
       integer :: lead(max_lead) = 1
       !> Number of leading extents: 0 for (n), 1 for (lead(1), n), ...
       integer :: nlead = 0
-      !> Trailing extent kind, `coupling_extent_grid`, `coupling_extent_atom`
-      !> or `coupling_extent_grid_atom`
+      !> Trailing extent kind, `coupling_extent_grid`, `coupling_extent_atom`,
+      !> `coupling_extent_grid_atom` or `coupling_extent_request_pair`
       integer :: extent = coupling_extent_grid
       !> Whether each phase requires this output
       logical :: required(moist_n_phases) = .false.
       !> Whether the coupling holds a valid answer
       logical :: available = .false.
+      !> Whether the answer came in the build phase; it then survives the
+      !> energy staging and goes only with a full invalidation
+      logical :: kept = .false.
    end type output_slot_type
 
    !> Coupling request: what a host computes, never the data it returns
@@ -129,6 +146,8 @@ module moist_channels_coupling
       procedure, private :: rows => request_rows
       procedure, private :: invalidate => request_invalidate
       procedure, private :: same_inputs => request_same_inputs
+      !> Size of the pairs a request-sized output runs over, `no_extent` for none
+      procedure, private :: pair_size => request_pair_size
       !> Trailing extent kind of a named output, 0 for an unknown name
       procedure :: output_extent => request_output_extent
    end type coupling_request_type
@@ -216,6 +235,42 @@ module moist_channels_coupling
       procedure, private :: declare => atomic_charge_declare
    end type atomic_charge_request_type
 
+   !> Nuclear charges of the host Hamiltonian
+   !>
+   !> Output: z(natom), the atomic numbers minus the core electrons an ECP
+   !> replaces; an all-electron host answers the atomic numbers
+   !>
+   !> - read by PCM for the direct nuclear gradient and by the isodensity core
+   !>   fill, which marks atoms with `z < Z` as ECP nuclei
+   !> - no inputs, so every registration shares one request and one answer
+   !> - no response item: nothing is differentiated with respect to `z`
+   type, extends(coupling_request_type) :: nuclear_charge_request_type
+   contains
+      procedure :: name => nuclear_charge_name
+      procedure, private :: declare => nuclear_charge_declare
+   end type nuclear_charge_request_type
+
+   !> Density matrix of the host in the basis of the domain
+   !>
+   !> Output: dcart(nbasis, nbasis), symmetric
+   !>
+   !> - read by the internal isodensity level set in the build phase, in its
+   !>   cartesian-monomial basis (`moist_get_isodensity_cart_layout`)
+   !> - input `nbasis`, set by the declaring level set; two declarations of
+   !>   different sizes are different inputs
+   !> - no response item: the density weights of the response phase carry its
+   !>   derivative
+   type, extends(coupling_request_type) :: density_matrix_request_type
+      !> Basis function count, the extent of both axes of `dcart`
+      integer :: nbasis = no_extent
+   contains
+      procedure :: name => density_matrix_name
+      procedure :: list_fields => density_matrix_list_fields
+      procedure, private :: declare => density_matrix_declare
+      procedure, private :: same_inputs => density_matrix_same_inputs
+      procedure, private :: pair_size => density_matrix_pair_size
+   end type density_matrix_request_type
+
    !> Site-resolved spherically averaged potential of the host charge distribution
    !>
    !> Output: phi(ngrid, natom)
@@ -266,7 +321,7 @@ module moist_channels_coupling
       integer :: slot = 0
    end type registration_type
 
-   !> Model-owned collection exposed to hosts through borrowed pointers
+   !> Model- or cavity-owned collection exposed to hosts through borrowed pointers
    !>
    !> The type carries only what a host calls: `next`, `request` and `answer`.
    !> Declaring, staging and reading belong to the model and its components and
@@ -334,7 +389,7 @@ module moist_channels_coupling
       procedure, private :: find_slot => view_find_slot
    end type coupling_view_type
 
-   !> Model-owned node; hosts only borrow its collection
+   !> Owned node; hosts only borrow its collection
    type :: coupling_node
       !> Stable collection allocation
       type(coupling_type), allocatable :: item
@@ -342,7 +397,7 @@ module moist_channels_coupling
       type(coupling_node), allocatable :: next
    end type coupling_node
 
-   !> Registry of every coupling minted by one model
+   !> Registry of every coupling minted by one model or one standalone cavity
    type :: coupling_registry_type
       private
       !> First owned node
@@ -360,15 +415,23 @@ contains
    !*                                 Request declarations                              *!
    !* ================================================================================= *!
 
-   !> Mark every output unanswered; the coupling keeps the storage
+   !> Mark outputs unanswered; the coupling keeps the storage
    !>
    !> @param[in,out] self Request to invalidate
-   subroutine request_invalidate(self)
+   !> @param[in] keep_build Spare the answers of the build phase
+   subroutine request_invalidate(self, keep_build)
       !> Request to invalidate
       class(coupling_request_type), intent(inout) :: self
+      !> Spare the answers of the build phase
+      logical, intent(in), optional :: keep_build
+      logical :: keep
       integer :: i
+      keep = .false.
+      if (present(keep_build)) keep = keep_build
       do i = 1, self%n_outputs()
+         if (keep .and. self%outputs(i)%kept) cycle
          self%outputs(i)%available = .false.
+         self%outputs(i)%kept = .false.
       end do
    end subroutine request_invalidate
 
@@ -431,7 +494,7 @@ contains
       ext = coupling_extent_grid
       if (present(extent)) ext = extent
       if (ext /= coupling_extent_grid .and. ext /= coupling_extent_atom &
-         & .and. ext /= coupling_extent_grid_atom) then
+         & .and. ext /= coupling_extent_grid_atom .and. ext /= coupling_extent_request_pair) then
          call fatal_error(error, trim(self%name())//": output '"//name//"' has an unknown extent kind")
          return
       end if
@@ -467,7 +530,7 @@ contains
       !> Output name
       character(len=*), intent(in) :: name
       !> `coupling_extent_grid`, `coupling_extent_atom`,
-      !> `coupling_extent_grid_atom`, or 0 when unknown
+      !> `coupling_extent_grid_atom`, `coupling_extent_request_pair`, or 0 when unknown
       integer :: ext
       integer :: i
       ext = 0
@@ -713,6 +776,17 @@ contains
       equal = same_type_as(self, other)
    end function request_same_inputs
 
+   !> Default pair size: the request carries none
+   !>
+   !> @param[in] self Request to inspect
+   function request_pair_size(self) result(n)
+      !> Request to inspect
+      class(coupling_request_type), intent(in) :: self
+      !> Size of the pairs, `no_extent` for none
+      integer :: n
+      n = no_extent
+   end function request_pair_size
+
    !* ================================================================================= *!
    !*                                   Request kinds                                   *!
    !* ================================================================================= *!
@@ -859,6 +933,99 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call self%add("q", error, extent=coupling_extent_atom)
    end subroutine atomic_charge_declare
+
+   !> Name of the nuclear_charges calculation
+   !>
+   !> @param[in] self Request to describe
+   function nuclear_charge_name(self) result(name)
+      !> Request to describe
+      class(nuclear_charge_request_type), intent(in) :: self
+      !> Diagnostic name
+      character(len=request_name_len) :: name
+      name = "nuclear_charges"
+   end function nuclear_charge_name
+
+   !> Output of the nuclear_charges calculation, over the solute atoms
+   !>
+   !> @param[in,out] self Request to declare
+   !> @param[out] error Invalid declaration
+   subroutine nuclear_charge_declare(self, error)
+      !> Request to declare
+      class(nuclear_charge_request_type), intent(inout) :: self
+      !> Invalid declaration
+      type(error_type), allocatable, intent(out) :: error
+      call self%add("z", error, extent=coupling_extent_atom)
+   end subroutine nuclear_charge_declare
+
+   !> Name of the density_matrix calculation
+   !>
+   !> @param[in] self Request to describe
+   function density_matrix_name(self) result(name)
+      !> Request to describe
+      class(density_matrix_request_type), intent(in) :: self
+      !> Diagnostic name
+      character(len=request_name_len) :: name
+      name = "density_matrix"
+   end function density_matrix_name
+
+   !> Output of the density_matrix calculation, over pairs of its basis functions
+   !>
+   !> @param[in,out] self Request to declare
+   !> @param[out] error Invalid declaration
+   subroutine density_matrix_declare(self, error)
+      !> Request to declare
+      class(density_matrix_request_type), intent(inout) :: self
+      !> Invalid declaration
+      type(error_type), allocatable, intent(out) :: error
+      call self%add("dcart", error, extent=coupling_extent_request_pair)
+   end subroutine density_matrix_declare
+
+   !> Declare the basis size, the input a host sizes `dcart` with
+   !>
+   !> Real like every request input; absent before the level set sets it
+   !>
+   !> @param[in] self Request to describe
+   !> @param[in,out] query Field walker
+   subroutine density_matrix_list_fields(self, query)
+      !> Request to describe
+      class(density_matrix_request_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+      !> Basis size as a real scalar
+      real(wp), allocatable :: nbasis
+      if (self%nbasis < 0) return
+      nbasis = real(self%nbasis, wp)
+      call query%add_real_scalar("nbasis", "Basis function count, both extents of dcart", nbasis)
+   end subroutine density_matrix_list_fields
+
+   !> Whether two density matrices run over the same basis size
+   !>
+   !> @param[in] self Registered density matrix
+   !> @param[in] other Candidate calculation
+   function density_matrix_same_inputs(self, other) result(equal)
+      !> Registered density matrix
+      class(density_matrix_request_type), intent(in) :: self
+      !> Candidate calculation
+      class(coupling_request_type), intent(in) :: other
+      !> Whether inputs match
+      logical :: equal
+      equal = .false.
+      select type (other)
+      type is (density_matrix_request_type)
+         equal = self%nbasis == other%nbasis
+      end select
+   end function density_matrix_same_inputs
+
+   !> Basis size of the density matrix, both extents of `dcart`
+   !>
+   !> @param[in] self Request to inspect
+   function density_matrix_pair_size(self) result(n)
+      !> Request to inspect
+      class(density_matrix_request_type), intent(in) :: self
+      !> Size of the pairs, `no_extent` before the level set sets it
+      integer :: n
+      n = self%nbasis
+   end function density_matrix_pair_size
 
    !> Name of the radial_potential calculation
    !>
@@ -1049,15 +1216,20 @@ contains
       end if
    end subroutine coupling_register
 
-   !> Record the extents after a declaration pass; a new extent drops every answer
+   !> Record the extents after a declaration pass; a new extent drops the answers over it
    !>
    !> - the family gives the counts its own domain has, on every staging, so
    !>   they follow the model across updates
    !> - an absent count means the coupling has no such extent, unlike a given
    !>   zero, which is an empty one; outputs over an absent extent are refused
    !> - giving or dropping a count is a change like a new value
-   !> - staleness at unchanged extents is the owner's duty: a model update
-   !>   invalidates every coupling it minted
+   !> - a changed count drops the answers over it, `ngrid` those over the
+   !>   points, `natom` those over the atoms, both those over (ngrid, natom);
+   !>   answers over unchanged counts keep their shape and survive, so the
+   !>   first build, which gives `ngrid`, keeps the nuclear charges, and the
+   !>   request-sized density matrix depends on no count at all
+   !> - staleness at unchanged extents is the owner's duty: an update
+   !>   invalidates every coupling the owner minted, a build every other one
    !>
    !> @param[in,out] coupling Collection to refresh
    !> @param[in] ngrid Evaluation point count, the extent of per-point outputs
@@ -1071,28 +1243,55 @@ contains
       integer, intent(in), optional :: natom
       !> Recorded counts
       integer :: npoint, nsite
+      !> Which counts changed, by extent kind; a request-sized output follows none
+      logical :: changed(4)
+      integer :: i, j
       npoint = no_extent
       if (present(ngrid)) npoint = ngrid
       nsite = no_extent
       if (present(natom)) nsite = natom
       call coupling%compact()
-      if (coupling%ngrid /= npoint .or. coupling%natom /= nsite) call coupling_invalidate(coupling)
+      changed(coupling_extent_grid) = coupling%ngrid /= npoint
+      changed(coupling_extent_atom) = coupling%natom /= nsite
+      changed(coupling_extent_grid_atom) = changed(coupling_extent_grid) .or. changed(coupling_extent_atom)
+      changed(coupling_extent_request_pair) = .false.
+      if (any(changed)) then
+         coupling%epoch = coupling%epoch + 1_int64
+         coupling%phase = moist_phase_none
+         coupling%cursor = 0
+         do i = 1, coupling%n_requests()
+            associate (item => coupling%requests(i)%item)
+               do j = 1, item%n_outputs()
+                  if (.not. changed(item%outputs(j)%extent)) cycle
+                  item%outputs(j)%available = .false.
+                  item%outputs(j)%kept = .false.
+               end do
+            end associate
+         end do
+      end if
       coupling%ngrid = npoint
       coupling%natom = nsite
    end subroutine coupling_snapshot
 
-   !> Invalidate every answer, the staging and any outstanding scoped view
+   !> Invalidate the answers, the staging and any outstanding scoped view
+   !>
+   !> - by default every answer goes: a new geometry, `prepare_build`
+   !> - with `keep_build` the answers of the build phase survive: a new host
+   !>   evaluation at the same geometry, the energy staging
    !>
    !> @param[in,out] coupling Collection to invalidate
-   subroutine coupling_invalidate(coupling)
+   !> @param[in] keep_build Spare the answers of the build phase
+   subroutine coupling_invalidate(coupling, keep_build)
       !> Collection to invalidate
       class(coupling_type), intent(inout) :: coupling
+      !> Spare the answers of the build phase
+      logical, intent(in), optional :: keep_build
       integer :: i
       coupling%epoch = coupling%epoch + 1_int64
       coupling%phase = moist_phase_none
       coupling%cursor = 0
       do i = 1, coupling%n_requests()
-         call coupling%requests(i)%item%invalidate()
+         call coupling%requests(i)%item%invalidate(keep_build)
       end do
    end subroutine coupling_invalidate
 
@@ -1216,8 +1415,8 @@ contains
 
    !> Trailing extent, in elements, of one output of the current request
    !>
-   !> The point count, the atom count or their product (ngrid * natom) of the
-   !> snapshot by the output's kind; what a host allocates per row before
+   !> The point count, the atom count, their product (ngrid * natom) or the
+   !> request's own pair size squared by the output's kind; what a host allocates per row before
    !> answering through a flat buffer
    !>
    !> @param[in] coupling Collection to inspect
@@ -1300,9 +1499,9 @@ contains
 
    !> Trailing extent, in elements, of one output
    !>
-   !> The point count, the atom count or their product of the snapshot by the
-   !> output's extent kind; negative when the snapshot did not give a count
-   !> the kind needs
+   !> The point count, the atom count or their product of the snapshot, or the
+   !> request's own pair size squared, by the output's extent kind; negative
+   !> when the count the kind needs is absent
    !>
    !> @param[in] self Collection to inspect
    !> @param[in] i Slot index
@@ -1323,6 +1522,9 @@ contains
          ! Each count on its own: a product with an absent count need not be negative
          n = no_extent
          if (self%ngrid >= 0 .and. self%natom >= 0) n = self%ngrid*self%natom
+      case (coupling_extent_request_pair)
+         n = self%requests(i)%item%pair_size()
+         if (n >= 0) n = n*n
       case default
          n = self%ngrid
       end select
@@ -1331,7 +1533,7 @@ contains
    !> Caller-side shape of one output: its leading extents, then the trailing ones
    !>
    !> The trailing extents are (ngrid), (natom) or (ngrid, natom) of the
-   !> snapshot by the output's extent kind
+   !> snapshot, or the request's own (n, n), by the output's extent kind
    !>
    !> @param[in] self Collection to inspect
    !> @param[in] i Slot index
@@ -1358,6 +1560,8 @@ contains
             dims(rank + 1) = self%natom
          case (coupling_extent_grid_atom)
             dims(rank + 1:rank + 2) = [self%ngrid, self%natom]
+         case (coupling_extent_request_pair)
+            dims(rank + 1:rank + 2) = self%requests(i)%item%pair_size()
          case default
             dims(rank + 1) = self%ngrid
          end select
@@ -1365,7 +1569,8 @@ contains
       end associate
    end subroutine shape_of
 
-   !> Number of trailing extents of an extent kind: two for (ngrid, natom), else one
+   !> Number of trailing extents of an extent kind: two for (ngrid, natom) and
+   !> request-sized pairs, else one
    !>
    !> @param[in] extent Trailing extent kind of the output
    pure function trailing_rank(extent) result(rank)
@@ -1374,7 +1579,7 @@ contains
       !> Number of trailing extents
       integer :: rank
       rank = 1
-      if (extent == coupling_extent_grid_atom) rank = 2
+      if (extent == coupling_extent_grid_atom .or. extent == coupling_extent_request_pair) rank = 2
    end function trailing_rank
 
    !> Refusal of an output whose count the snapshot did not give
@@ -1393,6 +1598,8 @@ contains
          reason = "needs an atom count; the snapshot has none"
       case (coupling_extent_grid_atom)
          reason = "needs a point and an atom count; the snapshot lacks at least one"
+      case (coupling_extent_request_pair)
+         reason = "needs a size from its request; the request has none"
       case default
          reason = "needs a point count; the snapshot has none"
       end select
@@ -1418,6 +1625,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       associate (item => self%requests(i)%item)
          item%outputs(j)%available = .false.
+         item%outputs(j)%kept = .false.
          call fatal_error(error, trim(item%name())//": "//trim(item%outputs(j)%name)//" "//reason)
       end associate
    end subroutine reject
@@ -1487,6 +1695,7 @@ contains
       end if
       self%requests(i)%answers(j)%values = reshape(values, [rows, n])
       self%requests(i)%item%outputs(j)%available = .true.
+      self%requests(i)%item%outputs(j)%kept = self%phase == moist_phase_build
    end subroutine store
 
    !> Answer a vector output of the current request, extent by the output's kind
@@ -1619,11 +1828,11 @@ contains
       end if
       if (coupling%phase /= phase) then
          if (coupling%phase == moist_phase_none) then
-            call fatal_error(error, "get_"//trim(phase_name(phase))// &
+            call fatal_error(error, trim(phase_consumer(phase))// &
                & " requires a coupling staged by prepare_"//trim(phase_name(phase))// &
                & "; this coupling is not staged")
          else
-            call fatal_error(error, "get_"//trim(phase_name(phase))// &
+            call fatal_error(error, trim(phase_consumer(phase))// &
                & " requires a coupling staged by prepare_"//trim(phase_name(phase))// &
                & "; this coupling is staged for the "//trim(phase_name(coupling%phase))//" phase")
          end if
@@ -1662,10 +1871,29 @@ contains
          name = "response"
       case (moist_phase_gradient)
          name = "gradient"
+      case (moist_phase_build)
+         name = "build"
       case default
          name = "none"
       end select
    end function phase_name
+
+   !> Name of the call that consumes a phase, e.g. "get_gradient" or "build"
+   !>
+   !> Fixed length for the same reason as `phase_name`
+   !>
+   !> @param[in] phase Phase index
+   pure function phase_consumer(phase) result(name)
+      !> Phase index
+      integer, intent(in) :: phase
+      !> Consumer name, blank padded
+      character(len=16) :: name
+      if (phase == moist_phase_build) then
+         name = "build"
+      else
+         name = "get_"//phase_name(phase)
+      end if
+   end function phase_consumer
 
    !* ================================================================================= *!
    !*                                  Component views                                  *!
@@ -1908,17 +2136,27 @@ contains
       end do
    end subroutine registry_release
 
-   !> Push invalidation into every coupling issued by this model
+   !> Push invalidation into every coupling issued by this owner
    !>
-   !> @param[in,out] self Model registry
-   subroutine registry_invalidate(self)
-      !> Model registry
+   !> @param[in,out] self Owner registry
+   !> @param[in] except Coupling to spare, the one a build reads
+   subroutine registry_invalidate(self, except)
+      !> Owner registry
       class(coupling_registry_type), intent(inout), target :: self
+      !> Coupling to spare
+      type(coupling_type), intent(in), target, optional :: except
       type(coupling_node), pointer :: node
+      !> Collection of the current node
+      type(coupling_type), pointer :: candidate
       if (.not. allocated(self%first)) return
       node => self%first
       do
-         call coupling_invalidate(node%item)
+         candidate => node%item
+         if (present(except)) then
+            if (.not. associated(candidate, except)) call coupling_invalidate(candidate)
+         else
+            call coupling_invalidate(candidate)
+         end if
          if (.not. allocated(node%next)) exit
          node => node%next
       end do

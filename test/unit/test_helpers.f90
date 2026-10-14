@@ -74,7 +74,8 @@ module test_helpers
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
                           radius_type_static, new_cosmo_radii
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & point_potential_request_type, gaussian_potential_request_type, moist_phase_energy, &
+      & point_potential_request_type, gaussian_potential_request_type, nuclear_charge_request_type, &
+      & moist_phase_energy, &
       & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view, &
       & coupling_check_mandatory
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
@@ -539,7 +540,8 @@ contains
    !> and the FD gradient tests pin the result. Sign: `grad_r (1/|r - R|) =
    !> -(r - R)/|r - R|^3`, so the gradient points from the grid point towards
    !> a positive charge. Only the derivatives are answered, on every
-   !> potential request the host walk visits; every other output is left as is
+   !> potential request the host walk visits, and `qat` as the host's
+   !> `nuclear_charges`; every other output is left as is
    !> Call it after every `prepare_gradient` (or `prepare_response` of a
    !> field-dependent cavity), and after `fill_missing_with_zeros` if both
    !> are used
@@ -574,6 +576,8 @@ contains
          type is (point_potential_request_type)
             call point_charge_field(cavity, qat, mol, .false., w_xyz, w_xi)
             call submit(coupling, "dphi_dr", w_xyz)
+         type is (nuclear_charge_request_type)
+            call submit(coupling, "z", qat)
          end select
       end do
 

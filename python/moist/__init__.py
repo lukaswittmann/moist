@@ -2,9 +2,9 @@
 
 import re
 
-from .context import Context
-from .density import GaussianBasis, InternalDensity
 from .library import get_version_string, get_banner
+from .context import Context
+from .density import GaussianBasis
 
 from .interface import (
     AnchorGradient,
@@ -25,6 +25,8 @@ from .interface import (
     GaussianMomentRequest,
     PointPotentialRequest,
     GaussianPotentialRequest,
+    NuclearChargesRequest,
+    DensityMatrixRequest,
     RadialPotentialAdjointResponse,
     Response,
     IsodensitySource,
@@ -52,7 +54,9 @@ from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, Gaus
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, LevelSet
 
 __all__ = [
-    "Context", "GaussianBasis", "InternalDensity", "get_version_string", "get_banner",
+    "get_version_string", "get_banner",
+    "Context", 
+    "GaussianBasis",
     "DROPParameters",
     "ISwiGParameters",
     "SvdWParameters",
@@ -94,6 +98,8 @@ __all__ = [
     "GaussianMomentRequest",
     "PointPotentialRequest",
     "GaussianPotentialRequest",
+    "NuclearChargesRequest",
+    "DensityMatrixRequest",
     "RadialPotentialAdjointResponse",
     "Response",
     "IsodensitySource",

@@ -12,6 +12,10 @@
 !>
 !> exactly as the internal variant does, from the same
 !> [[moist_cavity_drop_lsf_isodensity_param_type]]
+!>
+!> The callback is pulled point by point during the build and stays outside
+!> the host coupling; only the nuclear charges of the core fill arrive in its
+!> build phase
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
@@ -23,7 +27,9 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
       isodensity_max_nuclear_charge
-   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
+      & request_require, moist_phase_build, nuclear_charge_request_type
    use moist_output_format, only: format_string
    implicit none(type, external)
    private
@@ -87,8 +93,14 @@ module moist_cavity_drop_lsf_isodensity_callback
       real(wp) :: zmax = 0.0_wp
       !> Core fill of the ECP nuclei in the bound structure
       type(moist_iso_core_fill_type) :: core
+      !> Nuclear charges of the host Hamiltonian (nat); unallocated means no ECP nucleus
+      real(wp), allocatable :: z(:)
    contains
       procedure, public :: new => lsf_new
+      procedure, public :: set_nuclear_charges => lsf_set_nuclear_charges
+      procedure, public :: declare_coupling => lsf_declare_coupling
+      procedure, public :: read_build => lsf_read_build
+      procedure, public :: requires_build_inputs => lsf_requires_build_inputs
       procedure, public :: update => lsf_update
       procedure, public :: prepare => lsf_prepare
       procedure, public :: prepare_subset => lsf_prepare_subset
@@ -135,6 +147,73 @@ contains
       if (present(param)) self%param = param
    end subroutine lsf_new
 
+   !> Declare the build-phase request at the cavity scope
+   !>
+   !> `nuclear_charges`, required while the core fill is on; the density
+   !> itself is pulled through the callback, outside the coupling
+   !>
+   !> @param[in]    self     LSF instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine lsf_declare_coupling(self, coupling, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      type(coupling_type), intent(inout) :: coupling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(nuclear_charge_request_type) :: charges
+
+      call request_require(charges, moist_phase_build, "z", self%param%fills_core(), error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "nuclear_charges", charges, error)
+   end subroutine lsf_declare_coupling
+
+   !> Read the nuclear charges while the core fill is on
+   !>
+   !> @param[inout] self     LSF instance
+   !> @param[in]    coupling Cavity-scoped view of the build phase
+   !> @param[in]    mol      Structure of the cavity's latest update
+   !> @param[out]   error    Missing answer or a charge outside (0, Z]
+   subroutine lsf_read_build(self, coupling, mol, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      type(structure_type), intent(in) :: mol
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: z(:)
+
+      if (.not. self%param%fills_core()) return
+      call coupling%read("nuclear_charges", "z", z, error)
+      if (allocated(error)) return
+      call iso_check_nuclear_charges(mol, z, error)
+      if (allocated(error)) return
+      call self%set_nuclear_charges(z)
+   end subroutine lsf_read_build
+
+   !> Whether the projection waits for build-phase answers
+   !>
+   !> The nuclear charges, while the core fill is on
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_requires_build_inputs(self) result(requires)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      logical :: requires
+
+      requires = self%param%fills_core()
+   end function lsf_requires_build_inputs
+
+   !> Store the nuclear charges of the host Hamiltonian for the core fill
+   !>
+   !> Read by the next `update`; atoms with `z < Z` are ECP nuclei
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    z    Nuclear charges (nat)
+   subroutine lsf_set_nuclear_charges(self, z)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
+      real(wp), intent(in) :: z(:)
+
+      self%z = z
+   end subroutine lsf_set_nuclear_charges
+
    !> Bind molecular geometry for the inherited base state
    !>
    !> @param[inout] self  LSF instance
@@ -147,7 +226,7 @@ contains
 
       call lsf_base_update(self, mol, radii)
       self%zmax = isodensity_max_nuclear_charge(mol)
-      call self%core%update(mol, radii, self%param)
+      call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point

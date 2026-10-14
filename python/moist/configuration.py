@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from . import library
-from .density import InternalDensity
+from .density import GaussianBasis
 from .parameters import (
     CFCParameters, DROPParameters, ISwiGParameters, IsodensityParameters,
     SvdWParameters, _resolve,
@@ -25,14 +25,14 @@ class LevelSet(ABC):
     density_dependent = False
 
     @abstractmethod
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
+    def _new_cavity(self, parameters, radii, source, pass_order, basis, *, context):
         """Create independently owned native state for this surface."""
 
 
 class _GeometricLevelSet(LevelSet):
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
-        if source is not None or pass_order is not None:
-            raise TypeError("A geometric LSF does not accept a density source")
+    def _new_cavity(self, parameters, radii, source, pass_order, basis, *, context):
+        if source is not None or pass_order is not None or basis is not None:
+            raise TypeError("A geometric LSF does not accept a density source or basis")
         return library.new_drop_cavity(parameters, self.parameters, radii, context=context)
 
 
@@ -60,12 +60,15 @@ class CFC(_GeometricLevelSet):
 
 @dataclass(frozen=True, init=False)
 class Isodensity(LevelSet):
-    """Electron-density surface, bound to a source when the cavity is built.
+    """Electron-density surface, evaluated internally or by a callback.
 
-    The source is an ``InternalDensity``, a callable, or an object supplying
-    ``density(point, order)``. Callbacks return bare density derivatives;
-    the LSF parameters define the contour and scale.
-    PySCF supplies its own source automatically.
+    Built with ``basis=``, a :class:`GaussianBasis`, moist evaluates the
+    density itself; the host answers the density matrix ``dcart`` in the build
+    phase of every coupling walk. Built with ``source=``, a callable or an
+    object supplying ``density(point, order)``, moist pulls the bare density
+    point by point during the build, outside the coupling. With the core fill
+    on, the build phase also asks for the nuclear charges ``z``. The LSF
+    parameters define the contour and scale.
     """
 
     parameters: IsodensityParameters
@@ -75,14 +78,18 @@ class Isodensity(LevelSet):
     def __init__(self, *, parameters: IsodensityParameters | None = None):
         object.__setattr__(self, "parameters", _resolve(IsodensityParameters, parameters))
 
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
-        if isinstance(source, InternalDensity):
+    def _new_cavity(self, parameters, radii, source, pass_order, basis, *, context):
+        if basis is not None:
+            if source is not None:
+                raise TypeError("Isodensity takes a basis or a callback source, not both")
+            if not isinstance(basis, GaussianBasis):
+                raise TypeError("basis must be a GaussianBasis")
             if pass_order is not None:
                 raise TypeError("pass_order applies only to callbacks")
-            return library.new_internal_isodensity_cavity(source, parameters, self.parameters, radii, context=context)
+            return library.new_internal_isodensity_cavity(basis, parameters, self.parameters, radii, context=context)
         callback = getattr(source, "density", source)
         if not callable(callback):
-            raise TypeError("Isodensity requires a callable source or density(point, order)")
+            raise TypeError("Isodensity requires a GaussianBasis, a callable source or density(point, order)")
         return library.new_drop_cavity_isodensity_callback(
             callback, parameters, self.parameters, radii, pass_order=pass_order, context=context
         )
@@ -94,8 +101,8 @@ class CavityConfiguration(ABC):
     density_dependent = False
 
     @abstractmethod
-    def build(self, *, context=None, source=None):
-        """Create a live cavity, binding host data when required.
+    def build(self, *, context=None, source=None, basis=None):
+        """Create a live cavity; an isodensity surface takes its basis or callback.
 
         Without ``context`` the cavity runs on the context of its model.
         """
@@ -122,11 +129,11 @@ class DROP(CavityConfiguration):
     def density_dependent(self):
         return self.lsf.density_dependent
 
-    def build(self, *, context=None, source=None, pass_order=None):
+    def build(self, *, context=None, source=None, pass_order=None, basis=None):
         from .interface import CavityDROP
 
         return CavityDROP(lsf=self.lsf, parameters=self.parameters, radii=self.radii,
-                          source=source, pass_order=pass_order, context=context)
+                          source=source, pass_order=pass_order, basis=basis, context=context)
 
 
 @dataclass(frozen=True, init=False)
@@ -144,9 +151,9 @@ class ISwiG(CavityConfiguration):
         object.__setattr__(self, "parameters", _resolve(ISwiGParameters, parameters))
         object.__setattr__(self, "radii", _resolve_radii(radii))
 
-    def build(self, *, context=None, source=None):
+    def build(self, *, context=None, source=None, basis=None):
         from .interface import CavityISwiG
 
-        if source is not None:
-            raise TypeError("ISwiG does not accept a density source")
+        if source is not None or basis is not None:
+            raise TypeError("ISwiG does not accept a density source or basis")
         return CavityISwiG(parameters=self.parameters, radii=self.radii, context=context)

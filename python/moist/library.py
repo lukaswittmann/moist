@@ -161,7 +161,6 @@ def error_check(func):
 def new_structure(
     natoms: int,
     numbers: np.ndarray,
-    z_eff: np.ndarray,
     positions: np.ndarray,
     lattice: Optional[np.ndarray],
     periodic: Optional[np.ndarray],
@@ -170,7 +169,6 @@ def new_structure(
         error_check(lib.moist_new_structure)(
             natoms,
             _cast("int*", numbers),
-            _cast("int*", z_eff),
             _cast("double*", positions),
             _cast("double*", lattice),
             _cast("bool*", periodic),
@@ -257,17 +255,15 @@ def new_drop_cavity(parameters, lsf_parameters, radii=None, *, context=None) -> 
     return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii, context=context)
 
 
-def new_internal_isodensity_cavity(source, parameters, lsf_parameters, radii=None, *, context=None):
-    basis = source.basis
+def new_internal_isodensity_cavity(basis, parameters, lsf_parameters, radii=None, *, context=None):
+    """Copy an internal isodensity LSF over ``basis`` and radii into a DROP cavity."""
     arrays = [np.asarray(getattr(basis, name), dtype=dtype) for name, dtype in (
         ("shell_atom", np.int32), ("shell_l", np.int32), ("shell_nprim", np.int32),
         ("exponents", np.float64), ("coefficients", np.float64))]
     lsf = error_check(lib.moist_new_isodensity_lsf)(
         len(basis.shell_atom), *[_cast("int*" if i < 3 else "double*", a)
                                  for i, a in enumerate(arrays)], lsf_parameters._as_options())
-    cavity = _drop_from_lsf(lsf, parameters._as_options(), radii, context=context)
-    set_isodensity_density(cavity, source.density_matrix)
-    return cavity
+    return _drop_from_lsf(lsf, parameters._as_options(), radii, context=context)
 
 
 def isodensity_layout(cavity):
@@ -279,14 +275,6 @@ def isodensity_layout(cavity):
     entry(cavity.handle, ncart, nshell, _cast("int*", offsets),
           *[_cast("int*", a) for a in powers])
     return offsets, np.stack(powers, axis=1)
-
-
-def set_isodensity_density(handle, density, *, model=False):
-    array = np.asarray(density, dtype=np.float64, order="C")
-    if array.ndim != 2 or array.shape[0] != array.shape[1]:
-        raise ValueError("density must be a square matrix")
-    entry = lib.moist_set_model_isodensity_density if model else lib.moist_set_isodensity_density
-    error_check(entry)(handle.handle, len(array), _cast("double*", array))
 
 
 def new_iswig_cavity(parameters, radii=None, *, context=None) -> CavityHandle:
@@ -451,10 +439,18 @@ def new_drop_cavity_isodensity_callback(
 
 
 def update_model(model: ModelHandle, structure: StructureHandle) -> None:
-    return error_check(lib.moist_update_model)(
-        model.handle,
-        structure.handle,
-    )
+    """Update a model with a structure: everything that needs no host state."""
+    error_check(lib.moist_update_model)(model.handle, structure.handle)
+
+
+def prepare_model_build(model: ModelHandle, coupling: CouplingHandle) -> None:
+    """Stage the build phase of a model coupling."""
+    error_check(lib.moist_prepare_model_build)(model.handle, coupling.handle)
+
+
+def build_model(model: ModelHandle, coupling: CouplingHandle) -> None:
+    """Complete a model from the answered build phase of a coupling."""
+    error_check(lib.moist_build_model)(model.handle, coupling.handle)
 
 
 def get_model_cavity(model: ModelHandle) -> CavityHandle:
@@ -518,21 +514,8 @@ def new_general_model(
 # -----------------------------------------------------------------------------
 # Host coupling protocol
 # -----------------------------------------------------------------------------
-#
-# A coupling carries the model's requests and a cursor over them; one response
-# handle receives what a phase hands back and carries a cursor over its items.
-# next_coupling_request() and next_response_item() move the cursors, and the
-# other request and response functions act on the request or item they stopped
-# at, failing by name when none is current. Requests and response items are
-# identified by their canonical names, never by an index or a token. Grid
-# inputs are read from the model's cavity. Like the C entries they bind, these
-# functions take no sizes: moist reads and writes exactly the documented
-# shape, so an array passed in has to have it. Only the element type and the
-# layout are checked here, which the pointer cast relies on.
-
-
-# Parent model of every live coupling, keyed by the native coupling address
-_COUPLING_PARENTS: dict[int, ModelHandle] = {}
+# Parent model or cavity of every live coupling, keyed by the native coupling address
+_COUPLING_PARENTS: dict[int, ModelHandle | CavityHandle] = {}
 
 
 def _release_coupling(handle):
@@ -543,10 +526,18 @@ def _release_coupling(handle):
 
 
 def new_coupling(model: ModelHandle) -> CouplingHandle:
-    """Declare the host coupling of an updated general model."""
+    """Declare a host coupling of an updated general model."""
 
     handle = error_check(lib.moist_new_coupling)(model.handle)
     _COUPLING_PARENTS[int(ffi.cast("uintptr_t", handle))] = model
+    return CouplingHandle(ffi.gc(handle, _release_coupling))
+
+
+def new_cavity_coupling(cavity: CavityHandle) -> CouplingHandle:
+    """Declare the build-phase coupling of an updated standalone cavity."""
+
+    handle = error_check(lib.moist_new_cavity_coupling)(cavity.handle)
+    _COUPLING_PARENTS[int(ffi.cast("uintptr_t", handle))] = cavity
     return CouplingHandle(ffi.gc(handle, _release_coupling))
 
 
@@ -670,9 +661,9 @@ def get_coupling_request_missing(coupling: CouplingHandle, name: str) -> bool:
 def answer_coupling_request(coupling: CouplingHandle, name: str, values: np.ndarray) -> None:
     """Submit one named output of the current request.
 
-    ``values`` is a C-contiguous float64 array ``(ngrid, ...)`` on the cavity
-    grid with the output's trailing extents; moist reads exactly that many
-    values.  A rejected output stays missing until a valid retry; the others
+    ``values`` is a C-contiguous float64 array ``(n, ...)`` with ``n`` the
+    grid size, the atom count or ``(nbasis, nbasis)`` by the output's extent,
+    then the output's trailing extents; moist reads exactly that many values.  A rejected output stays missing until a valid retry; the others
     are unaffected.
     """
 
@@ -703,10 +694,18 @@ def get_response_item_name(response: ResponseHandle) -> str:
 
 
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
-    return error_check(lib.moist_update_cavity)(
-        cavity.handle,
-        structure.handle,
-    )
+    """Update a standalone cavity with a structure: everything that needs no host state."""
+    error_check(lib.moist_update_cavity)(cavity.handle, structure.handle)
+
+
+def prepare_cavity_build(cavity: CavityHandle, coupling: CouplingHandle) -> None:
+    """Stage the build phase of a cavity coupling."""
+    error_check(lib.moist_prepare_cavity_build)(cavity.handle, coupling.handle)
+
+
+def build_cavity(cavity: CavityHandle, coupling: CouplingHandle) -> None:
+    """Complete a standalone cavity from the answered build phase of a coupling."""
+    error_check(lib.moist_build_cavity)(cavity.handle, coupling.handle)
 
 
 def get_cavity_sizes(cavity: CavityHandle) -> tuple[int, int]:
@@ -964,11 +963,6 @@ def _tag_of(dtype: np.dtype) -> int:
 # -----------------------------------------------------------------------------
 # Components of a general model
 # -----------------------------------------------------------------------------
-#
-# Components are addressed by position, counting from zero in the order they
-# were added; a component added twice repeats its name. Count and names need no
-# update. Each component declares its results as named real fields: ``energy``
-# after a successful energy evaluation, gone again after an update.
 
 
 def get_model_component_count(model: ModelHandle) -> int:
@@ -1066,12 +1060,6 @@ def get_model_component_field(
 # -----------------------------------------------------------------------------
 # Named fields of the current response item and coupling request
 # -----------------------------------------------------------------------------
-#
-# The arrays of a response item and the inputs of a coupling request are named
-# fields like a cavity's, real only. They act on the item or request the
-# cursor stopped at and fail by name when none is current. A read fills a
-# caller buffer of the shape the matching info reports; only the element type
-# and the layout are checked here.
 
 
 def get_response_field_count(response: ResponseHandle) -> int:

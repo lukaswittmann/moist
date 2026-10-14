@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
-from moist import DROPParameters, Isodensity, IsodensityParameters
+from moist import DROPParameters, Isodensity, IsodensityParameters, NuclearChargesRequest
 from moist.interface import (
     CavityDROP,
     ModelComponentPV,
@@ -165,16 +165,21 @@ def flaky_lsf(water) -> SimpleNamespace:
     return state
 
 
-def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
-    """A callback-backed DROP cavity; the contour is an LSF setting, not the source's."""
-    return CavityDROP(lsf=Isodensity(parameters=IsodensityParameters(rho_iso=rho_iso)),
+def _isodensity(source, rho_iso=_RHO_ISO, core_fill=False, **kwargs):
+    """A callback-backed DROP cavity; the contour is an LSF setting, not the source's.
+
+    The core fill is off by default: a bare callable carries no nuclear
+    charges, and water has no ECP nucleus to fill.
+    """
+    parameters = IsodensityParameters(rho_iso=rho_iso, core_fill=core_fill)
+    return CavityDROP(lsf=Isodensity(parameters=parameters),
                       parameters=DROPParameters(nleb=26), source=source, context=CONTEXT,
                       **kwargs)
 
 
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
     numbers, positions = water
-    structure = Structure(numbers, positions, z_eff=numbers)
+    structure = Structure(numbers, positions)
     cavity = _isodensity(callback, rho_iso, **kwargs)
     cavity.update(structure)
     return cavity.cavity
@@ -186,13 +191,34 @@ def test_isodensity_cavity_accepts_a_density_source(water) -> None:
     source = _GaussianSource(positions)
     cavity = _isodensity(source)
 
-    cavity.update(Structure(numbers, positions, z_eff=numbers))
+    cavity.update(Structure(numbers, positions))
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
-    assert cavity.lsf == Isodensity(parameters=IsodensityParameters(rho_iso=_RHO_ISO))
+    assert cavity.lsf == Isodensity(parameters=IsodensityParameters(rho_iso=_RHO_ISO, core_fill=False))
     with raises(TypeError, match="callable source"):
         _isodensity(object())
+
+
+def test_core_fill_asks_for_nuclear_charges_in_the_build_walk(water, build_with) -> None:
+    """With the core fill on the build walk asks for ``nuclear_charges``.
+
+    Answered, the cavity builds; left unanswered, the build names the output.
+    """
+    numbers, positions = water
+    source = _GaussianSource(positions)
+    cavity = _isodensity(source, core_fill=True)
+    cavity.update(Structure(numbers, positions))
+    build_with(cavity, z=numbers.astype(float))
+    assert cavity.snapshot().ngrid > 0
+
+    bare = _isodensity(source.density, core_fill=True)
+    bare.update(Structure(numbers, positions))
+    coupling = bare.new_coupling()
+    bare.prepare_build(coupling)
+    assert [type(request) for request in coupling] == [NuclearChargesRequest]
+    with raises(RuntimeError, match="nuclear_charges: missing required outputs: z"):
+        bare.build(coupling)
 
 
 def test_callback_both_forms_agree(water) -> None:
@@ -310,7 +336,7 @@ def test_callback_failure_stops_further_calls(water) -> None:
 
 def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
     """A cavity whose callback failed once must rebuild cleanly afterwards."""
-    structure = Structure(*water, z_eff=water[0])
+    structure = Structure(*water)
     cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     flaky_lsf.arm()
 
@@ -324,7 +350,7 @@ def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
 
 def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) -> None:
     """A failed second build must not leave the first surface readable as current."""
-    structure = Structure(*water, z_eff=water[0])
+    structure = Structure(*water)
     cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     cavity.update(structure)
     assert cavity.snapshot().ngrid > 0
@@ -339,7 +365,7 @@ def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) ->
 
 def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> None:
     """Model updates propagate callback failures and invalidate their live view."""
-    structure = Structure(*water, z_eff=water[0])
+    structure = Structure(*water)
     model = SolvationModel(
         CONTEXT, _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
     )

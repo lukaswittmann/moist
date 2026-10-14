@@ -96,6 +96,7 @@ module moist_cavity_drop_lsf_base
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
+   use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_math_sorter_counting_sort, only: counting_argsort
    implicit none(type, external)
    private
@@ -223,6 +224,9 @@ module moist_cavity_drop_lsf_base
       !> `prepare` (the unscreened full scan) [ncenters]
       integer, allocatable :: full_scan_cand(:)
    contains
+
+      !* --------------------------- Geometry and screening --------------------------- *!
+
       !> Bind molecular geometry and rebuild the screening caches
       !>
       !> - concrete LSFs may override to refresh additional caches
@@ -231,16 +235,16 @@ module moist_cavity_drop_lsf_base
       !> Move the atom centers without touching radii, parameters or derivative
       !> storage (used by nuclear finite-difference drivers)
       procedure, non_overridable :: set_centers => lsf_base_set_centers
-      !> Abort when an accessor is asked for an order `prepare` did not compute
-      procedure :: require_deriv => lsf_base_require_deriv
       !> Relabel the cavity's cell-grid candidate lists into the declared candidate
       !> index space, not overridable since the declaration decides
       procedure, non_overridable :: remap_candidate_grid => lsf_base_remap_candidate_grid
       !> Reject candidates whose contribution is below `screening_threshold`
       procedure, non_overridable :: screen_candidates => lsf_base_screen_candidates
       !> Change `screening_threshold` in place, rewriting only the cached reach
-      procedure, non_overridable :: set_screening_threshold => &
-         lsf_base_set_screening_threshold
+      procedure, non_overridable :: set_screening_threshold => lsf_base_set_screening_threshold
+      !> Exact radial offset from the atom surface at which this LSF's
+      !> contribution equals `screening_threshold`
+      procedure(lsf_screening_offset_iface), deferred :: screening_offset
       !> Geometric bound query 1 of 2: how far a *surface* can be from a point
       !> with a known LSF value (see the "Two geometric-bound queries" note above)
       procedure :: exclusion_radius => lsf_base_exclusion_radius
@@ -248,18 +252,32 @@ module moist_cavity_drop_lsf_base
       !> a point and still matter, derived from `screening_offset` and not
       !> overridable, so gate and reach stay the same mathematics
       procedure, non_overridable :: neighbor_cutoff => lsf_base_neighbor_cutoff
+
+      !* -------------------------- Density and build phase --------------------------- *!
+
       !> Chain-rule factor `dS/drho` of a density-backed LSF, and whether this
       !> LSF has a density at all (see [[lsf_base_density_adjoint_factor]])
       procedure :: density_adjoint_factor => lsf_base_density_adjoint_factor
       !> Reject projected surface points this LSF cannot represent (see
       !> [[lsf_base_check_surface]])
       procedure :: check_surface => lsf_base_check_surface
+      !> Declare the host requests of the build phase, at the cavity scope (none by default)
+      procedure :: declare_coupling => lsf_base_declare_coupling
+      !> Whether the level set requires build-phase answers before `update` (no by default)
+      procedure :: requires_build_inputs => lsf_base_requires_build_inputs
+      !> Read the build-phase answers before `update` (nothing by default)
+      procedure :: read_build => lsf_base_read_build
+
+      !* ------------------------------ Point evaluation ------------------------------ *!
+
       !> Cache per-point screening / state
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
       !> Configure the highest spatial derivative order required
       procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
+      !> Abort when an accessor is asked for an order `prepare` did not compute
+      procedure :: require_deriv => lsf_base_require_deriv
       !> Number of atoms currently active after `prepare`/`prepare_subset`
       procedure(lsf_active_count_iface), deferred :: active_count
       !> User-space atom id of the i-th currently active atom
@@ -272,11 +290,8 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_f3_rrr_iface), deferred :: f3_rrr
       !> Mixed third derivative: spatial Hessian w.r.t. nuclear positions
       procedure(lsf_f3_rr_rA_iface), deferred :: f3_rr_rA
-      !> Exact radial offset from the atom surface at which this LSF's
-      !> contribution equals `screening_threshold`
-      procedure(lsf_screening_offset_iface), deferred :: screening_offset
 
-      !* ------------------ Higher-order and contracted derivatives ---------------- *!
+      !* ------------------ Higher-order and contracted derivatives ------------------- *!
 
       !> Pure spatial fourth derivative d^4S / dr^4
       procedure :: f4_rrrr => lsf_base_f4_rrrr
@@ -304,6 +319,9 @@ module moist_cavity_drop_lsf_base
       procedure :: f4_rr_rA_rad => lsf_base_f4_rr_rA_rad
       !> Normalized level set S/||grad S|| and its nuclear gradient
       procedure :: normalized_f01_rA => lsf_base_normalized_f01_rA
+
+      !* ---------------------- Directional and adjoint products ---------------------- *!
+
       !> Directional nuclear derivative of the value
       procedure :: tangent_f0 => lsf_base_tangent_f0
       !> Directional nuclear derivative of the spatial gradient
@@ -1269,6 +1287,46 @@ contains
       factor = 0.0_wp
       available = .false.
    end function lsf_base_density_adjoint_factor
+
+   !> Default declaration: the level set reads nothing from the host
+   !>
+   !> @param[in]    self     LSF instance
+   !> @param[inout] coupling Coupling being declared, scope set by the cavity
+   !> @param[out]   error    Error handling
+   subroutine lsf_base_declare_coupling(self, coupling, error)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Coupling being declared
+      type(coupling_type), intent(inout) :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+   end subroutine lsf_base_declare_coupling
+
+   !> Default: the level set needs no host state beyond the structure
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_base_requires_build_inputs(self) result(requires)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Whether a build-phase answer is required
+      logical :: requires
+
+      requires = .false.
+   end function lsf_base_requires_build_inputs
+
+   !> Default build-phase read: nothing to read
+   !>
+   !> @param[inout] self     LSF instance
+   !> @param[in]    coupling Cavity-scoped view of the build phase
+   !> @param[in]    mol      Structure of the cavity's latest update
+   !> @param[out]   error    Error handling
+   subroutine lsf_base_read_build(self, coupling, mol, error)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Cavity-scoped view of the build phase
+      class(coupling_view_type), intent(in) :: coupling
+      !> Structure of the cavity's latest update
+      type(structure_type), intent(in) :: mol
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+   end subroutine lsf_base_read_build
 
    !> Reject projected surface points this LSF cannot represent
    !>

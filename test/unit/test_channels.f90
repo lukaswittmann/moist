@@ -7,12 +7,13 @@ module test_channels
       & coupling_request_type, coupling_registry_type, point_potential_request_type, &
       & gaussian_potential_request_type, gaussian_moment_request_type, &
       & atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type, &
-      & coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom, &
+      & nuclear_charge_request_type, density_matrix_request_type, moist_phase_build, &
+      & coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom, coupling_extent_request_pair, &
       & current_output_extent, current_request, answer_flat, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, request_name_len, coupling_register, &
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
-      & coupling_make_view, coupling_close_view
+      & coupling_make_view, coupling_close_view, moist_n_phases
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, &
       & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
@@ -98,7 +99,11 @@ contains
          new_unittest("field_query_types_and_growth", test_field_query_types), &
          new_unittest("registration_resets_scope_and_masks", test_registration_resets_scope_and_masks), &
          new_unittest("compaction_remaps_and_forgets", test_compaction_remaps_and_forgets), &
-         new_unittest("checked_walk_copies", test_checked_walk_copies)]
+         new_unittest("checked_walk_copies", test_checked_walk_copies), &
+         new_unittest("build_answers_survive_energy_invalidation", test_build_answers_kept), &
+         new_unittest("density_matrix_runs_over_its_own_size", test_density_matrix_size), &
+         new_unittest("density_matrix_sizes_are_inputs", test_density_matrix_size_inputs), &
+         new_unittest("build_staging_messages", test_build_staging_messages)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -473,7 +478,7 @@ contains
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, .not. coupling%next(), more="a false condition still required phi")
       if (allocated(error)) return
-      call coupling_arm(coupling, 4, err)
+      call coupling_arm(coupling, moist_n_phases + 1, err)
       call check(error, allocated(err))
       if (allocated(error)) return
       call check(error, index(err%message, "Invalid coupling phase") > 0)
@@ -928,8 +933,9 @@ contains
          call check_moist_error(error, err, "energy answer")
          if (allocated(error)) return
       end do
-      call coupling_check_mandatory(coupling, 4, err)
-      call check(error, allocated(err), more="phase 4 passed the completeness check")
+      ! Phases run 1 to moist_n_phases in the order a host runs them
+      call coupling_check_mandatory(coupling, moist_n_phases + 1, err)
+      call check(error, allocated(err), more="a phase past the last passed the completeness check")
       if (allocated(error)) return
       call check(error, index(err%message, "Invalid coupling phase") > 0)
       if (allocated(error)) return
@@ -2063,7 +2069,8 @@ contains
    end subroutine test_snapshot_without_grid
 
    !> An output whose count the snapshot did not give is refused on every
-   !> answer route, for both extent kinds; a given zero is an empty extent
+   !> answer route, for both extent kinds; a given zero is an empty extent, and
+   !> giving a count keeps the answers over the others
    subroutine test_missing_extent(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
@@ -2153,10 +2160,8 @@ contains
       call coupling%answer("phi", empty, err)
       call check_moist_error(error, err, "empty phi on a zero grid")
       if (allocated(error)) return
-      call check(error, next_is(coupling, "atomic_multipoles"), more="giving the point count kept q")
-      if (allocated(error)) return
-      call coupling%answer("q", [1.0_wp, -1.0_wp], err)
-      call check_moist_error(error, err, "q next to a zero grid")
+      ! Giving the point count leaves the answers over the unchanged atom count
+      call check(error, .not. coupling%next(), more="giving the point count dropped q")
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "zero-grid pass complete")
@@ -3440,5 +3445,244 @@ contains
       end do
       call check(error, position, 2)
    end subroutine test_checked_walk_copies
+
+   !* ================================================================================= *!
+   !*                                    Build phase                                    *!
+   !* ================================================================================= *!
+
+   !> Answers given in the build phase survive an invalidation that keeps
+   !> them, a new point count and a later staging; a full invalidation drops
+   !> them, and the same output answered in another phase is dropped too
+   subroutine test_build_answers_kept(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(nuclear_charge_request_type) :: charges
+      type(point_potential_request_type) :: point
+      type(coupling_view_type) :: view
+      real(wp), allocatable :: z(:)
+      call check(error, charges%name(), "nuclear_charges")
+      if (allocated(error)) return
+      call request_require(charges, moist_phase_build, "z", err)
+      if (.not. allocated(err)) call request_require(charges, moist_phase_gradient, "z", err)
+      if (.not. allocated(err)) call request_require(point, moist_phase_energy, "phi", err)
+      call check_moist_error(error, err, "requirements")
+      if (allocated(error)) return
+      call check(error, charges%output_extent("z") == coupling_extent_atom, more="z runs over the atoms")
+      if (allocated(error)) return
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "charges", charges, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "potential", point, err)
+      call check_moist_error(error, err, "registration")
+      if (allocated(error)) return
+      ! Before the build: atoms only, the grid request is not asked for
+      call coupling_snapshot(coupling, natom=2)
+      call coupling_arm(coupling, moist_phase_build, err)
+      call check_moist_error(error, err, "build staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "nuclear_charges"), more="the build phase asks for z")
+      if (allocated(error)) return
+      call coupling%answer("z", [8.0_wp, 1.0_wp], err)
+      call check_moist_error(error, err, "z answer")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="the build phase asks for the grid request")
+      if (allocated(error)) return
+      ! The build gives the point count, then two energy evaluations
+      call coupling_snapshot(coupling, ngrid=2, natom=2)
+      call coupling_invalidate(coupling, keep_build=.true.)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check(error, next_is(coupling, "point_potential"), more="energy asks for phi")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "phi answer")
+      if (allocated(error)) return
+      call coupling_invalidate(coupling, keep_build=.true.)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check(error, next_is(coupling, "point_potential"), more="a new energy evaluation kept phi")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "second phi answer")
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check(error, .not. coupling%next(), more="the gradient asked for z again")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("charges", "z", z, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "z read in the gradient")
+      if (allocated(error)) return
+      call check(error, all(z == [8.0_wp, 1.0_wp]), more="z changed between the phases")
+      if (allocated(error)) return
+      ! Negative control: z answered in the gradient phase goes with the energy staging
+      call coupling_invalidate(coupling)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check(error, next_is(coupling, "nuclear_charges"), more="a full invalidation kept z")
+      if (allocated(error)) return
+      call coupling%answer("z", [8.0_wp, 1.0_wp], err)
+      call check_moist_error(error, err, "gradient z answer")
+      if (allocated(error)) return
+      call coupling_invalidate(coupling, keep_build=.true.)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check(error, next_is(coupling, "nuclear_charges"), &
+         & more="z answered in the gradient phase survived the energy staging")
+   end subroutine test_build_answers_kept
+
+   !> The density matrix runs over (nbasis, nbasis), a size its request carries:
+   !> refused before the size is set, listed as the input `nbasis`, refused at
+   !> a wrong shape, read back at rank 2, kept across new snapshot counts
+   subroutine test_density_matrix_size(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: unsized, coupling
+      type(density_matrix_request_type) :: density
+      type(coupling_view_type) :: view
+      type(field_query_type) :: query
+      class(coupling_request_type), allocatable :: request
+      real(wp) :: dcart(2, 2)
+      real(wp), allocatable :: read_back(:, :)
+      integer :: extent
+      dcart = reshape([1.0_wp, 0.5_wp, 0.5_wp, 2.0_wp], [2, 2])
+      call check(error, density%name(), "density_matrix")
+      if (allocated(error)) return
+      call request_require(density, moist_phase_build, "dcart", err)
+      call check_moist_error(error, err, "requirement")
+      if (allocated(error)) return
+      call check(error, density%output_extent("dcart") == coupling_extent_request_pair, &
+         & more="dcart runs over pairs of its request's size")
+      if (allocated(error)) return
+
+      ! Without a size the answer has no shape
+      call coupling_begin_registration(unsized)
+      call coupling_register(unsized, "density", density, err)
+      call check_moist_error(error, err, "unsized registration")
+      if (allocated(error)) return
+      call coupling_snapshot(unsized, natom=1)
+      call coupling_arm(unsized, moist_phase_build, err)
+      call check(error, next_is(unsized, "density_matrix"), more="the build phase asks for dcart")
+      if (allocated(error)) return
+      call unsized%answer("dcart", dcart, err)
+      call check(error, allocated(err), more="dcart was accepted without a size")
+      if (allocated(error)) return
+      call check(error, index(err%message, "density_matrix: dcart needs a size from its request") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+
+      density%nbasis = 2
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "density", density, err)
+      call check_moist_error(error, err, "registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, natom=1)
+      call coupling_arm(coupling, moist_phase_build, err)
+      call check(error, next_is(coupling, "density_matrix"), more="the build phase asks for dcart")
+      if (allocated(error)) return
+      ! The host reads the size from the request, as the widths of the moments
+      request = coupling%request()
+      call query%enumerate()
+      call request%list_fields(query)
+      call check_listing(error, query, "density_matrix", 1)
+      if (allocated(error)) return
+      call query%fetch("nbasis")
+      call request%list_fields(query)
+      call check(error, query%found .and. allocated(query%rvals), more="the request lists no nbasis")
+      if (allocated(error)) return
+      call check(error, size(query%rvals) == 1 .and. query%rvals(1) == 2.0_wp, more="nbasis is not 2")
+      if (allocated(error)) return
+      call current_output_extent(coupling, "dcart", extent, err)
+      call check_moist_error(error, err, "extent query")
+      if (allocated(error)) return
+      call check(error, extent, 4, "the extent is nbasis * nbasis")
+      if (allocated(error)) return
+      call coupling%answer("dcart", [1.0_wp, 0.5_wp, 0.5_wp, 2.0_wp], err)
+      call check(error, allocated(err), more="a rank-1 density matrix was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("dcart", reshape([(1.0_wp, extent = 1, 9)], [3, 3]), err)
+      call check(error, allocated(err), more="a 3 x 3 density matrix was accepted for nbasis = 2")
+      if (allocated(error)) return
+      call check(error, index(err%message, "shape mismatch") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("dcart", dcart, err)
+      call check_moist_error(error, err, "dcart answer")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density", "dcart", read_back, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "dcart read")
+      if (allocated(error)) return
+      call check(error, all(shape(read_back) == [2, 2]) .and. all(read_back == dcart), &
+         & more="dcart read back differs")
+      if (allocated(error)) return
+      ! New snapshot counts keep it: its size is the request's own
+      call coupling_snapshot(coupling, ngrid=5, natom=3)
+      call coupling_arm(coupling, moist_phase_build, err)
+      call check(error, .not. coupling%next(), more="a new snapshot dropped dcart")
+   end subroutine test_density_matrix_size
+
+   !> Two density matrices of different sizes are different inputs: one key in
+   !> one scope refuses the second, as a moment request refuses other widths;
+   !> under two keys each gets its own slot
+   subroutine test_density_matrix_size_inputs(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(density_matrix_request_type) :: small, large
+      integer :: visits
+      small%nbasis = 2
+      large%nbasis = 3
+      call request_require(small, moist_phase_build, "dcart", err)
+      if (.not. allocated(err)) call request_require(large, moist_phase_build, "dcart", err)
+      call check_moist_error(error, err, "requirements")
+      if (allocated(error)) return
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "density", small, err)
+      call check_moist_error(error, err, "first registration")
+      if (allocated(error)) return
+      call coupling_register(coupling, "density", large, err)
+      call check(error, allocated(err), more="a second size under the same key was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "density_matrix: request 'density' already registered with different inputs") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      ! Positive control: the same size again is the same request
+      call coupling_register(coupling, "density", small, err)
+      call check_moist_error(error, err, "repeated registration")
+      if (allocated(error)) return
+      call coupling_register(coupling, "other", large, err)
+      call check_moist_error(error, err, "second key")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling)
+      call coupling_arm(coupling, moist_phase_build, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+      visits = 0
+      do while (coupling%next())
+         visits = visits + 1
+      end do
+      call check(error, visits, 2, more="two sizes did not make two requests")
+   end subroutine test_density_matrix_size_inputs
+
+   !> The build phase is consumed by `build`, which names it in the staging errors
+   subroutine test_build_staging_messages(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      call coupling_check_mandatory(coupling, moist_phase_build, err)
+      call check(error, allocated(err), more="an unstaged coupling passed the build check")
+      if (allocated(error)) return
+      call check(error, err%message, &
+         & "build requires a coupling staged by prepare_build; this coupling is not staged")
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call coupling_check_mandatory(coupling, moist_phase_build, err)
+      call check(error, allocated(err), more="an energy staging passed the build check")
+      if (allocated(error)) return
+      call check(error, err%message, "build requires a coupling staged by prepare_build; "// &
+         & "this coupling is staged for the energy phase")
+   end subroutine test_build_staging_messages
 
 end module test_channels

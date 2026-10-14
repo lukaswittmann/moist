@@ -1,4 +1,4 @@
-"""Gaussian basis data and live density for MOIST's internal evaluator."""
+"""Gaussian basis data for MOIST's internal density evaluator."""
 
 from dataclasses import dataclass
 import numpy as np
@@ -45,40 +45,5 @@ class GaussianBasis:
 
     @property
     def ncart(self):
-        """Number of Cartesian monomials; query cavity layout for their order."""
+        """Number of Cartesian monomials, the extent of ``dcart``; query the cavity layout for their order."""
         return sum((l + 1) * (l + 2) // 2 for l in self.shell_l)
-
-
-class InternalDensity:
-    """Live density source using MOIST's internal Gaussian evaluator.
-
-    The matrix must be expressed in the basis's Cartesian-monomial layout,
-    available as ``cavity.isodensity_layout()``. Assign ``density_matrix`` before
-    each cavity/model update. Both assignment and reading copy the matrix;
-    changing it takes effect at the next explicit update/evaluation.
-    """
-
-    def __init__(self, basis: GaussianBasis, density_matrix):
-        if not isinstance(basis, GaussianBasis):
-            raise TypeError("basis must be a GaussianBasis")
-        self._basis = basis
-        self.density_matrix = density_matrix
-
-    @property
-    def basis(self):
-        return self._basis
-
-    @property
-    def density_matrix(self):
-        return self._density_matrix.copy()
-
-    @density_matrix.setter
-    def density_matrix(self, value):
-        array = np.asarray(value, dtype=np.float64)
-        if array.shape != (self.basis.ncart, self.basis.ncart):
-            raise ValueError("density_matrix must have shape (ncart, ncart)")
-        if not np.all(np.isfinite(array)):
-            raise ValueError("density_matrix must be finite")
-        if not np.allclose(array, array.T, rtol=1e-12, atol=1e-14):
-            raise ValueError("density_matrix must be symmetric")
-        self._density_matrix = np.array(array, order="C", copy=True)

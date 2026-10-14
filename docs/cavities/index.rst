@@ -18,9 +18,9 @@ It carries the shared allocatable quantities that concrete cavities fill where a
 
 Concrete cavity types must implement two deferred procedures:
 
-``update(mol, error)``
-   Build or refresh the cavity for the supplied molecular structure and fill
-   the common fields supported by that implementation.
+``update_surface(mol, error)``
+   Prepare the cavity for the supplied structure, called through ``update``.
+   Cavities needing host inputs finish through ``build_surface`` (:ref:`coupling-build`).
 
 ``get_gradient(error)``
    Prepare or validate the implementation-specific nuclear derivatives.
@@ -32,8 +32,7 @@ Typical Use
 -----------
 
 1. Construct a concrete cavity and configure its radii and discretization.
-2. Call ``update`` whenever its inputs change: after a geometry change, and for
-   a density-backed surface after a density change.
+2. Call ``update`` after geometry changes and follow the :ref:`coupling-build`.
 3. A ``model_continuum_type`` owns one cavity, updates it before its
    components, and passes the same cavity to each component.
 4. In the response phase, components accumulate model surface weights and

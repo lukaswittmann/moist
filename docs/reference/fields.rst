@@ -7,7 +7,7 @@ Named fields carry read-only data from MOIST to the host.
 Everything MOIST hands to the host is read through fields; everything the host hands in is written through coupling answers (:doc:`coupling`).
 The Fortran API provides direct access to the arrays; C and Python read them by name.
 
-Five fields are available:
+Five kinds of objects expose fields:
 
 - the cavity: its grid and results;
 - the model: the grid of its evaluation domain (a continuum model forwards its cavity's);
@@ -18,13 +18,13 @@ Five fields are available:
 Each field has a name, a type tag (``MOIST_FIELD_REAL``, ``MOIST_FIELD_INT``, ``MOIST_FIELD_BOOL``), a shape and a one-line description.
 
 - A field that was not computed is not listed; reading it is an error, never zeros.
-- The list follows the owner: list again after an update, and after each ``next()`` for response items and requests.
+- The list follows the owner: list again after an update or rebuild, and after each ``next()`` for response items and requests.
 - Arrays have rank at most ``MOIST_FIELD_MAX_RANK`` (3).
 - C and Python shapes reverse the Fortran shape, slowest-varying first: ``xyz(3,ngrid)`` is ``[ngrid][3]`` and ``w_hess_rho(3,3,ngrid)`` is ``[ngrid][3][3]`` (i.e. row-major).
 - Atom and sphere indices such as ``owner`` are 0-based.
 - Names have at most ``MOIST_FIELD_NAME_MAX`` characters.
 - Response items, requests and components declare real fields only.
-- Component ``energy`` appears after successful ``get_energy`` and clears on update. If a component fails, only earlier components' energies remain available.
+- Component ``energy`` appears after successful ``get_energy`` and clears on update or deferred surface rebuild. If a component fails during energy evaluation, only earlier components' energies remain available.
 
 .. list-table::
    :widths: 15 85

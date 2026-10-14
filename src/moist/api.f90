@@ -52,6 +52,10 @@ module moist_api
    private
 
    character(len=*), parameter :: namespace = "moist_"
+   !> Refusal of a surface reader on a cavity that holds no surface
+   character(len=*), parameter :: unbuilt_cavity_message = &
+      & "Cavity is not built - update it, then run its build phase "// &
+      & "(prepare_cavity_build and build_cavity, or the model's)"
    integer, parameter :: api_max_cstr = 4096
    !> Longest field name the API will scan for
    integer, parameter :: max_field_name_len = 64
@@ -148,7 +152,7 @@ module moist_api
       real(c_double) :: scale = 1000.0_c_double
       !> Density representation of the internal LSF; ignored by the callback LSF
       integer(c_int) :: basis = 1_c_int
-      !> Core fill of ECP nuclei (`z_eff < Z`)
+      !> Core fill of ECP nuclei (host nuclear charge below Z)
       logical(c_bool) :: core_fill = .true._c_bool
       !> Core-fill radius as a fraction of the atom's cavity radius
       real(c_double) :: core_radius_fraction = 0.5_c_double
@@ -238,15 +242,18 @@ module moist_api
       class(model_continuum_component_type), allocatable :: ptr
    end type vp_component
 
-   !> Borrowed host handle for a coupling owned by its solvation model
+   !> Borrowed host handle for a coupling owned by its solvation model or
+   !> standalone cavity
    !>
-   !> - the model must outlive this wrapper
+   !> - the owner must outlive this wrapper
    !> - deletion releases its collection
    type :: vp_coupling
-      !> Coupling owned by the parent model
+      !> Coupling owned by the parent model or cavity
       type(coupling_type), pointer :: ptr => null()
-      !> Parent model whose registry owns the collection
+      !> Parent model whose registry owns the collection, null for a cavity coupling
       class(solvation_model_type), pointer :: owner => null()
+      !> Parent cavity whose registry owns the collection, null for a model coupling
+      class(cavity_type), pointer :: cavity_owner => null()
    end type vp_coupling
 
    !> Response handle (`moist_response`), filled by the `get_*` reads
@@ -279,7 +286,7 @@ module moist_api
    public :: new_custom_radii_api, set_custom_radii_atoms_api, set_custom_radii_elements_api
    public :: delete_radii_api
    ! Solvation model API
-   public :: update_solvation_model_api
+   public :: update_solvation_model_api, prepare_solvation_model_build_api, build_solvation_model_api
    public :: get_solvation_model_cavity_api
    public :: delete_solvation_model_api
    ! Continuum solvation model and its components
@@ -288,7 +295,7 @@ module moist_api
    public :: delete_solvation_component_api
    public :: new_general_solvation_model_api, general_model_add_component_api
    ! Host coupling protocol (C mirror of the Fortran request/response exchange)
-   public :: new_coupling_api, delete_coupling_api
+   public :: new_coupling_api, new_cavity_coupling_api, delete_coupling_api
    public :: new_response_api, delete_response_api
    public :: general_model_prepare_energy_api, general_model_prepare_response_api
    public :: general_model_prepare_gradient_api
@@ -301,7 +308,7 @@ module moist_api
    ! Type-specific constructors
 
    ! Generic cavity operations
-   public :: update_cavity_api
+   public :: update_cavity_api, prepare_cavity_build_api, build_cavity_api
    public :: get_cavity_sizes_api
    public :: get_cavity_results_api
    public :: delete_cavity_api
@@ -330,7 +337,6 @@ module moist_api
    ! Type-specific getters
    public :: get_drop_cavity_tolerance_api
    public :: get_isodensity_cart_layout_api
-   public :: set_isodensity_density_api
    public :: assemble_amat_api
    public :: get_cavity_gaussian_api
    ! Gradient API
@@ -1698,7 +1704,7 @@ contains
    end subroutine get_error_api
 
    !> Create new molecular structure data (quantities in Bohr)
-   function new_structure_api(verror, natoms, numbers, z_eff, positions, &
+   function new_structure_api(verror, natoms, numbers, positions, &
          & c_lattice, c_periodic) result(vmol) &
          & bind(C, name=namespace//"new_structure")
       !> Required diagnostic handle
@@ -1707,8 +1713,6 @@ contains
       integer(c_int), value, intent(in) :: natoms
       !> Atomic numbers
       integer(c_int), intent(in), optional :: numbers(natoms)
-      !> Effective nuclear charges, atomic numbers minus ECP core electrons
-      integer(c_int), intent(in), optional :: z_eff(natoms)
       !> Atomic positions in Bohr, shape (3,natoms)
       real(c_double), intent(in), optional :: positions(3, natoms)
       !> Optional lattice vectors in Bohr
@@ -1731,10 +1735,6 @@ contains
          call api_error(error%ptr, "new_structure", "Required pointer 'numbers' is missing")
          return
       end if
-      if (.not. present(z_eff)) then
-         call api_error(error%ptr, "new_structure", "Required pointer 'z_eff' is missing")
-         return
-      end if
       if (.not. present(positions)) then
          call api_error(error%ptr, "new_structure", "Required pointer 'positions' is missing")
          return
@@ -1749,7 +1749,7 @@ contains
       end if
 
       allocate (mol)
-      call new(mol%ptr, numbers, positions, lattice=lattice, periodic=periodic, z_eff=z_eff)
+      call new(mol%ptr, numbers, positions, lattice=lattice, periodic=periodic)
       vmol = c_loc(mol)
 
       call verify_structure(error%ptr, mol%ptr)
@@ -2129,6 +2129,56 @@ contains
       end if
 
    end subroutine update_solvation_model_api
+
+   !> Stage the build phase of a model coupling
+   !>
+   !> - clears every answer of the coupling and restarts its walk
+   !> - the atom count comes from the structure of the latest moist_update_model
+   subroutine prepare_solvation_model_build_api(verror, vmodel, vcpl) &
+         & bind(C, name=namespace//"prepare_model_build")
+      !> Error, model and coupling handles
+      type(c_ptr), value :: verror, vmodel, vcpl
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Decoded coupling wrapper
+      type(vp_coupling), pointer :: cpl
+      !> Model error
+      type(error_type), allocatable :: model_error
+
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_build", error, model, cpl)
+      if (.not. associated(cpl)) return
+      call model%prepare_build(cpl%ptr, model_error)
+      if (allocated(model_error)) call api_error(error%ptr, "prepare_model_build", model_error%message)
+
+   end subroutine prepare_solvation_model_build_api
+
+   !> Complete a solvation model from the build phase of a coupling
+   !>
+   !> - the coupling must be staged by moist_prepare_model_build and every
+   !>   required output answered; a missing one is reported by name
+   !> - the coupling keeps its build-phase answers; every other coupling of
+   !>   the model is invalidated
+   subroutine build_solvation_model_api(verror, vmodel, vcpl) &
+         & bind(C, name=namespace//"build_model")
+      !> Error, model and coupling handles
+      type(c_ptr), value :: verror, vmodel, vcpl
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Decoded coupling wrapper
+      type(vp_coupling), pointer :: cpl
+      !> Model error
+      type(error_type), allocatable :: model_error
+
+      call api_decode_staging(verror, vmodel, vcpl, "build_model", error, model, cpl)
+      if (.not. associated(cpl)) return
+      call model%build(cpl%ptr, model_error)
+      if (allocated(model_error)) call api_error(error%ptr, "build_model", model_error%message)
+
+   end subroutine build_solvation_model_api
 
    !> Get a borrowed cavity handle from a solvation model
    !>
@@ -2663,10 +2713,10 @@ contains
 
    end subroutine api_response_handle
 
-   !> Create the host coupling of a solvation model
+   !> Create a host coupling of a solvation model
    !>
-   !> - runs `new_coupling` on the model: every component declares its requests
-   !>   on the updated cavity
+   !> - runs `new_coupling`; atom outputs are refused until the model is
+   !>   updated, grid outputs until it is built
    !> - created once per model, survives model updates; the `prepare_*` entry
    !>   points refresh it
    !> - null plus a set error on failure
@@ -2705,7 +2755,125 @@ contains
 
    end function new_coupling_api
 
-   !> Delete a coupling handle and release its model-owned collection
+   !> Create a host coupling of an updated standalone cavity
+   !>
+   !> - borrowed from the cavity; release it with moist_delete_coupling before
+   !>   the cavity
+   !> - a model-owned cavity handle refuses: its model's coupling answers it
+   !> - null plus a set error on failure
+   function new_cavity_coupling_api(verror, vcav) result(vcpl) &
+         & bind(C, name=namespace//"new_cavity_coupling")
+      !> Error and cavity handles
+      type(c_ptr), value :: verror, vcav
+      !> New coupling handle
+      type(c_ptr) :: vcpl
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Decoded cavity wrapper
+      type(vp_cavity), pointer :: cav
+      !> New coupling wrapper
+      type(vp_coupling), pointer :: cpl
+      !> Cavity error
+      type(error_type), allocatable :: cavity_error
+
+      vcpl = c_null_ptr
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      call api_owned_cavity(vcav, "new_cavity_coupling", cav, error%ptr)
+      if (allocated(error%ptr)) return
+
+      allocate (cpl)
+      call cav%ptr%new_coupling(cpl%ptr, cavity_error)
+      if (allocated(cavity_error)) then
+         deallocate (cpl)
+         call api_error(error%ptr, "new_cavity_coupling", cavity_error%message)
+         return
+      end if
+      cpl%cavity_owner => cav%ptr
+      vcpl = c_loc(cpl)
+
+   end function new_cavity_coupling_api
+
+   !> Decode a cavity handle that owns its cavity
+   !>
+   !> @param[in]  vcav    Cavity handle
+   !> @param[in]  routine Calling entry point
+   !> @param[out] cav     Decoded wrapper, null on failure
+   !> @param[out] error   Missing, uninitialized or model-owned cavity
+   subroutine api_owned_cavity(vcav, routine, cav, error)
+      !> Cavity handle
+      type(c_ptr), intent(in) :: vcav
+      !> Calling entry point
+      character(len=*), intent(in) :: routine
+      !> Decoded wrapper
+      type(vp_cavity), pointer, intent(out) :: cav
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Wrapper before validation completes
+      type(vp_cavity), pointer :: decoded
+
+      cav => null()
+      if (.not. c_associated(vcav)) then
+         call api_error(error, routine, "Cavity handle is missing")
+         return
+      end if
+      call c_f_pointer(vcav, decoded)
+      if (.not. associated(decoded%ptr)) then
+         call api_error(error, routine, "Cavity is not initialized")
+         return
+      end if
+      if (.not. decoded%owned) then
+         call api_error(error, routine, "Cannot modify a model-owned cavity")
+         return
+      end if
+      cav => decoded
+
+   end subroutine api_owned_cavity
+
+   !> Decode the handles of a cavity build entry point
+   !>
+   !> `cav` and `cpl` stay null on any failure
+   !>
+   !> @param[in]  vcav    Cavity handle
+   !> @param[in]  vcpl    Coupling handle
+   !> @param[in]  routine Calling entry point
+   !> @param[out] cav     Decoded cavity wrapper
+   !> @param[out] cpl     Decoded coupling wrapper
+   !> @param[out] error   Invalid handle or a coupling of another owner
+   subroutine api_decode_cavity_build(vcav, vcpl, routine, cav, cpl, error)
+      !> Cavity handle
+      type(c_ptr), intent(in) :: vcav
+      !> Coupling handle
+      type(c_ptr), intent(in) :: vcpl
+      !> Calling entry point
+      character(len=*), intent(in) :: routine
+      !> Decoded cavity wrapper
+      type(vp_cavity), pointer, intent(out) :: cav
+      !> Decoded coupling wrapper
+      type(vp_coupling), pointer, intent(out) :: cpl
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Wrappers before validation completes
+      type(vp_cavity), pointer :: cav_decoded
+      type(vp_coupling), pointer :: cpl_decoded
+
+      cav => null()
+      cpl => null()
+      call api_owned_cavity(vcav, routine, cav_decoded, error)
+      if (allocated(error)) return
+      call api_coupling_handle(vcpl, routine, cpl_decoded, error)
+      if (allocated(error)) return
+      if (.not. cav_decoded%ptr%owns_coupling(cpl_decoded%ptr)) then
+         call api_error(error, routine, "Coupling belongs to a different cavity or model")
+         return
+      end if
+      cav => cav_decoded
+      cpl => cpl_decoded
+
+   end subroutine api_decode_cavity_build
+
+   !> Delete a coupling handle and release its model- or cavity-owned collection
    subroutine delete_coupling_api(vcpl) &
          & bind(C, name=namespace//"delete_coupling")
       !> Coupling handle, null on return
@@ -2717,6 +2885,7 @@ contains
       if (c_associated(vcpl)) then
          call c_f_pointer(vcpl, cpl)
          if (associated(cpl%owner)) call cpl%owner%release_coupling(cpl%ptr)
+         if (associated(cpl%cavity_owner)) call cpl%cavity_owner%release_coupling(cpl%ptr)
          deallocate (cpl)
          vcpl = c_null_ptr
       end if
@@ -3032,38 +3201,6 @@ contains
 
    end subroutine general_model_get_gradient_api
 
-   !> Install internal model density; update the model before using its results
-   subroutine set_model_isodensity_density_api(verror, vmodel, ncart, c_density) &
-      bind(C, name=namespace//"set_model_isodensity_density")
-      !> Error handle
-      type(c_ptr), value, intent(in) :: verror
-      !> Model handle
-      type(c_ptr), value, intent(in) :: vmodel
-      !> Density dimension
-      integer(c_int), value, intent(in) :: ncart
-      !> Density buffer
-      type(c_ptr), value, intent(in) :: c_density
-      !> Error wrapper
-      type(vp_error), pointer :: error
-      !> Model owner
-      type(model_continuum_type), pointer :: continuum
-      !> Native view with reversed C axes
-      real(c_double), pointer :: density(:, :)
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      call api_continuum_model(vmodel, "set_model_isodensity_density", continuum, error%ptr)
-      if (allocated(error%ptr)) return
-      if (ncart < 1 .or. .not. c_associated(c_density)) then
-         call api_error(error%ptr, "set_model_isodensity_density", "Invalid density buffer")
-         return
-      end if
-      call c_f_pointer(c_density, density, [int(ncart), int(ncart)])
-      call continuum%set_isodensity_density(real(density, wp), error%ptr)
-      call prefix_api_error(error%ptr, "set_model_isodensity_density")
-   end subroutine set_model_isodensity_density_api
-
    !> Advance to the next request with a missing output of the staged phase
    !>
    !> - false ends the pass and rewinds; the next call starts a new pass
@@ -3191,6 +3328,8 @@ contains
    !>   exactly that many values
    !> - an output over (ngrid, natom), such as `radial_potential` phi, is
    !>   refused by name: its layout is not part of the C protocol yet
+   !> - `density_matrix` dcart is (nbasis, nbasis) and symmetric, so either
+   !>   storage order holds
    subroutine coupling_answer_api(verror, vcpl, c_name, values) &
       bind(C, name=namespace//"answer_coupling_request")
       !> Error handle
@@ -3377,79 +3516,6 @@ contains
                         "Cavity is not DROP type")
       end select
    end subroutine get_isodensity_cart_layout_api
-
-   !> Install the cartesian-monomial density matrix for the internal isodensity LSF
-   !>
-   !> - dcart is the ncart-by-ncart density matrix in moist's cartesian-monomial
-   !>   basis (column-major), typically the host's density transformed by the
-   !>   cart<-basis map derived from get_isodensity_cart_layout
-   !> - call before each cavity build
-   subroutine set_isodensity_density_api(verror, vcav, ncart, c_dcart) &
-         & bind(C, name=namespace//"set_isodensity_density")
-      !> Diagnostic handle
-      type(c_ptr), value :: verror
-      !> Cavity handle
-      type(c_ptr), value :: vcav
-      !> Number of Cartesian components; must match the stored basis
-      integer(c_int), value :: ncart
-      !> Density matrix in Cartesian-component order, shape (ncart,ncart)
-      type(c_ptr), value :: c_dcart
-
-      type(vp_error), pointer :: error
-      type(vp_cavity), pointer :: cav
-      real(c_double), pointer :: dcart(:, :)
-      type(error_type), allocatable :: cavity_error
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "set_isodensity_density", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-      if (.not. cav%owned) then
-         call api_error(error%ptr, "set_isodensity_density", "Cannot modify a model-owned cavity")
-         return
-      end if
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "set_isodensity_density", "Cavity is not initialized")
-         return
-      end if
-      if (.not. c_associated(c_dcart)) then
-         call api_error(error%ptr, "set_isodensity_density", "Density pointer is missing")
-         return
-      end if
-
-      select type (cavity => cav%ptr)
-      type is (cavity_type_drop)
-         if (.not. allocated(cavity%lsf_model)) then
-            call api_error(error%ptr, "set_isodensity_density", "Cavity has no LSF model")
-            return
-         end if
-         select type (lsf => cavity%lsf_model)
-         type is (moist_cavity_drop_lsf_isodensity_internal_type)
-            if (int(ncart) /= lsf%gto%ncart) then
-               call api_error(error%ptr, "set_isodensity_density", &
-                              "Density matrix dimension does not match the basis")
-               return
-            end if
-            call c_f_pointer(c_dcart, dcart, [int(ncart), int(ncart)])
-            call lsf%set_density(dcart, cavity_error)
-            if (allocated(cavity_error)) then
-               call api_error(error%ptr, "set_isodensity_density", cavity_error%message)
-               return
-            end if
-         class default
-            call api_error(error%ptr, "set_isodensity_density", &
-                           "Cavity LSF is not the internal isodensity type")
-         end select
-      class default
-         call api_error(error%ptr, "set_isodensity_density", "Cavity is not DROP type")
-      end select
-   end subroutine set_isodensity_density_api
 
    !> Return the master numerical tolerance configured on a DROP cavity
    subroutine get_drop_cavity_tolerance_api(verror, vcav, c_tolerance) &
@@ -3652,22 +3718,8 @@ contains
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
-
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "update_cavity", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "update_cavity", "Cavity is not initialized")
-         return
-      end if
-      if (.not. cav%owned) then
-         call api_error(error%ptr, "update_cavity", &
-                        "Cannot update a borrowed cavity handle")
-         return
-      end if
+      call api_owned_cavity(vcav, "update_cavity", cav, error%ptr)
+      if (allocated(error%ptr)) return
 
       if (.not. c_associated(vmol)) then
          call api_error(error%ptr, "update_cavity", "Molecular structure data is missing")
@@ -3689,6 +3741,58 @@ contains
       end if
 
    end subroutine update_cavity_api
+
+   !> Stage the build phase of a cavity coupling
+   !>
+   !> - clears every answer of the coupling and restarts its walk
+   !> - the atom count comes from the structure of the latest moist_update_cavity
+   subroutine prepare_cavity_build_api(verror, vcav, vcpl) &
+         & bind(C, name=namespace//"prepare_cavity_build")
+      !> Diagnostic handle
+      type(c_ptr), value :: verror
+      !> Cavity and coupling handles
+      type(c_ptr), value :: vcav, vcpl
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      type(vp_coupling), pointer :: cpl
+      type(error_type), allocatable :: cavity_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      call api_decode_cavity_build(vcav, vcpl, "prepare_cavity_build", cav, cpl, error%ptr)
+      if (allocated(error%ptr)) return
+      call cav%ptr%prepare_build(cpl%ptr, cavity_error)
+      if (allocated(cavity_error)) call api_error(error%ptr, "prepare_cavity_build", cavity_error%message)
+
+   end subroutine prepare_cavity_build_api
+
+   !> Complete a cavity of any concrete type from the build phase of a coupling
+   !>
+   !> - the coupling must be staged by moist_prepare_cavity_build and every
+   !>   required output answered; a missing one is reported by name
+   !> - the coupling keeps its build-phase answers; every other coupling of
+   !>   the cavity is invalidated
+   subroutine build_cavity_api(verror, vcav, vcpl) &
+         & bind(C, name=namespace//"build_cavity")
+      !> Diagnostic handle
+      type(c_ptr), value :: verror
+      !> Cavity and coupling handles
+      type(c_ptr), value :: vcav, vcpl
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      type(vp_coupling), pointer :: cpl
+      type(error_type), allocatable :: cavity_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      call api_decode_cavity_build(vcav, vcpl, "build_cavity", cav, cpl, error%ptr)
+      if (allocated(error%ptr)) return
+      call cav%ptr%build(cpl%ptr, cavity_error)
+      if (allocated(cavity_error)) call api_error(error%ptr, "build_cavity", cavity_error%message)
+
+   end subroutine build_cavity_api
 
    !> Report grid and sphere counts of a cavity of any concrete type
    subroutine get_cavity_sizes_api(verror, vcav, ngrid, nsph) &
@@ -3731,8 +3835,8 @@ contains
          return
       end if
 
-      if (.not. allocated(cav%ptr%radii)) then
-         call api_error(error%ptr, "get_cavity_sizes", "Cavity is not built yet")
+      if (.not. allocated(cav%ptr%total_area)) then
+         call api_error(error%ptr, "get_cavity_sizes", unbuilt_cavity_message)
          return
       end if
 
@@ -3849,7 +3953,7 @@ contains
       end if
 
       if (.not. allocated(cav%ptr%total_area)) then
-         call api_error(error%ptr, "get_cavity_results", "Cavity is not built yet")
+         call api_error(error%ptr, "get_cavity_results", unbuilt_cavity_message)
          return
       end if
 
@@ -5553,7 +5657,7 @@ contains
       end if
 
       if (.not. allocated(cav%ptr%total_area)) then
-         call api_error(error%ptr, "compute_cavity_gradient", "Cavity is not built yet - call update_cavity first")
+         call api_error(error%ptr, "compute_cavity_gradient", unbuilt_cavity_message)
          return
       end if
 
@@ -5597,7 +5701,7 @@ contains
       end if
 
       if (.not. allocated(cav%ptr%total_area)) then
-         call api_error(error%ptr, "compute_anchor_gradient", "Cavity is not built yet - call update_cavity first")
+         call api_error(error%ptr, "compute_anchor_gradient", unbuilt_cavity_message)
          return
       end if
 
@@ -5700,7 +5804,7 @@ contains
 
       select type (cavity => cav%ptr)
       type is (cavity_type_drop)
-         if (.not. allocated(cavity%xyz1_rA) .or. .not. allocated(cavity%xi1_rA) &
+         if (.not. cavity%is_built() .or. .not. allocated(cavity%xyz1_rA) .or. .not. allocated(cavity%xi1_rA) &
              .or. .not. allocated(cavity%a_i1_rA) .or. .not. allocated(cavity%v1_rA) &
              .or. .not. allocated(cavity%A_tot1_rA) .or. .not. allocated(cavity%V_tot1_rA)) then
             call api_error(error%ptr, "get_anchor_gradient", &
@@ -5808,8 +5912,8 @@ contains
 
       select type (cavity => cav%ptr)
       type is (cavity_type_drop)
-         ! Check if gradient was computed
-         if (.not. allocated(cavity%A_tot1_rA)) then
+         ! Check if gradient was computed on the current surface
+         if (.not. cavity%is_built() .or. .not. allocated(cavity%A_tot1_rA)) then
             call api_error(error%ptr, "get_cavity_gradient", &
                            "Gradient not computed - call compute_cavity_gradient first")
             return
@@ -6437,7 +6541,7 @@ contains
 
    end subroutine c_f_character_ptr
 
-   !> Reject coincident atoms and effective charges outside 1..Z before accepting a geometry
+   !> Reject coincident atoms before accepting a geometry
    subroutine verify_structure(error, mol)
       !> Diagnostic on failure
       type(error_type), allocatable, intent(out) :: error
@@ -6452,16 +6556,6 @@ contains
       end do
       if (stat > 0) then
          call fatal_error(error, "Too close interatomic distances found")
-         return
-      end if
-      if (allocated(mol%z_eff)) then
-         if (size(mol%z_eff) /= mol%nat) then
-            call fatal_error(error, "Effective nuclear charges do not match the number of atoms")
-            return
-         end if
-         if (any(mol%z_eff < 1 .or. mol%z_eff > mol%num(mol%id))) then
-            call fatal_error(error, "Effective nuclear charges must lie between 1 and the atomic number")
-         end if
       end if
    end subroutine verify_structure
 

@@ -12,8 +12,11 @@
 !>    S(r) = scale * (rho_iso - rho(r))
 !>
 !> The host code has to provide
-!> - Basis set (once)
-!> - Density matrix (once per SCF step)
+!> - Basis set (once, at construction)
+!> - Density matrix (once per SCF step), as the `density_matrix` answer of the
+!>   build phase, read by `read_build` before the projection
+!> - Nuclear charges of the core fill, as the `nuclear_charges` answer, while
+!>   the fill is on
 !>
 !> The isodensity surface is a level set of the density itself, so the level set
 !> function carries no *explicit* nuclear-position dependence for the cavity
@@ -28,7 +31,9 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
       isodensity_max_nuclear_charge
-   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
+      & request_require, moist_phase_build, nuclear_charge_request_type, density_matrix_request_type
    implicit none(type, external)
    private
 
@@ -60,11 +65,17 @@ module moist_cavity_drop_lsf_isodensity_internal
       real(wp) :: zmax = 0.0_wp
       !> Core fill of the ECP nuclei in the bound structure
       type(moist_iso_core_fill_type) :: core
+      !> Nuclear charges of the host Hamiltonian (nat); unallocated means no ECP nucleus
+      real(wp), allocatable :: z(:)
       !> Per-instance evaluation scratch, sized on first use
       type(moist_iso_gto_work_type) :: work
    contains
       procedure, public :: new => lsf_new
       procedure, public :: set_density => lsf_set_density
+      procedure, public :: set_nuclear_charges => lsf_set_nuclear_charges
+      procedure, public :: declare_coupling => lsf_declare_coupling
+      procedure, public :: read_build => lsf_read_build
+      procedure, public :: requires_build_inputs => lsf_requires_build_inputs
       procedure, public :: update => lsf_update
       procedure, public :: prepare => lsf_prepare
       procedure, public :: prepare_subset => lsf_prepare_subset
@@ -135,6 +146,85 @@ contains
       call self%gto%set_density(dcart, error)
    end subroutine lsf_set_density
 
+   !> Declare the build-phase requests at the cavity scope
+   !>
+   !> - `density_matrix`, required: the density this level set is built from
+   !> - `nuclear_charges`, required while the core fill is on
+   !>
+   !> @param[in]    self     LSF instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine lsf_declare_coupling(self, coupling, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      type(coupling_type), intent(inout) :: coupling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(density_matrix_request_type) :: density
+      type(nuclear_charge_request_type) :: charges
+
+      ! The density matrix runs over the cartesian-monomial basis
+      density%nbasis = self%gto%ncart
+      call request_require(density, moist_phase_build, "dcart", error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "density_matrix", density, error)
+      if (allocated(error)) return
+      call request_require(charges, moist_phase_build, "z", self%param%fills_core(), error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "nuclear_charges", charges, error)
+   end subroutine lsf_declare_coupling
+
+   !> Read the density matrix and, with the core fill on, the nuclear charges
+   !>
+   !> @param[inout] self     LSF instance
+   !> @param[in]    coupling Cavity-scoped view of the build phase
+   !> @param[in]    mol      Structure of the cavity's latest update
+   !> @param[out]   error    Missing answer, a density the basis rejects or a
+   !>                        charge outside (0, Z]
+   subroutine lsf_read_build(self, coupling, mol, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      type(structure_type), intent(in) :: mol
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: dcart(:, :), z(:)
+
+      call coupling%read("density_matrix", "dcart", dcart, error)
+      if (allocated(error)) return
+      call self%set_density(dcart, error)
+      if (allocated(error)) return
+      if (.not. self%param%fills_core()) return
+      call coupling%read("nuclear_charges", "z", z, error)
+      if (allocated(error)) return
+      call iso_check_nuclear_charges(mol, z, error)
+      if (allocated(error)) return
+      call self%set_nuclear_charges(z)
+   end subroutine lsf_read_build
+
+   !> Whether the projection waits for build-phase answers
+   !>
+   !> The density matrix, always
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_requires_build_inputs(self) result(requires)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      logical :: requires
+
+      requires = .true.
+   end function lsf_requires_build_inputs
+
+   !> Store the nuclear charges of the host Hamiltonian for the core fill
+   !>
+   !> Read by the next `update`; atoms with `z < Z` are ECP nuclei
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    z    Nuclear charges (nat)
+   subroutine lsf_set_nuclear_charges(self, z)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
+      real(wp), intent(in) :: z(:)
+
+      self%z = z
+   end subroutine lsf_set_nuclear_charges
+
    !> Bind molecular geometry and refresh the shell centers
    !>
    !> @param[inout] self  LSF instance
@@ -150,7 +240,7 @@ contains
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
       self%zmax = isodensity_max_nuclear_charge(mol)
-      call self%core%update(mol, radii, self%param)
+      call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator

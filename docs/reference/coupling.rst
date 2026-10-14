@@ -50,14 +50,13 @@ Those derivatives include the electronic sign of the potential; the weights requ
 Typical SCF and gradient workflow
 ---------------------------------
 
-Construct the cavity and model components, update the model for the molecular structure, and create a coupling. That coupling can be reused throughout the SCF calculation and the subsequent gradient evaluation.
+Construct the cavity and model components, update the model for the structure, and create a coupling. Reuse it throughout the SCF calculation and gradient evaluation.
 
 At each SCF density:
 
-#. **Update a density-dependent cavity.** Supply the current density to its    density source and update the model before evaluating it.
+#. **Build the cavity.** Follow the :ref:`coupling-build` with the current density.
    A cavity determined only by nuclear geometry can be reused while the geometry is unchanged.
 #. **Evaluate the energy.** Prepare the energy phase, answer its requests and obtain MOIST's energy contribution.
-   Preparing this phase discards answers from the previous density.
 #. **Build the Fock contribution.** Prepare the response phase, answer any additional requests and obtain the response coefficients.
    Contract every response item with the corresponding density-matrix derivatives and add the results to the host Fock matrix.
 
@@ -77,8 +76,12 @@ Each phase follows the same request-and-answer loop. Here, ``prepare_*`` and ``g
 
 .. code-block:: text
 
-   update model
+   update model (structure)
    create coupling
+   prepare build
+   while a request with missing outputs is available:
+       answer it (density matrix, nuclear charges)
+   build model
 
    for each evaluation phase:
        prepare phase
@@ -100,7 +103,27 @@ Grid inputs
 -----------
 
 Grid inputs are :doc:`fields` of the model: ``xyz``, ``xi0`` and the other per-point arrays of its evaluation domain.
-The coupling keeps no copy of the grid and has no grid accessor of its own. A model update invalidates every coupling, so a staged coupling always refers to the current grid.
+Read them from the model; the coupling keeps no grid copy. Grid outputs require a built surface.
+
+.. _coupling-build:
+
+Build phase
+-----------
+
+``update(structure)`` prepares the geometry. Cavities that need host inputs defer their surface construction to the build phase.
+Run it after each structure update and each density change on a density-dependent cavity:
+
+#. Call ``prepare_build(coupling)``.
+#. Answer the requests with the usual ``next()`` / ``answer`` loop.
+#. Call ``build(coupling)`` to complete the cavity and components.
+
+Internal isodensity cavities request ``density_matrix``; both isodensity implementations request ``nuclear_charges`` when core fill is enabled.
+Callback density is evaluated directly, outside the coupling.
+Geometric cavities and callbacks without core fill are built by ``update``: their request loop is empty and ``build`` does not rebuild the surface.
+For those callbacks, repeat ``update`` after each density change.
+
+Standalone cavities use the same protocol in every language.
+See the :ref:`Fortran <isodensity-build-fortran>`, :ref:`C <isodensity-build-c>` and :ref:`Python <coupling-python>` examples, and :ref:`coupling-phases` for answer reuse and invalidation.
 
 .. _coupling-requests:
 
@@ -125,6 +148,12 @@ The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr
    * - ``gaussian_moments``
      - ``xyz`` and the request's own ``width(ngrid)``
      - ``gt(ngrid)``, ``pt(3, ngrid)``, ``mt(3, 3, ngrid)``, ``rt(3, ngrid)``
+   * - ``nuclear_charges``
+     - none
+     - ``z(natom)``
+   * - ``density_matrix``
+     - the request's own ``nbasis``; the basis order of ``moist_get_isodensity_cart_layout``
+     - ``dcart(nbasis, nbasis)``, symmetric
 
 Both potential requests carry the total nuclear plus electronic potential.
 ``dphi_dr`` is its derivative with respect to the evaluation point, without a charge multiplication or electric-field sign change.
@@ -138,8 +167,13 @@ The same prefactor applies to ``gt``, ``pt``, ``mt`` and ``rt``, and to the host
 Zero-width requests represent inert zero-area points and have zero moments.
 They are a :doc:`field <fields>` of the request, not of the cavity: read them from the request, never recompute them.
 
+``nuclear_charges`` are atomic numbers minus ECP core electrons; all-electron hosts supply the atomic numbers.
+``density_matrix`` uses the internal isodensity level set's Cartesian-monomial layout; its size ``nbasis`` is an input of the request, like the moment widths, not a count of the snapshot.
+Neither has a response item.
+
 PCM requires ``phi`` in every phase.
 It requires both derivatives for the gradient, and for the response only when the cavity geometry follows the density.
+The gradient also requires ``z``, reused from the build phase when available.
 GOSTSHYP requires ``gt`` and ``pt`` in every phase; ``mt`` and ``rt`` for the gradient, and for the response only on a density-dependent cavity.
 Zero pressure or zero scale registers no moment request.
 PV registers no request (as it requires none).
@@ -192,7 +226,7 @@ After its first successful update, a model can create couplings.
 A coupling belongs to that model; several may coexist, and each can serve every phase.
 The language APIs describe ownership and lifetime requirements.
 
-Any phase can be staged directly. ``get_*`` is the completeness check: it requires the matching staged phase and all its required outputs, fails by name on a wrong or absent staging and on missing outputs (those of the first incomplete request), and on failure leaves the accumulator unchanged.
+After building, any evaluation phase can be staged directly. ``get_*`` requires the matching phase and all required outputs; errors name the missing phase or outputs and leave the accumulator unchanged.
 Evaluation does not consume answers.
 
 .. list-table:: State transitions
@@ -200,13 +234,18 @@ Evaluation does not consume answers.
 
    * - Operation
      - Effect
-   * - Create coupling after model update
+   * - Create coupling
      - Requests declared, nothing staged: ``next()`` returns false.
+   * - ``prepare_build``
+     - Clear answers, select build, reset the cursor. A deferred surface is
+       discarded; evaluation requires a successful build.
+   * - ``build``
+     - Complete the model, retain build answers, end staging and invalidate
+       other couplings. A failed deferred build leaves no surface.
    * - ``prepare_energy``
-     - Clear all answers, select energy, reset the cursor.
+     - Clear answers except build inputs, select energy, reset the cursor.
    * - ``prepare_response`` / ``prepare_gradient``
-     - Retain all answers, select the phase, reset the cursor. Only a model
-       update or ``prepare_energy`` discards answers.
+     - Retain answers, select the phase, reset the cursor.
    * - ``next()`` returns true
      - Move the cursor to the next request, in declaration order, with an
        output the staged phase requires and no valid answer for it.
@@ -230,11 +269,12 @@ The language APIs describe whether the requirement state is read live or from a 
 
 A missing output is a required output without a valid answer.
 Asking whether an output the request does not have is missing gives false, not an error: ``answer`` rejects the unknown name and ``get_*`` names the missing outputs, so a misspelling cannot pass unnoticed.
-A rejected answer (wrong name, rank, shape or a non-finite value) is reported on submission, leaves that output missing until a valid retry, and does not touch the other outputs.
+Native rejection of an output's rank, shape or values clears that output without touching others; an unknown name changes nothing.
+Python validates shapes and density-matrix symmetry before submission; those errors leave any previous answer intact (:ref:`coupling-python`).
 An answer without a current request (before the first ``next()``, after ``next()`` returned false, after a new ``prepare_*`` or a model update) is an error that points to ``next()`` and changes no answer.
 
 Prepare again after a model update.
-For a new host density, start with ``prepare_energy`` to discard old answers; also update density-dependent cavities before preparing.
+For a new host density, follow the SCF workflow above.
 ``next()`` never stops at a complete request, so replacing a valid answer, for example the potential of a perturbed density, also starts with ``prepare_energy``.
 
 Energy and gradient accumulation

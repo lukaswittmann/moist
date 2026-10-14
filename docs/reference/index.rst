@@ -13,8 +13,7 @@ Context
    The run settings every other object shares: the thread count, how much MOIST prints, and the timer recording where the time goes (:doc:`context`).
 
 Structure
-   The solute: atomic numbers, nuclear charges and positions.
-   The nuclear charges are those of the host Hamiltonian, the atomic numbers minus the core electrons an effective core potential replaces.
+   The solute's elements and geometry. Nuclear charges arrive through the coupling (:ref:`coupling-requests`).
 
 Cavity
    The surface separating the solute from the solvent, discretized into grid points with areas, normals and Gaussian widths.
@@ -49,13 +48,13 @@ A calculation
        update the model with the structure
        first geometry only: create a coupling (each update resets it)
        for each SCF iteration:
-           density-dependent cavity: install the density, update the model
+           build phase with the current density
            energy and response phases    -> energy, Fock contribution
        gradient phase                    -> nuclear gradient
 
    print the timings                                    (optional)
 
-:doc:`coupling` describes the phases.
+:ref:`coupling-build` describes when rebuilding is required; :doc:`coupling` covers evaluation.
 
 Run context
 -----------
@@ -83,7 +82,7 @@ Ownership and lifetime
 
 Constructors copy what they are given: the model holds its own cavity and components, the cavity its own level set, and an update keeps its own copy of the structure.
 The originals can therefore be deleted or reused.
-The context is the exception; it is shared, not copied, and must outlive everything built on it.
+The context is shared: Fortran callers keep it alive; C and Python objects retain it.
 
 Add every component before the first update; later additions are rejected.
 
@@ -101,12 +100,12 @@ Density-dependent cavities
 --------------------------
 
 An isodensity cavity (ρ-DROP) follows the host's electron density.
-The host installs every new density and updates the model before it prepares the energy phase.
+Rebuild it at each density change before evaluating the energy (:ref:`coupling-build`).
 MOIST obtains the density in one of two ways (:doc:`/cavities/isodensity`):
 
 Internal
-   The host passes its Gaussian basis once, at construction, and a density matrix at every SCF step: Fortran ``model%set_isodensity_density``, C ``moist_set_model_isodensity_density``, Python ``source.density_matrix``.
-   The matrix is in the Cartesian-monomial layout MOIST reports or, with the ``spherical`` basis option, over the host's spherical functions.
+   The host supplies its Gaussian basis at construction and a density matrix at each SCF step.
+   The matrix always uses MOIST's Cartesian-monomial layout, including with the ``spherical`` basis option.
 Callback
    The host evaluates the density and its spatial derivatives at the points MOIST asks for.
    It returns the density itself; MOIST subtracts the isovalue.
@@ -115,7 +114,7 @@ On such a cavity the response phase requires more derivative outputs (:ref:`coup
 Its weights, contracted with the density-matrix derivative of the density, complete the Fock matrix, and contracted with the basis-center derivatives, the nuclear gradient.
 The gradient phase does not return this item, so the host keeps the weights from the response phase at the converged density (:ref:`coupling-response`).
 
-MOIST finds the atoms with an effective core potential from the structure's nuclear charges and fills in their missing core density, so the surface has no hole at those nuclei.
+MOIST uses the host's nuclear charges to identify ECP atoms and fills their missing core density to prevent holes in the surface.
 
 Conventions
 -----------

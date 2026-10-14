@@ -13,23 +13,25 @@ Solvation Model Interface
 -------------------------
 
 A ``solvation_model_type`` is the host-facing object for one complete solvation treatment.
-Concrete models implement four deferred procedures:
+Its main host-facing calls are:
 
 ``update(mol, error)``
-   Refresh all structure-dependent state.
+   Prepare structure-dependent state; see :ref:`coupling-build` for deferred construction.
 
 ``get_energy(coupling, energy, error)``
    Add the model energy for the answers staged on the coupling.
 
 ``get_response(coupling, response, error)``
-   Add the host contributions of the response phase.
+   Fill the response with coefficients for the host.
 
 ``get_gradient(coupling, response, gradient, error)``
    Add the nuclear-gradient contribution, and with it the host part of the
    gradient phase.
 
 The ``coupling_type`` holds the requests the host answers, visited one at a time with ``next()``, and ``response_type`` the list of items the model hands back, walked the same way; both are described in :doc:`/reference/coupling`.
-``model_continuum_type`` (``src/moist/model/continuum/type.f90``) adds the calls that drive them: ``new_coupling`` returns a model-owned coupling (several may coexist, and ``release_coupling`` frees one) then ``prepare_energy``, ``prepare_response`` and ``prepare_gradient`` stage one phase each.
+The base provides ``new_coupling``, ``release_coupling`` and the ``prepare_*`` calls.
+Concrete models implement ``update``, ``atom_count``, ``declare_pass`` and the three evaluation calls; a model whose update waits for host answers overrides ``build``, calling the base ``model_build`` first.
+``new_coupling`` requires an updated model and the ``prepare_*`` evaluation calls a built one.
 
 Model Component Interface
 -------------------------
@@ -54,8 +56,8 @@ Composition and Lifecycle
 The ``model_continuum_type`` owns one cavity and an ordered list of components:
 
 1. Construct the model from a cavity and add all components before the first update; the model stores copies of both.
-2. ``update`` refreshes the cavity first, then every component.
-3. ``get_energy`` sums the component energies and keeps each one in the model until the next update, as the ``energy`` field of ``list_component_fields(index, query)``.
+2. ``update`` and the :ref:`coupling-build` refresh the cavity, then its components.
+3. ``get_energy`` sums and stores each component's contribution in its ``energy`` field (:doc:`/reference/fields`).
 4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gaussian_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
 5. ``get_gradient`` adds the direct nuclear terms, contracts the gradient-side surface weights through the cavity, and refills the response with the same direct items.
 
@@ -113,7 +115,7 @@ The model runs on ``ctx``. The cavity and components above have no context of
 their own, so their copies in the model use that; a part constructed with
 ``ctx=`` keeps its own.
 
-Call ``model%update(mol, error)`` with the current structure, then create a host coupling with ``model%new_coupling(coupling, error)``; energies, responses and gradients are computed one phase at a time on that coupling, as described in :doc:`/reference/coupling`.
+After ``model%update(mol, error)``, create a coupling with ``model%new_coupling(coupling, error)`` and follow the :doc:`host coupling protocol </reference/coupling>` for building and evaluation.
 ``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).
 ``model%print_parameters(unit)`` prints the settings at any time, at the context's :ref:`verbosity <verbosity>`: the cavity section followed by each component; ``unit`` defaults to the run context's unit.
 

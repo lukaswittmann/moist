@@ -43,6 +43,7 @@ from moist.interface import (
     GaussianMomentRequest,
     GaussianPotentialRequest,
     ModelComponentCOSMO,
+    NuclearChargesRequest,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
@@ -235,6 +236,17 @@ def make_host(mol, *, dm):
     return host
 
 
+def host_build(owner, host, coupling=None):
+    """Run the build phase of a cavity or model with the host's answers, as the driver does."""
+    if coupling is None:
+        coupling = owner.new_coupling()
+    owner.prepare_build(coupling)
+    for request in coupling:
+        host.answer_build(coupling, request)
+    owner.build(coupling)
+    return coupling
+
+
 def cavity_config(isodensity):
     """The DROP configuration of one layer: isodensity or solute-vdW."""
     if isodensity:
@@ -275,10 +287,11 @@ def test_internal_density_reproduces_the_callback_cavity(cart):
     mol = molecule("water", "cc-pvtz").copy()
     mol.cart = cart
     host = make_host(mol, dm=scf.RHF(mol).run(verbose=0).make_rdm1())
-    internal = cavity_config(True).build(source=host.internal_density(), context=CONTEXT)
+    internal = cavity_config(True).build(basis=host.basis, context=CONTEXT)
     callback = cavity_config(True).build(source=host, context=CONTEXT)
     for cavity in (internal, callback):
         cavity.update(host.structure())
+        host_build(cavity, host)
 
     # Measured 9e-16
     np.testing.assert_allclose(internal.xyz, callback.xyz, rtol=0.0, atol=1e-10)
@@ -298,7 +311,6 @@ def test_internal_density_reproduces_the_callback_model():
     internal = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
     # The same driver on the host's density callback
     callback = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
-    callback.source = None
     callback.model = SolvationModel(
         CONTEXT, cavity_config(True).build(source=callback.host), callback.components)
 
@@ -751,6 +763,8 @@ def test_gradient_path_reads_host_surface_weights():
                     dphi_dr=factor * host.surface_potential_gradient(coords, xi),
                     dphi_dxi=host._dphi_dxi(coords, xi),
                 )
+            elif isinstance(request, NuclearChargesRequest):
+                coupling.answer(z=host.nuclear_charges)
         gradients.append(_gradient(model, coupling)[0])
     step = gradients[1] - gradients[0]
     assert np.max(np.abs(step)) > 1.0e-6
@@ -892,14 +906,19 @@ def test_ecp_molecule_is_rejected_before_element_lookup():
 
 
 @pytest.mark.host
-def test_host_structure_separates_elements_from_ecp_charges(monkeypatch):
+def test_host_separates_elements_from_ecp_charges(monkeypatch):
     mol = gto.M(atom="I 0 0 0; H 0 0 3.04", basis="def2-svp", ecp="def2-svp", verbose=0)
     # Past the guard: the mapping it hands moist once ECPs are admitted
     monkeypatch.setattr(mol, "has_ecp", lambda: False)
-    structure = PySCFHost(mol).structure()
+    host = PySCFHost(mol)
+    structure = host.structure()
+    # The structure holds the elements; the nuclear charges are the answer
+    # to the nuclear_charges request
     np.testing.assert_array_equal(structure.numbers, [53, 1])
-    np.testing.assert_array_equal(structure.z_eff, mol.atom_charges())
-    assert structure.z_eff[0] == 53 - mol.atom_nelec_core(0) < 53
+    np.testing.assert_array_equal(host.nuclear_charges, mol.atom_charges())
+    assert host.nuclear_charges[0] == 53 - mol.atom_nelec_core(0) < 53
+    host.dm = np.zeros((mol.nao, mol.nao))
+    assert host.cartesian_density().shape == (host.basis.ncart, host.basis.ncart)
 
 
 def _energy(model, coupling):

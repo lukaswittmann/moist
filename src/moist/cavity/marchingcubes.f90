@@ -24,10 +24,12 @@ module moist_cavity_marchingcubes
    use mctc_io_convert, only: autoaa
    use mctc_io_constants, only: pi
    use moist_math_linalg, only: cross_product
-   use moist_cavity_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type, update_cavity_base, build_cavity_base, cavity_declare_pass
    use moist_context, only: moist_context_type, resolve_num_threads
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
+      & coupling_close_view
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_timer, only: cat_properties
@@ -71,6 +73,12 @@ module moist_cavity_marchingcubes
    contains
       !> Integrate the isosurface for a new geometry
       procedure :: update => update_cavity_marchingcubes
+      !> Whether the level set requires build-phase answers before the integration
+      procedure :: defers_build => marchingcubes_defers_build
+      !> Read the build-phase answers and integrate the deferred isosurface
+      procedure :: build => build_cavity_marchingcubes
+      !> Declare the build-phase requests of the level set
+      procedure :: declare_coupling => declare_coupling_marchingcubes
       !> Marching cubes exposes no analytic nuclear derivatives
       procedure :: get_gradient => get_gradient_marchingcubes
       !> Construction settings
@@ -457,6 +465,12 @@ contains
       allocate(self%radius_model, source=radius_model)
       if (allocated(self%lsf_model)) deallocate(self%lsf_model)
       allocate(self%lsf_model, source=lsf_model)
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_marchingcubes
 
    !> Construction settings of the cavity
@@ -476,19 +490,22 @@ contains
    !*                          Update Cavity (integrate surface)                        *!
    !* ================================================================================= *!
 
-   !> Integrate the LSF isosurface for a new geometry
+   !> Take a new geometry: radii and sphere centres, then the isosurface
+   !> unless the level set waits for build-phase answers
    !>
    !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3); with no surface
    !> discretization `ngrid` stays zero and the grid arrays stay unallocated
    !>
-   !> @param[inout] self  Cavity instance
-   !> @param[in]    mol   Molecular structure
-   !> @param[out]   error Error handling
+   !> @param[inout] self     Cavity instance
+   !> @param[in]    mol      Molecular structure
+   !> @param[out]   error    Error handling
    subroutine update_cavity_marchingcubes(self, mol, error)
       class(cavity_type_marchingcubes), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -508,9 +525,94 @@ contains
       if (allocated(self%sphxyz)) deallocate (self%sphxyz)
       allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
 
+      !> The integration waits for the density matrix or the nuclear charges
+      if (.not. self%defers_build()) then
+         call integrate_surface_mc(self, error)
+         if (allocated(error)) return
+      end if
+      self%updated = .true.
+      self%built = .not. self%defers_build()
+
+   end subroutine update_cavity_marchingcubes
+
+   !> Whether the level set requires build-phase answers before the integration
+   !>
+   !> @param[in] self Cavity instance
+   function marchingcubes_defers_build(self) result(defers)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(in) :: self
+      !> Whether `update` leaves the integration to `build`
+      logical :: defers
+
+      defers = .false.
+      if (allocated(self%lsf_model)) defers = self%lsf_model%requires_build_inputs()
+
+   end function marchingcubes_defers_build
+
+   !> Read the build phase, then integrate a deferred surface
+   !>
+   !> - `build_cavity_base` first; a surface that `update` integrated stays
+   !> - otherwise built once the level set read its answers and the
+   !>   integration succeeded, then the coupling records the extents
+   !>
+   !> @param[inout] self     Updated cavity
+   !> @param[inout] coupling Coupling staged by `prepare_build`
+   !> @param[out]   error    Error handling
+   subroutine build_cavity_marchingcubes(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(inout) :: self
+      !> Coupling staged by `prepare_build`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Cavity-scoped read interface
+      type(coupling_view_type) :: view
+
+      call build_cavity_base(self, coupling, error)
+      if (allocated(error)) return
+      if (.not. self%defers_build()) return
+      call coupling_make_view(coupling, 0, view)
+      call self%lsf_model%read_build(view, self%mol, error)
+      call coupling_close_view(coupling)
+      if (allocated(error)) return
+      call integrate_surface_mc(self, error)
+      if (allocated(error)) return
+      self%built = .true.
+      call cavity_declare_pass(self, coupling, error)
+
+   end subroutine build_cavity_marchingcubes
+
+   !> Declare the build-phase requests of the level set at the cavity scope
+   !>
+   !> @param[in]    self     Cavity instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine declare_coupling_marchingcubes(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(in) :: self
+      !> Coupling being declared
+      type(coupling_type), intent(inout) :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (allocated(self%lsf_model)) call self%lsf_model%declare_coupling(coupling, error)
+
+   end subroutine declare_coupling_marchingcubes
+
+   !> Integrate the isosurface of the stored structure, radii and sphere centres
+   !>
+   !> @param[inout] self  Cavity instance
+   !> @param[out]   error Error handling
+   subroutine integrate_surface_mc(self, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
       !> Refresh LSF geometry caches; the integrator reads lsf%radii for its
       !> bounding box and never calls update itself
-      call self%lsf_model%update(mol, self%radii)
+      call self%lsf_model%update(self%mol, self%radii)
 
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)
@@ -522,7 +624,7 @@ contains
       call self%ctx%timer%stop("Marching cubes")
       if (allocated(error)) return
 
-   end subroutine update_cavity_marchingcubes
+   end subroutine integrate_surface_mc
 
    !> Run the integrator, forwarding only the mesh-export paths that were requested
    !>

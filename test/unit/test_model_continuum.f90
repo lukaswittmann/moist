@@ -492,10 +492,10 @@ contains
 
    end subroutine test_continuum_model_pv_smoke
 
-!> Foreign-coupling and isodensity-density guard checks
+!> Foreign-coupling guard checks
 !>
-!> A coupling minted by one model is refused by every other model, and a
-!> model without an internal isodensity cavity refuses a density
+!> A coupling minted by one model is refused by every other model, in the
+!> evaluation phases and in the build phase
    subroutine test_continuum_model_guards(error)
 
       !> Error handling
@@ -519,8 +519,6 @@ contains
       type(response_type) :: response
       !> Nuclear-gradient accumulator, must stay untouched
       real(wp), allocatable :: gradient(:, :)
-      !> Density matrix offered to a model that cannot take one
-      real(wp) :: density(1, 1)
       !> Energy accumulator, must stay untouched
       real(wp) :: energy
       !> Named fields fetched through the public model interface
@@ -629,17 +627,20 @@ contains
       if (allocated(error)) return
       call model_a%release_coupling(coupling)
 
-      density = 0.0_wp
-      call model_b%set_isodensity_density(density, err)
-      if (.not. allocated(err)) then
-         call test_failed(error, "iSwiG model accepted an isodensity density")
+      ! The build phase checks ownership too
+      call model_a%update(mol, err)
+      if (.not. allocated(err)) call model_a%new_coupling(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "Owner coupling failed: "//err%message)
          return
       end if
-      call check(error, index(err%message, "requires an internal isodensity cavity") > 0, &
-         & more="unexpected error message: "//err%message)
+      call model_b%prepare_build(coupling, err)
+      call check_foreign("prepare_build")
       if (allocated(error)) return
-      call check(error, .not. model_b%is_updated(), &
-         & more="a refused density left the model marked usable")
+      call model_b%build(coupling, err)
+      call check_foreign("build")
+      if (allocated(error)) return
+      call model_a%release_coupling(coupling)
 
    contains
 

@@ -271,6 +271,17 @@ def cavity_config(rho_iso=None):
     return DROP(lsf=lsf, parameters=DROPParameters(nleb=NLEB, tolerance=PROJ_TOL))
 
 
+def host_build(owner, host, coupling=None):
+    """Run the build phase of a cavity or model with the host's answers, as the driver does."""
+    if coupling is None:
+        coupling = owner.new_coupling()
+    owner.prepare_build(coupling)
+    for request in coupling:
+        host.answer_build(coupling, request)
+    owner.build(coupling)
+    return coupling
+
+
 def make_wall(mol, positions=None, *, dm, pressure=PRESSURE, rho_iso=None, parameters=None):
     """Host plus an evaluated GOSTSHYP driver ("wall") at ``dm``, optionally displaced."""
     if positions is not None:
@@ -566,7 +577,7 @@ def test_params_update_drops_the_previous_surfaces_moments():
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    _host, wall = make_wall(mol, dm=dm)
+    host, wall = make_wall(mol, dm=dm)
     before = wall.energy
     original_xyz = wall.model.cavity.xyz.copy()
     original_ngrid = wall.model.cavity.ngrid
@@ -574,7 +585,8 @@ def test_params_update_drops_the_previous_surfaces_moments():
     displaced = mol.atom_coords()
     displaced[0, 2] += 0.05
     numbers = np.asarray(mol.atom_charges(), dtype=np.int64)
-    wall.model.update(Structure(numbers, displaced, z_eff=numbers))
+    wall.model.update(Structure(numbers, displaced))
+    host_build(wall.model, host)
 
     # Vacuous unless the surface really moved while keeping its point count --
     # exactly the case a shape check cannot distinguish.
@@ -825,7 +837,8 @@ def test_gradient_surface_channel_matches_fd(system, basis):
         # The cavity moves; host.mol -- and hence the level set -- does not.
         # Only the callback can hold it: the internal density follows the structure.
         model = SolvationModel(CONTEXT, cavity_config().build(source=host), [ModelComponentGOSTSHYP(PRESSURE)])
-        model.update(Structure(numbers, displaced, z_eff=numbers))
+        model.update(Structure(numbers, displaced))
+        host_build(model, host)
         return component_energy(model, mol, dm), model.cavity.ngrid
 
     for index in sampled_coordinates(mol.natm):
@@ -1012,8 +1025,10 @@ def test_conventions_anchor_area_derivatives_sum_to_the_total():
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
-    cavity = cavity_config().build(source=host.internal_density(dm), context=CONTEXT)
+    host.dm = dm
+    cavity = cavity_config().build(basis=host.basis, context=CONTEXT)
     cavity.update(host.structure())
+    host_build(cavity, host)
 
     cavity.compute_anchor_gradient()
     anchor = cavity.get_anchor_gradient()

@@ -367,6 +367,9 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      !> Counts the snapshot records; unallocated ones are absent
+      integer, allocatable :: ngrid, natom
+
       call coupling_begin_registration(coupling)
       call coupling_set_scope(coupling, 0)
       call cavity%declare_coupling(coupling, error)
@@ -374,7 +377,8 @@ contains
       call coupling_set_scope(coupling, 1)
       call self%declare_coupling(cavity, coupling, error)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, ngrid=cavity%ngrid, natom=cavity%nsph)
+      call cavity%snapshot_counts(ngrid, natom)
+      call coupling_snapshot(coupling, ngrid=ngrid, natom=natom)
 
    end subroutine declare_component_pass
 
@@ -403,8 +407,10 @@ contains
 
    !> Stage one phase of a bare component's coupling
    !>
-   !> - energy starts a new host evaluation; later phases reuse valid raw
-   !>   answers
+   !> - energy starts a new host evaluation and drops every answer but those
+   !>   of the build phase; later phases reuse valid raw answers
+   !> - on a cavity without a surface the snapshot has no point count, so
+   !>   every grid output is refused
    !> - the coupling keeps no grid copy, so after changing the cavity the
    !>   caller must stage the energy phase before any later one
    !>
@@ -425,7 +431,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      if (phase == moist_phase_energy) call coupling_invalidate(coupling)
+      if (phase == moist_phase_energy) call coupling_invalidate(coupling, keep_build=.true.)
       call declare_component_pass(self, cavity, coupling, error)
       if (allocated(error)) return
       call coupling_arm(coupling, phase, error)

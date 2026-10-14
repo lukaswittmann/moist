@@ -30,7 +30,7 @@ def _model(components=None):
     model = moist.SolvationModel(CONTEXT, moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26),
                                                    context=CONTEXT),
                                 components or [moist.ModelComponentPV(1e-4)])
-    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1])
+    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
     model.update(structure)
     return model, structure
 
@@ -91,6 +91,7 @@ def test_cyclic_garbage_deletes_coupling_before_model(monkeypatch):
         delete = kind._delete
         monkeypatch.setattr(kind, "_delete", staticmethod(
             lambda handle, kind=kind, delete=delete: (order.append(kind), delete(handle))))
+    alive = set(library._COUPLING_PARENTS)
     gc.disable()
     try:
         for _ in range(8):
@@ -105,7 +106,7 @@ def test_cyclic_garbage_deletes_coupling_before_model(monkeypatch):
     assert order.count(library.CouplingHandle) == 8
     assert order.index(library.ModelHandle) > max(
         i for i, kind in enumerate(order) if kind is library.CouplingHandle)
-    assert not library._COUPLING_PARENTS
+    assert set(library._COUPLING_PARENTS) <= alive
 
 
 def test_independent_answers():
@@ -116,6 +117,13 @@ def test_independent_answers():
     ngrid = model.cavity.ngrid
     visited = []
     for request in coupling:
+        if isinstance(request, moist.NuclearChargesRequest):
+            # The PCM direct term
+            assert request.missing == {"z"}
+            with pytest.raises(ValueError, match=r"must have shape \(2,\)"):
+                coupling.answer(z=np.ones(3))
+            coupling.answer(z=np.ones(2))
+            continue
         visited.append(request)
         assert request.missing == {"phi", "dphi_dr", "dphi_dxi"}
         with pytest.raises(ValueError):
@@ -141,7 +149,7 @@ def test_independent_answers():
 @pytest.mark.parametrize("numbers", [[1.2], [1.], [True], [2**32+1], [0], [119]])
 def test_atomic_numbers_not_coerced(numbers):
     with pytest.raises(ValueError):
-        moist.Structure(numbers, [[0., 0., 0.]], z_eff=numbers)
+        moist.Structure(numbers, [[0., 0., 0.]])
 
 
 def test_response_without_pcm_has_no_potential_adjoint():
@@ -160,24 +168,26 @@ def test_native_strings():
         moist.get_banner("invalid")
 
 
-def test_internal_density_matches_callback_and_updates_model(gaussian_density):
+def test_internal_density_matches_callback_and_updates_model(gaussian_density, build_with):
+    """The density matrix answered in the build walk, not a constructor, drives the surface."""
     basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                                exponents=[.5], coefficients=[1.])
-    density = np.ones((1, 1))
-    source = moist.InternalDensity(basis, density)
-    density[:] = 9  # The source owns its input.
     config = moist.DROP(lsf=moist.Isodensity(), parameters=moist.DROPParameters(nleb=26))
-    cavity = config.build(source=source, context=CONTEXT)
+    cavity = config.build(basis=basis, context=CONTEXT)
     offsets, powers = cavity.isodensity_layout()
     np.testing.assert_array_equal(offsets, [0, 1])
     np.testing.assert_array_equal(powers, [[0, 0, 0]])
-    structure = moist.Structure([1], [[0., 0., 0.]], z_eff=[1])
+    structure = moist.Structure([1], [[0., 0., 0.]])
     reference = config.build(source=gaussian_density, context=CONTEXT)
     cavity.update(structure)
+    build_with(cavity, dcart=np.ones((1, 1)), z=[1.])
     reference.update(structure)
+    build_with(reference, z=[1.])
     np.testing.assert_allclose(cavity.xyz, reference.xyz, atol=1e-10)
     model = moist.SolvationModel(CONTEXT, cavity, [moist.ModelComponentPV(1e-4)])
     model.update(structure)
+    coupling = model.new_coupling()
+    build_with(model, dcart=np.ones((1, 1)), z=[1.], coupling=coupling)
     initial = _energy(model)
     weights = (np.zeros(cavity.ngrid), np.zeros(cavity.ngrid), np.ones((cavity.ngrid, 3)))
     standalone_weights = cavity.contract_surface_lsf_weights(*weights)
@@ -192,18 +202,17 @@ def test_internal_density_matches_callback_and_updates_model(gaussian_density):
     assert np.linalg.norm(raw_weights[1]) > 1e-6
     for actual, expected in zip(standalone_weights, raw_weights):
         np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-14)
-    source.density_matrix = [[2.]]
-    model.update(structure)
+    # A new density is a new build walk of the model; the standalone cavity stays
+    build_with(model, dcart=[[2.]], z=[1.], coupling=coupling)
     assert _energy(model) > initial
     for before, after in zip(standalone_weights, cavity.contract_surface_lsf_weights(*weights)):
         np.testing.assert_array_equal(before, after)
-    # The model updates its own copied cavity; no density aliases escape.
-    np.testing.assert_array_equal(source.density_matrix, [[2.]])
-    matrix = source.density_matrix
-    matrix[:] = 10
-    np.testing.assert_array_equal(source.density_matrix, [[2.]])
-    with pytest.raises(ValueError, match="shape"):
-        source.density_matrix = np.eye(2)
+    # The answer is sized by the basis
+    model.prepare_build(coupling)
+    for request in coupling:
+        if isinstance(request, moist.DensityMatrixRequest):
+            with pytest.raises(ValueError, match="shape"):
+                coupling.answer(dcart=np.eye(2))
 
 
 def test_c_field_shape_uses_row_major_order():
@@ -218,9 +227,8 @@ def test_c_field_shape_uses_row_major_order():
 def test_internal_basis_layout():
     basis = moist.GaussianBasis(shell_atom=[0, 0], shell_l=[0, 1], shell_nprim=[1, 1],
                                exponents=[.5, .5], coefficients=[1., 1.])
-    source = moist.InternalDensity(basis, np.diag([1., .1, .2, .3]))
     config = moist.DROP(lsf=moist.Isodensity(), parameters=moist.DROPParameters(nleb=26))
-    cavity = config.build(source=source, context=CONTEXT)
+    cavity = config.build(basis=basis, context=CONTEXT)
     offsets, powers = cavity.isodensity_layout()
     np.testing.assert_array_equal(offsets, [0, 1, 4])
     assert {tuple(row) for row in powers} == {(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)}
@@ -228,7 +236,7 @@ def test_internal_basis_layout():
 
 def test_diagnostic_contractions_match_explicit_anchor_tensors():
     cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
-    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1])
+    structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
     cavity.update(structure)
     cavity.assemble_amat()
     cavity.compute_cavity_gradient()
@@ -244,7 +252,7 @@ def test_diagnostic_contractions_match_explicit_anchor_tensors():
         xyz[1, 2] += shift
         moved = moist.CavityDROP(parameters=moist.DROPParameters(
             nleb=26, tolerance=FD_PROJECTION_TOL), context=CONTEXT)
-        moved.update(moist.Structure(structure.numbers, xyz, z_eff=structure.z_eff))
+        moved.update(moist.Structure(structure.numbers, xyz))
         matrix, _ = moved.assemble_amat()
         # Tighter projection can recover extra points. Keep the original
         # point IDs and fixed charges; extra points have zero charge.
@@ -278,7 +286,7 @@ def _gaussian_amat(xi, f, xyz):
 def test_amat_surface_weights_are_the_surface_derivatives_of_q1_a_q2():
     """The three weight channels are d(q1^T A q2) by xi, f and each point position."""
     cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
-    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]], z_eff=[1, 1]))
+    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]]))
     xi, f, xyz = cavity.get("xi0"), cavity.get("f"), cavity.get("xyz")
     # The written-out matrix has to be the one moist assembles, or the
     # differences below would test the transcription instead of moist.
@@ -349,20 +357,30 @@ def test_accumulator_buffer_guards(kind, invalid, monkeypatch):
 
 
 @pytest.mark.parametrize("invalid", ["nan", "infinity", "asymmetry"])
-def test_internal_density_rejects_invalid_values(invalid):
+def test_density_matrix_answer_rejects_invalid_values(invalid, build_with):
+    """A non-finite or asymmetric ``dcart`` stays missing; a valid retry builds."""
     basis = moist.GaussianBasis(shell_atom=[0], shell_l=[1], shell_nprim=[1],
                                exponents=[.5], coefficients=[1.])
-    source = moist.InternalDensity(basis, np.eye(3))
+    cavity = moist.DROP(lsf=moist.Isodensity(parameters=moist.IsodensityParameters(core_fill=False)),
+                        parameters=moist.DROPParameters(nleb=26)).build(basis=basis, context=CONTEXT)
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    coupling = cavity.new_coupling()
+    cavity.prepare_build(coupling)
     value = np.eye(3)
     if invalid == "asymmetry":
         value[0, 1] = .5
-        match = "symmetric"
+        error, match = ValueError, "symmetric"
     else:
         value[0, 0] = np.nan if invalid == "nan" else np.inf
-        match = "finite"
-    with pytest.raises(ValueError, match=match):
-        source.density_matrix = value
-    np.testing.assert_array_equal(source.density_matrix, np.eye(3))
+        error, match = RuntimeError, "finite"
+    for request in coupling:
+        assert isinstance(request, moist.DensityMatrixRequest)
+        assert request.missing == {"dcart"}
+        with pytest.raises(error, match=match):
+            coupling.answer(dcart=value)
+    with pytest.raises(RuntimeError, match="density_matrix: missing required outputs: dcart"):
+        cavity.build(coupling)
+    build_with(cavity, dcart=np.eye(3), coupling=coupling)
 
 
 @pytest.mark.parametrize("style, native_style", [

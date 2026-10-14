@@ -110,9 +110,10 @@ typedef struct moist_cavity_s* moist_cavity;
 /// Radii model class
 typedef struct moist_radii_s* moist_radii;
 
-/// Host coupling class: the request list of one solvation model, minted by
-/// moist_new_coupling and staged per phase by the moist_prepare_model_*
-/// entry points (see HOST COUPLING PROTOCOL below)
+/// Host coupling class: the request list of one solvation model or standalone
+/// cavity, minted by moist_new_coupling or moist_new_cavity_coupling and staged
+/// per phase by the moist_prepare_* entry points (see HOST COUPLING PROTOCOL
+/// below)
 typedef struct moist_coupling_s* moist_coupling;
 
 /// Response class: the host part of one phase, filled by the
@@ -122,9 +123,10 @@ typedef struct moist_response_s* moist_response;
 /// Requests, response items, outputs and arrays are identified by canonical
 /// NAME, never by a numeric tag or handle. Request names: "point_potential",
 /// "gaussian_potential", "gaussian_moments", "atomic_multipoles",
-/// "atomic_charges", "radial_potential"; their outputs: "phi", "dphi_dr",
-/// "dphi_dxi", "gt", "pt", "mt", "rt", "q", "mu", "theta"; request inputs:
-/// "width" ("gaussian_moments"). Response items: "potential_adjoint"
+/// "atomic_charges", "radial_potential", "nuclear_charges", "density_matrix";
+/// their outputs: "phi", "dphi_dr", "dphi_dxi", "gt", "pt", "mt", "rt", "q",
+/// "mu", "theta", "z", "dcart"; request inputs:
+/// "width" ("gaussian_moments"), "nbasis" ("density_matrix"). Response items: "potential_adjoint"
 /// ("w_phi"), "density" ("w_rho", "w_grad_rho", "w_hess_rho"),
 /// "gaussian_amplitude" ("w_overlap", "w_normal_deriv"),
 /// "atomic_multipole_adjoint" ("dg_dq", "dg_dmu", "dg_dtheta"),
@@ -160,7 +162,8 @@ typedef struct moist_response_s* moist_response;
 /// - 0 after writing every requested buffer
 /// - Nonzero reports evaluation failure: output buffers ignored, moist stops
 ///   calling the callback for the rest of the cavity build, unwinds its
-///   parallel evaluation loops, and fails the enclosing moist_update_cavity()
+///   parallel evaluation loops, and fails the enclosing moist_update_cavity(),
+///   moist_build_cavity(), moist_update_model() or moist_build_model()
 ///   with a moist_error naming the returned status
 /// - Only abort path from inside a callback; without it moist builds a
 ///   cavity from whatever is in the buffers
@@ -286,7 +289,7 @@ typedef struct {
     double rho_iso;
     double scale;
     moist_isodensity_basis basis;  /* Only read by moist_new_isodensity_lsf */
-    bool core_fill;  /* Fill ECP nuclei (z_eff < numbers) against density dips */
+    bool core_fill;  /* Fill ECP nuclei (nuclear charge z < atomic number) against density dips */
     double core_radius_fraction;  /* Fill radius as a fraction of the atom radius */
     /* --- end of 1.0 layout --- */
 } moist_isodensity_options;
@@ -447,13 +450,12 @@ moist_delete_error(moist_error* error) moist_API_SUFFIX__V_1_0;
 **/
 
 /// Create new molecular structure data (quantities in Bohr)
-/// numbers are the elements; z_eff the nuclear charges of the host Hamiltonian,
-/// numbers minus ECP core electrons (pass numbers for all-electron hosts)
+/// The structure holds element numbers and geometry only; the nuclear charges
+/// of the host Hamiltonian arrive through the "nuclear_charges" coupling request
 moist_API_ENTRY moist_structure moist_API_CALL
 moist_new_structure(moist_error error,
                     int natoms,
                     const int* numbers /* [natoms] */,
-                    const int* z_eff /* [natoms] */,
                     const double* positions /* : row-major (natoms, 3) */,
                     const double* lattice /* : row-major (3, 3), vectors in rows */,
                     const bool* periodic /* [3] */) moist_API_SUFFIX__V_1_0;
@@ -553,28 +555,55 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
 
 /* HOST COUPLING PROTOCOL
  *
- * The same six steps as the Fortran interface:
+ * The same steps as the Fortran interface:
  *
- * 1. Update the model, then mint a coupling with moist_new_coupling
- * 2. Stage a phase with moist_prepare_model_energy/response/gradient; energy
- *    clears all answers, response and gradient keep valid answers; every
- *    prepare starts a new walk over the requests
- * 3. Walk the requests that still miss an output with
+ * 1. Update the model with the structure, moist_update_model(err, model, mol);
+ *    it does everything that needs no host state. Mint a coupling with
+ *    moist_new_coupling, before or after; it survives later updates
+ * 2. Build phase, part of every host loop, after every update and for every
+ *    new density: moist_prepare_model_build(err, model, cpl) clears every
+ *    answer of cpl and stages the requests the build reads; walk and answer
+ *    them as in 4 and 5; moist_build_model(err, model, cpl) completes the
+ *    model. On a geometric cavity the walk is empty and the build changes
+ *    nothing, so a host never branches on the cavity type. Build-phase
+ *    requests:
+ *    - "density_matrix" ("dcart", nbasis x nbasis, symmetric) of an internal
+ *      isodensity cavity, in the cartesian-monomial basis of
+ *      moist_get_isodensity_cart_layout
+ *    - "nuclear_charges" ("z", one per atom) of an isodensity cavity with the
+ *      core fill on: the nuclear charges of the host Hamiltonian, atomic
+ *      numbers minus the core electrons an ECP replaces; an all-electron host
+ *      answers the atomic numbers
+ *    The callback isodensity level set is pulled point by point during the
+ *    surface construction and stays outside the coupling. Without core fill,
+ *    callbacks build during update; repeat the update for each new density.
+ *    A standalone cavity runs
+ *    moist_update_cavity, moist_prepare_cavity_build and moist_build_cavity
+ *    on a coupling from moist_new_cavity_coupling the same way
+ * 3. Stage a phase with moist_prepare_model_energy/response/gradient; energy
+ *    clears all answers except those of the build phase, response and
+ *    gradient keep valid answers; every prepare starts a new walk over the
+ *    requests. Before the build a deferring cavity holds no surface: no
+ *    component declares, grid outputs are refused for want of a point count
+ *    and get_* fails on its own.
+ *    PCM components ask for "nuclear_charges" in the gradient phase unless
+ *    the build phase already holds them
+ * 4. Walk the requests that still miss an output with
  *    `while (moist_next_coupling_request(err, cpl))`. Each such request is
  *    visited once per pass; false ends the pass and rewinds, so a second loop
  *    retries what is still missing; false also reports a failure, check err
  *    after the loop. Leaving the loop early resumes the pass at the next call
- * 4. For the current request, read its name, ask which outputs are missing,
+ * 5. For the current request, read its name, ask which outputs are missing,
  *    read the inputs it lists (moist_get_coupling_request_field_real, e.g.
  *    the "width" of "gaussian_moments"), compute the outputs on the model's
  *    grid -- read it with moist_get_model_field_real ("xyz", "xi0", ...),
  *    which works for every model family -- and submit each with
  *    moist_answer_coupling_request. A rejected output stays missing until a
  *    valid retry; the others survive
- * 5. Call the moist_get_model_* entry matching the staged phase; fails by
+ * 6. Call the moist_get_model_* entry matching the staged phase; fails by
  *    name on a wrong staging or any missing output, evaluation does not
  *    consume answers
- * 6. Walk the response with `while (moist_next_response_item(err, resp))`:
+ * 7. Walk the response with `while (moist_next_response_item(err, resp))`:
  *    every item present is visited once per pass. Read the current item's
  *    name, copy its arrays with moist_get_response_field_real (their shapes
  *    from moist_get_response_field_info) and contract them; stop on an item
@@ -615,25 +644,33 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  * complete the nuclear gradient. Going straight to the gradient phase there
  * drops that term silently
  *
- * - A model update invalidates all its couplings' answers, even if the grid
- *   size is unchanged; prepare again to refresh a coupling
- * - Host must prepare energy again for a new density, and also update a
- *   density-dependent cavity before preparing
- * - Release couplings before their model
+ * - A model update invalidates the answers of all its couplings, even if the
+ *   grid size is unchanged; a build invalidates every coupling but the one it
+ *   read, which keeps its build-phase answers until the next prepare_build
+ * - Host must prepare energy again for a new density, and also run the
+ *   build phase of a density-dependent cavity before preparing
+ * - Release couplings before their model or cavity
  * - Response arrays are independent copies; get_response/get_gradient clear
  *   the response once they accept the request, which also starts a new walk
  *   over its items; a rejected request, including an unimplemented theory,
  *   leaves it untouched
  */
-/// Mint a borrowed coupling after the model's first successful update
+/// Mint a borrowed coupling; needs an updated model
 /// Several couplings may coexist; every component declares its requests
 /// Coupling survives later model updates; the prepare_* entry points
-/// refresh it
+/// refresh it. Grid outputs are refused until the model is built
 moist_API_ENTRY moist_coupling moist_API_CALL
 moist_new_coupling(moist_error error,
                    moist_model model) moist_API_SUFFIX__V_1_0;
 
-/// Delete a coupling handle and release its model-owned collection
+/// Mint a borrowed coupling of a standalone cavity for its build phase
+/// Release it with moist_delete_coupling before the cavity. A model-owned
+/// cavity handle refuses: its model's coupling answers the build phase
+moist_API_ENTRY moist_coupling moist_API_CALL
+moist_new_cavity_coupling(moist_error error,
+                          moist_cavity cavity) moist_API_SUFFIX__V_1_0;
+
+/// Delete a coupling handle and release its model- or cavity-owned collection
 moist_API_ENTRY void moist_API_CALL
 moist_delete_coupling(moist_coupling* coupling) moist_API_SUFFIX__V_1_0;
 
@@ -645,7 +682,29 @@ moist_new_response(moist_error error) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL
 moist_delete_response(moist_response* response) moist_API_SUFFIX__V_1_0;
 
-/// Stage the energy phase: mark every answer stale and start a new walk
+/// Stage the build phase: clear every answer of the coupling and start a new
+/// walk over the requests the build reads; the atom count comes from the
+/// structure of the latest moist_update_model. A cavity that waits for its
+/// build phase drops its surface until the next build succeeds, and every
+/// coupling of the model loses its answers over it
+moist_API_ENTRY void moist_API_CALL
+moist_prepare_model_build(moist_error error,
+                          moist_model model,
+                          moist_coupling coupling) moist_API_SUFFIX__V_1_0;
+
+/// Complete a model from the build phase of a coupling staged by
+/// moist_prepare_model_build. Fails by name on a wrong staging or a missing
+/// required output. The coupling keeps its build-phase answers; every other
+/// coupling of the model is invalidated. Only a deferred cavity and its
+/// components are rebuilt
+moist_API_ENTRY void moist_API_CALL
+moist_build_model(moist_error error,
+                  moist_model model,
+                  moist_coupling coupling) moist_API_SUFFIX__V_1_0;
+
+/// Stage the energy phase: mark every answer but those of the build phase
+/// stale and start a new walk. On a cavity without a surface the snapshot
+/// has no point count, so grid outputs are refused
 moist_API_ENTRY void moist_API_CALL
 moist_prepare_model_energy(moist_error error,
                            moist_model model,
@@ -722,8 +781,11 @@ moist_get_coupling_request_missing(moist_error error, moist_coupling coupling, c
 
 /// Submit one named output of the current request. values is row-major
 /// (ngrid, dims...) on the cavity grid, with the output's leading extents:
-/// phi, dphi_dxi, gt: [ngrid]; dphi_dr, pt, rt: [ngrid][3]; mt: [ngrid][3][3].
-/// moist reads exactly that many values. An error when no request is current,
+/// phi, dphi_dxi, gt: [ngrid]; dphi_dr, pt, rt: [ngrid][3]; mt: [ngrid][3][3];
+/// per atom: q, z: [natom], mu: [natom][3], theta: [natom][3][3]; over the
+/// basis: dcart: [nbasis][nbasis], symmetric, with nbasis the request's own
+/// input "nbasis". moist reads exactly that many
+/// values. An error when no request is current,
 /// for an unknown output, a NULL buffer or a non-finite value. A rejected
 /// output stays missing until a valid retry; other outputs are unaffected
 moist_API_ENTRY void moist_API_CALL
@@ -734,8 +796,9 @@ moist_answer_coupling_request(moist_error error, moist_coupling coupling, const 
 ///
 /// A request kind may carry inputs its component chose, which the host reads
 /// and never recomputes: "gaussian_moments" lists "width" [ngrid], the
-/// Gaussian moment exponents in bohr**-2 -- not a cavity field. A kind
-/// without inputs lists none. Enumerate them with
+/// Gaussian moment exponents in bohr**-2 -- not a cavity field; "density_matrix"
+/// lists "nbasis", a scalar, both extents of "dcart". A kind without inputs
+/// lists none. Enumerate them with
 /// moist_get_coupling_request_field_count +
 /// moist_get_coupling_request_field_info, then read one by name; every input
 /// is MOIST_FIELD_REAL, and `dims` lists its extents slowest-varying first,
@@ -864,15 +927,18 @@ moist_get_response_field_real(moist_error error,
                               const char* name,
                               double* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
-/// Update a solvation model with a molecular structure
+/// Update a solvation model with a molecular structure: everything that needs
+/// no host state; a model whose cavity waits for host answers completes in
+/// the build phase. Invalidates every coupling of the model
 moist_API_ENTRY void moist_API_CALL
 moist_update_model(moist_error error,
-                             moist_model model,
-                             moist_structure mol) moist_API_SUFFIX__V_1_0;
+                   moist_model model,
+                   moist_structure mol) moist_API_SUFFIX__V_1_0;
 
 /// Get a borrowed cavity handle from a solvation model
 /// Valid as long as the parent model exists, but cannot be rebuilt
-/// independently: moist_update_cavity rejects borrowed handles
+/// independently: moist_update_cavity, moist_prepare_cavity_build,
+/// moist_build_cavity and moist_new_cavity_coupling reject borrowed handles
 /// Use moist_delete_cavity to release the handle (does NOT destroy the
 /// model's cavity); the handle retains the model's context until then
 moist_API_ENTRY moist_cavity moist_API_CALL
@@ -900,7 +966,10 @@ moist_delete_model(moist_model* model) moist_API_SUFFIX__V_1_0;
 /// allocate and call again. `shell_cart_offset` is 0-based (length nshell+1);
 /// `comp_lx/ly/lz` are the per-component monomial powers (length ncart)
 /// defining the ordering the host must match when building its density
-/// transform. Any of the output pointers may be NULL to skip it
+/// transform; the "density_matrix" request of the build phase runs over it.
+/// With moist_isodensity_basis_spherical, a density outside the span of the
+/// spherical functions (a host with cartesian basis functions) is refused.
+/// Any of the output pointers may be NULL to skip it
 moist_API_ENTRY void moist_API_CALL
 moist_get_isodensity_cart_layout(moist_error error,
                                  moist_cavity cavity,
@@ -910,23 +979,6 @@ moist_get_isodensity_cart_layout(moist_error error,
                                  int* comp_lx /* [ncart] */,
                                  int* comp_ly /* [ncart] */,
                                  int* comp_lz /* [ncart] */) moist_API_SUFFIX__V_1_0;
-
-/// Install the cartesian-monomial density matrix for the internal isodensity LSF
-/// `dcart` is the ncart-by-ncart density matrix, row-major (ncart, ncart): element
-/// (p,q) at `[p*ncart + q]`. Call before each moist_update_cavity
-/// With moist_isodensity_basis_spherical, a density outside the span of the
-/// spherical functions (a host with cartesian basis functions) is an error
-moist_API_ENTRY void moist_API_CALL
-moist_set_isodensity_density(moist_error error,
-                             moist_cavity cavity,
-                             int ncart,
-                             const double* dcart /* : row-major (ncart, ncart) */) moist_API_SUFFIX__V_1_0;
-
-/// Set density on a model owning an internal isodensity cavity; copies dcart
-/// Invalidates model results and every coupling of the model; call moist_update_model next
-moist_API_ENTRY void moist_API_CALL
-moist_set_model_isodensity_density(moist_error error, moist_model model, int ncart,
-                                   const double *dcart /* [ncart][ncart] */) moist_API_SUFFIX__V_1_0;
 
 /// Master numerical tolerance currently configured on a DROP cavity
 /// Reports an error for non-DROP cavity types
@@ -940,13 +992,37 @@ moist_get_drop_cavity_tolerance(moist_error error,
 **/
 
 /// Generic update cavity - works for all cavity types
+/// Everything that needs no host state; a geometric cavity is built
+/// afterwards, an isodensity cavity waiting for host answers completes in
+/// the build phase. Invalidates every coupling of the cavity
 moist_API_ENTRY void moist_API_CALL
 moist_update_cavity(moist_error error,
                     moist_cavity cavity,
                     moist_structure mol) moist_API_SUFFIX__V_1_0;
 
+/// Stage the build phase of a standalone cavity: clear every answer of the
+/// coupling (minted by moist_new_cavity_coupling) and start a new walk over
+/// the requests the build reads. A cavity that waits for its build phase
+/// drops its surface until the next build succeeds; its surface readers
+/// refuse it
+moist_API_ENTRY void moist_API_CALL
+moist_prepare_cavity_build(moist_error error,
+                           moist_cavity cavity,
+                           moist_coupling coupling) moist_API_SUFFIX__V_1_0;
+
+/// Complete a cavity of any type from the build phase of a coupling staged by
+/// moist_prepare_cavity_build. Fails by name on a wrong staging or a missing
+/// required output. The coupling keeps its build-phase answers; every other
+/// coupling of the cavity is invalidated. Only a deferred surface is rebuilt
+moist_API_ENTRY void moist_API_CALL
+moist_build_cavity(moist_error error,
+                   moist_cavity cavity,
+                   moist_coupling coupling) moist_API_SUFFIX__V_1_0;
+
 /// Get generic cavity sizes - works for all cavity types
 /// Returns ngrid (number of grid points) and nsph (number of spheres)
+/// Refuses a cavity that holds no surface, naming the build phase; its named
+/// fields then list only nsph, radii and sphxyz
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_sizes(moist_error error,
                        moist_cavity cavity,

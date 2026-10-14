@@ -413,6 +413,9 @@ contains
       ! plus the total volume PV's own lifecycle guards require
       cavity%ngrid = ngrid_sw
       cavity%nsph = 1
+      ! The hand-built surface counts as updated and built
+      cavity%updated = .true.
+      cavity%built = .true.
       allocate (cavity%sphxyz, source=xyz_mol)
       allocate (cavity%a, source=sw_areas)
       allocate (cavity%xi0, source=sw_xis)

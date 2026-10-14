@@ -32,14 +32,17 @@ options with the caller's ``sizeof`` before assigning fields:
    moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
    moist_add_model_component(error, model, pcm);  /* model owns a copy */
    moist_delete(pcm);
-   moist_structure mol = moist_new_structure(error, natoms, numbers, z_eff, positions,
+   moist_structure mol = moist_new_structure(error, natoms, numbers, positions,
                                              NULL, NULL);  /* NULL: molecular */
    moist_update_model(error, model, mol);
    moist_delete(mol);  /* the cavity and components copy the structure */
+   moist_coupling cpl = moist_new_coupling(error, model);
+   moist_prepare_model_build(error, model, cpl);
+   /* No build requests for this geometric cavity. */
+   moist_build_model(error, model, cpl);
 
-``numbers`` are the elements and ``z_eff`` the nuclear charges of the host
-Hamiltonian: the atomic numbers minus the core electrons an effective core
-potential replaces. Both are required; all-electron hosts pass ``numbers`` twice.
+The structure holds elements and geometry. Supply nuclear charges through
+the ``nuclear_charges`` request (:ref:`coupling-requests`).
 
 Add every component before the first ``moist_update_model``; later additions
 are rejected.
@@ -72,8 +75,8 @@ Ownership
 
 Each ``new_*`` handle has one owner. Constructors copy their configuration;
 assigning a handle creates an alias, not another owner. Delete couplings before
-their model. ``moist_get_model_cavity`` returns a borrowed cavity: it must not
-outlive the model, ``moist_update_cavity`` rejects it, and
+their model or cavity. ``moist_get_model_cavity`` returns a borrowed cavity:
+use its model for updates, builds and couplings. It must not outlive the model;
 ``moist_delete_cavity`` releases only the handle.
 Responses own their results. Callback functions and contexts must outlive every
 cavity or model using them.
@@ -131,14 +134,21 @@ See :doc:`coupling` for the host exchange protocol.
 Host coupling
 -------------
 
-Staging (``moist_prepare_model_energy``, ``moist_prepare_model_response``,
-``moist_prepare_model_gradient``) and evaluation (``moist_get_model_energy``,
-``moist_get_model_response``, ``moist_get_model_gradient``) take the model and
-the coupling; :doc:`coupling` describes the shared protocol. Requests and response
-items are reached through these entries (declaration macros omitted):
+Create a coupling after updating the model. Stage each phase with
+``moist_prepare_model_*``, then call ``moist_build_model`` or the matching
+``moist_get_model_*``; both take the model and coupling. See :doc:`coupling`
+for the protocol. The main entries are shown below (declaration macros omitted):
 
 .. code-block:: c
 
+   moist_coupling moist_new_coupling(moist_error error, moist_model model);
+   moist_coupling moist_new_cavity_coupling(moist_error error, moist_cavity cavity);
+   void moist_update_model(moist_error error, moist_model model, moist_structure mol);
+   void moist_prepare_model_build(moist_error error, moist_model model, moist_coupling coupling);
+   void moist_build_model(moist_error error, moist_model model, moist_coupling coupling);
+   void moist_update_cavity(moist_error error, moist_cavity cavity, moist_structure mol);
+   void moist_prepare_cavity_build(moist_error error, moist_cavity cavity, moist_coupling coupling);
+   void moist_build_cavity(moist_error error, moist_cavity cavity, moist_coupling coupling);
    bool moist_next_coupling_request(moist_error error, moist_coupling coupling);
    void moist_get_coupling_request_name(moist_error error, moist_coupling coupling,
                                         char* name);
@@ -189,8 +199,8 @@ does not have; ``moist_answer_coupling_request`` rejects that name.
 
 The field entries read request inputs and response arrays as :doc:`fields`,
 with the conventions of the model field getters; only real fields exist.
-``gaussian_moments`` declares ``width[ngrid]``; the other requests declare no
-field. ``_count`` and ``_info`` enumerate whatever the current item declares,
+``gaussian_moments`` declares ``width[ngrid]``; ``density_matrix`` declares
+``nbasis``, a real scalar giving both matrix dimensions. ``_count`` and ``_info`` enumerate whatever the current item declares,
 so ``count`` sizes a buffer for any item. The items of the
 :ref:`response table <coupling-response>` declare ``w_phi[ngrid]`` of
 ``potential_adjoint``; ``w_rho[ngrid]``, ``w_grad_rho[ngrid][3]`` and
@@ -325,7 +335,30 @@ header for each axis's meaning. The ``r_iI1_rA`` and ``rho1_rA`` outputs of
 ``moist_get_cavity_gradient`` accept ``NULL`` and exist only for a cavity
 built with ``do_fine``; asking for one that was not computed is an error.
 
-For internal isodensity models, ``moist_set_model_isodensity_density`` installs
-new density data on the owned cavity and invalidates model results and every
-coupling of the model. Follow it with ``moist_update_model``. The standalone
-``moist_set_isodensity_density`` is restricted to independently owned cavities.
+.. _isodensity-build-c:
+
+Build phase
+~~~~~~~~~~~
+
+The :ref:`coupling-build` for an internal isodensity model:
+
+.. code-block:: c
+
+   moist_update_model(err, model, mol);
+   moist_prepare_model_build(err, model, cpl);
+   while (moist_next_coupling_request(err, cpl)) {
+       char name[MOIST_NAME_MAX + 1];
+       moist_get_coupling_request_name(err, cpl, name);
+       if (strcmp(name, "density_matrix") == 0) {
+           /* dcart[nbasis][nbasis], symmetric, in the order of moist_get_isodensity_cart_layout;
+              nbasis is the request's input: moist_get_coupling_request_field_real(err, cpl, "nbasis", &n) */
+           moist_answer_coupling_request(err, cpl, "dcart", dcart);
+       } else if (strcmp(name, "nuclear_charges") == 0) {
+           /* z[natoms]: atomic numbers minus ECP core electrons */
+           moist_answer_coupling_request(err, cpl, "z", z);
+       }
+   }
+   moist_build_model(err, model, cpl);
+
+For a standalone cavity, use ``moist_new_cavity_coupling``,
+``moist_update_cavity``, ``moist_prepare_cavity_build`` and ``moist_build_cavity``.
