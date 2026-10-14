@@ -605,6 +605,7 @@ def test_optional_potential_spatial_contractions(with_spatial_weights):
         return np.full((2, 3), 5.0)
 
     solvation = object.__new__(PySCFSolvation)
+    solvation.context = CONTEXT
     solvation.mol = SimpleNamespace(nao=2, natm=2)
     solvation.model = SimpleNamespace(
         cavity=SimpleNamespace(xyz=np.zeros((2, 3))),
@@ -624,7 +625,7 @@ def test_optional_potential_spatial_contractions(with_spatial_weights):
     solvation._dm = np.eye(2)
     solvation.coupling = None
     solvation.evaluate = lambda dm: None
-    solvation._answer_requests = lambda: None
+    solvation._answer_requests = lambda phase: None
     np.testing.assert_array_equal(solvation._fock(solvation.response),
                                   np.full((2, 2), 5.0 if with_spatial_weights else 2.0))
     channels = solvation.gradient_channels(solvation._dm)
