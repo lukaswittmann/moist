@@ -21,28 +21,25 @@ MOIST Documentation
    :target: https://codecov.io/gh/lukaswittmann/moist
    :alt: Coverage
 
-
-
-Welcome to the documentation of `MOIST <moist_>`_, the Modular and Open-source Implicit Solvation Toolkit.
+Welcome to the documentation of `MOIST`_, the Modular and Open-source Implicit Solvation Toolkit.
 MOIST is a modular library designed to provide tools and methods from the field of implicit and statistical solvation for molecular quantum chemistry.
+
+For PySCF support and upcoming ORCA and TURBOMOLE integrations, see :doc:`integrations`.
 
 .. note::
 
    MOIST is currently in a pre-release state.
 
-.. _moist: https://github.com/lukaswittmann/moist 
-
-References
-----------
-
-.. bibliography::
-   :all:
-
+.. _moist: https://github.com/lukaswittmann/moist
 
 .. toctree::
+   :maxdepth: 2
+   :titlesonly:
 
    Models <models/index>
    Cavities <cavities/index>
+   Integrations <integrations>
    Recipes <recipe/index>
    API Reference <reference/index>
+   References <bibliography>
    Release Notes <changelog>

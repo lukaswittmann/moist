@@ -17,7 +17,12 @@
 
 <br clear="right">
 
-<img align="right" src="docs/_static/moist_portal_animated.svg" alt="Animated MOIST logo with a drop falling through portals" width="300">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/_static/dark_moist_animated.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/_static/white_moist_animated.svg">
+  <img align="right" src="docs/_static/white_moist_animated.svg" width="320">
+</picture>
+
 
 MOIST is a modular library for implicit solvation in molecular quantum chemistry, usable from Fortran, C, and Python. It provides modern, smooth and differentiable cavity construction schemes (vdW iSwiG, SvdW-DROP, and isodensity-DROP), efficient polarizable continuum models (PCMs), pressure models (GOSTSHYP), and statistical solvation models (Reference Interaction Site Model, RISM), all implemented with performance and differentiability in mind.
 
