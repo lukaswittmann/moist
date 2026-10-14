@@ -122,6 +122,45 @@ def test_context_prints_its_timer(capfd):
         context.print_timer(simple=1)
 
 
+def test_context_host_timers(capfd):
+    """Host timers print under ``Host``, stop innermost first and survive a raise."""
+    context = moist.Context(verbosity=4)
+    with context.timer("Outer"):
+        with context.timer("Inner"):
+            pass
+    with pytest.raises(ValueError):
+        with context.timer("Raises"):
+            raise ValueError
+    context.start_timer("A")
+    with pytest.raises(RuntimeError, match="innermost"):
+        context.stop_timer("B")
+    context.stop_timer("A")
+    with pytest.raises(RuntimeError, match="No host timer is open"):
+        context.stop_timer("A")
+    with pytest.raises(RuntimeError, match="exceeds 32 bytes"):
+        context.start_timer("x" * 33)
+    with pytest.raises(TypeError):
+        context.start_timer(1)
+    capfd.readouterr()
+    context.print_timer()
+    out = capfd.readouterr().out
+    for name in ("Host", "Outer", "Inner", "Raises", "A"):
+        assert name in out
+    assert "NaN" not in out
+
+
+def test_context_timer_keeps_the_block_exception():
+    """A stop failing while the block raises leaves the block's exception the one raised."""
+    context = moist.Context()
+    with pytest.raises(KeyError):
+        with context.timer("Outer"):
+            # left open, so stopping "Outer" fails as "not the innermost"
+            context.start_timer("Inner")
+            raise KeyError("host work failed")
+    context.stop_timer("Inner")
+    context.stop_timer("Outer")
+
+
 @pytest.mark.parametrize("config", [
     moist.DROP(lsf=moist.SvdW(), parameters=moist.DROPParameters(nleb=26)),
     moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26)),

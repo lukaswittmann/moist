@@ -30,6 +30,7 @@ module moist_api
    use moist_model_continuum_component_pv, only: model_continuum_component_pv, new_component_pv
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_timer, only: timer_name_len => name_len
    use moist_radii, only: radius_type, new_radii, radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -276,7 +277,7 @@ module moist_api
    public :: vp_error, vp_structure, vp_cavity, vp_radii, vp_model, vp_component
    public :: vp_coupling, vp_response, vp_context
    public :: new_context_api, delete_context_api, get_context_num_threads_api, print_context_timer_api, &
-      & print_context_timer_simple_api
+      & print_context_timer_simple_api, start_context_timer_api, stop_context_timer_api
    public :: create_drop_cavity_api, create_iswig_cavity_api, create_model_api
    public :: get_version_api, get_version_string_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
@@ -665,6 +666,95 @@ contains
       call c_f_pointer(handle, context)
       call context%ctx%timer%print_simple("moist")
    end subroutine print_context_timer_simple_api
+
+   !> Start a host timer on a context, under its `Host` timer node
+   !>
+   !> @param[in] verror diagnostic handle
+   !> @param[in] handle context handle
+   !> @param[in] c_name NUL-terminated timer name
+   subroutine start_context_timer_api(verror, handle, c_name) bind(C, name=namespace//"start_context_timer")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Context handle
+      type(c_ptr), value, intent(in) :: handle
+      !> NUL-terminated timer name
+      type(c_ptr), value, intent(in) :: c_name
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded context handle
+      type(vp_context), pointer :: context
+      !> Decoded timer name
+      character(len=:, kind=c_char), allocatable :: name
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(handle)) then
+         call api_error(error%ptr, "start_context_timer", "Context handle is missing")
+         return
+      end if
+      call api_timer_name(c_name, "start_context_timer", name, error%ptr)
+      if (allocated(error%ptr)) return
+      call c_f_pointer(handle, context)
+      call context%ctx%start_timer(name, error%ptr)
+      call prefix_api_error(error%ptr, "start_context_timer")
+   end subroutine start_context_timer_api
+
+   !> Stop the innermost open host timer of a context, which must carry the name
+   !>
+   !> @param[in] verror diagnostic handle
+   !> @param[in] handle context handle
+   !> @param[in] c_name NUL-terminated timer name
+   subroutine stop_context_timer_api(verror, handle, c_name) bind(C, name=namespace//"stop_context_timer")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Context handle
+      type(c_ptr), value, intent(in) :: handle
+      !> NUL-terminated timer name
+      type(c_ptr), value, intent(in) :: c_name
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded context handle
+      type(vp_context), pointer :: context
+      !> Decoded timer name
+      character(len=:, kind=c_char), allocatable :: name
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(handle)) then
+         call api_error(error%ptr, "stop_context_timer", "Context handle is missing")
+         return
+      end if
+      call api_timer_name(c_name, "stop_context_timer", name, error%ptr)
+      if (allocated(error%ptr)) return
+      call c_f_pointer(handle, context)
+      call context%ctx%stop_timer(name, error%ptr)
+      call prefix_api_error(error%ptr, "stop_context_timer")
+   end subroutine stop_context_timer_api
+
+   !> Decode a NUL-terminated timer name argument, reading at most
+   !> MOIST_NAME_MAX + 1 bytes
+   !>
+   !> - the bytes pass unchanged; the context checks the name, so the rules
+   !>   and their messages are the same in every language
+   !> - a name without a terminator in that span arrives as MOIST_NAME_MAX + 1
+   !>   bytes, which the context's length rule rejects
+   subroutine api_timer_name(c_name, routine, name, error)
+      !> NUL-terminated name
+      type(c_ptr), intent(in) :: c_name
+      !> Calling entry point
+      character(len=*), intent(in) :: routine
+      !> Decoded name
+      character(len=:, kind=c_char), allocatable, intent(out) :: name
+      !> Missing name
+      type(error_type), allocatable, intent(out) :: error
+      if (.not. c_associated(c_name)) then
+         call api_error(error, routine, "Timer name is missing")
+         return
+      end if
+      call c_f_character_ptr(c_name, name, timer_name_len + 1)
+   end subroutine api_timer_name
 
    !> Retain a shared run context for a new cavity, component or model
    !>

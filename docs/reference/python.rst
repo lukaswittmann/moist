@@ -49,6 +49,9 @@ output (:ref:`levels <verbosity>`) and leave the debug stream off; a negative th
 count raises. Everything built on a context retains it.
 ``context.print_timer()`` prints the recorded timings on the process standard
 output; ``context.print_timer(simple=True)`` prints the compact form.
+``with context.timer(name):`` times host work under the report's ``Host`` node
+(:ref:`rules <api-context>`); ``context.start_timer`` and ``context.stop_timer``
+are the unpaired form.
 
 ``SolvationModel(context, cavity, components)`` requires the context as its first argument.
 Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one

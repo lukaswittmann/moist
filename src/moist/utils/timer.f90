@@ -17,8 +17,9 @@
 !>   * handle-based `start(id)` / `stop(id)`, with `id` obtained once from
 !>     `resolve`, skips the hash lookup and the stack; use it inside hot loops
 !>
-!> Any timer left running at report time, or closed by a mismatched
-!> `stop("name")`, is poisoned and rendered as NaN
+!> A timer closed by a mismatched `stop("name")`, started while running or
+!> stopped without a start is poisoned and rendered as NaN; a report shows a
+!> timer that is still running as `running` and leaves it measuring
 !>
 !> FIXME: TODO: the timer is NOT thread-safe; inside OpenMP regions gate
 !> start/stop to a single thread (see cavity/drop/gradient.f90)
@@ -30,30 +31,32 @@ module moist_utils_timer
    implicit none(type, external)
    private
 
-   public :: timer_type
-   public :: cat_none, cat_setup, cat_energy, cat_potential, cat_gradient, &
-             cat_hessian, cat_solve, cat_properties, cat_io
+   public :: timer_type, name_len
+   public :: cat_none, cat_setup, cat_build, cat_energy, cat_potential, cat_gradient, &
+             cat_hessian, cat_solve, cat_properties, cat_io, cat_host
 
-   !> Timer categories: an orthogonal tag summed across the module tree at
-   !> report time; a node inherits its parent's category unless one is given
+   !> Moist internal timer categories
    integer, parameter :: cat_none = 0
    integer, parameter :: cat_setup = 1
-   integer, parameter :: cat_energy = 2
-   integer, parameter :: cat_potential = 3
-   integer, parameter :: cat_gradient = 4
-   integer, parameter :: cat_hessian = 5
-   integer, parameter :: cat_solve = 6
-   integer, parameter :: cat_properties = 7
-   integer, parameter :: cat_io = 8
+   integer, parameter :: cat_build = 2
+   integer, parameter :: cat_energy = 3
+   integer, parameter :: cat_potential = 4
+   integer, parameter :: cat_gradient = 5
+   integer, parameter :: cat_hessian = 6
+   integer, parameter :: cat_solve = 7
+   integer, parameter :: cat_properties = 8
+   integer, parameter :: cat_io = 9
+   !> Host-side timers
+   integer, parameter :: cat_host = 10
 
    !> Number of named categories
-   integer, parameter :: ncat = 8
+   integer, parameter :: ncat = 10
 
    !> Human-readable category labels (index 0 = uncategorized, never in pivot)
    character(len=12), parameter :: cat_label(0:ncat) = [character(len=12) :: &
-                                                        "n/a", "Setup", "Energy", "Potential", &
+                                                        "n/a", "Setup", "Build", "Energy", "Potential", &
                                                         "Gradient", "Hessian", "Solve", &
-                                                        "Properties", "I/O"]
+                                                        "Properties", "I/O", "Host"]
 
    !> Maximum stored length of a timer name
    integer, parameter :: name_len = 32
@@ -757,7 +760,7 @@ contains
    !>
    !> - a module tree with per-node share and call counts, an "(other)" remainder
    !>   per parent, a category-pivot summary and a wall/CPU footer
-   !> - any timer still open is poisoned and shown as NaN
+   !> - a timer still open is shown as `running`; the report changes no timer
    !> - the tree is drawn with Unicode box-drawing guides and a fixed,
    !>   header-labelled column layout
    !> - percentages are against the run total ("%tot"), so every row shares one
@@ -789,11 +792,6 @@ contains
 
       depth_cap = huge(1)
       if (present(max_depth)) depth_cap = max_depth
-
-      ! poison anything still open: reaching a report with an open timer is a bug
-      do i = 1, self%n
-         if (self%running(i)) self%poisoned(i) = .true.
-      end do
 
       total_sec = self%get()
       call cpu_time(cpu_now)
@@ -834,7 +832,7 @@ contains
       cat_sec = 0.0_wp
       do i = 1, self%n
          if (self%category(i) == cat_none) cycle
-         if (self%poisoned(i) .or. self%ncalls(i) == 0) cycle
+         if (self%poisoned(i) .or. self%running(i) .or. self%ncalls(i) == 0) cycle
          if (self%parent(i) == 0) then
             cat_sec(self%category(i)) = cat_sec(self%category(i)) + node_seconds(self, i)
          else if (self%category(self%parent(i)) /= self%category(i)) then
@@ -926,7 +924,7 @@ contains
    !> - no shares, call counts, category pivot or CPU time
    !> - at most `simple_depth` (2) levels below the top level; deeper nodes fold
    !>   into their ancestor's total
-   !> - any timer still open is poisoned and shown as NaN
+   !> - a timer still open is shown as `running`; the report changes no timer
    !>
    !> @param[inout] self       Timer instance
    !> @param[in]    iunit      Output unit
@@ -951,11 +949,6 @@ contains
 
       depth_cap = simple_depth
       if (present(max_depth)) depth_cap = min(max_depth, simple_depth)
-
-      ! poison anything still open: reaching a report with an open timer is a bug
-      do i = 1, self%n
-         if (self%running(i)) self%poisoned(i) = .true.
-      end do
 
       total_sec = self%get()
 
@@ -1037,7 +1030,11 @@ contains
          sect = prefix//tg_branch//trim(self%names(id))
       end if
 
-      write (numbuf, '(f13.4,f9.2,i9,"x")') sec, pct, self%ncalls(id)
+      if (self%running(id)) then
+         write (numbuf, '(a13,9x,i9,"x")') "running", self%ncalls(id)
+      else
+         write (numbuf, '(f13.4,f9.2,i9,"x")') sec, pct, self%ncalls(id)
+      end if
       write (iunit, "(1x,a)") pad_disp(sect, sect_w)//numbuf(1:32)
 
       ! at the depth cap, fold all descendants into this node (show total only)
@@ -1124,11 +1121,18 @@ contains
       real(wp) :: rem
       integer :: j
       logical :: show_other
+      ! value cell of an open timer, as wide as `simple_fmt`
+      character(len=13) :: cell
 
       ! skip nodes that were never measured (created via resolve but unused)
       if (self%ncalls(id) == 0 .and. .not. self%poisoned(id)) return
 
-      call pp%kv(trim(self%names(id)), node_seconds(self, id), "s", fmt=simple_fmt)
+      if (self%running(id)) then
+         cell = "running"
+         call pp%kv(trim(self%names(id)), adjustr(cell))
+      else
+         call pp%kv(trim(self%names(id)), node_seconds(self, id), "s", fmt=simple_fmt)
+      end if
 
       ! at the depth cap, fold all descendants into this node (show total only)
       if (depth >= max_depth) return
@@ -1147,9 +1151,9 @@ contains
    !> Time of a node not attributed to any of its printable children, and whether
    !> it is worth an "(other)" row
    !>
-   !> - only surfaced when the node has printable children, is balanced, and the
-   !>   remainder is a meaningful slice of the run (> 0.1%); tiny leftovers just
-   !>   clutter the tree
+   !> - only surfaced when the node has printable children, is balanced and
+   !>   closed, and the remainder is a meaningful slice of the run (> 0.1%);
+   !>   tiny leftovers just clutter the tree
    !>
    !> @param[in]  self       Timer instance
    !> @param[in]  id         Node index
@@ -1173,7 +1177,7 @@ contains
 
       show = .false.
       rem = 0.0_wp
-      if (self%poisoned(id)) return
+      if (self%poisoned(id) .or. self%running(id)) return
 
       nkids = 0
       child_sum = 0.0_wp
@@ -1181,7 +1185,7 @@ contains
          if (self%parent(j) /= id) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          nkids = nkids + 1
-         if (.not. self%poisoned(j)) child_sum = child_sum + node_seconds(self, j)
+         if (.not. (self%poisoned(j) .or. self%running(j))) child_sum = child_sum + node_seconds(self, j)
       end do
       if (nkids == 0) return
 

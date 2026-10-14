@@ -1,6 +1,8 @@
 !> Test suite for the shared run context in moist_context
 module test_utils_context
-   use mctc_env, only: wp
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+   use, intrinsic :: iso_fortran_env, only: int64
+   use mctc_env, only: wp, host_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
    use moist_context, only: moist_context_type, new_context
@@ -23,6 +25,11 @@ contains
                   new_unittest("profile_flag", test_profile_flag), &
                   new_unittest("report_depth", test_report_depth), &
                   new_unittest("timer_print", test_timer_print), &
+                  new_unittest("host_timer_group", test_host_timer_group), &
+                  new_unittest("host_timer_balance", test_host_timer_balance), &
+                  new_unittest("host_timer_category", test_host_timer_category), &
+                  new_unittest("host_timer_print_open", test_host_timer_print_open), &
+                  new_unittest("host_timer_names", test_host_timer_names), &
                   new_unittest("threads_default", test_threads_default), &
                   new_unittest("threads_explicit", test_threads_explicit), &
                   new_unittest("threads_fixed", test_threads_fixed), &
@@ -251,6 +258,227 @@ contains
       end do
       close (iu)
    end subroutine print_nested_timer
+
+   !> Host timers land under `Host` and nest only among themselves: a moist timer
+   !> started inside a host frame stays top level, a host timer started inside a
+   !> moist frame still lands under `Host`
+   subroutine test_host_timer_group(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(host_error_type), allocatable :: err
+
+      call new_context(ctx, nthreads=0)
+      call ctx%start_timer("Coupling", err)
+      if (.not. allocated(err)) call ctx%timer%start("Setup")
+      if (.not. allocated(err)) call ctx%start_timer("potential", err)
+      if (.not. allocated(err)) call ctx%stop_timer("potential", err)
+      if (.not. allocated(err)) call ctx%timer%stop("Setup")
+      if (.not. allocated(err)) call ctx%stop_timer("Coupling", err)
+      call check(error,.not. allocated(err), "balanced host timers are accepted")
+      if (allocated(error)) return
+
+      call check(error, node_depth_of(ctx, "Host") == 0, "Host is a top-level node")
+      if (allocated(error)) return
+      call check(error, node_depth_of(ctx, "Setup") == 0, "moist timer stays top level in a host frame")
+      if (allocated(error)) return
+      call check(error, node_depth_of(ctx, "Coupling") == 1, "host timer lands under Host")
+      if (allocated(error)) return
+      call check(error, node_depth_of(ctx, "potential") == 2, "host timer in a moist frame stays under Host")
+      if (allocated(error)) return
+      call check(error, ctx%timer%get("Host/Coupling/potential") >= 0.0_wp, "nested host path resolves")
+      if (allocated(error)) return
+      call check(error,.not. ieee_is_nan(ctx%timer%get("Host")), "closing the last host timer stops Host")
+      call ctx%delete()
+   end subroutine test_host_timer_group
+
+   !> A stop must name the innermost open host timer; a rejected call changes nothing
+   subroutine test_host_timer_balance(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(host_error_type), allocatable :: err
+
+      call new_context(ctx, nthreads=0)
+      call ctx%stop_timer("A", err)
+      call check(error, allocated(err), "stop without an open host timer is refused")
+      if (allocated(error)) return
+
+      call ctx%start_timer("", err)
+      call check(error, allocated(err), "empty name is refused")
+      if (allocated(error)) return
+      call ctx%start_timer(repeat("x", 33), err)
+      call check(error, allocated(err), "name past 32 characters is refused")
+      if (allocated(error)) return
+      call check(error, ctx%timer%num_nodes() == 0, "refused starts create no node")
+      if (allocated(error)) return
+
+      call ctx%start_timer(repeat("x", 32), err)
+      call check(error,.not. allocated(err), "32-character name is accepted")
+      if (allocated(error)) return
+      call ctx%stop_timer(repeat("x", 32), err)
+      call check(error,.not. allocated(err), "32-character name stops")
+      if (allocated(error)) return
+
+      call ctx%start_timer("A", err)
+      if (.not. allocated(err)) call ctx%start_timer("B", err)
+      call check(error,.not. allocated(err), "nested host timers start")
+      if (allocated(error)) return
+      call ctx%stop_timer("A", err)
+      call check(error, allocated(err), "stop of an outer host timer is refused")
+      if (allocated(error)) return
+      call ctx%stop_timer("B", err)
+      if (.not. allocated(err)) call ctx%stop_timer("A", err)
+      call check(error,.not. allocated(err), "the refused stop left the stack intact")
+      if (allocated(error)) return
+      call ctx%stop_timer("A", err)
+      call check(error, allocated(err), "a closed host timer cannot stop again")
+      if (allocated(error)) return
+
+      call check(error,.not. ieee_is_nan(ctx%timer%get("Host/A/B")), "balanced timers are not poisoned")
+      call ctx%delete()
+   end subroutine test_host_timer_balance
+
+   !> The report sums host time under its own `Host` category
+   subroutine test_host_timer_category(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(host_error_type), allocatable :: err
+      integer :: iu, stat
+      character(256) :: line
+      logical :: in_pivot, host_category
+      integer(int64) :: tick0, tick
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the timer report opens")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0, verbosity=4, unit=iu)
+      call ctx%start_timer("Fock build", err)
+      ! the pivot lists only categories with time, so let the clock tick once
+      call system_clock(tick0)
+      do
+         call system_clock(tick)
+         if (tick /= tick0) exit
+      end do
+      if (.not. allocated(err)) call ctx%stop_timer("Fock build", err)
+      call ctx%timer%print()
+      call ctx%delete()
+      call check(error,.not. allocated(err), "host timer runs")
+      if (allocated(error)) then
+         close (iu)
+         return
+      end if
+
+      in_pivot = .false.
+      host_category = .false.
+      rewind (iu)
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "by category") > 0) in_pivot = .true.
+         if (in_pivot) host_category = host_category .or. adjustl(line(1:12)) == "Host"
+      end do
+      close (iu)
+      call check(error, host_category, "host time appears under the Host category")
+   end subroutine test_host_timer_category
+
+   !> A report printed while a host timer is open leaves it and `Host` measuring
+   subroutine test_host_timer_print_open(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(host_error_type), allocatable :: err
+      integer :: iu, stat
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the timer report opens")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0)
+      call ctx%start_timer("A", err)
+      if (.not. allocated(err)) call ctx%timer%write(iu)
+      if (.not. allocated(err)) call ctx%stop_timer("A", err)
+      close (iu)
+      call check(error,.not. allocated(err), "a host timer stops after a report")
+      if (allocated(error)) return
+      call check(error,.not. ieee_is_nan(ctx%timer%get("Host/A")), "the report left the host timer measuring")
+      if (allocated(error)) return
+      call check(error,.not. ieee_is_nan(ctx%timer%get("Host")), "the report left Host measuring")
+      call ctx%delete()
+   end subroutine test_host_timer_print_open
+
+   !> Every byte of a host timer name counts: 1 to 32 bytes of UTF-8, no control
+   !> character, no leading or trailing space, for a start and a stop alike
+   subroutine test_host_timer_names(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(host_error_type), allocatable :: err
+      !> UTF-8 encodings of U+00E9, U+20AC and U+1F600
+      character(len=*), parameter :: e_acute = achar(195)//achar(169), &
+         & euro = achar(226)//achar(130)//achar(172), &
+         & smiley = achar(240)//achar(159)//achar(152)//achar(128)
+
+      call new_context(ctx, nthreads=0)
+      call refuse("", "empty")
+      call refuse(repeat("x", 32)//"  ", "exceeds 32 bytes")
+      call refuse(repeat(e_acute, 17), "exceeds 32 bytes")
+      call refuse(" A", "space")
+      call refuse("A ", "space")
+      call refuse("A"//achar(9)//"B", "control")
+      call refuse("A"//achar(0), "control")
+      call refuse("A"//achar(194)//achar(133), "control")
+      call refuse(achar(233), "UTF-8")
+      call refuse(achar(195), "UTF-8")
+      call refuse(achar(192)//achar(129), "UTF-8")
+      call refuse(achar(224)//achar(128)//achar(128), "UTF-8")
+      call refuse(achar(237)//achar(160)//achar(128), "UTF-8")
+      call refuse(achar(244)//achar(144)//achar(128)//achar(128), "UTF-8")
+      if (allocated(error)) return
+      call check(error, ctx%timer%num_nodes() == 0, "refused names create no node")
+      if (allocated(error)) return
+
+      call ctx%start_timer(repeat(e_acute, 16), err)
+      call check(error,.not. allocated(err), "32 bytes of UTF-8 are accepted")
+      if (allocated(error)) return
+      call ctx%start_timer("A"//euro//smiley, err)
+      call check(error,.not. allocated(err), "three- and four-byte characters are accepted")
+      if (allocated(error)) return
+      call ctx%stop_timer("A"//euro//smiley//" ", err)
+      call check(error, allocated(err), "a stop with a trailing space is refused")
+      if (allocated(error)) return
+      call ctx%stop_timer("A"//euro//smiley, err)
+      if (.not. allocated(err)) call ctx%stop_timer(repeat(e_acute, 16), err)
+      call check(error,.not. allocated(err), "the refused stop left the timers open")
+      call ctx%delete()
+
+   contains
+
+      !> Check that a start with `name` is refused by the rule named in `rule`
+      subroutine refuse(name, rule)
+         character(len=*), intent(in) :: name, rule
+
+         if (allocated(error)) return
+         call ctx%start_timer(name, err)
+         call check(error, allocated(err), "invalid host timer name is refused: "//rule)
+         if (allocated(error)) return
+         call check(error, index(err%message, rule) > 0, "refusal names the rule '"//rule//"', got: "//err%message)
+      end subroutine refuse
+
+   end subroutine test_host_timer_names
+
+   !> Depth of the first timer node with a name, -1 when absent
+   !>
+   !> @param[in] ctx   context holding the timer
+   !> @param[in] name  node name
+   integer function node_depth_of(ctx, name) result(depth)
+      type(moist_context_type), intent(in) :: ctx
+      character(*), intent(in) :: name
+      integer :: id
+
+      depth = -1
+      do id = 1, ctx%timer%num_nodes()
+         if (ctx%timer%node_name(id) == name) then
+            depth = ctx%timer%node_depth(id)
+            return
+         end if
+      end do
+   end function node_depth_of
 
    !> A fresh context reports at least one thread (1 without OpenMP), and records
    !> a start timestamp

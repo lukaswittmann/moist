@@ -587,6 +587,45 @@ def test_the_driver_stops_on_an_item_it_cannot_contract():
 
 
 @pytest.mark.conventions
+def test_the_driver_times_its_host_work(capfd):
+    """Every coupling phase and contraction is timed under ``Host``."""
+    context = Context(verbosity=4)
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(
+        mol, ISwiG(parameters=ISwiGParameters(nleb=26)), [ModelComponentCPCM(EPSILON)],
+        context=context)
+    solvation.gradient(dm)
+    capfd.readouterr()
+    context.print_timer()
+    out = capfd.readouterr().out
+    for name in ("Host", "Build coupling", "Energy coupling", "Response coupling",
+                 "Gradient coupling", "Fock build", "Gradient contraction",
+                 "gaussian_potential", "potential_adjoint"):
+        assert name in out
+    assert "NaN" not in out
+
+
+@pytest.mark.isodensity
+@pytest.mark.cpcm
+def test_the_build_phase_is_timed_as_build(capfd):
+    """The isodensity projection and the PCM setup run under the model's ``Build`` node,
+    which the category summary lists as ``Build``."""
+    context = Context(verbosity=4)
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=context)
+    solvation.evaluate(dm)
+    capfd.readouterr()
+    context.print_timer()
+    lines = capfd.readouterr().out.splitlines()
+    assert any(line.startswith(" Build ") for line in lines)
+    for name in ("Projector", "PCM setup"):
+        assert any(line.startswith((f" ├─ {name} ", f" └─ {name} ")) for line in lines)
+        assert not any(line.startswith(f" {name} ") for line in lines)
+    summary = lines[lines.index(" by category"):]
+    assert any(line.startswith(" Build ") for line in summary)
+
+
+@pytest.mark.conventions
 def test_pv_alone_makes_the_fock_purely_level_set():
     """With no electrostatic component the whole Fock is the ``lsf`` contraction.
 

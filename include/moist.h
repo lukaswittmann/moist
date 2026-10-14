@@ -216,6 +216,28 @@ moist_print_context_timer(moist_error error,
 moist_API_ENTRY void moist_API_CALL
 moist_print_context_timer_simple(moist_error error,
                                  moist_context context) moist_API_SUFFIX__V_1_0;
+/// Host timers: time the host's own work in the context's timer report
+/// - Every host timer lands under a top-level "Host" node, apart from moist's
+///   own timers: neither ever nests under the other. "Host" runs while any
+///   host timer is open and carries the "Host" category of the report
+/// - Host timers nest among themselves; a stop names the innermost open one
+///   and anything else is an error that stops nothing
+/// - Time only host work: moist calls made with a host timer open are counted
+///   both there and in moist's own timers
+/// - A name has 1 to MOIST_NAME_MAX bytes of UTF-8 (an ASCII character takes
+///   one, any other two to four), no control character and no leading or
+///   trailing space; a repeated name under the same parent accumulates into
+///   one node
+/// - Stop on failure paths too, into a separate moist_error: every call
+///   replaces the diagnostic it is given, so reusing the failed one loses it
+/// - Serialized with every other call on the context; never from a callback
+moist_API_ENTRY void moist_API_CALL
+moist_start_context_timer(moist_error error, moist_context context,
+                          const char* name) moist_API_SUFFIX__V_1_0;
+/// Stop the innermost open host timer, which must carry `name`
+moist_API_ENTRY void moist_API_CALL
+moist_stop_context_timer(moist_error error, moist_context context,
+                         const char* name) moist_API_SUFFIX__V_1_0;
 
 /* Options: pass NULL to a constructor for defaults, or initialize with
  * moist_init_*_options(error, &options, sizeof options) before overriding fields

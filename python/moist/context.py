@@ -1,5 +1,8 @@
 """Shared run settings and native context lifetime."""
 
+from contextlib import contextmanager, suppress
+from typing import Iterator
+
 from . import library
 
 
@@ -37,6 +40,41 @@ class Context:
         if not isinstance(simple, bool):
             raise TypeError("simple must be a bool")
         library.print_context_timer(self._handle, simple)
+
+    @contextmanager
+    def timer(self, name: str) -> Iterator[None]:
+        """Time the enclosed host work as ``name`` in this context's timer report.
+
+        Every host timer lands under a top-level ``Host`` node, apart from
+        moist's own timers, and nests only inside other host timers.  Time
+        only host work: a moist call inside the block is counted both here
+        and in moist's own timers.  A repeated name under the same parent
+        accumulates into one node.  The timer stops even when the block
+        raises, and that exception stays the one raised: a failing stop does
+        not replace it.
+
+        A name has 1 to 32 bytes of UTF-8, no control character and no leading
+        or trailing space. A non-``str`` raises
+        :class:`TypeError`, a NUL or an unencodable character
+        :class:`ValueError`, and a name breaking the other rules
+        :class:`RuntimeError`.
+        """
+        self.start_timer(name)
+        try:
+            yield
+        except BaseException:
+            with suppress(RuntimeError):
+                self.stop_timer(name)
+            raise
+        self.stop_timer(name)
+
+    def start_timer(self, name: str) -> None:
+        """Start the host timer ``name`` (rules as in :meth:`timer`); prefer :meth:`timer`."""
+        library.start_context_timer(self._handle, name)
+
+    def stop_timer(self, name: str) -> None:
+        """Stop the innermost open host timer, which must be ``name``; anything else raises."""
+        library.stop_context_timer(self._handle, name)
 
     def _as_handle(self) -> library.ContextHandle:
         return self._handle

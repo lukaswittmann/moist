@@ -10,7 +10,10 @@
 !>   * `verbosity` - the project-wide output level, see below,
 !>   * `debug`     - the debug-stream flag; it raises `verbosity` to 6,
 !>   * `timer`     - the profiling timer; because the context is shared by
-!>     pointer, every borrower appends into this one timer tree
+!>     pointer, every borrower appends into this one timer tree; the host
+!>     times its own work through the context's `start_timer`/`stop_timer`,
+!>     under a top-level `Host` node, never through `timer%start`/`timer%stop`,
+!>     which belong to moist's own nodes
 !>
 !> Verbosity levels; a host calls moist once per SCF iteration and geometry
 !> step, so each level also bounds how often it prints:
@@ -25,13 +28,17 @@
 !>
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
-   use moist_utils_timer, only: timer_type
+   use mctc_env, only: error_type, fatal_error
+   use moist_utils_timer, only: timer_type, timer_name_len => name_len, cat_host
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 !$ use omp_lib, only: omp_get_max_threads
    implicit none(type, external)
    private
 
    public :: moist_context_type, new_context, resolve_num_threads
+
+   !> Top-level timer node that groups every host timer
+   character(len=*), parameter :: host_group = "Host"
 
    !> Shared run context: owned at the top level, borrowed by every model/cavity
    type :: moist_context_type
@@ -67,6 +74,11 @@ module moist_context
       integer :: io_stat = 0
       !> Central profiling timer; every borrower appends into this one tree
       type(timer_type) :: timer
+      !> Open host timer nodes, the `Host` group first; a stack apart from the
+      !> timer's own, so host and moist nodes never nest into each other
+      integer, allocatable, private :: host_frames(:)
+      !> Number of open host timer nodes, `Host` included
+      integer, private :: nhost = 0
    contains
       !> Tear down the owned timer and close any owned files
       procedure :: delete => delete_context
@@ -90,6 +102,11 @@ module moist_context
       procedure :: print_settings => context_print_settings
       !> Maximum timing-tree depth to print for the current verbosity
       procedure :: report_depth => context_report_depth
+      !> Start a host timer under the `Host` node; a host uses this, never
+      !> `timer%start`, which nests into moist's own nodes
+      procedure :: start_timer => context_start_timer
+      !> Stop the innermost open host timer by name
+      procedure :: stop_timer => context_stop_timer
    end type moist_context_type
 
 contains
@@ -203,6 +220,8 @@ contains
       end if
 
       call self%timer%delete()
+      self%nhost = 0
+      if (allocated(self%host_frames)) deallocate (self%host_frames)
 
    end subroutine delete_context
 
@@ -253,6 +272,181 @@ contains
       end if
 
    end function context_report_depth
+
+   !> Start a host timer: a node under the top-level `Host` node
+   !>
+   !> - host timers nest among themselves on their own stack: a moist timer
+   !>   started meanwhile stays where it would be, and a host timer never
+   !>   lands under a moist node
+   !> - the first open host timer also starts `Host`, the last one closed
+   !>   stops it, so `Host` times the spans with any host timer open
+   !>
+   !> @param[in]  name   timer name under the contract of `check_timer_name`
+   !> @param[out] error  invalid name or uninitialized timer; nothing started
+   subroutine context_start_timer(self, name, error)
+      !> Context instance
+      class(moist_context_type), intent(inout) :: self
+      !> Timer name
+      character(len=*), intent(in) :: name
+      !> Error on an invalid name or an uninitialized timer
+      type(error_type), allocatable, intent(out) :: error
+      !> Parent node and node of the new timer
+      integer :: parent, id
+
+      call check_timer_name(name, error)
+      if (allocated(error)) return
+
+      if (self%nhost == 0) then
+         parent = self%timer%resolve(host_group, 0, cat_host)
+         if (parent == 0) then
+            call fatal_error(error, "Context timer is not initialized")
+            return
+         end if
+         call push_host_frame(self, parent)
+         call self%timer%start(parent)
+      else
+         parent = self%host_frames(self%nhost)
+      end if
+
+      id = self%timer%resolve(name, parent)
+      call push_host_frame(self, id)
+      call self%timer%start(id)
+
+   end subroutine context_start_timer
+
+   !> Stop the innermost open host timer, which must carry `name`
+   !>
+   !> Closing the last open host timer also stops `Host`
+   !>
+   !> @param[in]  name   name of the innermost open host timer
+   !> @param[out] error  invalid name, no host timer open or a different
+   !>                    innermost one; nothing stopped
+   subroutine context_stop_timer(self, name, error)
+      !> Context instance
+      class(moist_context_type), intent(inout) :: self
+      !> Expected timer name
+      character(len=*), intent(in) :: name
+      !> Error on an invalid name or an unbalanced stop
+      type(error_type), allocatable, intent(out) :: error
+      !> Innermost open host node
+      integer :: id
+
+      call check_timer_name(name, error)
+      if (allocated(error)) return
+      if (self%nhost < 2) then
+         call fatal_error(error, "No host timer is open")
+         return
+      end if
+      id = self%host_frames(self%nhost)
+      if (self%timer%node_name(id) /= name) then
+         call fatal_error(error, "Host timer '"//name//"' is not the innermost open one, '"// &
+            & trim(self%timer%node_name(id))//"'")
+         return
+      end if
+
+      call self%timer%stop(id)
+      self%nhost = self%nhost - 1
+      if (self%nhost == 1) then
+         call self%timer%stop(self%host_frames(1))
+         self%nhost = 0
+      end if
+
+   end subroutine context_stop_timer
+
+   !> Check a host timer name against the contract shared by every language
+   !>
+   !> - 1 to `name_len` bytes of UTF-8: an ASCII character takes one byte,
+   !>   `é` two
+   !> - no control character (U+0000 to U+001F, U+007F to U+009F)
+   !> - no leading or trailing space: every byte is part of the name, so a
+   !>   padded Fortran buffer is passed as `trim(buffer)`
+   !>
+   !> @param[in]  name   candidate name
+   !> @param[out] error  the first rule the name breaks
+   subroutine check_timer_name(name, error)
+      !> Candidate name
+      character(len=*), intent(in) :: name
+      !> Error naming the broken rule
+      type(error_type), allocatable, intent(out) :: error
+      !> Byte position, sequence length and continuation index
+      integer :: i, nbytes, k
+      !> Current byte and decoded code point
+      integer :: byte, code
+      !> Byte limit, as text for the message
+      character(len=8) :: limit
+
+      if (len(name) == 0) then
+         call fatal_error(error, "Timer name is empty")
+         return
+      end if
+      if (len(name) > timer_name_len) then
+         write (limit, "(i0)") timer_name_len
+         call fatal_error(error, "Timer name exceeds "//trim(limit)//" bytes")
+         return
+      end if
+      if (name(1:1) == " " .or. name(len(name):len(name)) == " ") then
+         call fatal_error(error, "Timer name starts or ends with a space")
+         return
+      end if
+
+      i = 1
+      do while (i <= len(name))
+         byte = ichar(name(i:i))
+         select case (byte)
+         case (0:127)
+            nbytes = 1
+            code = byte
+         case (194:223)
+            nbytes = 2
+            code = iand(byte, 31)
+         case (224:239)
+            nbytes = 3
+            code = iand(byte, 15)
+         case (240:244)
+            nbytes = 4
+            code = iand(byte, 7)
+         case default
+            nbytes = 0
+         end select
+         if (nbytes == 0 .or. i + nbytes - 1 > len(name)) exit
+         do k = i + 1, i + nbytes - 1
+            byte = ichar(name(k:k))
+            if (iand(byte, 192) /= 128) exit
+            code = 64*code + iand(byte, 63)
+         end do
+         if (k < i + nbytes) exit
+         ! overlong forms, UTF-16 surrogates and code points past U+10FFFF
+         if ((nbytes == 3 .and. code < 2048) .or. (nbytes == 4 .and. code < 65536) &
+            & .or. (code >= 55296 .and. code <= 57343) .or. code > 1114111) exit
+         if (code < 32 .or. (code >= 127 .and. code <= 159)) then
+            call fatal_error(error, "Timer name contains a control character")
+            return
+         end if
+         i = i + nbytes
+      end do
+      if (i <= len(name)) call fatal_error(error, "Timer name is not valid UTF-8")
+
+   end subroutine check_timer_name
+
+   !> Push a node onto the host timer stack, growing it on demand
+   subroutine push_host_frame(self, id)
+      !> Context instance
+      class(moist_context_type), intent(inout) :: self
+      !> Node to push
+      integer, intent(in) :: id
+      !> Grown stack
+      integer, allocatable :: frames(:)
+
+      if (.not. allocated(self%host_frames)) allocate (self%host_frames(8))
+      if (self%nhost == size(self%host_frames)) then
+         allocate (frames(2*self%nhost))
+         frames(:self%nhost) = self%host_frames(:self%nhost)
+         call move_alloc(frames, self%host_frames)
+      end if
+      self%nhost = self%nhost + 1
+      self%host_frames(self%nhost) = id
+
+   end subroutine push_host_frame
 
    !> Write a message to the context output unit if the level is enabled
    !>

@@ -4322,6 +4322,31 @@ int test_context(void)
     if (moist_check_error(error)) goto cleanup;
     moist_print_context_timer_simple(error, NULL);
     if (!moist_check_error(error)) goto cleanup;
+    /* Host timers nest among themselves; a stop names the innermost one, and a
+     * refused stop leaves the stack intact */
+    moist_start_context_timer(error, context, "Coupling");
+    if (moist_check_error(error)) goto cleanup;
+    moist_start_context_timer(error, context, "potential");
+    if (moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, "Coupling");
+    if (!moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, "potential");
+    if (moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, "Coupling");
+    if (moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, "Coupling");
+    if (!moist_check_error(error)) goto cleanup;
+    moist_start_context_timer(error, context, NULL);
+    if (!moist_check_error(error)) goto cleanup;
+    moist_start_context_timer(error, context, "");
+    if (!moist_check_error(error)) goto cleanup;
+    /* MOIST_NAME_MAX + 1 characters */
+    moist_start_context_timer(error, context, "123456789012345678901234567890123");
+    if (!moist_check_error(error)) goto cleanup;
+    moist_start_context_timer(error, NULL, "Coupling");
+    if (!moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, NULL, "Coupling");
+    if (!moist_check_error(error)) goto cleanup;
     moist_delete(context);
     lsf = moist_new_svdw_lsf(error, NULL);
     mol = make_h2o(error);
@@ -4367,6 +4392,72 @@ cleanup:
     moist_delete(other);
     moist_delete(lsf);
     moist_delete(mol);
+    moist_delete(error);
+    return failed;
+}
+
+/* Whether the diagnostic in `error` contains `text` */
+static int error_mentions(moist_error error, const char* text)
+{
+    char message[512] = {0};
+    const int capacity = (int)sizeof message;
+    if (!moist_check_error(error)) return 0;
+    moist_get_error(error, message, &capacity);
+    return strstr(message, text) != NULL;
+}
+
+/* Host work timed as "Host work", failing through `error` when asked; the stop
+ * runs on every path into its own diagnostic, so `error` keeps the failure */
+static int timed_host_work(moist_error error, moist_context context, int fail)
+{
+    moist_error diagnostic = moist_new_error();
+    int count = 0, status = 1;
+    moist_start_context_timer(error, context, "Host work");
+    if (moist_check_error(error)) goto done;
+    moist_get_context_num_threads(error, fail ? NULL : context, &count);
+    moist_stop_context_timer(diagnostic, context, "Host work");
+    if (moist_check_error(error)) goto done;
+    if (moist_check_error(diagnostic)) {
+        show_error(diagnostic);
+        goto done;
+    }
+    status = 0;
+done:
+    moist_delete(diagnostic);
+    return status;
+}
+
+int test_host_timers(void)
+{
+    moist_error error = moist_new_error();
+    moist_context context = moist_new_context(error, 0, 0, false);
+    char name[64] = {0};
+    int failed = 1;
+    if (!context || moist_check_error(error)) goto cleanup;
+    /* Every byte counts: no surrounding space, valid UTF-8, at most
+     * MOIST_NAME_MAX bytes, so 16 two-byte characters fit and 17 do not */
+    moist_start_context_timer(error, context, "A ");
+    if (!error_mentions(error, "space")) goto cleanup;
+    moist_start_context_timer(error, context, "\xe9");
+    if (!error_mentions(error, "UTF-8")) goto cleanup;
+    for (int k = 0; k < 17; ++k) strcat(name, "\xc3\xa9");
+    moist_start_context_timer(error, context, name);
+    if (!error_mentions(error, "exceeds 32 bytes")) goto cleanup;
+    name[32] = '\0';
+    moist_start_context_timer(error, context, name);
+    if (moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, name);
+    if (moist_check_error(error)) goto cleanup;
+    /* A failed step keeps its own diagnostic and still stops the timer */
+    if (timed_host_work(error, context, 1) == 0) goto cleanup;
+    if (!error_mentions(error, "Context handle is missing")) goto cleanup;
+    if (timed_host_work(error, context, 0) != 0 || moist_check_error(error)) goto cleanup;
+    moist_stop_context_timer(error, context, "Host work");
+    if (!error_mentions(error, "No host timer is open")) goto cleanup;
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    moist_delete(context);
     moist_delete(error);
     return failed;
 }
@@ -4710,6 +4801,7 @@ static const struct {
     int (*fn)(void);
 } test_registry[] = {
     {"context", test_context},
+    {"host_timers", test_host_timers},
     {"v1_contract", test_v1_contract},
     {"options_1_0_prefix", test_options_1_0_prefix},
     {"options_padding", test_options_padding},

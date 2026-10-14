@@ -100,3 +100,28 @@ MOIST prints its settings and timings only when the host asks:
          context.print_timer()  # or context.print_timer(simple=True)
 
 The library default is verbosity 2 in every language; each language page lists the remaining context options.
+
+Host timers
+-----------
+
+Host timers collect coupling and response work under a separate ``Host`` node in the timing report.
+PySCF records this work automatically.
+
+- Time only host work; MOIST calls inside a host timer are counted in both groups.
+- Names contain 1 to 32 UTF-8 bytes, no control characters and no leading or trailing spaces. In Fortran, use ``trim(buffer)`` for padded names.
+- Stop nested timers innermost first. Repeated names under the same parent accumulate.
+- Stop timers on failure paths too. In C and Fortran, use a separate error variable for stopping to preserve the original failure.
+- Serialize timer calls with other calls on the context; never call them from a callback.
+
+Start and stop timers through the context:
+
+- Fortran: ``ctx%start_timer(name, error)`` and ``ctx%stop_timer(name, diagnostic)``.
+- C/C++: ``moist_start_context_timer(error, context, name)`` and ``moist_stop_context_timer(diagnostic, context, name)``.
+- Python: prefer the scoped form, which stops the timer even when the block raises:
+
+  .. code-block:: python
+
+     with context.timer("Fock build"):
+         ...  # contract the response
+
+Print the report after closing the timers. Open timers appear as ``running`` and keep measuring.

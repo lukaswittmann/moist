@@ -32,7 +32,8 @@ contains
          new_unittest("growth_preserves_tree", test_growth_preserves_tree), &
          new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
          new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts), &
-         new_unittest("simple_report", test_simple_report) &
+         new_unittest("simple_report", test_simple_report), &
+         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers) &
          ]
 
    end subroutine collect_utils_timer
@@ -605,6 +606,43 @@ contains
                  "full report shows level 3, shares, categories and CPU time")
       call t%delete()
    end subroutine test_simple_report
+
+   !> Both reports show a timer that is still open as running, without a NaN in
+   !> the tree or the category pivot, and leave it measuring: after its stop it
+   !> reads a finite time
+   subroutine test_report_leaves_open_timers(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      character(len=*), parameter :: markers(*) = [character(len=12) :: &
+         "running", "NaN", "by category"]
+      logical :: found(size(markers))
+
+      call t%new(verbose=.true.)
+      call t%start("closed", category=cat_setup)
+      call busy()
+      call t%stop()
+      call t%start("open", category=cat_gradient)
+      call t%start("inner")
+      call busy()
+
+      call scan_report(t, .false., markers, found, error)
+      if (allocated(error)) return
+      call check(error, found(1) .and. .not. found(2), "full report shows open timers as running")
+      if (allocated(error)) return
+      call check(error, found(3), "full report keeps the pivot of the closed timers")
+      if (allocated(error)) return
+      call scan_report(t, .true., markers, found, error)
+      if (allocated(error)) return
+      call check(error, found(1) .and. .not. found(2), "simple report shows open timers as running")
+      if (allocated(error)) return
+
+      call t%stop("inner")
+      call t%stop("open")
+      call check(error, .not. ieee_is_nan(t%get("open")), "a report leaves an open timer measuring")
+      if (allocated(error)) return
+      call check(error, .not. ieee_is_nan(t%get("open/inner")), "a report leaves a nested open timer measuring")
+      call t%delete()
+   end subroutine test_report_leaves_open_timers
 
    !> Write a report of `t` to a scratch unit and report which markers appear
    !>

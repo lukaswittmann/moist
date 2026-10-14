@@ -60,6 +60,7 @@ A negative thread count is an error.
 ``verbosity`` and ``debug`` are the only logging settings; the options structs carry none.
 ``moist_print_context_timer(error, context)`` prints the timings recorded on a context on the process standard output;
 ``moist_print_context_timer_simple`` prints the compact form.
+``moist_start_context_timer(error, context, name)`` and ``moist_stop_context_timer`` time host work under the report's ``Host`` node; :ref:`api-context` gives the naming rule, the cleanup on failure paths and a C++ scope guard.
 
 Every cavity, component and model constructor takes the context as its second argument.
 ``moist_new_model`` refuses a NULL context; a cavity or component accepts NULL.

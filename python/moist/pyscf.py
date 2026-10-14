@@ -773,6 +773,7 @@ class PySCFSolvation:
     The requests are answered by :class:`PySCFHost` (potentials) and
     :class:`GaussianMoments` (GOSTSHYP moments); the response items are
     contracted by the same two into the Fock matrix and the nuclear gradient.
+    This host work is timed on the context, under ``Host`` in its timer report.
 
     :param mol: PySCF molecule.
     :param cavity: a cavity configuration, ``DROP(lsf=...)`` or ``ISwiG(...)``.
@@ -889,15 +890,21 @@ class PySCFSolvation:
             self.moments.bind(self.model.cavity, self._dm)
         return self.moments
 
-    def _answer_requests(self) -> None:
-        """Answer every request in the staged phase that misses an output."""
-        for request in self.coupling:
-            self._answer(request)
+    def _answer_requests(self, phase: str) -> None:
+        """Answer every request in the staged phase that misses an output.
+
+        Timed as host work, ``<phase> coupling`` with one node per request kind.
+        """
+        timer = self.context.timer
+        with timer(f"{phase} coupling"):
+            for request in self.coupling:
+                with timer(request.name):
+                    self._answer(request)
 
     def _build(self) -> None:
         """Run the build phase at the current density."""
         self.model.prepare_build(self.coupling)
-        self._answer_requests()
+        self._answer_requests("Build")
         self.model.build(self.coupling)
 
     def _density(self, dm) -> np.ndarray:
@@ -937,12 +944,12 @@ class PySCFSolvation:
             cpl = self.coupling
 
             self.model.prepare_energy(cpl)
-            self._answer_requests()
+            self._answer_requests("Energy")
             energy = np.array(0.0)
             self.model.get_energy(cpl, energy)
 
             self.model.prepare_response(cpl)
-            self._answer_requests()
+            self._answer_requests("Response")
             response = self.model.get_response(cpl)
         except Exception:
             self._dm = None
@@ -952,21 +959,24 @@ class PySCFSolvation:
         return self._result
 
     def _fock(self, response: Response, *, with_density: bool = True) -> np.ndarray:
-        """Contract the response items into the Fock matrix."""
+        """Contract the response items into the Fock matrix, timed as ``Fock build``."""
         nao = self.mol.nao
         coords = self.model.cavity.xyz
         fock = np.zeros((nao, nao))
-        for item in response:
-            if isinstance(item, PotentialAdjointResponse):
-                fock += self.host.fock_potential(coords, self._xi, item.w_phi)
-            elif isinstance(item, GaussianAmplitudeResponse):
-                fock += self._bound_moments().fock(item)
-            elif isinstance(item, DensityResponse):
-                # Present exactly when the surface follows the density.
-                if with_density:
-                    fock += self.host._fock_lsf(coords, item)
-            else:
-                raise NotImplementedError(f"Unsupported response item '{item.name}'")
+        timer = self.context.timer
+        with timer("Fock build"):
+            for item in response:
+                with timer(item.name):
+                    if isinstance(item, PotentialAdjointResponse):
+                        fock += self.host.fock_potential(coords, self._xi, item.w_phi)
+                    elif isinstance(item, GaussianAmplitudeResponse):
+                        fock += self._bound_moments().fock(item)
+                    elif isinstance(item, DensityResponse):
+                        # Present exactly when the surface follows the density.
+                        if with_density:
+                            fock += self.host._fock_lsf(coords, item)
+                    else:
+                        raise NotImplementedError(f"Unsupported response item '{item.name}'")
         return fock
 
     def frozen_fock(self) -> np.ndarray:
@@ -996,7 +1006,7 @@ class PySCFSolvation:
         self.host.dm = self._dm
         cpl = self.coupling
         self.model.prepare_gradient(cpl)
-        self._answer_requests()
+        self._answer_requests("Gradient")
         model = np.zeros((self.mol.natm, 3))
         self.model.get_gradient(cpl, model)
 
@@ -1008,16 +1018,19 @@ class PySCFSolvation:
         response = self.response
         coords = self.model.cavity.xyz
         channels = {"model": model}
-        for item in response:
-            if isinstance(item, PotentialAdjointResponse):
-                channels["potential"] = self.host._gradient_phi(
-                    coords, np.asarray(item.w_phi), xi=self._xi)
-            elif isinstance(item, GaussianAmplitudeResponse):
-                channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
-            elif isinstance(item, DensityResponse):
-                channels["density"] = self.host._gradient_lsf(coords, item)
-            else:
-                raise NotImplementedError(f"Unsupported response item '{item.name}'")
+        timer = self.context.timer
+        with timer("Gradient contraction"):
+            for item in response:
+                with timer(item.name):
+                    if isinstance(item, PotentialAdjointResponse):
+                        channels["potential"] = self.host._gradient_phi(
+                            coords, np.asarray(item.w_phi), xi=self._xi)
+                    elif isinstance(item, GaussianAmplitudeResponse):
+                        channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
+                    elif isinstance(item, DensityResponse):
+                        channels["density"] = self.host._gradient_lsf(coords, item)
+                    else:
+                        raise NotImplementedError(f"Unsupported response item '{item.name}'")
         return channels
 
     def gradient(self, dm) -> np.ndarray:

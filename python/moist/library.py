@@ -222,6 +222,24 @@ def print_context_timer(context, simple=False):
         error_check(lib.moist_print_context_timer)(context.handle)
 
 
+def start_context_timer(context, name):
+    error_check(lib.moist_start_context_timer)(context.handle, _timer_name(name))
+
+
+def stop_context_timer(context, name):
+    error_check(lib.moist_stop_context_timer)(context.handle, _timer_name(name))
+
+
+def _timer_name(name):
+    """UTF-8 bytes of a timer name; the context checks the rest of the naming rules."""
+    if not isinstance(name, str):
+        raise TypeError("timer name must be a str")
+    # C reads up to the first NUL, so a NUL would silently cut the name short
+    if "\0" in name:
+        raise ValueError("Timer name contains a control character")
+    return name.encode()
+
+
 def _construct(kind, handle_type, *args, context, required=False):
     """Call ``moist_new_<kind>``; ``context=None`` passes NULL unless required."""
     if context is None and not required:

@@ -4,6 +4,7 @@ module moist_model_continuum_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
+   use moist_utils_timer, only: cat_build
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
@@ -218,6 +219,8 @@ contains
    !>   stays built
    !> - otherwise built only once the cavity and every component are, then
    !>   the coupling records the new point count
+   !> - timed as `Build` after the protocol, also when `update` built
+   !>   everything
    !>
    !> @param[in,out] self Instance
    !> @param[in,out] coupling Coupling staged by `prepare_build`; the cavity reads its own scope
@@ -232,6 +235,25 @@ contains
 
       call model_build(self, coupling, error)
       if (allocated(error)) return
+      call self%ctx%timer%start("Build", category=cat_build)
+      call complete_build(self, coupling, error)
+      call self%ctx%timer%stop("Build")
+
+   end subroutine continuum_build
+
+   !> Complete a cavity that waited for the build phase, then every component
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Coupling staged by `prepare_build`; the cavity reads its own scope
+   !> @param[out] error Error handling
+   subroutine complete_build(self, coupling, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
+      !> Coupling staged by `prepare_build`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
       ! Built completely by `update`, components included
       if (.not. self%defers_build()) return
       call clear_component_energies(self)
@@ -243,7 +265,7 @@ contains
       ! The answers of the build phase survive the new point count
       call self%declare_pass(coupling, error)
 
-   end subroutine continuum_build
+   end subroutine complete_build
 
    !> Update every component on the built cavity and its structure
    !>
