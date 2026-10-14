@@ -8,9 +8,9 @@ module moist_model_continuum_component_pcm_dpcm_original
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_dpcm_original, only: dpcm_original_complex_state, &
+   use pcmgen_gauss_dpcm_original, only: dpcm_original_complex_state, &
       & dpcm_original_assemble, dpcm_original_medium, dpcm_original_solve, dpcm_original_weights
-   use moist_model_continuum_component_pcm_kernel_point_dpcm_original, only: dpcm_original_point_complex_state, &
+   use pcmgen_point_dpcm_original, only: dpcm_original_point_complex_state, &
       & dpcm_original_point_assemble, dpcm_original_point_medium, dpcm_original_point_solve, &
       & dpcm_original_point_weights
    implicit none(type, external)
@@ -18,9 +18,17 @@ module moist_model_continuum_component_pcm_dpcm_original
 
    public :: model_continuum_component_dpcm_original, new_component_dpcm_original
 
-   !> Concrete DPCM original component
+   !> Original DPCM component
+   !>
+   !> - Physical input: solvent relative permittivity epsilon
+   !> - Cavity positions, normals, principal curvatures and grid point areas
+   !> - Gaussian charge widths when available
+   !> - Host potential and its outward normal derivative at the surface points
+   !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(pcm_layer_base) :: model_continuum_component_dpcm_original
+      !> Gaussian surface kernel state
       type(dpcm_original_complex_state) :: gauss
+      !> Point surface kernel state
       type(dpcm_original_point_complex_state) :: point
    contains
       procedure :: assemble_layer => dpcm_original_assemble_layer
@@ -31,12 +39,24 @@ module moist_model_continuum_component_pcm_dpcm_original
 contains
 
    !> Construct DPCM original from physical and numerical parameters
+   !>
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self     initialized original DPCM component
+   !> @param[in]  epsilon  dimensionless solvent relative permittivity, >= 1
+   !> @param[out] error    allocated on invalid physical or numerical parameters
+   !> @param[in]  param    optional solver controls, compiled defaults when omitted
+   !> @param[in]  ctx      optional borrowed context, must outlive the component
    subroutine new_component_dpcm_original(self, epsilon, error, param, ctx)
+      !> Original DPCM component
       type(model_continuum_component_dpcm_original), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 

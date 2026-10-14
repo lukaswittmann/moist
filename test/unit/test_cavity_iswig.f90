@@ -1299,7 +1299,7 @@ contains
 
    !> Cross-validation of the iSwiG CPCM electrostatics against ORCA 6.1.1
    subroutine test_amat_orca_reference(error)
-      use moist_model_continuum_component_pcm_kernel_gauss_conductor, only: conductor_state, &
+      use pcmgen_gauss_conductor, only: conductor_state, &
          & conductor_assemble, conductor_medium, conductor_solve
       !> Error handling
       type(error_type), allocatable, intent(out) :: error

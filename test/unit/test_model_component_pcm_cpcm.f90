@@ -16,7 +16,7 @@ module test_model_component_pcm_cpcm
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
       & model_continuum_component_cosmo, new_component_cosmo
    use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu
-   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only: conductor_state, &
+   use pcmgen_gauss_conductor, only: conductor_state, &
       & conductor_assemble, conductor_medium, conductor_solve
    use test_pcm_conductor_probe, only: probe_conductor_matrix, &
       & probe_conductor_bilinear_weights, probe_conductor_nuclear_gradient

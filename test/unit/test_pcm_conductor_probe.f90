@@ -10,7 +10,7 @@ module test_pcm_conductor_probe
    use mctc_env, only: wp, error_type, fatal_error
    use moist_math_boys, only: boys_x_far
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_operator
-   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only: conductor_state, &
+   use pcmgen_gauss_conductor, only: conductor_state, &
       & conductor_assemble, conductor_medium, conductor_solve, conductor_weights, conductor_tangent
    implicit none(type, external)
    private

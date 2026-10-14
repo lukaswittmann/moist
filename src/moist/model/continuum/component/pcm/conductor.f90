@@ -14,9 +14,9 @@ module moist_model_continuum_component_pcm_conductor
       & solver_type, moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only: conductor_state, &
+   use pcmgen_gauss_conductor, only: conductor_state, &
       & conductor_assemble, conductor_medium, conductor_solve, conductor_weights
-   use moist_model_continuum_component_pcm_kernel_point_conductor, only: conductor_point_state, &
+   use pcmgen_point_conductor, only: conductor_point_state, &
       & conductor_point_assemble, conductor_point_medium, conductor_point_solve, &
       & conductor_point_weights
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -44,11 +44,23 @@ module moist_model_continuum_component_pcm_conductor
       procedure :: declare_coupling => conductor_declare_coupling
    end type model_continuum_component_pcm_conductor
 
-   !> CPCM dielectric scaling
+   !> CPCM with dielectric factor (epsilon - 1)/epsilon
+   !>
+   !> - Physical input: solvent relative permittivity epsilon
+   !> - Cavity positions
+   !> - Gaussian widths and switching factors, or point-charge grid point areas
+   !> - Host electrostatic potential at the surface points
+   !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(model_continuum_component_pcm_conductor) :: model_continuum_component_cpcm
    end type model_continuum_component_cpcm
 
-   !> COSMO dielectric scaling
+   !> COSMO with dielectric factor (epsilon - 1)/(epsilon + 1/2)
+   !>
+   !> - Physical input: solvent relative permittivity epsilon
+   !> - Cavity positions
+   !> - Gaussian widths and switching factors, or point-charge grid point areas
+   !> - Host electrostatic potential at the surface points
+   !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(model_continuum_component_pcm_conductor) :: model_continuum_component_cosmo
    end type model_continuum_component_cosmo
 
@@ -56,17 +68,24 @@ contains
 
    !> Construct CPCM from physical and numerical parameters
    !>
-   !> @param[out] self CPCM component
-   !> @param[in] ctx Optional borrowed context; must outlive the component
-   !> @param[in] epsilon Solvent dielectric constant
-   !> @param[out] error Construction error
-   !> @param[in] param Optional numerical settings
+   !> - Positive infinite epsilon: conductor limit
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self     initialized CPCM component
+   !> @param[in]  epsilon  dimensionless solvent relative permittivity, >= 1
+   !> @param[out] error    allocated on invalid physical or numerical parameters
+   !> @param[in]  param    optional solver controls, compiled defaults when omitted
+   !> @param[in]  ctx      optional borrowed context, must outlive the component
    subroutine new_component_cpcm(self, epsilon, error, param, ctx)
+      !> CPCM component
       type(model_continuum_component_cpcm), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
 
       if (present(ctx)) self%ctx => ctx
@@ -88,17 +107,24 @@ contains
 
    !> Construct COSMO from physical and numerical parameters
    !>
-   !> @param[out] self COSMO component
-   !> @param[in] ctx Optional borrowed context; must outlive the component
-   !> @param[in] epsilon Solvent dielectric constant
-   !> @param[out] error Construction error
-   !> @param[in] param Optional numerical settings
+   !> - Positive infinite epsilon: conductor limit
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self     initialized COSMO component
+   !> @param[in]  epsilon  dimensionless solvent relative permittivity, >= 1
+   !> @param[out] error    allocated on invalid physical or numerical parameters
+   !> @param[in]  param    optional solver controls, compiled defaults when omitted
+   !> @param[in]  ctx      optional borrowed context, must outlive the component
    subroutine new_component_cosmo(self, epsilon, error, param, ctx)
+      !> COSMO component
       type(model_continuum_component_cosmo), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
 
       if (present(ctx)) self%ctx => ctx
