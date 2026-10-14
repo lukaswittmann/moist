@@ -1,7 +1,7 @@
 DROP Cavities
 =============
 
-.. image:: /_static/drop.svg
+.. image:: /_static/logos/drop.svg
    :alt: DROP cavity construction
    :align: right
 
@@ -28,7 +28,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_a.svg
+      .. image:: /_static/figures/drop/reference-cavity.svg
          :alt: Isodensity surface and van der Waals reference cavity
          :align: center
          :width: 65%
@@ -41,7 +41,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_b.svg
+      .. image:: /_static/figures/drop/projection.svg
          :alt: Projection of reference quadrature points onto the isodensity surface
          :align: center
          :width: 80%
@@ -51,7 +51,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_c.svg
+      .. image:: /_static/figures/drop/weight-mapping.svg
          :alt: Quadrature weight mapping onto the isodensity surface
          :align: center
          :width: 80%

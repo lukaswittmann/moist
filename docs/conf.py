@@ -29,13 +29,13 @@ bibtex_bibfiles = ["_static/references.bib"]
 
 html_theme = "sphinx_book_theme"
 html_title = project
-html_logo = "_static/white_moist_drop.svg"
+html_logo = "_static/logos/moist-light.svg"
 html_favicon = html_logo
 
 html_theme_options = {
     "logo": {
-        "image_light": "_static/white_moist_drop.svg",
-        "image_dark": "_static/dark_moist_drop.svg",
+        "image_light": "_static/logos/moist-light.svg",
+        "image_dark": "_static/logos/moist-dark.svg",
         "alt_text": "MOIST",
     },
     "repository_url": "https://github.com/lukaswittmann/moist",
