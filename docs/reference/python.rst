@@ -153,6 +153,9 @@ and ``describe(name)`` work as on a cavity:
 numbered from 1, with descriptions, solvent inputs and registered settings.
 ``model.print_parameters(file=None)`` prints them to standard output by default.
 Neither needs an update.
+``model.radii_text()`` and ``model.print_radii(file=None)`` do the same for the
+radii table of the current structure, one row per element or a short summary
+for custom radii; they need ``update`` and are ready before a deferred build.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of

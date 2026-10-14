@@ -1013,6 +1013,16 @@ def get_model_parameters_text(model: ModelHandle) -> str:
     return _native_text(lib.moist_get_model_parameters_text, model.handle)
 
 
+def get_model_radii_text(model: ModelHandle) -> str:
+    """Return the radii table of the current structure of a general model.
+
+    Available right after the update, also before a deferred build. The text
+    ends in a newline; printing it is left to the caller.
+    """
+
+    return _native_text(lib.moist_get_model_radii_text, model.handle)
+
+
 def get_model_component_field_count(model: ModelHandle, index: int) -> int:
     """Return how many results the component at ``index`` currently holds."""
 

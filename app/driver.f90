@@ -271,6 +271,9 @@ contains
             call cavity%update(mol, error=error)
             if (allocated(error)) return
 
+            ! Radii of the structure; the update itself prints none
+            if (ctx%verbosity(2)) call cavity%print_radii()
+
             ! Gradient if asked for
             if (config%grad) then
                call cavity%get_gradient(error)

@@ -50,6 +50,8 @@ The command-line program defaults to verbosity 4.
 MOIST prints its settings and timings only when the host asks:
 
 - The settings printout lists the cavity and then each component: nothing at verbosity 0, the normal settings at 1 and 2, every setting from 3.
+- The radii table of the current structure has one row per element, or a short summary for custom radii: nothing at verbosity 0, the table from 1.
+  It needs an update and is ready before a deferred build: Fortran ``model%print_radii()`` prints nothing before the update, C ``moist_get_model_radii_text`` and Python ``model.radii_text()`` fail.
 - The timer prints nothing at verbosity 0 and the top-level phases at 1, adds one level of the tree per step up to 3, and prints the whole tree from 4.
 - The banner is returned as text for the host to print: Fortran ``moist_banner_text(style)``, C ``moist_get_banner``, Python ``get_banner(style)``.
 

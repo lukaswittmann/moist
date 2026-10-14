@@ -43,4 +43,4 @@ Each field has a name, a type tag (``MOIST_FIELD_REAL``, ``MOIST_FIELD_INT``, ``
        ``SolvationModel.components``: live views with ``name``, ``description``, ``energy``, ``configuration``, ``fields()``, ``get(name)`` and ``describe(name)``.
        Response items and requests are typed: their fields are attributes, e.g. ``item.w_phi`` and ``request.width``.
 
-For cavity and component settings, use ``model%print_parameters(unit)``, ``moist_get_model_parameters_text`` or ``SolvationModel.parameters_text()``.
+For cavity and component settings, use ``model%print_parameters(unit)``, ``moist_get_model_parameters_text`` or ``SolvationModel.parameters_text()``; for the radii table, ``model%print_radii(unit)``, ``moist_get_model_radii_text`` or ``SolvationModel.radii_text()``.

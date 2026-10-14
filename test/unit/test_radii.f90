@@ -34,7 +34,6 @@ contains
                   new_unittest("radii_guard_contracts", test_guard_contracts), &
                   new_unittest("static_radii_cpcm", test_static_radii_cpcm), &
                   new_unittest("static_radii_constructors", test_static_constructors), &
-                  new_unittest("radii_constructor_verbosity", test_constructor_verbosity), &
                   new_unittest("static_radii_zero_gradient", test_static_zero_gradient), &
                   new_unittest("static_radii_needs_update", test_static_requires_update), &
                   new_unittest("custom_radii_atoms_works", test_custom_atoms_dropcess), &
@@ -190,41 +189,6 @@ contains
       end if
       call check(error, model%f0(1), ref, thr=thr, more="Bondi radius mismatch")
    end subroutine test_static_constructors
-
-   subroutine test_constructor_verbosity(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(radius_type_static) :: static_model
-      class(radius_type), allocatable :: model
-      type(moist_error_type), allocatable :: err
-
-      call new_cpcm_radii(static_model)
-      call check(error, static_model%verbosity, 0, &
-                 more="default static constructor verbosity must be zero")
-      if (allocated(error)) return
-
-      call new_cpcm_radii(static_model, verbosity=3)
-      call check(error, static_model%verbosity, 3, &
-                 more="explicit static constructor verbosity mismatch")
-      if (allocated(error)) return
-
-      call new_radii("cpcm", model, err, verbosity=4)
-      if (allocated(err)) then
-         call test_failed(error, "new_radii with verbosity failed: "//trim(err%message))
-         return
-      end if
-      call check(error, model%verbosity, 4, &
-                 more="new_radii string constructor verbosity mismatch")
-      if (allocated(error)) return
-
-      call new_radii_custom_atoms([2.10_wp, 1.25_wp, 1.25_wp], model, err, verbosity=5)
-      if (allocated(err)) then
-         call test_failed(error, "new_radii_custom_atoms with verbosity failed: "//trim(err%message))
-         return
-      end if
-      call check(error, model%verbosity, 5, &
-                 more="custom atom constructor verbosity mismatch")
-   end subroutine test_constructor_verbosity
 
    subroutine test_static_zero_gradient(error)
       type(error_type), allocatable, intent(out) :: error
@@ -543,14 +507,14 @@ contains
          end select
          call check(error, static_model%model_tag, tags(i), more="direct constructor model selector")
          if (allocated(error)) return
-         call new_radii(tags(i), model, err, verbosity=3)
+         call new_radii(tags(i), model, err)
          if (allocated(err)) then
             call test_failed(error, "integer factory rejected valid tag")
             return
          end if
          call check_selector()
          if (allocated(error)) return
-         call new_radii(names(i), model, err, verbosity=3)
+         call new_radii(names(i), model, err)
          if (allocated(err)) then
             call test_failed(error, "string factory rejected normalized model name")
             return
@@ -558,10 +522,8 @@ contains
          call check_selector()
          if (allocated(error)) return
       end do
-      static_model = default_cpcm_radii(verbosity=4)
+      static_model = default_cpcm_radii()
       call check(error, static_model%model_tag, rad_type%cpcm, more="default CPCM selector")
-      if (allocated(error)) return
-      call check(error, static_model%verbosity, 4, more="default CPCM verbosity")
       if (allocated(error)) return
       call new_rahm_radii(static_model)
       call check(error, static_model%model_tag, rad_type%rahm, more="Rahm selector")
@@ -572,20 +534,18 @@ contains
       call new_radii("unknown", model, err)
       call check(error, allocated(err), more="unknown string name must fail")
       if (allocated(error)) return
-      call new_radii_custom_elements([1], [1.3_wp], model, err, verbosity=4)
+      call new_radii_custom_elements([1], [1.3_wp], model, err)
       if (allocated(err)) then
          call test_failed(error, "custom element constructor rejected valid input")
          return
       end if
-      call check(error, model%verbosity, 4, more="custom element explicit verbosity")
-      if (allocated(error)) return
-      call new_radii_custom_elements([1], [1.3_wp], model, err)
-      call check(error, model%verbosity, 0, more="custom element default verbosity")
-      if (allocated(error)) return
       call new_radii_custom_atoms([1.3_wp], model, err)
-      call check(error, model%verbosity, 0, more="custom atom default verbosity")
+      if (allocated(err)) then
+         call test_failed(error, "custom atom constructor rejected valid input")
+         return
+      end if
    contains
-      !> Validate static selector and verbosity in a factory result
+      !> Validate the static selector of a factory result
       subroutine check_selector()
          select type (model)
          type is (radius_type_static)
@@ -593,8 +553,6 @@ contains
          class default
             call test_failed(error, "factory must construct static model")
          end select
-         if (allocated(error)) return
-         call check(error, model%verbosity, 3, more="factory verbosity")
       end subroutine check_selector
    end subroutine test_factory_contracts
 

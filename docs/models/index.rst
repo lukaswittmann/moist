@@ -118,6 +118,7 @@ their own, so their copies in the model use that; a part constructed with
 After ``model%update(mol, error)``, create a coupling with ``model%new_coupling(coupling, error)`` and follow the :doc:`host coupling protocol </reference/coupling>` for building and evaluation.
 ``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).
 ``model%print_parameters(unit)`` prints the settings at any time, at the context's :ref:`verbosity <verbosity>`: the cavity section followed by each component; ``unit`` defaults to the run context's unit.
+``model%print_radii(unit)`` prints the radii table of the current structure once the model is updated, also before a deferred build; before the update it prints nothing.
 
 Components
 ----------

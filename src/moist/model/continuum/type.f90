@@ -67,6 +67,8 @@ module moist_model_continuum_type
       procedure :: list_fields => continuum_list_fields
       !> Print the settings of the cavity and of every component
       procedure :: print_parameters => continuum_print_parameters
+      !> Print the radii of the current structure
+      procedure :: print_radii => continuum_print_radii
    end type model_continuum_type
 
 contains
@@ -662,6 +664,35 @@ contains
       end do
 
    end subroutine continuum_print_parameters
+
+   !> Print the radii of the current structure, the cavity's radius model
+   !>
+   !> - nothing before a successful update; a cavity waiting for the build
+   !>   phase already has its radii
+   !> - the cavity follows its own context, like `print_parameters`
+   !>
+   !> @param[in] self Model
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   !> @param[in] level Verbosity level; nothing prints at 0 (default: the
+   !>                  cavity's context verbosity)
+   subroutine continuum_print_radii(self, unit, level)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
+
+      !> Effective output unit
+      integer :: iu
+
+      if (.not. self%updated .or. .not. allocated(self%cavity)) return
+      iu = output_unit
+      if (associated(self%ctx)) iu = self%ctx%unit
+      if (present(unit)) iu = unit
+      call self%cavity%print_radii(iu, level)
+
+   end subroutine continuum_print_radii
 
    !> Publish the results of one component
    !>

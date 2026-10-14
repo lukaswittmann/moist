@@ -320,6 +320,10 @@ It follows the context's :ref:`verbosity <verbosity>`: empty at 0, the normal se
 Use ``moist_get_banner`` buffer rules to retrieve and print the text.
 Other model families are errors.
 
+``moist_get_model_radii_text`` returns the radii table of the current structure with the same buffer rules: one row per element, or a short summary for custom radii.
+It needs ``moist_update_model`` and is ready before a deferred build, so an isodensity cavity has it before its first build; before the update it is an error.
+It is empty at verbosity 0 and holds the table from 1; no update prints it on its own.
+
 Contracts
 ---------
 

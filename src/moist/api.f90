@@ -326,6 +326,7 @@ module moist_api
    ! Components of a continuum model and their named results
    public :: get_model_component_count_api, get_model_component_name_api
    public :: get_model_component_description_api, get_model_parameters_text_api
+   public :: get_model_radii_text_api
    public :: get_model_component_field_count_api, get_model_component_field_info_api
    public :: get_model_component_field_about_api, get_model_component_field_real_api
    ! Named arrays of the current response item and inputs of the current request
@@ -5176,7 +5177,7 @@ contains
    end function fetch_component_field
 
    !* ================================================================================= *!
-   !*                           Continuum model parameter text                          *!
+   !*                      Continuum model parameter and radii text                     *!
    !* ================================================================================= *!
 
    !> Copy the parameter printout of a continuum model or query its length
@@ -5204,23 +5205,63 @@ contains
       if (.not. valid_string_output(verror, buffer, capacity, length, "get_model_parameters_text", error)) return
       call api_continuum_model(vmodel, "get_model_parameters_text", continuum, error%ptr)
       if (allocated(error%ptr)) return
-      call render_model_parameters(continuum, text, error%ptr)
+      call render_model_text(continuum, "parameters", text, error%ptr)
       call prefix_api_error(error%ptr, "get_model_parameters_text")
       if (allocated(error%ptr)) return
       call copy_string_output(text, buffer, capacity, length)
    end subroutine get_model_parameters_text_api
 
-   !> Render the parameter printout of a continuum model as text
+   !> Copy the radii table of the current structure or query its length
+   !>
+   !> Available right after the update, before a deferred build; the host
+   !> decides where to print
+   subroutine get_model_radii_text_api(verror, vmodel, buffer, capacity, length) &
+         & bind(C, name=namespace//"get_model_radii_text")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> Output buffer; NULL is allowed only with zero capacity
+      character(kind=c_char), intent(inout), optional :: buffer(*)
+      !> Buffer capacity in bytes, including the terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Required text length excluding the terminator; unchanged on error
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Rendered table
+      character(len=:), allocatable :: text
+
+      if (.not. valid_string_output(verror, buffer, capacity, length, "get_model_radii_text", error)) return
+      call api_continuum_model(vmodel, "get_model_radii_text", continuum, error%ptr)
+      if (allocated(error%ptr)) return
+      call continuum%require_updated(error%ptr)
+      if (allocated(error%ptr)) then
+         call prefix_api_error(error%ptr, "get_model_radii_text")
+         return
+      end if
+      call render_model_text(continuum, "radii", text, error%ptr)
+      call prefix_api_error(error%ptr, "get_model_radii_text")
+      if (allocated(error%ptr)) return
+      call copy_string_output(text, buffer, capacity, length)
+   end subroutine get_model_radii_text_api
+
+   !> Render a printout of a continuum model as text
    !>
    !> Prints into a scratch unit, then joins its lines, each ending in a newline;
-   !> the detailed settings follow the context verbosity, the normal ones always print
+   !> the printout follows the context verbosity
    !>
    !> @param[in]  continuum Continuum model
+   !> @param[in]  table     Printout: "parameters" or "radii"
    !> @param[out] text      Printout, unallocated on error
    !> @param[out] error     Scratch-unit failure
-   subroutine render_model_parameters(continuum, text, error)
+   subroutine render_model_text(continuum, table, text, error)
       !> Continuum model
       type(model_continuum_type), intent(in), target :: continuum
+      !> Printout to render
+      character(len=*), intent(in) :: table
       !> Printout
       character(len=:), allocatable, intent(out) :: text
       !> Scratch-unit failure
@@ -5240,7 +5281,15 @@ contains
          call fatal_error(error, "Cannot open a scratch unit: "//trim(message))
          return
       end if
-      call continuum%print_parameters(unit)
+      select case (table)
+      case ("parameters")
+         call continuum%print_parameters(unit)
+      case ("radii")
+         call continuum%print_radii(unit)
+      case default
+         call fatal_error(error, "Unknown table name '"//trim(table)//"'")
+         return
+      end select
       rewind (unit)
       text = ""
       records: do
@@ -5259,7 +5308,7 @@ contains
       end do records
       close (unit)
       if (allocated(error)) deallocate (text)
-   end subroutine render_model_parameters
+   end subroutine render_model_text
 
    !* ================================================================================= *!
    !*                       Named response item and request fields                      *!

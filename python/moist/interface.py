@@ -1557,6 +1557,21 @@ class SolvationModel:
         """Print :meth:`parameters_text` to ``file``, standard output by default."""
         print(self.parameters_text(), end="", file=file)
 
+    def radii_text(self) -> str:
+        """Return the native radii table of the current structure.
+
+        One row per element, or a short summary for custom radii. Empty at
+        context verbosity 0, printed from 1. Available right after
+        :meth:`update`, also before a deferred build; no update prints it on
+        its own.
+        """
+        self._require_updated()
+        return library.get_model_radii_text(self._model)
+
+    def print_radii(self, file=None) -> None:
+        """Print :meth:`radii_text` to ``file``, standard output by default."""
+        print(self.radii_text(), end="", file=file)
+
     def _invalidate(self) -> None:
         self._updated = False
         self._natoms = None

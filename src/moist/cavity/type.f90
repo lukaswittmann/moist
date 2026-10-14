@@ -183,7 +183,7 @@ module moist_cavity_type
       procedure :: parameters => cavity_parameters_default
       !> Print the cavity kind and its registered settings
       procedure :: print_parameters => print_cavity_parameters
-      !> Print the radius model of the current structure; called by every `update`
+      !> Print the radius model of the current structure
       procedure, non_overridable :: print_radii => print_cavity_radii
       !> Write grid to XYZ file for visualization
       procedure :: write_xyz_debug => write_cavity_xyz_debug
@@ -819,18 +819,33 @@ contains
 
    end subroutine print_cavity_parameters
 
-   !> Print the radius model at verbosity 2 and above
+   !> Print the radius model of the current structure
    !>
-   !> Called by each cavity's `update` right after its radius model was
-   !> updated: the printout lists the radii of the current structure
+   !> No `update` prints it; the host calls it after one when it wants the table
    !>
    !> @param[in] self Cavity instance
-   subroutine print_cavity_radii(self)
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   !> @param[in] level Verbosity level; nothing prints at 0 (default: the
+   !>                  context's verbosity, printed without a context)
+   subroutine print_cavity_radii(self, unit, level)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
 
-      if (.not. associated(self%ctx) .or. .not. allocated(self%radius_model)) return
-      if (self%ctx%verbosity(2)) call self%radius_model%print(unit=self%ctx%unit)
+      !> Effective output unit and verbosity level
+      integer :: iu, lvl
+
+      if (.not. allocated(self%radius_model)) return
+      iu = cavity_unit(self)
+      if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (associated(self%ctx)) lvl = self%ctx%verbosity()
+      if (present(level)) lvl = level
+      if (lvl < 1) return
+      call self%radius_model%print(unit=iu)
 
    end subroutine print_cavity_radii
 

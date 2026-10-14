@@ -517,7 +517,6 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
-      call self%print_radii()
       if (allocated(self%radii)) deallocate (self%radii)
       allocate (self%radii(self%nsph), source=self%radius_model%f0)
 

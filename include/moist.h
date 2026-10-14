@@ -1305,6 +1305,19 @@ moist_get_model_parameters_text(moist_error error, moist_model model,
                                 char* buffer, size_t capacity,
                                 size_t* length) moist_API_SUFFIX__V_1_0;
 
+/// Copy the radii table of the current structure, or query its length,
+/// following moist_get_banner
+/// One row per element of the structure: atomic number, symbol and radius in
+/// Angstrom and Bohr; for custom radii a short summary of the model. Empty at
+/// context verbosity 0, printed from 1. Available right after
+/// moist_update_model, also when the cavity waits for the build phase; an
+/// error before it. No update prints the table on its own. A model of
+/// another family is an error
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_radii_text(moist_error error, moist_model model,
+                           char* buffer, size_t capacity,
+                           size_t* length) moist_API_SUFFIX__V_1_0;
+
 /// Assemble A-matrix and compute xi values
 /// Must be called before accessing xi or using the A-matrix
 /// Call moist_get_cavity_sizes first to get ngrid for array allocation, then

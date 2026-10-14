@@ -2978,6 +2978,8 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_get_model_component_description");
     moist_get_model_parameters_text(error, NULL, NULL, 0, &text_length);
     REQUIRE_ORIGIN("moist_get_model_parameters_text");
+    moist_get_model_radii_text(error, NULL, NULL, 0, &text_length);
+    REQUIRE_ORIGIN("moist_get_model_radii_text");
     coupling = moist_new_coupling(error, NULL);
     REQUIRE_ORIGIN("moist_new_coupling");
     /* A failing walk reports and still ends the host loop */
@@ -3880,6 +3882,11 @@ int test_coupling_protocol_gostshyp(void)
     /* Per-component energies, read by 0-based component index */
     double share[2] = {0.0, 0.0}, again = 0.0;
     char* settings = NULL;
+    /* A cavity without a context of its own follows the model's, so its
+     * radii table shows on the verbosity-2 context */
+    moist_cavity open_cavity = NULL;
+    moist_model radii_model = NULL;
+    char* radii = NULL;
     char visited[128];
     bool more = false;
     REQUIRE(mol && cav && pcm && gostshyp && !moist_check_error(error));
@@ -4058,6 +4065,35 @@ int test_coupling_protocol_gostshyp(void)
         REQUIRE(strlen(head) == sizeof head - 1 && strncmp(head, settings, sizeof head - 1) == 0);
         fputs(settings, stdout);
     }
+    /* The radii table belongs to a structure: refused before the update,
+     * empty when the cavity's own context is silent, one row per element
+     * otherwise. No update prints the table, so the host prints it here */
+    {
+        size_t length = 7, full = 0;
+        moist_get_model_radii_text(error, model, NULL, 0, &length);
+        REQUIRE(!moist_check_error(error) && length == 0);
+        open_cavity = moist_new_iswig_cavity(error, NULL, NULL, NULL);
+        radii_model = moist_new_model(error, shown_context, open_cavity);
+        moist_add_model_component(error, radii_model, pcm);
+        REQUIRE(radii_model && !moist_check_error(error));
+        length = 7;
+        moist_get_model_radii_text(error, radii_model, NULL, 0, &length);
+        if (expect_failure(&error, "Solvation model must be updated first",
+                           "radii text before the update")) goto cleanup;
+        REQUIRE(length == 7);
+        moist_update_model(error, radii_model, mol);
+        REQUIRE(!moist_check_error(error));
+        moist_get_model_radii_text(error, radii_model, NULL, 0, &full);
+        REQUIRE(!moist_check_error(error) && full > 0);
+        radii = malloc(full + 1);
+        REQUIRE(radii);
+        moist_get_model_radii_text(error, radii_model, radii, full + 1, &length);
+        REQUIRE(!moist_check_error(error) && length == full && strlen(radii) == full);
+        /* H once although the structure holds two */
+        REQUIRE(strstr(radii, "Radii") && strstr(radii, " O ") && strstr(radii, " H "));
+        REQUIRE(strstr(radii, " H ") == strrchr(radii, 'H') - 1);
+        fputs(radii, stdout);
+    }
 
     /* On a fixed cavity the response phase needs nothing new; the response
      * carries the amplitudes next to the potential adjoint */
@@ -4134,12 +4170,14 @@ cleanup:
     if (moist_check_error(error)) show_error(error);
     free(xyz); free(xi); free(phi); free(dphi); free(dxi);
     free(gt); free(pt); free(mt); free(rt); free(width);
-    free(w_overlap); free(w_normal_deriv); free(settings);
+    free(w_overlap); free(w_normal_deriv); free(settings); free(radii);
     moist_delete_coupling(&cpl);
     moist_delete_cavity(&borrowed);
     moist_delete_response(&response);
     moist_delete_model(&model);
     moist_delete_model(&shown);
+    moist_delete_model(&radii_model);
+    moist_delete_cavity(&open_cavity);
     moist_delete_context(&shown_context);
     moist_delete_component(&gostshyp);
     moist_delete_component(&pcm);
