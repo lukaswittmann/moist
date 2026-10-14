@@ -3689,6 +3689,7 @@ contains
                   tmp61, tmp62, tmp3751, tmp3756, tmp3757, tmp3758, tmp3759, tmp3763, tmp3764, &
                   tmp3765, tmp3766, tmp3767, tmp3768, tmp3769, tmp3770, tmp3771, tmp3772, tmp3773, &
                   tmp3774
+      real(wp), allocatable :: tmp69(:), tmp70(:)
       integer :: i, j
 
       if (state%matrix_free) then
@@ -3909,14 +3910,14 @@ contains
       tmp66 = tmp67
       tmp68 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp69, tmp70) &
       !$omp& shared(npt, state, tmp37, tmp38, tmp39, tmp41, tmp43, tmp45) &
       !$omp& shared(tmp47) &
       !$omp& reduction(+: tmp34, tmp35, tmp36, tmp40, tmp42, tmp44, tmp46) &
       !$omp& reduction(+: tmp48, tmp64, tmp66, tmp68)
+      allocate (tmp69(npt))
+      allocate (tmp70(npt))
       block
-         real(wp) :: tmp69(npt)
-         real(wp) :: tmp70(npt)
          real(wp) :: tmp81, tmp82, tmp83, tmp84, tmp85, tmp86, tmp87, tmp88, tmp89, tmp90, tmp91, &
                      tmp92, tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100, tmp101, &
                      tmp103, tmp104, tmp107, tmp111, tmp455, tmp465, tmp470, tmp484, tmp495, &
@@ -8570,6 +8571,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp69)
+      deallocate (tmp70)
       !$omp end parallel
       grad_r(1, :) = tmp34
       grad_r(2, :) = tmp35
@@ -8907,6 +8910,10 @@ contains
                   tmp32308, tmp32309, tmp32310, tmp32311, tmp32312, tmp32313, tmp32314, tmp32315, &
                   tmp32316, tmp32317, tmp32342, tmp32343, tmp32344, tmp32351, tmp32352, tmp32353, &
                   tmp32354, tmp32355, tmp32356, tmp32357, tmp32358
+      real(wp), allocatable :: tmp53(:), tmp54(:), tmp2854(:), tmp3198(:), tmp3546(:), tmp3974(:), &
+                               tmp4318(:), tmp6207(:), tmp7383(:), tmp7810(:), tmp9703(:), &
+                               tmp10880(:), tmp12071(:), tmp13277(:), tmp13278(:), tmp25494(:), &
+                               tmp25495(:), tmp32366(:)
       integer :: i, j
 
       stat = 0
@@ -9287,12 +9294,12 @@ contains
       tmp52 = tmp27*state%s20
       tmp51 = tmp52
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp53, tmp54) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1, tmp26, tmp35, tmp51) &
       !$omp& reduction(+: tmp37, tmp49)
+      allocate (tmp53(npt))
+      allocate (tmp54(npt))
       block
-         real(wp) :: tmp53(npt)
-         real(wp) :: tmp54(npt)
          real(wp) :: tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68, tmp69, &
                      tmp70, tmp71, tmp72, tmp73, tmp74, tmp75, tmp76, tmp79, tmp83, tmp86, tmp90, &
                      tmp109, tmp113, tmp118, tmp140, tmp141, tmp55, tmp56, tmp57, tmp58
@@ -12703,14 +12710,16 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp53)
+      deallocate (tmp54)
       !$omp end parallel
       tmp2853 = tmp38*state%s22
       tmp2852 = tmp2853
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp2854) &
       !$omp& shared(dr, dxi, npt, state, tmp2852)
+      allocate (tmp2854(npt))
       block
-         real(wp) :: tmp2854(npt)
          real(wp) :: tmp2856, tmp2857, tmp2858, tmp2859, tmp2860, tmp2861, tmp2862, tmp2863, &
                      tmp2864, tmp2866, tmp2867, tmp2870, tmp2874, tmp2884, tmp2888, tmp2893, &
                      tmp2923, tmp2924, tmp2855
@@ -13172,6 +13181,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp2854)
       !$omp end parallel
       tmp3190 = state%a*tmp26
       call gemv(state%s12, state%s22, tmp3191, trans="t")
@@ -13182,10 +13192,10 @@ contains
       tmp3197 = tmp38*tmp3195
       tmp3196 = tmp3197
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3198) &
       !$omp& shared(dr, dxi, npt, state, tmp3195, tmp3196)
+      allocate (tmp3198(npt))
       block
-         real(wp) :: tmp3198(npt)
          real(wp) :: tmp3200, tmp3201, tmp3202, tmp3203, tmp3204, tmp3205, tmp3206, tmp3207, &
                      tmp3208, tmp3210, tmp3211, tmp3214, tmp3218, tmp3228, tmp3232, tmp3237, &
                      tmp3267, tmp3268, tmp3199
@@ -13647,6 +13657,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3198)
       !$omp end parallel
       tmp3534 = tmp3194 + tmp3196
       tmp3535 = (-0.15915494309189535_wp)*tmp3534
@@ -13661,11 +13672,11 @@ contains
       tmp3545 = tmp27*tmp3543
       tmp3544 = tmp3545
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3546) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp3543) &
       !$omp& reduction(+: tmp3544)
+      allocate (tmp3546(npt))
       block
-         real(wp) :: tmp3546(npt)
          real(wp) :: tmp3547, tmp3548, tmp3549, tmp3550, tmp3551, tmp3552, tmp3553, tmp3554, &
                      tmp3555, tmp3556, tmp3557, tmp3558, tmp3559, tmp3560, tmp3561, tmp3563, &
                      tmp3564, tmp3567, tmp3571, tmp3581, tmp3585, tmp3590, tmp3715, tmp3716
@@ -14238,6 +14249,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3546)
       !$omp end parallel
       tmp3961 = tmp3542 + tmp3544
       tmp3962 = 0.15915494309189535_wp*tmp3961
@@ -14255,11 +14267,11 @@ contains
       tmp3973 = tmp38*state%s24
       tmp3972 = tmp3973
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3974) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp3972)
+      allocate (tmp3974(npt))
       block
-         real(wp) :: tmp3974(npt)
          real(wp) :: tmp3975, tmp3976, tmp3977, tmp3978, tmp3979, tmp3980, tmp3981, tmp3982, &
                      tmp3983, tmp3985, tmp3986, tmp3989, tmp3993, tmp4003, tmp4007, tmp4012, &
                      tmp4042, tmp4043
@@ -14717,6 +14729,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3974)
       !$omp end parallel
       tmp4309 = -tmp3972
       tmp4310 = tmp3971 + tmp4309
@@ -14730,11 +14743,11 @@ contains
       tmp4317 = tmp27*state%s16
       tmp4316 = tmp4317
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp4318) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp4316)
+      allocate (tmp4318(npt))
       block
-         real(wp) :: tmp4318(npt)
          real(wp) :: tmp4319, tmp4320, tmp4321, tmp4322, tmp4323, tmp4324, tmp4325, tmp4326, &
                      tmp4327, tmp4328, tmp4329, tmp4330, tmp4331, tmp4332, tmp4333, tmp4336, &
                      tmp4340, tmp4343, tmp4347, tmp4380, tmp4381, tmp4396, tmp4400, tmp4405
@@ -17051,6 +17064,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp4318)
       !$omp end parallel
       call gemv(state%s12, tmp4315, tmp6200)
       tmp6201 = tmp4316 + tmp6200
@@ -17060,11 +17074,11 @@ contains
       tmp6206 = tmp2*state%s18
       tmp6205 = tmp6206
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp6207) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp6205)
+      allocate (tmp6207(npt))
       block
-         real(wp) :: tmp6207(npt)
          real(wp) :: tmp6208, tmp6209, tmp6210, tmp6211, tmp6212, tmp6213, tmp6214, tmp6215, &
                      tmp6216, tmp6219, tmp6223, tmp6226, tmp6230, tmp6244, tmp6248, tmp6253, &
                      tmp6275, tmp6276
@@ -18533,14 +18547,15 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp6207)
       !$omp end parallel
       tmp7382 = tmp4317
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp7383) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp7382)
+      allocate (tmp7383(npt))
       block
-         real(wp) :: tmp7383(npt)
          real(wp) :: tmp7384, tmp7385, tmp7386, tmp7387, tmp7388, tmp7389, tmp7390, tmp7391, &
                      tmp7392, tmp7393, tmp7394, tmp7395, tmp7396, tmp7397, tmp7398, tmp7400, &
                      tmp7401, tmp7404, tmp7408, tmp7418, tmp7422, tmp7427, tmp7552, tmp7553
@@ -19113,6 +19128,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp7383)
       !$omp end parallel
       call gemv(state%s14, tmp4315, tmp7798)
       tmp7799 = tmp7382 + tmp7798
@@ -19129,11 +19145,11 @@ contains
       tmp7809 = tmp27*state%s33
       tmp7808 = tmp7809
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp7810) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp7808)
+      allocate (tmp7810(npt))
       block
-         real(wp) :: tmp7810(npt)
          real(wp) :: tmp7811, tmp7812, tmp7813, tmp7814, tmp7815, tmp7816, tmp7817, tmp7818, &
                      tmp7819, tmp7820, tmp7821, tmp7822, tmp7823, tmp7824, tmp7825, tmp7828, &
                      tmp7832, tmp7835, tmp7839, tmp7872, tmp7873, tmp7888, tmp7892, tmp7897
@@ -21450,6 +21466,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp7810)
       !$omp end parallel
       tmp9692 = da*state%s32
       call gemv(state%s12, tmp9692, tmp9693)
@@ -21463,11 +21480,11 @@ contains
       tmp9702 = tmp2*state%s20
       tmp9701 = tmp9702
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp9703) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp9701)
+      allocate (tmp9703(npt))
       block
-         real(wp) :: tmp9703(npt)
          real(wp) :: tmp9704, tmp9705, tmp9706, tmp9707, tmp9708, tmp9709, tmp9710, tmp9711, &
                      tmp9712, tmp9715, tmp9719, tmp9722, tmp9726, tmp9740, tmp9744, tmp9749, &
                      tmp9771, tmp9772
@@ -22954,15 +22971,16 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp9703)
       !$omp end parallel
       tmp10879 = tmp2*state%s35
       tmp10878 = tmp10879
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp10880) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp10878)
+      allocate (tmp10880(npt))
       block
-         real(wp) :: tmp10880(npt)
          real(wp) :: tmp10881, tmp10882, tmp10883, tmp10884, tmp10885, tmp10886, tmp10887, &
                      tmp10888, tmp10889, tmp10892, tmp10896, tmp10899, tmp10903, tmp10917, &
                      tmp10921, tmp10926, tmp10948, tmp10949
@@ -24455,6 +24473,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp10880)
       !$omp end parallel
       tmp12055 = da*state%s34
       call gemv(state%s13, tmp12055, tmp12056)
@@ -24475,10 +24494,10 @@ contains
       tmp12070 = tmp2*state%s37
       tmp12069 = tmp12070
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp12071) &
       !$omp& shared(dr, dxi, npt, state, tmp12069)
+      allocate (tmp12071(npt))
       block
-         real(wp) :: tmp12071(npt)
          real(wp) :: tmp12073, tmp12074, tmp12075, tmp12076, tmp12077, tmp12078, tmp12079, &
                      tmp12080, tmp12081, tmp12084, tmp12088, tmp12091, tmp12095, tmp12109, &
                      tmp12113, tmp12118, tmp12140, tmp12141, tmp12072
@@ -25975,6 +25994,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp12071)
       !$omp end parallel
       tmp13247 = state%s36*tmp3968
       call gemv(state%s13, tmp13247, tmp13248, trans="t")
@@ -26007,15 +26027,15 @@ contains
       tmp13275 = 0.0_wp
       tmp13276 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp13277, tmp13278) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp12067, tmp13247, tmp13251) &
       !$omp& shared(tmp13252, tmp13256, tmp13257, tmp13262, tmp13266) &
       !$omp& shared(tmp13268, tmp13269, tmp13270, tmp13272, tmp13274) &
       !$omp& shared(tmp13276, tmp3969, tmp4312, tmp4315, tmp7803) &
       !$omp& reduction(+: tmp13271, tmp13273, tmp13275)
+      allocate (tmp13277(npt))
+      allocate (tmp13278(npt))
       block
-         real(wp) :: tmp13277(npt)
-         real(wp) :: tmp13278(npt)
          real(wp) :: tmp13286, tmp13287, tmp13288, tmp13289, tmp13290, tmp13291, tmp13292, &
                      tmp13293, tmp13294, tmp13295, tmp13296, tmp13297, tmp13298, tmp13299, &
                      tmp13300, tmp13301, tmp13302, tmp13303, tmp13304, tmp13305, tmp13306, &
@@ -41034,6 +41054,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp13277)
+      deallocate (tmp13278)
       !$omp end parallel
       call gemv(state%s12, tmp13257, tmp25485, trans="t")
       tmp25486 = tmp13266 + tmp25485
@@ -41045,15 +41067,15 @@ contains
       tmp25492 = 0.0_wp
       tmp25493 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp25494, tmp25495) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp12067, tmp13247, tmp13251) &
       !$omp& shared(tmp13252, tmp13256, tmp13257, tmp13262, tmp13263) &
       !$omp& shared(tmp13264, tmp25488, tmp25493, tmp3969, tmp4312, tmp4315) &
       !$omp& shared(tmp7803) &
       !$omp& reduction(+: tmp25489, tmp25490, tmp25491, tmp25492)
+      allocate (tmp25494(npt))
+      allocate (tmp25495(npt))
       block
-         real(wp) :: tmp25494(npt)
-         real(wp) :: tmp25495(npt)
          real(wp) :: tmp25500, tmp25501, tmp25502, tmp25503, tmp25504, tmp25505, tmp25506, &
                      tmp25507, tmp25508, tmp25509, tmp25510, tmp25511, tmp25512, tmp25513, &
                      tmp25514, tmp25515, tmp25516, tmp25517, tmp25518, tmp25519, tmp25520, &
@@ -49628,6 +49650,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp25494)
+      deallocate (tmp25495)
       !$omp end parallel
       hvp_r(1, :) = tmp25489
       hvp_r(2, :) = tmp25490
@@ -49766,10 +49790,10 @@ contains
       tmp32365 = tmp27*state%s27
       tmp32364 = tmp32365
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp32366) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp32364)
+      allocate (tmp32366(npt))
       block
-         real(wp) :: tmp32366(npt)
          real(wp) :: tmp32368, tmp32369, tmp32370, tmp32371, tmp32372, tmp32373, tmp32374, &
                      tmp32375, tmp32376, tmp32377, tmp32378, tmp32379, tmp32380, tmp32381, &
                      tmp32382, tmp32384, tmp32385, tmp32388, tmp32392, tmp32402, tmp32406, &
@@ -50355,6 +50379,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp32366)
       !$omp end parallel
       call gemv(state%s14, tmp4312, tmp32782, trans="t")
       tmp32783 = tmp32364 + tmp32782
@@ -53266,6 +53291,7 @@ contains
       complex(wp) :: tmp3757, tmp3764, tmp3765, tmp3766, tmp3767, tmp3773, tmp3774, tmp3775, &
                      tmp3776, tmp3777, tmp3778, tmp3779, tmp3780, tmp3781, tmp3782, tmp3783, &
                      tmp3784
+      real(wp), allocatable :: tmp75(:), tmp76(:)
       integer :: i, j
 
       if (state%matrix_free) then
@@ -53502,14 +53528,14 @@ contains
       tmp72 = tmp73
       tmp74 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp75, tmp76) &
       !$omp& shared(npt, state, tmp43, tmp44, tmp45, tmp47, tmp49, tmp51) &
       !$omp& shared(tmp53) &
       !$omp& reduction(+: tmp40, tmp41, tmp42, tmp46, tmp48, tmp50, tmp52) &
       !$omp& reduction(+: tmp54, tmp70, tmp72, tmp74)
+      allocate (tmp75(npt))
+      allocate (tmp76(npt))
       block
-         real(wp) :: tmp75(npt)
-         real(wp) :: tmp76(npt)
          real(wp) :: tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, tmp97, tmp109, tmp110, tmp113, &
                      tmp117, tmp461, tmp471, tmp476, tmp490, tmp501, tmp533, tmp545, tmp559, &
                      tmp570, tmp621, tmp625, tmp637, tmp641, tmp651, tmp657, tmp662, tmp669, &
@@ -58163,6 +58189,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp75)
+      deallocate (tmp76)
       !$omp end parallel
       grad_r(1, :) = tmp40
       grad_r(2, :) = tmp41
@@ -58513,6 +58541,10 @@ contains
                                   tmp32823(:), tmp32824(:), tmp32825(:), tmp32826(:), tmp32827(:), &
                                   tmp32828(:), tmp32829(:), tmp32830(:), tmp32831(:), tmp32832(:), &
                                   tmp32833(:), tmp32834(:)
+      real(wp), allocatable :: tmp53(:), tmp54(:), tmp2854(:), tmp3202(:), tmp3554(:), tmp3984(:), &
+                               tmp4328(:), tmp6219(:), tmp7395(:), tmp7826(:), tmp9723(:), &
+                               tmp10900(:), tmp12095(:), tmp13307(:), tmp13308(:), tmp25526(:), &
+                               tmp25527(:), tmp32398(:)
       integer :: i, j
 
       stat = 0
@@ -58927,12 +58959,12 @@ contains
       tmp52 = tmp27*state%cx_s20
       tmp51 = tmp52
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp53, tmp54) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1, tmp26, tmp35, tmp51) &
       !$omp& reduction(+: tmp37, tmp49)
+      allocate (tmp53(npt))
+      allocate (tmp54(npt))
       block
-         real(wp) :: tmp53(npt)
-         real(wp) :: tmp54(npt)
          real(wp) :: tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp69, tmp70, tmp71, &
                      tmp72, tmp73, tmp74, tmp79, tmp83, tmp86, tmp90, tmp109, tmp113, tmp118, &
                      tmp140, tmp141
@@ -62344,14 +62376,16 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp53)
+      deallocate (tmp54)
       !$omp end parallel
       tmp2853 = tmp38*state%cx_s22
       tmp2852 = tmp2853
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp2854) &
       !$omp& shared(dr, dxi, npt, state, tmp2852)
+      allocate (tmp2854(npt))
       block
-         real(wp) :: tmp2854(npt)
          real(wp) :: tmp2856, tmp2857, tmp2858, tmp2859, tmp2860, tmp2861, tmp2862, tmp2863, &
                      tmp2866, tmp2867, tmp2870, tmp2874, tmp2884, tmp2888, tmp2893, tmp2923, &
                      tmp2924
@@ -62817,6 +62851,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp2854)
       !$omp end parallel
       tmp3190 = state%a*tmp26
       call gemv(state%cx_s12, real(state%cx_s22, wp), tmp3192, trans="t")
@@ -62831,10 +62866,10 @@ contains
       tmp3201 = tmp38*tmp3199
       tmp3200 = tmp3201
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3202) &
       !$omp& shared(dr, dxi, npt, state, tmp3199, tmp3200)
+      allocate (tmp3202(npt))
       block
-         real(wp) :: tmp3202(npt)
          real(wp) :: tmp3204, tmp3205, tmp3206, tmp3207, tmp3208, tmp3209, tmp3210, tmp3211, &
                      tmp3214, tmp3215, tmp3218, tmp3222, tmp3232, tmp3236, tmp3241, tmp3271, &
                      tmp3272
@@ -63300,6 +63335,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3202)
       !$omp end parallel
       tmp3538 = tmp3196 + tmp3200
       tmp3539 = (-0.15915494309189535_wp)*tmp3538
@@ -63318,11 +63354,11 @@ contains
       tmp3553 = tmp27*tmp3551
       tmp3552 = tmp3553
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3554) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp3551) &
       !$omp& reduction(+: tmp3552)
+      allocate (tmp3554(npt))
       block
-         real(wp) :: tmp3554(npt)
          real(wp) :: tmp3556, tmp3557, tmp3558, tmp3559, tmp3560, tmp3561, tmp3562, tmp3563, &
                      tmp3564, tmp3565, tmp3566, tmp3567, tmp3568, tmp3569, tmp3571, tmp3572, &
                      tmp3575, tmp3579, tmp3589, tmp3593, tmp3598, tmp3723, tmp3724
@@ -63899,6 +63935,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3554)
       !$omp end parallel
       tmp3969 = tmp3548 + tmp3552
       tmp3970 = 0.15915494309189535_wp*tmp3969
@@ -63918,11 +63955,11 @@ contains
       tmp3983 = tmp38*state%cx_s24
       tmp3982 = tmp3983
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp3984) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp3982)
+      allocate (tmp3984(npt))
       block
-         real(wp) :: tmp3984(npt)
          real(wp) :: tmp3985, tmp3986, tmp3987, tmp3988, tmp3989, tmp3990, tmp3991, tmp3992, &
                      tmp3995, tmp3996, tmp3999, tmp4003, tmp4013, tmp4017, tmp4022, tmp4052, &
                      tmp4053
@@ -64384,6 +64421,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp3984)
       !$omp end parallel
       tmp4319 = -tmp3982
       tmp4320 = tmp3981 + tmp4319
@@ -64397,11 +64435,11 @@ contains
       tmp4327 = tmp27*state%cx_s16
       tmp4326 = tmp4327
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp4328) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp4326)
+      allocate (tmp4328(npt))
       block
-         real(wp) :: tmp4328(npt)
          real(wp) :: tmp4330, tmp4331, tmp4332, tmp4333, tmp4334, tmp4335, tmp4336, tmp4337, &
                      tmp4338, tmp4339, tmp4340, tmp4341, tmp4342, tmp4343, tmp4346, tmp4350, &
                      tmp4353, tmp4357, tmp4390, tmp4391, tmp4406, tmp4410, tmp4415
@@ -66722,6 +66760,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp4328)
       !$omp end parallel
       call gemv(state%cx_s12, real(tmp4325, wp), tmp6211)
       call gemv(state%cx_s12, aimag(tmp4325), tmp6212)
@@ -66733,11 +66772,11 @@ contains
       tmp6218 = tmp2*state%cx_s18
       tmp6217 = tmp6218
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp6219) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp6217)
+      allocate (tmp6219(npt))
       block
-         real(wp) :: tmp6219(npt)
          real(wp) :: tmp6220, tmp6221, tmp6222, tmp6223, tmp6224, tmp6225, tmp6226, tmp6227, &
                      tmp6231, tmp6235, tmp6238, tmp6242, tmp6256, tmp6260, tmp6265, tmp6287, &
                      tmp6288
@@ -68210,14 +68249,15 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp6219)
       !$omp end parallel
       tmp7394 = tmp4327
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp7395) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp7394)
+      allocate (tmp7395(npt))
       block
-         real(wp) :: tmp7395(npt)
          real(wp) :: tmp7397, tmp7398, tmp7399, tmp7400, tmp7401, tmp7402, tmp7403, tmp7404, &
                      tmp7405, tmp7406, tmp7407, tmp7408, tmp7409, tmp7410, tmp7412, tmp7413, &
                      tmp7416, tmp7420, tmp7430, tmp7434, tmp7439, tmp7564, tmp7565
@@ -68794,6 +68834,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp7395)
       !$omp end parallel
       call gemv(state%s14, real(tmp4325, wp), tmp7811)
       call gemv(state%s14, aimag(tmp4325), tmp7812)
@@ -68814,11 +68855,11 @@ contains
       tmp7825 = tmp27*state%cx_s33
       tmp7824 = tmp7825
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp7826) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp7824)
+      allocate (tmp7826(npt))
       block
-         real(wp) :: tmp7826(npt)
          real(wp) :: tmp7828, tmp7829, tmp7830, tmp7831, tmp7832, tmp7833, tmp7834, tmp7835, &
                      tmp7836, tmp7837, tmp7838, tmp7839, tmp7840, tmp7841, tmp7844, tmp7848, &
                      tmp7851, tmp7855, tmp7888, tmp7889, tmp7904, tmp7908, tmp7913
@@ -71139,6 +71180,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp7826)
       !$omp end parallel
       tmp9708 = da*state%cx_s32
       call gemv(state%cx_s12, real(tmp9708, wp), tmp9710)
@@ -71156,11 +71198,11 @@ contains
       tmp9722 = tmp2*state%cx_s20
       tmp9721 = tmp9722
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp9723) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp9721)
+      allocate (tmp9723(npt))
       block
-         real(wp) :: tmp9723(npt)
          real(wp) :: tmp9725, tmp9726, tmp9727, tmp9728, tmp9729, tmp9730, tmp9731, tmp9732, &
                      tmp9735, tmp9739, tmp9742, tmp9746, tmp9760, tmp9764, tmp9769, tmp9791, &
                      tmp9792
@@ -72651,15 +72693,16 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp9723)
       !$omp end parallel
       tmp10899 = tmp2*state%cx_s35
       tmp10898 = tmp10899
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp10900) &
       !$omp& shared(dr, dxi, npt, state) &
       !$omp& reduction(+: tmp10898)
+      allocate (tmp10900(npt))
       block
-         real(wp) :: tmp10900(npt)
          real(wp) :: tmp10902, tmp10903, tmp10904, tmp10905, tmp10906, tmp10907, tmp10908, &
                      tmp10909, tmp10912, tmp10916, tmp10919, tmp10923, tmp10937, tmp10941, &
                      tmp10946, tmp10968, tmp10969
@@ -74156,6 +74199,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp10900)
       !$omp end parallel
       tmp12075 = da*state%cx_s34
       call gemv(state%cx_s13, real(tmp12075, wp), tmp12077)
@@ -74180,10 +74224,10 @@ contains
       tmp12094 = tmp2*state%cx_s37
       tmp12093 = tmp12094
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp12095) &
       !$omp& shared(dr, dxi, npt, state, tmp12093)
+      allocate (tmp12095(npt))
       block
-         real(wp) :: tmp12095(npt)
          real(wp) :: tmp12097, tmp12098, tmp12099, tmp12100, tmp12101, tmp12102, tmp12103, &
                      tmp12104, tmp12108, tmp12112, tmp12115, tmp12119, tmp12133, tmp12137, &
                      tmp12142, tmp12164, tmp12165
@@ -75684,6 +75728,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp12095)
       !$omp end parallel
       tmp13271 = state%cx_s36*tmp3976
       call gemv(state%cx_s13, real(tmp13271, wp), tmp13273, trans="t")
@@ -75722,15 +75767,15 @@ contains
       tmp13305 = 0.0_wp
       tmp13306 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp13307, tmp13308) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp12091, tmp13271, tmp13277) &
       !$omp& shared(tmp13278, tmp13284, tmp13285, tmp13292, tmp13296) &
       !$omp& shared(tmp13298, tmp13299, tmp13300, tmp13302, tmp13304) &
       !$omp& shared(tmp13306, tmp3977, tmp4322, tmp4325, tmp7817) &
       !$omp& reduction(+: tmp13301, tmp13303, tmp13305)
+      allocate (tmp13307(npt))
+      allocate (tmp13308(npt))
       block
-         real(wp) :: tmp13307(npt)
-         real(wp) :: tmp13308(npt)
          real(wp) :: tmp13317, tmp13318, tmp13319, tmp13320, tmp13321, tmp13322, tmp13323, &
                      tmp13324, tmp13325, tmp13326, tmp13327, tmp13328, tmp13329, tmp13330, &
                      tmp13354, tmp13358, tmp13361, tmp13365, tmp13403, tmp13404, tmp13419, &
@@ -90750,6 +90795,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp13307)
+      deallocate (tmp13308)
       !$omp end parallel
       call gemv(state%cx_s12, real(tmp13285, wp), tmp25516, trans="t")
       call gemv(state%cx_s12, aimag(tmp13285), tmp25517, trans="t")
@@ -90763,15 +90810,15 @@ contains
       tmp25524 = 0.0_wp
       tmp25525 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp25526, tmp25527) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp12091, tmp13271, tmp13277) &
       !$omp& shared(tmp13278, tmp13284, tmp13285, tmp13292, tmp13293) &
       !$omp& shared(tmp13294, tmp25520, tmp25525, tmp3977, tmp4322, tmp4325) &
       !$omp& shared(tmp7817) &
       !$omp& reduction(+: tmp25521, tmp25522, tmp25523, tmp25524)
+      allocate (tmp25526(npt))
+      allocate (tmp25527(npt))
       block
-         real(wp) :: tmp25526(npt)
-         real(wp) :: tmp25527(npt)
          real(wp) :: tmp25532, tmp25533, tmp25534, tmp25535, tmp25536, tmp25537, tmp25538, &
                      tmp25547, tmp25548, tmp25549, tmp25550, tmp25551, tmp25552, tmp25553, &
                      tmp25575, tmp25576, tmp25579, tmp25583, tmp25632, tmp25636, tmp25641, &
@@ -99346,6 +99393,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp25526)
+      deallocate (tmp25527)
       !$omp end parallel
       hvp_r(1, :) = tmp25521
       hvp_r(2, :) = tmp25522
@@ -99484,10 +99533,10 @@ contains
       tmp32397 = tmp27*state%cx_s27
       tmp32396 = tmp32397
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp32398) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp32396)
+      allocate (tmp32398(npt))
       block
-         real(wp) :: tmp32398(npt)
          real(wp) :: tmp32401, tmp32402, tmp32403, tmp32404, tmp32405, tmp32406, tmp32407, &
                      tmp32408, tmp32409, tmp32410, tmp32411, tmp32412, tmp32413, tmp32414, &
                      tmp32416, tmp32417, tmp32420, tmp32424, tmp32434, tmp32438, tmp32443, &
@@ -100077,6 +100126,7 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp32398)
       !$omp end parallel
       call gemv(state%s14, real(tmp4322, wp), tmp32815, trans="t")
       call gemv(state%s14, aimag(tmp4322), tmp32816, trans="t")
@@ -100625,6 +100675,8 @@ contains
                                tmp2775(:), tmp2776(:), tmp2876(:), tmp2877(:)
       real(wp) :: tmp3, tmp4, tmp5, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp18, tmp19, &
                   tmp20, tmp1432, tmp1440, tmp1441, tmp1442, tmp2774, tmp2878, tmp2879
+      real(wp), allocatable :: tmp24(:), tmp25(:), tmp900(:), tmp901(:), tmp1444(:), tmp1546(:), &
+                               tmp2218(:), tmp2353(:), tmp2777(:)
       integer :: i, j
 
       stat = 0
@@ -100744,12 +100796,12 @@ contains
       tmp23 = tmp2*state%s29
       tmp22 = tmp23
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp24, tmp25) &
       !$omp& shared(npt, state, tmp22, tmp9) &
       !$omp& reduction(+: tmp1, tmp8)
+      allocate (tmp24(npt))
+      allocate (tmp25(npt))
       block
-         real(wp) :: tmp24(npt)
-         real(wp) :: tmp25(npt)
          real(wp) :: tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp40, &
                      tmp44, tmp47, tmp51, tmp26, tmp27
 
@@ -101857,6 +101909,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp24)
+      deallocate (tmp25)
       !$omp end parallel
       state%s30 = tmp22
       state%s17 = state%v + tmp1
@@ -101871,12 +101925,12 @@ contains
       tmp899 = tmp2*state%s27
       tmp898 = tmp899
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp900, tmp901) &
       !$omp& shared(npt, state, tmp898) &
       !$omp& reduction(+: tmp896)
+      allocate (tmp900(npt))
+      allocate (tmp901(npt))
       block
-         real(wp) :: tmp900(npt)
-         real(wp) :: tmp901(npt)
          real(wp) :: tmp903, tmp904, tmp905, tmp906, tmp907, tmp908, tmp909, tmp910, tmp911, &
                      tmp914, tmp918, tmp921, tmp925, tmp902
 
@@ -102587,6 +102641,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp900)
+      deallocate (tmp901)
       !$omp end parallel
       state%s19 = tmp896
       tmp1429 = state%s15*state%s17
@@ -102616,11 +102672,11 @@ contains
          tmp1443 = tmp1439*state%s20
          tmp1438 = tmp1443
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp1444) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp1438)
+         allocate (tmp1444(npt))
          block
-            real(wp) :: tmp1444(npt)
             real(wp) :: tmp1445, tmp1446, tmp1447, tmp1448, tmp1449, tmp1451, tmp1452, tmp1455, &
                         tmp1459
 
@@ -102791,16 +102847,17 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp1444)
          !$omp end parallel
          tmp1543 = state%a*tmp1438
          tmp1545 = tmp2*tmp1543
          tmp1544 = tmp1545
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp1546) &
          !$omp& shared(npt, state, tmp1543) &
          !$omp& reduction(+: tmp1544)
+         allocate (tmp1546(npt))
          block
-            real(wp) :: tmp1546(npt)
             real(wp) :: tmp1547, tmp1548, tmp1549, tmp1550, tmp1551, tmp1552, tmp1553, tmp1554, &
                         tmp1557, tmp1561, tmp1564, tmp1568
 
@@ -103653,6 +103710,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp1546)
          !$omp end parallel
          tmp2213 = (-0.15915494309189535_wp)*tmp1544
          tmp2214 = tmp1438 + tmp2213
@@ -103660,10 +103718,10 @@ contains
          tmp2217 = tmp2*state%s20
          tmp2216 = tmp2217
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2218) &
          !$omp& shared(npt, state, tmp2216)
+         allocate (tmp2218(npt))
          block
-            real(wp) :: tmp2218(npt)
             real(wp) :: tmp2220, tmp2221, tmp2222, tmp2223, tmp2224, tmp2225, tmp2226, tmp2227, &
                         tmp2229, tmp2230, tmp2233, tmp2237, tmp2219
 
@@ -103880,6 +103938,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2218)
          !$omp end parallel
          tmp2348 = state%a*tmp2216
          tmp2349 = 0.15915494309189535_wp*tmp2348
@@ -103887,11 +103946,11 @@ contains
          tmp2352 = tmp10*tmp2350
          tmp2351 = tmp2352
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2353) &
          !$omp& shared(npt, state, tmp2350) &
          !$omp& reduction(+: tmp2351)
+         allocate (tmp2353(npt))
          block
-            real(wp) :: tmp2353(npt)
             real(wp) :: tmp2354, tmp2355, tmp2356, tmp2357, tmp2358, tmp2361, tmp2365, tmp2368, &
                         tmp2372
 
@@ -104445,6 +104504,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2353)
          !$omp end parallel
          tmp2770 = state%s2*tmp2351
          tmp2771 = tmp2215 + tmp2770
@@ -104454,11 +104514,11 @@ contains
          tmp2776 = tmp1439*state%s18
          tmp2775 = tmp2776
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2777) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp2775)
+         allocate (tmp2777(npt))
          block
-            real(wp) :: tmp2777(npt)
             real(wp) :: tmp2778, tmp2779, tmp2780, tmp2781, tmp2782, tmp2784, tmp2785, tmp2788, &
                         tmp2792
 
@@ -104629,6 +104689,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2777)
          !$omp end parallel
          tmp2876 = -tmp2775
          tmp2877 = tmp895 + tmp2876
@@ -104707,6 +104768,7 @@ contains
                   tmp1272, tmp1273, tmp1274, tmp1275, tmp1276, tmp1281, tmp1282, tmp1283, tmp1284, &
                   tmp1285, tmp4892, tmp4894, tmp4895, tmp4896, tmp4897, tmp4899, tmp4900, tmp4901, &
                   tmp4902, tmp4903, tmp4904, tmp4905, tmp4906, tmp4907, tmp4908, tmp4909, tmp4910
+      real(wp), allocatable :: tmp46(:), tmp47(:), tmp1308(:), tmp1309(:)
       integer :: i, j
 
       stat = 0
@@ -104892,12 +104954,12 @@ contains
       tmp45 = tmp29*state%s20
       tmp44 = tmp45
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp46, tmp47) &
       !$omp& shared(npt, state, tmp13, tmp27, tmp7) &
       !$omp& reduction(+: tmp1, tmp26, tmp28, tmp44)
+      allocate (tmp46(npt))
+      allocate (tmp47(npt))
       block
-         real(wp) :: tmp46(npt)
-         real(wp) :: tmp47(npt)
          real(wp) :: tmp51, tmp52, tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60, tmp61, &
                      tmp62, tmp63, tmp65, tmp66, tmp69, tmp73, tmp243, tmp254, tmp262, tmp272, &
                      tmp277, tmp284, tmp297, tmp302, tmp390, tmp393, tmp412, tmp814, tmp48, tmp49, &
@@ -106400,6 +106462,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp46)
+      deallocate (tmp47)
       !$omp end parallel
       state%s32 = tmp1
       state%s34 = tmp7
@@ -106485,14 +106549,14 @@ contains
       tmp1305 = tmp1306
       tmp1307 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp1308, tmp1309) &
       !$omp& shared(npt, state, tmp1287, tmp1296, tmp1297, tmp1298, tmp1300) &
       !$omp& shared(tmp1302, tmp1304) &
       !$omp& reduction(+: tmp1288, tmp1289, tmp1292, tmp1294, tmp1295) &
       !$omp& reduction(+: tmp1299, tmp1301, tmp1303, tmp1305, tmp1307)
+      allocate (tmp1308(npt))
+      allocate (tmp1309(npt))
       block
-         real(wp) :: tmp1308(npt)
-         real(wp) :: tmp1309(npt)
          real(wp) :: tmp1319, tmp1320, tmp1321, tmp1322, tmp1323, tmp1324, tmp1325, tmp1326, &
                      tmp1327, tmp1328, tmp1329, tmp1330, tmp1331, tmp1332, tmp1333, tmp1334, &
                      tmp1335, tmp1336, tmp1337, tmp1338, tmp1339, tmp1340, tmp1341, tmp1343, &
@@ -111056,6 +111120,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp1308)
+      deallocate (tmp1309)
       !$omp end parallel
       grad_r(1, :) = tmp1288
       grad_r(2, :) = tmp1294
@@ -111386,6 +111452,8 @@ contains
                   tmp22893, tmp22894, tmp22895, tmp22896, tmp22897, tmp22898, tmp22923, tmp22924, &
                   tmp22925, tmp22932, tmp22933, tmp22934, tmp22935, tmp22936, tmp22937, tmp22938, &
                   tmp22939
+      real(wp), allocatable :: tmp79(:), tmp80(:), tmp2963(:), tmp2964(:), tmp5886(:), tmp5887(:), &
+                               tmp8563(:), tmp8564(:)
       integer :: i, j
 
       stat = 0
@@ -111801,13 +111869,13 @@ contains
       tmp78 = tmp5*state%s20
       tmp77 = tmp78
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp79, tmp80) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp13, tmp19, tmp3, tmp4, tmp44) &
       !$omp& shared(tmp77) &
       !$omp& reduction(+: tmp57, tmp62, tmp63, tmp75)
+      allocate (tmp79(npt))
+      allocate (tmp80(npt))
       block
-         real(wp) :: tmp79(npt)
-         real(wp) :: tmp80(npt)
          real(wp) :: tmp86, tmp87, tmp88, tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, &
                      tmp97, tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp107, tmp111, &
                      tmp114, tmp118, tmp156, tmp157, tmp172, tmp176, tmp181, tmp81, tmp82, tmp83, &
@@ -115286,6 +115354,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp79)
+      deallocate (tmp80)
       !$omp end parallel
       tmp2909 = state%a*tmp4
       tmp2910 = da*tmp13
@@ -115346,14 +115416,14 @@ contains
       tmp2962 = state%s2*tmp2961
       tmp2953 = tmp2962
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp2963, tmp2964) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp2911, tmp2912, tmp2915) &
       !$omp& shared(tmp2916, tmp2919, tmp2920, tmp2921, tmp2922, tmp2923) &
       !$omp& shared(tmp2924) &
       !$omp& reduction(+: tmp2936, tmp2941, tmp2946, tmp2953)
+      allocate (tmp2963(npt))
+      allocate (tmp2964(npt))
       block
-         real(wp) :: tmp2963(npt)
-         real(wp) :: tmp2964(npt)
          real(wp) :: tmp2966, tmp2967, tmp2968, tmp2969, tmp2970, tmp2971, tmp2972, tmp2973, &
                      tmp2974, tmp2975, tmp2976, tmp2977, tmp2978, tmp2979, tmp2980, tmp2981, &
                      tmp2982, tmp2983, tmp2984, tmp2985, tmp2986, tmp2987, tmp2988, tmp2989, &
@@ -118928,6 +118998,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp2963)
+      deallocate (tmp2964)
       !$omp end parallel
       tmp5849 = tmp19 + tmp2936
       tmp5850 = state%s2*tmp5849
@@ -118971,13 +119043,13 @@ contains
       tmp5885 = tmp5883 + tmp5884
       tmp5882 = tmp5885
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp5886, tmp5887) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp5855, tmp5856, tmp5865) &
       !$omp& shared(tmp5866, tmp5874, tmp5878, tmp5882) &
       !$omp& reduction(+: tmp5867, tmp5880)
+      allocate (tmp5886(npt))
+      allocate (tmp5887(npt))
       block
-         real(wp) :: tmp5886(npt)
-         real(wp) :: tmp5887(npt)
          real(wp) :: tmp5892, tmp5893, tmp5894, tmp5895, tmp5896, tmp5897, tmp5898, tmp5899, &
                      tmp5900, tmp5901, tmp5902, tmp5903, tmp5904, tmp5905, tmp5906, tmp5907, &
                      tmp5908, tmp5909, tmp5910, tmp5911, tmp5912, tmp5913, tmp5916, tmp5920, &
@@ -122235,6 +122307,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp5886)
+      deallocate (tmp5887)
       !$omp end parallel
       tmp8527 = 0.0_wp
       call state%solver%solve(state%op3, .false., tmp5867, tmp8527, error)
@@ -122275,16 +122349,16 @@ contains
       tmp8562 = tmp8560 + tmp8561
       tmp8559 = tmp8562
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp8563, tmp8564) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp2919, tmp3, tmp5855, tmp5856) &
       !$omp& shared(tmp5865, tmp5866, tmp8528, tmp8531, tmp8532, tmp8535) &
       !$omp& shared(tmp8539, tmp8540, tmp8541, tmp8544, tmp8548, tmp8549) &
       !$omp& shared(tmp8550, tmp8552, tmp8554, tmp8556, tmp8558, tmp8559) &
       !$omp& reduction(+: tmp8545, tmp8546, tmp8547, tmp8551, tmp8553) &
       !$omp& reduction(+: tmp8555, tmp8557)
+      allocate (tmp8563(npt))
+      allocate (tmp8564(npt))
       block
-         real(wp) :: tmp8563(npt)
-         real(wp) :: tmp8564(npt)
          real(wp) :: tmp8576, tmp8577, tmp8578, tmp8579, tmp8580, tmp8581, tmp8582, tmp8583, &
                      tmp8584, tmp8585, tmp8586, tmp8587, tmp8588, tmp8589, tmp8590, tmp8591, &
                      tmp8592, tmp8593, tmp8594, tmp8595, tmp8596, tmp8597, tmp8598, tmp8599, &
@@ -140116,6 +140190,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp8563)
+      deallocate (tmp8564)
       !$omp end parallel
       hvp_r(1, :) = tmp8545
       hvp_r(2, :) = tmp8546
@@ -140345,6 +140421,7 @@ contains
                                tmp1770(:), tmp1771(:)
       real(wp) :: tmp6, tmp7, tmp8, tmp14, tmp15, tmp16, tmp17, tmp18, tmp19, tmp20, tmp21, tmp22, &
                   tmp23
+      real(wp), allocatable :: tmp25(:), tmp26(:), tmp903(:), tmp904(:)
       integer :: i, j
 
       stat = 0
@@ -140437,12 +140514,12 @@ contains
       tmp24 = tmp13*tmp3
       tmp12 = tmp24
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp25, tmp26) &
       !$omp& shared(npt, state, tmp1, tmp12, tmp3) &
       !$omp& reduction(+: tmp11, tmp4)
+      allocate (tmp25(npt))
+      allocate (tmp26(npt))
       block
-         real(wp) :: tmp25(npt)
-         real(wp) :: tmp26(npt)
          real(wp) :: tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp39, tmp43, &
                      tmp46, tmp50, tmp27
 
@@ -141535,6 +141612,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp25)
+      deallocate (tmp26)
       !$omp end parallel
       tmp889 = dv + tmp4
       tmp890 = state%s15*tmp889
@@ -141555,12 +141634,12 @@ contains
       tmp902 = tmp900 + tmp901
       tmp899 = tmp902
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp903, tmp904) &
       !$omp& shared(npt, state, tmp892, tmp894, tmp895, tmp899) &
       !$omp& reduction(+: tmp896)
+      allocate (tmp903(npt))
+      allocate (tmp904(npt))
       block
-         real(wp) :: tmp903(npt)
-         real(wp) :: tmp904(npt)
          real(wp) :: tmp906, tmp907, tmp908, tmp909, tmp910, tmp911, tmp912, tmp913, tmp914, &
                      tmp915, tmp918, tmp922, tmp925, tmp929, tmp905
 
@@ -142666,6 +142745,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp903)
+      deallocate (tmp904)
       !$omp end parallel
       tmp1765 = tmp890 + tmp896
       tmp1766 = 0.0_wp
@@ -142875,6 +142956,8 @@ contains
                                   tmp2772(:), tmp2773(:), tmp2775(:), tmp2776(:), tmp2876(:), &
                                   tmp2877(:)
       complex(wp) :: tmp1432, tmp2774, tmp2878, tmp2879
+      real(wp), allocatable :: tmp24(:), tmp25(:), tmp900(:), tmp901(:), tmp1444(:), tmp1546(:), &
+                               tmp2218(:), tmp2353(:), tmp2777(:)
       integer :: i, j
 
       stat = 0
@@ -142994,12 +143077,12 @@ contains
       tmp23 = tmp2*state%cx_s29
       tmp22 = tmp23
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp24, tmp25) &
       !$omp& shared(npt, state, tmp22, tmp9) &
       !$omp& reduction(+: tmp1, tmp8)
+      allocate (tmp24(npt))
+      allocate (tmp25(npt))
       block
-         real(wp) :: tmp24(npt)
-         real(wp) :: tmp25(npt)
          real(wp) :: tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp40, tmp44, tmp47, tmp51
          complex(wp) :: tmp28, tmp36, tmp37, tmp26, tmp27
 
@@ -144109,6 +144192,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp24)
+      deallocate (tmp25)
       !$omp end parallel
       state%cx_s30 = tmp22
       state%cx_s17 = state%cx_v + tmp1
@@ -144123,12 +144208,12 @@ contains
       tmp899 = tmp2*state%cx_s27
       tmp898 = tmp899
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp900, tmp901) &
       !$omp& shared(npt, state, tmp898) &
       !$omp& reduction(+: tmp896)
+      allocate (tmp900(npt))
+      allocate (tmp901(npt))
       block
-         real(wp) :: tmp900(npt)
-         real(wp) :: tmp901(npt)
          real(wp) :: tmp903, tmp904, tmp905, tmp906, tmp909, tmp910, tmp911, tmp914, tmp918, &
                      tmp921, tmp925
          complex(wp) :: tmp907, tmp908, tmp902
@@ -144841,6 +144926,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp900)
+      deallocate (tmp901)
       !$omp end parallel
       state%cx_s19 = tmp896
       tmp1429 = state%cx_s15*state%cx_s17
@@ -144870,11 +144957,11 @@ contains
          tmp1443 = tmp1439*state%cx_s20
          tmp1438 = tmp1443
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp1444) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp1438)
+         allocate (tmp1444(npt))
          block
-            real(wp) :: tmp1444(npt)
             real(wp) :: tmp1445, tmp1446, tmp1447, tmp1448, tmp1451, tmp1452, tmp1455, tmp1459
             complex(wp) :: tmp1449
 
@@ -145048,16 +145135,17 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp1444)
          !$omp end parallel
          tmp1543 = state%a*tmp1438
          tmp1545 = tmp2*tmp1543
          tmp1544 = tmp1545
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp1546) &
          !$omp& shared(npt, state, tmp1543) &
          !$omp& reduction(+: tmp1544)
+         allocate (tmp1546(npt))
          block
-            real(wp) :: tmp1546(npt)
             real(wp) :: tmp1547, tmp1548, tmp1549, tmp1550, tmp1551, tmp1552, tmp1553, tmp1557, &
                         tmp1561, tmp1564, tmp1568
             complex(wp) :: tmp1554
@@ -145912,6 +146000,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp1546)
          !$omp end parallel
          tmp2213 = (-0.15915494309189535_wp)*tmp1544
          tmp2214 = tmp1438 + tmp2213
@@ -145919,10 +146008,10 @@ contains
          tmp2217 = tmp2*state%cx_s20
          tmp2216 = tmp2217
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2218) &
          !$omp& shared(npt, state, tmp2216)
+         allocate (tmp2218(npt))
          block
-            real(wp) :: tmp2218(npt)
             real(wp) :: tmp2221, tmp2222, tmp2223, tmp2224, tmp2225, tmp2226, tmp2227, tmp2229, &
                         tmp2230, tmp2233, tmp2237
             complex(wp) :: tmp2220, tmp2219
@@ -146143,6 +146232,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2218)
          !$omp end parallel
          tmp2348 = state%a*tmp2216
          tmp2349 = 0.15915494309189535_wp*tmp2348
@@ -146150,11 +146240,11 @@ contains
          tmp2352 = tmp10*tmp2350
          tmp2351 = tmp2352
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2353) &
          !$omp& shared(npt, state, tmp2350) &
          !$omp& reduction(+: tmp2351)
+         allocate (tmp2353(npt))
          block
-            real(wp) :: tmp2353(npt)
             real(wp) :: tmp2355, tmp2356, tmp2357, tmp2358, tmp2361, tmp2365, tmp2368, tmp2372
             complex(wp) :: tmp2354
 
@@ -146711,6 +146801,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2353)
          !$omp end parallel
          tmp2770 = state%cx_s2*tmp2351
          tmp2771 = tmp2215 + tmp2770
@@ -146720,11 +146811,11 @@ contains
          tmp2776 = tmp1439*state%cx_s18
          tmp2775 = tmp2776
          !$omp parallel &
-         !$omp& private(i, j) &
+         !$omp& private(i, j, tmp2777) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp2775)
+         allocate (tmp2777(npt))
          block
-            real(wp) :: tmp2777(npt)
             real(wp) :: tmp2778, tmp2779, tmp2780, tmp2781, tmp2784, tmp2785, tmp2788, tmp2792
             complex(wp) :: tmp2782
 
@@ -146898,6 +146989,7 @@ contains
             end do
             !$omp end do
          end block
+         deallocate (tmp2777)
          !$omp end parallel
          tmp2876 = -tmp2775
          tmp2877 = tmp895 + tmp2876
@@ -146980,6 +147072,7 @@ contains
       complex(wp) :: tmp4892, tmp4894, tmp4895, tmp4896, tmp4897, tmp4899, tmp4900, tmp4901, &
                      tmp4902, tmp4903, tmp4904, tmp4905, tmp4906, tmp4907, tmp4908, tmp4909, &
                      tmp4910
+      real(wp), allocatable :: tmp46(:), tmp47(:), tmp1308(:), tmp1309(:)
       integer :: i, j
 
       stat = 0
@@ -147165,12 +147258,12 @@ contains
       tmp45 = tmp29*state%cx_s20
       tmp44 = tmp45
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp46, tmp47) &
       !$omp& shared(npt, state, tmp13, tmp27, tmp7) &
       !$omp& reduction(+: tmp1, tmp26, tmp28, tmp44)
+      allocate (tmp46(npt))
+      allocate (tmp47(npt))
       block
-         real(wp) :: tmp46(npt)
-         real(wp) :: tmp47(npt)
          real(wp) :: tmp51, tmp52, tmp53, tmp54, tmp56, tmp57, tmp58, tmp65, tmp66, tmp69, tmp73, &
                      tmp243, tmp254, tmp262, tmp272, tmp277, tmp284, tmp297, tmp302, tmp390, &
                      tmp393, tmp412, tmp814
@@ -148676,6 +148769,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp46)
+      deallocate (tmp47)
       !$omp end parallel
       state%cx_s32 = tmp1
       state%cx_s34 = tmp7
@@ -148761,14 +148856,14 @@ contains
       tmp1305 = tmp1306
       tmp1307 = 0.0_wp
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp1308, tmp1309) &
       !$omp& shared(npt, state, tmp1287, tmp1296, tmp1297, tmp1298, tmp1300) &
       !$omp& shared(tmp1302, tmp1304) &
       !$omp& reduction(+: tmp1288, tmp1289, tmp1292, tmp1294, tmp1295) &
       !$omp& reduction(+: tmp1299, tmp1301, tmp1303, tmp1305, tmp1307)
+      allocate (tmp1308(npt))
+      allocate (tmp1309(npt))
       block
-         real(wp) :: tmp1308(npt)
-         real(wp) :: tmp1309(npt)
          real(wp) :: tmp1323, tmp1324, tmp1325, tmp1326, tmp1327, tmp1328, tmp1329, tmp1343, &
                      tmp1344, tmp1347, tmp1351, tmp1694, tmp1704, tmp1709, tmp1723, tmp1734, &
                      tmp1766, tmp1778, tmp1792, tmp1803, tmp1854, tmp1858, tmp1870, tmp1874, &
@@ -153333,6 +153428,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp1308)
+      deallocate (tmp1309)
       !$omp end parallel
       grad_r(1, :) = tmp1288
       grad_r(2, :) = tmp1294
@@ -153663,6 +153760,8 @@ contains
                                   tmp22947(:), tmp22948(:), tmp22949(:), tmp22950(:), tmp22951(:), &
                                   tmp22952(:), tmp22953(:), tmp22954(:), tmp22955(:), tmp22956(:), &
                                   tmp22957(:), tmp22958(:), tmp22959(:), tmp22960(:), tmp22961(:)
+      real(wp), allocatable :: tmp79(:), tmp80(:), tmp2963(:), tmp2964(:), tmp5886(:), tmp5887(:), &
+                               tmp8563(:), tmp8564(:)
       integer :: i, j
 
       stat = 0
@@ -154078,13 +154177,13 @@ contains
       tmp78 = tmp5*state%cx_s20
       tmp77 = tmp78
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp79, tmp80) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp13, tmp19, tmp3, tmp4, tmp44) &
       !$omp& shared(tmp77) &
       !$omp& reduction(+: tmp57, tmp62, tmp63, tmp75)
+      allocate (tmp79(npt))
+      allocate (tmp80(npt))
       block
-         real(wp) :: tmp79(npt)
-         real(wp) :: tmp80(npt)
          real(wp) :: tmp87, tmp88, tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, tmp97, &
                      tmp98, tmp99, tmp100, tmp107, tmp111, tmp114, tmp118, tmp156, tmp157, tmp172, &
                      tmp176, tmp181
@@ -157564,6 +157663,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp79)
+      deallocate (tmp80)
       !$omp end parallel
       tmp2909 = state%a*tmp4
       tmp2910 = da*tmp13
@@ -157624,14 +157725,14 @@ contains
       tmp2962 = state%cx_s2*tmp2961
       tmp2953 = tmp2962
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp2963, tmp2964) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp2911, tmp2912, tmp2915) &
       !$omp& shared(tmp2916, tmp2919, tmp2920, tmp2921, tmp2922, tmp2923) &
       !$omp& shared(tmp2924) &
       !$omp& reduction(+: tmp2936, tmp2941, tmp2946, tmp2953)
+      allocate (tmp2963(npt))
+      allocate (tmp2964(npt))
       block
-         real(wp) :: tmp2963(npt)
-         real(wp) :: tmp2964(npt)
          real(wp) :: tmp2966, tmp2967, tmp2968, tmp2969, tmp2970, tmp2971, tmp2972, tmp2973, &
                      tmp2978, tmp2979, tmp2980, tmp2982, tmp2983, tmp2984, tmp2995, tmp2996, &
                      tmp2999, tmp3003, tmp3026, tmp3030, tmp3035, tmp3101, tmp3102
@@ -161208,6 +161309,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp2963)
+      deallocate (tmp2964)
       !$omp end parallel
       tmp5849 = tmp19 + tmp2936
       tmp5850 = state%cx_s2*tmp5849
@@ -161251,13 +161354,13 @@ contains
       tmp5885 = tmp5883 + tmp5884
       tmp5882 = tmp5885
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp5886, tmp5887) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp5855, tmp5856, tmp5865) &
       !$omp& shared(tmp5866, tmp5874, tmp5878, tmp5882) &
       !$omp& reduction(+: tmp5867, tmp5880)
+      allocate (tmp5886(npt))
+      allocate (tmp5887(npt))
       block
-         real(wp) :: tmp5886(npt)
-         real(wp) :: tmp5887(npt)
          real(wp) :: tmp5892, tmp5893, tmp5894, tmp5895, tmp5896, tmp5897, tmp5898, tmp5899, &
                      tmp5906, tmp5907, tmp5908, tmp5910, tmp5911, tmp5912, tmp5916, tmp5920, &
                      tmp5923, tmp5927, tmp5946, tmp5950, tmp5955, tmp5977, tmp5978
@@ -164515,6 +164618,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp5886)
+      deallocate (tmp5887)
       !$omp end parallel
       tmp8527 = 0.0_wp
       call state%solver%solve_complex(state%op3, .false., tmp5867, tmp8527, error)
@@ -164555,16 +164660,16 @@ contains
       tmp8562 = tmp8560 + tmp8561
       tmp8559 = tmp8562
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp8563, tmp8564) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp2919, tmp3, tmp5855, tmp5856) &
       !$omp& shared(tmp5865, tmp5866, tmp8528, tmp8531, tmp8532, tmp8535) &
       !$omp& shared(tmp8539, tmp8540, tmp8541, tmp8544, tmp8548, tmp8549) &
       !$omp& shared(tmp8550, tmp8552, tmp8554, tmp8556, tmp8558, tmp8559) &
       !$omp& reduction(+: tmp8545, tmp8546, tmp8547, tmp8551, tmp8553) &
       !$omp& reduction(+: tmp8555, tmp8557)
+      allocate (tmp8563(npt))
+      allocate (tmp8564(npt))
       block
-         real(wp) :: tmp8563(npt)
-         real(wp) :: tmp8564(npt)
          real(wp) :: tmp8576, tmp8577, tmp8578, tmp8579, tmp8580, tmp8581, tmp8582, tmp8591, &
                      tmp8592, tmp8593, tmp8594, tmp8595, tmp8596, tmp8597, tmp8619, tmp8620, &
                      tmp8623, tmp8627, tmp8676, tmp8680, tmp8685, tmp8796, tmp8797, tmp9574, &
@@ -182397,6 +182502,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp8563)
+      deallocate (tmp8564)
       !$omp end parallel
       hvp_r(1, :) = tmp8545
       hvp_r(2, :) = tmp8546
@@ -182627,6 +182734,7 @@ contains
                                   tmp898(:), tmp899(:), tmp900(:), tmp901(:), tmp902(:), &
                                   tmp1765(:), tmp1766(:), tmp1767(:), tmp1768(:), tmp1769(:), &
                                   tmp1770(:), tmp1771(:)
+      real(wp), allocatable :: tmp25(:), tmp26(:), tmp903(:), tmp904(:)
       integer :: i, j
 
       stat = 0
@@ -182719,12 +182827,12 @@ contains
       tmp24 = tmp13*tmp3
       tmp12 = tmp24
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp25, tmp26) &
       !$omp& shared(npt, state, tmp1, tmp12, tmp3) &
       !$omp& reduction(+: tmp11, tmp4)
+      allocate (tmp25(npt))
+      allocate (tmp26(npt))
       block
-         real(wp) :: tmp25(npt)
-         real(wp) :: tmp26(npt)
          real(wp) :: tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp39, tmp43, tmp46, tmp50
          complex(wp) :: tmp35, tmp36, tmp27
 
@@ -183817,6 +183925,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp25)
+      deallocate (tmp26)
       !$omp end parallel
       tmp889 = dv + tmp4
       tmp890 = state%cx_s15*tmp889
@@ -183837,12 +183947,12 @@ contains
       tmp902 = tmp900 + tmp901
       tmp899 = tmp902
       !$omp parallel &
-      !$omp& private(i, j) &
+      !$omp& private(i, j, tmp903, tmp904) &
       !$omp& shared(npt, state, tmp892, tmp894, tmp895, tmp899) &
       !$omp& reduction(+: tmp896)
+      allocate (tmp903(npt))
+      allocate (tmp904(npt))
       block
-         real(wp) :: tmp903(npt)
-         real(wp) :: tmp904(npt)
          real(wp) :: tmp907, tmp908, tmp909, tmp910, tmp912, tmp913, tmp914, tmp918, tmp922, &
                      tmp925, tmp929
          complex(wp) :: tmp906, tmp911, tmp915, tmp905
@@ -184949,6 +185059,8 @@ contains
          end do
          !$omp end do
       end block
+      deallocate (tmp903)
+      deallocate (tmp904)
       !$omp end parallel
       tmp1765 = tmp890 + tmp896
       tmp1766 = 0.0_wp
@@ -185242,6 +185354,7 @@ contains
          block
             real(wp) :: tmp1(self%npt), tmp2(self%npt), tmp6(self%npt)
             real(wp) :: tmp3, tmp4, tmp5
+            real(wp), allocatable :: tmp7(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -185253,10 +185366,10 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, tmp1, x)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp15, tmp16, tmp19, tmp23, tmp8
 
                !$omp do schedule(static)
@@ -185428,6 +185541,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             y = tmp1
          end block
@@ -185435,6 +185549,7 @@ contains
          block
             real(wp) :: tmp1(self%npt), tmp2(self%npt), tmp6(self%npt)
             real(wp) :: tmp3, tmp4, tmp5
+            real(wp), allocatable :: tmp7(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -185446,11 +185561,11 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, x) &
             !$omp& reduction(+: tmp1)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp12, tmp14, tmp15, tmp18, tmp22
 
                !$omp do schedule(static)
@@ -185618,6 +185733,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             y = tmp1
          end block
@@ -186076,6 +186192,7 @@ contains
                         tmp1348(self%npt), tmp1349(self%npt), tmp1350(self%npt)
             real(wp) :: tmp3, tmp4, tmp5, tmp680, tmp681, tmp682, tmp787, tmp788, tmp789, tmp790, &
                         tmp791, tmp792, tmp793, tmp794, tmp795, tmp796
+            real(wp), allocatable :: tmp7(:), tmp684(:), tmp798(:), tmp1219(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -186087,10 +186204,10 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, tmp1, x)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp19, tmp23, &
                            tmp26, tmp30, tmp8
 
@@ -186941,6 +187058,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             tmp675 = self%a*tmp1
             tmp676 = (-0.15915494309189535_wp)*tmp675
@@ -186954,10 +187072,10 @@ contains
             tmp683 = tmp679*tmp677
             tmp678 = tmp683
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp684) &
             !$omp& shared(self, tmp677, tmp678)
+            allocate (tmp684(self%npt))
             block
-               real(wp) :: tmp684(self%npt)
                real(wp) :: tmp686, tmp687, tmp688, tmp689, tmp690, tmp692, tmp693, tmp696, tmp700, &
                            tmp685
 
@@ -187132,6 +187250,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp684)
             !$omp end parallel
             tmp784 = self%c1*tmp678
             do i = 1, self%npt
@@ -187150,10 +187269,10 @@ contains
             tmp797 = tmp786*x
             tmp785 = tmp797
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp798) &
             !$omp& shared(self, tmp785, x)
+            allocate (tmp798(self%npt))
             block
-               real(wp) :: tmp798(self%npt)
                real(wp) :: tmp800, tmp801, tmp802, tmp803, tmp804, tmp807, tmp811, tmp814, tmp818, &
                            tmp799
 
@@ -187711,16 +187830,17 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp798)
             !$omp end parallel
             tmp1216 = self%a*tmp785
             tmp1218 = tmp2*tmp1216
             tmp1217 = tmp1218
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp1219) &
             !$omp& shared(self, tmp1216) &
             !$omp& reduction(+: tmp1217)
+            allocate (tmp1219(self%npt))
             block
-               real(wp) :: tmp1219(self%npt)
                real(wp) :: tmp1220, tmp1221, tmp1222, tmp1223, tmp1224, tmp1225, tmp1226, tmp1227, &
                            tmp1229, tmp1230, tmp1233, tmp1237
 
@@ -187933,6 +188053,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp1219)
             !$omp end parallel
             tmp1348 = 0.15915494309189535_wp*tmp1217
             tmp1349 = tmp785 + tmp1348
@@ -187948,6 +188069,7 @@ contains
                         tmp919(self%npt), tmp930(self%npt), tmp1348(self%npt)
             real(wp) :: tmp3, tmp4, tmp5, tmp109, tmp110, tmp111, tmp920, tmp921, tmp922, tmp923, &
                         tmp924, tmp925, tmp926, tmp927, tmp928, tmp929
+            real(wp), allocatable :: tmp7(:), tmp113(:), tmp785(:), tmp931(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -187959,11 +188081,11 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, x) &
             !$omp& reduction(+: tmp1)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp12, tmp14, tmp15, tmp18, tmp22
 
                !$omp do schedule(static)
@@ -188131,6 +188253,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             tmp106 = self%a*tmp1
             do i = 1, self%npt
@@ -188142,11 +188265,11 @@ contains
             tmp112 = tmp108*tmp106
             tmp107 = tmp112
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp113) &
             !$omp& shared(self, tmp106) &
             !$omp& reduction(+: tmp107)
+            allocate (tmp113(self%npt))
             block
-               real(wp) :: tmp113(self%npt)
                real(wp) :: tmp114, tmp115, tmp116, tmp117, tmp118, tmp119, tmp120, tmp121, tmp124, &
                            tmp128, tmp131, tmp135
 
@@ -188997,6 +189120,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp113)
             !$omp end parallel
             tmp780 = (-0.15915494309189535_wp)*tmp107
             tmp781 = tmp1 + tmp780
@@ -189004,10 +189128,10 @@ contains
             tmp784 = tmp108*x
             tmp783 = tmp784
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp785) &
             !$omp& shared(self, tmp783, x)
+            allocate (tmp785(self%npt))
             block
-               real(wp) :: tmp785(self%npt)
                real(wp) :: tmp787, tmp788, tmp789, tmp790, tmp791, tmp792, tmp793, tmp794, tmp796, &
                            tmp797, tmp800, tmp804, tmp786
 
@@ -189224,6 +189348,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp785)
             !$omp end parallel
             tmp915 = self%a*tmp783
             tmp916 = 0.15915494309189535_wp*tmp915
@@ -189244,11 +189369,11 @@ contains
             tmp930 = tmp919*tmp917
             tmp918 = tmp930
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp931) &
             !$omp& shared(self, tmp917) &
             !$omp& reduction(+: tmp918)
+            allocate (tmp931(self%npt))
             block
-               real(wp) :: tmp931(self%npt)
                real(wp) :: tmp932, tmp933, tmp934, tmp935, tmp936, tmp939, tmp943, tmp946, tmp950
 
                !$omp do schedule(static)
@@ -189801,6 +189926,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp931)
             !$omp end parallel
             tmp1348 = self%c3*tmp918
             y = tmp782 + tmp1348
@@ -195700,6 +195826,7 @@ contains
                            tmp785(self%npt), tmp797(self%npt), tmp1216(self%npt), &
                            tmp1217(self%npt), tmp1218(self%npt), tmp1348(self%npt), &
                            tmp1349(self%npt), tmp1350(self%npt)
+            real(wp), allocatable :: tmp7(:), tmp684(:), tmp798(:), tmp1219(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -195711,10 +195838,10 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, tmp1, x)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp19, tmp23, tmp26, &
                            tmp30
                complex(wp) :: tmp16, tmp8
@@ -196569,6 +196696,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             tmp675 = self%a*tmp1
             tmp676 = (-0.15915494309189535_wp)*tmp675
@@ -196582,10 +196710,10 @@ contains
             tmp683 = tmp679*tmp677
             tmp678 = tmp683
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp684) &
             !$omp& shared(self, tmp677, tmp678)
+            allocate (tmp684(self%npt))
             block
-               real(wp) :: tmp684(self%npt)
                real(wp) :: tmp686, tmp687, tmp688, tmp689, tmp692, tmp693, tmp696, tmp700
                complex(wp) :: tmp690, tmp685
 
@@ -196763,6 +196891,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp684)
             !$omp end parallel
             tmp784 = self%c1*tmp678
             do i = 1, self%npt
@@ -196781,10 +196910,10 @@ contains
             tmp797 = tmp786*x
             tmp785 = tmp797
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp798) &
             !$omp& shared(self, tmp785, x)
+            allocate (tmp798(self%npt))
             block
-               real(wp) :: tmp798(self%npt)
                real(wp) :: tmp801, tmp802, tmp803, tmp804, tmp807, tmp811, tmp814, tmp818
                complex(wp) :: tmp800, tmp799
 
@@ -197345,16 +197474,17 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp798)
             !$omp end parallel
             tmp1216 = self%a*tmp785
             tmp1218 = tmp2*tmp1216
             tmp1217 = tmp1218
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp1219) &
             !$omp& shared(self, tmp1216) &
             !$omp& reduction(+: tmp1217)
+            allocate (tmp1219(self%npt))
             block
-               real(wp) :: tmp1219(self%npt)
                real(wp) :: tmp1221, tmp1222, tmp1223, tmp1224, tmp1225, tmp1226, tmp1227, tmp1229, &
                            tmp1230, tmp1233, tmp1237
                complex(wp) :: tmp1220
@@ -197571,6 +197701,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp1219)
             !$omp end parallel
             tmp1348 = 0.15915494309189535_wp*tmp1217
             tmp1349 = tmp785 + tmp1348
@@ -197586,6 +197717,7 @@ contains
                            tmp112(self%npt), tmp780(self%npt), tmp781(self%npt), tmp782(self%npt), &
                            tmp783(self%npt), tmp784(self%npt), tmp915(self%npt), tmp916(self%npt), &
                            tmp917(self%npt), tmp918(self%npt), tmp930(self%npt), tmp1348(self%npt)
+            real(wp), allocatable :: tmp7(:), tmp113(:), tmp785(:), tmp931(:)
             integer :: i, j
 
             do i = 1, self%npt
@@ -197597,11 +197729,11 @@ contains
             tmp6 = tmp2*x
             tmp1 = tmp6
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp7) &
             !$omp& shared(self, x) &
             !$omp& reduction(+: tmp1)
+            allocate (tmp7(self%npt))
             block
-               real(wp) :: tmp7(self%npt)
                real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp14, tmp15, tmp18, tmp22
                complex(wp) :: tmp12
 
@@ -197771,6 +197903,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp7)
             !$omp end parallel
             tmp106 = self%a*tmp1
             do i = 1, self%npt
@@ -197782,11 +197915,11 @@ contains
             tmp112 = tmp108*tmp106
             tmp107 = tmp112
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp113) &
             !$omp& shared(self, tmp106) &
             !$omp& reduction(+: tmp107)
+            allocate (tmp113(self%npt))
             block
-               real(wp) :: tmp113(self%npt)
                real(wp) :: tmp114, tmp115, tmp116, tmp117, tmp118, tmp119, tmp120, tmp124, tmp128, &
                            tmp131, tmp135
                complex(wp) :: tmp121
@@ -198641,6 +198774,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp113)
             !$omp end parallel
             tmp780 = (-0.15915494309189535_wp)*tmp107
             tmp781 = tmp1 + tmp780
@@ -198648,10 +198782,10 @@ contains
             tmp784 = tmp108*x
             tmp783 = tmp784
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp785) &
             !$omp& shared(self, tmp783, x)
+            allocate (tmp785(self%npt))
             block
-               real(wp) :: tmp785(self%npt)
                real(wp) :: tmp788, tmp789, tmp790, tmp791, tmp792, tmp793, tmp794, tmp796, tmp797, &
                            tmp800, tmp804
                complex(wp) :: tmp787, tmp786
@@ -198872,6 +199006,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp785)
             !$omp end parallel
             tmp915 = self%a*tmp783
             tmp916 = 0.15915494309189535_wp*tmp915
@@ -198892,11 +199027,11 @@ contains
             tmp930 = tmp919*tmp917
             tmp918 = tmp930
             !$omp parallel &
-            !$omp& private(i, j) &
+            !$omp& private(i, j, tmp931) &
             !$omp& shared(self, tmp917) &
             !$omp& reduction(+: tmp918)
+            allocate (tmp931(self%npt))
             block
-               real(wp) :: tmp931(self%npt)
                real(wp) :: tmp933, tmp934, tmp935, tmp936, tmp939, tmp943, tmp946, tmp950
                complex(wp) :: tmp932
 
@@ -199453,6 +199588,7 @@ contains
                end do
                !$omp end do
             end block
+            deallocate (tmp931)
             !$omp end parallel
             tmp1348 = self%c3*tmp918
             y = tmp782 + tmp1348
