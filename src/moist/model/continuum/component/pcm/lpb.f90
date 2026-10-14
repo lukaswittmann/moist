@@ -8,9 +8,9 @@ module moist_model_continuum_component_pcm_lpb
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_lpb, only: lpb_complex_state, &
+   use pcmgen_gauss_lpb, only: lpb_complex_state, &
       & lpb_assemble, lpb_medium, lpb_solve, lpb_weights
-   use moist_model_continuum_component_pcm_kernel_point_lpb, only: lpb_point_complex_state, &
+   use pcmgen_point_lpb, only: lpb_point_complex_state, &
       & lpb_point_assemble, lpb_point_medium, lpb_point_solve, &
       & lpb_point_weights
    implicit none(type, external)
@@ -19,10 +19,18 @@ module moist_model_continuum_component_pcm_lpb
    public :: model_continuum_component_lpb, new_component_lpb
    public :: debye_kappa
 
-   !> Concrete LPB component
+   !> Linearized Poisson-Boltzmann component
+   !>
+   !> - Physical inputs: solvent relative permittivity epsilon and inverse Debye length kappa
+   !> - Cavity positions, normals, principal curvatures and grid point areas
+   !> - Gaussian charge widths and switching factors when available
+   !> - Host electrostatic potential at the surface points
    type, extends(pcm_layer_base) :: model_continuum_component_lpb
+      !> Gaussian surface kernel state
       type(lpb_complex_state) :: gauss
+      !> Point surface kernel state
       type(lpb_point_complex_state) :: point
+      !> Inverse Debye screening length, bohr^-1
       real(wp) :: kappa = 0.0_wp
    contains
       procedure :: assemble_layer => lpb_assemble_layer
@@ -34,13 +42,28 @@ module moist_model_continuum_component_pcm_lpb
 contains
 
    !> Construct LPB from physical and numerical parameters
+   !>
+   !> - Kappa from ionic strength and temperature: debye_kappa
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self     initialized LPB component
+   !> @param[in]  epsilon  dimensionless solvent relative permittivity, >= 1
+   !> @param[in]  kappa    inverse Debye length in bohr^-1, finite and >= 0
+   !> @param[out] error    allocated on invalid physical or numerical parameters
+   !> @param[in]  param    optional solver controls, compiled defaults when omitted
+   !> @param[in]  ctx      optional borrowed context, must outlive the component
    subroutine new_component_lpb(self, epsilon, kappa, error, param, ctx)
+      !> LPB component
       type(model_continuum_component_lpb), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Inverse Debye screening length
       real(wp), intent(in) :: kappa
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 

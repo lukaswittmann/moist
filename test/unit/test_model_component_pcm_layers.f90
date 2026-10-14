@@ -24,9 +24,9 @@ module test_model_component_pcm_layers
    use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, new_component_slic
    use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_model_continuum_component_pcm_solvers, only: pcm_dense_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_ssvpe, only: ssvpe_state, ssvpe_assemble, &
+   use pcmgen_gauss_ssvpe, only: ssvpe_state, ssvpe_assemble, &
       & ssvpe_medium, ssvpe_solve
-   use moist_model_continuum_component_pcm_kernel_gauss_iefpcm, only: iefpcm_state, iefpcm_assemble, &
+   use pcmgen_gauss_iefpcm, only: iefpcm_state, iefpcm_assemble, &
       & iefpcm_medium, iefpcm_solve
    use test_model_component_pcm_layer_golden, only: golden_eps, hf_n, hf_xyz, hf_normal, &
       & hf_curv, hf_xi, hf_f, hf_area, hf_v, hf_q, hf_qsym, hf_energy, &
@@ -82,6 +82,9 @@ contains
                call make_component(kind, component, err, ctx=own_ctx)
             case (3)
                call make_component(kind, component, err, ctx=absent_ctx)
+            case default
+               call fatal_error(error, "test_optional_context: invalid mode")
+               return
             end select
             call check(error,.not. allocated(err))
             if (allocated(error)) return

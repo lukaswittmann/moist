@@ -8,9 +8,9 @@ module moist_model_continuum_component_pcm_nonlocal
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_nonlocal, only: nonlocal_pcm_state, &
+   use pcmgen_gauss_nonlocal, only: nonlocal_pcm_state, &
       & nonlocal_pcm_assemble, nonlocal_pcm_medium, nonlocal_pcm_solve, nonlocal_pcm_weights
-   use moist_model_continuum_component_pcm_kernel_point_nonlocal, only: nonlocal_pcm_point_state, &
+   use pcmgen_point_nonlocal, only: nonlocal_pcm_point_state, &
       & nonlocal_pcm_point_assemble, nonlocal_pcm_point_medium, nonlocal_pcm_point_solve, &
       & nonlocal_pcm_point_weights
    implicit none(type, external)
@@ -19,12 +19,25 @@ module moist_model_continuum_component_pcm_nonlocal
    public :: model_continuum_component_nonlocal, new_component_nonlocal
 
    !> Three-field nonlocal boundary system
+   !>
+   !> - Physical inputs: eps_solvent, eps_inf, lambda and optional eps_solute
+   !> - Cavity positions, normals and grid point areas
+   !> - Gaussian charge widths when available
+   !> - Host potential and its outward normal derivative at the surface points
    type, extends(pcm_layer_base) :: model_continuum_component_nonlocal
+      !> High-frequency solvent relative permittivity, dimensionless
       real(wp) :: eps_inf = 1.0_wp
+      !> Relative permittivity inside the cavity, dimensionless
       real(wp) :: eps_solute = 1.0_wp
+      !> Solvent polarization correlation length, bohr
       real(wp) :: lambda = 1.0_wp
-      real(wp), allocatable :: u(:), w_ext(:)
+      !> Interior potential trace times 4*pi, shape (ngrid)
+      real(wp), allocatable :: u(:)
+      !> Exterior auxiliary trace times 4*pi, shape (ngrid)
+      real(wp), allocatable :: w_ext(:)
+      !> Gaussian surface kernel state
       type(nonlocal_pcm_state) :: gauss
+      !> Point surface kernel state
       type(nonlocal_pcm_point_state) :: point
    contains
       procedure :: assemble_layer => nonlocal_assemble_layer
@@ -36,13 +49,33 @@ module moist_model_continuum_component_pcm_nonlocal
 contains
 
    !> Construct nonlocal electrostatics from permittivities and correlation length
+   !>
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self         initialized nonlocal PCM component
+   !> @param[in]  eps_solvent  dimensionless static solvent relative permittivity, finite and >= 1
+   !> @param[in]  eps_inf      dimensionless high-frequency solvent relative permittivity, finite and >= 1
+   !> @param[in]  lambda       solvent polarization correlation length in bohr, finite and > 0
+   !> @param[out] error        allocated on invalid physical or numerical parameters
+   !> @param[in]  param        optional solver controls, compiled defaults when omitted
+   !> @param[in]  eps_solute   dimensionless relative permittivity inside the cavity, finite and >= 1; default 1
+   !> @param[in]  ctx          optional borrowed context, must outlive the component
    subroutine new_component_nonlocal(self, eps_solvent, eps_inf, lambda, error, param, eps_solute, ctx)
+      !> Nonlocal PCM component
       type(model_continuum_component_nonlocal), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
-      real(wp), intent(in) :: eps_solvent, eps_inf, lambda
+      !> Static solvent relative permittivity
+      real(wp), intent(in) :: eps_solvent
+      !> High-frequency solvent relative permittivity
+      real(wp), intent(in) :: eps_inf
+      !> Solvent polarization correlation length
+      real(wp), intent(in) :: lambda
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Relative permittivity inside the cavity
       real(wp), intent(in), optional :: eps_solute
       type(moist_pcm_parameters_type) :: settings
 

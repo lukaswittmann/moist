@@ -8,9 +8,9 @@ module moist_model_continuum_component_pcm_slic
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_slic, only: slic_state, &
+   use pcmgen_gauss_slic, only: slic_state, &
       & slic_assemble, slic_medium, slic_solve, slic_weights
-   use moist_model_continuum_component_pcm_kernel_point_slic, only: slic_point_state, &
+   use pcmgen_point_slic, only: slic_point_state, &
       & slic_point_assemble, slic_point_medium, slic_point_solve, &
       & slic_point_weights
    implicit none(type, external)
@@ -18,14 +18,29 @@ module moist_model_continuum_component_pcm_slic
 
    public :: model_continuum_component_slic, new_component_slic
 
-   !> Concrete SLIC component
+   !> Solvation-layer interface condition component
+   !>
+   !> - Physical inputs: epsilon, alpha, beta, gamma; optional mu and phi_static
+   !> - Perturbation `h(E_n) = alpha*tanh(beta*E_n - gamma) + mu`
+   !> - `E_n`: total outward normal electric field in atomic units
+   !> - Static energy contribution `phi_static*Q`, with net solute charge `Q` in elementary charges
+   !> - Cavity positions, normals, principal curvatures and grid point areas
+   !> - Gaussian charge widths when available
+   !> - Host potential and its outward normal derivative at the surface points
    type, extends(pcm_layer_base) :: model_continuum_component_slic
+      !> Gaussian surface kernel state
       type(slic_state) :: gauss
+      !> Point surface kernel state
       type(slic_point_state) :: point
+      !> Amplitude of the solvation-layer perturbation h, dimensionless
       real(wp) :: alpha = 0.0_wp
+      !> Transition steepness, inverse atomic electric-field units
       real(wp) :: beta = 0.0_wp
+      !> Offset of the tanh argument `beta*E_n - gamma`, dimensionless
       real(wp) :: gamma = 0.0_wp
+      !> Additive shift of the perturbation h, dimensionless
       real(wp) :: mu = 0.0_wp
+      !> Static potential offset, hartree per elementary charge
       real(wp) :: phi_static = 0.0_wp
    contains
       procedure :: assemble_layer => slic_assemble_layer
@@ -36,17 +51,42 @@ module moist_model_continuum_component_pcm_slic
 contains
 
    !> Construct SLIC from physical and numerical parameters
+   !>
+   !> - Flux constraint: `2*feps*(mu + abs(alpha)) < 1`
+   !> - Dielectric factor `feps = (epsilon - 1)/(epsilon + 1)`, conductor limit 1
+   !> - Numerical constraint: `param%newton_tol < 1`
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self        initialized SLIC component
+   !> @param[in]  epsilon     dimensionless solvent relative permittivity, >= 1
+   !> @param[in]  alpha       dimensionless perturbation amplitude, finite
+   !> @param[in]  beta        inverse atomic electric-field units, finite
+   !> @param[in]  gamma       dimensionless transition offset, finite
+   !> @param[out] error       allocated on invalid physical or numerical parameters
+   !> @param[in]  param       optional linear/nonlinear solver controls, compiled defaults when omitted
+   !> @param[in]  mu          dimensionless additive shift, finite; default `alpha*tanh(gamma)`
+   !> @param[in]  phi_static  static potential in hartree per elementary charge, finite; default 0
+   !> @param[in]  ctx         optional borrowed context, must outlive the component
    subroutine new_component_slic(self, epsilon, alpha, beta, gamma, error, param, mu, phi_static, ctx)
+      !> SLIC component
       type(model_continuum_component_slic), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Amplitude of the solvation-layer perturbation h
       real(wp), intent(in) :: alpha
+      !> Transition steepness in the normal electric field
       real(wp), intent(in) :: beta
+      !> Offset of the tanh argument `beta*E_n - gamma`
       real(wp), intent(in) :: gamma
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear and nonlinear solver controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Additive shift of the perturbation h
       real(wp), intent(in), optional :: mu
+      !> Static potential offset
       real(wp), intent(in), optional :: phi_static
       type(moist_pcm_parameters_type) :: settings
 

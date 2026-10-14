@@ -21,7 +21,7 @@ module test_cavity_drop_born_fit
    use moist_math_grid_angular_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
    use moist_model_continuum_component_pcm_solvers, only : pcm_dense_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_conductor, only : conductor_state, &
+   use pcmgen_gauss_conductor, only : conductor_state, &
       & conductor_assemble, conductor_medium, conductor_solve
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter

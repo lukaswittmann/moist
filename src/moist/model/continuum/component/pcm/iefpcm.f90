@@ -8,9 +8,9 @@ module moist_model_continuum_component_pcm_iefpcm
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
-   use moist_model_continuum_component_pcm_kernel_gauss_iefpcm, only: iefpcm_complex_state, &
+   use pcmgen_gauss_iefpcm, only: iefpcm_complex_state, &
       & iefpcm_assemble, iefpcm_medium, iefpcm_solve, iefpcm_weights
-   use moist_model_continuum_component_pcm_kernel_point_iefpcm, only: iefpcm_point_complex_state, &
+   use pcmgen_point_iefpcm, only: iefpcm_point_complex_state, &
       & iefpcm_point_assemble, iefpcm_point_medium, iefpcm_point_solve, &
       & iefpcm_point_weights
    implicit none(type, external)
@@ -18,9 +18,16 @@ module moist_model_continuum_component_pcm_iefpcm
 
    public :: model_continuum_component_iefpcm, new_component_iefpcm
 
-   !> Concrete IEF-PCM component
+   !> Integral-equation-formalism PCM component
+   !>
+   !> - Physical input: solvent relative permittivity epsilon
+   !> - Cavity positions, normals, principal curvatures and grid point areas
+   !> - Gaussian charge widths and switching factors when available
+   !> - Host electrostatic potential at the surface points
    type, extends(pcm_layer_base) :: model_continuum_component_iefpcm
+      !> Gaussian surface kernel state
       type(iefpcm_complex_state) :: gauss
+      !> Point surface kernel state
       type(iefpcm_point_complex_state) :: point
    contains
       procedure :: assemble_layer => iefpcm_assemble_layer
@@ -31,12 +38,24 @@ module moist_model_continuum_component_pcm_iefpcm
 contains
 
    !> Construct IEF-PCM from physical and numerical parameters
+   !>
+   !> - Standalone computation requires ctx; model-owned components inherit the model context
+   !>
+   !> @param[out] self     initialized IEF-PCM component
+   !> @param[in]  epsilon  dimensionless solvent relative permittivity, >= 1
+   !> @param[out] error    allocated on invalid physical or numerical parameters
+   !> @param[in]  param    optional solver controls, compiled defaults when omitted
+   !> @param[in]  ctx      optional borrowed context, must outlive the component
    subroutine new_component_iefpcm(self, epsilon, error, param, ctx)
+      !> IEF-PCM component
       type(model_continuum_component_iefpcm), intent(out) :: self
-      !> Borrowed run context; omitted, a model supplies its own
+      !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Solvent relative permittivity
       real(wp), intent(in) :: epsilon
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 
