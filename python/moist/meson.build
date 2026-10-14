@@ -51,6 +51,7 @@ moist_pyext = python.extension_module(
 pysrcs = [
   '__init__.py',
   'configuration.py',
+  'context.py',
   'density.py',
   'interface.py',
   'library.py',
@@ -114,7 +115,7 @@ test(
 
 # Test MOIST--QM coupling (using PySCF) (mainly isodensity cavity + models)
 #
-#   host          the adapter's own derivative orders, moist not involved
+#   host          the adapter's own derivative orders and basis conversion
 #   vdw           electrostatic conventions on a density-independent cavity
 #   isodensity_*  the level-set chain rule, one target per component set
 #   conventions   channel semantics and the negative controls
@@ -164,6 +165,17 @@ foreach entry : [
     timeout: entry[2],
   )
 endforeach
+
+# ECP nuclei: the isodensity core fill against a pseudo-atom and all-electron AuH
+test(
+  'pyscf_ecp',
+  python,
+  args: pytest_args + [tests_dir / 'test_pyscf_ecp.py'],
+  depends: moist_pyext,
+  env: coupling_env,
+  suite: 'python',
+  timeout: 300,
+)
 
 # Public PySCF SCF/gradient wrapper, including cache and scanner lifetimes
 test(

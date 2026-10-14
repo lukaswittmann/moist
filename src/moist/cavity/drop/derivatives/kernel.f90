@@ -50,6 +50,8 @@ module moist_cavity_drop_derivatives_kernel
    !> individual principal-curvature derivatives are ill-defined at `k1 = k2`,
    !> while the mean and Gaussian curvatures stay smooth
    real(wp), parameter :: seed_curv_disc_guard = 1.0e-10_wp
+   !> Below this gap of `B` the switched eigenvalue is treated as degenerate
+   real(wp), parameter :: seed_switch_gap_guard = 1.0e-10_wp
 
    !> Per-grid point forward state consumed by [[apply_seed]]
    !>
@@ -92,6 +94,8 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: Binv11 = 0.0_wp, Binv12 = 0.0_wp, Binv22 = 0.0_wp
       !> Eigenvector of `B` for the switched eigenvalue, lifted to 3D
       real(wp) :: u_switch(3) = 0.0_wp
+      !> Both eigenvalues of `B` coincide, `u_switch` is arbitrary
+      logical :: degenerate_switch = .false.
       !> Sphere tangent frame and its projection into the surface tangent plane
       real(wp) :: t1_vec(3) = 0.0_wp, t2_vec(3) = 0.0_wp
       real(wp) :: tau1(2) = 0.0_wp, tau2(2) = 0.0_wp
@@ -109,10 +113,11 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: f_foc_f0 = 0.0_wp, f_foc_dS = 0.0_wp
       !> Lebedev-weight pruning chain factor
       real(wp) :: wleb_prune_factor = 1.0_wp
-      !> Shape-operator invariants (only when `want_curvature`)
-      real(wp) :: Hn(3) = 0.0_wp, Cn(3) = 0.0_wp
-      real(wp) :: T_curv = 0.0_wp, D_curv = 0.0_wp
-      real(wp) :: KM_curv = 0.0_wp, disc_curv = 0.0_wp
+      !> `H q_a`, shape operator `S_ab = q_a^T H q_b/|g|` and its half gap
+      !> `disc = hypot((S11-S22)/2, S12)` (only when `want_curvature`)
+      real(wp) :: Hq1(3) = 0.0_wp, Hq2(3) = 0.0_wp
+      real(wp) :: S11_curv = 0.0_wp, S12_curv = 0.0_wp, S22_curv = 0.0_wp
+      real(wp) :: half_diff_curv = 0.0_wp, disc_curv = 0.0_wp
 
    end type drop_seed_state_type
 
@@ -191,10 +196,6 @@ contains
       real(wp) :: vmin_B(2), vmax_B(2)
       !> Lebedev pruning scratch
       real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds
-      !> Adjugate of the level-set Hessian
-      real(wp) :: adjH(3, 3)
-      !> Trace and normal contractions of the Hessian
-      real(wp) :: trH, nHn, nCn
 
       status = seed_state_ok
 
@@ -228,6 +229,7 @@ contains
       call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
       state%u_switch = vmin_B(1)*state%q1 + vmin_B(2)*state%q2
+      state%degenerate_switch = beta_max - lambda_switch <= seed_switch_gap_guard
       call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS)
 
       state%Binv11 = state%B22/state%det_B
@@ -280,33 +282,16 @@ contains
          state%wleb_prune_factor = 1.0_wp
       end if
 
-      ! Frame-independent shape-operator invariants of the level set:
-      !   T = k1 + k2 = (tr H - n^T H n)/|g|
-      !   D = k1 * k2 = (n^T adj(H) n)/|g|^2     (Goldman, implicit surfaces)
-      !   k1,k2 = T/2 +/- sqrt((T/2)^2 - D)
+      ! Shape operator in the surface frame [q1, q2]; KM and the gap are
+      ! rotation invariants, the gap a sum of squares (accurate near umbilics)
       if (state%want_curvature) then
-         associate (H => state%lsf2_rr, n => state%n_surf)
-            state%Hn = matmul(H, n)
-            trH = H(1, 1) + H(2, 2) + H(3, 3)
-            nHn = dot_product(n, state%Hn)
-            state%T_curv = (trH - nHn)/state%g_norm
-
-            adjH(1, 1) = H(2, 2)*H(3, 3) - H(2, 3)*H(2, 3)
-            adjH(2, 2) = H(1, 1)*H(3, 3) - H(1, 3)*H(1, 3)
-            adjH(3, 3) = H(1, 1)*H(2, 2) - H(1, 2)*H(1, 2)
-            adjH(1, 2) = H(1, 3)*H(2, 3) - H(1, 2)*H(3, 3)
-            adjH(1, 3) = H(1, 2)*H(2, 3) - H(2, 2)*H(1, 3)
-            adjH(2, 3) = H(1, 2)*H(1, 3) - H(1, 1)*H(2, 3)
-            adjH(2, 1) = adjH(1, 2)
-            adjH(3, 1) = adjH(1, 3)
-            adjH(3, 2) = adjH(2, 3)
-
-            state%Cn = matmul(adjH, n)
-            nCn = dot_product(n, state%Cn)
-            state%D_curv = nCn/state%g_norm_sq
-            state%KM_curv = 0.5_wp*state%T_curv
-            state%disc_curv = sqrt(max(state%KM_curv*state%KM_curv - state%D_curv, 0.0_wp))
-         end associate
+         state%Hq1 = matmul(state%lsf2_rr, state%q1)
+         state%Hq2 = matmul(state%lsf2_rr, state%q2)
+         state%S11_curv = dot_product(state%q1, state%Hq1)/state%g_norm
+         state%S12_curv = dot_product(state%q1, state%Hq2)/state%g_norm
+         state%S22_curv = dot_product(state%q2, state%Hq2)/state%g_norm
+         state%half_diff_curv = 0.5_wp*(state%S11_curv - state%S22_curv)
+         state%disc_curv = hypot(state%half_diff_curv, state%S12_curv)
       end if
 
    end subroutine build_seed_state
@@ -351,8 +336,8 @@ contains
       real(wp) :: dy1(3), dy2(3), dcross(3)
       !> Lebedev-weight chain scratch
       real(wp) :: dw_pre
-      !> Curvature-invariant sensitivities
-      real(wp) :: dadjH(3, 3), dtrH, dnHn, dT, dnCn, dD, d_disc
+      !> Shape-operator, mean-curvature and half-gap sensitivities
+      real(wp) :: dS11, dS12, dS22, dKM, d_disc
       !> Cartesian index
       integer :: kaxis
 
@@ -401,7 +386,11 @@ contains
       dM_tan = matmul(dP_tan, state%AP_tan) &
                + matmul(state%P_tan, matmul(dA, state%P_tan)) &
                + matmul(state%P_tan, matmul(state%A_mat, dP_tan))
-      dlambda_switch = dot_product(state%u_switch, matmul(dM_tan, state%u_switch))
+      if (state%degenerate_switch) then
+         dlambda_switch = 0.5_wp*(dM_tan(1, 1) + dM_tan(2, 2) + dM_tan(3, 3))
+      else
+         dlambda_switch = dot_product(state%u_switch, matmul(dM_tan, state%u_switch))
+      end if
 
       ! The sphere tangent frame is rigid, so dt1 = dt2 = 0
       dtau1(1) = dot_product(dq1, state%t1_vec)
@@ -447,38 +436,26 @@ contains
 
       if (.not. state%want_curvature) return
 
-      associate (H => state%lsf2_rr, n => state%n_surf, dH => res%dH)
-         ! d(n^T H n) = 2 (dn . H n) + n^T dH n, H symmetric
-         dtrH = dH(1, 1) + dH(2, 2) + dH(3, 3)
-         dnHn = 2.0_wp*dot_product(res%dn_surf, state%Hn) &
-                + dot_product(n, matmul(dH, n))
-         dT = (dtrH - dnHn)/state%g_norm - state%T_curv*res%d_gnorm/state%g_norm
+      associate (q1 => state%q1, q2 => state%q2, dH => res%dH)
+         ! d(q_a^T H q_b) = dq_a.H q_b + dq_b.H q_a + q_a^T dH q_b (H symmetric)
+         dS11 = (2.0_wp*dot_product(dq1, state%Hq1) + dot_product(q1, matmul(dH, q1))) &
+                /state%g_norm - state%S11_curv*res%d_gnorm/state%g_norm
+         dS12 = (dot_product(dq1, state%Hq2) + dot_product(dq2, state%Hq1) &
+                 + dot_product(q1, matmul(dH, q2)))/state%g_norm &
+                - state%S12_curv*res%d_gnorm/state%g_norm
+         dS22 = (2.0_wp*dot_product(dq2, state%Hq2) + dot_product(q2, matmul(dH, q2))) &
+                /state%g_norm - state%S22_curv*res%d_gnorm/state%g_norm
+         dKM = 0.5_wp*(dS11 + dS22)
 
-         dadjH(1, 1) = dH(2, 2)*H(3, 3) + H(2, 2)*dH(3, 3) - 2.0_wp*H(2, 3)*dH(2, 3)
-         dadjH(2, 2) = dH(1, 1)*H(3, 3) + H(1, 1)*dH(3, 3) - 2.0_wp*H(1, 3)*dH(1, 3)
-         dadjH(3, 3) = dH(1, 1)*H(2, 2) + H(1, 1)*dH(2, 2) - 2.0_wp*H(1, 2)*dH(1, 2)
-         dadjH(1, 2) = dH(1, 3)*H(2, 3) + H(1, 3)*dH(2, 3) &
-                       - dH(1, 2)*H(3, 3) - H(1, 2)*dH(3, 3)
-         dadjH(1, 3) = dH(1, 2)*H(2, 3) + H(1, 2)*dH(2, 3) &
-                       - dH(2, 2)*H(1, 3) - H(2, 2)*dH(1, 3)
-         dadjH(2, 3) = dH(1, 2)*H(1, 3) + H(1, 2)*dH(1, 3) &
-                       - dH(1, 1)*H(2, 3) - H(1, 1)*dH(2, 3)
-         dadjH(2, 1) = dadjH(1, 2)
-         dadjH(3, 1) = dadjH(1, 3)
-         dadjH(3, 2) = dadjH(2, 3)
-
-         dnCn = 2.0_wp*dot_product(res%dn_surf, state%Cn) &
-                + dot_product(n, matmul(dadjH, n))
-         dD = dnCn/state%g_norm_sq - 2.0_wp*state%D_curv*res%d_gnorm/state%g_norm
-
-         ! disc^2 = KM^2 - KG, so 2 disc d(disc) = (T/2) dT - dD
+         ! disc = hypot(half_diff, S12)
          if (state%disc_curv > seed_curv_disc_guard) then
-            d_disc = (state%KM_curv*dT - dD)/(2.0_wp*state%disc_curv)
+            d_disc = (state%half_diff_curv*0.5_wp*(dS11 - dS22) &
+                      + state%S12_curv*dS12)/state%disc_curv
          else
             d_disc = 0.0_wp
          end if
-         res%dk1 = 0.5_wp*dT + d_disc
-         res%dk2 = 0.5_wp*dT - d_disc
+         res%dk1 = dKM + d_disc
+         res%dk2 = dKM - d_disc
       end associate
 
    end subroutine apply_seed

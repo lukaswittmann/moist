@@ -1,0 +1,86 @@
+!> CPCM (Conductor-like Polarizable Continuum Model) implementation
+!>
+!> The CPCM variant of PCM, with its specific dielectric scaling
+!> (f epsilon = ( epsilon -1)/ epsilon )
+module moist_model_continuum_component_pcm_cpcm
+   use mctc_env, only: wp
+   use mctc_env_error, only: error_type, fatal_error
+   use mctc_io, only: structure_type
+   use moist_context, only: moist_context_type
+   use moist_cavity_type, only: cavity_type
+   use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, moist_pcm_parameters_type
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   implicit none(type, external)
+   private
+
+   public :: model_continuum_component_cpcm
+   public :: new_component_cpcm
+
+   !> CPCM (Conductor-like Polarizable Continuum Model) variant
+   !>
+   !> - f epsilon = ( epsilon -1)/ epsilon scaling
+   type, extends(model_continuum_component_pcm) :: model_continuum_component_cpcm
+   end type model_continuum_component_cpcm
+
+contains
+
+   !> Construct from parameter values; omission uses compiled defaults
+   !>
+   !> @param[inout] self Object to initialize
+   !> @param[in] epsilon Solvent dielectric constant
+   !> @param[in] external_matrix Optional host-supplied PCM matrix
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_component_cpcm(self, epsilon, external_matrix, error, param, ctx)
+      !> CPCM instance to initialize
+      type(model_continuum_component_cpcm), intent(out) :: self
+      !> Dielectric constant
+      real(wp), intent(in) :: epsilon
+      !> Solver configuration; omitted means compiled defaults
+      type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Optional: external pre-computed matrix (ngrid, ngrid)
+      real(wp), intent(in), optional :: external_matrix(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
+
+      !> Resolved solver configuration
+      type(moist_pcm_parameters_type) :: settings
+
+      if (present(param)) settings = param
+      !> Borrow the shared run context (owns verbosity/debug/timer)
+      if (present(ctx)) self%ctx => ctx
+
+      ! Set dielectric properties; below eps = 1 the scaling factor turns
+      ! negative (and diverges at eps = 0), so the model is undefined there,
+      ! and the `epsilon /= epsilon` test rejects a NaN input
+      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+         call fatal_error(error, &
+            & "[new_component_cpcm] Dielectric constant must be >= 1")
+         return
+      end if
+      self%epsilon = epsilon
+      if (ieee_is_finite(epsilon)) then
+         self%feps = (epsilon - 1.0_wp)/epsilon  ! CPCM formula
+      else
+         self%feps = 1.0_wp  ! Conductor limit
+      end if
+
+      call settings%validate(error)
+      if (allocated(error)) return
+      self%param = settings
+
+      ! Handle external matrix
+      if (present(external_matrix)) then
+         call self%set_external_matrix(external_matrix)
+      end if
+
+      ! Set component name and description
+      self%name = "CPCM"
+      self%description = "Conductor-like polarizable continuum, f(eps) = (eps - 1)/eps"
+
+   end subroutine new_component_cpcm
+
+end module moist_model_continuum_component_pcm_cpcm

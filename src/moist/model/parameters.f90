@@ -1,16 +1,19 @@
-!> Shared JSON/TOML file input and output, with JSON printing for native
-!> parameter objects
+!> Shared JSON/TOML file input and output, with JSON and table printing for
+!> native parameter objects
 !>
 !> Derived types declare their fields in register_entries and defaults in
-!> init_defaults
+!> init_defaults; each field carries a print level, 2 for the normal printout
+!> and 3 (default) for the detailed one
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_utils, only: to_lower
    use jonquil, only: json_load, json_dump
-   use tomlf, only: toml_table, toml_value, toml_array, toml_error, &
+   use tomlf, only: toml_table, toml_value, toml_array, toml_keyval, toml_key, toml_error, &
       toml_load, toml_dump, get_value, set_value, len
-   use tomlf_type, only: cast_to_table
+   use tomlf_constants, only: toml_type
+   use tomlf_type, only: cast_to_table, initialized
+   use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
    private
    public :: moist_model_parameters_type
@@ -24,6 +27,8 @@ module moist_model_parameters
       logical :: reading = .false.
       !> First field-conversion error during the current operation
       type(error_type), allocatable :: failure
+      !> Highest field print level a table collection keeps; files keep every field
+      integer :: print_level = huge(1)
    contains
       !> Declare the parameter fields through register_* calls
       procedure(register_entries_ifc), deferred :: register_entries
@@ -37,6 +42,8 @@ module moist_model_parameters
       procedure :: write_file
       !> Print parameter values as formatted JSON
       procedure :: print_parameters
+      !> Print parameter values as an aligned key-value table
+      procedure :: print_table
       procedure :: register_real_scalar
       procedure :: register_int_scalar
       procedure :: register_logical
@@ -240,24 +247,139 @@ contains
       !$omp end critical (moist_parameter_documents)
    end subroutine print_parameters
 
+   !> Print parameter values as an aligned key-value table
+   !>
+   !> - one line per registered field, in registration order; a dotted key
+   !>   group becomes a nested section
+   !> - works on a copy, so printing leaves the values untouched
+   !> - a failed collection prints one warning line instead of the table
+   !> - with `level`, fields registered above it are left out
+   !>
+   !> @param[in] self Parameter values
+   !> @param[inout] pp Pretty printer; the table continues at its indentation
+   !> @param[in] level Verbosity level of the printout (default: every field)
+   subroutine print_table(self, pp, level)
+      class(moist_model_parameters_type), intent(in) :: self
+      type(prettyprinter), intent(inout) :: pp
+      integer, intent(in), optional :: level
+      !> Copy that holds the temporary document
+      class(moist_model_parameters_type), allocatable, target :: work
+      type(error_type), allocatable :: error
+      type(toml_table), pointer :: root
+
+      allocate(work, source=self)
+      if (present(level)) work%print_level = level
+      !$omp critical (moist_parameter_documents)
+      call work%collect_document(error)
+      if (allocated(error)) then
+         ! TODO: route through ctx%warning once a context is reachable here
+         call pp%section("[Warning] Cannot collect parameters: "//error%message)
+      else
+         ! A table with every field above the level holds no storage
+         root => cast_to_table(work%document)
+         if (associated(root)) then
+            if (initialized(root)) call print_document_table(root, pp)
+         end if
+      end if
+      call work%clear_document()
+      !$omp end critical (moist_parameter_documents)
+   end subroutine print_table
+
+   !> Print every entry of one document table, nesting subtables as sections
+   !>
+   !> @param[inout] table Document table
+   !> @param[inout] pp Pretty printer
+   recursive subroutine print_document_table(table, pp)
+      type(toml_table), intent(inout) :: table
+      type(prettyprinter), intent(inout) :: pp
+      type(toml_key), allocatable :: keys(:)
+      class(toml_value), pointer :: entry
+      character(len=:), allocatable :: text
+      real(wp) :: rval
+      integer :: ival, i, stat
+      logical :: lval
+
+      call table%get_keys(keys)
+      do i = 1, size(keys)
+         call table%get(keys(i)%key, entry)
+         if (.not. associated(entry)) cycle
+         select type (entry)
+         type is (toml_table)
+            call pp%push(keys(i)%key//":")
+            call print_document_table(entry, pp)
+            call pp%pop()
+         type is (toml_array)
+            call print_document_array(entry, keys(i)%key, pp)
+         type is (toml_keyval)
+            select case (entry%get_type())
+            case (toml_type%float)
+               call get_value(table, keys(i)%key, rval, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, rval, &
+                  & use_exp=(abs(rval) > 0.0_wp .and. abs(rval) < 1.0e-4_wp) .or. abs(rval) >= 1.0e6_wp)
+            case (toml_type%int)
+               call get_value(table, keys(i)%key, ival, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, ival)
+            case (toml_type%boolean)
+               call get_value(table, keys(i)%key, lval, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, lval)
+            case (toml_type%string)
+               call get_value(table, keys(i)%key, text, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, text)
+            case default
+               ! Registration helpers write no other value kinds
+               continue
+            end select
+         end select
+      end do
+   end subroutine print_document_table
+
+   !> Print a real vector one element per line, labelled `key(i)`
+   !>
+   !> @param[inout] array Document array
+   !> @param[in] key Field name
+   !> @param[inout] pp Pretty printer
+   subroutine print_document_array(array, key, pp)
+      type(toml_array), intent(inout) :: array
+      character(len=*), intent(in) :: key
+      type(prettyprinter), intent(inout) :: pp
+      character(len=12) :: label
+      real(wp) :: value
+      integer :: i, stat
+
+      do i = 1, len(array)
+         call get_value(array, i, value, stat=stat)
+         if (stat /= 0) cycle
+         write(label, "(i0)") i
+         call pp%kv(key//"("//trim(label)//")", value)
+      end do
+   end subroutine print_document_array
+
    !> Resolve a dotted key; missing input fields keep their default values
    !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[out] parent Parent object, or null when no field is available
    !> @param[out] leaf Final key segment
-   subroutine field_parent(self, key, parent, leaf)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine field_parent(self, key, parent, leaf, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       type(toml_table), pointer, intent(out) :: parent
       character(len=:), allocatable, intent(out) :: leaf
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: child
       class(toml_value), pointer :: value
-      integer :: first, dot, stat
+      integer :: first, dot, stat, field_level
 
       nullify(parent)
       leaf = key
       if (allocated(self%failure) .or. .not. allocated(self%document)) return
+      ! A table collected for a lower verbosity skips detailed fields
+      if (.not. self%reading) then
+         field_level = 3
+         if (present(level)) field_level = level
+         if (field_level > self%print_level) return
+      end if
       parent => cast_to_table(self%document)
       first = 1
       do
@@ -292,16 +414,19 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
-   subroutine register_real_scalar(self, key, value)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_real_scalar(self, key, value, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       real(wp), intent(inout) :: value
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: parent
       character(len=:), allocatable :: leaf
       real(wp) :: parsed
       integer :: stat
 
-      call self%field_parent(key, parent, leaf)
+      call self%field_parent(key, parent, leaf, level)
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
@@ -317,16 +442,19 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
-   subroutine register_int_scalar(self, key, value)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_int_scalar(self, key, value, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       integer, intent(inout) :: value
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: parent
       character(len=:), allocatable :: leaf
       integer :: parsed
       integer :: stat
 
-      call self%field_parent(key, parent, leaf)
+      call self%field_parent(key, parent, leaf, level)
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
@@ -342,16 +470,19 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
-   subroutine register_logical(self, key, value)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_logical(self, key, value, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       logical, intent(inout) :: value
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: parent
       character(len=:), allocatable :: leaf
       logical :: parsed
       integer :: stat
 
-      call self%field_parent(key, parent, leaf)
+      call self%field_parent(key, parent, leaf, level)
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
@@ -367,17 +498,20 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] values Parameter values
-   subroutine register_real_vector(self, key, values)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_real_vector(self, key, values, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       real(wp), intent(inout) :: values(:)
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: parent
       type(toml_array), pointer :: array
       character(len=:), allocatable :: leaf
       real(wp) :: parsed
       integer :: stat, i
 
-      call self%field_parent(key, parent, leaf)
+      call self%field_parent(key, parent, leaf, level)
       if (.not. associated(parent)) return
       call get_value(parent, leaf, array, requested=.not. self%reading, stat=stat)
       if (stat == 0 .and. associated(array)) then
@@ -406,16 +540,19 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
-   subroutine register_alloc_string(self, key, value)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_alloc_string(self, key, value, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       character(len=:), allocatable, intent(inout) :: value
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       type(toml_table), pointer :: parent
       character(len=:), allocatable :: leaf, parsed
       integer :: stat
 
       if (.not. self%reading .and. .not. allocated(value)) return
-      call self%field_parent(key, parent, leaf)
+      call self%field_parent(key, parent, leaf, level)
       if (.not. associated(parent)) return
       if (self%reading) then
          call get_value(parent, leaf, parsed, stat=stat)
@@ -431,15 +568,18 @@ contains
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
-   subroutine register_string(self, key, value)
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_string(self, key, value, level)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
       ! allow(assumed-size-character-intent): fixed-length fields, oversized input is rejected
       character(len=*), intent(inout) :: value
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
       character(len=:), allocatable :: text
 
       text = trim(value)
-      call self%register_alloc_string(key, text)
+      call self%register_alloc_string(key, text, level)
       if (allocated(self%failure)) return
       if (len(text) > len(value)) then
          call fatal_error(self%failure, "Parameter string is too long: "//key)

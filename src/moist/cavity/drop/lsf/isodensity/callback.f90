@@ -12,6 +12,10 @@
 !>
 !> exactly as the internal variant does, from the same
 !> [[moist_cavity_drop_lsf_isodensity_param_type]]
+!>
+!> The callback is pulled point by point during the build and stays outside
+!> the host coupling; only the nuclear charges of the core fill arrive in its
+!> build phase
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
@@ -21,7 +25,11 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
+      isodensity_max_nuclear_charge
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
+      & request_require, moist_phase_build, nuclear_charge_request_type
    use moist_output_format, only: format_string
    implicit none(type, external)
    private
@@ -83,8 +91,16 @@ module moist_cavity_drop_lsf_isodensity_callback
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
+      !> Core fill of the ECP nuclei in the bound structure
+      type(moist_iso_core_fill_type) :: core
+      !> Nuclear charges of the host Hamiltonian (nat); unallocated means no ECP nucleus
+      real(wp), allocatable :: z(:)
    contains
       procedure, public :: new => lsf_new
+      procedure, public :: set_nuclear_charges => lsf_set_nuclear_charges
+      procedure, public :: declare_coupling => lsf_declare_coupling
+      procedure, public :: read_build => lsf_read_build
+      procedure, public :: requires_build_inputs => lsf_requires_build_inputs
       procedure, public :: update => lsf_update
       procedure, public :: prepare => lsf_prepare
       procedure, public :: prepare_subset => lsf_prepare_subset
@@ -99,6 +115,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
+      procedure, public :: check_surface => lsf_check_surface
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
 contains
@@ -120,6 +137,7 @@ contains
       !> The callback is globally evaluable and holds no per-atom data, so
       !> candidate ids are never translated
       self%candidate_space = lsf_candidate_space_user
+      self%name = "Isodensity"
 
       self%radius_dependent = .false.
 
@@ -128,6 +146,73 @@ contains
       self%param = moist_cavity_drop_lsf_isodensity_param_type()
       if (present(param)) self%param = param
    end subroutine lsf_new
+
+   !> Declare the build-phase request at the cavity scope
+   !>
+   !> `nuclear_charges`, required while the core fill is on; the density
+   !> itself is pulled through the callback, outside the coupling
+   !>
+   !> @param[in]    self     LSF instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine lsf_declare_coupling(self, coupling, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      type(coupling_type), intent(inout) :: coupling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(nuclear_charge_request_type) :: charges
+
+      call request_require(charges, moist_phase_build, "z", self%param%fills_core(), error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "nuclear_charges", charges, error)
+   end subroutine lsf_declare_coupling
+
+   !> Read the nuclear charges while the core fill is on
+   !>
+   !> @param[inout] self     LSF instance
+   !> @param[in]    coupling Cavity-scoped view of the build phase
+   !> @param[in]    mol      Structure of the cavity's latest update
+   !> @param[out]   error    Missing answer or a charge outside (0, Z]
+   subroutine lsf_read_build(self, coupling, mol, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      type(structure_type), intent(in) :: mol
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: z(:)
+
+      if (.not. self%param%fills_core()) return
+      call coupling%read("nuclear_charges", "z", z, error)
+      if (allocated(error)) return
+      call iso_check_nuclear_charges(mol, z, error)
+      if (allocated(error)) return
+      call self%set_nuclear_charges(z)
+   end subroutine lsf_read_build
+
+   !> Whether the projection waits for build-phase answers
+   !>
+   !> The nuclear charges, while the core fill is on
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_requires_build_inputs(self) result(requires)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      logical :: requires
+
+      requires = self%param%fills_core()
+   end function lsf_requires_build_inputs
+
+   !> Store the nuclear charges of the host Hamiltonian for the core fill
+   !>
+   !> Read by the next `update`; atoms with `z < Z` are ECP nuclei
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    z    Nuclear charges (nat)
+   subroutine lsf_set_nuclear_charges(self, z)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
+      real(wp), intent(in) :: z(:)
+
+      self%z = z
+   end subroutine lsf_set_nuclear_charges
 
    !> Bind molecular geometry for the inherited base state
    !>
@@ -140,10 +225,8 @@ contains
       real(wp), intent(in) :: radii(:)
 
       call lsf_base_update(self, mol, radii)
-      self%zmax = 0.0_wp
-      if (allocated(mol%num)) then
-         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
-      end if
+      self%zmax = isodensity_max_nuclear_charge(mol)
+      call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point
@@ -162,6 +245,9 @@ contains
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
       integer(c_int) :: status
+      !> Host density with the ECP core fill, and the fill ball holding the point
+      real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
+      integer :: inside
 
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
@@ -195,18 +281,24 @@ contains
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if
+      rho = real(c_rho, wp)
+      drho = real(c_drho, wp)
+      if (want_hess) d2rho = real(c_d2rho, wp)
+      if (want_third) d3rho = real(c_d3rho, wp)
+      call self%core%add(point, self%prepared_deriv, rho, drho, d2rho, d3rho, inside=inside)
+      call self%core%check(inside, rho, error)
       ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
       ! derivative inherits the sign flip; identical by construction to the lift
       ! in [[moist_cavity_drop_lsf_isodensity_internal]]
-      self%value = self%param%scale*(self%param%rho_iso - real(c_rho, wp))
-      self%grad = -self%param%scale*real(c_drho, wp)
+      self%value = self%param%scale*(self%param%rho_iso - rho)
+      self%grad = -self%param%scale*drho
       if (want_hess) then
-         self%hess = -self%param%scale*real(c_d2rho, wp)
+         self%hess = -self%param%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (want_third) then
-         self%third = -self%param%scale*real(c_d3rho, wp)
+         self%third = -self%param%scale*d3rho
       else
          self%third = 0.0_wp
       end if
@@ -385,7 +477,7 @@ contains
       !> Surface-free radius
       real(wp) :: r
 
-      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0, self%core%log_grad_bound())
    end function lsf_exclusion_radius
 
    !> Chain-rule factor between the level set and the density it is built from
@@ -408,5 +500,20 @@ contains
       factor = -self%param%scale
       available = .true.
    end function lsf_density_adjoint_factor
+
+   !> Reject projected surface points inside an ECP core fill
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  xyz       Cavity points in Bohr (3, n)
+   !> @param[in]  projected Whether each point is a converged surface projection (n)
+   !> @param[out] error     Set at the first projected point inside a fill ball
+   subroutine lsf_check_surface(self, xyz, projected, error)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      real(wp), intent(in) :: xyz(:, :)
+      logical, intent(in) :: projected(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%core%check_surface(xyz, projected, error)
+   end subroutine lsf_check_surface
 
 end module moist_cavity_drop_lsf_isodensity_callback

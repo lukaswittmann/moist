@@ -12,12 +12,11 @@ module moist_cavity_numsa
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
-   use moist_cavity_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type, update_cavity_base
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
-   use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
-   use mctc_io_constants, only: pi
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
 
    implicit none(type, external)
    private
@@ -49,16 +48,9 @@ module moist_cavity_numsa
    !> NUMSA cavity state
    type, extends(cavity_type) :: cavity_type_numsa
 
-      !> Number of Lebedev angular grid points
-      integer :: num_leb = 110
-      !> Probe radius for solvent sphere (bohr)
-      real(wp) :: probe = 0.0_wp*aatoau
-      !> Offset added to neighbor-list cutoff radius (bohr)
-      real(wp) :: offset = 2.0_wp*aatoau
-      !> Smoothing width $w$ for switching function (bohr)
-      real(wp) :: smoothing = 0.3_wp*aatoau
-      !> Tolerance for surface point exclusion
-      real(wp) :: tolsesp = 1.e-6_wp
+      !> Construction settings: Lebedev points, probe radius, neighbor-list
+      !> offset, smoothing width and surface exclusion tolerance
+      type(moist_cavity_numsa_parameters_type) :: param
 
       !> Atomic numbers (nat)
       integer, allocatable :: at(:)
@@ -68,7 +60,7 @@ module moist_cavity_numsa
       integer, allocatable :: ppind(:, :)
       !> Lebedev angular grid points (3, num_leb)
       real(wp), allocatable :: ang_grid(:, :)
-      !> Lebedev quadrature weights (num_leb)
+      !> Lebedev solid-angle weights (num_leb), summing to 4*pi
       real(wp), allocatable :: ang_weight(:)
       !> Neighbor-list cutoff radius (bohr)
       real(wp) :: srcut
@@ -95,6 +87,8 @@ module moist_cavity_numsa
    contains
       procedure :: update => update_cavity_numsa
       procedure :: get_gradient => compute_area_gradient_numsa
+      !> Construction settings
+      procedure :: parameters => numsa_parameters
    end type cavity_type_numsa
 
 contains
@@ -119,8 +113,8 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_cavity_numsa_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("num_leb", self%num_leb)
-      call self%register_real_scalar("probe", self%probe)
+      call self%register_int_scalar("num_leb", self%num_leb, level=2)
+      call self%register_real_scalar("probe", self%probe, level=2)
       call self%register_real_scalar("offset", self%offset)
       call self%register_real_scalar("smoothing", self%smoothing)
       call self%register_real_scalar("tolsesp", self%tolsesp)
@@ -129,40 +123,56 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radii Atomic radius model to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_numsa(self, ctx, radii, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_numsa(self, radii, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_numsa), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radii
       !> Construction error
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_numsa_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
       type(moist_cavity_numsa_parameters_type) :: settings
 
       if (present(param)) settings = param
-      self%ctx => ctx
-      self%num_leb = settings%num_leb
-      self%probe = settings%probe
-      self%offset = settings%offset
-      self%smoothing = settings%smoothing
-      self%tolsesp = settings%tolsesp
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
+      self%label = "NUMSA"
+      self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radii)
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_numsa
+
+   !> Construction settings of the cavity
+   !>
+   !> @param[in] self NUMSA cavity instance
+   function numsa_parameters(self) result(param)
+      !> NUMSA cavity instance
+      class(cavity_type_numsa), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function numsa_parameters
 
    !> Update cavity surface and gradients for current molecular geometry
    !>
    !> @param[inout] self   The cavity object to update
    !> @param[in]    mol    Molecular structure with coordinates
-   !> @param[in]    radii  Atomic radii (typically vdW radii) in bohr (nat)
    subroutine update_cavity_numsa(self, mol, error)
       class(cavity_type_numsa), intent(inout) :: self
       type(structure_type), intent(in) :: mol
@@ -172,6 +182,11 @@ contains
       real(wp), allocatable :: surface(:)
       real(wp), allocatable :: dsdr(:, :, :)
       integer :: iat, jatom
+
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
+      call self%require_context(error)
+      if (allocated(error)) return
 
       nat = mol%nat
       self%nsph = nat
@@ -187,8 +202,9 @@ contains
       if (.not. allocated(self%asph)) allocate (self%asph(nat))
 
       ! initialize the internal numsa state and neighbour list
-      call init_numsa(self, mol%num(mol%id), self%radii, self%probe, self%num_leb, &
-                      self%offset, self%smoothing, error)
+      call init_numsa(self, mol%num(mol%id), self%radii, self%param%probe, self%param%num_leb, &
+                      self%param%offset, self%param%smoothing, error)
+      if (allocated(error)) return
       call update_nnlist(self, mol%xyz)
 
       allocate (surface(nat))
@@ -218,6 +234,8 @@ contains
       end do
 
       deallocate (surface, dsdr)
+      self%updated = .true.
+      self%built = .true.
 
    end subroutine update_cavity_numsa
 
@@ -298,7 +316,9 @@ contains
       !> Error handling
       type(error_type), intent(out), allocatable :: error
 
-      integer :: iat, jat, ij, oleb, izp
+      integer :: iat, jat, ij, izp
+      !> Angular quadrature filling the cached grid, solid-angle weights summing to 4*pi
+      type(moist_math_grid_angular_type) :: leb
       real(wp) :: ws, rr
 
       ! Set number of atoms
@@ -306,9 +326,6 @@ contains
       if (allocated(self%at)) deallocate (self%at)
       allocate (self%at(self%nsph))
       self%at = num
-
-      ! Set number of Lebedev points
-      self%num_leb = nang
 
       ! Allocate pair indices for all unique (i,j) combinations
       self%ntpair = self%nsph*(self%nsph - 1)/2
@@ -379,20 +396,13 @@ contains
          self%srcut = self%srcut + 2.0_wp*aatoau
       end if
 
-      ! Set up Lebedev angular quadrature grid, mapping the requested num_leb
-      ! to a Lebedev order index
-      call lebedev_order_from_num(nang, oleb, error)
+      ! Set up the angular quadrature grid through the S2 grid type and cache
+      ! its nodes and weights in the plain arrays the integrators consume
+      call new_lebedev_grid(leb, error, npts=nang)
       if (allocated(error)) return
 
-      if (allocated(self%ang_grid)) deallocate (self%ang_grid)
-      if (allocated(self%ang_weight)) deallocate (self%ang_weight)
-      allocate (self%ang_grid(3, nang))
-      allocate (self%ang_weight(nang))
-      call get_angular_grid(oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
-
-      ! Scale weights for full sphere (Lebedev weights integrate to 1)
-      self%ang_weight(:) = self%ang_weight*4.0_wp*pi
+      call move_alloc(leb%points, self%ang_grid)
+      call move_alloc(leb%weights, self%ang_weight)
 
    end subroutine init_numsa
 
@@ -551,7 +561,7 @@ contains
                               grds, nni, grdi)
 
             ! Accumulate surface contribution if point is accessible
-            if (sasap > self%tolsesp) then
+            if (sasap > self%param%tolsesp) then
                wsa = self%ang_weight(ip)*wr*sasap
                sasai = sasai + wsa
                ! Accumulate gradient contributions

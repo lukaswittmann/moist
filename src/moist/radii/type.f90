@@ -7,14 +7,10 @@ module moist_radius_type
 
    public :: radius_type
 
-   ! TODO: Add error propagation
-
    !> Abstract base class for cached atomic radii models
    type, abstract :: radius_type
       !> Number of atoms in the cached state
       integer :: nat = 0
-      !> Verbosity level controlling model diagnostics
-      integer :: verbosity = 0
       !> Cached radii vector in atomic units
       real(wp), allocatable :: f0(:)
       !> Cached derivatives dR_i/dR_A with shape (3,nat,nat)

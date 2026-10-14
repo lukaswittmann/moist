@@ -3,10 +3,11 @@ Fortran API
 
 Cavity, LSF, and PCM constructors accept an optional ``param`` object.
 Omitting it uses compiled defaults; constructors copy supplied values.
-Required inputs such as radii, LSFs, context, and dielectric constant remain
-separate arguments. Individual setting keywords are not accepted.
+Required inputs such as radii, LSFs and dielectric constant, and the optional
+trailing ``ctx``, remain separate arguments. Individual setting keywords are not
+accepted.
 
-All configuration parameter types extend ``moist_model_parameters_type`` and
+Cavity, LSF and PCM parameter types extend ``moist_model_parameters_type`` and
 support ``read_file(path, error)``, ``write_file(path, error)`` and
 ``print_parameters(error, unit=...)``. The file extension selects JSON
 (``.json``) or TOML (``.toml``), ignoring case; any other extension is an
@@ -27,8 +28,8 @@ extend the configuration parameter base.
    call param%read_file("drop.json", error)
    if (allocated(error)) error stop error%message
    param%num_leb = 194
-   call new_cavity_drop(cavity, ctx, radius_model=radii, lsf_model=lsf, &
-      & error=error, param=param)
+   call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, &
+      & error=error, param=param, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 A new defaulted parameter field keeps existing constructor calls valid, but a
@@ -39,13 +40,13 @@ only MOIST's module files. Hosts that call mctc-lib directly must link a
 compatible mctc-lib, its dependencies and its module files themselves;
 ``pkg-config moist`` supplies none of them.
 
-Cavities extend ``cavity_type``; components extend
-``solvation_model_component_type`` (modules ``moist_cavity_type`` and
-``moist_model_type``). Constructors are specific to each type; evaluation uses
+Cavities extend ``cavity_type``; continuum components extend
+``model_continuum_component_type`` (modules ``moist_cavity_type`` and
+``moist_model_continuum_component_type``). Constructors are specific to each type; evaluation uses
 the shared interfaces.
 
-``moist_context_type`` controls logging and timing and must outlive its
-components. An allocated ``mctc_env`` error signals failure.
+``moist_context_type`` is the :ref:`run context <api-context>` and must outlive everything that borrows it.
+A model takes it as its first argument after ``self``; cavities and components take it as the optional trailing ``ctx=``.
 
 .. code-block:: fortran
 
@@ -55,7 +56,13 @@ components. An allocated ``mctc_env`` error signals failure.
    type(moist_context_type), target :: ctx
    type(error_type), allocatable :: error
 
-   call new_context(ctx, verbosity=1)
+   call new_context(ctx, nthreads=0, verbosity=2)  ! nthreads <= 0 takes the current OpenMP setting
+
+``verbosity`` defaults to 2 (:ref:`levels <verbosity>`) and ``debug`` to ``.false.``.
+``unit=`` or ``logfile=`` redirect the messages, ``debugfile=`` the debug stream; ``do_profile=.true.`` records the fine-grained timers.
+``ctx%verbosity()`` returns the level and ``ctx%verbosity(n)`` whether level ``n`` prints, for hosts that gate their own output on it.
+``call ctx%timer%print()`` and ``call ctx%timer%print_simple()`` write the recorded timings to the context's unit.
+The command-line program's ``-v``/``-q`` raise or lower its default verbosity of 4.
 
 Cavities
 --------
@@ -90,8 +97,9 @@ MOIST also supports custom atom-wise and element-wise radii:
       & element_radii, error)
    if (allocated(error)) error stop error%message
 
-Call ``update`` after geometry changes. For ρ-DROP, first set the new density
-on the cavity-owned LSF. ``get_gradient`` prepares nuclear-derivative arrays.
+Call ``update`` after geometry changes, then follow the :ref:`coupling-build`.
+``get_gradient`` prepares nuclear-derivative arrays. The example below uses a
+geometric cavity, which ``update`` builds directly.
 
 .. code-block:: fortran
 
@@ -135,8 +143,8 @@ The iSwiG constructor directly combines the radii and Lebedev discretization:
 
    type(cavity_type_iswig) :: cavity
 
-   call new_cavity_iswig(cavity, ctx, radius_model=radii, error=error, &
-      & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp))
+   call new_cavity_iswig(cavity, radius_model=radii, error=error, &
+      & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 A positive ``cut_a`` discards points with switched area ``f*a <= cut_a``;
@@ -163,8 +171,8 @@ For SvdW, pass its LSF to ``new_cavity_drop``:
    call svdw%new()
 
    ! Construct SvdW-DROP
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=svdw, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=svdw, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 See :doc:`/cavities/svdw` for the LSF parameters.
@@ -184,8 +192,8 @@ For the COSMO Fine Cavity (CFC), only the constructor changes:
    type(cavity_type_drop) :: cavity
 
    call cfc_lsf%new()
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=cfc_lsf, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=cfc_lsf, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 See :doc:`/cavities/cfc` for the CFC parameters.
@@ -202,12 +210,13 @@ The host supplies the shell layout once and a new ``dcart`` for every SCF densit
    use moist_cavity_drop_lsf_isodensity_internal, only : &
       & moist_cavity_drop_lsf_isodensity_internal_type
 
-   use moist, only: moist_cavity_drop_lsf_isodensity_param_type
+   use moist, only: moist_cavity_drop_lsf_isodensity_param_type, &
+      & coupling_type, density_matrix_request_type, nuclear_charge_request_type
 
    type(moist_cavity_drop_lsf_isodensity_internal_type) :: rho_lsf
    type(cavity_type_drop) :: cavity
    integer, allocatable :: sh_atom(:), sh_l(:), sh_nprim(:)
-   real(wp), allocatable :: exps(:), coeffs(:), dcart(:, :)
+   real(wp), allocatable :: exps(:), coeffs(:), dcart(:, :), z(:)
    real(wp), parameter :: rho_iso = 1.0e-3_wp
 
    ! sh_atom, sh_l, sh_nprim, exps, coeffs, and dcart (from QM side)
@@ -216,18 +225,34 @@ The host supplies the shell layout once and a new ``dcart`` for every SCF densit
    if (allocated(error)) error stop error%message
 
    ! Construct isodensity cavity
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=rho_lsf, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=rho_lsf, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
-Set the density at each SCF step:
+.. _isodensity-build-fortran:
+
+Answer the :ref:`coupling-build` with the host density matrix ``dcart`` and
+nuclear charges ``z``:
 
 .. code-block:: fortran
 
-   select type (lsf => cavity%lsf_model)
-   type is (moist_cavity_drop_lsf_isodensity_internal_type)
-      call lsf%set_density(dcart, error)
-   end select
+   type(coupling_type), target :: coupling
+
+   call cavity%update(mol, error)
+   if (allocated(error)) error stop error%message
+   ! At each SCF step
+   call cavity%prepare_build(coupling, error)
+   if (allocated(error)) error stop error%message
+   do while (coupling%next())
+      select type (request => coupling%request())
+      type is (density_matrix_request_type)
+         call coupling%answer("dcart", dcart, error)
+      type is (nuclear_charge_request_type)
+         call coupling%answer("z", z, error)
+      end select
+      if (allocated(error)) error stop error%message
+   end do
+   call cavity%build(coupling, error)
    if (allocated(error)) error stop error%message
 
 Alternatively, a callback-backed LSF calls a supplied function with the
@@ -266,7 +291,7 @@ coefficients for the host's integrals.
      - Response items it produces
    * - CPCM, COSMO
      - ``gaussian_potential`` with independently required ``phi``,
-       ``dphi_dr`` and ``dphi_dxi`` outputs
+       ``dphi_dr`` and ``dphi_dxi`` outputs; ``nuclear_charges`` (``z``) for gradients
      - ``potential_adjoint`` (``w_phi``, :math:`\mathrm{d}E/\mathrm{d}\phi`;
        the induced charges for a stationary PCM)
    * - PV
@@ -274,7 +299,7 @@ coefficients for the host's integrals.
      - None of its own
    * - GOSTSHYP
      - ``gaussian_moments`` (``gt``, ``pt``, ``mt``, ``rt``)
-     - ``gostshyp_amplitude`` (``w_overlap``, ``w_normal_deriv``)
+     - ``gaussian_amplitude`` (``w_overlap``, ``w_normal_deriv``)
 
 On a density-backed cavity (the isodensity level sets) the response of every
 model additionally carries the ``density`` item, which belongs to the cavity
@@ -289,13 +314,13 @@ CPCM
 
 .. code-block:: fortran
 
-   use moist_model_components, only : solvation_model_component_cpcm, &
+   use moist_model_continuum_component, only : model_continuum_component_cpcm, &
       & new_component_cpcm, solver_type, moist_pcm_parameters_type
 
-   type(solvation_model_component_cpcm) :: cpcm
+   type(model_continuum_component_cpcm) :: cpcm
 
-   call new_component_cpcm(cpcm, ctx, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+   call new_component_cpcm(cpcm, epsilon=80.0_wp, &
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 The host answers ``gaussian_potential`` at the grid points ``cavity%xyz`` with
@@ -313,13 +338,13 @@ with the same host requests and solver options as CPCM:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : solvation_model_component_cosmo, &
+   use moist_model_continuum_component, only : model_continuum_component_cosmo, &
       & new_component_cosmo, solver_type, moist_pcm_parameters_type
 
-   type(solvation_model_component_cosmo) :: cosmo
+   type(model_continuum_component_cosmo) :: cosmo
 
-   call new_component_cosmo(cosmo, ctx, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+   call new_component_cosmo(cosmo, epsilon=80.0_wp, &
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 PV
@@ -330,11 +355,11 @@ cavity:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : solvation_model_component_pv, &
+   use moist_model_continuum_component, only : model_continuum_component_pv, &
       & new_component_pv
 
    real(wp), parameter :: gpa_to_au = 3.39893e-5_wp
-   type(solvation_model_component_pv) :: pv
+   type(model_continuum_component_pv) :: pv
 
    call new_component_pv(pv, pressure=1.0_wp*gpa_to_au)
 
@@ -351,32 +376,36 @@ to reproduce the requested pressure:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : solvation_model_component_gostshyp, &
+   use moist_model_continuum_component, only : model_continuum_component_gostshyp, &
       & new_component_gostshyp
 
    real(wp), parameter :: gpa_to_au = 3.39893e-5_wp
-   type(solvation_model_component_gostshyp) :: gostshyp
+   type(model_continuum_component_gostshyp) :: gostshyp
 
    call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
-The ``gaussian_moments`` request carries the exponents ``width``; read them
-from the request, never recompute them. Answer only its missing outputs, and
-contract ``w_overlap`` and ``w_normal_deriv`` with the host's Gaussian
-integrals. See :ref:`coupling-requests` for the outputs required per phase.
+The ``gaussian_moments`` request (``gaussian_moment_request_type``) carries
+the exponents in ``request%width``; read them from the request, never
+recompute them. Use unit-integral Gaussians
+``G=(width/pi)**1.5*exp(-width*|r-C|**2)`` for all moments and matching AO
+integrals. Answer only its missing outputs, and contract ``w_overlap``
+and ``w_normal_deriv`` of the ``gaussian_amplitude`` item
+(``gaussian_amplitude_response_type``) with the host's Gaussian integrals.
+See :ref:`coupling-requests` for the outputs required per phase.
 
 Building a list-based model
 ---------------------------
 
-``solvation_model_general`` owns its cavity and components. Using the objects
+``model_continuum_type`` owns its cavity and components. Using the objects
 constructed above:
 
 .. code-block:: fortran
 
-   use moist_model_general, only : solvation_model_general, new_model_general
+   use moist_model_continuum, only : model_continuum_type, new_continuum_model
 
-   type(solvation_model_general), target :: model
+   type(model_continuum_type), target :: model
 
-   call new_model_general(model, cavity, ctx, error)
+   call new_continuum_model(model, ctx, cavity, error)
    if (allocated(error)) error stop error%message
    call model%add_component(cpcm, error)
    if (allocated(error)) error stop error%message
@@ -385,23 +414,20 @@ constructed above:
    call model%add_component(gostshyp, error)
    if (allocated(error)) error stop error%message
 
-Add all components before the first ``model%update``. After a successful update,
-create a coupling with ``model%new_coupling``. For each phase, call
-``prepare_*``, answer the missing outputs of each request that
-``do while (coupling%next())`` makes current, call ``get_*``, and contract
-each item that ``do while (response%next())`` makes current. Grid inputs are
-the public arrays of ``model%cavity`` (``xyz``, ``xi0``, ``normal0``, ``a``,
-``f``). See :ref:`coupling-fortran` for the evaluation loop and ownership
-rules.
+Add all components before the first ``model%update``. After updating, create
+a coupling with ``model%new_coupling`` and follow the :ref:`coupling-build`
+using ``model%prepare_build`` and ``model%build``. See :ref:`coupling-fortran`
+for evaluation and ownership; grid inputs are read from ``model%cavity``.
 
 The ``moist`` umbrella module re-exports what the evaluation loop needs: every
 parameter type, ``cavity_type_drop`` and ``new_cavity_drop``, ``radius_type``
 and the generic ``new_radii``, the model and component types with their
-constructors and ``solver_type``, the coupling and request types, the response
-type with its items, and ``wp``, ``error_type``, ``fatal_error`` and
-``structure_type`` from mctc-lib. Everything else the examples above use --
-the context, the other cavities, the concrete radii and LSF types, the
-diagnostics -- comes from its own module.
+constructors and ``solver_type``, the isodensity ``moist_iso_basis``, the
+coupling and request types, the response type with its items,
+``field_query_type``, and ``wp``, ``error_type``,
+``fatal_error`` and ``structure_type`` from mctc-lib. Everything else the
+examples above use -- the context, the other cavities, the concrete radii and
+LSF types, the diagnostics -- comes from its own module.
 
 ``coupling_type`` and ``response_type`` carry only the host bindings
 (``next``, ``request``, ``answer``; ``next``, ``item``); declaring, staging and
@@ -421,7 +447,9 @@ on a cavity fixed with respect to the density. ``host_potential`` and
 
 The model must have ``target`` and outlive its couplings. Create a coupling
 after a successful model update; ``model%release_coupling(coupling)`` releases
-it early. Grid inputs are read from ``model%cavity``.
+it early. Grid inputs are read from ``model%cavity``. PCM asks for
+``nuclear_charge_request_type`` (``z(natom)``) in the gradient phase unless the
+build phase already answered it.
 
 ``coupling%request()`` returns a copy of the current request carrying its
 kind, outputs, requirement state and inputs such as the moment width. Later
@@ -433,7 +461,7 @@ The response is walked the same way, one item copy at a time.
 
    use moist
 
-   type(solvation_model_general), target :: model
+   type(model_continuum_type), target :: model
    type(coupling_type), pointer :: coupling
    type(response_type) :: response
    type(error_type), allocatable :: error
@@ -486,6 +514,10 @@ non-finite value or a missing current request comes back as an error.
 ``response%item()`` likewise returns a polymorphic copy of the current item,
 with its arrays as components (``item%w_phi``), and the placeholder
 ``no_current_item`` outside a walk.
+Items and requests also bind ``list_fields(query)``, which declares the same
+arrays as :doc:`fields` to a ``field_query_type``: after ``query%enumerate()``
+it fills ``query%info``, after ``query%fetch(name)`` it copies that one array
+into ``query%rvals``. The typed components remain the way to read them.
 ``get_gradient(coupling, response, gradient, error)`` fills the response with
 the host part of the gradient phase, walked the same way, and adds to
 ``gradient(3, nat)``.

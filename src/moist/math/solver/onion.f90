@@ -22,7 +22,7 @@ module moist_math_solver_onion
    use moist_math_solver_type, only: solver_base_type
 
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
+   use moist_math_grid_angular_lebedev, only: get_angular_grid, lebedev_order_from_num
    use, intrinsic :: iso_fortran_env, only: output_unit
    implicit none(type, external)
    private

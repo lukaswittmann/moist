@@ -6,6 +6,7 @@ module moist_radii
    use moist_radii_static, only: radius_type_static
    use moist_radii_static, only: new_cpcm_radii, new_smd_radii
    use moist_radii_static, only: new_d3_radii, new_cosmo_radii, new_bondi_radii
+   use moist_radii_static, only: new_gauss_radii
    use moist_radii_custom, only: radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use mctc_io_utils, only: to_lower
@@ -20,6 +21,7 @@ module moist_radii
    public :: new_d3_radii
    public :: new_cosmo_radii
    public :: new_bondi_radii
+   public :: new_gauss_radii
    public :: new_radii_custom_atoms
    public :: new_radii_custom_elements
    public :: new_radii
@@ -34,15 +36,12 @@ contains
 
    !> Return a default CPCM static radii model object
    !>
-   !> @param[in]  verbosity  optional print level for diagnostics
    !> @return radii          CPCM static radii model
-   function default_cpcm_radii(verbosity) result(radii)
+   function default_cpcm_radii() result(radii)
       !> CPCM static radii model
       type(radius_type_static) :: radii
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_cpcm_radii(radii, verbosity)
+      call new_cpcm_radii(radii)
    end function default_cpcm_radii
 
    !> Construct a custom radii object from per-atom radii
@@ -50,21 +49,18 @@ contains
    !> @param[in]  radii  per-atom radii in bohr (size must match mol%nat in update)
    !> @param[out] model      constructed custom radii model
    !> @param[out] error      allocated on invalid input
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_radii_custom_atoms(radii, model, error, verbosity)
+   subroutine new_radii_custom_atoms(radii, model, error)
       !> Per-atom radii in bohr
       real(wp), intent(in) :: radii(:)
       !> Constructed radii model
       class(radius_type), allocatable, intent(out) :: model
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       allocate (radius_type_custom :: model)
       select type (model)
       type is (radius_type_custom)
-         call new_custom_radii_atoms(radii, model, error, verbosity)
+         call new_custom_radii_atoms(radii, model, error)
       end select
    end subroutine new_radii_custom_atoms
 
@@ -74,8 +70,7 @@ contains
    !> @param[in]  radii           radii matching atomic_numbers in bohr
    !> @param[out] model           constructed custom radii model
    !> @param[out] error           allocated on invalid input
-   !> @param[in]  verbosity       optional print level for diagnostics
-   subroutine new_radii_custom_elements(atomic_numbers, radii, model, error, verbosity)
+   subroutine new_radii_custom_elements(atomic_numbers, radii, model, error)
       !> Atomic numbers with custom radii
       integer, intent(in) :: atomic_numbers(:)
       !> Radii matching atomic_numbers in bohr
@@ -84,13 +79,11 @@ contains
       class(radius_type), allocatable, intent(out) :: model
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       allocate (radius_type_custom :: model)
       select type (model)
       type is (radius_type_custom)
-         call new_custom_radii_elements(atomic_numbers, radii, model, error, verbosity)
+         call new_custom_radii_elements(atomic_numbers, radii, model, error)
       end select
    end subroutine new_radii_custom_elements
 
@@ -99,16 +92,13 @@ contains
    !> @param[in]  model_tag  radius type tag
    !> @param[out] model      constructed radii model
    !> @param[out] error      allocated on unknown model tag
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_radii_int(model_tag, model, error, verbosity)
+   subroutine new_radii_int(model_tag, model, error)
       !> Radius type tag
       integer, intent(in) :: model_tag
       !> Constructed radii model
       class(radius_type), allocatable, intent(out) :: model
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       character(len=128) :: msg
 
@@ -117,31 +107,37 @@ contains
          allocate (radius_type_static :: model)
          select type (model)
          type is (radius_type_static)
-            call new_cpcm_radii(model, verbosity)
+            call new_cpcm_radii(model)
          end select
       case (rad_type%smd)
          allocate (radius_type_static :: model)
          select type (model)
          type is (radius_type_static)
-            call new_smd_radii(model, verbosity)
+            call new_smd_radii(model)
          end select
       case (rad_type%d3)
          allocate (radius_type_static :: model)
          select type (model)
          type is (radius_type_static)
-            call new_d3_radii(model, verbosity)
+            call new_d3_radii(model)
          end select
       case (rad_type%cosmo)
          allocate (radius_type_static :: model)
          select type (model)
          type is (radius_type_static)
-            call new_cosmo_radii(model, verbosity)
+            call new_cosmo_radii(model)
          end select
       case (rad_type%bondi)
          allocate (radius_type_static :: model)
          select type (model)
          type is (radius_type_static)
-            call new_bondi_radii(model, verbosity)
+            call new_bondi_radii(model)
+         end select
+      case (rad_type%gauss)
+         allocate (radius_type_static :: model)
+         select type (model)
+         type is (radius_type_static)
+            call new_gauss_radii(model)
          end select
       case default
          write (msg, "(a,i0)") "Unknown radius type tag: ", model_tag
@@ -155,16 +151,13 @@ contains
    !> @param[in]  model_name  radius model name
    !> @param[out] model       constructed radii model
    !> @param[out] error       allocated on unknown model name
-   !> @param[in]  verbosity   optional print level for diagnostics
-   subroutine new_radii_str(model_name, model, error, verbosity)
+   subroutine new_radii_str(model_name, model, error)
       !> Radius model name
       character(len=*), intent(in) :: model_name
       !> Constructed radii model
       class(radius_type), allocatable, intent(out) :: model
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       integer :: model_tag
       character(len=32) :: mstr
@@ -182,6 +175,8 @@ contains
          model_tag = rad_type%cosmo
       case ("bondi")
          model_tag = rad_type%bondi
+      case ("gauss")
+         model_tag = rad_type%gauss
       case ("custom")
          call fatal_error(error, "Use new_radii_custom_atoms or new_radii_custom_elements for custom radii")
          return
@@ -191,7 +186,7 @@ contains
          return
       end select
 
-      call new_radii_int(model_tag, model, error, verbosity)
+      call new_radii_int(model_tag, model, error)
    end subroutine new_radii_str
 
 end module moist_radii

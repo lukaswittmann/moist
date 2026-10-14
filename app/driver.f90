@@ -77,24 +77,21 @@ contains
       real(wp) :: tmp_wp
 
       !> Open the run context; every cavity/model borrows it, so all sub-timers
-      !> started later nest under the "total" node opened here.
-      call new_context(ctx, verbosity=config%verbosity, debug=config%debug)
+      !> started later nest under the "total" node opened here. A positive
+      !> --threads is applied to the OpenMP runtime by the context.
+      call new_context(ctx, nthreads=config%num_threads, verbosity=config%verbosity, debug=config%debug, &
+         & do_profile=config%profile)
       call ctx%timer%start("total")
 
       !* ---------------------------- Thread configuration --------------------------- *!
-      !> Routed through the context so it stays the single place the thread budget
-      !> is changed -- `get_num_threads` and `print_settings` then report what the
-      !> run is actually using, and the pin is released again on `ctx%delete`.
       if (config%num_threads > 0) then
 !$       if (.false.) then
-            write (ctx%unit, "(a)") &
-               "[Warn] Program compiled without OpenMP support, ignoring --threads"
+            call ctx%warning("Program compiled without OpenMP support, ignoring --threads")
 !$       else
-!$          call ctx%set_num_threads(config%num_threads)
 ! #ifdef WITH_MKL
 ! !$       call mkl_set_num_threads(config%num_threads)
 ! #endif
-!$          if (config%verbosity > 0) then
+!$          if (ctx%verbosity(1)) then
 !$             write (ctx%unit, '(a,i0,a)') &
 !$                "[Info] OpenMP threads set to ", config%num_threads, ""
 !$          end if
@@ -115,7 +112,7 @@ contains
                                               temperature=config%temperature, pressure_si=config%pressure_si, &
                                               error=error)
          if (allocated(error)) return
-         call system%print()
+         if (ctx%verbosity(1)) call system%print()
          return
       end if
 
@@ -145,11 +142,10 @@ contains
             read (unit, *, iostat=stat) tmp_wp
             if (stat == 0) then
                mol%charge = tmp_wp
-               if (config%verbosity > 0) write (output_unit, "(a)") &
+               if (ctx%verbosity(1)) write (output_unit, "(a)") &
                   "[Info] Molecular charge read from '"//filename//"'"
             else
-               if (config%verbosity > 0) write (output_unit, "(a)") &
-                  "[Warn] Could not read molecular charge read from '"//filename//"'"
+               call ctx%warning("Could not read molecular charge from '"//filename//"'")
             end if
             close (unit)
          end if
@@ -170,7 +166,7 @@ contains
             class(radius_type), allocatable :: radius_model
 
             ! Print header
-            call cavity_header(output_unit, trim(config%mode))
+            if (ctx%verbosity(1)) call cavity_header(output_unit, trim(config%mode))
 
             ! Instantiate the appropriate cavity type
             if (to_lower(config%mode) == "numsa") then
@@ -179,8 +175,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_numsa(tmp_cavity, ctx, radii=radius_model, error=error, &
-                     param=moist_cavity_numsa_parameters_type(num_leb=config%nleb))
+                  call new_cavity_numsa(tmp_cavity, radii=radius_model, error=error, &
+                     param=moist_cavity_numsa_parameters_type(num_leb=config%nleb), ctx=ctx)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -190,8 +186,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_iswig(tmp_cavity, ctx, radius_model=radius_model, error=error, &
-                     param=moist_cavity_iswig_parameters_type(num_leb=config%nleb))
+                  call new_cavity_iswig(tmp_cavity, radius_model=radius_model, error=error, &
+                     param=moist_cavity_iswig_parameters_type(num_leb=config%nleb), ctx=ctx)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -210,28 +206,29 @@ contains
                         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=config%drop_blend_k, &
                            blend_1b=config%drop_blend_1b, blend_2b=config%drop_blend_2b, &
                            blend_3b=config%drop_blend_3b))
-                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
                            lsf_model=svdw_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                           wleb_prune_level=config%drop_wleb_prune_level))
+                           wleb_prune_level=config%drop_wleb_prune_level), ctx=ctx)
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=config%cfc_a1, &
                            a2=config%cfc_a2, c=config%cfc_c, m=config%cfc_m))
-                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
                            lsf_model=cfc_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                           wleb_prune_level=config%drop_wleb_prune_level))
+                           wleb_prune_level=config%drop_wleb_prune_level), ctx=ctx)
                      end block
                   else
                      call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
                   end if
                   if (allocated(error)) return
-                  call tmp_cavity%properties(do_fine=config%cavity_fine)
                   call move_alloc(tmp_cavity, cavity)
                end block
             else if (to_lower(config%mode) == "mc") then
@@ -267,9 +264,15 @@ contains
                end block
             end if
 
+            ! Settings of the constructed cavity
+            if (ctx%verbosity(1)) call cavity%print_parameters()
+
             ! Use polymorphic cavity methods
             call cavity%update(mol, error=error)
             if (allocated(error)) return
+
+            ! Radii of the structure; the update itself prints none
+            if (ctx%verbosity(2)) call cavity%print_radii()
 
             ! Gradient if asked for
             if (config%grad) then
@@ -278,7 +281,7 @@ contains
             end if
 
             ! Print results; with no unit the cavity follows its own context
-            call cavity%print()
+            if (ctx%verbosity(1)) call cavity%print()
 
             ! Write cavity files (xyz, csv, pqr) only when --dump is given.
             ! Marching cubes has no grid points to dump; it already wrote its
@@ -293,7 +296,8 @@ contains
             end if
 
          end block
-         call report_run_timings()
+         call ctx%timer%stop("total")
+         call ctx%timer%print("moist")
          call ctx%delete()
          return
       end if
@@ -337,21 +341,6 @@ contains
       call fatal_error(error, "No solvation models implemented in the current preview version")
       return
 
-      call report_run_timings()
-      call ctx%delete()
-
-   contains
-
-      !> Stop the top-level timer and print the accumulated timing tree. Every
-      !> cavity/model sub-timer nests under "total" (opened at run start), so this
-      !> prints the full hierarchical breakdown for the run.
-      subroutine report_run_timings()
-         call ctx%timer%stop("total")
-         if (config%verbosity > 0) then
-            call ctx%timer%write(output_unit, "moist", max_depth=ctx%report_depth())
-         end if
-      end subroutine report_run_timings
-
    end subroutine run_main
 
    !> Construct a marching-cubes cavity, wiring up mesh export when --dump is set
@@ -377,12 +366,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (dump) then
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
+         call new_cavity_marchingcubes(cavity, radius_model=radius_model, lsf_model=lsf_model, &
             error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing, &
-            obj_file="cavity.obj", pqr_file="cavity.pqr"))
+            obj_file="cavity.obj", pqr_file="cavity.pqr"), ctx=ctx)
       else
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
-            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing))
+         call new_cavity_marchingcubes(cavity, radius_model=radius_model, lsf_model=lsf_model, &
+            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing), ctx=ctx)
       end if
 
    end subroutine new_mc_cavity

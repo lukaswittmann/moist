@@ -16,6 +16,7 @@ module moist_data_solvents
 
    public :: solvation_system_type, new_solvation_system
    public :: get_solvent_id
+   public :: solvent_multipole_data_type, get_solvent_charges, get_solvent_multipoles
 
    private
 
@@ -58,8 +59,18 @@ module moist_data_solvents
 
       procedure :: print => print_solvation_system
       procedure :: update => add_solute_properties
+      procedure :: get_charges => get_system_charges
+      procedure :: get_multipoles => get_system_multipoles
 
    end type solvation_system_type
+
+   !> Atom-centered Cartesian multipoles in e*bohr^rank
+   type :: solvent_multipole_data_type
+      real(wp), allocatable :: monopole(:)
+      real(wp), allocatable :: dipole(:,:)
+      real(wp), allocatable :: quadrupole(:,:)
+      real(wp), allocatable :: octupole(:,:)
+   end type solvent_multipole_data_type
 
 contains
 
@@ -125,6 +136,34 @@ contains
    !>   end subroutine get_solvent_geometry
    !>
    include "solventgeometries.inc"
+
+   !> Atomic charges in e
+   include "solventcharges.inc"
+
+   !> Signed, atom-centered Cartesian moments in e*bohr^rank
+   include "solventmultipoles.inc"
+
+   !> Get atomic charges for a gas, solvent, or conductor environment
+   subroutine get_system_charges(self, environment, model, charges, error)
+      class(solvation_system_type), intent(in) :: self
+      character(len=*), intent(in) :: environment
+      character(len=*), intent(in) :: model
+      real(wp), allocatable, intent(out) :: charges(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      call get_solvent_charges(self%solvent_id, environment, model, charges, error)
+   end subroutine get_system_charges
+
+   !> Get atom-centered multipoles for a gas, solvent, or conductor environment
+   subroutine get_system_multipoles(self, environment, model, multipoles, error)
+      class(solvation_system_type), intent(in) :: self
+      character(len=*), intent(in) :: environment
+      character(len=*), intent(in) :: model
+      type(solvent_multipole_data_type), intent(out) :: multipoles
+      type(error_type), allocatable, intent(out) :: error
+
+      call get_solvent_multipoles(self%solvent_id, environment, model, multipoles, error)
+   end subroutine get_system_multipoles
 
 
    !> Initialize a solvation system from solvent data

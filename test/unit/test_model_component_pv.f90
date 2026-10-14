@@ -4,6 +4,7 @@
 !>   * the energy is `p * V`, with `V` the enclosed cavity volume
 !>   * the nuclear gradient is `p * dV/dR`
 !>   * the surface adjoints are `p *` the cavity volume adjoints
+!>   * energy and gradient are invariant under rigid translation
 module test_model_component_pv
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
@@ -16,13 +17,16 @@ module test_model_component_pv
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
-   use moist_cavity_drop, only: cavity_type_drop
+   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_radii, only: radius_type, radius_type_static, new_cosmo_radii, &
-      & new_radii_custom_atoms
+      & new_radii_custom_atoms, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: get_test_structures, center_at_origin, &
       & get_test_cavity_iswig, fd4_scalar, fd4_offsets
@@ -41,9 +45,9 @@ module test_model_component_pv
 
 contains
 
-!> Collect the PV component test suite
-!>
-!> @param[out] testsuite Collected unit tests
+   !> Collect the PV component test suite
+   !>
+   !> @param[out] testsuite Collected unit tests
    subroutine collect_model_component_pv(testsuite)
 
       !> Collection of tests
@@ -53,27 +57,28 @@ contains
          & new_unittest("pv_sphere_volume", test_pv_sphere_volume), &
          & new_unittest("pv_nuclear_gradient", test_pv_nuclear_gradient), &
          & new_unittest("pv_surface_weights", test_pv_surface_weights), &
+         & new_unittest("pv_translation_invariance", test_pv_translation_invariance), &
          & new_unittest("pv_zero_pressure_short_circuit", test_pv_short_circuit), &
          & new_unittest("pv_lifecycle_guards", test_pv_guards) &
          & ]
 
    end subroutine collect_model_component_pv
 
-!> The PV energy of a spherical cavity against the analytic `p * 4/3 pi R^3`
-!>
-!> A one-atom iSwiG surface carries no switching contributions, so its
-!> divergence-theorem volume `1/3 sum_i a_i (n_i . r_i)` collapses to the exact
-!> sphere volume at any Lebedev order and any sphere position -- the sphere is
-!> deliberately placed off the origin so a dropped center offset in that
-!> contraction would show up. The pressures span ambient to extreme; one atomic
-!> unit of pressure is about 29.4 TPa, so the top of the sweep is far above any
-!> physical solvation pressure and makes the PV term dominate outright
-!>
-!> @param[out] error Error handling
+   !> The PV energy of a spherical cavity against the analytic `p * 4/3 pi R^3`
+   !>
+   !> A one-atom iSwiG surface carries no switching contributions, so its
+   !> divergence-theorem volume `1/3 sum_i a_i (n_i . r_i)` collapses to the exact
+   !> sphere volume at any Lebedev order and any sphere position -- the sphere is
+   !> deliberately placed off the origin so a dropped center offset in that
+   !> contraction would show up. The pressures span ambient to extreme; one atomic
+   !> unit of pressure is about 29.4 TPa, so the top of the sweep is far above any
+   !> physical solvation pressure and makes the PV term dominate outright
    subroutine test_pv_sphere_volume(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Single-sphere and two-sphere test structures
@@ -83,7 +88,7 @@ contains
       !> Radius model pinning the sphere radius exactly
       class(radius_type), allocatable :: radius_model
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Energy accumulator and the analytic reference volume
@@ -111,6 +116,7 @@ contains
       real(wp), parameter :: vol_rtol = 1.0e-11_wp
 
       call new (mol, [6], reshape(center, [3, 1]))
+      call new_context(ctx)
 
       do irad = 1, size(test_radii)
          volume_ref = 4.0_wp/3.0_wp*pi*test_radii(irad)**3
@@ -130,7 +136,7 @@ contains
             end if
 
             do ipres = 1, size(test_pressures)
-               call new_component_pv(pv_component, test_pressures(ipres))
+               call new_component_pv(pv_component, test_pressures(ipres), ctx=ctx)
                call pv_component%update(mol, cavity, err)
                if (allocated(err)) then
                   call test_failed(error, "PV update failed: "//err%message)
@@ -176,7 +182,7 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, test_pressures(size(test_pressures)))
+      call new_component_pv(pv_component, test_pressures(size(test_pressures)), ctx=ctx)
       call pv_component%update(mol_pair, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update on the two-sphere cavity failed: "//err%message)
@@ -195,20 +201,20 @@ contains
 
    end subroutine test_pv_sphere_volume
 
-!> The PV nuclear gradient against fourth-order central differences
-!>
-!> The cavity is rebuilt from scratch at every stencil point, so this differences
-!> the same quantity the component reports rather than a frozen surface. The
-!> gradient accumulator carries a sentinel throughout, which turns an assignment
-!> where an accumulation was meant into a failure; the exact pressure scaling is
-!> then checked separately, where it can be asserted to roundoff instead of to
-!> finite-difference accuracy
-!>
-!> @param[out] error Error handling
+   !> The PV nuclear gradient against fourth-order central differences
+   !>
+   !> The cavity is rebuilt from scratch at every stencil point, so this differences
+   !> the same quantity the component reports rather than a frozen surface. The
+   !> gradient accumulator carries a sentinel throughout, which turns an assignment
+   !> where an accumulation was meant into a failure; the exact pressure scaling is
+   !> then checked separately, where it can be asserted to roundoff instead of to
+   !> finite-difference accuracy
    subroutine test_pv_nuclear_gradient(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Sampled test structures and the displaced copy driven through the cavity
@@ -217,7 +223,7 @@ contains
       !> Cavity rebuilt at the reference and at every displaced geometry
       type(cavity_type_iswig) :: cavity
       !> Components at unit and at scaled pressure
-      type(solvation_model_component_pv) :: pv_component, pv_scaled
+      type(model_continuum_component_pv) :: pv_component, pv_scaled
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Gradient accumulators at unit and at scaled pressure
@@ -256,7 +262,8 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, unit_pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, unit_pressure, ctx=ctx)
       call pv_component%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -274,7 +281,7 @@ contains
       if (allocated(error)) return
 
       ! The pressure enters as a pure prefactor, so this holds to roundoff
-      call new_component_pv(pv_scaled, scaled_pressure)
+      call new_component_pv(pv_scaled, scaled_pressure, ctx=ctx)
       call pv_scaled%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Scaled PV update failed: "//err%message)
@@ -300,7 +307,8 @@ contains
                call displaced_energy(trial, values(k))
                if (allocated(error)) return
             end do
-            fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+            call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "PV gradient atom ", iatom, ", axis ", iaxis
             call check(error, gradient(iaxis, iatom) - sentinel, fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
@@ -345,21 +353,22 @@ contains
 
    end subroutine test_pv_nuclear_gradient
 
-!> The PV surface adjoints against fourth-order central differences
-!>
-!> Driven on the shared synthetic seven-point DROP surface, carrying the radial
-!> normal field: the volume is the divergence-theorem integral
-!> `1/3 sum_i a_i (r_i . n_i)`, which only measures an enclosed volume on a
-!> closed radial surface, so the harness's tilted field would change what is
-!> being tested. Unlike CPCM, the volume depends on the normals, so all four
-!> channels stay enabled. The pressure is deliberately not one, so a dropped
-!> prefactor cannot hide
-!>
-!> @param[out] error Error handling
+   !> The PV surface adjoints against fourth-order central differences
+   !>
+   !> Driven on the shared synthetic seven-point DROP surface, carrying the radial
+   !> normal field: the volume is the divergence-theorem integral
+   !> `1/3 sum_i a_i ((r_i - c) . n_i)`, which only measures an enclosed volume on
+   !> a closed radial surface, so the harness's tilted field would change what is
+   !> being tested. Unlike CPCM, the volume depends on the normals, so all four
+   !> channels stay enabled. The pressure is deliberately not one, so a dropped
+   !> prefactor cannot hide, and the single sphere center (the volume origin `c`)
+   !> sits off the coordinate origin, so weights taken from absolute positions fail
    subroutine test_pv_surface_weights(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; PV only stores it
@@ -367,7 +376,7 @@ contains
       !> Synthetic DROP surface carrying the volume adjoint fields
       type(cavity_type_drop) :: cavity
       !> Components at finite and at zero pressure
-      type(solvation_model_component_pv) :: pv_component, pv_zero
+      type(model_continuum_component_pv) :: pv_component, pv_zero
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Analytic surface weights, and a prefilled accumulator PV must not touch
@@ -376,10 +385,12 @@ contains
       type(surface_fixture) :: surface
       !> Radial normal field of the fixture
       real(wp) :: normals(3, ngrid_sw)
-      !> Dummy molecular geometry
+      !> Molecular geometry, the single sphere center
       real(wp) :: xyz_mol(3, 1)
-      !> Grid point index
-      integer :: igrid
+      !> Central-difference origin weights and the origin displacement
+      real(wp) :: fd_c(3), dc(3)
+      !> Grid point and axis indices
+      integer :: igrid, iaxis
 
       !> Pressure of the component under test
       real(wp), parameter :: pressure = 2.5_wp
@@ -390,16 +401,22 @@ contains
       real(wp), parameter :: fd_rtol = 2.0e-9_wp
       !> Value prefilled into every channel of the untouched accumulator
       real(wp), parameter :: prefill = 0.75_wp
+      !> Off-origin sphere center, and so volume origin, bohr
+      real(wp), parameter :: origin(3) = [0.4_wp, -0.3_wp, 0.25_wp]
 
       normals = fixture_radial_normals()
 
-      xyz_mol(:, 1) = 0.0_wp
+      xyz_mol(:, 1) = origin
       call new (mol, [1], xyz_mol)
 
       ! Synthetic surface carrying only the fields the volume adjoint reads,
       ! plus the total volume PV's own lifecycle guards require
       cavity%ngrid = ngrid_sw
       cavity%nsph = 1
+      ! The hand-built surface counts as updated and built
+      cavity%updated = .true.
+      cavity%built = .true.
+      allocate (cavity%sphxyz, source=xyz_mol)
       allocate (cavity%a, source=sw_areas)
       allocate (cavity%xi0, source=sw_xis)
       allocate (cavity%f, source=sw_fs)
@@ -409,10 +426,11 @@ contains
       cavity%total_volume = 0.0_wp
       do igrid = 1, ngrid_sw
          cavity%total_volume = cavity%total_volume &
-            & + sw_areas(igrid)*dot_product(sw_xyz(:, igrid), normals(:, igrid))/3.0_wp
+            & + sw_areas(igrid)*dot_product(sw_xyz(:, igrid) - origin, normals(:, igrid))/3.0_wp
       end do
 
-      call new_component_pv(pv_component, pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -434,6 +452,20 @@ contains
          & "pv", step=step, thr_abs=fd_atol, thr_rel=fd_rtol)
       if (allocated(error)) return
 
+      ! The origin channel against central differences in the origin
+      do iaxis = 1, 3
+         dc = 0.0_wp
+         dc(iaxis) = step
+         fd_c(iaxis) = (pv_origin_energy(origin + dc) - pv_origin_energy(origin - dc)) &
+            & /(2.0_wp*step)
+      end do
+      call check(error, maxval(abs(weights%w_c - fd_c)), 0.0_wp, thr=fd_atol, &
+         & more="PV volume-origin weights disagree with central differences")
+      if (allocated(error)) return
+      call check(error, maxval(abs(weights%w_c)) > 0.0_wp, &
+         & more="PV wrote no volume-origin weights")
+      if (allocated(error)) return
+
       ! A zero pressure must return before the accumulator is written at all
       call prefilled%init(ngrid_sw)
       prefilled%w_xi = prefill
@@ -444,8 +476,9 @@ contains
       prefilled%w_k2 = prefill
       prefilled%w_xyz = prefill
       prefilled%w_n = prefill
+      prefilled%w_c = prefill
 
-      call new_component_pv(pv_zero, 0.0_wp)
+      call new_component_pv(pv_zero, 0.0_wp, ctx=ctx)
       call pv_zero%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -460,7 +493,8 @@ contains
          & maxval(abs(prefilled%w_xi - prefill)), maxval(abs(prefilled%w_f - prefill)), &
          & maxval(abs(prefilled%w_a - prefill)), maxval(abs(prefilled%w_w - prefill)), &
          & maxval(abs(prefilled%w_k1 - prefill)), maxval(abs(prefilled%w_k2 - prefill)), &
-         & maxval(abs(prefilled%w_xyz - prefill)), maxval(abs(prefilled%w_n - prefill))), &
+         & maxval(abs(prefilled%w_xyz - prefill)), maxval(abs(prefilled%w_n - prefill)), &
+         & maxval(abs(prefilled%w_c - prefill))), &
          & 0.0_wp, thr=0.0_wp, &
          & message="PV at zero pressure wrote to the surface-adjoint accumulator")
 
@@ -487,19 +521,209 @@ contains
          energy = 0.0_wp
          do i = 1, trial%ngrid()
             energy = energy &
-               & + areas(i)*dot_product(trial%xyz(:, i), trial%normal(:, i))
+               & + areas(i)*dot_product(trial%xyz(:, i) - origin, trial%normal(:, i))
          end do
          energy = pressure*energy/3.0_wp
 
       end function pv_surface_energy
 
+      !> PV energy of the reference surface measured from a displaced origin
+      !>
+      !> @param[in] c Volume origin, bohr
+      !> @return PV energy
+      function pv_origin_energy(c) result(energy)
+
+         !> Volume origin, bohr
+         real(wp), intent(in) :: c(3)
+
+         !> PV energy
+         real(wp) :: energy
+
+         !> Grid point index
+         integer :: i
+
+         energy = 0.0_wp
+         do i = 1, ngrid_sw
+            energy = energy + sw_areas(i)*dot_product(sw_xyz(:, i) - c, normals(:, i))
+         end do
+         energy = pressure*energy/3.0_wp
+
+      end function pv_origin_energy
+
    end subroutine test_pv_surface_weights
 
-!> A zero pressure must short-circuit before the cavity is asked for anything
-!> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,
-!> so a missing short circuit is observable as the error PV raises without them
-!>
-!> @param[out] error Error handling
+   !> The PV energy and nuclear gradient under a rigid translation of the molecule
+   !>
+   !> On overlapping spheres the discrete surface does not close, `sum_i a_i n_i`
+   !> stays nonzero, so a volume measured from a fixed point changes by
+   !> `t . sum_i a_i n_i/3` under a shift `t` and leaves the net force
+   !> `p sum_i a_i n_i/3`. Both cavities are moved far off the coordinate origin;
+   !> the energy must not change, and the forward and reverse gradients must carry
+   !> no net force. The nonzero `sum_i a_i n_i` is asserted first, so the fixture
+   !> can see the fault
+   subroutine test_pv_translation_invariance(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+
+      !> Overlapping-sphere test structure
+      type(structure_type) :: mol
+      !> Cavities under test
+      type(cavity_type_iswig) :: iswig
+      type(cavity_type_drop) :: drop
+      !> Level set of the DROP cavity
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw
+      !> Run context borrowed by the DROP cavity and the component
+      type(moist_context_type), target :: ctx
+
+      !> Pressure of the component under test
+      real(wp), parameter :: pressure = 0.75_wp
+      !> Rigid shift, bohr
+      real(wp), parameter :: shift(3) = [35.0_wp, -52.0_wp, 18.0_wp]
+      !> Smallest `|sum_i a_i n_i|/A` for which the fixture sees a fixed origin
+      real(wp), parameter :: closure_floor = 1.0e-4_wp
+      !> Relative tolerance of the energy under translation
+      real(wp), parameter :: energy_rtol = 1.0e-11_wp
+      !> Absolute tolerance of the net force
+      real(wp), parameter :: force_atol = 1.0e-9_wp
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call get_structure(mol, "MB16-43", "01")
+
+      call get_test_cavity_iswig(mol, iswig, err, nleb=110)
+      if (allocated(err)) then
+         call test_failed(error, "iSwiG cavity setup failed: "//err%message)
+         return
+      end if
+      call check_translation(iswig, "iSwiG")
+      if (allocated(error)) return
+
+      call svdw%new()
+      call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=svdw, &
+         & error=err, param=moist_cavity_drop_parameters_type(num_leb=50), ctx=ctx)
+      if (allocated(err)) then
+         call test_failed(error, "DROP cavity setup failed: "//err%message)
+         return
+      end if
+      call check_translation(drop, "DROP")
+
+   contains
+
+      !> Compare one cavity's PV terms on the reference and the shifted structure
+      !>
+      !> @param[inout] cavity Cavity, updated here on both structures
+      !> @param[in]    label  Cavity name in failure messages
+      subroutine check_translation(cavity, label)
+
+         !> Cavity, updated here on both structures
+         class(cavity_type), intent(inout) :: cavity
+         !> Cavity name in failure messages
+         character(len=*), intent(in) :: label
+
+         !> Rigidly shifted structure
+         type(structure_type) :: shifted
+         !> Component under test
+         type(model_continuum_component_pv) :: pv_component
+         !> Host coupling data, never read by PV
+         type(coupling_type) :: coupling
+         !> Host part of the gradient phase, unused by PV
+         type(response_type) :: response
+         !> Reverse-mode surface adjoints
+         type(cavity_surface_adjoint_type) :: acc
+         !> Forward and reverse gradients
+         real(wp), allocatable :: grad_fwd(:, :), grad_rev(:, :)
+         !> Energies on both structures and the discrete closure `sum_i a_i n_i`
+         real(wp) :: energy, energy_shifted, closure(3)
+         !> Grid point and atom indices
+         integer :: igrid, iat
+         type(moist_error_type), allocatable :: local_err
+
+         call cavity%update(mol, local_err)
+         if (.not. allocated(local_err)) then
+            call new_component_pv(pv_component, pressure, ctx=ctx)
+         end if
+         if (.not. allocated(local_err)) call pv_component%update(mol, cavity, local_err)
+         if (allocated(local_err)) then
+            call test_failed(error, label//" reference setup failed: "//local_err%message)
+            return
+         end if
+
+         closure = 0.0_wp
+         do igrid = 1, cavity%ngrid
+            closure = closure + cavity%a(igrid)*cavity%normal0(:, igrid)
+         end do
+         call check(error, norm2(closure) > closure_floor*cavity%total_area, &
+            & more=label//" surface closes, the translation check is vacuous")
+         if (allocated(error)) return
+
+         energy = 0.0_wp
+         call pv_component%get_energy(component_view(coupling), cavity, energy, local_err)
+         if (allocated(local_err)) then
+            call test_failed(error, label//" PV energy failed: "//local_err%message)
+            return
+         end if
+
+         ! Reverse mode, as the model assembles it
+         call acc%init(cavity%ngrid)
+         allocate (grad_rev(3, mol%nat), source=0.0_wp)
+         call pv_component%get_gradient_surface_weights(component_view(coupling), cavity, &
+            & acc, local_err)
+         if (.not. allocated(local_err)) call cavity%get_surface_gradient(acc, grad_rev, local_err)
+         if (.not. allocated(local_err)) then
+            call pv_component%get_direct_gradient(component_view(coupling), cavity, &
+            & grad_rev, local_err)
+         end if
+         if (allocated(local_err)) then
+            call test_failed(error, label//" reverse PV gradient failed: "//local_err%message)
+            return
+         end if
+
+         allocate (grad_fwd(3, mol%nat), source=0.0_wp)
+         call pv_component%get_gradient(component_view(coupling), cavity, response, grad_fwd, &
+            & local_err)
+         if (allocated(local_err)) then
+            call test_failed(error, label//" forward PV gradient failed: "//local_err%message)
+            return
+         end if
+         call check(error, maxval(abs(grad_fwd)) > 1.0e-6_wp, &
+            & more=label//" PV gradient is zero, the net-force check is vacuous")
+         if (allocated(error)) return
+
+         call check(error, norm2(sum(grad_fwd, dim=2)), 0.0_wp, thr=force_atol, &
+            & more=label//" forward PV gradient carries a net force")
+         if (allocated(error)) return
+         call check(error, norm2(sum(grad_rev, dim=2)), 0.0_wp, thr=force_atol, &
+            & more=label//" reverse PV gradient carries a net force")
+         if (allocated(error)) return
+
+         shifted = mol
+         do iat = 1, shifted%nat
+            shifted%xyz(:, iat) = shifted%xyz(:, iat) + shift
+         end do
+         call cavity%update(shifted, local_err)
+         if (.not. allocated(local_err)) call pv_component%update(shifted, cavity, local_err)
+         if (allocated(local_err)) then
+            call test_failed(error, label//" shifted setup failed: "//local_err%message)
+            return
+         end if
+         energy_shifted = 0.0_wp
+         call pv_component%get_energy(component_view(coupling), cavity, energy_shifted, &
+            & local_err)
+         if (allocated(local_err)) then
+            call test_failed(error, label//" shifted PV energy failed: "//local_err%message)
+            return
+         end if
+         call check(error, energy_shifted, energy, thr=energy_rtol*abs(energy), &
+            & more=label//" PV energy changes under rigid translation")
+
+      end subroutine check_translation
+
+   end subroutine test_pv_translation_invariance
+
+   !> A zero pressure must short-circuit before the cavity is asked for anything
+   !> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,
+   !> so a missing short circuit is observable as the error PV raises without them
    subroutine test_pv_short_circuit(error)
 
       !> Error handling
@@ -515,7 +739,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Gradient accumulator carrying a sentinel
       real(wp), allocatable :: gradient(:, :)
       !> Host part of the gradient phase, unused by PV
@@ -524,12 +748,12 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
 
       call new_cosmo_radii(radius_model)
-      call new_cavity_numsa(cavity, ctx, radii=radius_model, error=err, &
-         param=moist_cavity_numsa_parameters_type(num_leb=110))
+      call new_cavity_numsa(cavity, radii=radius_model, error=err, &
+         param=moist_cavity_numsa_parameters_type(num_leb=110), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "NUMSA cavity setup failed: "//err%message)
          return
@@ -543,7 +767,7 @@ contains
       allocate (gradient(3, mol%nat), source=1.5_wp)
 
       ! Zero pressure: no cavity call at all, accumulator untouched
-      call new_component_pv(pv_component, 0.0_wp)
+      call new_component_pv(pv_component, 0.0_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -559,7 +783,7 @@ contains
       if (allocated(error)) return
 
       ! Finite pressure: the missing cavity hook must surface as an error
-      call new_component_pv(pv_component, 0.75_wp)
+      call new_component_pv(pv_component, 0.75_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -573,11 +797,9 @@ contains
 
    end subroutine test_pv_short_circuit
 
-!> The lifecycle guards: a cavity that was never updated carries no volume, a
-!> volume contribution produces no host-trace potential, and a mis-shaped
-!> gradient accumulator is rejected without being written to
-!>
-!> @param[out] error Error handling
+   !> The lifecycle guards: a cavity that was never updated carries no volume, a
+   !> volume contribution produces no host-trace potential, and a mis-shaped
+   !> gradient accumulator is rejected without being written to
    subroutine test_pv_guards(error)
 
       !> Error handling
@@ -595,7 +817,7 @@ contains
       !> Potential accumulator PV must leave alone
       type(response_type) :: response
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
       !> Gradient accumulator of the wrong shape
@@ -609,19 +831,19 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
       call new_cosmo_radii(radius_model)
 
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=26))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=26), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity construction failed: "//err%message)
          return
       end if
 
       ! Never updated: no total volume, so neither update nor get_energy may run
-      call new_component_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       call check(error, allocated(err), &
          & more="PV accepted a cavity that was never updated")

@@ -35,27 +35,19 @@ contains
    !> @param[in]  radii  per-atom radii (bohr)
    !> @param[out] self       custom radii model
    !> @param[out] error      error on invalid radii input
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_custom_radii_atoms(radii, self, error, verbosity)
+   subroutine new_custom_radii_atoms(radii, self, error)
       !> Per-atom radii (bohr)
       real(wp), intent(in) :: radii(:)
       !> Custom radii model
       type(radius_type_custom), intent(out) :: self
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       integer :: iat
 
       self%nat = 0
       self%has_atom_radii = .false.
       self%has_element_radii = .false.
-      if (present(verbosity)) then
-         self%verbosity = verbosity
-      else
-         self%verbosity = 0
-      end if
 
       if (size(radii) < 1) then
          call fatal_error(error, "new_custom_radii_atoms: radii list must not be empty")
@@ -80,8 +72,7 @@ contains
    !> @param[in]  radii           radii matching atomic_numbers (bohr)
    !> @param[out] self            custom radii model
    !> @param[out] error           error on invalid input
-   !> @param[in]  verbosity       optional print level for diagnostics
-   subroutine new_custom_radii_elements(atomic_numbers, radii, self, error, verbosity)
+   subroutine new_custom_radii_elements(atomic_numbers, radii, self, error)
       !> Atomic numbers for supplied radii
       integer, intent(in) :: atomic_numbers(:)
       !> Radii values matching atomic_numbers (bohr)
@@ -90,8 +81,6 @@ contains
       type(radius_type_custom), intent(out) :: self
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       integer :: iat
       integer :: z
@@ -101,11 +90,6 @@ contains
       self%nat = 0
       self%has_atom_radii = .false.
       self%has_element_radii = .false.
-      if (present(verbosity)) then
-         self%verbosity = verbosity
-      else
-         self%verbosity = 0
-      end if
 
       if (size(atomic_numbers) < 1) then
          call fatal_error(error, "new_custom_radii_elements: atomic_numbers must not be empty")
@@ -171,6 +155,7 @@ contains
       if (self%has_element_radii .and. allocated(self%element_radii)) then
          write (iu, "(a,i0)") "  max atomic number in element radii table: ", size(self%element_radii)
       end if
+      flush (iu)
    end subroutine print_custom_radii
 
    !> Update cached radii for a molecular structure

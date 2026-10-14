@@ -34,7 +34,8 @@ module test_math_solvers
    use nlesolver_module, only: nlesolver_type, &
                                NLESOLVER_SCALAR_BOUNDS, &
                                NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_finite
+   use test_helpers, only: fd4_scalar, fd4_offsets
    implicit none(type, external)
    private
 
@@ -60,6 +61,13 @@ module test_math_solvers
    real(wp), parameter :: slsqp_thr = 1.0e-7_wp
    !> Tolerance for L-BFGS-B solver
    real(wp), parameter :: lbfgsb_thr = 1.0e-6_wp
+
+   !> Absolute tolerance for componentwise deflation gradient finite differences
+   real(wp), parameter :: deflation_fd_abs = 1.0e-10_wp
+   !> Relative tolerance for componentwise deflation gradient finite differences
+   real(wp), parameter :: deflation_fd_rel = 1.0e-9_wp
+   !> Step for the fourth-order deflation gradient finite difference
+   real(wp), parameter :: deflation_fd_step = 1.0e-4_wp
 
    !* ================================================================================= *!
    !*     Raw-kernel test constants (vendored APIs ported from upstream test suites)    *!
@@ -1891,20 +1899,17 @@ contains
    !>  - multiplier == 1 with no known roots (no deflation),
    !>  - append_root accepts fresh points, rejects a within-dedup_tol duplicate
    !>    and accepts a point just outside dedup_tol
-   !>  - analytic gradient(x) matches a central finite difference of
+   !>  - analytic gradient(x) matches a fourth-order central finite difference of
    !>    multiplier(x) at probe points well away from the stored roots
    subroutine test_deflation_operator_gradient_fd(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_deflation_operator_type) :: op
       type(moist_error_type), allocatable :: op_error
-      real(wp), dimension(2) :: root_a, root_b, p, pp, pm
+      real(wp), dimension(2) :: root_a, root_b, p, ps
       real(wp), dimension(2) :: grad_analytic, grad_fd
-      real(wp) :: m_plus, m_minus
-      real(wp) :: rel_err
+      real(wp) :: m_stencil(4), bound
       logical :: accepted
-      integer :: ip, k
-      real(wp), parameter :: step = 1.0e-6_wp
-      real(wp), parameter :: grad_tol = 1.0e-6_wp
+      integer :: ip, k, is
       real(wp), parameter :: probes(2, 3) = reshape( &
                              [0.3_wp, -0.4_wp, 2.0_wp, 1.5_wp, -0.5_wp, -2.0_wp], [2, 3])
 
@@ -1946,23 +1951,29 @@ contains
       call op%append_root(root_a, accepted)
       call op%append_root(root_b, accepted)
 
-      ! Central-difference check of grad_M against analytic gradient
+      ! Fourth-order stencil; tolerance provenance at deflation_fd_abs
       do ip = 1, 3
          p = probes(:, ip)
          call op%gradient(p, grad_analytic)
          do k = 1, 2
-            pp = p; pm = p
-            pp(k) = p(k) + step
-            pm(k) = p(k) - step
-            m_plus = op%multiplier(pp)
-            m_minus = op%multiplier(pm)
-            grad_fd(k) = (m_plus - m_minus)/(2.0_wp*step)
+            do is = 1, 4
+               ps = p
+               ps(k) = p(k) + fd4_offsets(is)*deflation_fd_step
+               m_stencil(is) = op%multiplier(ps)
+            end do
+            call fd4_scalar(m_stencil(1), m_stencil(2), m_stencil(3), m_stencil(4), &
+                            deflation_fd_step, grad_fd(k), error)
+            if (allocated(error)) return
+            call check(error, ieee_is_finite(grad_analytic(k)), &
+                       message="deflation gradient must be finite at probe "//to_string(ip)// &
+                       ", component "//to_string(k))
+            if (allocated(error)) return
+            bound = max(deflation_fd_abs, deflation_fd_rel*abs(grad_fd(k)))
+            call check(error, grad_analytic(k), grad_fd(k), thr=bound, &
+                       message="analytic grad_M must match fourth-order FD at probe "//to_string(ip)// &
+                       ", component "//to_string(k))
+            if (allocated(error)) return
          end do
-         rel_err = maxval(abs(grad_analytic - grad_fd)) &
-                   /max(1.0_wp, maxval(abs(grad_analytic)))
-         call check(error, rel_err < grad_tol, .true., &
-                    message="analytic grad_M must match central FD of multiplier")
-         if (allocated(error)) return
       end do
 
    end subroutine test_deflation_operator_gradient_fd

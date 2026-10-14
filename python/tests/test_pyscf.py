@@ -43,16 +43,22 @@ from moist.interface import (
     GaussianMomentRequest,
     GaussianPotentialRequest,
     ModelComponentCOSMO,
+    NuclearChargesRequest,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
     Response,
+    SolvationModel,
 )
 from moist.pyscf import (
     CFC, DROP, ISwiG, Isodensity, SvdW,
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
 from moist.parameters import DROPParameters, ISwiGParameters
+from moist import Context
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 #: Dielectric constant of water
 EPSILON = 80.0
@@ -230,6 +236,17 @@ def make_host(mol, *, dm):
     return host
 
 
+def host_build(owner, host, coupling=None):
+    """Run the build phase of a cavity or model with the host's answers, as the driver does."""
+    if coupling is None:
+        coupling = owner.new_coupling()
+    owner.prepare_build(coupling)
+    for request in coupling:
+        host.answer_build(coupling, request)
+    owner.build(coupling)
+    return coupling
+
+
 def cavity_config(isodensity):
     """The DROP configuration of one layer: isodensity or solute-vdW."""
     if isodensity:
@@ -241,7 +258,8 @@ def solve(mol, positions=None, *, dm, isodensity, components="cpcm"):
     """Driver for ``mol`` displaced to ``positions`` (bohr), evaluated at ``dm``."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    solvation = PySCFSolvation(mol, cavity_config(isodensity), COMPONENTS[components]())
+    solvation = PySCFSolvation(mol,
+                               cavity_config(isodensity), COMPONENTS[components](), context=CONTEXT)
     solvation.evaluate(dm)
     return solvation
 
@@ -250,6 +268,7 @@ def solvated_rhf(mol, epsilon):
     """Converged solvated RHF on the isodensity cavity used by the L2 tier."""
     mean_field = moist_for_scf(
         scf.RHF(mol), cavity=cavity_config(True), components=[ModelComponentCPCM(epsilon)],
+        context=CONTEXT,
     )
     mean_field.conv_tol = 1e-13
     mean_field.conv_tol_grad = 1e-9
@@ -257,17 +276,52 @@ def solvated_rhf(mol, epsilon):
     return mean_field
 
 
-@pytest.mark.conventions
-def test_pyscf_host_is_an_isodensity_cavity_source():
-    """A host is the density source of an isodensity cavity built from it."""
-    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    host = make_host(mol, dm=dm)
+@pytest.mark.host
+@pytest.mark.parametrize("cart", [False, True])
+def test_internal_density_reproduces_the_callback_cavity(cart):
+    """The host's basis conversion: moist's evaluator builds the callback's cavity.
 
-    cavity = cavity_config(True).build(source=host)
-    cavity.update(host.structure())
+    cc-pVTZ brings f shells and general contractions; ``cart`` covers both
+    AO conventions.
+    """
+    mol = molecule("water", "cc-pvtz").copy()
+    mol.cart = cart
+    host = make_host(mol, dm=scf.RHF(mol).run(verbose=0).make_rdm1())
+    internal = cavity_config(True).build(basis=host.basis, context=CONTEXT)
+    callback = cavity_config(True).build(source=host, context=CONTEXT)
+    for cavity in (internal, callback):
+        cavity.update(host.structure())
+        host_build(cavity, host)
 
-    assert cavity.density_dependent
-    assert cavity.ngrid > 0
+    # Measured 9e-16
+    np.testing.assert_allclose(internal.xyz, callback.xyz, rtol=0.0, atol=1e-10)
+    assert internal.area == pytest.approx(callback.area, rel=1e-12)
+
+
+@pytest.mark.isodensity
+@pytest.mark.cpcm_pv
+def test_internal_density_reproduces_the_callback_model():
+    """Energy, Fock and every gradient channel agree between the two density sources.
+
+    The level set's higher spatial derivatives enter only here, through the
+    density weights.
+    """
+    system, basis = CASES[1]
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    internal = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
+    # The same driver on the host's density callback
+    callback = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm+pv"](), context=CONTEXT)
+    callback.model = SolvationModel(
+        CONTEXT, cavity_config(True).build(source=callback.host), callback.components)
+
+    # Measured 1e-14 relative
+    expected, actual = callback.evaluate(dm), internal.evaluate(dm)
+    assert actual.energy == pytest.approx(expected.energy, rel=1e-12)
+    np.testing.assert_allclose(actual.fock, expected.fock, rtol=0.0, atol=1e-12)
+    expected, actual = callback.gradient_channels(dm), internal.gradient_channels(dm)
+    assert actual.keys() == expected.keys() == {"model", "potential", "density"}
+    for name, reference in expected.items():
+        np.testing.assert_allclose(actual[name], reference, rtol=0.0, atol=1e-12, err_msg=name)
 
 
 @pytest.mark.isodensity
@@ -276,7 +330,7 @@ def test_results_are_immutable_and_independent_of_the_input_density():
     """The driver's results are frozen values, not views of the caller's arrays."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     density = np.array(dm, copy=True)
-    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
 
     result = solvation.evaluate(density)
     gradient = solvation.gradient(density)
@@ -355,7 +409,7 @@ def sampled_coordinates(natm):
 def test_l0_pcm_components_and_cavity_types_share_the_pyscf_driver(cavity, component_type):
     """Every PCM/cavity combination runs through the same driver."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    solvation = PySCFSolvation(mol, cavity, [component_type(EPSILON)])
+    solvation = PySCFSolvation(mol, cavity, [component_type(EPSILON)], context=CONTEXT)
 
     result = solvation.evaluate(dm)
 
@@ -533,6 +587,45 @@ def test_the_driver_stops_on_an_item_it_cannot_contract():
 
 
 @pytest.mark.conventions
+def test_the_driver_times_its_host_work(capfd):
+    """Every coupling phase and contraction is timed under ``Host``."""
+    context = Context(verbosity=4)
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(
+        mol, ISwiG(parameters=ISwiGParameters(nleb=26)), [ModelComponentCPCM(EPSILON)],
+        context=context)
+    solvation.gradient(dm)
+    capfd.readouterr()
+    context.print_timer()
+    out = capfd.readouterr().out
+    for name in ("Host", "Build coupling", "Energy coupling", "Response coupling",
+                 "Gradient coupling", "Fock build", "Gradient contraction",
+                 "gaussian_potential", "potential_adjoint"):
+        assert name in out
+    assert "NaN" not in out
+
+
+@pytest.mark.isodensity
+@pytest.mark.cpcm
+def test_the_build_phase_is_timed_as_build(capfd):
+    """The isodensity projection and the PCM setup run under the model's ``Build`` node,
+    which the category summary lists as ``Build``."""
+    context = Context(verbosity=4)
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=context)
+    solvation.evaluate(dm)
+    capfd.readouterr()
+    context.print_timer()
+    lines = capfd.readouterr().out.splitlines()
+    assert any(line.startswith(" Build ") for line in lines)
+    for name in ("Projector", "PCM setup"):
+        assert any(line.startswith((f" ├─ {name} ", f" └─ {name} ")) for line in lines)
+        assert not any(line.startswith(f" {name} ") for line in lines)
+    summary = lines[lines.index(" by category"):]
+    assert any(line.startswith(" Build ") for line in summary)
+
+
+@pytest.mark.conventions
 def test_pv_alone_makes_the_fock_purely_level_set():
     """With no electrostatic component the whole Fock is the ``lsf`` contraction.
 
@@ -620,7 +713,7 @@ def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
     The response and gradient phases receive only ``w_xyz``.
     """
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
     host = solvation.host
 
     potential_calls = []
@@ -668,13 +761,14 @@ def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypat
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
 
-    electrostatic = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    electrostatic = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"](), context=CONTEXT)
     electrostatic.evaluate(dm)
     assert builds == []
     assert electrostatic.moments is None
 
     # Positive control: GOSTSHYP requests moments.
-    pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)])
+    pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)],
+                                 context=CONTEXT)
     pressurised.evaluate(dm)
     assert builds == [1]
 
@@ -708,6 +802,8 @@ def test_gradient_path_reads_host_surface_weights():
                     dphi_dr=factor * host.surface_potential_gradient(coords, xi),
                     dphi_dxi=host._dphi_dxi(coords, xi),
                 )
+            elif isinstance(request, NuclearChargesRequest):
+                coupling.answer(z=host.nuclear_charges)
         gradients.append(_gradient(model, coupling)[0])
     step = gradients[1] - gradients[0]
     assert np.max(np.abs(step)) > 1.0e-6
@@ -795,7 +891,7 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=50))
-    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)])
+    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)], context=CONTEXT)
     result = solvation.evaluate(dm)
     host, model = solvation.host, solvation.model
     coords = model.cavity.xyz
@@ -827,7 +923,7 @@ def test_point_gaussian_mismatch_decreases_with_grid_order():
     differences = []
     for nleb in (50, 194, 770):
         cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=nleb))
-        solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)])
+        solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)], context=CONTEXT)
         result = solvation.evaluate(dm)
         matrix, _ = library.assemble_drop_amat(solvation.model.cavity._handle)
         point_phi = solvation.host.surface_potential(solvation.model.cavity.xyz)
@@ -846,6 +942,22 @@ def test_ecp_molecule_is_rejected_before_element_lookup():
     host = PySCFHost(mol)
     with pytest.raises(ValueError, match="effective core potentials"):
         host.structure()
+
+
+@pytest.mark.host
+def test_host_separates_elements_from_ecp_charges(monkeypatch):
+    mol = gto.M(atom="I 0 0 0; H 0 0 3.04", basis="def2-svp", ecp="def2-svp", verbose=0)
+    # Past the guard: the mapping it hands moist once ECPs are admitted
+    monkeypatch.setattr(mol, "has_ecp", lambda: False)
+    host = PySCFHost(mol)
+    structure = host.structure()
+    # The structure holds the elements; the nuclear charges are the answer
+    # to the nuclear_charges request
+    np.testing.assert_array_equal(structure.numbers, [53, 1])
+    np.testing.assert_array_equal(host.nuclear_charges, mol.atom_charges())
+    assert host.nuclear_charges[0] == 53 - mol.atom_nelec_core(0) < 53
+    host.dm = np.zeros((mol.nao, mol.nao))
+    assert host.cartesian_density().shape == (host.basis.ncart, host.basis.ncart)
 
 
 def _energy(model, coupling):

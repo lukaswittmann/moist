@@ -207,13 +207,12 @@ contains
 
       !*------------------------- Project all points------------------------- *!
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          plp = new_prettylistprinter([12, 8, 12, 12], &
                                      [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
                                      unit=self%ctx%unit)
          call plp%blank()
-         call plp%header("PROJECTOR")
-         call plp%blank()
+         call plp%header("DROP Projector")
          call plp%print_header()
          call plp%separator()
       end if
@@ -233,7 +232,7 @@ contains
       ! init() sets solver tolerances and branching cutoffs
       call projectors(thread_slot)%init(self%param, self%lsf_model, &
                                         branch_sep_cut=self%param%branch_sep_cut, &
-                                        verbosity=self%ctx%verbosity, &
+                                        verbosity=self%ctx%verbosity(), &
                                         debug=self%ctx%debug, tol=self%param%proj_tol, maxiter=self%param%proj_maxiter)
       call proj_buffers(thread_slot)%init(nloc, thread_error(thread_slot)%e)
       if (.not. allocated(thread_error(thread_slot)%e)) then
@@ -268,7 +267,7 @@ contains
 
          ! f below cutoff; downstream weight filtering will remove that point
          if (self%f(i) < self%param%wleb_cut) then
-            if (self%ctx%verbosity >= 3) then
+            if (self%ctx%verbosity(5)) then
                !$omp critical (projection_warning_print)
                write (self%ctx%unit, "(x,a,i0,a)") &
                   "Skipping projection for gridpoint ", i, " (f below cutoff)"
@@ -283,6 +282,7 @@ contains
             append_ok = .true.
             block
                type(error_type), allocatable :: proj_error
+               character(len=128) :: report
 
                ! Actually project point (can return multiple branches)
                call projectors(thread_slot)%project_point( &
@@ -303,13 +303,11 @@ contains
                                   thread_error(thread_slot)%e)
                   append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
                else if (allocated(proj_error)) then
-                  !$omp critical (projection_warning_print)
-                  print "(a,i0)", "Warning: Projection failed for gridpoint ", i
-                  print "(a)", proj_error%message
-                  print "(a)", "Debug info:"
-                  print "(a,i0)", "  gridpoint ID: ", i
-                  print "(a,3(es12.4))", "  anchor: ", self%anchorxyz(:, i)
-                  !$omp end critical (projection_warning_print)
+                  write (report, "(i0)") i
+                  call self%ctx%warning("Projection failed for gridpoint "//trim(report)//": "//proj_error%message)
+                  write (report, "(a,i0,a,3es12.4)") "Failed projection, gridpoint ID: ", i, &
+                     ", anchor: ", self%anchorxyz(:, i)
+                  call self%ctx%debug_message(trim(report))
                   ! A failed projection is not fatal: keep the anchor but flag it not
                   ! converged so it is later assigned f=0 and excluded from the quadrature
                   ! Only the workspace write below can abort the run
@@ -365,7 +363,7 @@ contains
          ! Progress is reported only by thread 1, extrapolating its own count to all threads (est_done)
          local_done = local_done + 1
          if (thread_slot == 1) then
-            if (self%ctx%verbosity >= 2) then
+            if (self%ctx%verbosity(4)) then
                est_done = min(nmax_anchor, local_done*nthreads)
                now_time = drop_wall_time()
 
@@ -434,7 +432,7 @@ contains
          return
       end if
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          call plp%separator()
          call plp%begin_row()
          call plp%add(nmax_anchor)
@@ -528,7 +526,7 @@ contains
       n_branched_anchor = sum(thread_branched_anchor)
       n_branched_points = sum(thread_branched_points)
 
-      if (self%ctx%verbosity >= 1) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Projection results:")
@@ -704,7 +702,7 @@ contains
       ! Tangent-restricted KKT matrix B = Q^T A Q (2x2 symmetric)
       real(wp) :: B11, B12, B22
       ! Analytic 2x2 eigenvalues of B
-      real(wp) :: tr_B, det_B, disc, sqrt_disc
+      real(wp) :: tr_B, det_B, sqrt_disc
       real(wp) :: beta1, beta2   ! eigenvalues (beta1 >= beta2)
       real(wp) :: lambda_switch_i
       real(wp), parameter :: det_B_guard = 1.0e-30_wp
@@ -747,7 +745,7 @@ contains
       ! Loop over all grid points to compute Jacobian scaling
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, proj_point, &
       !$omp& anchor_point, lambda_val, lsf0, A, g_vec, g_norm_sq, g_norm, n_surf, q1, q2, &
-      !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
+      !$omp& B11, B12, B22, tr_B, det_B, sqrt_disc, beta1, beta2, lambda_switch_i, &
       !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
       !$omp& lsf_error)
       thread_slot = 1
@@ -815,12 +813,12 @@ contains
          B22 = dot_product(q2, matmul(A, q2))
 
          ! Analytic 2x2 eigenvalues of B
-         ! beta_{1,2} = tr(B)/2 +/- sqrt(tr(B)^2/4 - det(B))
+         ! beta_{1,2} = tr(B)/2 +/- sqrt(((B11 - B22)/2)^2 + B12^2)
+         ! Sum of squares, not tr(B)^2/4 - det(B): the difference cancels to
+         ! O(eps) at umbilics, and its square root is O(sqrt(eps)) noise in beta2
          tr_B = B11 + B22
          det_B = B11*B22 - B12*B12
-         disc = 0.25_wp*tr_B*tr_B - det_B
-         disc = max(disc, 0.0_wp)
-         sqrt_disc = sqrt(disc)
+         sqrt_disc = hypot(0.5_wp*(B11 - B22), B12)
          beta1 = 0.5_wp*tr_B + sqrt_disc ! larger eigenvalue
          beta2 = 0.5_wp*tr_B - sqrt_disc ! smaller eigenvalue
 

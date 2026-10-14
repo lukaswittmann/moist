@@ -6,7 +6,7 @@
 #   0.6.0-alpha.1 (alpha)
 #
 # Usage: config/sync-version.sh [--check]
-#   --check   exit 1 if any file would change (for CI validation)
+#   --check   exit 1 if any file would change, without writing (for CI)
 
 set -euo pipefail
 
@@ -20,8 +20,8 @@ fi
 
 FULL="$(tr -d '[:space:]' < "$VERSION_FILE")"
 
-# Validate SemVer with optional pre-release: MAJOR.MINOR.PATCH[-PRERELEASE]
-if ! echo "$FULL" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+semver='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'
+if ! [[ $FULL =~ $semver ]]; then
    echo "error: VERSION '$FULL' is not MAJOR.MINOR.PATCH[-PRERELEASE]" >&2
    exit 1
 fi
@@ -30,83 +30,68 @@ fi
 BASE="${FULL%%-*}"
 IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
 
-# Translate a SemVer pre-release (e.g. "alpha.1") to PEP 440 spelling
+# PEP 440 spelling of the pre-release: alpha.1 -> a1, beta -> b, rc.2 -> rc2
 PRE="${FULL#"$BASE"}"
-PEP440="$BASE"
-if [ -n "$PRE" ]; then
-   label="${PRE#-}"          # alpha.1
-   name="${label%%.*}"       # alpha
-   num="${label##*.}"        # 1
-   if [ "$num" = "$label" ]; then num=""; fi   # no numeric segment after the dot
-   case "$name" in
-      alpha|a) PEP440="${BASE}a${num}" ;;
-      beta|b)  PEP440="${BASE}b${num}" ;;
-      rc|c)    PEP440="${BASE}rc${num}" ;;
-      *)       PEP440="$BASE" ;;
-   esac
-fi
+PRE="${PRE#-}"
+num="${PRE##*.}"
+if [ "$num" = "$PRE" ]; then num=""; fi   # no numeric segment after a dot
+case "${PRE%%.*}" in
+   alpha|a) PEP440="${BASE}a${num}" ;;
+   beta|b)  PEP440="${BASE}b${num}" ;;
+   rc|c)    PEP440="${BASE}rc${num}" ;;
+   *)       PEP440="$BASE" ;;
+esac
 
-# Portable in-place edit
+CHECK=0
+if [ "${1:-}" = "--check" ]; then
+   CHECK=1
+fi
+CHANGED_FILES=()
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+# Apply sed expressions to a file; with --check only record that it would
+# change. Writing through a redirect keeps the file's mode.
 sub() {
-   local expr=$1 file=$2 tmp
-   tmp="$(mktemp "${file}.XXXXXX")"
-   if sed "$expr" "$file" > "$tmp"; then
-      mv "$tmp" "$file"
+   local file=$1
+   shift
+   sed "$@" "$file" > "$tmp"
+   if cmp -s "$tmp" "$file"; then
+      return 0
+   fi
+   if [ "$CHECK" -eq 1 ]; then
+      CHANGED_FILES+=("$file")
    else
-      rm -f "$tmp"
-      return 1
+      cat "$tmp" > "$file"
    fi
 }
 
-# Files that will be checked in --check mode
-TARGETS=(
-   meson.build
-   fpm.toml
-   python/meson.build
-   src/moist/version.f90
-   docs/src/version.f90
-)
-
 echo "Syncing version $FULL (base $BASE, wheel $PEP440) to all targets..."
 
-# 1. meson.build (root) -- version: 'X.Y.Z[-pre]' (full string; meson tolerates it)
-#    Match only lines where version value starts with a digit (skip >=... patterns)
-sub "s/^\(  version: '\)[0-9][^']*'/\1$FULL'/" "$REPO_ROOT/meson.build"
+# meson.build: the full string (meson tolerates the suffix); python/meson.build:
+# the PEP 440 one. Only the project line: its version starts with a digit,
+# dependency constraints start with >=.
+project_version="s/^\(  version: '\)[0-9][^']*'"
+sub "$REPO_ROOT/meson.build" -e "$project_version/\1$FULL'/"
+sub "$REPO_ROOT/python/meson.build" -e "$project_version/\1$PEP440'/"
 
-# 2. fpm.toml -- version = "X.Y.Z" (numeric base only; fpm rejects suffixes)
-sub "s/^version = \"[^\"]*\"/version = \"$BASE\"/" "$REPO_ROOT/fpm.toml"
+# python/pyproject.toml declares the version dynamic (meson-python reads
+# python/meson.build) and moist/__init__.py asks the library: nothing to sync.
 
-# 3. python/meson.build -- version: 'X.Y.Z[aN]' (PEP 440; project line only, not dependency)
-sub "s/^\(  version: '\)[0-9][^']*'/\1$PEP440'/" "$REPO_ROOT/python/meson.build"
+# version.f90: display string (full) and compact array (base integers)
+sub "$REPO_ROOT/src/moist/version.f90" \
+   -e "s/moist_version_string = \"[^\"]*\"/moist_version_string = \"$FULL\"/" \
+   -e "s/moist_version_compact(3) = \[[0-9, ]*\]/moist_version_compact(3) = [$MAJOR, $MINOR, $PATCH]/"
 
-# 4. python/pyproject.toml declares the version dynamic; meson-python reads it
-#    from python/meson.build, and moist/__init__.py derives __version__ from
-#    the linked library at import time. Nothing to sync.
-
-# 5 & 6. version.f90 (src + doc) -- display string (full) + compact array (base ints)
-for f90 in "$REPO_ROOT/src/moist/version.f90" "$REPO_ROOT/docs/src/version.f90"; do
-   if [ -f "$f90" ]; then
-      sub "s/moist_version_string = \"[^\"]*\"/moist_version_string = \"$FULL\"/" "$f90"
-      sub "s/moist_version_compact(3) = \[[0-9, ]*\]/moist_version_compact(3) = [$MAJOR, $MINOR, $PATCH]/" "$f90"
-   fi
-done
-
-echo "Done."
-
-# --check mode: fail if the sync produced changes in version-related files only
-if [ "${1:-}" = "--check" ]; then
-   CHANGED=0
-   for t in "${TARGETS[@]}"; do
-      if ! git -C "$REPO_ROOT" diff --quiet -- "$t" 2>/dev/null; then
-         CHANGED=1
-      fi
-   done
-   if [ "$CHANGED" -ne 0 ]; then
-      echo "" >&2
-      echo "error: version files are out of sync with VERSION." >&2
-      echo "Run 'config/sync-version.sh' and commit the result." >&2
-      git -C "$REPO_ROOT" diff --stat -- "${TARGETS[@]}" >&2
-      exit 1
-   fi
+if [ "$CHECK" -eq 0 ]; then
+   echo "Done."
+elif [ "${#CHANGED_FILES[@]}" -gt 0 ]; then
+   echo "" >&2
+   echo "error: version files are out of sync with VERSION." >&2
+   echo "Run 'config/sync-version.sh' and commit the result." >&2
+   printf '  %s\n' "${CHANGED_FILES[@]}" >&2
+   exit 1
+else
    echo "All version files are in sync."
 fi

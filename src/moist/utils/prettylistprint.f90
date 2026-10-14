@@ -1,10 +1,22 @@
 !> Fixed-width tabular output
+!>
+!> - every cell (number, logical, string, column header) is right-aligned in its column
+!> - text wider than its column is printed in full, never cut; the row then runs
+!>   past the column and later cells shift right
+!> - a numeric edit that overflows is repeated with the same descriptor at a large
+!>   width, so decimals and exponent style stay and every integer digit appears
 module moist_utils_prettylistprint
    use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
      & real32, real64
    implicit none(type, external)
    private
    public :: prettylistprinter, new_prettylistprinter
+
+   !> Field width for re-rendering an overflowing numeric edit: room for the 309
+   !> integer digits of huge(1.0_real64) under an F edit, sign, point and decimals
+   integer, parameter :: wide_width = 400
+   !> Internal-write buffer, longer than `wide_width` for literal text around the field
+   integer, parameter :: buffer_len = 512
 
    type :: prettylistprinter
       integer :: unit = output_unit
@@ -15,7 +27,8 @@ module moist_utils_prettylistprint
       integer :: fmt_len = 16
       integer, allocatable :: widths(:)
       character(:), allocatable :: headers(:)
-      character(:), allocatable :: row(:)
+      !> Text of the current row: cells and gaps added so far, without the offset
+      character(:), allocatable :: row
       character(:), allocatable :: fmt_int
       character(:), allocatable :: fmt_real
       character(:), allocatable :: fmt_exp
@@ -52,12 +65,11 @@ contains
       class(prettylistprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
-      character(:), allocatable :: spaced_title, block, line
+      character(:), allocatable :: block, line
       integer :: w, rem, nleft, nright, left_padding
 
       w = table_width(self)
-      spaced_title = spread_text(trim(adjustl(title)))
-      block = " "//spaced_title//" "
+      block = " "//trim(adjustl(title))//" "
 
       if (w <= 0) return
 
@@ -89,8 +101,8 @@ contains
    !> @param[in] fmt_exp  Optional exponential real format override
    !> @param[in] fmt_logical Optional logical format override
    !> @param[in] column_gap Optional spaces inserted between columns
-   function new_prettylistprinter(widths, headers, &
-                                  unit, offset, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical, column_gap) result(plp)
+   function new_prettylistprinter(widths, headers, unit, offset, fmt_len, fmt_int, fmt_real, &
+                                  fmt_exp, fmt_logical, column_gap) result(plp)
       !> Column widths
       integer, intent(in) :: widths(:)
       !> Column headers
@@ -106,7 +118,7 @@ contains
       integer, intent(in), optional :: column_gap
       !> Constructed pretty list printer
       type(prettylistprinter) :: plp
-      integer :: i, wmax, hmax
+      integer :: i, hmax
 
       ! A malformed column specification is a programming error at the call
       ! site, not a runtime condition: there is no table to print and no
@@ -137,9 +149,9 @@ contains
       if (present(column_gap)) plp%column_gap = max(0, column_gap)
       if (present(fmt_len)) plp%fmt_len = max(1, fmt_len)
 
-      plp%fmt_int = int_fmt(plp%fmt_len)
-      plp%fmt_real = fixed_fmt(plp%fmt_len, 4)
-      plp%fmt_exp = exp_fmt(plp%fmt_len, 4)
+      call int_fmt(plp%fmt_len, plp%fmt_int)
+      call fixed_fmt(plp%fmt_len, 4, plp%fmt_real)
+      call exp_fmt(plp%fmt_len, 4, plp%fmt_exp)
       plp%fmt_logical = "L1"
 
       if (present(fmt_int)) plp%fmt_int = trim(fmt_int)
@@ -147,8 +159,6 @@ contains
       if (present(fmt_exp)) plp%fmt_exp = trim(fmt_exp)
       if (present(fmt_logical)) plp%fmt_logical = trim(fmt_logical)
 
-      wmax = maxval(plp%widths)
-      allocate (character(len=wmax) :: plp%row(plp%ncols))
       call plp%begin_row()
    end function new_prettylistprinter
 
@@ -184,23 +194,27 @@ contains
 
    !> Print column headers right-aligned in their fields
    !>
+   !> - a header wider than its column is printed in full
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine print_header(self)
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
       integer :: i
+      character(:), allocatable :: cell
 
       if (self%offset > 0) then
          write (self%unit, "(A)", advance="no") repeat(" ", self%offset)
       end if
       do i = 1, self%ncols
-         write (self%unit, "(A)", advance="no") format_cell(self%headers(i), self%widths(i))
+         call format_cell(self%headers(i), self%widths(i), cell)
+         write (self%unit, "(A)", advance="no") cell
          if (i < self%ncols) write (self%unit, "(A)", advance="no") repeat(" ", self%column_gap)
       end do
-      write (self%unit, *)
+      write (self%unit, "(A)") ""
    end subroutine print_header
 
-   !> Print a separator line with `width-1` dashes per column and configurable gaps
+   !> Print a separator line with one dash per column character and configurable gaps
    !>
    !> @param[inout] self Pretty list printer instance
    subroutine separator(self)
@@ -213,10 +227,10 @@ contains
          write (self%unit, "(A)", advance="no") repeat("-", max(0, self%widths(i)))
          if (i < self%ncols) write (self%unit, "(A)", advance="no") repeat(" ", self%column_gap)
       end do
-      write (self%unit, *)
+      write (self%unit, "(A)") ""
    end subroutine separator
 
-   !> Print a blank line
+   !> Print a blank line, then flush the unit so the finished block is written out
    !>
    !> @param[inout] self Pretty printer instance
    subroutine blank(self)
@@ -224,6 +238,7 @@ contains
       class(prettylistprinter), intent(inout) :: self
 
       write (self%unit, "(A)") ""
+      flush (self%unit)
    end subroutine blank
 
    !> Start a new row and reset write position to first column
@@ -233,7 +248,7 @@ contains
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
 
-      self%row(:) = ""
+      self%row = ""
       self%next_col = 1
    end subroutine begin_row
 
@@ -244,9 +259,7 @@ contains
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
 
-      call ensure_can_add(self)
-      self%row(self%next_col) = ""
-      self%next_col = self%next_col + 1
+      call add_from_string(self, "")
    end subroutine skip
 
    !> Print current row and reset for next row
@@ -255,7 +268,6 @@ contains
    subroutine end_row(self)
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
-      integer :: i
 
       ! Refuse a row that is short of its column count: a truncated line in
       ! the middle of a table is harder to diagnose than a stop right here
@@ -264,14 +276,7 @@ contains
          error stop "prettylistprinter: row has missing columns, use skip() or add()"
       end if
 
-      if (self%offset > 0) then
-         write (self%unit, "(A)", advance="no") repeat(" ", self%offset)
-      end if
-      do i = 1, self%ncols
-         write (self%unit, "(A)", advance="no") format_cell(self%row(i), self%widths(i))
-         if (i < self%ncols) write (self%unit, "(A)", advance="no") repeat(" ", self%column_gap)
-      end do
-      write (self%unit, *)
+      write (self%unit, "(A)") repeat(" ", self%offset)//self%row
 
       call self%begin_row()
    end subroutine end_row
@@ -292,7 +297,7 @@ contains
 
       eff_fmt = self%fmt_int
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call add_number(self, val, eff_fmt)
    end subroutine add_i8
 
    !> Add an int16 value to current row
@@ -311,7 +316,7 @@ contains
 
       eff_fmt = self%fmt_int
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call add_number(self, val, eff_fmt)
    end subroutine add_i16
 
    !> Add an int32 value to current row
@@ -330,7 +335,7 @@ contains
 
       eff_fmt = self%fmt_int
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call add_number(self, val, eff_fmt)
    end subroutine add_i32
 
    !> Add an int64 value to current row
@@ -349,7 +354,7 @@ contains
 
       eff_fmt = self%fmt_int
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call add_number(self, val, eff_fmt)
    end subroutine add_i64
 
    !> Add a real32 value to current row
@@ -364,26 +369,14 @@ contains
       real(real32), intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
-      character(64) :: eff_fmt
-      character(:), allocatable :: s
-      integer :: icol, wcol
+      character(:), allocatable :: eff_fmt
 
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         eff_fmt = default_real_fmt(self, real(val, kind=real64))
+         call default_real_fmt(self, real(val, kind=real64), eff_fmt)
       end if
-      s = value_to_string(val, trim(eff_fmt))
-      ! Unlike the other `add` specifics this one indexes `widths`/`row`
-      ! directly, so the overrun check has to be honoured before it does
-      call ensure_can_add(self)
-      icol = self%next_col
-      wcol = self%widths(icol)
-      if (is_real_overflow(s, wcol)) then
-         s = overflow_marker(wcol, val < 0.0_real32)
-      end if
-      self%row(icol) = trim(s)
-      self%next_col = icol + 1
+      call add_number(self, val, eff_fmt)
    end subroutine add_r32
 
    !> Add a real64 value to current row
@@ -398,26 +391,14 @@ contains
       real(real64), intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
-      character(64) :: eff_fmt
-      character(:), allocatable :: s
-      integer :: icol, wcol
+      character(:), allocatable :: eff_fmt
 
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         eff_fmt = default_real_fmt(self, val)
+         call default_real_fmt(self, val, eff_fmt)
       end if
-      s = value_to_string(val, trim(eff_fmt))
-      ! Unlike the other `add` specifics this one indexes `widths`/`row`
-      ! directly, so the overrun check has to be honoured before it does
-      call ensure_can_add(self)
-      icol = self%next_col
-      wcol = self%widths(icol)
-      if (is_real_overflow(s, wcol)) then
-         s = overflow_marker(wcol, val < 0.0_real64)
-      end if
-      self%row(icol) = trim(s)
-      self%next_col = icol + 1
+      call add_number(self, val, eff_fmt)
    end subroutine add_r64
 
    !> Add a logical value to current row
@@ -432,11 +413,12 @@ contains
       logical, intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
-      character(:), allocatable :: eff_fmt
+      character(:), allocatable :: eff_fmt, text
 
       eff_fmt = self%fmt_logical
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call value_to_string(val, eff_fmt, text)
+      call add_from_string(self, text)
    end subroutine add_l
 
    !> Add a character value to current row
@@ -451,15 +433,44 @@ contains
       character(*), intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
+      character(:), allocatable :: text
 
       if (present(fmt)) then
-         call add_from_string(self, value_to_string(val, trim(fmt)))
+         call value_to_string(val, trim(fmt), text)
+         call add_from_string(self, text)
       else
          call add_from_string(self, trim(val))
       end if
    end subroutine add_c
 
-   !> Add pre-formatted string content to the current column
+   !> Add an integer or real value, re-rendered wide when its edit overflows
+   !>
+   !> - an edit that writes '*' or text wider than the column is repeated with
+   !>   `widen_format`, so decimals and exponent style stay and all digits appear
+   !>
+   !> @param[inout] self Pretty list printer instance
+   !> @param[in]    val  Integer or real value
+   !> @param[in]    fmt  Format for this cell, without outer parentheses
+   subroutine add_number(self, val, fmt)
+      !> Pretty list printer instance
+      class(prettylistprinter), intent(inout) :: self
+      !> Integer or real value
+      class(*), intent(in) :: val
+      !> Format for this cell
+      character(*), intent(in) :: fmt
+      character(:), allocatable :: s, wide_fmt
+
+      ! The column width is read below, so the overrun check comes first
+      call ensure_can_add(self)
+      call value_to_string(val, fmt, s)
+      if (index(s, "*") > 0 .or. len_trim(adjustl(s)) > self%widths(self%next_col)) then
+         call widen_format(fmt, wide_fmt)
+         call value_to_string(val, wide_fmt, s)
+      end if
+      call add_from_string(self, s)
+   end subroutine add_number
+
+   !> Append pre-formatted string content as the next cell of the current row
    !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    s    Pre-formatted cell text
@@ -468,9 +479,12 @@ contains
       class(prettylistprinter), intent(inout) :: self
       !> Cell text
       character(*), intent(in) :: s
+      character(:), allocatable :: cell
 
       call ensure_can_add(self)
-      self%row(self%next_col) = trim(s)
+      if (self%next_col > 1) self%row = self%row//repeat(" ", self%column_gap)
+      call format_cell(s, self%widths(self%next_col), cell)
+      self%row = self%row//cell
       self%next_col = self%next_col + 1
    end subroutine add_from_string
 
@@ -489,41 +503,38 @@ contains
       end if
    end subroutine ensure_can_add
 
-   !> Fit and right-align a cell value into fixed-width output
+   !> Right-align a cell value in its column, never cutting it
+   !>
+   !> - leading and trailing blanks of `s` are padding, not content
+   !> - content wider than the column is returned in full
    !>
    !> @param[in] s     Source text
    !> @param[in] width Cell width
-   function format_cell(s, width) result(out)
+   !> @param[out] out Right-aligned output cell
+   subroutine format_cell(s, width, out)
       !> Source text
       character(*), intent(in) :: s
       !> Cell width
       integer, intent(in) :: width
       !> Right-aligned output cell
-      character(:), allocatable :: out
-      integer :: ls
+      character(:), allocatable, intent(out) :: out
+      character(:), allocatable :: text
 
-      if (width <= 0) then
-         out = ""
-         return
-      end if
-
-      ls = len_trim(s)
-      if (ls > width) then
-         out = s(ls - width + 1:ls)
-      else
-         out = repeat(" ", width - ls)//s(1:ls)
-      end if
-   end function format_cell
+      text = trim(adjustl(s))
+      out = repeat(" ", max(0, width - len(text)))//text
+   end subroutine format_cell
 
    !> Convert supported scalar values to string using supplied format
    !>
    !> @param[in] val Scalar value
    !> @param[in] fmt Fortran format string without outer parentheses
-   function value_to_string(val, fmt) result(s)
+   !> @param[out] s Formatted scalar text
+   subroutine value_to_string(val, fmt, s)
       class(*), intent(in) :: val
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
-      character(256) :: buf
+      !> Formatted scalar text
+      character(:), allocatable, intent(out) :: s
+      character(buffer_len) :: buf
 
       buf = ""
 
@@ -538,13 +549,13 @@ contains
          write (buf, "("//trim(fmt)//")") val
       type is (real(real32))
          if (val == 0.0_real32) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, "("//trim(fmt)//")") val
       type is (real(real64))
          if (val == 0.0_real64) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, "("//trim(fmt)//")") val
@@ -558,15 +569,17 @@ contains
       end select
 
       s = trim(buf)
-   end function value_to_string
+   end subroutine value_to_string
 
    !> Return canonical zero representation based on supplied format width
    !>
    !> @param[in] fmt Fortran format string without outer parentheses
-   function zero_value_string(fmt) result(s)
+   !> @param[out] s Formatted zero text
+   subroutine zero_value_string(fmt, s)
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
-      character(256) :: buf
+      !> Formatted zero text
+      character(:), allocatable, intent(out) :: s
+      character(buffer_len) :: buf
       integer :: idot, w
 
       write (buf, "("//trim(fmt)//")") 0.0_real64
@@ -578,56 +591,64 @@ contains
       else
          s = "0.0"
       end if
-   end function zero_value_string
+   end subroutine zero_value_string
 
    !> Build fixed real format string
    !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
-   function fixed_fmt(width, decimals) result(fmt)
+   !> @param[out] fmt Fixed-point format
+   subroutine fixed_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      !> Fixed-point format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end function fixed_fmt
+   end subroutine fixed_fmt
 
    !> Build exponential real format string
    !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
-   function exp_fmt(width, decimals) result(fmt)
+   !> @param[out] fmt Exponential format
+   subroutine exp_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      !> Exponential format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end function exp_fmt
+   end subroutine exp_fmt
 
    !> Build integer format string
    !>
    !> @param[in] width Base width used to derive integer field width
-   function int_fmt(width) result(fmt)
+   !> @param[out] fmt Integer format
+   subroutine int_fmt(width, fmt)
       integer, intent(in) :: width
-      character(:), allocatable :: fmt
+      !> Integer format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf
 
       write (wbuf, "(I0)") max(1, width - 7)
       fmt = "I"//trim(wbuf)
-   end function int_fmt
+   end subroutine int_fmt
 
    !> Select default real format from value magnitude
    !>
    !> @param[in] self Pretty list printer instance
    !> @param[in] val  Real64 value
-   function default_real_fmt(self, val) result(fmt)
+   !> @param[out] fmt Selected real format
+   subroutine default_real_fmt(self, val, fmt)
       class(prettylistprinter), intent(in) :: self
       real(real64), intent(in) :: val
-      character(:), allocatable :: fmt
+      !> Selected real format
+      character(:), allocatable, intent(out) :: fmt
       real(real64) :: aval
 
       aval = abs(val)
@@ -638,40 +659,51 @@ contains
       else
          fmt = self%fmt_real
       end if
-   end function default_real_fmt
+   end subroutine default_real_fmt
 
-   !> Determine whether formatted real text overflows the target cell width
+   !> Raise the field width of the first numeric edit descriptor to `wide_width`
    !>
-   !> @param[in] s      Formatted real text
-   !> @param[in] width  Target cell width
-   function is_real_overflow(s, width) result(overflow)
-      character(*), intent(in) :: s
-      integer, intent(in) :: width
-      logical :: overflow
-
-      overflow = (index(s, "*") > 0) .or. (len_trim(s) - 1 > width)
-   end function is_real_overflow
-
-   !> Create overflow marker text for a real cell
+   !> - matches I, B, O, Z, F, D, G, E, EN, ES or EX followed by a width, outside
+   !>   quoted literals; precision and exponent digits are kept
+   !> - a zero width is already minimal and stays; without a match `fmt` is returned
+   !> - literal text before the descriptor keeps the widened field's padding
    !>
-   !> - positive overflow uses '+', negative overflow '-'
-   !> - marker length is `width-1` as requested
-   !>
-   !> @param[in] width       Target cell width
-   !> @param[in] is_negative Sign selector
-   function overflow_marker(width, is_negative) result(s)
-      integer, intent(in) :: width
-      logical, intent(in) :: is_negative
-      character(:), allocatable :: s
-      integer :: n
+   !> @param[in] fmt Fortran format string without outer parentheses
+   !> @param[out] wide Widened format
+   subroutine widen_format(fmt, wide)
+      character(*), intent(in) :: fmt
+      !> Widened format
+      character(:), allocatable, intent(out) :: wide
+      character(16) :: wbuf
+      character(1) :: quote
+      integer :: i, istart, iend
 
-      n = max(0, width)
-      if (is_negative) then
-         s = repeat("-", n)
-      else
-         s = repeat("+", n)
-      end if
-   end function overflow_marker
+      wide = fmt
+      quote = " "
+      do i = 1, len(fmt)
+         if (quote /= " ") then
+            if (fmt(i:i) == quote) quote = " "
+         else if (fmt(i:i) == "'" .or. fmt(i:i) == '"') then
+            quote = fmt(i:i)
+         else if (index("IBOZFDGEibozfdge", fmt(i:i)) > 0) then
+            istart = i + 1
+            if (index("Ee", fmt(i:i)) > 0 .and. istart <= len(fmt)) then
+               if (index("SNXsnx", fmt(istart:istart)) > 0) istart = istart + 1
+            end if
+            iend = istart - 1
+            do while (iend < len(fmt))
+               if (index("0123456789", fmt(iend + 1:iend + 1)) == 0) exit
+               iend = iend + 1
+            end do
+            if (iend >= istart) then
+               if (verify(fmt(istart:iend), "0") == 0) return
+               write (wbuf, "(I0)") wide_width
+               wide = fmt(:istart - 1)//trim(wbuf)//fmt(iend + 1:)
+               return
+            end if
+         end if
+      end do
+   end subroutine widen_format
 
    !> Compute total printable table width, including inter-column spaces
    !>
@@ -686,25 +718,5 @@ contains
          w = sum(self%widths) + self%column_gap*(self%ncols - 1)
       end if
    end function table_width
-
-   !> Insert one space between all characters of input text
-   !>
-   !> @param[in] s Input text
-   function spread_text(s) result(out)
-      character(*), intent(in) :: s
-      character(:), allocatable :: out
-      integer :: i, ls
-
-      ls = len_trim(s)
-      if (ls <= 0) then
-         out = ""
-         return
-      end if
-
-      out = s(1:1)
-      do i = 2, ls
-         out = out//" "//s(i:i)
-      end do
-   end function spread_text
 
 end module moist_utils_prettylistprint

@@ -47,7 +47,7 @@ ignore:
   # - "src/moist/math/solver/slsqp"
 
   # Hard-coded quadrature tables
-  - "src/moist/math/grid/lebedev.f90"
+  - "src/moist/math/grid/angular/lebedev.f90"
 
   # Static parameter tables
   - "src/moist/data"

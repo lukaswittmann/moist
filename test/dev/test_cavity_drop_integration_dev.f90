@@ -42,8 +42,6 @@ contains
    subroutine collect_cavity_drop_integration(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
-      ! TODO: re-enable the per-dataset marching-cubes tests (upu23, amino20x4, mb16_43,
-      ! but14diol, il16, dimer_pes) once the comparison harness is finalized
       testsuite = [ &
                   new_unittest("mc_mixed", test_mc_mixed) &
                   ]
@@ -582,7 +580,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Get radii (either from argument or compute from atomic numbers)
       if (present(radii)) then
@@ -599,9 +597,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_2b=beta, &
             blend_3b=gamma))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -665,7 +663,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Sanitize names (replace spaces and special chars with underscores)
       sanitized_benchmark = trim(benchmark_name)
@@ -755,9 +753,9 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_2b=beta, &
                blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, &
-               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
+               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)

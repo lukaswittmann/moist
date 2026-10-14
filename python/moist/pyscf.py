@@ -1,13 +1,13 @@
 """PySCF integration for MOIST.
 
-Import this module to register ``mf.MOIST(cavity=..., components=...)`` on
+Import this module to register ``mf.MOIST(cavity=..., components=..., context=...)`` on
 PySCF mean-field objects.  Everything the integration needs is in this one
 file, top to bottom:
 
 1. :class:`PySCFHost` -- the AO-basis integrals: the surface potential and its
-   raw derivatives, the density callback an isodensity cavity evaluates, and
-   the contractions of MOIST's response items into Fock and nuclear-gradient
-   contributions.
+   raw derivatives, the basis and density an isodensity cavity evaluates with
+   moist's internal Gaussian evaluator, and the contractions of MOIST's
+   response items into Fock and nuclear-gradient contributions.
 2. :class:`GaussianMoments` -- the GOSTSHYP half of the host: the three-center
    Gaussian moment integrals a ``gaussian_moments`` request asks for, and the
    contraction of the returned amplitudes.
@@ -37,9 +37,11 @@ from .configuration import (
 from .interface import (
     Coupling,
     DensityResponse,
+    GaussianAmplitudeResponse,
     GaussianMomentRequest,
+    NuclearChargesRequest,
+    DensityMatrixRequest,
     GaussianPotentialRequest,
-    GostshypAmplitudeResponse,
     PointPotentialRequest,
     PotentialAdjointResponse,
     Response,
@@ -48,7 +50,8 @@ from .interface import (
     Structure,
     _immutable_array,
 )
-from .parameters import ModelParameters, _resolve
+from .context import Context, _resolve_context
+from .density import GaussianBasis
 
 __all__ = [
     "DROP", "ISwiG", "SvdW", "CFC", "Isodensity",
@@ -100,14 +103,12 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 #: xxx/xyy/xzz, y picks xxy/yyy/yzz and z picks xxz/yyz/zzz.
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``.
-#: Only :class:`GaussianMoments` diagnostics read this copy; the energy, Fock
-#: and gradient paths do not.
-_OVERLAP_FLOOR = 1.0e-9
+def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int, *, normalized=False):
+    """Build one Gaussian shell per point.
 
-
-def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
-    """Build one coefficient-1 GTO shell of angular momentum ``angl`` per grid point."""
+    ``normalized=True`` makes the s Gaussian integrate to one. The same radial
+    coefficient applies to p/d/f shells; callers restore their angular ratios.
+    """
     from pyscf import gto
 
     coords = np.asarray(coords, dtype=np.float64)
@@ -128,39 +129,79 @@ def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
         fakemol._bas[ishell, gto.NCTR_OF] = 1
         fakemol._bas[ishell, gto.PTR_EXP] = len(env)
         fakemol._bas[ishell, gto.PTR_COEFF] = len(env) + 1
-        env.extend((float(exponents[ishell]), 1.0))
+        coefficient = (exponents[ishell] / np.pi)**1.5 / _S_NORM if normalized else 1.0
+        env.extend((float(exponents[ishell]), float(coefficient)))
 
     fakemol._env = np.asarray(env, dtype=np.float64)
     fakemol._built = True
     return fakemol
 
 
-def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
+def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart", *, normalized=False):
     """Compute three-center one-electron integrals over a Gaussian-per-grid-point fakemol."""
-    fakemol = _fakemol_gaussians(centers, omega, angl)
+    fakemol = _fakemol_gaussians(centers, omega, angl, normalized=normalized)
     nbas = mol.nbas
     shls_slice = (0, nbas, 0, nbas, nbas, nbas + fakemol.nbas)
     return (mol + fakemol).intor(intor, shls_slice=shls_slice)
 
 
 # -----------------------------------------------------------------------------
-# The host: AO-basis integrals and the density callback
+# The basis of moist's internal isodensity evaluator
+# -----------------------------------------------------------------------------
+
+#: Real-harmonic factors libcint folds into its Cartesian s and p functions
+_CART_SP_FACTOR = (_S_NORM, math.sqrt(3.0) * _S_NORM)
+
+
+def _cartesian_basis(mol) -> GaussianBasis:
+    """Return ``mol``'s basis as moist's Cartesian monomials, one shell per contraction.
+
+    The coefficients carry libcint's radial normalization and its s/p factors,
+    so every monomial is the Cartesian function libcint evaluates; moist's
+    per-shell component order is libcint's.
+    """
+    from pyscf import gto
+
+    atoms, angular, nprim, exponents, coefficients = [], [], [], [], []
+    for shell in range(mol.nbas):
+        l, alpha = mol.bas_angular(shell), mol.bas_exp(shell)
+        contraction = mol.bas_ctr_coeff(shell) * gto.gto_norm(l, alpha)[:, None]
+        if l < 2:
+            contraction = contraction * _CART_SP_FACTOR[l]
+        for column in contraction.T:
+            atoms.append(mol.bas_atom(shell))
+            angular.append(l)
+            nprim.append(len(alpha))
+            exponents.extend(alpha)
+            coefficients.extend(column)
+    return GaussianBasis(shell_atom=atoms, shell_l=angular, shell_nprim=nprim,
+                         exponents=exponents, coefficients=coefficients)
+
+
+# -----------------------------------------------------------------------------
+# The host: AO-basis integrals and the density source
 # -----------------------------------------------------------------------------
 
 
 class PySCFHost:
     """The AO-basis half of the coupling for one PySCF molecule.
 
-    The density matrix is mutable state (:attr:`dm`).  It must be current
-    *before* every cavity build, and the level-set callback reads it on every
-    point evaluation.
+    The density matrix is mutable state (:attr:`dm`).  An isodensity cavity
+    built over :attr:`basis` evaluates it with moist's internal Gaussian
+    evaluator: :meth:`answer_build` answers its ``dcart`` in the build phase.
+    :meth:`density` is the same density as a callback, which reads :attr:`dm`
+    on every point evaluation.
 
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     """
 
     def __init__(self, mol) -> None:
         self.mol = mol
+        #: Current AO density matrix; set before evaluating the host.
         self.dm: Optional[np.ndarray] = None
+        #: ``mol``'s basis on moist's Cartesian monomials
+        self.basis = _cartesian_basis(mol)
+        self._c2s = None if mol.cart else mol.cart2sph_coeff()
         self._gto_prefix = "GTOval_cart_deriv" if mol.cart else "GTOval_sph_deriv"
         self._aoslice = mol.aoslice_by_atom()
 
@@ -169,10 +210,17 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def structure(self) -> Structure:
-        """Return the molecular structure in moist's representation (bohr)."""
-        numbers = self.mol.atom_charges()
+        """Return the molecular structure in moist's representation (bohr).
+
+        ``numbers`` are the elements; the nuclear charges of the Hamiltonian,
+        ``atom_charges()``, are answered through the ``nuclear_charges``
+        coupling request instead.
+        """
+        from pyscf import gto
+
         if self.mol.has_ecp():
             raise ValueError("effective core potentials are not supported")
+        numbers = [gto.charge(self.mol.atom_pure_symbol(i)) for i in range(self.mol.natm)]
         return Structure(numbers, self.mol.atom_coords())
 
     def _density_matrix(self) -> np.ndarray:
@@ -188,8 +236,41 @@ class PySCFHost:
     # level set
     # ------------------------------------------------------------------
 
+    def cartesian_density(self, dm=None) -> np.ndarray:
+        """Return ``dm`` (default :attr:`dm`) on :attr:`basis`, ``(ncart, ncart)``."""
+        dm = self._density_matrix() if dm is None else np.asarray(dm)
+        if self._c2s is not None:
+            # Same dirty BLAS status flags as in `density`
+            with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
+                dm = self._c2s @ dm @ self._c2s.T
+        # Symmetric only to rounding; Coupling.answer checks it to 1e-12
+        return 0.5 * (dm + dm.T)
+
+    def answer_build(self, coupling: Coupling, request) -> None:
+        """Answer a request of ``coupling`` that needs no surface, at :attr:`dm`.
+
+        ``density_matrix`` (build phase) with :meth:`cartesian_density`,
+        ``nuclear_charges`` (build or gradient phase) with
+        :attr:`nuclear_charges`; anything else raises.
+        """
+        if isinstance(request, DensityMatrixRequest):
+            coupling.answer(dcart=self.cartesian_density())
+        elif isinstance(request, NuclearChargesRequest):
+            coupling.answer(z=self.nuclear_charges)
+        else:
+            raise NotImplementedError(f"PySCF host cannot answer {request.name!r} without a surface")
+
+    @property
+    def nuclear_charges(self) -> np.ndarray:
+        """Nuclear charges of the Hamiltonian, ``mol.atom_charges()``, ``(natm,)``.
+
+        The answer to the ``nuclear_charges`` request; they differ from the
+        atomic numbers only under an ECP.
+        """
+        return np.asarray(self.mol.atom_charges(), dtype=np.float64)
+
     def density(self, point: np.ndarray, order: int):
-        """Evaluate the density for an isodensity cavity built with ``source=host``.
+        """Evaluate the density as a callback, for an isodensity cavity built with ``source=host``.
 
         Returns the bare ``rho`` and its spatial derivatives up to ``order``
         only.  moist owns the level set built from it: it subtracts
@@ -429,7 +510,8 @@ class PySCFHost:
 class GaussianMoments:
     """The host half of GOSTSHYP: Gaussian moment integrals on the cavity grid.
 
-    GOSTSHYP places an unnormalized Gaussian ``G_j = exp(-omega_j |r-C_j|^2)``
+    GOSTSHYP places a unit-integral Gaussian
+    ``G_j = (omega_j/pi)^1.5 exp(-omega_j |r-C_j|^2)``
     on every grid point.  The component asks the host for the density moments
     ``gt = <G>``, ``pt = <(r-C) G>``, ``mt = <(r-C)(r-C) G>`` and
     ``rt = <(r-C)|r-C|^2 G>`` (the ``gaussian_moments`` request) and hands back
@@ -438,10 +520,9 @@ class GaussianMoments:
     ``f_j = n_j . grad_r g_j``.  ``ftilde`` is not exchanged: moist derives it
     as ``-2 omega_j (n_j . pt_j)`` from the same moments it differentiates.
 
-    Every per-grid-point Gaussian carries a normalization that cancels between
-    energy and Fock, so it is not formed.  Only the relative s/p/d/f angular
-    constants are restored, which is what makes ``f = n . grad g`` exact; they
-    are pinned against an independent quadrature in ``test_gostshyp.py``.
+    The unit-integral normalization and the relative s/p/d/f angular constants
+    are applied to every moment and matching Fock and AO-center derivative block.
+    Normalization varies with area; the component includes that derivative.
 
     The widths ``omega`` are the component's choice, read from the request
     snapshot; the pressure is the component's too.  Bound to one surface and
@@ -535,7 +616,7 @@ class GaussianMoments:
 
         Recomputed on each call, not cached.
         """
-        p_cart = _int3c1e(self.mol, self.centers, self.omega, 1)
+        p_cart = _int3c1e(self.mol, self.centers, self.omega, 1, normalized=True)
         ncart = p_cart.shape[0]
         p_cart = p_cart.reshape(ncart, ncart, self.ngrid, 3)
         # dG/dC_a = 2 omega (r_a - C_a) G, and displacing the field point is the
@@ -547,7 +628,7 @@ class GaussianMoments:
 
     def _build_integrals(self) -> None:
         """Build the dense ``g`` and ``f`` blocks the amplitudes are contracted with."""
-        g_cart = _int3c1e(self.mol, self.centers, self.omega, 0)
+        g_cart = _int3c1e(self.mol, self.centers, self.omega, 0, normalized=True)
         self._G = self._to_spherical(g_cart)
         self._F = np.einsum("uvja,ja->uvj", self.f_vector(), self.normals, optimize=True)
 
@@ -587,16 +668,16 @@ class GaussianMoments:
         ncart = dm_cart.shape[0]
         gt = pt = mt = rt = None
         if "gt" in required:
-            block = _int3c1e(self.mol, centers, omega, 0)
+            block = _int3c1e(self.mol, centers, omega, 0, normalized=True)
             gt = np.einsum("pqj,pq->j", block, dm_cart, optimize=True)
         if "pt" in required:
-            block = _int3c1e(self.mol, centers, omega, 1)
+            block = _int3c1e(self.mol, centers, omega, 1, normalized=True)
             pt = self._contract_p_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 3))
         if "mt" in required:
-            block = _int3c1e(self.mol, centers, omega, 2)
+            block = _int3c1e(self.mol, centers, omega, 2, normalized=True)
             mt = self._contract_d_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 6))
         if "rt" in required:
-            block = _int3c1e(self.mol, centers, omega, 3)
+            block = _int3c1e(self.mol, centers, omega, 3, normalized=True)
             rt = self._contract_f_rho2_moments(dm_cart, block.reshape(ncart, ncart, ngrid, 10))
         return gt, pt, mt, rt
 
@@ -628,35 +709,11 @@ class GaussianMoments:
             self._traces = self.traces(self._dm)
         return self._traces
 
-    @property
-    def inactive_count(self) -> int:
-        """Grid points the component switched off, out of :attr:`ngrid`.
-
-        Derived from ``ftilde``, not from the amplitudes: the amplitudes carry
-        the pressure, and at ``p_inp = 0`` they are zero for every point.
-        """
-        _, ftilde = self.live_traces
-        floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
-        return int(np.count_nonzero(np.abs(ftilde) <= floor))
-
-    def effective_volume(self) -> float:
-        """Return ``E / p_inp`` (eq 11), evaluated as ``sum_j a_j gtilde_j / ftilde_j``.
-
-        Not the cavity volume, and well defined at ``p_inp = 0`` where the
-        energy vanishes with the pressure but the volume does not.
-        """
-        gt, ftilde = self.live_traces
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = self.areas * gt / ftilde
-        floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
-        active = np.abs(ftilde) > floor
-        return float(np.sum(np.where(active, ratio, 0.0)))
-
     # ------------------------------------------------------------------
     # contractions of the amplitudes
     # ------------------------------------------------------------------
 
-    def fock(self, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
+    def fock(self, amplitude: GaussianAmplitudeResponse) -> np.ndarray:
         """Return ``sum_j [w_overlap_j g_j + w_normal_deriv_j f_j]`` at a frozen surface."""
         if self._G is None:
             self._build_integrals()
@@ -664,13 +721,13 @@ class GaussianMoments:
         fock += np.einsum("j,uvj->uv", amplitude.w_normal_deriv, self._F, optimize=True)
         return 0.5 * (fock + fock.T)
 
-    def nuclear_gradient(self, dm: np.ndarray, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
+    def nuclear_gradient(self, dm: np.ndarray, amplitude: GaussianAmplitudeResponse) -> np.ndarray:
         """Return the gradient with AO centers moving, surface frozen (``int3c1e_ip1``), ``(natm, 3)``."""
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
 
-        ip1_g = _int3c1e(self.mol, self.centers, self.omega, 0, "int3c1e_ip1_cart")
-        ip1_p = _int3c1e(self.mol, self.centers, self.omega, 1, "int3c1e_ip1_cart")
+        ip1_g = _int3c1e(self.mol, self.centers, self.omega, 0, "int3c1e_ip1_cart", normalized=True)
+        ip1_p = _int3c1e(self.mol, self.centers, self.omega, 1, "int3c1e_ip1_cart", normalized=True)
         ip1_g = ip1_g.reshape(3, ncart, ncart, self.ngrid)
         ip1_p = ip1_p.reshape(3, ncart, ncart, self.ngrid, 3)
         ip1_f = -_S_OVER_P_NORM * 2.0 * np.einsum(
@@ -692,7 +749,7 @@ class GaussianMoments:
 
 
 # -----------------------------------------------------------------------------
-# The driver: one model, one coupling, the six-step protocol
+# The driver: one model, one coupling, the host protocol
 # -----------------------------------------------------------------------------
 
 
@@ -716,16 +773,17 @@ class PySCFSolvation:
     The requests are answered by :class:`PySCFHost` (potentials) and
     :class:`GaussianMoments` (GOSTSHYP moments); the response items are
     contracted by the same two into the Fock matrix and the nuclear gradient.
+    This host work is timed on the context, under ``Host`` in its timer report.
 
     :param mol: PySCF molecule.
     :param cavity: a cavity configuration, ``DROP(lsf=...)`` or ``ISwiG(...)``.
         An isodensity level set is bound to this molecule's density.
     :param components: the model components, e.g. ``[ModelComponentCPCM(80.0)]``.
-    :param parameters: model logging settings.
+    :param context: run context of the cavity and model: threads, verbosity, debug.
     """
 
     def __init__(self, mol, cavity: CavityConfiguration, components, *,
-                 parameters: ModelParameters | None = None) -> None:
+                 context: Context) -> None:
         if not isinstance(cavity, CavityConfiguration):
             raise TypeError("cavity must be DROP(lsf=...) or ISwiG(...)")
         items = tuple(components)
@@ -734,13 +792,12 @@ class PySCFSolvation:
         self.mol = mol
         self.configuration = cavity
         self.components = items
-        self.parameters = _resolve(ModelParameters, parameters)
+        self.context = _resolve_context(context)
         self.host = PySCFHost(mol)
         self.host.structure()  # Validate the molecular representation before use.
-        self.model = SolvationModel(
-            cavity.build(source=self.host if cavity.density_dependent else None),
-            items, parameters=self.parameters,
-        )
+        # An isodensity cavity runs moist's internal evaluator over the host basis
+        live = cavity.build(basis=self.host.basis) if cavity.density_dependent else cavity.build()
+        self.model = SolvationModel(self.context, live, items)
         self.coupling = None
         #: The GOSTSHYP half, created the first time a moment request appears
         self.moments: Optional[GaussianMoments] = None
@@ -791,6 +848,10 @@ class PySCFSolvation:
     def _answer(self, request) -> None:
         """Answer the missing outputs of the current request on the cavity grid."""
         coupling = self.coupling
+        if isinstance(request, (DensityMatrixRequest, NuclearChargesRequest)):
+            # Build-phase answers and the charges need no surface
+            self.host.answer_build(coupling, request)
+            return
         cavity = self.model.cavity
         coords = cavity.xyz
         if isinstance(request, PointPotentialRequest):
@@ -829,10 +890,22 @@ class PySCFSolvation:
             self.moments.bind(self.model.cavity, self._dm)
         return self.moments
 
-    def _answer_requests(self) -> None:
-        """Answer every request in the staged phase that misses an output."""
-        for request in self.coupling:
-            self._answer(request)
+    def _answer_requests(self, phase: str) -> None:
+        """Answer every request in the staged phase that misses an output.
+
+        Timed as host work, ``<phase> coupling`` with one node per request kind.
+        """
+        timer = self.context.timer
+        with timer(f"{phase} coupling"):
+            for request in self.coupling:
+                with timer(request.name):
+                    self._answer(request)
+
+    def _build(self) -> None:
+        """Run the build phase at the current density."""
+        self.model.prepare_build(self.coupling)
+        self._answer_requests("Build")
+        self.model.build(self.coupling)
 
     def _density(self, dm) -> np.ndarray:
         density = np.asarray(dm)
@@ -850,8 +923,10 @@ class PySCFSolvation:
     def evaluate(self, dm) -> Result:
         """Return the energy and Fock contribution at the density ``dm``.
 
-        Rebuilds a density-dependent cavity, then runs the energy and the
-        response phase.  The result is cached until the density changes.
+        The first evaluation updates the model, then every evaluation of a
+        density-dependent cavity, and the first of any other, runs the build
+        phase; then the energy and the response phase.  The result is cached
+        until the density changes.
         """
         density = self._density(dm)
         if self._result is not None and np.array_equal(density, self._dm):
@@ -860,19 +935,21 @@ class PySCFSolvation:
         self._dm = density
         self.host.dm = density
         try:
-            if self.coupling is None or self.configuration.density_dependent:
-                self.model.update(self.host.structure())
             if self.coupling is None:
+                self.model.update(self.host.structure())
                 self.coupling = self.model.new_coupling()
+                self._build()
+            elif self.configuration.density_dependent:
+                self._build()
             cpl = self.coupling
 
             self.model.prepare_energy(cpl)
-            self._answer_requests()
+            self._answer_requests("Energy")
             energy = np.array(0.0)
             self.model.get_energy(cpl, energy)
 
             self.model.prepare_response(cpl)
-            self._answer_requests()
+            self._answer_requests("Response")
             response = self.model.get_response(cpl)
         except Exception:
             self._dm = None
@@ -882,21 +959,24 @@ class PySCFSolvation:
         return self._result
 
     def _fock(self, response: Response, *, with_density: bool = True) -> np.ndarray:
-        """Contract the response items into the Fock matrix."""
+        """Contract the response items into the Fock matrix, timed as ``Fock build``."""
         nao = self.mol.nao
         coords = self.model.cavity.xyz
         fock = np.zeros((nao, nao))
-        for item in response:
-            if isinstance(item, PotentialAdjointResponse):
-                fock += self.host.fock_potential(coords, self._xi, item.w_phi)
-            elif isinstance(item, GostshypAmplitudeResponse):
-                fock += self._bound_moments().fock(item)
-            elif isinstance(item, DensityResponse):
-                # Present exactly when the surface follows the density.
-                if with_density:
-                    fock += self.host._fock_lsf(coords, item)
-            else:
-                raise NotImplementedError(f"Unsupported response item '{item.name}'")
+        timer = self.context.timer
+        with timer("Fock build"):
+            for item in response:
+                with timer(item.name):
+                    if isinstance(item, PotentialAdjointResponse):
+                        fock += self.host.fock_potential(coords, self._xi, item.w_phi)
+                    elif isinstance(item, GaussianAmplitudeResponse):
+                        fock += self._bound_moments().fock(item)
+                    elif isinstance(item, DensityResponse):
+                        # Present exactly when the surface follows the density.
+                        if with_density:
+                            fock += self.host._fock_lsf(coords, item)
+                    else:
+                        raise NotImplementedError(f"Unsupported response item '{item.name}'")
         return fock
 
     def frozen_fock(self) -> np.ndarray:
@@ -917,7 +997,7 @@ class PySCFSolvation:
             potential adjoint.
         ``moments``
             The basis-center derivative of the Gaussian moments, contracted
-            with the GOSTSHYP amplitudes (present only with a moment request).
+            with the Gaussian amplitudes (present only with a moment request).
         ``density``
             The basis-center derivative of the level set, contracted with the
             density weights (present only on a density-dependent cavity).
@@ -926,7 +1006,7 @@ class PySCFSolvation:
         self.host.dm = self._dm
         cpl = self.coupling
         self.model.prepare_gradient(cpl)
-        self._answer_requests()
+        self._answer_requests("Gradient")
         model = np.zeros((self.mol.natm, 3))
         self.model.get_gradient(cpl, model)
 
@@ -938,16 +1018,19 @@ class PySCFSolvation:
         response = self.response
         coords = self.model.cavity.xyz
         channels = {"model": model}
-        for item in response:
-            if isinstance(item, PotentialAdjointResponse):
-                channels["potential"] = self.host._gradient_phi(
-                    coords, np.asarray(item.w_phi), xi=self._xi)
-            elif isinstance(item, GostshypAmplitudeResponse):
-                channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
-            elif isinstance(item, DensityResponse):
-                channels["density"] = self.host._gradient_lsf(coords, item)
-            else:
-                raise NotImplementedError(f"Unsupported response item '{item.name}'")
+        timer = self.context.timer
+        with timer("Gradient contraction"):
+            for item in response:
+                with timer(item.name):
+                    if isinstance(item, PotentialAdjointResponse):
+                        channels["potential"] = self.host._gradient_phi(
+                            coords, np.asarray(item.w_phi), xi=self._xi)
+                    elif isinstance(item, GaussianAmplitudeResponse):
+                        channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
+                    elif isinstance(item, DensityResponse):
+                        channels["density"] = self.host._gradient_lsf(coords, item)
+                    else:
+                        raise NotImplementedError(f"Unsupported response item '{item.name}'")
         return channels
 
     def gradient(self, dm) -> np.ndarray:
@@ -967,11 +1050,11 @@ class _MoistState:
     ``result`` is the latest :class:`Result`, or ``None`` before use.
     """
 
-    def __init__(self, mol, *, cavity, components, parameters=None):
+    def __init__(self, mol, *, cavity, components, context):
         self.mol = mol
         self._cavity = None
         self._components = ()
-        self._parameters = _resolve(ModelParameters, parameters)
+        self._context = _resolve_context(context)
         self.set(cavity=cavity, components=components)
 
     @property
@@ -983,8 +1066,8 @@ class _MoistState:
         return self._components
 
     @property
-    def parameters(self):
-        return self._parameters
+    def context(self):
+        return self._context
 
     @property
     def solvation(self) -> Optional[PySCFSolvation]:
@@ -1005,16 +1088,16 @@ class _MoistState:
         result = self.result
         return None if result is None else result.fock
 
-    def set(self, *, cavity=None, components=None, parameters=None):
-        """Replace model settings or cavity configuration, clearing cached results."""
+    def set(self, *, cavity=None, components=None, context=None):
+        """Replace the cavity, components or context, clearing cached results."""
         config = self._cavity if cavity is None else cavity
         if not isinstance(config, CavityConfiguration):
             raise TypeError("cavity must be DROP(lsf=...) or ISwiG(...)")
         items = self._components if components is None else tuple(components)
         if not items or any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must be a nonempty sequence of MOIST components")
-        model_parameters = self.parameters if parameters is None else _resolve(ModelParameters, parameters)
-        self._cavity, self._components, self._parameters = config, items, model_parameters
+        run_context = self.context if context is None else _resolve_context(context)
+        self._cavity, self._components, self._context = config, items, run_context
         return self.reset()
 
     def reset(self, mol=None):
@@ -1026,7 +1109,7 @@ class _MoistState:
 
     def copy(self):
         return type(self)(self.mol, cavity=self.cavity, components=self.components,
-                          parameters=self.parameters)
+                          context=self.context)
 
     def _molecule_key(self):
         mol = self.mol
@@ -1041,7 +1124,7 @@ class _MoistState:
             if self.mol.has_ecp():
                 raise ValueError("effective core potentials are not supported")
             self._solvation = PySCFSolvation(
-                self.mol, self.cavity, self.components, parameters=self.parameters)
+                self.mol, self.cavity, self.components, context=self.context)
             self._fingerprint = key
         return self._solvation
 
@@ -1142,7 +1225,7 @@ class _MoistSCF:
     def density_fit(self, *args, **kwargs):
         base = self.undo_moist().density_fit(*args, **kwargs)
         return moist_for_scf(base, cavity=self.with_moist.cavity,
-                             components=self.with_moist.components, parameters=self.with_moist.parameters)
+                             components=self.with_moist.components, context=self.with_moist.context)
 
     def _unsupported(self, *args, **kwargs):
         raise NotImplementedError("MOIST currently supports ground-state SCF and nuclear gradients only")
@@ -1173,11 +1256,12 @@ class _MoistGrad:
         raise NotImplementedError("MOIST GPU gradients are not supported")
 
 
-def moist_for_scf(mf, *, cavity, components, parameters=None):
+def moist_for_scf(mf, *, cavity, components, context):
     """Attach MOIST to RHF/RKS/UHF/UKS without running SCF.
 
     Use ``DROP(lsf=SvdW(...))``, ``DROP(lsf=CFC(...))``,
-    ``DROP(lsf=Isodensity(...))`` or ``ISwiG(...)``.
+    ``DROP(lsf=Isodensity(...))`` or ``ISwiG(...)``. ``context`` is the
+    :class:`~moist.Context` the cavity and model run on.
     Importing :mod:`moist.pyscf` also registers this function as ``mf.MOIST``.
     """
     from pyscf import lib, scf
@@ -1191,7 +1275,7 @@ def moist_for_scf(mf, *, cavity, components, parameters=None):
         raise ValueError("Cannot attach MOIST to a calculation with an existing solvent")
     if mf.mol.has_ecp():
         raise ValueError("effective core potentials are not supported")
-    state = _MoistState(mf.mol, cavity=cavity, components=components, parameters=parameters)
+    state = _MoistState(mf.mol, cavity=cavity, components=components, context=context)
     obj = mf.copy()
     obj.with_moist = state
     # Results from an earlier gas-phase calculation are not MOIST results.

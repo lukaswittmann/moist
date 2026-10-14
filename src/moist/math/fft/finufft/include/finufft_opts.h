@@ -1,0 +1,72 @@
+// -------- Public header for user-controllable FINUFFT options struct ---------
+// Deliberately a plain C struct, without special types, or switchable prec's.
+// See ../docs/devnotes.rst about what else to sync when you change this.
+
+#ifndef FINUFFT_OPTS_H
+#define FINUFFT_OPTS_H
+
+// Deprecation attribute for struct fields in C++14+ code, empty otherwise.
+#ifndef FINUFFT_DEPRECATED_FIELD
+#if defined(__cplusplus) && __cplusplus >= 201402L
+#define FINUFFT_DEPRECATED_FIELD(msg) [[deprecated(msg)]]
+#else
+#define FINUFFT_DEPRECATED_FIELD(msg)
+#endif
+#endif
+
+// Default FFT plan flag passed to opts.fftw.
+// Equals FFTW_ESTIMATE (=64) for FFTW builds; -1 for DUCC0 (a sentinel,
+// since FFTW_MEASURE=0 is a different valid choice).
+// To use FFTW_MEASURE or other flags explicitly, include <fftw3.h>.
+#ifdef __cplusplus
+extern "C" {
+#endif
+extern const int FINUFFT_FFT_DEFAULT;
+#ifdef __cplusplus
+}
+#endif
+
+typedef struct finufft_opts { // defaults see plan.hpp:finufft_default_opts_t()
+  // sphinx tag (don't remove): @opts_start
+  // FINUFFT options:
+  // data handling opts...
+  int modeord;          // (type 1,2 only): 0 CMCL-style increasing mode order
+                        //                  1 FFT-style mode order
+  int spreadinterponly; // (type 1,2 only): 0 do actual NUFFT
+                        // 1 only spread (if type 1) or interpolate (type 2)
+
+  // diagnostic opts...
+  int debug;        // 0 silent, 1 some timing/debug, or 2 more
+  int spread_debug; // spreader: 0 silent, 1 some timing/debug, or 2 tonnes
+  int showwarn;     // 0 don't print warnings to stderr, 1 do
+
+  // algorithm performance opts...
+  int nthreads;           // number of threads to use, or 0 uses all available
+  int fftw;               // plan flags to FFTW (FFTW_ESTIMATE=64, FFTW_MEASURE=0,...)
+  int spread_sort;        // spreader: 0 don't sort, 1 do, or 2 heuristic choice
+  FINUFFT_DEPRECATED_FIELD("no effect; Horner is always used")
+  int spread_kerevalmeth; // deprecated; no effect (Horner is always used)
+  FINUFFT_DEPRECATED_FIELD("no effect; padding is handled internally")
+  int spread_kerpad;      // deprecated; no effect (padding is handled internally)
+  double upsampfac;       // upsampling ratio sigma: 2.0 std, 1.25 small FFT, 0.0 auto
+  int spread_thread;      // (vectorized ntr>1 only): 0 auto, 1 seq multithreaded,
+                          //                          2 parallel single-thread spread
+  int maxbatchsize;       // (vectorized ntr>1 only): max transform batch, 0 auto
+  int spread_nthr_atomic; // if >=0, threads above which spreader OMP critical goes
+                          // atomic
+  int spread_max_sp_size; // if >0, overrides spreader (dir=1) max subproblem size
+  int spread_kerformula;  // kernel function formula: 0 default, [>0 devs/debug only]
+                          // Non-zero values are unsupported and behavior can change
+  int allow_eps_too_small; // CPU only: 0 hard error if tol<eps_mach, 1 clamp and proceed
+  // sphinx tag (don't remove): @opts_end
+
+  // User can provide their own FFTW planner lock functions for thread safety
+  // Null values ignored and use a default lock function (both or neither must be set)
+  void (*fftw_lock_fun)(void *);   // Function ptr that locks the FFTW planner
+  void (*fftw_unlock_fun)(void *); // Function ptr that unlocks the FFTW planner
+  void *fftw_lock_data;            // Data to pass to the lock functions (e.g. a mutex)
+} finufft_opts;
+
+// Those of the above of the form spread_* indicate pass through to finufft_spread_opts
+
+#endif // FINUFFT_OPTS_H

@@ -21,7 +21,8 @@
 module test_cavity_drop_nuclear_adjoint
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -35,13 +36,14 @@ module test_cavity_drop_nuclear_adjoint
    use moist_context, only: moist_context_type, new_context
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
-   use moist_model_general, only: solvation_model_general, new_model_general
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use test_helpers, only: stage_model_point_charge_energy, fill_missing_with_zeros, &
       & fill_point_charge_field, &
       & fill_legacy_radii, copy_potential_adjoint
+   use moist_cavity_type, only: cavity_type
    implicit none(type, external)
    private
 
@@ -58,15 +60,28 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: PROJ_MAXITER = 1000
    integer, parameter :: PROJ_LEVEL = 2
 
-   !> Forward-versus-reverse thresholds
-   real(wp), parameter :: EQ_ABS = 1.0E-9_wp
-   real(wp), parameter :: EQ_REL = 1.0E-9_wp
+   !> Absolute forward-versus-reverse bound across all channels
+   real(wp), parameter :: EQ_ABS = 5.0E-10_wp
+   !> Relative bound on each forward reference entry
+   real(wp), parameter :: EQ_REL = 1.0E-12_wp
+
+   !> Model paths sum the same analytic terms with round-off differences
+   real(wp), parameter :: AB_ABS = 1.0E-12_wp
+   !> Relative model bound on each forward reference entry
+   real(wp), parameter :: AB_REL = 1.0E-12_wp
 
    !> Below this the reference gradient is too small to carry a relative test
    real(wp), parameter :: VACUITY_THR = 1.0E-6_wp
 
    !> Softmax scale for the branching test
    real(wp), parameter :: BRANCH_SOFTMAX_S = 0.5_wp
+
+   !> Branching-width finite-difference step
+   real(wp), parameter :: XI_FD_STEP = 1.0E-4_wp
+   !> Absolute branching-width derivative bound
+   real(wp), parameter :: XI_FD_ABS = 1.0E-10_wp
+   !> Relative branching-width derivative bound
+   real(wp), parameter :: XI_FD_REL = 5.0E-9_wp
 
    !> Symmetry-breaking displacement for branching fixture
    real(wp), parameter :: FIXTURE_NUDGE = 1.0E-4_wp
@@ -97,8 +112,6 @@ contains
    end subroutine collect_cavity_drop_nuclear_adjoint
 
    !> Every surface-adjoint channel driven simultaneously
-   !>
-   !> @param[out] error  Error handle
    subroutine test_all_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -115,8 +128,6 @@ contains
    !> softmax reverse pass and its explicit owner term completely untested
    !> A near-symmetric dimer under multistart projection does branch, and
    !> [[run_equivalence]] asserts that it actually did
-   !>
-   !> @param[out] error  Error handle
    subroutine test_branching_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -141,8 +152,6 @@ contains
    !> A channel that the reverse path drops entirely would still pass the
    !> combined test if another channel dominated the sum, so each one is also
    !> checked in isolation with its own non-vacuity guard
-   !>
-   !> @param[out] error  Error handle
    subroutine test_single_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -174,21 +183,14 @@ contains
    !> are keyed on the persistent `cavity%numbering` and restricted to points
    !> that survive at every stencil geometry -- otherwise a point appearing or
    !> vanishing would put a step discontinuity into L
-   !>
-   !> @param[out] error  Error handle
    subroutine test_branching_xi_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
       !> Central-difference stencil
       integer, parameter :: NSTEP = 4
-      real(wp), parameter :: FD_STEP = 1.0E-4_wp
-      !> Displaced atom and axis. One coordinate is enough: the branch
-      !> correction is the same code path for every atom and axis
+      !> Coordinate with a nonzero branching-width response
       integer, parameter :: FD_ATOM = 5, FD_AXIS = 3
-      !> FD-versus-analytic bounds, limited by the stencil round-off floor
-      real(wp), parameter :: FD_ABS = 5.0E-8_wp
-      real(wp), parameter :: FD_REL = 5.0E-6_wp
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -197,16 +199,15 @@ contains
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol, mol_fd
 
-      real(wp) :: fd_coeff(NSTEP), fd_delta(NSTEP)
+      real(wp) :: fd_delta(NSTEP)
       real(wp), allocatable :: grad_ana(:, :), wmap(:), xi_store(:, :), w_xi(:)
       logical, allocatable :: have(:, :), usable(:), in_ref(:)
       !> Branch count per persistent numbering at each stencil geometry
       integer, allocatable :: bc_store(:, :)
-      real(wp) :: lvals(NSTEP), num_deriv, ana_deriv, diff
+      real(wp) :: num_deriv, ana_deriv, diff
       integer :: max_num, istep, igrid, inum, ngrid, ncommon, nphantom
 
-      fd_coeff = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/(12.0_wp*FD_STEP)
-      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*FD_STEP
+      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*XI_FD_STEP
 
       call fixture_geometry(.true., mol)
       call build_cavity(cavity, ctx, mol, .true., error)
@@ -283,10 +284,18 @@ contains
          return
       end if
 
-      do istep = 1, NSTEP
-         lvals(istep) = sum(wmap*xi_store(:, istep), mask=usable)
+      ! Pair nearby widths before summing to avoid subtracting large functionals
+      num_deriv = 0.0_wp
+      do inum = 1, max_num
+         if (.not. usable(inum)) cycle
+         num_deriv = num_deriv + wmap(inum)* &
+            (8.0_wp*(xi_store(inum, 3) - xi_store(inum, 2)) - &
+             (xi_store(inum, 4) - xi_store(inum, 1)))/(12.0_wp*XI_FD_STEP)
       end do
-      num_deriv = sum(fd_coeff*lvals)
+      if (.not. ieee_is_finite(num_deriv)) then
+         call test_failed(error, "branching xi FD reference is not finite")
+         return
+      end if
 
       ! Analytic side: same restricted weights through the reverse path
       allocate (w_xi(ngrid), source=0.0_wp)
@@ -316,8 +325,12 @@ contains
          return
       end if
 
+      if (.not. ieee_is_finite(ana_deriv)) then
+         call test_failed(error, "branching xi analytic derivative is not finite")
+         return
+      end if
       diff = abs(ana_deriv - num_deriv)
-      if (diff > FD_ABS .and. diff > FD_REL*abs(num_deriv)) then
+      if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
          call test_failed(error, "branching xi gradient disagrees with finite differences: "// &
                           "analytic "//to_string(ana_deriv)//" numeric "//to_string(num_deriv)// &
                           " (common points "//to_string(ncommon)//")")
@@ -337,8 +350,12 @@ contains
          ana_deriv = ana_deriv + w_xi(igrid)*cavity%xi1_rA(FD_AXIS, FD_ATOM, igrid)
       end do
 
+      if (.not. ieee_is_finite(ana_deriv)) then
+         call test_failed(error, "forward xi1_rA derivative is not finite under branching")
+         return
+      end if
       diff = abs(ana_deriv - num_deriv)
-      if (diff > FD_ABS .and. diff > FD_REL*abs(num_deriv)) then
+      if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
          call test_failed(error, "forward xi1_rA disagrees with finite differences under "// &
                           "branching: analytic "//to_string(ana_deriv)// &
                           " numeric "//to_string(num_deriv))
@@ -349,7 +366,7 @@ contains
 
    !> Model-level gradient: reverse path must equal the legacy forward path
    !>
-   !> This is the only test that drives `general_get_gradient` over a cavity
+   !> This is the only test that drives `continuum_get_gradient` over a cavity
    !> that supports the surface contraction -- the model suite uses an iSwiG
    !> cavity, which falls back to the forward path -- so it is what actually
    !> exercises the component hooks `get_gradient_surface_weights` and
@@ -358,8 +375,6 @@ contains
    !> The two paths are required to agree, not merely to be close: the
    !> gradient-side surface weights were chosen to reproduce exactly the set
    !> of terms the forward path assembles
-   !>
-   !> @param[out] error  Error handle
    subroutine test_model_forward_reverse(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -367,17 +382,14 @@ contains
       !> Dielectric constant and pressure of the probe model
       real(wp), parameter :: epsilon_r = 32.0_wp
       real(wp), parameter :: pressure = 0.75_wp
-      !> Both paths sum the same analytic terms, so only round-off separates them
-      real(wp), parameter :: AB_ABS = 1.0E-9_wp
-      real(wp), parameter :: AB_REL = 1.0E-9_wp
       !> Atomic charges driving the electrostatics
       real(wp), parameter :: qat_vals(*) = [0.20_wp, -0.15_wp, -0.05_wp]
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(solvation_model_general), target :: model_rev, model_fwd
-      type(solvation_model_component_cpcm) :: pcm_component
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_type), target :: model_rev, model_fwd
+      type(model_continuum_component_cpcm) :: pcm_component
+      type(model_continuum_component_pv) :: pv_component
       type(coupling_type), pointer :: coupling
       !> Host part of the gradient phase from each path
       type(response_type) :: response_rev, response_fwd
@@ -385,6 +397,8 @@ contains
       type(potential_adjoint_response_type), allocatable :: charge_rev, charge_fwd
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
+      !> Borrowed model cavities
+      class(cavity_type), pointer :: cav_rev, cav_fwd
 
       real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
       real(wp) :: diff, scale
@@ -397,8 +411,8 @@ contains
       if (allocated(error)) return
       nat = mol%nat
 
-      call new_component_cpcm(pcm_component, ctx, epsilon=epsilon_r, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_component, epsilon=epsilon_r, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -409,7 +423,9 @@ contains
       if (allocated(error)) return
       call build_model(model_fwd, cavity, ctx, pcm_component, pv_component, mol, error)
       if (allocated(error)) return
-      model_fwd%force_forward_gradient = .true.
+      call model_fwd%use_forward_gradient(.true.)
+      cav_rev => model_rev%cavity
+      cav_fwd => model_fwd%cavity
 
       ! Point-charge potential trace plus its total position weight
       call stage_model_point_charge_energy(error, model_rev, qat_vals, mol, coupling)
@@ -425,8 +441,8 @@ contains
          call test_failed(error, "gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(model_rev%cavity, coupling)
-      call fill_point_charge_field(model_rev%cavity, coupling, qat_vals, mol)
+      call fill_missing_with_zeros(cav_rev, coupling)
+      call fill_point_charge_field(cav_rev, coupling, qat_vals, mol)
 
       allocate (grad_rev(3, nat), source=0.0_wp)
       allocate (grad_fwd(3, nat), source=0.0_wp)
@@ -439,7 +455,7 @@ contains
       call stage_model_point_charge_energy(error, model_fwd, qat_vals, mol, coupling)
       if (allocated(error)) return
       call model_fwd%prepare_gradient(coupling, err)
-      call fill_point_charge_field(model_fwd%cavity, coupling, qat_vals, mol)
+      call fill_point_charge_field(cav_fwd, coupling, qat_vals, mol)
       call model_fwd%get_gradient(coupling, response_fwd, grad_fwd, err)
       if (allocated(err)) then
          call test_failed(error, "forward model gradient failed: "//err%message)
@@ -469,7 +485,8 @@ contains
          do iaxis = 1, 3
             diff = abs(grad_rev(iaxis, iatom) - grad_fwd(iaxis, iatom))
             scale = abs(grad_fwd(iaxis, iatom))
-            if (diff > AB_ABS .and. diff > AB_REL*scale) then
+            ! Negated pass test, so a NaN on either path fails
+            if (.not. (diff <= AB_ABS .or. diff <= AB_REL*scale)) then
                call test_failed(error, "model gradient differs between paths at atom "// &
                                 to_string(iatom)//" axis "//to_string(iaxis)// &
                                 ": reverse "//to_string(grad_rev(iaxis, iatom))// &
@@ -492,14 +509,14 @@ contains
    !> @param[out]   error  Error handle
    subroutine build_model(model, cavity, ctx, pcmc, pvc, mol, error)
       !> Model to build
-      type(solvation_model_general), intent(out) :: model
+      type(model_continuum_type), intent(out) :: model
       !> Cavity template copied into the model
       type(cavity_type_drop), intent(in) :: cavity
       !> Run context owned by the caller
       type(moist_context_type), intent(in), target :: ctx
       !> Component templates
-      type(solvation_model_component_cpcm), intent(in) :: pcmc
-      type(solvation_model_component_pv), intent(in) :: pvc
+      type(model_continuum_component_cpcm), intent(in) :: pcmc
+      type(model_continuum_component_pv), intent(in) :: pvc
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Error handle
@@ -507,7 +524,7 @@ contains
 
       type(mctc_error), allocatable :: err
 
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       if (.not. allocated(err)) call model%add_component(pcmc, err)
       if (.not. allocated(err)) call model%add_component(pvc, err)
       if (.not. allocated(err)) call model%update(mol, err)
@@ -519,8 +536,6 @@ contains
    end subroutine build_model
 
    !> A mis-shaped gradient accumulator must be rejected, not silently ignored
-   !>
-   !> @param[out] error  Error handle
    subroutine test_shape_guard(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -655,7 +670,8 @@ contains
                worst_atom = iatom
                worst_axis = iaxis
             end if
-            if (diff > EQ_ABS .and. diff > EQ_REL*abs(grad_fwd(iaxis, iatom))) then
+            ! Negated pass test, so a NaN on either path fails
+            if (.not. (diff <= EQ_ABS .or. diff <= EQ_REL*abs(grad_fwd(iaxis, iatom)))) then
                call test_failed(error, "reverse/forward gradient mismatch for "//label// &
                                 " at atom "//to_string(iatom)//" axis "//to_string(iaxis)// &
                                 ": reverse "//to_string(grad_rev(iaxis, iatom))// &
@@ -851,15 +867,18 @@ contains
       call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
+      ! do_fine turns on curvature, normals, r_iI and rho so that every
+      ! optional *_rA array the reference contraction reads is allocated
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
             blend_3b=gamma_loc))
-         call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_context(ctx, nthreads=0, verbosity=0)
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc))
+            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc, &
+            do_fine=.true.), ctx=ctx)
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)
@@ -881,10 +900,6 @@ contains
          end if
          call cavity%branch_weight%init(BRANCH_SOFTMAX_S)
       end if
-
-      ! do_fine turns on curvature, normals, r_iI and rho so that every
-      ! optional *_rA array the reference contraction reads is allocated
-      call cavity%properties(do_fine=.true.)
 
       call cavity%update(mol, error=cav_error)
       if (allocated(cav_error)) then

@@ -12,7 +12,8 @@ project(
 )
 lib_version = meson.project_version().split('-')[0]
 install = not (meson.is_subproject() and get_option('default_library') == 'static')
-has_cc = add_languages('c', required: get_option('api') or get_option('python'), native: false)
+# C (C API tests, Python shim) and C++ (ducc0 FFT, FINUFFT)
+add_languages('c', 'cpp', required: true, native: false)
 
 # General configuration information
 inc_dirs = []
@@ -23,6 +24,15 @@ subdir('config')
 srcs = []
 subdir('src')
 
+is_libcxx = cxx.get_define('_LIBCPP_VERSION', prefix: '#include <cstddef>') != ''
+lib_deps += cxx.find_library(is_libcxx ? 'c++' : 'stdc++')
+
+# Windows DLLs export every symbol, which clashes with the executables' own static subprojects
+moist_link_args = []
+if host_machine.system() == 'windows'
+  moist_link_args = cxx.get_supported_link_arguments('-Wl,--exclude-libs,ALL')
+endif
+
 # Library target
 moist_lib = library(
   meson.project_name(),
@@ -30,6 +40,7 @@ moist_lib = library(
   version: lib_version,
   dependencies: lib_deps,
   include_directories: inc_dirs,
+  link_args: moist_link_args,
   install: install,
 )
 
@@ -48,7 +59,7 @@ subdir('app')
 # Package the license files
 moist_lic = files(
   'LICENSE',
-  'THIRD_PARTY_LICENSES.md',
+  'THIRD_PARTY_NOTICES.md',
 )
 
 moist_header = files(

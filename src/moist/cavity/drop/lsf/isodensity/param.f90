@@ -6,8 +6,10 @@
 !>
 !> and differ only in where the density comes from; so they use the same parameters
 module moist_cavity_drop_lsf_isodensity_param
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_basis
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
+   use mctc_io, only: structure_type
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none(type, external)
@@ -15,6 +17,7 @@ module moist_cavity_drop_lsf_isodensity_param
 
    public :: moist_cavity_drop_lsf_isodensity_param_type
    public :: isodensity_exclusion_radius
+   public :: isodensity_max_nuclear_charge
 
    !> Isodensity level set function parameters
    type, extends(moist_model_parameters_type) :: moist_cavity_drop_lsf_isodensity_param_type
@@ -22,6 +25,18 @@ module moist_cavity_drop_lsf_isodensity_param
       real(wp) :: rho_iso = 1.0E-3_wp
       !> Constant multiplier applied to the level set value and derivatives
       real(wp) :: scale = 1.0_wp / 1.0E-3_wp
+      !> Density representation of the internal LSF, a [[moist_iso_basis]] value
+      !>
+      !> - spherical needs a host with spherical basis functions
+      !> - ignored by the callback LSF
+      integer :: basis = moist_iso_basis%cartesian
+
+      !> Core fill at every nucleus whose host charge `z` is below `Z`, so an ECP pseudo-density
+      !> has no dip below `rho_iso` there; see [[moist_cavity_drop_lsf_isodensity_core]]
+      logical :: core_fill = .true.
+      !> Core-fill radius `X_A` as a fraction of the atom's cavity radius `R_A`,
+      !> capped at 2 Bohr
+      real(wp) :: core_radius_fraction = 0.5_wp
 
       !* ------------------- Surface-free exclusion certificate ---------------- *!
       ! These parameters are only used in the octree solver; these are used in order
@@ -42,9 +57,23 @@ module moist_cavity_drop_lsf_isodensity_param
       procedure, public :: new => new_lsf_isodensity_param
       !> Print the parameters
       procedure, public :: print => print_lsf_isodensity_param
+      !> Whether the core fill is on, so the host's nuclear charges are required
+      procedure, public :: fills_core => lsf_isodensity_fills_core
    end type moist_cavity_drop_lsf_isodensity_param_type
 
 contains
+
+   !> Whether the core fill is on: `core_fill` and a positive radius fraction
+   !>
+   !> @param[in] self Isodensity parameters
+   pure function lsf_isodensity_fills_core(self) result(on)
+      !> Isodensity parameters
+      class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
+      !> Whether ECP nuclei are filled
+      logical :: on
+
+      on = self%core_fill .and. self%core_radius_fraction > 0.0_wp
+   end function lsf_isodensity_fills_core
 
    !> Restore compiled parameter defaults
    !>
@@ -55,6 +84,9 @@ contains
 
       self%rho_iso = defaults%rho_iso
       self%scale = defaults%scale
+      self%basis = defaults%basis
+      self%core_fill = defaults%core_fill
+      self%core_radius_fraction = defaults%core_radius_fraction
       self%log_grad_out = defaults%log_grad_out
       self%log_grad_cusp = defaults%log_grad_cusp
       self%exclusion_cap = defaults%exclusion_cap
@@ -68,6 +100,9 @@ contains
 
       call self%register_real_scalar("rho_iso", self%rho_iso)
       call self%register_real_scalar("scale", self%scale)
+      call self%register_int_scalar("basis", self%basis)
+      call self%register_logical("core_fill", self%core_fill)
+      call self%register_real_scalar("core_radius_fraction", self%core_radius_fraction)
       call self%register_real_scalar("log_grad_out", self%log_grad_out)
       call self%register_real_scalar("log_grad_cusp", self%log_grad_cusp)
       call self%register_real_scalar("exclusion_cap", self%exclusion_cap)
@@ -78,8 +113,12 @@ contains
    !> @param[inout] self     Isodensity parameter instance
    !> @param[in]    rho_iso  Density isovalue (optional)
    !> @param[in]    scale    Constant level set multiplier (optional)
+   !> @param[in]    basis    Density representation of the internal LSF (optional)
+   !> @param[in]    core_fill Core fill of ECP nuclei (optional)
+   !> @param[in]    core_radius_fraction Core-fill radius as a fraction of `R_A` (optional)
    subroutine new_lsf_isodensity_param(self, rho_iso, scale, log_grad_out, &
-                                       log_grad_cusp, exclusion_cap)
+                                       log_grad_cusp, exclusion_cap, basis, core_fill, &
+                                       core_radius_fraction)
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(inout) :: self
       !> Density isovalue (optional override)
       real(wp), intent(in), optional :: rho_iso
@@ -91,12 +130,21 @@ contains
       real(wp), intent(in), optional :: log_grad_cusp
       !> Cap on the certified radius in Bohr (optional override)
       real(wp), intent(in), optional :: exclusion_cap
+      !> Density representation, a [[moist_iso_basis]] value (optional override)
+      integer, intent(in), optional :: basis
+      !> Core fill of ECP nuclei (optional override)
+      logical, intent(in), optional :: core_fill
+      !> Core-fill radius as a fraction of the atom's cavity radius (optional override)
+      real(wp), intent(in), optional :: core_radius_fraction
 
       if (present(rho_iso)) self%rho_iso = rho_iso
       if (present(scale)) self%scale = scale
       if (present(log_grad_out)) self%log_grad_out = log_grad_out
       if (present(log_grad_cusp)) self%log_grad_cusp = log_grad_cusp
       if (present(exclusion_cap)) self%exclusion_cap = exclusion_cap
+      if (present(basis)) self%basis = basis
+      if (present(core_fill)) self%core_fill = core_fill
+      if (present(core_radius_fraction)) self%core_radius_fraction = core_radius_fraction
    end subroutine new_lsf_isodensity_param
 
    !> Physically motivated surface-free radius for an isodensity level set
@@ -106,14 +154,17 @@ contains
    !> @param[in] self  Isodensity parameters
    !> @param[in] zmax  Largest nuclear charge in the structure
    !> @param[in] lsf0  Level set value at the evaluation point
+   !> @param[in] log_grad_core Interior bound added by the ECP core fill (0 without)
    !> @returns   r     Surface-free radius (zero when uncertified)
-   pure function isodensity_exclusion_radius(self, zmax, lsf0) result(r)
+   pure function isodensity_exclusion_radius(self, zmax, lsf0, log_grad_core) result(r)
       !> Isodensity parameters
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
       !> Largest nuclear charge in the structure
       real(wp), intent(in) :: zmax
       !> Level set value at the evaluation point
       real(wp), intent(in) :: lsf0
+      !> Interior bound added by the ECP core fill
+      real(wp), intent(in) :: log_grad_core
       !> Surface-free radius
       real(wp) :: r
 
@@ -133,39 +184,76 @@ contains
          ! Exterior: the ball stays exterior, so the cusp never enters
          kappa = self%log_grad_out
       else
-         ! Interior: the ball can reach a nucleus
-         kappa = max(self%log_grad_out, self%log_grad_cusp*zmax)
+         ! Interior: the ball can reach a nucleus; an ECP core fill g adds
+         ! |grad g| / max(g, rho_iso) on top
+         kappa = max(self%log_grad_out, self%log_grad_cusp*zmax) + log_grad_core
       end if
 
       r = min(abs(log(ratio))/kappa, self%exclusion_cap)
    end function isodensity_exclusion_radius
+
+   !> Largest nuclear charge entering the interior cusp bound
+   !>
+   !> The atomic number, not the host's nuclear charge `z`: ECP pseudo-densities
+   !> reach `|grad ln rho|` of 3 `z` (Hf, def2-SVP) but stay below `Z`
+   !>
+   !> @param[in] mol   Molecular structure
+   !> @returns   zmax  Largest atomic number (zero for an empty structure)
+   pure function isodensity_max_nuclear_charge(mol) result(zmax)
+      !> Molecular structure
+      type(structure_type), intent(in) :: mol
+      !> Largest atomic number
+      real(wp) :: zmax
+
+      zmax = 0.0_wp
+      if (allocated(mol%num)) then
+         if (size(mol%num) > 0) zmax = real(maxval(mol%num), wp)
+      end if
+   end function isodensity_max_nuclear_charge
 
    !> Print the isodensity parameters in the verbose cavity diagnostics
    !>
    !> @param[in] self  Isodensity parameter instance
    !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
    !>                  context pass `ctx%unit` so this honours a log file
-   subroutine print_lsf_isodensity_param(self, unit)
+   !> @param[in] level Verbosity level; below 3 only the normal settings print
+   !>                  (default: all)
+   subroutine print_lsf_isodensity_param(self, unit, level)
       class(moist_cavity_drop_lsf_isodensity_param_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
+      !> Pretty printer
       type(prettyprinter) :: pp
       !> Effective output unit
       integer :: iu
+      !> Whether the detailed settings print
+      logical :: detailed
 
       iu = output_unit
       if (present(unit)) iu = unit
+      detailed = .true.
+      if (present(level)) detailed = level >= 3
 
       pp = new_prettyprinter(unit=iu)
       call pp%push("Implicit surface (isodensity):")
       call pp%kv("Isovalue (rho_iso)", self%rho_iso, use_exp=.true.)
       call pp%kv("Scale", self%scale)
-      if (self%log_grad_out > 0.0_wp) then
+      if (self%basis == moist_iso_basis%spherical) then
+         call pp%kv("AO basis", "spherical")
+      else
+         call pp%kv("AO basis", "cartesian")
+      end if
+      call pp%kv("ECP core fill", self%core_fill)
+      if (detailed .and. self%core_fill) call pp%kv("ECP core fill radius (of R_A)", self%core_radius_fraction)
+      if (detailed .and. self%log_grad_out > 0.0_wp) then
          call pp%kv("Exclusion |grad ln rho| (out)", self%log_grad_out, "1/Bohr")
          call pp%kv("Exclusion cusp factor (in)", self%log_grad_cusp)
          call pp%kv("Exclusion radius cap", self%exclusion_cap, "Bohr")
       end if
       call pp%pop()
+      call pp%blank()
    end subroutine print_lsf_isodensity_param
 
 end module moist_cavity_drop_lsf_isodensity_param

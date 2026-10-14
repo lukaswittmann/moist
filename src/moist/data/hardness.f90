@@ -18,6 +18,10 @@ module moist_data_hardness
 
    !> Element-specific chemical hardnesses for the charge scaling function used
    !> to extrapolate the C6 coefficients in DFT-D4
+   !>
+   !> - Data: DFT-D4 source table, https://dftd4.github.io/dftd4/sourcefile/hardness.f90.html
+   !> - Model: Caldeweyher et al., J. Chem. Phys. 150, 154122 (2019)
+   !> - DOI: 10.1063/1.5090222
    real(wp), parameter :: chemical_hardness(max_elem) = [ &
      & 0.47259288_wp, 0.92203391_wp, 0.17452888_wp, 0.25700733_wp, 0.33949086_wp, &
      & 0.42195412_wp, 0.50438193_wp, 0.58691863_wp, 0.66931351_wp, 0.75191607_wp, &

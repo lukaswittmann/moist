@@ -65,7 +65,7 @@ contains
       real(wp) :: t_build
       real :: c0, c1
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       radius_model = default_cpcm_radii()
 
       write (*, "(a)") ""
@@ -87,8 +87,8 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=5.5_wp, &
                blend_2b=0.0_wp, blend_3b=3.0_wp))
-            call new_cavity_drop(cavity, ctx, radius_model=radius_model, &
-                                 lsf_model=svdw_template, error=cavity_error)
+            call new_cavity_drop(cavity, radius_model=radius_model, &
+                                 lsf_model=svdw_template, error=cavity_error, ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "cavity build failed: "//cavity_error%message)
@@ -441,7 +441,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       nleb = 194
       blend_k = 5.5_wp
@@ -493,10 +493,10 @@ contains
                   type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                   call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
                      blend_2b=blend_2b, blend_3b=blend_3b))
-                  call new_cavity_drop(cavity_drop, ctx, radius_model=default_cpcm_radii(), &
+                  call new_cavity_drop(cavity_drop, radius_model=default_cpcm_radii(), &
                      lsf_model=svdw_template, error=cavity_error, &
                      param=moist_cavity_drop_parameters_type(num_leb=nleb, tolerance=1.0E-10_wp, &
-                     proj_level=proj_level))
+                     proj_level=proj_level), ctx=ctx)
                end block
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
                call cavity_drop%update(mol, error=cavity_error)
@@ -819,7 +819,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0, do_profile=.true.)
+      call new_context(ctx, nthreads=0, verbosity=0, do_profile=.true.)
 
       !> Polyalanine structures (increasing size)
       struct_names = [character(len=20) :: &
@@ -869,9 +869,9 @@ contains
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
                   blend_2b=blend_2b, blend_3b=blend_3b))
-               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                   error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, do_fine=.true., &
-                  tolerance=1.0E-10_wp, proj_level=proj_level))
+                  tolerance=1.0E-10_wp, proj_level=proj_level), ctx=ctx)
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -1198,7 +1198,7 @@ contains
       type(moist_context_type), target :: ctx
 
       !> Polyalanine structures (increasing size)
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       struct_names = [character(len=20) :: &
                       "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &
@@ -1229,8 +1229,8 @@ contains
          do iter = 1, n_iter
             if (allocated(cavity)) deallocate (cavity)
             allocate (cavity)
-            call new_cavity_iswig(cavity, ctx, radius_model=default_cpcm_radii(), error=cavity_error, &
-               param=moist_cavity_iswig_parameters_type(num_leb=nleb))
+            call new_cavity_iswig(cavity, radius_model=default_cpcm_radii(), error=cavity_error, &
+               param=moist_cavity_iswig_parameters_type(num_leb=nleb), ctx=ctx)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return

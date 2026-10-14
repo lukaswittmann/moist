@@ -24,7 +24,10 @@ contains
                   new_unittest("full_scan_threshold_not_triggered", test_full_scan_not_triggered), &
                   new_unittest("cell_fraction_superset", test_cell_fraction_superset), &
                   new_unittest("cell_fraction_finer_cells", test_cell_fraction_finer_cells), &
-                  new_unittest("cell_fraction_default_identity", test_cell_fraction_default_identity) &
+                  new_unittest("cell_fraction_default_identity", test_cell_fraction_default_identity), &
+                  new_unittest("scaled_boundary_coverage", test_scaled_boundary_coverage), &
+                  new_unittest("clamp_identity", test_clamp_identity), &
+                  new_unittest("lifecycle", test_lifecycle) &
                   ]
    end subroutine collect_math_cell_grid
 
@@ -377,6 +380,139 @@ contains
       call grid_implicit%destroy()
       call grid_explicit%destroy()
    end subroutine test_cell_fraction_default_identity
+
+   !> Cover translated and scaled geometries, heterogeneous reaches, and tangency
+   subroutine test_scaled_boundary_coverage(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cell_grid_type) :: grid
+      real(wp) :: xyz(3, 4), radii(4), point(3), scale, shift(3)
+      integer :: iscale, ix, iy, iz, j, start, n
+
+      do iscale = -1, 1
+         scale = 10.0_wp**(3*iscale)
+         shift = [-3.0_wp, -4.0_wp, -5.0_wp]*scale
+         xyz(:, 1) = shift + [4.0_wp, 4.0_wp, 4.0_wp]*scale
+         xyz(:, 2) = shift
+         xyz(:, 3) = shift + [1.0_wp, 2.0_wp, 3.0_wp]*scale
+         xyz(:, 4) = shift + [3.0_wp, 1.0_wp, 2.0_wp]*scale
+         radii = [0.25_wp, 1.0_wp, 1.5_wp, 0.5_wp]*scale
+         call grid%build(xyz, radii, cell_fraction=0.5_wp)
+         call check(error, abs(grid%cell_side - maxval(radii)*0.5_wp) <= &
+                    epsilon(1.0_wp)*scale, "cell side must use maximum reach")
+         if (allocated(error)) return
+         call check(error, maxval(abs(grid%origin - shift)) <= epsilon(1.0_wp)*scale, &
+                    "origin must be bounding-box minimum")
+         if (allocated(error)) return
+         do iz = 0, 16
+         do iy = 0, 16
+         do ix = 0, 16
+            point = shift + real([ix, iy, iz], wp)*0.25_wp*scale
+            call grid%query(point, start, n)
+            call check(error, start >= 0 .and. n >= 0 .and. start + n <= size(grid%cell_nlat), &
+                       "query must provide a valid candidate slice")
+            if (allocated(error)) return
+            do j = 1, 4
+               if (norm2(point - xyz(:, j)) > radii(j)) cycle
+               call check(error, count(grid%cell_nlat(start + 1:start + n) == j) == 1, &
+                          "each covering atom must occur exactly once")
+               if (allocated(error)) return
+            end do
+         end do
+         end do
+         end do
+         call grid%destroy()
+      end do
+
+      ! Exact binary coordinates put a reach endpoint on a cell face
+      xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      xyz(:, 2) = [4.0_wp, 4.0_wp, 4.0_wp]
+      xyz(:, 3) = [1.0_wp, 1.0_wp, 1.0_wp]
+      xyz(:, 4) = [3.0_wp, 3.0_wp, 3.0_wp]
+      radii = [0.25_wp, 1.0_wp, 1.0_wp, 0.5_wp]
+      call grid%build(xyz, radii)
+      do j = 1, 3
+         point = xyz(:, 3)
+         point(j) = point(j) + radii(3)
+         call grid%query(point, start, n)
+         call check(error, count(grid%cell_nlat(start + 1:start + n) == 3) == 1, &
+                    "tangent atom must be included at a cell face")
+         if (allocated(error)) return
+      end do
+      call grid%destroy()
+   end subroutine test_scaled_boundary_coverage
+
+   !> External queries select the same candidates as their clamped boundary point
+   subroutine test_clamp_identity(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cell_grid_type) :: grid
+      real(wp) :: xyz(3, 2), radii(2), point(3), boundary(3)
+      integer :: axis, side, start, n, boundary_start, boundary_n
+
+      xyz(:, 1) = [-2.0_wp, -3.0_wp, -4.0_wp]
+      xyz(:, 2) = [3.0_wp, 4.0_wp, 5.0_wp]
+      radii = 0.5_wp
+      call grid%build(xyz, radii)
+      do axis = 1, 3
+         do side = 1, 2
+            boundary = xyz(:, side)
+            point = boundary
+            point(axis) = point(axis) + real(2*side - 3, wp)*100.0_wp
+            call grid%query(boundary, boundary_start, boundary_n)
+            call grid%query(point, start, n)
+            call check(error, start == boundary_start .and. n == boundary_n, &
+                       "outside query must select clamped boundary cell")
+            if (allocated(error)) return
+         end do
+      end do
+      call grid%destroy()
+   end subroutine test_clamp_identity
+
+   !> Rebuilds index new geometry, destroy releases storage, and empty geometry
+   !> or zero reach still give valid query slices
+   subroutine test_lifecycle(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cell_grid_type) :: grid
+      real(wp) :: xyz(3, 2), radii(2)
+      integer :: start, n
+
+      xyz(:, 1) = 0.0_wp
+      xyz(:, 2) = 3.0_wp
+      radii = 1.0_wp
+      call grid%build(xyz, radii, full_scan_below=3)
+      call grid%build(xyz, radii, full_scan_below=2, cell_fraction=0.5_wp)
+      call check(error, .not. grid%full_scan, "threshold equality must use spatial path")
+      if (allocated(error)) return
+      xyz(:, 2) = -3.0_wp
+      call grid%build(xyz, radii, cell_fraction=0.5_wp)
+      call grid%query(xyz(:, 2), start, n)
+      call check(error, count(grid%cell_nlat(start + 1:start + n) == 2) == 1, &
+                 "rebuild must index new geometry")
+      if (allocated(error)) return
+      call grid%destroy()
+      call check(error, .not. allocated(grid%cell_inl) .and. .not. allocated(grid%cell_nnl) &
+                 .and. .not. allocated(grid%cell_nlat), "destroy must release candidate storage")
+      if (allocated(error)) return
+      call check(error, grid%ncells == 0 .and. grid%natoms == 0 .and. &
+                 abs(grid%cell_fraction - 1.0_wp) <= epsilon(1.0_wp), &
+                 "destroy must reset grid metadata")
+      if (allocated(error)) return
+      call grid%destroy()
+      call grid%build(xyz(:, :0), radii(:0))
+      call grid%query(xyz(:, 1), start, n)
+      call check(error, start == 0 .and. n == 0, "empty geometry query must be empty")
+      if (allocated(error)) return
+      ! Zero reach covers no point away from the centers; only the slice is checked
+      radii = 0.0_wp
+      call grid%build(xyz, radii)
+      call grid%query([1.5_wp, 1.5_wp, 1.5_wp], start, n)
+      call check(error, start >= 0 .and. n >= 0 .and. start + n <= size(grid%cell_nlat), &
+                 "nonpositive reach query must provide a valid candidate slice")
+      if (allocated(error)) return
+      call grid%destroy()
+   end subroutine test_lifecycle
 
    pure function point_inside_bbox(point, lo, hi) result(inside)
       real(wp), intent(in) :: point(3), lo(3), hi(3)

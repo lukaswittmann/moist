@@ -34,7 +34,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, compiler and version, build system (meson/cmake/fpm), BLAS/LAPACK provider
+      description: OS, compiler and version, build system (meson/cmake), BLAS/LAPACK provider
       placeholder: macOS 15, gfortran 14.3, meson, OpenBLAS
     validations:
       required: true

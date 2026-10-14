@@ -130,20 +130,13 @@ contains
       !> Eigenvector for largest eigenvalue
       real(wp), intent(out) :: v_max(2)
 
-      real(wp) :: trace, det, disc, sqrt_disc, norm
+      real(wp) :: trace, sqrt_disc, norm
 
       ! Characteristic polynomial: lambda^2 - trace*lambda + det = 0
+      ! Its discriminant trace^2 - 4 det equals (a - c)^2 + 4 b^2
+      ! The sum of squares keeps the eigenvalue gap correct near degeneracy
       trace = a + c
-      det = a*c - b*b
-      disc = trace*trace - 4.0_wp*det
-
-      ! Eigenvalues (guaranteed real for symmetric matrix)
-      if (disc < 0.0_wp) then
-         ! Numerically negative discriminant; clamp to zero
-         sqrt_disc = 0.0_wp
-      else
-         sqrt_disc = sqrt(disc)
-      end if
+      sqrt_disc = hypot(a - c, 2.0_wp*b)
 
       lambda_min = 0.5_wp*(trace - sqrt_disc)
       lambda_max = 0.5_wp*(trace + sqrt_disc)

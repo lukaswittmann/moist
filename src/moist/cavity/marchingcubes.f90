@@ -24,10 +24,12 @@ module moist_cavity_marchingcubes
    use mctc_io_convert, only: autoaa
    use mctc_io_constants, only: pi
    use moist_math_linalg, only: cross_product
-   use moist_cavity_type, only: cavity_type
-   use moist_context, only: moist_context_type
+   use moist_cavity_type, only: cavity_type, update_cavity_base, build_cavity_base, cavity_declare_pass
+   use moist_context, only: moist_context_type, resolve_num_threads
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
+      & coupling_close_view
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_timer, only: cat_properties
@@ -64,19 +66,23 @@ module moist_cavity_marchingcubes
       !> integrator source-allocates one thread-local clone per OpenMP thread
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
 
-      !> Finest marching-cubes grid spacing, bohr
-      real(wp) :: spacing = 0.2_wp
-
-      !> Wavefront OBJ mesh export path (mesh export off when unallocated)
-      character(len=:), allocatable :: obj_file
-      !> PQR triangle-centroid export path (mesh export off when unallocated)
-      character(len=:), allocatable :: pqr_file
+      !> Construction settings: finest grid spacing, bohr, and the OBJ and PQR
+      !> mesh export paths (export off when unallocated)
+      type(moist_cavity_marchingcubes_parameters_type) :: param
 
    contains
       !> Integrate the isosurface for a new geometry
       procedure :: update => update_cavity_marchingcubes
+      !> Whether the level set requires build-phase answers before the integration
+      procedure :: defers_build => marchingcubes_defers_build
+      !> Read the build-phase answers and integrate the deferred isosurface
+      procedure :: build => build_cavity_marchingcubes
+      !> Declare the build-phase requests of the level set
+      procedure :: declare_coupling => declare_coupling_marchingcubes
       !> Marching cubes exposes no analytic nuclear derivatives
       procedure :: get_gradient => get_gradient_marchingcubes
+      !> Construction settings
+      procedure :: parameters => marchingcubes_parameters
    end type cavity_type_marchingcubes
 
    !> Growable buffer for collecting triangle vertices from marching cubes
@@ -419,7 +425,7 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_cavity_marchingcubes_parameters_type), intent(inout), target :: self
 
-      call self%register_real_scalar("spacing", self%spacing)
+      call self%register_real_scalar("spacing", self%spacing, level=2)
       call self%register_alloc_string("obj_file", self%obj_file)
       call self%register_alloc_string("pqr_file", self%pqr_file)
    end subroutine register_parameter_entries
@@ -427,16 +433,14 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[in] lsf_model Level set function to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_marchingcubes(self, ctx, radius_model, lsf_model, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_marchingcubes(self, radius_model, lsf_model, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_marchingcubes), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
       !> Level set function to copy
@@ -445,40 +449,65 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_marchingcubes_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
       type(moist_cavity_marchingcubes_parameters_type) :: settings
 
       if (present(param)) settings = param
       call settings%validate(error)
       if (allocated(error)) return
-      self%ctx => ctx
-      self%spacing = settings%spacing
-      if (allocated(self%obj_file)) deallocate(self%obj_file)
-      if (allocated(settings%obj_file)) self%obj_file = settings%obj_file
-      if (allocated(self%pqr_file)) deallocate(self%pqr_file)
-      if (allocated(settings%pqr_file)) self%pqr_file = settings%pqr_file
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
+      self%label = "Marching cubes"
+      self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radius_model)
       if (allocated(self%lsf_model)) deallocate(self%lsf_model)
       allocate(self%lsf_model, source=lsf_model)
+      ! A constructed cavity has no structure, no surface and no coupling yet
+      if (allocated(self%mol)) deallocate (self%mol)
+      self%updated = .false.
+      call self%clear_surface()
+      call self%clear_couplings()
+
    end subroutine new_cavity_marchingcubes
+
+   !> Construction settings of the cavity
+   !>
+   !> @param[in] self Marching-cubes cavity instance
+   function marchingcubes_parameters(self) result(param)
+      !> Marching-cubes cavity instance
+      class(cavity_type_marchingcubes), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function marchingcubes_parameters
 
    !* ================================================================================= *!
    !*                          Update Cavity (integrate surface)                        *!
    !* ================================================================================= *!
 
-   !> Integrate the LSF isosurface for a new geometry
+   !> Take a new geometry: radii and sphere centres, then the isosurface
+   !> unless the level set waits for build-phase answers
    !>
    !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3); with no surface
    !> discretization `ngrid` stays zero and the grid arrays stay unallocated
    !>
-   !> @param[inout] self  Cavity instance
-   !> @param[in]    mol   Molecular structure
-   !> @param[out]   error Error handling
+   !> @param[inout] self     Cavity instance
+   !> @param[in]    mol      Molecular structure
+   !> @param[out]   error    Error handling
    subroutine update_cavity_marchingcubes(self, mol, error)
       class(cavity_type_marchingcubes), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
+
+      call update_cavity_base(self, mol, error)
+      if (allocated(error)) return
+      call self%require_context(error)
+      if (allocated(error)) return
 
       !> Set number of spheres
       self%nsph = mol%nat
@@ -488,7 +517,6 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
-      if (self%ctx%verbosity >= 2) call self%radius_model%print()
       if (allocated(self%radii)) deallocate (self%radii)
       allocate (self%radii(self%nsph), source=self%radius_model%f0)
 
@@ -496,9 +524,94 @@ contains
       if (allocated(self%sphxyz)) deallocate (self%sphxyz)
       allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
 
+      !> The integration waits for the density matrix or the nuclear charges
+      if (.not. self%defers_build()) then
+         call integrate_surface_mc(self, error)
+         if (allocated(error)) return
+      end if
+      self%updated = .true.
+      self%built = .not. self%defers_build()
+
+   end subroutine update_cavity_marchingcubes
+
+   !> Whether the level set requires build-phase answers before the integration
+   !>
+   !> @param[in] self Cavity instance
+   function marchingcubes_defers_build(self) result(defers)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(in) :: self
+      !> Whether `update` leaves the integration to `build`
+      logical :: defers
+
+      defers = .false.
+      if (allocated(self%lsf_model)) defers = self%lsf_model%requires_build_inputs()
+
+   end function marchingcubes_defers_build
+
+   !> Read the build phase, then integrate a deferred surface
+   !>
+   !> - `build_cavity_base` first; a surface that `update` integrated stays
+   !> - otherwise built once the level set read its answers and the
+   !>   integration succeeded, then the coupling records the extents
+   !>
+   !> @param[inout] self     Updated cavity
+   !> @param[inout] coupling Coupling staged by `prepare_build`
+   !> @param[out]   error    Error handling
+   subroutine build_cavity_marchingcubes(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(inout) :: self
+      !> Coupling staged by `prepare_build`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Cavity-scoped read interface
+      type(coupling_view_type) :: view
+
+      call build_cavity_base(self, coupling, error)
+      if (allocated(error)) return
+      if (.not. self%defers_build()) return
+      call coupling_make_view(coupling, 0, view)
+      call self%lsf_model%read_build(view, self%mol, error)
+      call coupling_close_view(coupling)
+      if (allocated(error)) return
+      call integrate_surface_mc(self, error)
+      if (allocated(error)) return
+      self%built = .true.
+      call cavity_declare_pass(self, coupling, error)
+
+   end subroutine build_cavity_marchingcubes
+
+   !> Declare the build-phase requests of the level set at the cavity scope
+   !>
+   !> @param[in]    self     Cavity instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine declare_coupling_marchingcubes(self, coupling, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(in) :: self
+      !> Coupling being declared
+      type(coupling_type), intent(inout) :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (allocated(self%lsf_model)) call self%lsf_model%declare_coupling(coupling, error)
+
+   end subroutine declare_coupling_marchingcubes
+
+   !> Integrate the isosurface of the stored structure, radii and sphere centres
+   !>
+   !> @param[inout] self  Cavity instance
+   !> @param[out]   error Error handling
+   subroutine integrate_surface_mc(self, error)
+      !> Cavity instance
+      class(cavity_type_marchingcubes), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
       !> Refresh LSF geometry caches; the integrator reads lsf%radii for its
       !> bounding box and never calls update itself
-      call self%lsf_model%update(mol, self%radii)
+      call self%lsf_model%update(self%mol, self%radii)
 
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)
@@ -510,7 +623,7 @@ contains
       call self%ctx%timer%stop("Marching cubes")
       if (allocated(error)) return
 
-   end subroutine update_cavity_marchingcubes
+   end subroutine integrate_surface_mc
 
    !> Run the integrator, forwarding only the mesh-export paths that were requested
    !>
@@ -523,29 +636,33 @@ contains
       class(cavity_type_marchingcubes), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      if (allocated(self%obj_file) .and. allocated(self%pqr_file)) then
+      if (allocated(self%param%obj_file) .and. allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               obj_file=self%obj_file, pqr_file=self%pqr_file)
-      else if (allocated(self%obj_file)) then
+                                               target_spacing=self%param%spacing, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
+                                               obj_file=self%param%obj_file, pqr_file=self%param%pqr_file)
+      else if (allocated(self%param%obj_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               obj_file=self%obj_file)
-      else if (allocated(self%pqr_file)) then
+                                               target_spacing=self%param%spacing, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
+                                               obj_file=self%param%obj_file)
+      else if (allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               pqr_file=self%pqr_file)
+                                               target_spacing=self%param%spacing, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
+                                               pqr_file=self%param%pqr_file)
       else
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug)
+                                               target_spacing=self%param%spacing, &
+                                               verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads())
       end if
 
    end subroutine integrate_marching_cubes_export
@@ -618,7 +735,9 @@ contains
    !>
    !> - the cavity is the f0=0 isosurface (negative inside)
    !> - triangle winding follows the standard table convention
-   !> - volume is summed via signed tetrahedra w.r.t. the origin
+   !> - volume is summed via signed tetrahedra spanned from the geometric center
+   !>   (mean of `xyz`), so the per-cube volumes of the refinement test and the
+   !>   total are translation invariant
    !> - screened LSF evaluation, O(N) per point
    !> - initial coarse grid vertices are cached to avoid redundant evaluations
    !>
@@ -628,12 +747,13 @@ contains
    !> @param[out] volume          Enclosed volume
    !> @param[in]  target_spacing  Finest grid spacing (optional, default 0.2)
    !> @param[in]  debug           Enable debug output (optional)
-   !> @param[in]  verbosity       Verbosity level; >=2 enables progress output (optional)
+   !> @param[in]  verbosity       Verbosity level; >=4 enables progress output (optional)
+   !> @param[in]  nthreads        OpenMP team size (optional, default omp_get_max_threads)
    !> @param[in]  obj_file        Wavefront OBJ mesh output path (optional)
    !> @param[in]  pqr_file        PQR file output path with triangle centroids (optional)
    !> @param[out] error           LSF evaluation failure; area/volume are invalid
    subroutine integrate_surface_marching_cubes(lsf, xyz, area, volume, error, &
-                                               target_spacing, debug, verbosity, obj_file, pqr_file)
+                                               target_spacing, debug, verbosity, obj_file, pqr_file, nthreads)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       real(wp), intent(in) :: xyz(:, :)
       real(wp), intent(out) :: area, volume
@@ -645,9 +765,13 @@ contains
       character(len=*), intent(in), optional :: obj_file
       !> Output PQR file path with triangle centroids
       character(len=*), intent(in), optional :: pqr_file
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
       real(wp) :: spacing, margin
       real(wp) :: grid_min(3), grid_max(3)
+      !> Apex of the signed volume tetrahedra: mean atomic position, bohr
+      real(wp) :: center(3)
       integer :: nx, ny, nz
       integer :: ix, iy, iz
       integer :: tri_count
@@ -703,7 +827,10 @@ contains
       !> Per-thread LSF evaluation failure and the loop-wide abort it triggers
       type(error_type), allocatable :: lsf_error
       logical :: abort_requested
+      !> Effective team size
+      integer :: nt
 
+      nt = resolve_num_threads(nthreads)
       spacing = 0.2_wp
       if (present(target_spacing)) spacing = target_spacing
       margin = 2.0_wp
@@ -711,12 +838,13 @@ contains
       if (present(debug)) dbg = debug
       verbose_level = 0
       if (present(verbosity)) verbose_level = verbosity
-      if (verbose_level >= 2) dbg = .true.
+      if (verbose_level >= 4) dbg = .true.
       export_mesh = present(obj_file) .or. present(pqr_file)
 
       ! Compute initial grid bounds from atomic radii and one padding layer
       call compute_lsf_grid_bounds(lsf, xyz, grid_min, grid_max, &
                                    margin, spacing)
+      center = sum(xyz, dim=2)/real(max(1, size(xyz, 2)), wp)
 
       min_spacing = spacing
       max_extent = maxval(grid_max - grid_min)
@@ -740,7 +868,7 @@ contains
       ! Pre-compute LSF values on the (nx+1)*(ny+1)*(nz+1) vertex grid
       allocate (grid_vals(0:nx, 0:ny, 0:nz))
       abort_requested = .false.
-      !$omp parallel default(none) &
+      !$omp parallel num_threads(nt) default(none) &
       !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz, &
       !$omp&        abort_requested, error) &
       !$omp& private(lsf_priv, ptmp, ix, iy, iz, lsf_error)
@@ -808,8 +936,7 @@ contains
                    "Elapsed(s)"], &
                   unit=error_unit)
          call plp_mc%blank()
-         call plp_mc%header("MARCHING CUBES")
-         call plp_mc%blank()
+         call plp_mc%header("Marching Cubes")
          write (error_unit, "(a,i0,a,i0,a,i0)") &
             " grid: ", nx, " x ", ny, " x ", nz
          write (error_unit, "(a,f10.4,a,f10.4,a,i0)") &
@@ -823,8 +950,8 @@ contains
 !$       wall_start = omp_get_wtime()
       end if
 
-      !$omp parallel default(none) &
-      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, &
+      !$omp parallel num_threads(nt) default(none) &
+      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, center, &
       !$omp&        max_level, min_spacing, local_stack_size, &
       !$omp&        n_coarse_total, n_coarse_done, progress_interval, &
       !$omp&        dbg, wall_start, plp_mc, export_mesh, all_tris, &
@@ -852,7 +979,7 @@ contains
          loc_buf%n = 0
       end if
 
-      !$omp do collapse(3) schedule(dynamic)
+      !$omp do collapse(2) schedule(dynamic)
       do iz = 1, nz
          do iy = 1, ny
             do ix = 1, nx
@@ -909,21 +1036,21 @@ contains
                   else if (spacing_here <= min_spacing) then
                      if (export_mesh) then
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count, &
+                                               cube%vals, center, area, volume, tri_count, &
                                                tri_buf=loc_buf)
                      else
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count)
+                                               cube%vals, center, area, volume, tri_count)
                      end if
                      n_cubes_accepted = n_cubes_accepted + 1
                   else if (cube%level >= max_level) then
                      if (export_mesh) then
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count, &
+                                               cube%vals, center, area, volume, tri_count, &
                                                tri_buf=loc_buf)
                      else
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count)
+                                               cube%vals, center, area, volume, tri_count)
                      end if
                      n_cubes_accepted = n_cubes_accepted + 1
                   else
@@ -931,7 +1058,7 @@ contains
                      coarse_vol = 0.0_wp
                      coarse_tri = 0
                      call march_single_cube(cube%minp, spacing_here, &
-                                            cube%vals, coarse_area, coarse_vol, coarse_tri)
+                                            cube%vals, center, coarse_area, coarse_vol, coarse_tri)
 
                      call subdivide_cube(cube%minp, cube%maxp, mid, &
                                          cube%vals, sub_min, sub_max, sub_vals, &
@@ -955,13 +1082,13 @@ contains
                         if (export_mesh) then
                            call march_single_cube(sub_min(:, child), &
                                                   spacing_here*0.5_wp, &
-                                                  sub_vals(:, child), &
+                                                  sub_vals(:, child), center, &
                                                   sub_area, sub_vol, sub_tri, &
                                                   tri_buf=loc_buf)
                         else
                            call march_single_cube(sub_min(:, child), &
                                                   spacing_here*0.5_wp, &
-                                                  sub_vals(:, child), &
+                                                  sub_vals(:, child), center, &
                                                   sub_area, sub_vol, sub_tri)
                         end if
                      end do
@@ -1071,12 +1198,15 @@ contains
 
    !> March a single cube defined by its minimum point and edge length
    !>
+   !> @param[in]    apex     Common apex of the signed volume tetrahedra, bohr
    !> @param[inout] tri_buf  Optional triangle buffer for mesh export
-   subroutine march_single_cube(origin, h, vals, area_acc, volume_acc, tri_acc, &
+   subroutine march_single_cube(origin, h, vals, apex, area_acc, volume_acc, tri_acc, &
                                 tri_buf)
       real(wp), intent(in) :: origin(3)
       real(wp), intent(in) :: h
       real(wp), intent(in) :: vals(8)
+      !> Common apex of the signed volume tetrahedra, bohr
+      real(wp), intent(in) :: apex(3)
       real(wp), intent(inout) :: area_acc, volume_acc
       integer, intent(inout) :: tri_acc
       type(mc_tri_buffer_type), intent(inout), optional :: tri_buf
@@ -1142,7 +1272,7 @@ contains
 
          area_term = sqrt(sum(tri_normal*tri_normal))
          area_acc = area_acc + 0.5_wp*area_term
-         volume_acc = volume_acc + dot_product(v0, tri_normal)/6.0_wp
+         volume_acc = volume_acc + dot_product(v0 - apex, tri_normal)/6.0_wp
          tri_acc = tri_acc + 1
          if (present(tri_buf)) call mc_tri_buffer_append(tri_buf, v0, v1, v2)
       end do
@@ -1275,6 +1405,7 @@ contains
       open (file=filename, newunit=unit, status="replace", action="write", &
             iostat=stat)
       if (stat /= 0) then
+         ! TODO: route through ctx%warning once a context is reachable here
          write (error_unit, "(a)") &
             "[Warning] Could not open OBJ file: "//trim(filename)
          return
@@ -1313,6 +1444,7 @@ contains
       open (file=filename, newunit=unit, status="replace", action="write", &
             iostat=stat)
       if (stat /= 0) then
+         ! TODO: route through ctx%warning once a context is reachable here
          write (error_unit, "(a)") &
             "[Warning] Could not open PQR file: "//trim(filename)
          return
