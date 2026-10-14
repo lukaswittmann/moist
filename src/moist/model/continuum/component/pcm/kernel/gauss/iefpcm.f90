@@ -464,7 +464,7 @@ contains
       state%s4 = state%r(1, :)
       state%s5 = state%r(2, :)
       state%s6 = state%r(3, :)
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(npt, state)
       do j = 1, npt
@@ -649,7 +649,7 @@ contains
       state%s9 = n(1, :)
       state%s10 = n(2, :)
       state%s11 = n(3, :)
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(npt, state)
       do j = 1, npt
@@ -1248,7 +1248,7 @@ contains
       tmp21 = 0.0_wp
       tmp22 = 0.0_wp
       tmp23 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp17, tmp18, tmp19, tmp21, tmp23) &
       !$omp& reduction(+: tmp14, tmp15, tmp16, tmp20, tmp22)
@@ -2743,7 +2743,7 @@ contains
       tmp12 = tmp20
       tmp22 = tmp2*state%s14
       tmp21 = tmp22
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1, tmp12) &
       !$omp& reduction(+: tmp21)
@@ -3552,7 +3552,7 @@ contains
       tmp634 = state%a*tmp630
       tmp636 = tmp2*tmp634
       tmp635 = tmp636
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dr, dxi, npt, state, tmp634, tmp635)
       block
@@ -4030,7 +4030,7 @@ contains
       tmp984 = da*state%s20
       tmp986 = tmp13*state%s13
       tmp985 = tmp986
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp985)
@@ -4615,7 +4615,7 @@ contains
       tmp1405 = dv + tmp1404
       tmp1407 = tmp13*state%s21
       tmp1406 = tmp1407
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp1406)
@@ -5219,7 +5219,7 @@ contains
       tmp1843 = 0.0_wp
       tmp1844 = 0.0_wp
       tmp1845 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1836, tmp1839, tmp1841) &
       !$omp& shared(tmp1842, tmp1843, tmp1845, tmp979, tmp982, tmp983) &
@@ -7413,7 +7413,7 @@ contains
       tmp3601 = 0.0_wp
       tmp3602 = 0.0_wp
       tmp3603 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1832, tmp1836, tmp3598) &
       !$omp& shared(tmp3603, tmp979, tmp982, tmp983) &
@@ -10568,7 +10568,7 @@ contains
       hvp_F = tmp6067 + tmp6077
       tmp6079 = tmp13*state%s18
       tmp6078 = tmp6079
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp6078)
       block
@@ -11706,7 +11706,7 @@ contains
       tmp25 = 0.0_wp
       tmp26 = 0.0_wp
       tmp27 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp21, tmp22, tmp23, tmp25, tmp27) &
       !$omp& reduction(+: tmp18, tmp19, tmp20, tmp24, tmp26)
@@ -13228,7 +13228,7 @@ contains
       tmp12 = tmp20
       tmp22 = tmp2*state%cx_s14
       tmp21 = tmp22
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1, tmp12) &
       !$omp& reduction(+: tmp21)
@@ -14043,7 +14043,7 @@ contains
       tmp638 = state%a*tmp630
       tmp640 = tmp2*tmp638
       tmp639 = tmp640
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dr, dxi, npt, state, tmp638, tmp639)
       block
@@ -14522,7 +14522,7 @@ contains
       tmp988 = da*state%cx_s20
       tmp990 = tmp13*state%cx_s13
       tmp989 = tmp990
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp989)
@@ -15113,7 +15113,7 @@ contains
       tmp1411 = dv + tmp1410
       tmp1413 = tmp13*state%cx_s21
       tmp1412 = tmp1413
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state) &
       !$omp& reduction(+: tmp1412)
@@ -15727,7 +15727,7 @@ contains
       tmp1855 = 0.0_wp
       tmp1856 = 0.0_wp
       tmp1857 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1848, tmp1851, tmp1853) &
       !$omp& shared(tmp1854, tmp1855, tmp1857, tmp983, tmp986, tmp987) &
@@ -17924,7 +17924,7 @@ contains
       tmp3615 = 0.0_wp
       tmp3616 = 0.0_wp
       tmp3617 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1842, tmp1848, tmp3612) &
       !$omp& shared(tmp3617, tmp983, tmp986, tmp987) &
@@ -21081,7 +21081,7 @@ contains
       hvp_F = tmp6081 + tmp6091
       tmp6093 = tmp13*state%cx_s18
       tmp6092 = tmp6093
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp6092)
       block
@@ -22154,7 +22154,7 @@ contains
       tmp1 = tmp7
       tmp9 = tmp2*state%s18
       tmp8 = tmp9
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp8) &
       !$omp& reduction(+: tmp1)
@@ -22409,7 +22409,7 @@ contains
          end do
          tmp157 = tmp153*state%s14
          tmp152 = tmp157
-         !$omp parallel default(none) &
+         !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp152)
@@ -22587,7 +22587,7 @@ contains
          tmp257 = state%a*tmp152
          tmp259 = tmp2*tmp257
          tmp258 = tmp259
-         !$omp parallel default(none) &
+         !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state, tmp257) &
          !$omp& reduction(+: tmp258)
@@ -22966,7 +22966,7 @@ contains
       end do
       tmp13 = tmp9*state%s23
       tmp8 = tmp13
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp8) &
       !$omp& reduction(+: tmp2)
@@ -23284,7 +23284,7 @@ contains
       tmp210 = 0.0_wp
       tmp211 = 0.0_wp
       tmp212 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp206, tmp207, tmp208, tmp210, tmp212) &
       !$omp& reduction(+: tmp201, tmp202, tmp204, tmp205, tmp209, tmp211)
@@ -24810,7 +24810,7 @@ contains
       tmp33 = tmp31 + tmp32
       tmp34 = (-0.15915494309189535_wp)*tmp33
       tmp30 = tmp34
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp13, tmp3, tmp4) &
       !$omp& reduction(+: tmp19, tmp30)
@@ -25664,7 +25664,7 @@ contains
       tmp677 = tmp675 + tmp676
       tmp678 = state%s8*tmp677
       tmp672 = tmp678
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp656, tmp657, tmp658, tmp659) &
       !$omp& shared(tmp660) &
@@ -26556,7 +26556,7 @@ contains
       tmp1341 = tmp14*tmp1326
       tmp1342 = tmp1340 + tmp1341
       tmp1339 = tmp1342
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1326, tmp1327, tmp1332) &
       !$omp& shared(tmp1335, tmp1339) &
@@ -27247,7 +27247,7 @@ contains
       tmp1836 = 0.0_wp
       tmp1837 = 0.0_wp
       tmp1838 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1326, tmp1327, tmp1332) &
       !$omp& shared(tmp1823, tmp1828, tmp1832, tmp1833, tmp1834, tmp1836) &
@@ -31406,7 +31406,7 @@ contains
       tmp4 = tmp10
       tmp12 = tmp5*tmp3
       tmp11 = tmp12
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp1, tmp11, tmp3) &
       !$omp& reduction(+: tmp4)
@@ -31856,7 +31856,7 @@ contains
       tmp1 = tmp7
       tmp9 = tmp2*state%cx_s18
       tmp8 = tmp9
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp8) &
       !$omp& reduction(+: tmp1)
@@ -32112,7 +32112,7 @@ contains
          end do
          tmp157 = tmp153*state%cx_s14
          tmp152 = tmp157
-         !$omp parallel default(none) &
+         !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state) &
          !$omp& reduction(+: tmp152)
@@ -32294,7 +32294,7 @@ contains
          tmp257 = state%a*tmp152
          tmp259 = tmp2*tmp257
          tmp258 = tmp259
-         !$omp parallel default(none) &
+         !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state, tmp257) &
          !$omp& reduction(+: tmp258)
@@ -32678,7 +32678,7 @@ contains
       end do
       tmp13 = tmp9*state%cx_s23
       tmp8 = tmp13
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp8) &
       !$omp& reduction(+: tmp2)
@@ -32998,7 +32998,7 @@ contains
       tmp210 = 0.0_wp
       tmp211 = 0.0_wp
       tmp212 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp206, tmp207, tmp208, tmp210, tmp212) &
       !$omp& reduction(+: tmp201, tmp202, tmp204, tmp205, tmp209, tmp211)
@@ -34528,7 +34528,7 @@ contains
       tmp33 = tmp31 + tmp32
       tmp34 = (-0.15915494309189535_wp)*tmp33
       tmp30 = tmp34
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp13, tmp3, tmp4) &
       !$omp& reduction(+: tmp19, tmp30)
@@ -35385,7 +35385,7 @@ contains
       tmp677 = tmp675 + tmp676
       tmp678 = state%cx_s8*tmp677
       tmp672 = tmp678
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp656, tmp657, tmp658, tmp659) &
       !$omp& shared(tmp660) &
@@ -36278,7 +36278,7 @@ contains
       tmp1341 = tmp14*tmp1326
       tmp1342 = tmp1340 + tmp1341
       tmp1339 = tmp1342
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1326, tmp1327, tmp1332) &
       !$omp& shared(tmp1335, tmp1339) &
@@ -36971,7 +36971,7 @@ contains
       tmp1836 = 0.0_wp
       tmp1837 = 0.0_wp
       tmp1838 = 0.0_wp
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, dxi, npt, state, tmp1326, tmp1327, tmp1332) &
       !$omp& shared(tmp1823, tmp1828, tmp1832, tmp1833, tmp1834, tmp1836) &
@@ -41130,7 +41130,7 @@ contains
       tmp4 = tmp10
       tmp12 = tmp5*tmp3
       tmp11 = tmp12
-      !$omp parallel default(none) &
+      !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp1, tmp11, tmp3) &
       !$omp& reduction(+: tmp4)
@@ -41528,7 +41528,7 @@ contains
             end do
             tmp6 = tmp2*x
             tmp1 = tmp6
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp1, x)
             block
@@ -41758,7 +41758,7 @@ contains
             end do
             tmp145 = tmp141*tmp139
             tmp140 = tmp145
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp139, tmp140)
             block
@@ -41955,7 +41955,7 @@ contains
             end do
             tmp6 = tmp2*x
             tmp1 = tmp6
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
             !$omp& reduction(+: tmp1)
@@ -42138,7 +42138,7 @@ contains
             end do
             tmp112 = tmp108*tmp106
             tmp107 = tmp112
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp106) &
             !$omp& reduction(+: tmp107)
@@ -42390,7 +42390,7 @@ contains
          call fatal_error(error, "[iefpcm_op2_assemble] allocation failed")
          return
       end if
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(self, tmp1)
       do j = 1, self%npt
@@ -42572,7 +42572,7 @@ contains
          tmp140 = 0.7978845608028654_wp*tmp139
          tmp1(i, i) = tmp140
       end do
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(self, tmp141)
       do j = 1, self%npt
@@ -42890,7 +42890,7 @@ contains
       tmp5 = self%xi(idx)
       tmp6 = self%F(idx)
       tmp7 = self%a(idx)
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(nb, tmp1, tmp5, tmp8)
       do j = 1, nb
@@ -43073,7 +43073,7 @@ contains
          tmp147 = 0.7978845608028654_wp*tmp146
          tmp8(i, i) = tmp147
       end do
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(nb, tmp1, tmp148, tmp2, tmp5)
       do j = 1, nb
@@ -43502,7 +43502,7 @@ contains
             end do
             tmp6 = tmp2*x
             tmp1 = tmp6
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp1, x)
             block
@@ -43735,7 +43735,7 @@ contains
             end do
             tmp145 = tmp141*tmp139
             tmp140 = tmp145
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp139, tmp140)
             block
@@ -43936,7 +43936,7 @@ contains
             end do
             tmp6 = tmp2*x
             tmp1 = tmp6
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
             !$omp& reduction(+: tmp1)
@@ -44121,7 +44121,7 @@ contains
             end do
             tmp112 = tmp108*tmp106
             tmp107 = tmp112
-            !$omp parallel default(none) &
+            !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp106) &
             !$omp& reduction(+: tmp107)
@@ -44378,7 +44378,7 @@ contains
          call fatal_error(error, "[iefpcm_op4_assemble] allocation failed")
          return
       end if
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(self, tmp1)
       do j = 1, self%npt
@@ -44560,7 +44560,7 @@ contains
          tmp140 = 0.7978845608028654_wp*tmp139
          tmp1(i, i) = tmp140
       end do
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(self, tmp141)
       do j = 1, self%npt
@@ -44879,7 +44879,7 @@ contains
       tmp5 = self%xi(idx)
       tmp6 = self%F(idx)
       tmp7 = self%a(idx)
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(nb, tmp1, tmp5, tmp8)
       do j = 1, nb
@@ -45062,7 +45062,7 @@ contains
          tmp147 = 0.7978845608028654_wp*tmp146
          tmp8(i, i) = tmp147
       end do
-      !$omp parallel do default(none) schedule(dynamic, 16) &
+      !$omp parallel do schedule(dynamic, 16) &
       !$omp& private(i) &
       !$omp& shared(nb, tmp1, tmp148, tmp2, tmp5)
       do j = 1, nb
