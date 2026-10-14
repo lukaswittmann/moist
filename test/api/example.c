@@ -4090,7 +4090,7 @@ int test_coupling_protocol_gostshyp(void)
         moist_get_model_radii_text(error, radii_model, radii, full + 1, &length);
         REQUIRE(!moist_check_error(error) && length == full && strlen(radii) == full);
         /* H once although the structure holds two */
-        REQUIRE(strstr(radii, "Radii") && strstr(radii, " O ") && strstr(radii, " H "));
+        REQUIRE(strstr(radii, "R (bohr)") && strstr(radii, " O ") && strstr(radii, " H "));
         REQUIRE(strstr(radii, " H ") == strrchr(radii, 'H') - 1);
         fputs(radii, stdout);
     }
