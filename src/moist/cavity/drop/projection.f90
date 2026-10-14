@@ -212,7 +212,7 @@ contains
                                      [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
                                      unit=self%ctx%unit)
          call plp%blank()
-         call plp%header("Projector")
+         call plp%header("DROP Projector")
          call plp%print_header()
          call plp%separator()
       end if

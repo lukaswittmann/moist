@@ -1515,7 +1515,7 @@ contains
       !> Banner line
       character(len=:), allocatable :: s
 
-      character(len=*), parameter :: title = " Timings "
+      character(len=*), parameter :: title = " MOIST Timings "
       integer :: left
 
       left = (tbl_w - len(title))/2
