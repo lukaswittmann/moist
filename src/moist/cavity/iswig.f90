@@ -12,6 +12,7 @@ module moist_cavity_iswig
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient, &
       & update_cavity_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_bornzeta, only: born_zeta_nleb, get_born_zeta
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_channels_fields, only: field_query_type
@@ -526,7 +527,7 @@ contains
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
    !>
-   !> - Sizes without a fitted swig_xi value are errors here, checked first
+   !> - Sizes without a fitted zeta (bornzeta.f90) are errors here, checked first
    !> - None of the fitted sizes has negative weights; the generator would
    !>   refuse such a rule
    !>
@@ -538,36 +539,27 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: isize
+      !> Born-fitted Gaussian width scale of this Lebedev size
+      real(wp) :: zeta
 
-      !> iSwiG-supported Lebedev orders (indexing into swig_xi_tab)
-      integer :: iswig_order
+      !> Whether this Lebedev size has a fitted zeta
+      logical :: found
 
       !> Angular quadrature filling the cache, solid-angle weights summing to 4*pi
       type(moist_math_grid_angular_type) :: leb
 
       !> Error message buffer
-      character(len=256) :: msg
-
-      ! Precompute constant swig_xi value for this Lebedev order
-      real(wp), parameter :: swig_xi_tab(11) = [ &
-                             4.865_wp, 4.855_wp, 4.893_wp, 4.901_wp, 4.903_wp, &
-                             4.905_wp, 4.906_wp, 4.905_wp, 4.899_wp, 4.907_wp, 4.907_wp]
-      integer, parameter :: iswig_grid_sizes(11) = [ &
-                            14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202]
+      character(len=512) :: msg
 
       if (self%cached_num_leb == self%param%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
          return
       end if
 
-      !> Check if the self%param%num_leb is available for iswig (xi)
-      iswig_order = -1
-      do isize = 1, size(iswig_grid_sizes)
-         if (self%param%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
-      end do
-      if (iswig_order < 0) then
+      ! Gaussian width scale shared with DROP
+      call get_born_zeta(self%param%num_leb, zeta, found)
+      if (.not. found) then
          write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%param%num_leb, &
-            & "; supported sizes: ", iswig_grid_sizes
+            & "; supported sizes: ", born_zeta_nleb
          call fatal_error(error, trim(msg))
          return
       end if
@@ -577,7 +569,7 @@ contains
       if (allocated(error)) return
 
       self%cached_num_leb = self%param%num_leb
-      self%cached_swx = swig_xi_tab(iswig_order)
+      self%cached_swx = zeta
 
       ! Cache nodes and weights in the plain arrays the integrators consume
       call move_alloc(leb%points, self%ang_grid)

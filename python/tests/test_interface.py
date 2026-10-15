@@ -94,8 +94,8 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     result = cavity.cavity
 
     assert len(result.a) == 70
-    assert np.asarray(result.a).sum() == approx(151.6278477636, rel=1e-10)
-    assert result.volume == approx(173.4128767106, rel=1e-10)
+    assert np.asarray(result.a).sum() == approx(151.6278652743, rel=1e-10)
+    assert result.volume == approx(173.4128251402, rel=1e-10)
 
 
 @pytest.mark.parametrize(
