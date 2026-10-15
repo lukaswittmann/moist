@@ -23,7 +23,7 @@ module moist_model_continuum_component_pcm_nonlocal
    !>
    !> - Physical inputs: eps_solvent, eps_inf, lambda and optional eps_solute
    !> - Cavity positions, normals and grid point areas
-   !> - Gaussian charge widths when available
+   !> - Gaussian charge widths and switching factors when available
    !> - Host potential and its outward normal derivative at the surface points
    !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(pcm_layer_base) :: model_continuum_component_nonlocal
@@ -107,7 +107,6 @@ contains
       self%param = settings
       self%needs_normal = .true.
       self%needs_curvature = .false.
-      self%needs_switching = .false.
       self%name = "Nonlocal electrostatics"
       self%description = "Three-field nonlocal dielectric model with solvent polarization correlations"
    end subroutine new_component_nonlocal
@@ -141,7 +140,9 @@ contains
       associate (r => cavity%xyz(:, 1:ngrid), n => cavity%normal0(:, 1:ngrid), &
          & a => cavity%a(1:ngrid))
          if (self%smeared) then
-            call nonlocal_pcm_assemble(self%gauss, r, n, cavity%xi0(1:ngrid), a, error, solver)
+            associate (xi => cavity%xi0(1:ngrid), f => cavity%f(1:ngrid))
+               call nonlocal_pcm_assemble(self%gauss, r, n, xi, f, a, error, solver)
+            end associate
             if (allocated(error)) return
             call nonlocal_pcm_medium(self%gauss, self%epsilon, self%eps_inf, &
                & self%lambda, self%eps_solute, error)
@@ -179,18 +180,18 @@ contains
       class(cavity_type), intent(in) :: cavity
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
-      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_xi(:), w_a(:)
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_xi(:), w_f(:), w_a(:)
       real(wp) :: w_eps, w_eps_inf, w_lambda, w_eps_solute
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_a(ngrid))
       if (self%smeared) then
-         allocate (w_xi(ngrid))
-         call nonlocal_pcm_weights(self%gauss, w_xyz, w_n, w_xi, w_a, w_eps, &
+         allocate (w_xi(ngrid), w_f(ngrid))
+         call nonlocal_pcm_weights(self%gauss, w_xyz, w_n, w_xi, w_f, w_a, w_eps, &
             & w_eps_inf, w_lambda, w_eps_solute, error)
          if (allocated(error)) return
-         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_xi=w_xi, w_a=w_a)
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_xi=w_xi, w_f=w_f, w_a=w_a)
       else
          call nonlocal_pcm_point_weights(self%point, w_xyz, w_n, w_a, w_eps, &
             & w_eps_inf, w_lambda, w_eps_solute, error)
@@ -201,7 +202,8 @@ contains
 
    !> Directional derivative of the nonlocal weights and trace adjoints
    !>
-   !> - no curvature or switching factors: `dk1`, `dk2` and `df` are ignored
+   !> - no curvature: `dk1` and `dk2` are ignored
+   !> - point surface: no widths or switching factors, `dxi` and `df` are ignored
    !>
    !> @param[in,out] self   nonlocal component with current weights
    !> @param[in]     dr     Position direction (3, ngrid, 1)
@@ -267,8 +269,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (self%smeared) then
-         call nonlocal_pcm_tangent(self%gauss, dr, dn, dxi, da, dv, dvn, hvp_r, hvp_n, hvp_xi, &
-            & hvp_a, hvp_v, hvp_vn, error)
+         call nonlocal_pcm_tangent(self%gauss, dr, dn, dxi, df, da, dv, dvn, hvp_r, hvp_n, hvp_xi, &
+            & hvp_f, hvp_a, hvp_v, hvp_vn, error)
       else
          call nonlocal_pcm_point_tangent(self%point, dr, dn, da, dv, dvn, hvp_r, hvp_n, hvp_a, &
             & hvp_v, hvp_vn, error)

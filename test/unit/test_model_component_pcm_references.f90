@@ -5,6 +5,8 @@
 !> - `reference`: point charges in spheres against exact series, other codes and
 !>   the literature; rows without a reference value skip and print the moist
 !>   energy (see `reference_table`)
+!> - `switched_off_point`: a point switched off on the surface drops out of
+!>   the energy of every model, so a cavity may drop it without a jump
 !> - CPCM identities exact at any discretization: vacuum limit, rigid
 !>   translation, linearity in f(eps)
 !> - Generated Gaussian IEF-PCM and SS(V)PE kernels against PySCF on an
@@ -21,7 +23,8 @@ module test_model_component_pcm_references
       & stage_point_charge_energy
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
       & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, pcm_physics, new_pcm, &
-      & seed_drop, first_seed, host_energy
+      & seed_drop, first_seed, host_energy, fd_cavity, get_seed, nmol, mol_label, get_solute, &
+      & host_charges
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
@@ -55,6 +58,11 @@ module test_model_component_pcm_references
    !> nu = sqrt(eps/eps_inf) R/lambda ~ 1, where the nonlocal energy lies far
    !> from both Born limits and Lambda = 3.8 bohr is resolved by the grid
    real(wp), parameter :: born_lambda = 25.0_wp
+
+   !> Factors that switch a surface point off in `check_switched_off_point`
+   real(wp), parameter :: switch_off(2) = [1.0e-4_wp, 1.0e-8_wp]
+   !> Roundoff floor of the energy gap of a switched-off point, Eh
+   real(wp), parameter :: thr_gap = 1.0e-12_wp
 
    !> Reference systems of the smoke test: point charges in spheres of explicit radii
    integer, parameter :: ref_sphere = 1, ref_water = 2, ref_ion_pair = 3, ref_ammonium = 4, &
@@ -257,7 +265,7 @@ module test_model_component_pcm_references
 
 contains
 
-   !> Collect the reference tests, two per model
+   !> Collect the reference tests, three per model
    !>
    !> @param[out] testsuite Collection of tests
    subroutine collect_model_component_pcm_references(testsuite)
@@ -267,22 +275,31 @@ contains
       testsuite = [ &
          & new_unittest("cpcm_born", test_cpcm_born), &
          & new_unittest("cpcm_reference", test_cpcm_reference), &
+         & new_unittest("cpcm_switched_off_point", test_cpcm_switched_off_point), &
          & new_unittest("cosmo_born", test_cosmo_born), &
          & new_unittest("cosmo_reference", test_cosmo_reference), &
+         & new_unittest("cosmo_switched_off_point", test_cosmo_switched_off_point), &
          & new_unittest("iefpcm_born", test_iefpcm_born), &
          & new_unittest("iefpcm_reference", test_iefpcm_reference), &
+         & new_unittest("iefpcm_switched_off_point", test_iefpcm_switched_off_point), &
          & new_unittest("ssvpe_born", test_ssvpe_born), &
          & new_unittest("ssvpe_reference", test_ssvpe_reference), &
+         & new_unittest("ssvpe_switched_off_point", test_ssvpe_switched_off_point), &
          & new_unittest("dpcm_born", test_dpcm_born), &
          & new_unittest("dpcm_reference", test_dpcm_reference), &
+         & new_unittest("dpcm_switched_off_point", test_dpcm_switched_off_point), &
          & new_unittest("dpcm_original_born", test_dpcm_original_born), &
          & new_unittest("dpcm_original_reference", test_dpcm_original_reference), &
+         & new_unittest("dpcm_original_switched_off_point", test_dpcm_original_switched_off_point), &
          & new_unittest("lpb_born", test_lpb_born), &
          & new_unittest("lpb_reference", test_lpb_reference), &
+         & new_unittest("lpb_switched_off_point", test_lpb_switched_off_point), &
          & new_unittest("slic_born", test_slic_born), &
          & new_unittest("slic_reference", test_slic_reference), &
+         & new_unittest("slic_switched_off_point", test_slic_switched_off_point), &
          & new_unittest("nonlocal_born", test_nonlocal_born), &
          & new_unittest("nonlocal_reference", test_nonlocal_reference), &
+         & new_unittest("nonlocal_switched_off_point", test_nonlocal_switched_off_point), &
          & new_unittest("cpcm_vacuum_limit", test_cpcm_vacuum_limit), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
@@ -312,6 +329,15 @@ contains
       call check_reference(error, pcm_cpcm)
    end subroutine test_cpcm_reference
 
+   !> CPCM: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_cpcm_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_cpcm)
+   end subroutine test_cpcm_switched_off_point
+
    !> COSMO: Born ion
    !>
    !> @param[out] error Test failure
@@ -329,6 +355,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_reference(error, pcm_cosmo)
    end subroutine test_cosmo_reference
+
+   !> COSMO: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_cosmo_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_cosmo)
+   end subroutine test_cosmo_switched_off_point
 
    !> IEF-PCM: Born ion
    !>
@@ -348,6 +383,15 @@ contains
       call check_reference(error, pcm_iefpcm)
    end subroutine test_iefpcm_reference
 
+   !> IEF-PCM: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_iefpcm_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_iefpcm)
+   end subroutine test_iefpcm_switched_off_point
+
    !> SS(V)PE: Born ion
    !>
    !> @param[out] error Test failure
@@ -365,6 +409,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_reference(error, pcm_ssvpe)
    end subroutine test_ssvpe_reference
+
+   !> SS(V)PE: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_ssvpe_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_ssvpe)
+   end subroutine test_ssvpe_switched_off_point
 
    !> DPCM: Born ion
    !>
@@ -384,6 +437,15 @@ contains
       call check_reference(error, pcm_dpcm)
    end subroutine test_dpcm_reference
 
+   !> DPCM: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_dpcm_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_dpcm)
+   end subroutine test_dpcm_switched_off_point
+
    !> Original DPCM: Born ion
    !>
    !> @param[out] error Test failure
@@ -401,6 +463,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_reference(error, pcm_dpcm_original)
    end subroutine test_dpcm_original_reference
+
+   !> DPCM original: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_dpcm_original_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_dpcm_original)
+   end subroutine test_dpcm_original_switched_off_point
 
    !> LPB: Born ion
    !>
@@ -420,6 +491,15 @@ contains
       call check_reference(error, pcm_lpb)
    end subroutine test_lpb_reference
 
+   !> LPB: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_lpb_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_lpb)
+   end subroutine test_lpb_switched_off_point
+
    !> SLIC: Born ion
    !>
    !> @param[out] error Test failure
@@ -438,6 +518,15 @@ contains
       call check_reference(error, pcm_slic)
    end subroutine test_slic_reference
 
+   !> SLIC: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_slic_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_slic)
+   end subroutine test_slic_switched_off_point
+
    !> Nonlocal: Born ion
    !>
    !> @param[out] error Test failure
@@ -455,6 +544,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_reference(error, pcm_nonlocal)
    end subroutine test_nonlocal_reference
+
+   !> Nonlocal: a switched-off point drops out of the energy
+   !>
+   !> @param[out] error Test failure
+   subroutine test_nonlocal_switched_off_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_switched_off_point(error, pcm_nonlocal)
+   end subroutine test_nonlocal_switched_off_point
 
    !* ================================================================================= *!
    !*                                   CPCM identities                                 *!
@@ -1618,5 +1716,115 @@ contains
          call move_alloc(iswig, cavity)
       end if
    end subroutine new_sphere_cavity
+
+   !* ================================================================================= *!
+   !*                                 Switched-off point                                *!
+   !* ================================================================================= *!
+
+   !> A point switched off on the surface drops out of the energy
+   !>
+   !> One point of each solute's surface (SLIC: SvdW-DROP, see `first_seed`) is
+   !> switched off by a factor s: on a Gaussian surface its switching factor
+   !> and its area (a = F R^2 w as on iSwiG, the width kept), on a point surface
+   !> its area. The energy must approach that of the surface without the point,
+   !> the gap shrinking at least like s^(1/2), the order of the point-surface
+   !> self terms 1.0694 sqrt(4 pi/a). A gap that stays finite is a jump in the
+   !> energy wherever a cavity drops a point that is nearly switched off
+   !>
+   !> @param[out] error Test failure
+   !> @param[in]  kind  Model identifier
+   subroutine check_switched_off_point(error, kind)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model identifier
+      integer, intent(in) :: kind
+
+      !> Run context borrowed by the components
+      type(moist_context_type), target :: ctx
+      !> Component under test, fresh for every surface
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Solute
+      type(structure_type) :: mol
+      !> Synthetic cavity and the surface without or with the switched-off point
+      type(fd_cavity) :: cavity, trial
+      !> Host charges on the solute atoms
+      real(wp), allocatable :: q(:)
+      !> Energy without the point, energies and gaps with the point switched off
+      real(wp) :: e_removed, e_off(2), gap(2)
+      !> Solute, surface kind, point and factor indices
+      integer :: imol, isurf, ipt, k
+      !> Gaussian surface (else point surface)
+      logical :: smeared
+      !> Failure context
+      character(len=200) :: context
+
+      call new_context(ctx, verbosity=0)
+      do imol = 1, nmol
+         call get_solute(imol, mol)
+         q = host_charges(mol)
+         do isurf = 1, 2
+            smeared = isurf == 1
+            call get_seed(first_seed(kind), smeared, mol, cavity, error)
+            if (allocated(error)) return
+            ipt = 1 + cavity%ngrid/3
+            call remove_point(cavity, ipt, trial)
+            call new_pcm(kind, ctx, pcm, error)
+            if (allocated(error)) return
+            call host_energy(pcm, mol, trial, mol, q, e_removed, error)
+            if (allocated(error)) return
+            do k = 1, size(switch_off)
+               trial = cavity
+               trial%a(ipt) = switch_off(k)*cavity%a(ipt)
+               if (smeared) trial%f(ipt) = switch_off(k)*cavity%f(ipt)
+               call new_pcm(kind, ctx, pcm, error)
+               if (allocated(error)) return
+               call host_energy(pcm, mol, trial, mol, q, e_off(k), error)
+               if (allocated(error)) return
+            end do
+            gap = e_off - e_removed
+            write (context, '(a,", ",a,", ",a," surface, point ",i0,": gap ",es9.2, &
+               & " at s = ",es7.1,", ",es9.2," at s = ",es7.1)') trim(pcm%name), &
+               & trim(mol_label(imol)), trim(merge("Gaussian", "point   ", smeared)), ipt, &
+               & gap(1), switch_off(1), gap(2), switch_off(2)
+            call check(error, abs(gap(1)) > thr_gap, message="vacuous switched-off point", &
+               & more=trim(context))
+            if (allocated(error)) return
+            call check(error, abs(gap(2)) <= 2*sqrt(switch_off(2)/switch_off(1))*abs(gap(1)) &
+               & + thr_gap, message="switched-off point does not drop out of the energy", &
+               & more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_switched_off_point
+
+   !> Copy of a synthetic cavity without one of its points
+   !>
+   !> @param[in]  cavity  Synthetic cavity
+   !> @param[in]  ipt     Point to remove
+   !> @param[out] removed Copy without the point
+   subroutine remove_point(cavity, ipt, removed)
+      !> Synthetic cavity
+      type(fd_cavity), intent(in) :: cavity
+      !> Point to remove
+      integer, intent(in) :: ipt
+      !> Copy without the point
+      type(fd_cavity), intent(out) :: removed
+
+      !> Points kept
+      integer, allocatable :: keep(:)
+      !> Grid-point index
+      integer :: i
+
+      keep = pack([(i, i=1, cavity%ngrid)], [(i, i=1, cavity%ngrid)] /= ipt)
+      removed = cavity
+      removed%ngrid = size(keep)
+      removed%xyz = cavity%xyz(:, keep)
+      removed%normal0 = cavity%normal0(:, keep)
+      removed%a = cavity%a(keep)
+      removed%k1 = cavity%k1(keep)
+      removed%k2 = cavity%k2(keep)
+      if (allocated(cavity%xi0)) removed%xi0 = cavity%xi0(keep)
+      if (allocated(cavity%f)) removed%f = cavity%f(keep)
+   end subroutine remove_point
 
 end module test_model_component_pcm_references
