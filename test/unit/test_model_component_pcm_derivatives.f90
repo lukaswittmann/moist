@@ -1071,7 +1071,7 @@ contains
       case (pcm_dpcm, pcm_dpcm_original, pcm_slic)
          channels = merge("r n k xi a", "r n k a   ", smeared)
       case default
-         channels = merge("r n xi a", "r n a   ", smeared)
+         channels = merge("r n xi f a", "r n a     ", smeared)
       end select
       channels = trim(channels)
    end function active_channels
