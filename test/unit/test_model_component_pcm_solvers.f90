@@ -13,6 +13,9 @@
 !> - solve_complex: real operators with complex right-hand sides (dense, GMRES
 !>   and the pcm_solver default), complex operators through zsytrf/zgetrf and
 !>   complex GMRES, the default of a non-overriding extension
+!> - pcm_nonlinear_problem: Newton with the Armijo line search on the cubic
+!>   x^3 - 2 x + 2, converging from x = -2 and stalling from x = 0 at the
+!>   local minimum of |F| (singular Jacobian, root out of reach), iteration limit
 module test_model_component_pcm_solvers
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, sp
@@ -24,7 +27,7 @@ module test_model_component_pcm_solvers
       & pcm_solver, pcm_dense_solver, pcm_gmres_solver, pcm_block_jacobi, &
       & pcm_factor_cholesky, pcm_factor_symmetric, pcm_factor_lu, &
       & pcm_factor_complex_symmetric, pcm_factor_complex_lu, pcm_storage_dense, &
-      & pcm_storage_matrix_free, pcm_storage_auto
+      & pcm_storage_matrix_free, pcm_storage_auto, pcm_nonlinear_problem
    implicit none(type, external)
    private
 
@@ -72,6 +75,22 @@ module test_model_component_pcm_solvers
       procedure :: solve_block => scaling_test_solver_solve_block
    end type scaling_test_solver
 
+   !> Decoupled cubics F_i(x) = x_i^3 - 2 x_i + 2
+   !>
+   !> - Root -1.7692923542386314; local minimum of |F| at sqrt(2/3), where
+   !>   F = 0.9113 and the Jacobian is singular
+   !> - Newton from 0 without a line search cycles between 0 and 1
+   type, extends(pcm_nonlinear_problem) :: cubic_test_problem
+   contains
+      !> Residual
+      procedure :: residual => cubic_test_problem_residual
+      !> Newton step
+      procedure :: step => cubic_test_problem_step
+   end type cubic_test_problem
+
+   !> Root of x^3 - 2 x + 2
+   real(wp), parameter :: cubic_root = -1.7692923542386314_wp
+
 contains
 
    !> Collect all exported unit tests
@@ -116,7 +135,10 @@ contains
          & new_unittest("gmres_invalid_calls", test_gmres_invalid_calls), &
          & new_unittest("block_jacobi_size_one", test_block_jacobi_size_one), &
          & new_unittest("block_jacobi_clusters", test_block_jacobi_clusters), &
-         & new_unittest("block_jacobi_complex", test_block_jacobi_complex) &
+         & new_unittest("block_jacobi_complex", test_block_jacobi_complex), &
+         & new_unittest("nonlinear_converges", test_nonlinear_converges), &
+         & new_unittest("nonlinear_stalls", test_nonlinear_stalls), &
+         & new_unittest("nonlinear_max_iter", test_nonlinear_max_iter) &
          & ]
    end subroutine collect_model_component_pcm_solvers
 
@@ -880,6 +902,55 @@ contains
       ! intent(out) already deallocated it; this marks the dummy as defined
       if (allocated(error)) deallocate (error)
    end subroutine scaling_test_solver_solve_block
+
+   !> Residual of the decoupled cubics
+   !>
+   !> @param[in]  self   problem
+   !> @param[in]  x      unknowns, length npt
+   !> @param[out] f      residual, length npt
+   !> @param[out] error  never allocated
+   subroutine cubic_test_problem_residual(self, x, f, error)
+      !> Problem
+      class(cubic_test_problem), intent(in) :: self
+      !> Unknowns
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Residual
+      real(wp), contiguous, intent(out) :: f(:)
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      associate (unused_self => self)
+      end associate
+      f = x**3 - 2.0_wp*x + 2.0_wp
+      ! intent(out) already deallocated it; this marks the dummy as defined
+      if (allocated(error)) deallocate (error)
+   end subroutine cubic_test_problem_residual
+
+   !> Newton step of the decoupled cubics, p = -f/(3 x^2 - 2)
+   !>
+   !> @param[in]  self   problem
+   !> @param[in]  x      unknowns, length npt
+   !> @param[in]  f      residual at x, length npt
+   !> @param[out] p      step, length npt
+   !> @param[out] error  never allocated
+   subroutine cubic_test_problem_step(self, x, f, p, error)
+      !> Problem
+      class(cubic_test_problem), intent(in) :: self
+      !> Unknowns
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Residual at x
+      real(wp), contiguous, intent(in) :: f(:)
+      !> Newton step
+      real(wp), contiguous, intent(out) :: p(:)
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      associate (unused_self => self)
+      end associate
+      p = -f/(3.0_wp*x**2 - 2.0_wp)
+      ! intent(out) already deallocated it; this marks the dummy as defined
+      if (allocated(error)) deallocate (error)
+   end subroutine cubic_test_problem_step
 
    !> Complex symmetric, non-Hermitian matrix: indefinite + i spd
    !>
@@ -2418,4 +2489,85 @@ contains
          end do
       end do
    end subroutine test_block_jacobi_complex
+
+   !> Newton converges to the root from x = -2 in a few full steps
+   !>
+   !> @param[out] error  test failure
+   subroutine test_nonlinear_converges(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(2)
+
+      problem%npt = 2
+      problem%solver => solver
+      solver%nonlinear_tol = 1.0e-13_wp
+      x = [-2.0_wp, -1.5_wp]
+      call problem%solve(x, err)
+      call check_moist_error(error, err, "Newton from x = -2")
+      if (allocated(error)) return
+      call check(error, all(abs(x - cubic_root) <= 1.0e-12_wp), "root of the cubic")
+      if (allocated(error)) return
+      call check(error, solver%nonlinear_iterations <= 6, "a few Newton steps")
+      if (allocated(error)) return
+      call check(error, solver%nonlinear_residual <= solver%nonlinear_tol, "residual recorded")
+   end subroutine test_nonlinear_converges
+
+   !> Newton from x = 0 stalls at the local minimum of |F| and reports it at once
+   !>
+   !> @param[out] error  test failure
+   subroutine test_nonlinear_stalls(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(1)
+
+      problem%npt = 1
+      problem%solver => solver
+      x = 0.0_wp
+      call problem%solve(x, err)
+      call check(error, allocated(err), "no root reachable from x = 0")
+      if (allocated(error)) return
+      call check(error, index(err%message, "[pcm_nonlinear_solve] Newton stalled") == 1, &
+         & "error reports the stall")
+      if (allocated(error)) return
+      call check(error, abs(x(1) - sqrt(2.0_wp/3.0_wp)) <= 1.0e-3_wp, &
+         & "iterate at the local minimum of |F|")
+      if (allocated(error)) return
+      call check(error, solver%nonlinear_iterations < solver%nonlinear_max_iter, &
+         & "stops before the iteration limit")
+      if (allocated(error)) return
+      call check(error, solver%nonlinear_residual > 0.4_wp, "residual recorded")
+   end subroutine test_nonlinear_stalls
+
+   !> Too few Newton steps for the tolerance are an error
+   !>
+   !> @param[out] error  test failure
+   subroutine test_nonlinear_max_iter(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(1)
+
+      problem%npt = 1
+      problem%solver => solver
+      solver%nonlinear_max_iter = 2
+      x = -2.0_wp
+      call problem%solve(x, err)
+      call check(error, allocated(err), "two steps do not converge")
+      if (allocated(error)) return
+      call check(error, index(err%message, "did not converge") > 0 &
+         & .and. index(err%message, "after 2 steps") > 0, "error reports the steps")
+      if (allocated(error)) return
+      call check(error, solver%nonlinear_iterations, 2, "iterations recorded")
+   end subroutine test_nonlinear_max_iter
 end module test_model_component_pcm_solvers
