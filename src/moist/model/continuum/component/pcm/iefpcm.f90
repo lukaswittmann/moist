@@ -73,6 +73,7 @@ contains
       self%feps = pcm_layer_feps(epsilon)
       self%param = settings
       self%name = "IEF-PCM"
+      self%description = "Integral-equation formulation of the polarizable continuum model"
    end subroutine new_component_iefpcm
 
    !> Assemble the IEF-PCM operators

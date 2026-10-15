@@ -107,6 +107,7 @@ contains
       self%needs_curvature = .false.
       self%needs_switching = .false.
       self%name = "Nonlocal electrostatics"
+      self%description = "Three-field nonlocal dielectric model with solvent polarization correlations"
    end subroutine new_component_nonlocal
 
    !> Assemble Gaussian or point boundary operators

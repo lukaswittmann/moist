@@ -112,6 +112,7 @@ contains
       self%feps = pcm_layer_feps(epsilon)
       self%param = settings
       self%name = "SLIC"
+      self%description = "Solvation-layer interface condition with a nonlinear dielectric response"
       self%needs_switching = .false.
       self%needs_normal = .true.
       self%alpha = alpha
