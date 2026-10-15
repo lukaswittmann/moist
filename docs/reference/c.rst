@@ -125,13 +125,15 @@ Check ``moist_check_error`` before using results: ``moist_success`` means succes
 ``moist_failure`` means a diagnostic, and ``moist_invalid_error`` means a NULL
 error handle. A NULL required pointer is an error; optional pointers have
 documented meanings. Numeric outputs remain unchanged on failure.
-Banner, version, and field-description getters clear writable buffers on failure.
+Banner, version, solvent-printout and field-description getters clear writable
+buffers on failure.
 Rejected coupling answers follow the invalidation rules in :doc:`coupling`.
 
 ``moist_get_error`` takes a buffer and a pointer to its positive
 ``int`` capacity. It NUL-terminates and truncates; no error produces an empty string.
 
-``moist_get_banner``, ``moist_get_version_string`` and the
+``moist_get_banner``, ``moist_get_version_string``,
+``moist_get_solvent_descriptors_text`` and the
 ``_field_about`` getters take capacity by value and return
 the full text length through a required ``size_t *length``, excluding the terminator.
 Pass NULL and zero to query the length, then allocate ``length + 1`` bytes.
@@ -152,6 +154,19 @@ capacities, which may exceed the logical size; padding remains untouched.
 The ``moist_contract_*`` entries use the cavity's own ``ngrid`` and ``nsph``.
 The header defines shapes and strides.
 See :doc:`coupling` for the host exchange protocol.
+
+Solvents
+--------
+
+``moist_get_solvent_descriptors(error, name, &desc, sizeof desc)`` and
+``moist_get_solvent_descriptors_by_id(error, id, &desc, sizeof desc)`` fill a
+``moist_solvent_descriptors`` struct (:ref:`api-solvents`). A size below the
+full 1.0 layout is an error. MOIST writes ``min(size, its own layout)`` bytes
+and records that count in ``desc.struct_size``, so a newer host on an older
+library sees which trailing fields are valid. The struct needs no
+initialization and is untouched on any error.
+``moist_get_solvent_descriptors_text`` copies the printout of a filled struct
+following the ``moist_get_banner`` buffer rules.
 
 .. _coupling-c:
 

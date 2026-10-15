@@ -15,10 +15,6 @@ error. Missing fields keep their defaults. ``print_parameters`` prints JSON.
 DROP recomputes its derived settings both on ``read_file`` and in the cavity
 constructor.
 
-``solvation_system_type`` holds physical properties and molecular structures.
-Create it with ``new_solvation_system`` from ``moist_data_solvents``; it does not
-extend the configuration parameter base.
-
 .. code-block:: fortran
 
    use moist, only: moist_cavity_drop_parameters_type, new_cavity_drop
@@ -440,6 +436,17 @@ LSF types, the diagnostics -- comes from its own module.
 accumulating belong to the model and are module procedures of
 ``moist_channels_coupling`` and ``moist_channels_response``, which ``moist``
 does not re-export.
+
+Solvents
+--------
+
+``get_solvent_descriptors(name, descriptors, error)`` and
+``get_solvent_descriptors_by_id(id, descriptors, error)``, exported by
+``moist``, fill a ``solvent_descriptors_type`` (:ref:`api-solvents`);
+``descriptors%print(unit)`` writes the printout, to standard output by default.
+``new_solvent_system(system, id, error=error)`` from ``moist_data_solvents``
+builds a ``solvent_system_type``; the optional ``temperature`` (K) and
+``pressure_si`` (Pa) default to 298.15 K and 1 atm.
 
 .. _coupling-fortran:
 

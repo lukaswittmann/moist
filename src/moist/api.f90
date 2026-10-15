@@ -51,6 +51,8 @@ module moist_api
    use moist_channels_fields, only: field_query_type, field_max_rank, &
       & field_real, field_int, field_bool
    use moist_version, only: get_moist_version
+   use moist_data_solvents, only: solvent_descriptors_type, get_solvent_descriptors, &
+      & get_solvent_descriptors_by_id, max_solvent_name_len
    use moist_output_ascii, only: moist_banner_text
    implicit none(type, external)
    private
@@ -205,6 +207,47 @@ module moist_api
    !> Frozen minimum caller allocation size
    integer(c_size_t), parameter :: gostshyp_options_min_size = c_sizeof(api_gostshyp_options_v1_0())
 
+   !> Frozen 1.0 solvent descriptor layout; a future addition needs a new versioned type
+   type, bind(C) :: api_solvent_descriptors_v1_0
+      !> Bytes filled by moist
+      integer(c_size_t) :: struct_size = 0_c_size_t
+      !> Table ID, frozen: new solvents are appended
+      integer(c_int) :: id = 0_c_int
+      !> Canonical name, lowercase and NUL-terminated
+      character(kind=c_char) :: name(max_solvent_name_len + 1) = c_null_char
+      !> Static relative permittivity
+      real(c_double) :: epsilon = 0.0_c_double
+      !> Refractive index at the sodium D line
+      real(c_double) :: refractive_index = 0.0_c_double
+      !> Abraham hydrogen-bond acidity
+      real(c_double) :: abraham_alpha = 0.0_c_double
+      !> Abraham hydrogen-bond basicity
+      real(c_double) :: abraham_beta = 0.0_c_double
+      !> Macroscopic surface tension in N/m
+      real(c_double) :: surface_tension_si = 0.0_c_double
+      !> Macroscopic surface tension in Eh/bohr**2
+      real(c_double) :: surface_tension_au = 0.0_c_double
+      !> Mass density in kg/m**3
+      real(c_double) :: mass_density_si = 0.0_c_double
+      !> Mass density in me/bohr**3
+      real(c_double) :: mass_density_au = 0.0_c_double
+      !> Molar mass in kg/mol
+      real(c_double) :: molar_mass_si = 0.0_c_double
+      !> Mass of one molecule in me
+      real(c_double) :: molecular_mass_au = 0.0_c_double
+      !> Number density in 1/m**3
+      real(c_double) :: number_density_si = 0.0_c_double
+      !> Number density in 1/bohr**3
+      real(c_double) :: number_density_au = 0.0_c_double
+      !> Volume per molecule in m**3
+      real(c_double) :: molecular_volume_si = 0.0_c_double
+      !> Volume per molecule in bohr**3
+      real(c_double) :: molecular_volume_au = 0.0_c_double
+   end type api_solvent_descriptors_v1_0
+
+   !> Frozen minimum caller allocation size
+   integer(c_size_t), parameter :: solvent_descriptors_min_size = c_sizeof(api_solvent_descriptors_v1_0())
+
    !> Owning C handle for an independently configured level-set function
    type :: vp_lsf
       !> Concrete level set, copied by the cavity constructor
@@ -293,6 +336,8 @@ module moist_api
       & print_context_timer_simple_api, start_context_timer_api, stop_context_timer_api
    public :: create_drop_cavity_api, create_iswig_cavity_api, create_model_api
    public :: get_version_api, get_version_string_api
+   public :: get_solvent_descriptors_api, get_solvent_descriptors_by_id_api
+   public :: get_solvent_descriptors_text_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
    public :: new_structure_api, delete_structure_api, update_structure_api
    public :: new_cpcm_radii_api, new_smd_radii_api, new_d3_radii_api, new_cosmo_radii_api, new_bondi_radii_api
@@ -1974,6 +2019,270 @@ contains
       call get_moist_version(string=version)
       call copy_string_output(version, buffer, capacity, length)
    end subroutine get_version_string_api
+
+   !* ================================================================================= *!
+   !*                                Solvent descriptors                                *!
+   !* ================================================================================= *!
+
+   !> Descriptors of a solvent named by any of its aliases
+   !>
+   !> Needs no context; a pure table read, safe on any thread. The caller's
+   !> struct is untouched on error
+   !>
+   !> @param[in] verror      diagnostic handle
+   !> @param[in] c_name      NUL-terminated name or alias; case and surrounding blanks ignored
+   !> @param[in] descriptors caller-owned struct
+   !> @param[in] bytes       caller allocation size
+   subroutine get_solvent_descriptors_api(verror, c_name, descriptors, bytes) &
+         & bind(C, name=namespace//"get_solvent_descriptors")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> NUL-terminated name or alias
+      type(c_ptr), value, intent(in) :: c_name
+      !> Caller-owned struct
+      type(c_ptr), value, intent(in) :: descriptors
+      !> Caller allocation size
+      integer(c_size_t), value, intent(in) :: bytes
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded name
+      character(len=:, kind=c_char), allocatable :: name
+      !> Whether the name lacks a terminator within the scanned span
+      logical :: truncated
+      !> Looked-up values
+      type(solvent_descriptors_type) :: value
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(c_name)) then
+         call api_error(error%ptr, "get_solvent_descriptors", "Solvent name is missing")
+         return
+      end if
+      if (.not. valid_descriptors_output(descriptors, bytes, "get_solvent_descriptors", error%ptr)) return
+      call c_f_character_ptr(c_name, name, api_max_cstr, truncated)
+      if (truncated) then
+         call api_error(error%ptr, "get_solvent_descriptors", "Solvent name is not NUL-terminated")
+         return
+      end if
+      call get_solvent_descriptors(name, value, error%ptr)
+      call prefix_api_error(error%ptr, "get_solvent_descriptors")
+      if (allocated(error%ptr)) return
+      call write_descriptors(value, descriptors, bytes)
+   end subroutine get_solvent_descriptors_api
+
+   !> Descriptors of a solvent table ID
+   !>
+   !> Needs no context; a pure table read, safe on any thread. The caller's
+   !> struct is untouched on error
+   !>
+   !> @param[in] verror      diagnostic handle
+   !> @param[in] solvent_id  table ID
+   !> @param[in] descriptors caller-owned struct
+   !> @param[in] bytes       caller allocation size
+   subroutine get_solvent_descriptors_by_id_api(verror, solvent_id, descriptors, bytes) &
+         & bind(C, name=namespace//"get_solvent_descriptors_by_id")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Table ID
+      integer(c_int), value, intent(in) :: solvent_id
+      !> Caller-owned struct
+      type(c_ptr), value, intent(in) :: descriptors
+      !> Caller allocation size
+      integer(c_size_t), value, intent(in) :: bytes
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Looked-up values
+      type(solvent_descriptors_type) :: value
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. valid_descriptors_output(descriptors, bytes, "get_solvent_descriptors_by_id", error%ptr)) return
+      call get_solvent_descriptors_by_id(int(solvent_id), value, error%ptr)
+      call prefix_api_error(error%ptr, "get_solvent_descriptors_by_id")
+      if (allocated(error%ptr)) return
+      call write_descriptors(value, descriptors, bytes)
+   end subroutine get_solvent_descriptors_by_id_api
+
+   !> Copy the "Solvent properties" printout of a descriptor struct, or query
+   !> its length, following get_banner
+   !>
+   !> Formats the values the caller passes; no table lookup
+   !>
+   !> @param[in] verror      diagnostic handle
+   !> @param[in] descriptors descriptors to print, as filled by a getter
+   !> @param[in] buffer      output buffer; NULL only with zero capacity
+   !> @param[in] capacity    buffer capacity including the terminator
+   !> @param[in] length      text length excluding the terminator
+   subroutine get_solvent_descriptors_text_api(verror, descriptors, buffer, capacity, length) &
+         & bind(C, name=namespace//"get_solvent_descriptors_text")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Descriptors to print
+      type(c_ptr), value, intent(in) :: descriptors
+      !> Output buffer; NULL is allowed only with zero capacity
+      character(kind=c_char), intent(inout), optional :: buffer(*)
+      !> Buffer capacity in bytes, including the terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Required text length excluding the terminator; unchanged on error
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Caller allocation size, the common first field
+      integer(c_size_t), pointer :: bytes
+      !> Wire copy of the caller's struct
+      type(api_solvent_descriptors_v1_0), target :: wire
+      !> Decoded descriptors
+      type(solvent_descriptors_type) :: value
+      !> Rendered printout
+      character(len=:), allocatable :: text
+      !> Scratch unit and I/O status
+      integer :: unit, stat
+      !> I/O diagnostic
+      character(len=256) :: message
+
+      if (.not. valid_string_output(verror, buffer, capacity, length, "get_solvent_descriptors_text", error)) return
+      if (.not. c_associated(descriptors)) then
+         call api_error(error%ptr, "get_solvent_descriptors_text", "Descriptors pointer is missing")
+         return
+      end if
+      call c_f_pointer(descriptors, bytes)
+      call copy_options(descriptors, c_loc(wire), c_sizeof(wire), bytes, solvent_descriptors_min_size, error%ptr)
+      if (allocated(error%ptr)) then
+         call api_error(error%ptr, "get_solvent_descriptors_text", &
+            & "Descriptors struct_size is smaller than the 1.0 layout")
+         return
+      end if
+      call read_descriptors(wire, value)
+      open (newunit=unit, status="scratch", action="readwrite", form="formatted", &
+         & iostat=stat, iomsg=message)
+      if (stat /= 0) then
+         call api_error(error%ptr, "get_solvent_descriptors_text", &
+            & "Cannot open a scratch unit: "//trim(message))
+         return
+      end if
+      call value%print(unit)
+      call read_scratch_text(unit, text, error%ptr)
+      call prefix_api_error(error%ptr, "get_solvent_descriptors_text")
+      if (allocated(error%ptr)) return
+      call copy_string_output(text, buffer, capacity, length)
+   end subroutine get_solvent_descriptors_text_api
+
+   !> Validate a caller's descriptor struct before any lookup
+   !>
+   !> @param[in]  descriptors caller-owned struct
+   !> @param[in]  bytes       caller allocation size
+   !> @param[in]  routine     calling entry point
+   !> @param[out] error       NULL struct or allocation below the 1.0 layout
+   !> @return whether the struct may be written
+   function valid_descriptors_output(descriptors, bytes, routine, error) result(valid)
+      !> Caller-owned struct
+      type(c_ptr), intent(in) :: descriptors
+      !> Caller allocation size
+      integer(c_size_t), intent(in) :: bytes
+      !> Calling entry point
+      character(len=*), intent(in) :: routine
+      !> NULL struct or allocation below the 1.0 layout
+      type(error_type), allocatable, intent(inout) :: error
+      !> Whether the struct may be written
+      logical :: valid
+
+      valid = .false.
+      if (.not. c_associated(descriptors)) then
+         call api_error(error, routine, "Descriptors pointer is missing")
+         return
+      end if
+      if (bytes < solvent_descriptors_min_size) then
+         call api_error(error, routine, "struct_size is smaller than the 1.0 layout")
+         return
+      end if
+      valid = .true.
+   end function valid_descriptors_output
+
+   !> Write looked-up descriptors into a validated caller struct
+   !>
+   !> Fills the supported prefix, padding zeroed, and records its length in
+   !> struct_size
+   !>
+   !> @param[in] value       looked-up descriptors
+   !> @param[in] descriptors caller-owned struct
+   !> @param[in] bytes       caller allocation size, at least the 1.0 layout
+   subroutine write_descriptors(value, descriptors, bytes)
+      !> Looked-up descriptors
+      type(solvent_descriptors_type), intent(in) :: value
+      !> Caller-owned struct
+      type(c_ptr), intent(in) :: descriptors
+      !> Caller allocation size
+      integer(c_size_t), intent(in) :: bytes
+      !> Wire layout with zeroed padding
+      type(api_solvent_descriptors_v1_0), target :: wire
+      !> Characters of the name copied
+      integer :: nchar, i
+      !> Size check already passed
+      type(error_type), allocatable :: error
+
+      call zero_options_storage(c_loc(wire), c_sizeof(wire))
+      wire%struct_size = min(bytes, c_sizeof(wire))
+      wire%id = int(value%id, c_int)
+      nchar = min(len(value%name), max_solvent_name_len)
+      do i = 1, nchar
+         wire%name(i) = value%name(i:i)
+      end do
+      wire%epsilon = real(value%epsilon, c_double)
+      wire%refractive_index = real(value%refractive_index, c_double)
+      wire%abraham_alpha = real(value%abraham_alpha, c_double)
+      wire%abraham_beta = real(value%abraham_beta, c_double)
+      wire%surface_tension_si = real(value%surface_tension_si, c_double)
+      wire%surface_tension_au = real(value%surface_tension_au, c_double)
+      wire%mass_density_si = real(value%mass_density_si, c_double)
+      wire%mass_density_au = real(value%mass_density_au, c_double)
+      wire%molar_mass_si = real(value%molar_mass_si, c_double)
+      wire%molecular_mass_au = real(value%molecular_mass_au, c_double)
+      wire%number_density_si = real(value%number_density_si, c_double)
+      wire%number_density_au = real(value%number_density_au, c_double)
+      wire%molecular_volume_si = real(value%molecular_volume_si, c_double)
+      wire%molecular_volume_au = real(value%molecular_volume_au, c_double)
+      call copy_options(c_loc(wire), descriptors, c_sizeof(wire), bytes, solvent_descriptors_min_size, error)
+   end subroutine write_descriptors
+
+   !> Decode a caller's descriptor struct
+   !>
+   !> @param[in]  wire  wire copy of the caller's struct
+   !> @param[out] value decoded descriptors; the name ends at the first NUL
+   subroutine read_descriptors(wire, value)
+      !> Wire copy of the caller's struct
+      type(api_solvent_descriptors_v1_0), intent(in) :: wire
+      !> Decoded descriptors
+      type(solvent_descriptors_type), intent(out) :: value
+      !> Characters of the name before its terminator
+      integer :: nchar, i
+
+      nchar = 0
+      do i = 1, size(wire%name)
+         if (wire%name(i) == c_null_char) exit
+         nchar = i
+      end do
+      allocate (character(len=nchar) :: value%name)
+      do i = 1, nchar
+         value%name(i:i) = wire%name(i)
+      end do
+      value%id = int(wire%id)
+      value%epsilon = real(wire%epsilon, wp)
+      value%refractive_index = real(wire%refractive_index, wp)
+      value%abraham_alpha = real(wire%abraham_alpha, wp)
+      value%abraham_beta = real(wire%abraham_beta, wp)
+      value%surface_tension_si = real(wire%surface_tension_si, wp)
+      value%surface_tension_au = real(wire%surface_tension_au, wp)
+      value%mass_density_si = real(wire%mass_density_si, wp)
+      value%mass_density_au = real(wire%mass_density_au, wp)
+      value%molar_mass_si = real(wire%molar_mass_si, wp)
+      value%molecular_mass_au = real(wire%molecular_mass_au, wp)
+      value%number_density_si = real(wire%number_density_si, wp)
+      value%number_density_au = real(wire%number_density_au, wp)
+      value%molecular_volume_si = real(wire%molecular_volume_si, wp)
+      value%molecular_volume_au = real(wire%molecular_volume_au, wp)
+   end subroutine read_descriptors
 
    !> Create an error handle
    function new_error_api() &
@@ -5431,12 +5740,8 @@ contains
       character(len=:), allocatable, intent(out) :: text
       !> Scratch-unit failure
       type(error_type), allocatable, intent(out) :: error
-      !> Scratch unit, I/O status and characters of the last read
-      integer :: unit, stat, nread
-      !> Line being joined from its chunks
-      character(len=:), allocatable :: line
-      !> One chunk of a record
-      character(len=256) :: chunk
+      !> Scratch unit and I/O status
+      integer :: unit, stat
       !> I/O diagnostic
       character(len=256) :: message
 
@@ -5452,9 +5757,33 @@ contains
       case ("radii")
          call continuum%print_radii(unit)
       case default
+         close (unit)
          call fatal_error(error, "Unknown table name '"//trim(table)//"'")
          return
       end select
+      call read_scratch_text(unit, text, error)
+   end subroutine render_model_text
+
+   !> Join the lines written to a scratch unit, each ending in a newline, and
+   !> close the unit
+   !>
+   !> @param[in]  unit  scratch unit, closed on return
+   !> @param[out] text  joined lines, unallocated on error
+   !> @param[out] error read failure
+   subroutine read_scratch_text(unit, text, error)
+      !> Scratch unit
+      integer, intent(in) :: unit
+      !> Joined lines
+      character(len=:), allocatable, intent(out) :: text
+      !> Read failure
+      type(error_type), allocatable, intent(out) :: error
+      !> I/O status and characters of the last read
+      integer :: stat, nread
+      !> Line being joined from its chunks
+      character(len=:), allocatable :: line
+      !> One chunk of a record
+      character(len=256) :: chunk
+
       rewind (unit)
       text = ""
       records: do
@@ -5473,7 +5802,7 @@ contains
       end do records
       close (unit)
       if (allocated(error)) deallocate (text)
-   end subroutine render_model_text
+   end subroutine read_scratch_text
 
    !* ================================================================================= *!
    !*                       Named response item and request fields                      *!

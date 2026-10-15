@@ -77,6 +77,66 @@ The numerical settings of each configurable cavity, level set and component go i
 
 The settings printout (:doc:`context`) shows the values a model runs with.
 
+.. _api-solvents:
+
+Solvents
+--------
+
+MOIST carries a table of 180 solvents.
+A lookup takes a name or a a moist internal solvent ID.
+Names ignore case and surrounding whitespace and accept various aliases, such as ``H2O``, ``water``, ..., or a CAS number.
+IDs are frozen: an ID never changes meaning, and new solvents are appended.
+A lookup needs no context and reads only constant tables, so any thread may call it; an unknown name or ID is an error.
+
+Solvent descriptors
+   The result of a lookup: one table entry with the same fields in every language.
+   Quantities with units come twice, in SI (``_si``) and in atomic units (``_au``).
+
+   .. list-table::
+      :header-rows: 1
+
+      * - Field
+        - Meaning
+        - Units
+      * - ``id``, ``name``
+        - Frozen table ID; canonical name, lowercase
+        -
+      * - ``epsilon``
+        - Static relative permittivity
+        -
+      * - ``refractive_index``
+        - Refractive index at the sodium D line
+        -
+      * - ``abraham_alpha``, ``abraham_beta``
+        - Abraham hydrogen-bond acidity and basicity
+        -
+      * - ``surface_tension``
+        - Macroscopic surface tension
+        - N/m; Eh/bohr²
+      * - ``mass_density``
+        - Mass density
+        - kg/m³; mₑ/bohr³
+      * - ``molar_mass_si``, ``molecular_mass_au``
+        - Mass of one mole; of one molecule
+        - kg/mol; mₑ
+      * - ``number_density``
+        - Molecules per volume
+        - 1/m³; 1/bohr³
+      * - ``molecular_volume``
+        - Volume per molecule
+        - m³; bohr³
+
+   The table follows the Minnesota Solvent Descriptor Database: the permittivity and surface tension at 298.15 K, the refractive index at 293.15 K and the density mostly at 293.15 K.
+   The last three rows derive from the solvent geometry MOIST stores.
+   A NaN marks a value the table lacks and carries into the values derived from it, while ``0`` is a real value, for example the acidity of an aprotic solvent.
+   Every table value is present; decalin has no stored geometry, so its derived values are NaN.
+   Each language also formats descriptors as a ``Solvent properties`` printout of the values passed, without a new lookup.
+
+Solvent system
+   Fortran only: the descriptors as its ``solvent`` component, together with a temperature, a pressure and the solvent geometry, as the MOZ models use it (:doc:`/models/moz`).
+   Building one fails without a stored geometry.
+   The descriptors stay at their reference temperatures and do not follow the system's temperature.
+
 Ownership and lifetime
 ----------------------
 
