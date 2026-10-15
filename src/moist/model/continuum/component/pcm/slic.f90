@@ -3,6 +3,7 @@ module moist_model_continuum_component_pcm_slic
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -47,6 +48,7 @@ module moist_model_continuum_component_pcm_slic
       real(wp) :: phi_static = 0.0_wp
    contains
       procedure :: configure_cavity => slic_configure_cavity
+      procedure :: print_inputs => slic_print_inputs
       procedure :: assemble_layer => slic_assemble_layer
       procedure :: solve_layer => slic_solve_layer
       procedure :: layer_weights => slic_layer_weights
@@ -134,6 +136,25 @@ contains
          return
       end if
    end subroutine new_component_slic
+
+   !> Print the physical inputs
+   !>
+   !> @param[in]    self Component instance
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine slic_print_inputs(self, pp)
+      !> Component instance
+      class(model_continuum_component_slic), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv("Epsilon", self%epsilon)
+      call pp%kv("Alpha", self%alpha)
+      call pp%kv("Beta", self%beta, "a.u.^-1")
+      call pp%kv("Gamma", self%gamma)
+      call pp%kv("Mu", self%mu)
+      call pp%kv("Static potential", self%phi_static, "Eh/e")
+
+   end subroutine slic_print_inputs
 
    !> Request normals and curvatures; warn when the cavity is iSwiG
    !>

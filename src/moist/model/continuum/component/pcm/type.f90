@@ -305,7 +305,7 @@ contains
 
    end function pcm_component_parameters
 
-   !> Print the dielectric constant and its scaling factor
+   !> Print the dielectric constant
    !>
    !> @param[in]    self PCM component instance
    !> @param[inout] pp   Pretty printer inside the component section
@@ -316,7 +316,6 @@ contains
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv("Epsilon", self%epsilon)
-      call pp%kv("f(eps)", self%feps)
 
    end subroutine pcm_component_print_inputs
 

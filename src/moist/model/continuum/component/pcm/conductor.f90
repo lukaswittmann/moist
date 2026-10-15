@@ -3,6 +3,7 @@ module moist_model_continuum_component_pcm_conductor
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
+   use moist_utils_prettyprint, only: prettyprinter
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -36,6 +37,7 @@ module moist_model_continuum_component_pcm_conductor
       !> Whether the assembled surface uses Gaussian charges
       logical :: smeared = .true.
    contains
+      procedure :: print_inputs => conductor_print_inputs
       procedure :: update => conductor_update
       procedure :: ensure_charges => conductor_ensure_charges
       procedure :: get_surface_weights => conductor_get_surface_weights
@@ -66,6 +68,21 @@ module moist_model_continuum_component_pcm_conductor
    end type model_continuum_component_cosmo
 
 contains
+
+   !> Print the dielectric constant and conductor scaling factor
+   !>
+   !> @param[in]    self Conductor component
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine conductor_print_inputs(self, pp)
+      !> Conductor component
+      class(model_continuum_component_pcm_conductor), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv("Epsilon", self%epsilon)
+      call pp%kv("f(eps)", self%feps)
+
+   end subroutine conductor_print_inputs
 
    !> Construct CPCM from physical and numerical parameters
    !>
