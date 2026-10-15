@@ -3,6 +3,7 @@ module moist_model_continuum_component_pcm_lpb
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
@@ -34,6 +35,7 @@ module moist_model_continuum_component_pcm_lpb
       !> Inverse Debye screening length, bohr^-1
       real(wp) :: kappa = 0.0_wp
    contains
+      procedure :: print_inputs => lpb_print_inputs
       procedure :: assemble_layer => lpb_assemble_layer
       procedure :: solve_layer => lpb_solve_layer
       procedure :: layer_weights => lpb_layer_weights
@@ -88,6 +90,21 @@ contains
       self%description = "Linearized Poisson-Boltzmann electrostatics with ionic screening"
       self%kappa = kappa
    end subroutine new_component_lpb
+
+   !> Print the physical inputs
+   !>
+   !> @param[in]    self Component instance
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine lpb_print_inputs(self, pp)
+      !> Component instance
+      class(model_continuum_component_lpb), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv("Epsilon", self%epsilon)
+      call pp%kv("Kappa", self%kappa, "bohr^-1")
+
+   end subroutine lpb_print_inputs
 
    !> Assemble the LPB operators
    subroutine lpb_assemble_layer(self, cavity, solver, error)

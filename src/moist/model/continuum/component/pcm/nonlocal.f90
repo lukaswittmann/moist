@@ -3,6 +3,7 @@ module moist_model_continuum_component_pcm_nonlocal
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
@@ -41,6 +42,7 @@ module moist_model_continuum_component_pcm_nonlocal
       !> Point surface kernel state
       type(nonlocal_pcm_point_state) :: point
    contains
+      procedure :: print_inputs => nonlocal_print_inputs
       procedure :: assemble_layer => nonlocal_assemble_layer
       procedure :: solve_layer => nonlocal_solve_layer
       procedure :: layer_weights => nonlocal_layer_weights
@@ -109,6 +111,23 @@ contains
       self%name = "Nonlocal electrostatics"
       self%description = "Three-field nonlocal dielectric model with solvent polarization correlations"
    end subroutine new_component_nonlocal
+
+   !> Print the physical inputs
+   !>
+   !> @param[in]    self Component instance
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine nonlocal_print_inputs(self, pp)
+      !> Component instance
+      class(model_continuum_component_nonlocal), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv("Epsilon", self%epsilon)
+      call pp%kv("Epsilon (high-frequency)", self%eps_inf)
+      call pp%kv("Epsilon (solute)", self%eps_solute)
+      call pp%kv("Correlation length", self%lambda, "bohr")
+
+   end subroutine nonlocal_print_inputs
 
    !> Assemble Gaussian or point boundary operators
    subroutine nonlocal_assemble_layer(self, cavity, solver, error)
