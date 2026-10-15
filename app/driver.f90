@@ -314,8 +314,8 @@ contains
             call rism_input%read_file(trim(config%parameters_path), error, strict=.true.)
          end if
          if (allocated(error)) return
-         if (config%temperature_given) rism_input%system%temperature = config%temperature
-         if (config%pressure_given) rism_input%system%pressure = config%pressure_si
+         if (allocated(config%temperature)) rism_input%system%temperature = config%temperature
+         if (allocated(config%pressure_si)) rism_input%system%pressure = config%pressure_si
          if (allocated(rism_input%system%charge)) mol%charge = rism_input%system%charge
          if (allocated(config%charge)) mol%charge = config%charge
          rism_input%system%charge = mol%charge
