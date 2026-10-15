@@ -4,9 +4,11 @@ module moist_model_continuum_component_pcm_slic
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
+   use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
-   use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
+   use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps, &
+      & layer_configure_cavity
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_slic, only: slic_state, &
       & slic_assemble, slic_medium, slic_solve, slic_weights, slic_tangent
@@ -44,6 +46,7 @@ module moist_model_continuum_component_pcm_slic
       !> Static potential offset, hartree per elementary charge
       real(wp) :: phi_static = 0.0_wp
    contains
+      procedure :: configure_cavity => slic_configure_cavity
       procedure :: assemble_layer => slic_assemble_layer
       procedure :: solve_layer => slic_solve_layer
       procedure :: layer_weights => slic_layer_weights
@@ -130,6 +133,35 @@ contains
          return
       end if
    end subroutine new_component_slic
+
+   !> Request normals and curvatures; warn when the cavity is iSwiG
+   !>
+   !> @param[in,out] self   SLIC component
+   !> @param[in,out] cavity cavity to configure before its update
+   !> @param[out]    error  allocated if the cavity rejects the request
+   subroutine slic_configure_cavity(self, cavity, error)
+      !> SLIC component
+      class(model_continuum_component_slic), intent(inout) :: self
+      !> Cavity to configure
+      class(cavity_type), intent(inout) :: cavity
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=*), parameter :: msg = "SLIC using iSwiG cavity can lead to spurious results or " &
+         & //"Newton failure due to discontinuous normals and the nonlinear interface condition; use " &
+         & //"a smooth cavity such as SvdW-DROP or isodensity-DROP instead. "
+
+      call layer_configure_cavity(self, cavity, error)
+      if (allocated(error)) return
+      select type (cavity)
+      class is (cavity_type_iswig)
+         if (associated(self%ctx)) then
+            call self%ctx%warning(msg)
+         else if (associated(cavity%ctx)) then
+            call cavity%ctx%warning(msg)
+         end if
+      end select
+   end subroutine slic_configure_cavity
 
    !> Assemble the SLIC operators
    subroutine slic_assemble_layer(self, cavity, solver, error)

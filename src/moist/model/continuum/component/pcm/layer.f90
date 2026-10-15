@@ -16,7 +16,7 @@ module moist_model_continuum_component_pcm_layer
    implicit none(type, external)
    private
 
-   public :: pcm_layer_base, pcm_layer_feps
+   public :: pcm_layer_base, pcm_layer_feps, layer_configure_cavity
 
    !> Common host lifecycle; each extension owns one generated model state
    type, abstract, extends(model_continuum_component_pcm) :: pcm_layer_base
