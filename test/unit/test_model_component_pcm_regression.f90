@@ -1,5 +1,10 @@
-!> CPCM/COSMO numerical reference from the pre-pcmgen target implementation
-module test_model_component_pcm_native_golden
+!> Change detector: CPCM/COSMO energies, charges and cavities frozen from the
+!> pre-pcmgen implementation
+!>
+!> - Not a reference: re-pin when a deliberate numerical change moves them
+!> - Fingerprints: sum, absolute sum, sin and cos projections of each array
+!> - Explicit dense solves preserve the direct-solver baseline
+module test_model_component_pcm_regression
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
@@ -16,12 +21,13 @@ module test_model_component_pcm_native_golden
    use moist_radii, only: default_cpcm_radii
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
       & model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type, solver_type
    use moist_channels_coupling, only: coupling_type
    use test_helpers, only: stage_point_charge_energy, component_view
    implicit none(type, external)
    private
 
-   public :: collect_model_component_pcm_native_golden
+   public :: collect_model_component_pcm_regression
 
    real(wp), parameter :: dielectric = 78.355_wp
    !> Frozen from the native target CPCM/COSMO implementation with A-matrix assembly.
@@ -71,7 +77,7 @@ module test_model_component_pcm_native_golden
 
 contains
 
-   subroutine collect_model_component_pcm_native_golden(testsuite)
+   subroutine collect_model_component_pcm_regression(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
@@ -83,7 +89,7 @@ contains
          & new_unittest("chloroglycine_iswig_cosmo", test_chloroglycine_iswig_cosmo), &
          & new_unittest("chloroglycine_drop_cpcm", test_chloroglycine_drop_cpcm), &
          & new_unittest("chloroglycine_drop_cosmo", test_chloroglycine_drop_cosmo)]
-   end subroutine collect_model_component_pcm_native_golden
+   end subroutine collect_model_component_pcm_regression
 
    subroutine test_iswig_cpcm(error)
       type(error_type), allocatable, intent(out) :: error
@@ -202,7 +208,8 @@ contains
       end if
 
       if (model_kind == "cpcm") then
-         call new_component_cpcm(cpcm, epsilon=dielectric, error=err, ctx=ctx)
+         call new_component_cpcm(cpcm, epsilon=dielectric, error=err, ctx=ctx, &
+            & param=moist_pcm_parameters_type(solver=solver_type%dense))
          if (.not. allocated(err)) call cpcm%update(mol, cavity, err)
          if (allocated(err)) then
             call test_failed(error, err%message)
@@ -214,7 +221,8 @@ contains
          call cpcm%get_energy(component_view(coupling), cavity, energy, err)
          if (.not. allocated(err)) q = cpcm%q
       else
-         call new_component_cosmo(cosmo, epsilon=dielectric, error=err, ctx=ctx)
+         call new_component_cosmo(cosmo, epsilon=dielectric, error=err, ctx=ctx, &
+            & param=moist_pcm_parameters_type(solver=solver_type%dense))
          if (.not. allocated(err)) call cosmo%update(mol, cavity, err)
          if (allocated(err)) then
             call test_failed(error, err%message)
@@ -279,4 +287,4 @@ contains
                  sum(values*cos(1.13_wp*[(real(i, wp), i=1, size(values))]))]
    end function fingerprint
 
-end module test_model_component_pcm_native_golden
+end module test_model_component_pcm_regression
