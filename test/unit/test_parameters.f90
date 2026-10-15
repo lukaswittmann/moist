@@ -19,6 +19,12 @@ module test_parameters
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
    use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_iefpcm, only: model_continuum_component_iefpcm, new_component_iefpcm
+   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
+   use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, new_component_slic
+   use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -40,6 +46,103 @@ module test_parameters
    end type vector_parameters_type
 
 contains
+
+   !> Check model-specific physical inputs before the first update
+   !>
+   !> @param[out] error Test failure
+   subroutine test_pcm_physical_inputs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Construction error
+      type(moist_error), allocatable :: err
+      !> Components under test
+      type(model_continuum_component_lpb) :: lpb
+      type(model_continuum_component_slic) :: slic
+      type(model_continuum_component_nonlocal) :: nonlocal
+      type(model_continuum_component_cpcm) :: cpcm
+      type(model_continuum_component_cosmo) :: cosmo
+      type(model_continuum_component_iefpcm) :: iefpcm
+      !> Captured parameter output
+      character(len=160) :: lines(80)
+      !> Scratch unit and line count
+      integer :: unit, nline
+
+      call new_component_lpb(lpb, 80.0_wp, 0.125_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call lpb%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Kappa", "0.125000 bohr^-1"), "LPB screening input missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "LPB prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_slic(slic, 80.0_wp, 0.125_wp, 0.25_wp, 0.5_wp, err, &
+         & mu=0.0625_wp, phi_static=1.25_wp)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call slic%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Alpha", "0.125000") .and. &
+         & printed_entry(lines, "Beta", "0.250000 a.u.^-1") .and. &
+         & printed_entry(lines, "Gamma", "0.500000") .and. &
+         & printed_entry(lines, "Mu", "0.062500") .and. &
+         & printed_entry(lines, "Static potential", "1.250000 Eh/e"), "SLIC physical inputs missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "SLIC prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 10.0_wp, err, eps_solute=1.5_wp)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call nonlocal%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Epsilon (high-frequency)", "2.000000") .and. &
+         & printed_entry(lines, "Epsilon (solute)", "1.500000") .and. &
+         & printed_entry(lines, "Correlation length", "10.000000 bohr"), "Nonlocal physical inputs missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "Nonlocal prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_iefpcm(iefpcm, 80.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call iefpcm%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & .not. printed_entry(lines, "f(eps)", ""), "Layer PCM prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_cpcm(cpcm, 2.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call cpcm%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "f(eps)", "0.500000"), "CPCM scaling factor missing")
+      if (allocated(error)) return
+
+      call new_component_cosmo(cosmo, 2.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call cosmo%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "f(eps)", "0.400000"), "COSMO scaling factor missing")
+   end subroutine test_pcm_physical_inputs
 
    !> Reset the helper parameter values
    !>
@@ -85,6 +188,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(vector_parameters_type) :: vector
       type(moist_gostshyp_parameters_type) :: gostshyp
+      type(moist_pcm_parameters_type) :: pcm
       character(len=128) :: lines(64)
       integer :: nline, unit
       type(moist_error), allocatable :: err
@@ -110,6 +214,23 @@ contains
       if (allocated(error)) return
       call capture_table(gostshyp, lines, nline, level=3)
       call check(error, printed_entry(lines, "regularization_start", ""), "level 3 lists the detailed fields")
+      if (allocated(error)) return
+
+      call check(error, pcm%solver, solver_type%iterative, "default iterative solver")
+      if (allocated(error)) return
+      call check(error, pcm%storage, pcm_storage_dense, "default dense storage")
+      if (allocated(error)) return
+      call capture_table(pcm, lines, nline, level=2)
+      call check(error, nline, 2, "normal PCM settings contain only solver and storage")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", ""))
+      if (allocated(error)) return
+      call capture_table(pcm, lines, nline, level=3)
+      call check(error, nline, 7, "detailed PCM settings include all solver controls")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "solver_tol", "") .and. &
+         & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
+         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", ""))
       if (allocated(error)) return
 
       ! Nothing prints at verbosity 0
@@ -587,7 +708,6 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("constructors", test_constructors), &
          new_unittest("file-roundtrip", test_roundtrip), &
-         new_unittest("memory-budget-gib", test_memory_budget_gib), &
          new_unittest("copies-and-errors", test_copies_and_errors), &
          new_unittest("vector-and-string", test_vector_and_string), &
          new_unittest("print-levels", test_print_levels), &
@@ -595,6 +715,7 @@ contains
          new_unittest("drop-load-file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
+         new_unittest("pcm-physical-inputs", test_pcm_physical_inputs), &
          new_unittest("invalid-fields", test_invalid_fields), &
          new_unittest("file-formats", test_file_formats), &
          new_unittest("drop-contracts", test_drop_contracts), &
@@ -602,81 +723,6 @@ contains
          new_unittest("parameter-validation", test_parameter_validation), &
          new_unittest("optional-overrides", test_optional_overrides)]
    end subroutine collect_parameters
-
-   !> Integer GiB budgets survive table output and JSON/TOML round trips
-   !>
-   !> @param[out] error Test failure
-   subroutine test_memory_budget_gib(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> PCM settings exercised through the shared parameter interface
-      type(moist_pcm_parameters_type) :: pcm
-      !> Library validation error
-      type(moist_error), allocatable :: err
-      !> Table printer
-      type(prettyprinter) :: pp
-      !> Practical GiB budgets from the minimum through one PiB
-      integer, parameter :: budgets(*) = [1, 4, 5, 64, 1024, 1048576]
-      !> Captured table lines and the current line without indentation
-      character(len=256) :: lines(32), line
-      !> Scratch I/O, indices, parsed value, and matching field count
-      integer :: unit, stat, nline, icase, iline, pos, shown, matches, format_index
-
-      call check(error, pcm%memory_budget_gib, 4)
-      if (allocated(error)) return
-      do icase = 1, size(budgets)
-         pcm%memory_budget_gib = budgets(icase)
-         open (newunit=unit, status="scratch", action="readwrite", iostat=stat)
-         call check(error, stat, 0)
-         if (allocated(error)) return
-         pp = new_prettyprinter(unit=unit)
-         call pcm%print_table(pp)
-         call read_printout(unit, lines, nline)
-         close (unit, iostat=stat)
-         call check(error, stat, 0)
-         if (allocated(error)) return
-         call check(error, pcm%memory_budget_gib, budgets(icase))
-         if (allocated(error)) return
-         matches = 0
-         do iline = 1, nline
-            line = adjustl(lines(iline))
-            if (index(line, "memory_budget_gib ") /= 1) cycle
-            matches = matches + 1
-            pos = index(line, "...", back=.true.)
-            call check(error, pos > 0)
-            if (allocated(error)) return
-            read (line(pos + 3:), *, iostat=stat) shown
-            call check(error, stat, 0)
-            if (allocated(error)) return
-            call check(error, shown, budgets(icase))
-            if (allocated(error)) return
-         end do
-         call check(error, matches, 1)
-         if (allocated(error)) return
-         do format_index = 1, 2
-            call roundtrip(pcm, "moist-test-memory-budget", error, format_index)
-            if (allocated(error)) return
-            call check(error, pcm%memory_budget_gib, budgets(icase))
-            if (allocated(error)) return
-         end do
-      end do
-      ! Exercise integer limits in serialization without relying on printer width
-      pcm%memory_budget_gib = huge(0)
-      do format_index = 1, 2
-         call roundtrip(pcm, "moist-test-memory-budget", error, format_index)
-         if (allocated(error)) return
-         call check(error, pcm%memory_budget_gib, huge(0))
-         if (allocated(error)) return
-      end do
-      do icase = -1, 0
-         pcm%memory_budget_gib = icase
-         call pcm%validate(err)
-         call check(error, allocated(err))
-         if (allocated(error)) return
-      end do
-      call pcm%init_defaults()
-      call check(error, pcm%memory_budget_gib, 4)
-   end subroutine test_memory_budget_gib
 
    !> Check copied settings, derived values, and resetting to defaults
    subroutine test_constructors(error)
@@ -763,7 +809,7 @@ contains
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
-      call check(error, pcm%param%solver, solver_type%dense)
+      call check(error, pcm%param%solver, solver_type%iterative)
       if (allocated(error)) return
       param%num_leb = 1
       call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, param, ctx=ctx)
@@ -836,12 +882,9 @@ contains
       if (allocated(error)) return
       pcm%solver = solver_type%dense
       pcm%solver_maxiter = 42
-      pcm%memory_budget_gib = 5
       call roundtrip(pcm, stem, error)
       if (allocated(error)) return
       call check(error, pcm%solver_maxiter, 42)
-      if (allocated(error)) return
-      call check(error, pcm%memory_budget_gib, 5)
       if (allocated(error)) return
       gostshyp%regularization_start = 2.0e-9_wp
       gostshyp%regularization_end = 2.0e-8_wp

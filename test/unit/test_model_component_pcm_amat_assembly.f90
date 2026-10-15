@@ -8,6 +8,8 @@ module test_model_component_pcm_amat_assembly
    use test_helpers, only: get_test_structures, center_at_origin, &
                            get_test_cavity_iswig, rel_deviation
    use test_pcm_conductor_probe, only: count_branches, nmol, nleb_survey
+   use pcmgen_gauss_conductor, only: conductor_state, conductor_assemble, conductor_medium, &
+                                     conductor_solve
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -249,19 +251,27 @@ contains
    end subroutine test_assembly_dense_grid
 
    !> Coincident grid points stay finite and hit the Gaussian overlap limit
+   !>
+   !> Unequal widths on the coincident pair, so a kernel that reads one width
+   !> twice misses the limit; the generated solve on the same surface must give
+   !> finite charges and energy
    subroutine test_coincident_grid_points(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
+      !> Generated conductor state of the solve
+      type(conductor_state) :: state
       !> Synthetic surface with a duplicated point
       real(wp) :: xi(4), f(4), xyz(3, 4), amat(4, 4)
       !> Pair width, expected limit and matrix indices
       real(wp) :: p, limit
       integer :: i, j
+      !> Surface potential, solved charges, potential adjoint and energy
+      real(wp) :: v(4), q(4), grad_v(4), energy
 
-      xi = [1.5_wp, 1.5_wp, 2.0_wp, 0.9_wp]
+      xi = [1.5_wp, 1.1_wp, 2.0_wp, 0.9_wp]
       f = [0.8_wp, 0.8_wp, 0.95_wp, 0.6_wp]
       xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       xyz(:, 2) = [0.0_wp, 0.0_wp, 0.0_wp]
@@ -289,6 +299,32 @@ contains
       limit = 2.0_wp*p/sqrt(4.0_wp*atan(1.0_wp))
       call check(error, amat(1, 2), limit, thr=ref_thr*limit, &
                  more="coincident pair does not reach the Gaussian overlap limit")
+      if (allocated(error)) return
+      call check(error, amat(2, 1), limit, thr=ref_thr*limit, &
+                 more="matrix is not symmetric at coincident grid points")
+      if (allocated(error)) return
+
+      v = [-0.31_wp, 0.22_wp, -0.17_wp, 0.41_wp]
+      call conductor_assemble(state, xyz, xi, f, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor assembly failed: "//err%message)
+         return
+      end if
+      call conductor_medium(state, 0.9_wp, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor medium failed: "//err%message)
+         return
+      end if
+      call conductor_solve(state, v, energy, q, grad_v, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor solve failed: "//err%message)
+         return
+      end if
+      call check(error, all(q == q) .and. all(abs(q) < huge(1.0_wp)), &
+                 more="coincident grid points produced non-finite surface charges")
+      if (allocated(error)) return
+      call check(error, energy == energy .and. abs(energy) < huge(1.0_wp), &
+                 more="coincident grid points produced a non-finite energy")
 
    end subroutine test_coincident_grid_points
 

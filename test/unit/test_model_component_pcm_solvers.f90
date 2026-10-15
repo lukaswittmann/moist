@@ -27,7 +27,7 @@ module test_model_component_pcm_solvers
       & pcm_solver, pcm_dense_solver, pcm_gmres_solver, pcm_block_jacobi, &
       & pcm_factor_cholesky, pcm_factor_symmetric, pcm_factor_lu, &
       & pcm_factor_complex_symmetric, pcm_factor_complex_lu, pcm_storage_dense, &
-      & pcm_storage_matrix_free, pcm_storage_auto, pcm_nonlinear_problem
+      & pcm_storage_matrix_free, pcm_nonlinear_problem
    implicit none(type, external)
    private
 
@@ -1775,7 +1775,7 @@ contains
       call check(error, scaling%inexact(), .false., "pcm_solver default is exact")
    end subroutine test_inexact
 
-   !> Matrix-free kernels: never for direct solvers, by storage and budget for GMRES
+   !> Matrix-free kernels: never for direct solvers, by explicit storage for GMRES
    !>
    !> @param[out] error  test failure
    subroutine test_matrix_free(error)
@@ -1787,24 +1787,9 @@ contains
 
       call check(error, dense%matrix_free(100000, 4), .false., "dense solver stores matrices")
       if (allocated(error)) return
-      call check(error, gmres%storage, pcm_storage_auto, "default storage")
+      call check(error, gmres%storage, pcm_storage_dense, "default dense storage")
       if (allocated(error)) return
-      call check(error, gmres%memory_budget_gib, 4, "default GiB budget")
-      if (allocated(error)) return
-      ! 4 GiB budget: one matrix of 23170 points fits, two do not
-      call check(error, gmres%matrix_free(23170, 1), .false., "one matrix within the budget")
-      if (allocated(error)) return
-      call check(error, gmres%matrix_free(23170, 2), "two matrices exceed the budget")
-      if (allocated(error)) return
-      gmres%memory_budget_gib = 1
-      call check(error, gmres%matrix_free(8192, 2), .false., "GiB budget is inclusive")
-      if (allocated(error)) return
-      call check(error, gmres%matrix_free(8193, 2), "one point more exceeds it")
-      if (allocated(error)) return
-      gmres%memory_budget_gib = huge(0)
-      call check(error, gmres%matrix_free(1000000, 2), .false., "GiB conversion avoids integer overflow")
-      if (allocated(error)) return
-      call check(error, gmres%matrix_free(600000000, 1), "large matrices exceed the maximum budget")
+      call check(error, gmres%matrix_free(600000000, 4), .false., "default stores matrices at any size")
       if (allocated(error)) return
       gmres%storage = pcm_storage_dense
       call check(error, gmres%matrix_free(100000, 4), .false., "dense storage")

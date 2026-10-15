@@ -316,8 +316,9 @@ if(MOIST_TESTS)
     cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
     model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
-    model_component_pcm_electrostatics model_component_pcm_cpcm
-    model_component_pcm_solvers model_component_pcm_layers model_component_pcm_native_golden
+    model_component_pcm_electrostatics model_component_pcm_solvers
+    model_component_pcm_interface model_component_pcm_derivatives
+    model_component_pcm_references model_component_pcm_regression
     model_component_gostshyp model_component_pv
     model_continuum channels model_coupling
   )
@@ -355,8 +356,7 @@ if(MOIST_TESTS)
     "${_unit}/test_pcm_conductor_probe.f90"
     "${_unit}/test_moz_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"
-    "${_unit}/test_model_component_pcm_parity_golden.f90"
-    "${_unit}/test_model_component_pcm_layer_golden.f90"
+    "${_unit}/test_model_component_pcm_fixtures.f90"
   )
   foreach(suite IN LISTS moist_test_suites)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
