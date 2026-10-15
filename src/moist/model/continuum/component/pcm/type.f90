@@ -28,6 +28,13 @@ module moist_model_continuum_component_pcm_type
    public :: model_continuum_component_pcm
    public :: pcm_solver_type
    public :: solver_type
+   public :: pcm_tangent_block, pcm_tangent_require
+
+   !> One-block kernel direction of a surface channel, zero when unallocated
+   interface pcm_tangent_block
+      module procedure pcm_tangent_block_scalar
+      module procedure pcm_tangent_block_vector
+   end interface pcm_tangent_block
 
    !> PCM linear solver choices
    type :: pcm_solver_type
@@ -140,6 +147,9 @@ module moist_model_continuum_component_pcm_type
 
       !> Accumulate the surface adjoints the reverse-mode gradient consumes
       procedure :: get_gradient_surface_weights => pcm_component_get_gradient_surface_weights
+
+      !> Directional derivative of the operator surface weights and trace adjoints
+      procedure :: surface_weight_tangent => pcm_component_surface_weight_tangent
 
       !> Nuclear gradient contributions that bypass the cavity surface
       procedure :: get_direct_gradient => pcm_component_get_direct_gradient
@@ -814,6 +824,144 @@ contains
 
       call fatal_error(error, "PCM component does not implement surface weights")
    end subroutine pcm_component_get_surface_weights
+
+   !> Report a concrete PCM implementation without a surface weight tangent
+   !>
+   !> Contract of the overrides, first piece of the nuclear Hessian:
+   !> - Derivative along (surface fields, dphi, dvn) of the operator weights
+   !>   `get_surface_weights` adds on a field-independent cavity (no host terms)
+   !>   and of `potential_adjoint` and `normal_trace_adjoint`
+   !> - Needs charges solved on the current traces
+   !> - Direction channels as in the accumulator (w_xyz, w_n, w_k1, w_k2, w_xi,
+   !>   w_f, w_a); an unallocated channel is a zero direction, a channel the
+   !>   model does not read is ignored
+   !>
+   !> @param[in,out] self      PCM component with current charges
+   !> @param[in]     cavity    Cavity the operators were assembled on
+   !> @param[in]     direction Surface direction, one entry per grid point and channel
+   !> @param[in]     dphi      Potential-trace direction (ngrid)
+   !> @param[in,out] tangent   Initialized accumulator, receives the weight tangent
+   !> @param[out]    dw_phi    Tangent of `potential_adjoint` (ngrid)
+   !> @param[out]    error     Allocated on failure
+   !> @param[in]     dvn       Normal-trace direction (ngrid); absent is zero
+   !> @param[out]    dw_vn     Tangent of `normal_trace_adjoint` (ngrid), normal-trace models only
+   subroutine pcm_component_surface_weight_tangent(self, cavity, direction, dphi, tangent, &
+         & dw_phi, error, dvn, dw_vn)
+      !> PCM component with current charges
+      class(model_continuum_component_pcm), intent(inout) :: self
+      !> Cavity the operators were assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction
+      class(cavity_surface_adjoint_type), intent(in) :: direction
+      !> Potential-trace direction
+      real(wp), intent(in) :: dphi(:)
+      !> Accumulator of the weight tangent
+      class(cavity_surface_adjoint_type), intent(inout) :: tangent
+      !> Tangent of the potential adjoint
+      real(wp), allocatable, intent(out) :: dw_phi(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace direction
+      real(wp), intent(in), optional :: dvn(:)
+      !> Tangent of the normal-trace adjoint
+      real(wp), allocatable, intent(out), optional :: dw_vn(:)
+
+      call fatal_error(error, "PCM component does not implement the surface weight tangent")
+   end subroutine pcm_component_surface_weight_tangent
+
+   !> Check the preconditions of a surface weight tangent
+   !>
+   !> @param[in]  self   PCM component
+   !> @param[in]  cavity Cavity the operators were assembled on
+   !> @param[in]  dphi   Potential-trace direction (ngrid)
+   !> @param[out] error  Allocated on stale charges or a grid mismatch
+   !> @param[in]  dvn    Optional normal-trace direction (ngrid)
+   subroutine pcm_tangent_require(self, cavity, dphi, error, dvn)
+      !> PCM component
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Cavity the operators were assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Potential-trace direction
+      real(wp), intent(in) :: dphi(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace direction
+      real(wp), intent(in), optional :: dvn(:)
+
+      if (.not. self%charges_valid .or. .not. allocated(self%q)) then
+         call fatal_error(error, "PCM tangent needs charges solved on the current traces")
+         return
+      end if
+      if (cavity%ngrid /= size(self%q)) then
+         call fatal_error(error, "PCM tangent cavity grid does not match the operators")
+         return
+      end if
+      if (size(dphi) /= cavity%ngrid) then
+         call fatal_error(error, "PCM tangent potential direction does not match the cavity grid")
+         return
+      end if
+      if (present(dvn)) then
+         if (size(dvn) /= cavity%ngrid) then
+            call fatal_error(error, "PCM tangent normal-trace direction does not match the cavity grid")
+         end if
+      end if
+   end subroutine pcm_tangent_require
+
+   !> One-block kernel direction of a scalar surface channel
+   !>
+   !> @param[in]  channel Direction channel (ngrid), unallocated for zero
+   !> @param[in]  ngrid   Number of grid points
+   !> @param[in]  name    Channel name for the error message
+   !> @param[out] block   Kernel direction block (ngrid, 1)
+   !> @param[out] error   Allocated on a size mismatch
+   subroutine pcm_tangent_block_scalar(channel, ngrid, name, block, error)
+      !> Direction channel
+      real(wp), allocatable, intent(in) :: channel(:)
+      !> Number of grid points
+      integer, intent(in) :: ngrid
+      !> Channel name
+      character(len=*), intent(in) :: name
+      !> Kernel direction block
+      real(wp), allocatable, intent(out) :: block(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      allocate (block(ngrid, 1), source=0.0_wp)
+      if (.not. allocated(channel)) return
+      if (size(channel) /= ngrid) then
+         call fatal_error(error, "PCM tangent direction "//name//" does not match the cavity grid")
+         return
+      end if
+      block(:, 1) = channel
+   end subroutine pcm_tangent_block_scalar
+
+   !> One-block kernel direction of a vector surface channel
+   !>
+   !> @param[in]  channel Direction channel (3, ngrid), unallocated for zero
+   !> @param[in]  ngrid   Number of grid points
+   !> @param[in]  name    Channel name for the error message
+   !> @param[out] block   Kernel direction block (3, ngrid, 1)
+   !> @param[out] error   Allocated on a shape mismatch
+   subroutine pcm_tangent_block_vector(channel, ngrid, name, block, error)
+      !> Direction channel
+      real(wp), allocatable, intent(in) :: channel(:, :)
+      !> Number of grid points
+      integer, intent(in) :: ngrid
+      !> Channel name
+      character(len=*), intent(in) :: name
+      !> Kernel direction block
+      real(wp), allocatable, intent(out) :: block(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      allocate (block(3, ngrid, 1), source=0.0_wp)
+      if (.not. allocated(channel)) return
+      if (any(shape(channel) /= [3, ngrid])) then
+         call fatal_error(error, "PCM tangent direction "//name//" does not match the cavity grid")
+         return
+      end if
+      block(:, :, 1) = channel
+   end subroutine pcm_tangent_block_vector
 
    !> Contract raw potential derivatives into position and Gaussian-width adjoints
    !>

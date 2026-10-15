@@ -9,10 +9,10 @@ module moist_model_continuum_component_pcm_dpcm_original
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_dpcm_original, only: dpcm_original_complex_state, &
-      & dpcm_original_assemble, dpcm_original_medium, dpcm_original_solve, dpcm_original_weights
+      & dpcm_original_assemble, dpcm_original_medium, dpcm_original_solve, dpcm_original_weights, dpcm_original_tangent
    use pcmgen_point_dpcm_original, only: dpcm_original_point_complex_state, &
       & dpcm_original_point_assemble, dpcm_original_point_medium, dpcm_original_point_solve, &
-      & dpcm_original_point_weights
+      & dpcm_original_point_weights, dpcm_original_point_tangent
    implicit none(type, external)
    private
 
@@ -34,6 +34,7 @@ module moist_model_continuum_component_pcm_dpcm_original
       procedure :: assemble_layer => dpcm_original_assemble_layer
       procedure :: solve_layer => dpcm_original_solve_layer
       procedure :: layer_weights => dpcm_original_layer_weights
+      procedure :: layer_tangent => dpcm_original_layer_tangent
    end type model_continuum_component_dpcm_original
 
 contains
@@ -141,5 +142,81 @@ contains
             & w_k2=w_k2, w_a=w_a)
       end if
    end subroutine dpcm_original_layer_weights
+
+   !> Directional derivative of the original DPCM weights and trace adjoints
+   !>
+   !> - no switching factors: `df` is ignored and `hvp_f` stays zero
+   !>
+   !> @param[in,out] self   original DPCM component with current weights
+   !> @param[in]     dr     Position direction (3, ngrid, 1)
+   !> @param[in]     dn     Normal direction (3, ngrid, 1)
+   !> @param[in]     dk1    First principal curvature direction (ngrid, 1)
+   !> @param[in]     dk2    Second principal curvature direction (ngrid, 1)
+   !> @param[in]     dxi    Gaussian width direction (ngrid, 1)
+   !> @param[in]     df     Switching factor direction (ngrid, 1)
+   !> @param[in]     da     Area direction (ngrid, 1)
+   !> @param[in]     dv     Potential-trace direction (ngrid, 1)
+   !> @param[in]     dvn    Normal-trace direction (ngrid, 1)
+   !> @param[in,out] hvp_r  Position tangent (3, ngrid, 1)
+   !> @param[in,out] hvp_n  Normal tangent (3, ngrid, 1)
+   !> @param[in,out] hvp_k1 First principal curvature tangent (ngrid, 1)
+   !> @param[in,out] hvp_k2 Second principal curvature tangent (ngrid, 1)
+   !> @param[in,out] hvp_xi Gaussian width tangent (ngrid, 1)
+   !> @param[in,out] hvp_f  Switching factor tangent (ngrid, 1)
+   !> @param[in,out] hvp_a  Area tangent (ngrid, 1)
+   !> @param[in,out] hvp_v  Potential adjoint tangent (ngrid, 1)
+   !> @param[in,out] hvp_vn Normal-trace adjoint tangent (ngrid, 1)
+   !> @param[out]    error  Allocated on failure
+   subroutine dpcm_original_layer_tangent(self, dr, dn, dk1, dk2, dxi, df, da, dv, dvn, hvp_r, hvp_n, &
+         & hvp_k1, hvp_k2, hvp_xi, hvp_f, hvp_a, hvp_v, hvp_vn, error)
+      !> original DPCM component with current weights
+      class(model_continuum_component_dpcm_original), intent(inout) :: self
+      !> Position direction
+      real(wp), contiguous, intent(in) :: dr(:, :, :)
+      !> Normal direction
+      real(wp), contiguous, intent(in) :: dn(:, :, :)
+      !> First principal curvature direction
+      real(wp), contiguous, intent(in) :: dk1(:, :)
+      !> Second principal curvature direction
+      real(wp), contiguous, intent(in) :: dk2(:, :)
+      !> Gaussian width direction
+      real(wp), contiguous, intent(in) :: dxi(:, :)
+      !> Switching factor direction
+      real(wp), contiguous, intent(in) :: df(:, :)
+      !> Area direction
+      real(wp), contiguous, intent(in) :: da(:, :)
+      !> Potential-trace direction
+      real(wp), contiguous, intent(in) :: dv(:, :)
+      !> Normal-trace direction
+      real(wp), contiguous, intent(in) :: dvn(:, :)
+      !> Position tangent
+      real(wp), contiguous, intent(inout) :: hvp_r(:, :, :)
+      !> Normal tangent
+      real(wp), contiguous, intent(inout) :: hvp_n(:, :, :)
+      !> First principal curvature tangent
+      real(wp), contiguous, intent(inout) :: hvp_k1(:, :)
+      !> Second principal curvature tangent
+      real(wp), contiguous, intent(inout) :: hvp_k2(:, :)
+      !> Gaussian width tangent
+      real(wp), contiguous, intent(inout) :: hvp_xi(:, :)
+      !> Switching factor tangent
+      real(wp), contiguous, intent(inout) :: hvp_f(:, :)
+      !> Area tangent
+      real(wp), contiguous, intent(inout) :: hvp_a(:, :)
+      !> Potential adjoint tangent
+      real(wp), contiguous, intent(inout) :: hvp_v(:, :)
+      !> Normal-trace adjoint tangent
+      real(wp), contiguous, intent(inout) :: hvp_vn(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (self%smeared) then
+         call dpcm_original_tangent(self%gauss%dpcm_original_state, dr, dn, dk1, dk2, dxi, da, dv, dvn, hvp_r, &
+            & hvp_n, hvp_k1, hvp_k2, hvp_xi, hvp_a, hvp_v, hvp_vn, error)
+      else
+         call dpcm_original_point_tangent(self%point%dpcm_original_point_state, dr, dn, dk1, dk2, da, dv, dvn, &
+            & hvp_r, hvp_n, hvp_k1, hvp_k2, hvp_a, hvp_v, hvp_vn, error)
+      end if
+   end subroutine dpcm_original_layer_tangent
 
 end module moist_model_continuum_component_pcm_dpcm_original
