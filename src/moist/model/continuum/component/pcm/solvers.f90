@@ -47,7 +47,7 @@ module moist_model_continuum_component_pcm_solvers
    public :: pcm_preconditioner, pcm_block_jacobi
    public :: pcm_factor_cholesky, pcm_factor_symmetric, pcm_factor_lu
    public :: pcm_factor_complex_symmetric, pcm_factor_complex_lu
-   public :: pcm_storage_dense, pcm_storage_matrix_free, pcm_storage_auto
+   public :: pcm_storage_dense, pcm_storage_matrix_free
 
    !> Factorization of a symmetric positive definite operator (potrf, lower)
    integer, parameter :: pcm_factor_cholesky = 1
@@ -64,8 +64,6 @@ module moist_model_continuum_component_pcm_solvers
    integer, parameter :: pcm_storage_dense = 1
    !> Operator storage of the generated kernels: matrix-free applications
    integer, parameter :: pcm_storage_matrix_free = 2
-   !> Operator storage of the generated kernels: matrix-free above a memory budget
-   integer, parameter :: pcm_storage_auto = 3
 
    !> Sufficient-decrease constant c of the Newton line search on |F|^2
    real(wp), parameter :: newton_armijo_c = 1.0e-4_wp
@@ -633,8 +631,7 @@ module moist_model_continuum_component_pcm_solvers
    !>   setup_complex always rebuild it for the id, a solve on an id without
    !>   preconditioner sets it up first
    !> - storage chooses whether the generated kernels store the operator
-   !>   matrices: pcm_storage_dense, pcm_storage_matrix_free or pcm_storage_auto
-   !>   (matrix-free when the matrices would exceed memory_budget_gib)
+   !>   matrices: pcm_storage_dense or pcm_storage_matrix_free
    type, extends(pcm_solver) :: pcm_gmres_solver
       !> Relative residual threshold norm(rhs - op x) / norm(rhs)
       real(wp) :: tol = 1.0e-8_wp
@@ -645,9 +642,7 @@ module moist_model_continuum_component_pcm_solvers
       !> Preconditioner; pcm_block_jacobi if not allocated at the first setup
       class(pcm_preconditioner), allocatable :: preconditioner
       !> Operator storage of the generated kernels, one of the pcm_storage_* kinds
-      integer :: storage = pcm_storage_auto
-      !> Memory for stored operator matrices in GiB (pcm_storage_auto)
-      integer :: memory_budget_gib = 4
+      integer :: storage = pcm_storage_dense
       !> Number of right-hand sides solved since construction
       integer :: n_solves = 0
       !> Number of iterations since construction
@@ -673,7 +668,7 @@ module moist_model_continuum_component_pcm_solvers
       procedure :: solve_complex_complex => pcm_gmres_solve_complex_complex
       !> Solutions satisfy the system to tol only
       procedure :: inexact => pcm_gmres_inexact
-      !> Matrix-free kernels by storage and memory_budget_gib
+      !> Matrix-free kernels by storage
       procedure :: matrix_free => pcm_gmres_matrix_free
    end type pcm_gmres_solver
 
@@ -2218,9 +2213,6 @@ contains
 
    !> Matrix-free kernels by the storage setting
    !>
-   !> - pcm_storage_auto: matrix-free when n_matrices 8 npt^2 bytes exceed
-   !>   memory_budget_gib GiB
-   !>
    !> @param[in] self        solver state
    !> @param[in] npt         operator dimension
    !> @param[in] n_matrices  number of (npt, npt) matrices the kernels would store
@@ -2234,15 +2226,9 @@ contains
       !> Apply the operators without storing their matrices
       logical :: matrix_free
 
-      select case (self%storage)
-      case (pcm_storage_dense)
-         matrix_free = .false.
-      case (pcm_storage_matrix_free)
-         matrix_free = .true.
-      case default
-         matrix_free = real(max(n_matrices, 0), wp)*8.0_wp*real(npt, wp)**2 &
-            & > real(self%memory_budget_gib, wp)*1024.0_wp**3
-      end select
+      associate (unused_npt => npt, unused_n_matrices => n_matrices)
+      end associate
+      matrix_free = self%storage == pcm_storage_matrix_free
    end function pcm_gmres_matrix_free
 
    !> Check the settings and the operator id; create the default preconditioner

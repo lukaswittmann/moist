@@ -4473,7 +4473,6 @@ int test_options_padding(void)
         MARK_FIELD(pcm, solver_restart);
         MARK_FIELD(pcm, solver_tol);
         MARK_FIELD(pcm, storage);
-        MARK_FIELD(pcm, memory_budget_gib);
         MARK_FIELD(pcm, newton_tol);
         MARK_FIELD(pcm, newton_maxiter);
         for (int pass = 0; pass < 2; ++pass) {
@@ -4511,7 +4510,7 @@ int test_pcm_solver_options(void)
     if (moist_check_error(error)) goto cleanup;
     /* Generated solver IDs and native defaults use the current layout. */
     if (moist_pcm_solver_dense != 1 || moist_pcm_solver_iterative != 2) goto cleanup;
-    if (options.solver != moist_pcm_solver_dense || options.memory_budget_gib != 4) goto cleanup;
+    if (options.solver != moist_pcm_solver_iterative || options.storage != moist_pcm_storage_dense) goto cleanup;
     if (!(options.solver_tol > 0.0) || options.solver_maxiter < 1) goto cleanup;
     options.solver = moist_pcm_solver_iterative;
     options.solver_tol = 1.0e-8;

@@ -276,14 +276,15 @@ def test_pcm_optional_context_and_lifetime(component_type, physical):
 def test_pcm_iterative_controls_round_trip(component):
     defaults = moist.PCMParameters()
     assert defaults.solver_tol > 0.0 and defaults.solver_maxiter >= 1
-    assert defaults.memory_budget_gib == 4
+    assert defaults.solver is moist.PCMSolver.ITERATIVE
+    assert defaults.storage is moist.PCMStorage.DENSE
     parameters = moist.PCMParameters(
-        solver="iterative", solver_tol=1e-8, solver_maxiter=200, memory_budget_gib=5)
+        solver="iterative", solver_tol=1e-8, solver_maxiter=200, storage="matrix_free")
     term = component(32, parameters=parameters)
     assert term.parameters.solver is moist.PCMSolver.ITERATIVE
     assert term.parameters.solver_tol == 1e-8
     assert term.parameters.solver_maxiter == 200
-    assert term.parameters.memory_budget_gib == 5
+    assert term.parameters.storage is moist.PCMStorage.MATRIX_FREE
     with pytest.raises(RuntimeError):
         component(32, parameters=moist.PCMParameters(solver_maxiter=0))
 

@@ -248,7 +248,6 @@ contains
             solver%max_iter = self%param%solver_maxiter
             solver%restart = self%param%solver_restart
             solver%storage = self%param%storage
-            solver%memory_budget_gib = self%param%memory_budget_gib
          end select
       else
          allocate (pcm_dense_solver :: solver)

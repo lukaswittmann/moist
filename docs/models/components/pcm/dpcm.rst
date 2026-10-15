@@ -1,10 +1,9 @@
 DPCM
 =====
 
-The differential PCM boundary formulation :cite:p:`miertus1981dpcm` uses the surface potential and its
-normal derivative. Both the current and original discretizations have separate
-component types. They require cavity normals and share the PCM numerical
-options of :doc:`index`.
+The differential PCM boundary formulation :cite:p:`miertus1981dpcm` uses the surface potential and its normal derivative.
+Both the current and original discretizations have separate component types.
+They require cavity normals and share the PCM numerical options of :doc:`index`.
 
 .. code-block:: fortran
 
