@@ -3,6 +3,7 @@
 !>
 !> - Not a reference: re-pin when a deliberate numerical change moves them
 !> - Fingerprints: sum, absolute sum, sin and cos projections of each array
+!> - Explicit dense solves preserve the direct-solver baseline
 module test_model_component_pcm_regression
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -20,6 +21,7 @@ module test_model_component_pcm_regression
    use moist_radii, only: default_cpcm_radii
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
       & model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type, solver_type
    use moist_channels_coupling, only: coupling_type
    use test_helpers, only: stage_point_charge_energy, component_view
    implicit none(type, external)
@@ -206,7 +208,8 @@ contains
       end if
 
       if (model_kind == "cpcm") then
-         call new_component_cpcm(cpcm, epsilon=dielectric, error=err, ctx=ctx)
+         call new_component_cpcm(cpcm, epsilon=dielectric, error=err, ctx=ctx, &
+            & param=moist_pcm_parameters_type(solver=solver_type%dense))
          if (.not. allocated(err)) call cpcm%update(mol, cavity, err)
          if (allocated(err)) then
             call test_failed(error, err%message)
@@ -218,7 +221,8 @@ contains
          call cpcm%get_energy(component_view(coupling), cavity, energy, err)
          if (.not. allocated(err)) q = cpcm%q
       else
-         call new_component_cosmo(cosmo, epsilon=dielectric, error=err, ctx=ctx)
+         call new_component_cosmo(cosmo, epsilon=dielectric, error=err, ctx=ctx, &
+            & param=moist_pcm_parameters_type(solver=solver_type%dense))
          if (.not. allocated(err)) call cosmo%update(mol, cavity, err)
          if (allocated(err)) then
             call test_failed(error, err%message)

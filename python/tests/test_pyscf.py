@@ -54,7 +54,7 @@ from moist.pyscf import (
     CFC, DROP, ISwiG, Isodensity, SvdW,
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
-from moist.parameters import DROPParameters, ISwiGParameters
+from moist.parameters import DROPParameters, ISwiGParameters, PCMParameters
 from moist import Context
 
 #: Run context shared by every cavity and model in this module
@@ -68,6 +68,9 @@ PRESSURE = 1.0e10 / 2.9421015697e13
 NLEB = 50
 #: Cavity projection tolerance
 PROJ_TOL = 1e-13
+#: Dense PCM solves: the difference and PySCF checks are tighter than the
+#: iterative solver tolerance
+DENSE = PCMParameters(solver="dense")
 
 #: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
@@ -150,9 +153,9 @@ PRIMARY_CASE = CASES[0]
 #: component (``pv``), the surface charges are zero and the whole Fock matrix
 #: is the level-set contraction.
 COMPONENTS = {
-    "cpcm": lambda: [ModelComponentCPCM(EPSILON)],
+    "cpcm": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE)],
     "pv": lambda: [ModelComponentPV(PRESSURE)],
-    "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON), ModelComponentPV(PRESSURE)],
+    "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE), ModelComponentPV(PRESSURE)],
 }
 
 
@@ -969,7 +972,8 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=50))
-    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)], context=CONTEXT)
+    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0, parameters=DENSE)],
+                               context=CONTEXT)
     result = solvation.evaluate(dm)
     host, model = solvation.host, solvation.model
     coords = model.cavity.xyz

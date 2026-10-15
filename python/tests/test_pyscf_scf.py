@@ -40,6 +40,8 @@ FD_NUCLEAR_STEP = 1e-3  # Bohr
 FD_SCF_STEP = 1e-2  # Bohr
 FD_SCF_ENERGY_TOL = 1e-14
 FD_SCF_GRAD_TOL = 1e-10
+#: Dense PCM solves: the difference checks are tighter than the iterative solver tolerance
+DENSE = PCMParameters(solver="dense")
 
 
 def assert_fd(analytic, reference, atol=FD_ATOL, rtol=FD_RTOL):
@@ -162,7 +164,8 @@ def test_copy_reset_and_configuration(mol):
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "rho-drop"])
 def test_nonlinear_fock_is_energy_derivative(mol, cavity):
-    mf = attach(mol.RHF(), cavity, [ModelComponentCPCM(32), ModelComponentPV(1e-4)])
+    mf = attach(mol.RHF(), cavity, [ModelComponentCPCM(32, parameters=DENSE),
+                                    ModelComponentPV(1e-4)])
     dm = mf.get_init_guess()
     rng = np.random.default_rng(45)
     direction = rng.normal(size=dm.shape)
@@ -185,7 +188,8 @@ def test_total_gradient_and_subset(mol, method, cavity):
     if method.endswith("KS"):
         base.xc = "lda,vwn"
         base.grids.level = 0
-    mf = attach(base, cavity, [ModelComponentCPCM(32), ModelComponentPV(1e-5)]).run()
+    mf = attach(base, cavity, [ModelComponentCPCM(32, parameters=DENSE),
+                               ModelComponentPV(1e-5)]).run()
     assert mf.converged
     grad = mf.nuc_grad_method()
     if method.endswith("KS"):
@@ -234,7 +238,8 @@ def test_gradient_scanner(mol, cavity):
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "cfc-drop", "iswig", "rho-drop"])
 def test_gostshyp_composition(mol, cavity):
-    mf = attach(mol.RHF(), cavity, [ModelComponentCPCM(32), ModelComponentGOSTSHYP(1e-4)])
+    mf = attach(mol.RHF(), cavity, [ModelComponentCPCM(32, parameters=DENSE),
+                                    ModelComponentGOSTSHYP(1e-4)])
     dm = mf.get_init_guess()
     result = mf.with_moist.evaluate(dm)
     assert np.isfinite(result.energy)

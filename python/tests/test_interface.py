@@ -43,6 +43,8 @@ CONTEXT = moist.Context()
 #: Shared small-grid parameters for tests that only fix ``nleb``
 _DROP_NLEB26 = DROPParameters(nleb=26)
 _ISWIG_NLEB26 = ISwiGParameters(nleb=26)
+#: Dense solves for tests that pin the solver
+_PCM_DENSE = PCMParameters(solver="dense")
 #: Small-grid parameters keyed by cavity type, for tests parametrized over it
 _NLEB26_PARAMETERS = {CavityDROP: _DROP_NLEB26, CavityISwiG: _ISWIG_NLEB26}
 
@@ -587,13 +589,13 @@ def test_cosmo_is_a_standalone_pcm_component() -> None:
 
 
 @pytest.mark.parametrize("factory", [
-    lambda: moist.ModelComponentIEFPCM(32.0),
-    lambda: moist.ModelComponentSSVPE(32.0),
-    lambda: moist.ModelComponentDPCM(32.0),
-    lambda: moist.ModelComponentDPCMOriginal(32.0),
-    lambda: moist.ModelComponentLPB(32.0, 0.1),
-    lambda: moist.ModelComponentSLIC(32.0, 0.2, 0.5, 0.8, 0.1, 0.0),
-    lambda: moist.ModelComponentNonlocal(32.0, 4.0, 1.0, 1.0),
+    lambda: moist.ModelComponentIEFPCM(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentSSVPE(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentDPCM(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentDPCMOriginal(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentLPB(32.0, 0.1, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentSLIC(32.0, 0.2, 0.5, 0.8, 0.1, 0.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentNonlocal(32.0, 4.0, 1.0, 1.0, parameters=_PCM_DENSE),
 ])
 def test_new_pcm_component_constructors(factory) -> None:
     component = factory()
