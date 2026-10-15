@@ -216,7 +216,7 @@ contains
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
       real(wp), parameter :: epsilon = 78.4_wp
-      real(wp), parameter :: ref_energy = -1.125110188578178E-2_wp
+      real(wp), parameter :: ref_energy = -1.1251382967601465E-2_wp
 
       call get_structure(mol, "MB16-43", "01")
       call test_all_solvers(error, mol, qat, epsilon, ref_energy, "neutral system")
@@ -234,7 +234,7 @@ contains
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -1.1_wp, 0.1_wp, -0.1_wp]
       real(wp), parameter :: epsilon = 78.4_wp
-      real(wp), parameter :: ref_energy = -8.994600196814041E-2_wp
+      real(wp), parameter :: ref_energy = -8.9947197526553738E-2_wp
 
       call get_structure(mol, "MB16-43", "01")
       call test_all_solvers(error, mol, qat, epsilon, ref_energy, "charged system")

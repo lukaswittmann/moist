@@ -62,8 +62,8 @@ contains
 
    !> Lebedev sizes without a fitted iSwiG width are refused by name
    !>
-   !> - 74 has negative weights, 38 is a valid rule without a fitted value,
-   !>   7 is no Lebedev size
+   !> - 74 and 230 have negative weights (no fitted value), 7 is no Lebedev
+   !>   size
    !> - All three must be reported as unsupported in iSwiG, before any grid
    !>   is built
    subroutine test_unsupported_lebedev_size(error)
@@ -71,7 +71,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: sizes(3) = [74, 38, 7]
+      integer, parameter :: sizes(3) = [74, 230, 7]
       type(structure_type) :: mol
       type(cavity_type_iswig), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
@@ -677,16 +677,17 @@ contains
       call check(error, cav%ngrid, ngrid_ref, &
          & more="Number of grid points does not match")
 
-      ! Independent references
-      switch_ref = 1240.5362859882753_wp
+      ! Independent references: numpy replica of the iSwiG rule on PySCF's
+      ! Lebedev nodes, zeta = 4.90101060987
+      switch_ref = 1240.5362915526180_wp
       call check(error, sum(cav%f), switch_ref, thr=REFERENCE_THR, &
          & more="Switching function does not match")
 
-      area_ref = 565.0168717938371_wp
+      area_ref = 565.01687384673539_wp
       call check(error, cav%total_area, area_ref, thr=REFERENCE_THR, &
          & more="Cavity total area does not match")
 
-      volume_ref = 454.4127542443011_wp
+      volume_ref = 454.41275558137346_wp
       call check(error, cav%total_volume, volume_ref, thr=REFERENCE_THR, &
          & more="Cavity total volume does not match")
 
