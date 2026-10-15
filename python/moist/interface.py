@@ -1393,7 +1393,7 @@ class ModelComponentSSVPE(_ModelComponentPCMBase):
 
 
 class ModelComponentDPCM(_ModelComponentPCMBase):
-    """Differential PCM component."""
+    """Dielectric PCM component."""
 
     def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
                  context: Context | None = None) -> None:
@@ -1401,7 +1401,7 @@ class ModelComponentDPCM(_ModelComponentPCMBase):
 
 
 class ModelComponentDPCMOriginal(_ModelComponentPCMBase):
-    """Original differential PCM discretization."""
+    """Dielectric PCM component in the published Miertus-Scrocco-Tomasi form."""
 
     def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
                  context: Context | None = None) -> None:

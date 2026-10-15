@@ -73,7 +73,7 @@ contains
       self%feps = pcm_layer_feps(epsilon)
       self%param = settings
       self%name = "DPCM"
-      self%description = "Differential formulation of the polarizable continuum model"
+      self%description = "Dielectric polarizable continuum, normal-field condition with f(eps) = (eps - 1)/(eps + 1)"
       self%needs_switching = .false.
       self%needs_normal = .true.
    end subroutine new_component_dpcm
