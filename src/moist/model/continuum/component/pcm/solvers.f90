@@ -25,8 +25,8 @@
 !> - LAPACK and BLAS are called only through moist_math_lapack and
 !>   moist_math_blas, so ILP64 builds keep working
 !> - pcm_nonlinear_problem: nonlinear systems of the generated kernels, solved
-!>   by Newton's method with backtracking (NLESolver in its custom step mode);
-!>   the kernel computes each step with the solver it points to
+!>   by Newton's method with an Armijo backtracking line search; the kernel
+!>   computes each step with the solver it points to
 module moist_model_continuum_component_pcm_solvers
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use, intrinsic :: iso_fortran_env, only: int64, output_unit
@@ -66,6 +66,11 @@ module moist_model_continuum_component_pcm_solvers
    integer, parameter :: pcm_storage_matrix_free = 2
    !> Operator storage of the generated kernels: matrix-free above a memory budget
    integer, parameter :: pcm_storage_auto = 3
+
+   !> Sufficient-decrease constant c of the Newton line search on |F|^2
+   real(wp), parameter :: newton_armijo_c = 1.0e-4_wp
+   !> Shortest Newton step length tried before the iteration counts as stalled
+   real(wp), parameter :: newton_step_min = 2.0_wp**(-20)
 
    !> Per-id work of an iterative solver or preconditioner: none cached
    integer, parameter :: slot_empty = 0
@@ -314,7 +319,7 @@ module moist_model_continuum_component_pcm_solvers
    !>
    !> - The kernel evaluates the residual and computes Newton steps
    !>   p = -J(x)^-1 F(x), setting up its Jacobian operator with the solver it
-   !>   points to; solve runs Newton's method with backtracking (NLESolver)
+   !>   points to; solve runs Newton's method with an Armijo line search
    !> - Converged when |F(x)| <= solver%nonlinear_tol |F(0)|, in at most
    !>   solver%nonlinear_max_iter steps; the statistics go to the solver
    !> - Components point to the caller's data; valid only during that call
@@ -375,24 +380,6 @@ module moist_model_continuum_component_pcm_solvers
          type(error_type), allocatable, intent(out) :: error
       end subroutine nonlinear_step_iface
    end interface
-
-   !> First failure inside the Newton callbacks, which cannot report it themselves
-   type :: newton_record
-      !> First error of a residual or a step
-      type(error_type), allocatable :: error
-      !> Newton steps taken
-      integer :: steps = 0
-      !> |F(0)|: NLESolver sees F/|F(0)|
-      real(wp) :: scale = 1.0_wp
-   end type newton_record
-
-   !> Context of the Newton callbacks (NLESolver keeps a copy; the targets are shared)
-   type :: newton_context
-      !> Problem being solved
-      class(pcm_nonlinear_problem), pointer :: problem => null()
-      !> Failures and statistics
-      type(newton_record), pointer :: record => null()
-   end type newton_context
 
    !> Deferred procedure of pcm_solver
    abstract interface
@@ -692,48 +679,48 @@ module moist_model_continuum_component_pcm_solvers
 
 contains
 
-   !> Solve a nonlinear system F(x) = 0 by Newton's method with backtracking
+   !> Solve a nonlinear system F(x) = 0 by Newton's method with an Armijo line search
    !>
-   !> - NLESolver in its custom step mode: the problem computes each step
-   !> - NLESolver sees F/|F(0)|: its backtracking asks for a decrease of |F| by
-   !>   c alpha |F|^2, which a Newton step gives only for |F| below 1
+   !> - The problem computes each step p = -J(x)^-1 F(x)
+   !> - Step lengths t = 1, 1/2, 1/4, ... until
+   !>   |F(x + t p)|^2 <= (1 - 2 c t) |F(x)|^2, c = newton_armijo_c
    !> - Converged when |F(x)| <= nonlinear_tol |F(0)| (x = 0 if F(0) = 0)
-   !> - Not converged in nonlinear_max_iter steps, or a failed step: error
+   !> - Stalled when no t >= newton_step_min decreases |F|: the Newton step is
+   !>   far too long, so J(x) is near singular at a point that is not a root
+   !>   (typically past a fold of the solution branch); error at once
+   !> - Not converged in nonlinear_max_iter steps, or a failed residual or step: error
    !> - Statistics go to the solver: nonlinear_iterations, nonlinear_residual
    !>
    !> @param[in]     self   problem
    !> @param[in,out] x      initial guess on entry, solution on exit
    !> @param[out]    error  allocated if Newton failed
    subroutine pcm_nonlinear_solve(self, x, error)
-      use moist_math_solver_type, only: solver_base_type
-      use moist_math_solver_newton, only: new_newton_solver, newton_linesearch_backtrack
       !> Problem
-      class(pcm_nonlinear_problem), target, intent(in) :: self
+      class(pcm_nonlinear_problem), intent(in) :: self
       !> Initial guess on entry, solution on exit
       real(wp), contiguous, intent(inout) :: x(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       character(len=*), parameter :: here = "[pcm_nonlinear_solve]"
-      class(solver_base_type), allocatable :: newton
-      ! The callbacks update it through the copy of the context NLESolver keeps
-      type(newton_record), target :: record
-      type(newton_context) :: context
-      real(wp), allocatable :: f(:), zero(:)
-      real(wp) :: scale, residual
+      real(wp), allocatable :: f(:), p(:), x_trial(:), f_trial(:)
+      real(wp) :: scale, norm_f, norm_trial, t
       integer :: stat, steps
 
       if (.not. associated(self%solver)) then
          call fatal_error(error, here//" the problem has no solver")
          return
       end if
-      allocate (f(size(x)), zero(size(x)), stat=stat)
+      allocate (f(size(x)), stat=stat)
+      if (stat == 0) allocate (p(size(x)), stat=stat)
+      if (stat == 0) allocate (x_trial(size(x)), stat=stat)
+      if (stat == 0) allocate (f_trial(size(x)), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, here//" allocation failed")
          return
       end if
-      zero = 0.0_wp
-      call self%residual(zero, f, error)
+      x_trial = 0.0_wp
+      call self%residual(x_trial, f, error)
       if (allocated(error)) return
       scale = nrm2(f)
       self%solver%nonlinear_iterations = 0
@@ -743,95 +730,61 @@ contains
          return
       end if
 
-      context%problem => self
-      record%scale = scale
-      context%record => record
-      ! tolx = 0: iterations stop without convergence only when a step is zero
-      ! (a failed callback), which the record then reports
-      call new_newton_solver(newton, size(x), size(x), error, func_ctx=newton_residual, &
-         & step_ctx=newton_step, context=context, max_iter=self%solver%nonlinear_max_iter, &
-         & tol=self%solver%nonlinear_tol, tolx=0.0_wp, &
-         & linesearch=newton_linesearch_backtrack, alpha_min=1.0e-10_wp)
-      if (allocated(error)) return
-      call newton%solve(x, error)
-      steps = record%steps
-      if (allocated(record%error)) then
-         call move_alloc(record%error, error)
-         return
-      end if
-      if (allocated(error)) deallocate (error)
-
       call self%residual(x, f, error)
       if (allocated(error)) return
-      residual = nrm2(f)/scale
-      self%solver%nonlinear_iterations = steps
-      self%solver%nonlinear_residual = residual
-      if (.not. residual <= self%solver%nonlinear_tol) then
-         call fatal_error(error, here//" Newton did not converge: |F|/|F(0)| = " &
-            & //real_str(residual)//" after "//int_str(steps)//" steps")
-      end if
+      norm_f = nrm2(f)
+      steps = 0
+      do while (.not. norm_f <= self%solver%nonlinear_tol*scale)
+         if (steps >= self%solver%nonlinear_max_iter) then
+            call newton_statistics(self%solver, steps, norm_f/scale)
+            call fatal_error(error, here//" Newton did not converge: |F|/|F(0)| = " &
+               & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps")
+            return
+         end if
+         call self%step(x, f, p, error)
+         if (allocated(error)) return
+         steps = steps + 1
+         t = 1.0_wp
+         do
+            x_trial = x + t*p
+            call self%residual(x_trial, f_trial, error)
+            if (allocated(error)) return
+            norm_trial = nrm2(f_trial)
+            ! Fails for a non-finite trial residual too
+            if (norm_trial <= sqrt(1.0_wp - 2.0_wp*newton_armijo_c*t)*norm_f) exit
+            t = 0.5_wp*t
+            if (t < newton_step_min) then
+               call newton_statistics(self%solver, steps, norm_f/scale)
+               call fatal_error(error, here//" Newton stalled at |F|/|F(0)| = " &
+                  & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps: no step" &
+                  & //" length down to "//real_str(newton_step_min)//" decreases |F|; the" &
+                  & //" Jacobian is near singular away from a root (fold of the solution branch)")
+               return
+            end if
+         end do
+         x = x_trial
+         f = f_trial
+         norm_f = norm_trial
+      end do
+      call newton_statistics(self%solver, steps, norm_f/scale)
    end subroutine pcm_nonlinear_solve
 
-   !> Residual callback of pcm_nonlinear_solve
+   !> Record the statistics of a nonlinear solve
    !>
-   !> @param[in]  x        unknowns
-   !> @param[out] f        residual over |F(0)| (zero after a failure, which stops the iterations)
-   !> @param[in]  context  newton_context
-   subroutine newton_residual(x, f, context)
-      !> Unknowns
-      real(wp), dimension(:), intent(in) :: x
-      !> Residual
-      real(wp), dimension(:), intent(out) :: f
-      !> Callback context
-      class(*), intent(in) :: context
+   !> @param[in,out] solver    solver of the Newton steps
+   !> @param[in]     steps     Newton steps taken
+   !> @param[in]     residual  final |F|/|F(0)|
+   subroutine newton_statistics(solver, steps, residual)
+      !> Solver of the Newton steps
+      class(pcm_solver), intent(inout) :: solver
+      !> Newton steps taken
+      integer, intent(in) :: steps
+      !> Final relative residual
+      real(wp), intent(in) :: residual
 
-      type(error_type), allocatable :: error
-
-      f = 0.0_wp
-      select type (context)
-      type is (newton_context)
-         if (allocated(context%record%error)) return
-         call context%problem%residual(x, f, error)
-         if (allocated(error)) then
-            call move_alloc(error, context%record%error)
-            f = 0.0_wp
-            return
-         end if
-         f = f/context%record%scale
-      end select
-   end subroutine newton_residual
-
-   !> Newton step callback of pcm_nonlinear_solve
-   !>
-   !> @param[in]  x        unknowns
-   !> @param[in]  f        residual at x over |F(0)|
-   !> @param[out] p        Newton step (zero after a failure, which stops the iterations)
-   !> @param[in]  context  newton_context
-   subroutine newton_step(x, f, p, context)
-      !> Unknowns
-      real(wp), dimension(:), intent(in) :: x
-      !> Residual at x
-      real(wp), dimension(:), intent(in) :: f
-      !> Newton step
-      real(wp), dimension(:), intent(out) :: p
-      !> Callback context
-      class(*), intent(in) :: context
-
-      type(error_type), allocatable :: error
-
-      p = 0.0_wp
-      select type (context)
-      type is (newton_context)
-         if (allocated(context%record%error)) return
-         call context%problem%step(x, context%record%scale*f, p, error)
-         if (allocated(error)) then
-            call move_alloc(error, context%record%error)
-            p = 0.0_wp
-            return
-         end if
-         context%record%steps = context%record%steps + 1
-      end select
-   end subroutine newton_step
+      solver%nonlinear_iterations = steps
+      solver%nonlinear_residual = residual
+   end subroutine newton_statistics
 
    !> Solve PCM system using LU factorization
    !> Solves A*q = rhs via LAPACK's LU decomposition (DGETRF + DGETRS).
