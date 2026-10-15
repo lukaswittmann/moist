@@ -15,7 +15,8 @@ module test_math_solvers
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_solver_type, only: solver_base_type
 
-   use moist_math_solver_newton, only: new_newton_solver, newton_linesearch_backtrack, newton_linesearch_exact
+   use moist_math_solver_newton, only: new_newton_solver, newton_linesearch_backtrack, newton_linesearch_exact, &
+                                       newton_linear_solver_custom_step
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_solver_lbfgsb, only: new_lbfgsb_solver
    use moist_math_solver_slsqp_multi_tangent, only: new_slsqp_multi_tangent_solver
@@ -104,6 +105,7 @@ contains
          & new_unittest("rosenbrock_newton", test_rosenbrock_newton), &
          & new_unittest("newton_custom_step", test_newton_custom_step), &
          & new_unittest("newton_custom_step_linesearch", test_newton_custom_step_linesearch), &
+         & new_unittest("newton_custom_step_requires_callback", test_newton_custom_step_requires_callback), &
          & new_unittest("circle_newton_lagrangian", test_circle_newton_lagrangian), &
          & new_unittest("rosenbrock_slsqp", test_rosenbrock_slsqp), &
          & new_unittest("circle_slsqp_explicit", test_circle_slsqp_explicit), &
@@ -166,6 +168,25 @@ contains
       end if
       call check(error, x(1), 2.0_wp, thr=1.0e-12_wp)
    end subroutine test_newton_custom_step
+
+   !> Custom-step mode without a step callback is refused before initialization
+   subroutine test_newton_custom_step_requires_callback(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      integer :: context
+
+      context = 0
+      call new_newton_solver(solver, n=1, m=1, error=solver_error, &
+                             func_ctx=custom_step_residual, context=context, &
+                             linear_solver=newton_linear_solver_custom_step, tol=1.0e-12_wp)
+      call check(error, allocated(solver_error), message="Custom step without step_ctx accepted")
+      if (allocated(error)) return
+      call check(error, index(solver_error%message, "step_ctx") > 0, &
+                 message="Unexpected error: "//solver_error%message)
+      if (allocated(error)) return
+      call check(error, .not. allocated(solver), message="Solver allocated despite the error")
+   end subroutine test_newton_custom_step_requires_callback
 
    !> Residual for the custom step test.
    subroutine custom_step_residual(x, f, context)

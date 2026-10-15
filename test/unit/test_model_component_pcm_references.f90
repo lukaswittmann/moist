@@ -297,6 +297,7 @@ contains
          & new_unittest("slic_born", test_slic_born), &
          & new_unittest("slic_reference", test_slic_reference), &
          & new_unittest("slic_switched_off_point", test_slic_switched_off_point), &
+         & new_unittest("slic_static_potential", test_slic_static_potential), &
          & new_unittest("nonlocal_born", test_nonlocal_born), &
          & new_unittest("nonlocal_reference", test_nonlocal_reference), &
          & new_unittest("nonlocal_switched_off_point", test_nonlocal_switched_off_point), &
@@ -517,6 +518,64 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_reference(error, pcm_slic)
    end subroutine test_slic_reference
+
+   !> SLIC: the static term adds phi_static times the net solute charge
+   !>
+   !> Born ion of either sign; the static term is a constant, so raising
+   !> phi_static by 0.1 Eh/e shifts the energy by exactly 0.1*Q
+   !>
+   !> @param[out] error Test failure
+   subroutine test_slic_static_potential(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the cavity and the components
+      type(moist_context_type), target :: ctx
+      !> Components without and with the static potential
+      class(model_continuum_component_pcm), allocatable :: plain, static
+      !> Single-sphere solute
+      type(structure_type) :: mol
+      !> Spherical cavity
+      class(cavity_type), allocatable :: cavity
+      !> Physical parameters of the shifted component
+      type(pcm_physics) :: physics
+      !> Static potential step, hartree per elementary charge
+      real(wp), parameter :: dphi_static = 0.1_wp
+      !> Charge and energies without and with the static potential
+      real(wp) :: charge, e0, e1
+      !> Sign index
+      integer :: isign
+
+      call new_context(ctx, verbosity=0)
+      call new_pcm(pcm_slic, ctx, plain, error)
+      if (allocated(error)) return
+      physics%slic_phi_static = dphi_static
+      call new_pcm(pcm_slic, ctx, static, error, physics)
+      if (allocated(error)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_sphere_cavity(pcm_slic, [born_radius], born_nleb, ctx, cavity, error)
+      if (allocated(error)) return
+      call static%configure_cavity(cavity, err)
+      call check_moist_error(error, err, "cavity configuration")
+      if (allocated(error)) return
+      call cavity%update(mol, error=err)
+      call check_moist_error(error, err, "cavity update")
+      if (allocated(error)) return
+
+      do isign = 1, 2
+         charge = merge(1.0_wp, -1.0_wp, isign == 1)
+         mol%charge = charge
+         call host_energy(plain, mol, cavity, mol, [charge], e0, error)
+         if (allocated(error)) return
+         call host_energy(static, mol, cavity, mol, [charge], e1, error)
+         if (allocated(error)) return
+         call check(error, e1 - e0, dphi_static*charge, thr=1.0e-12_wp, &
+            & message="SLIC static term is not phi_static times the net charge")
+         if (allocated(error)) return
+      end do
+   end subroutine test_slic_static_potential
 
    !> SLIC: a switched-off point drops out of the energy
    !>

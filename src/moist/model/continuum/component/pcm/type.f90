@@ -93,6 +93,11 @@ module moist_model_continuum_component_pcm_type
       !> Surface charges on cavity grid points (ngrid)
       real(wp), allocatable :: q(:)
 
+      !> Energy returned by the generated solve
+      !>
+      !> Residual-corrected for inexact solves, consistent with the gradient weights
+      real(wp) :: kernel_energy = 0.0_wp
+
       !> Numerical settings shared by computation and parameter introspection
       type(moist_pcm_parameters_type) :: param
 
@@ -367,7 +372,8 @@ contains
 
    !> Compute PCM solvation energy
    !>
-   !> E_solv = 0.5 * dot(q, phi)
+   !> Returns the energy of the generated solve, e.g. 0.5*dot(q, phi) for an
+   !> exact conductor solve; residual-corrected for iterative solves
    !>
    !> The molecular potential phi comes from the coupling's potential request
    !>
@@ -391,7 +397,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp) :: e_pcm
       !> Timer depth on entry, restored on every early return
       integer :: d0
 
@@ -407,11 +412,7 @@ contains
          return
       end if
 
-      ! Compute energy: E = 0.5 * dot(q, phi)
-      e_pcm = 0.5_wp*dot_product(self%q, self%phi)
-
-      ! Accumulate into energy
-      energy = energy + e_pcm
+      energy = energy + self%kernel_energy
 
       call self%ctx%timer%stop("PCM energy")
 

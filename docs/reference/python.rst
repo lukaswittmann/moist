@@ -172,10 +172,10 @@ for custom radii; they need ``update`` and are ready before a deferred build.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
-its :doc:`fields`. ``Structure(numbers, positions)`` stores elements and
-geometry, copying input arrays. Call ``update`` to change the geometry.
-Supply nuclear charges through the ``nuclear_charges`` request
-(:ref:`coupling-requests`).
+its :doc:`fields`. ``Structure(numbers, positions, charge=0.0)`` stores
+elements, geometry and the net charge (read by SLIC's static term), copying
+input arrays. Call ``update`` to change the geometry. Supply nuclear charges
+through the ``nuclear_charges`` request (:ref:`coupling-requests`).
 
 Internal Gaussian density
 -------------------------

@@ -292,7 +292,6 @@ contains
       class(cavity_type), intent(in) :: cavity
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: phi(:), grad_v(:)
-      real(wp) :: energy
       integer :: d0
 
       if (.not. allocated(self%q)) then
@@ -316,9 +315,9 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM solve", category=cat_solve)
       if (self%smeared) then
-         call conductor_solve(self%gauss, self%phi, energy, self%q, grad_v, error)
+         call conductor_solve(self%gauss, self%phi, self%kernel_energy, self%q, grad_v, error)
       else
-         call conductor_point_solve(self%point, self%phi, energy, self%q, grad_v, error)
+         call conductor_point_solve(self%point, self%phi, self%kernel_energy, self%q, grad_v, error)
       end if
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)

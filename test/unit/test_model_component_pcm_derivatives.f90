@@ -22,6 +22,8 @@
 !>   separately differenced, dense against iterative solves
 !> - CPCM host features: an independently coded energy on the fixture, an ECP
 !>   host with forward/reverse gradient parity, a supplied external potential
+!> - `cpcm_iterative_surface_gradient`: `surface_gradient` with GMRES at the
+!>   default tolerance, whose residual-corrected energy the weights differentiate
 module test_model_component_pcm_derivatives
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
@@ -94,6 +96,11 @@ module test_model_component_pcm_derivatives
    !> All tolerances are about ten times the largest deviation over every
    !> model and solute (six-point stencil, roundoff-limited)
    real(wp), parameter :: grad_atol = 3.0e-12_wp, grad_rtol = 1.0e-9_wp
+   !> Energy differences with GMRES at the default tolerance, absolute part
+   !>
+   !> The iterate's error enters to first order in the residual: measured 1.4e-10
+   !> with the residual-corrected energy, up to 1.8e-7 with 0.5*dot(q, phi)
+   real(wp), parameter :: gmres_atol = 1.5e-9_wp
    !> Nuclear gradient (four-point stencil), with cavity rebuild roundoff
    !>
    !> The SLIC Newton tolerance sets the largest deviation, 9e-10 relative
@@ -142,6 +149,7 @@ contains
 
       testsuite = [ &
          & new_unittest("cpcm_surface_gradient", test_cpcm_surface_gradient), &
+         & new_unittest("cpcm_iterative_surface_gradient", test_cpcm_iterative_surface_gradient), &
          & new_unittest("cpcm_tangent", test_cpcm_tangent), &
          & new_unittest("cpcm_nuclear_gradient", test_cpcm_nuclear_gradient), &
          & new_unittest("cosmo_surface_gradient", test_cosmo_surface_gradient), &
@@ -188,6 +196,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_surface_gradient(error, pcm_cpcm)
    end subroutine test_cpcm_surface_gradient
+
+   !> CPCM: surface and trace gradients with inexact GMRES solves
+   !>
+   !> Default solver tolerance; the energy carries the residual correction of
+   !> the generated solve, so the analytic weights stay its exact derivative
+   !>
+   !> @param[out] error Test failure
+   subroutine test_cpcm_iterative_surface_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_surface_gradient(error, pcm_cpcm, iterative=.true.)
+   end subroutine test_cpcm_iterative_surface_gradient
 
    !> CPCM: surface weight tangent
    !>
@@ -429,20 +449,23 @@ contains
 
    !> Surface and trace gradients on Gaussian and point surfaces of every solute
    !>
-   !> @param[out] error Test failure
-   !> @param[in]  kind  Model identifier
-   subroutine run_surface_gradient(error, kind)
+   !> @param[out] error     Test failure
+   !> @param[in]  kind      Model identifier
+   !> @param[in]  iterative Solve with GMRES at the default tolerance (default dense)
+   subroutine run_surface_gradient(error, kind, iterative)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
       integer, intent(in) :: kind
+      !> Solve with GMRES at the default tolerance
+      logical, intent(in), optional :: iterative
       !> Solute index
       integer :: imol
 
       do imol = 1, nmol
-         call check_surface_gradient(error, kind, imol, .true.)
+         call check_surface_gradient(error, kind, imol, .true., iterative)
          if (allocated(error)) return
-         call check_surface_gradient(error, kind, imol, .false.)
+         call check_surface_gradient(error, kind, imol, .false., iterative)
          if (allocated(error)) return
       end do
    end subroutine run_surface_gradient
@@ -495,11 +518,12 @@ contains
    !> displaced surface, so a surface step moves the traces as well and the
    !> difference is the total derivative `get_gradient_surface_weights` returns
    !>
-   !> @param[out] error   Test failure
-   !> @param[in]  kind    Model identifier
-   !> @param[in]  imol    Solute index
-   !> @param[in]  smeared Gaussian surface (else point surface)
-   subroutine check_surface_gradient(error, kind, imol, smeared)
+   !> @param[out] error     Test failure
+   !> @param[in]  kind      Model identifier
+   !> @param[in]  imol      Solute index
+   !> @param[in]  smeared   Gaussian surface (else point surface)
+   !> @param[in]  iterative Solve with GMRES at the default tolerance (default dense)
+   subroutine check_surface_gradient(error, kind, imol, smeared, iterative)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
@@ -508,6 +532,8 @@ contains
       integer, intent(in) :: imol
       !> Gaussian surface
       logical, intent(in) :: smeared
+      !> Solve with GMRES at the default tolerance
+      logical, intent(in), optional :: iterative
 
       !> Run context borrowed by the component
       type(moist_context_type), target :: ctx
@@ -527,6 +553,8 @@ contains
       real(wp) :: energy, values(6), analytic, fd
       !> Difference step of the seed
       real(wp) :: h
+      !> Absolute part of the difference tolerance
+      real(wp) :: atol
       !> Channel and stencil indices, cavity seed
       integer :: ich, k, seed
       !> Failure context
@@ -535,6 +563,13 @@ contains
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error)
       if (allocated(error)) return
+      atol = grad_atol
+      if (present(iterative)) then
+         if (iterative) then
+            pcm%param%solver = solver_type%iterative
+            atol = gmres_atol
+         end if
+      end if
       call get_solute(imol, mol)
       q = host_charges(mol)
       seed = first_seed(kind)
@@ -543,6 +578,7 @@ contains
       h = merge(step_drop_surface, step, seed == seed_drop)
       prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))// &
          & merge(", Gaussian", ", point   ", smeared)
+      if (pcm%param%solver == solver_type%iterative) prefix = trim(prefix)//", GMRES"
       call host_surface_weights(pcm, mol, cavity, q, acc, energy, error)
       if (allocated(error)) return
 
@@ -559,7 +595,7 @@ contains
          if (allocated(error)) return
          write (context, '(a,": channel ",a," dE/dt ",es12.4," vs FD ",es12.4,", dev ",es9.2)') &
             & trim(prefix), trim(channel_name(ich)), analytic, fd, abs(analytic - fd)
-         call check(error, abs(analytic - fd) <= grad_atol + grad_rtol*abs(fd), &
+         call check(error, abs(analytic - fd) <= atol + grad_rtol*abs(fd), &
             & message="surface weights disagree with the energy difference", more=trim(context))
          if (allocated(error)) return
          if (expects(active_channels(kind, smeared), ich)) then
@@ -585,7 +621,7 @@ contains
       if (allocated(error)) return
       write (context, '(a,": phi dE/dt ",es12.4," vs FD ",es12.4,", dev ",es9.2)') &
          & trim(prefix), analytic, fd, abs(analytic - fd)
-      call check(error, abs(analytic - fd) <= grad_atol + grad_rtol*abs(fd) .and. &
+      call check(error, abs(analytic - fd) <= atol + grad_rtol*abs(fd) .and. &
          & abs(fd) > thr_active*abs(energy), message="dE/dphi disagrees with the energy difference", &
          & more=trim(context))
       if (allocated(error)) return
@@ -601,7 +637,7 @@ contains
       if (allocated(error)) return
       write (context, '(a,": dphi_dr dE/dt ",es12.4," vs FD ",es12.4,", dev ",es9.2)') &
          & trim(prefix), analytic, fd, abs(analytic - fd)
-      call check(error, abs(analytic - fd) <= grad_atol + grad_rtol*abs(fd), &
+      call check(error, abs(analytic - fd) <= atol + grad_rtol*abs(fd), &
          & message="dE/d(dphi_dr) disagrees with the energy difference", more=trim(context))
       if (allocated(error)) return
       call check(error, allocated(w_dphi_dr) .eqv. pcm%uses_normal_trace(), &

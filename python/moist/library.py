@@ -192,6 +192,7 @@ def new_structure(
     positions: np.ndarray,
     lattice: Optional[np.ndarray],
     periodic: Optional[np.ndarray],
+    charge: float,
 ) -> StructureHandle:
     return StructureHandle.with_gc(
         error_check(lib.moist_new_structure)(
@@ -200,6 +201,7 @@ def new_structure(
             _cast("double*", positions),
             _cast("double*", lattice),
             _cast("bool*", periodic),
+            ffi.new("double *", charge),
         )
     )
 

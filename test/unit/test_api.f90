@@ -4,7 +4,7 @@ module test_api
    use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_null_ptr, c_int, c_double, c_bool, &
       & c_funptr, c_funloc, c_associated, c_f_pointer, c_char, c_null_char, c_size_t, &
       & c_sizeof, c_null_funptr, c_int8_t
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io_structure, only: structure_type
@@ -216,7 +216,7 @@ module test_api
       end subroutine moist_get_cavity_sizes
 
       function moist_new_structure(verror, natoms, numbers, positions, &
-            & lattice, periodic) result(vmol) &
+            & lattice, periodic, charge) result(vmol) &
             & bind(C, name="moist_new_structure")
          import :: c_ptr, c_int, c_double, c_bool
          implicit none(type, external)
@@ -226,8 +226,19 @@ module test_api
          real(c_double), intent(in), optional :: positions(3, natoms)
          real(c_double), intent(in), optional :: lattice(3, 3)
          logical(c_bool), intent(in), optional :: periodic(3)
+         real(c_double), intent(in), optional :: charge
          type(c_ptr) :: vmol
       end function moist_new_structure
+
+      function moist_new_slic_component(verror, vcontext, epsilon, alpha, beta, gamma, mu, &
+            & phi_static, options) result(vcomponent) &
+            & bind(C, name="moist_new_slic_component")
+         import :: c_ptr, c_double
+         implicit none(type, external)
+         type(c_ptr), value :: verror, vcontext, options
+         real(c_double), value :: epsilon, alpha, beta, gamma, mu, phi_static
+         type(c_ptr) :: vcomponent
+      end function moist_new_slic_component
 
       subroutine moist_delete_structure(vmol) &
             & bind(C, name="moist_delete_structure")
@@ -575,6 +586,7 @@ contains
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
+                  new_unittest("structure_charge_reaches_slic", test_structure_charge_slic), &
                   new_unittest("missing_pointers_results", test_missing_pointers_results), &
                   new_unittest("missing_pointers_gradients", test_missing_pointers_gradients), &
                   new_unittest("unbuilt_cavity_guards", test_unbuilt_cavity_guards), &
@@ -2402,9 +2414,10 @@ contains
       !> Returned structure handle
       type(c_ptr) :: verror, vmol
       !> Expected diagnostics, one per case
-      character(len=80), parameter :: needles(8) = [character(len=80) :: &
+      character(len=80), parameter :: needles(9) = [character(len=80) :: &
          & "[moist_new_structure] Required pointer 'numbers' is missing", &
          & "[moist_new_structure] Required pointer 'positions' is missing", &
+         & "[moist_new_structure] Net charge must be finite", &
          & "[moist_update_structure] Required pointer 'positions' is missing", &
          & "[moist_update_structure] Molecular structure data is missing", &
          & "[moist_update_structure] Invalid molecular structure data provided", &
@@ -2427,16 +2440,19 @@ contains
          case (2)
             vmol = moist_new_structure(verror, 2_c_int, numbers)
          case (3)
-            call update_structure_api(verror, c_null_ptr)
+            vmol = moist_new_structure(verror, 2_c_int, numbers, positions, &
+               & charge=ieee_value(1.0_c_double, ieee_quiet_nan))
          case (4)
-            call update_structure_api(verror, c_null_ptr, positions)
+            call update_structure_api(verror, c_null_ptr)
          case (5)
-            call update_structure_api(verror, c_loc(empty), positions)
+            call update_structure_api(verror, c_null_ptr, positions)
          case (6)
-            call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
+            call update_structure_api(verror, c_loc(empty), positions)
          case (7)
-            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
+            call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
          case (8)
+            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
+         case (9)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
          case default
             error stop "test_api: unhandled case in test_structure_radii_guards"
@@ -2449,6 +2465,117 @@ contains
       deallocate (err)
 
    end subroutine test_structure_radii_guards
+
+   !> The net charge of moist_new_structure reaches SLIC's static term
+   !>
+   !> Chloride on a SvdW-DROP cavity with a constant host trace: raising
+   !> phi_static by 0.1 Eh/e shifts the energy by 0.1*Q; NULL is neutral
+   subroutine test_structure_charge_slic(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(vp_structure), pointer :: mol
+      type(c_ptr) :: verror, vneutral, vanion
+      !> Chloride at the origin, bohr
+      integer(c_int), parameter :: numbers(1) = [17_c_int]
+      real(c_double), parameter :: positions(3, 1) = 0.0_c_double
+      !> Net charge of the anion, elementary charges
+      real(c_double), parameter :: charge = -1.0_c_double
+      !> Static potential step, hartree per elementary charge
+      real(c_double), parameter :: dphi_static = 0.1_c_double
+      !> Energies at phi_static 0 and dphi_static
+      real(c_double) :: e0, e1
+
+      allocate (err)
+      verror = c_loc(err)
+      vneutral = moist_new_structure(verror, 1_c_int, numbers, positions)
+      vanion = moist_new_structure(verror, 1_c_int, numbers, positions, charge=charge)
+
+      checks: block
+         call expect_success(error, err, "structures")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vneutral, mol)
+         call check(error, mol%ptr%charge, 0.0_wp, message="NULL charge is not neutral")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vanion, mol)
+         call check(error, mol%ptr%charge, real(charge, wp), message="net charge not stored")
+         if (allocated(error)) exit checks
+
+         e0 = slic_energy(0.0_c_double)
+         if (allocated(error)) exit checks
+         e1 = slic_energy(dphi_static)
+         if (allocated(error)) exit checks
+         call check(error, e1 - e0, dphi_static*charge, thr=1.0e-12_c_double, &
+            & message="phi_static*Q missing from the SLIC energy")
+      end block checks
+
+      call moist_delete_structure(vanion)
+      call moist_delete_structure(vneutral)
+      deallocate (err)
+
+   contains
+
+      !> SLIC energy of the anion through the C protocol at one static potential
+      function slic_energy(phi_static) result(energy)
+         !> Static potential, hartree per elementary charge
+         real(c_double), intent(in) :: phi_static
+         !> Model energy
+         real(c_double) :: energy
+         type(vp_coupling), pointer :: cpl
+         type(c_ptr) :: lsf, vcav, vmodel, vslic, vcpl, vgrid
+         !> Constant potential trace, zero field and width derivatives
+         real(c_double), allocatable :: values(:)
+         integer(c_int) :: ngrid, nsph
+         character(kind=c_char), allocatable, target :: name(:)
+         character(len=8), parameter :: outputs(3) = [character(len=8) :: "phi", "dphi_dr", "dphi_dxi"]
+         integer :: k
+
+         energy = 0.0_c_double
+         vcpl = c_null_ptr
+         lsf = moist_new_svdw_lsf(verror, c_null_ptr)
+         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
+         call moist_delete_lsf(lsf)
+         vmodel = model_on_context(verror, vcav)
+         ! Water-like SLIC parameters, mu = -alpha*tanh(-gamma)
+         vslic = moist_new_slic_component(verror, c_null_ptr, 78.4_c_double, 0.5_c_double, &
+            & -2.0_c_double, -0.5_c_double, -0.5_c_double*tanh(0.5_c_double), phi_static, c_null_ptr)
+         if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vslic)
+         if (.not. allocated(err%ptr)) call update_model_through_api(verror, vmodel, vanion)
+         if (.not. allocated(err%ptr)) then
+            vgrid = get_solvation_model_cavity_api(verror, vmodel)
+            call moist_get_cavity_sizes(verror, vgrid, ngrid, nsph)
+            call moist_delete_cavity(vgrid)
+         end if
+         if (.not. allocated(err%ptr)) vcpl = new_coupling_api(verror, vmodel)
+         if (.not. allocated(err%ptr)) call general_model_prepare_energy_api(verror, vmodel, vcpl)
+         if (.not. allocated(err%ptr)) then
+            call c_f_pointer(vcpl, cpl)
+            do while (next_coupling_request_api(verror, vcpl))
+               associate (request => cpl%ptr%request())
+                  do k = 1, size(outputs)
+                     if (.not. request%is_missing(trim(outputs(k)))) cycle
+                     if (k == 2) then
+                        allocate (values(3*ngrid), source=0.0_c_double)
+                     else
+                        allocate (values(ngrid), source=merge(-0.1_c_double, 0.0_c_double, k == 1))
+                     end if
+                     name = c_string(trim(outputs(k)))
+                     call coupling_answer_api(verror, vcpl, c_loc(name), values)
+                     deallocate (values)
+                     if (allocated(err%ptr)) exit
+                  end do
+               end associate
+               if (allocated(err%ptr)) exit
+            end do
+         end if
+         if (.not. allocated(err%ptr)) call general_model_get_energy_api(verror, vmodel, vcpl, energy)
+         call expect_success(error, err, "SLIC evaluation")
+         call delete_coupling_api(vcpl)
+         call delete_solvation_model_api(vmodel)
+         call delete_solvation_component_api(vslic)
+         call moist_delete_cavity(vcav)
+      end function slic_energy
+
+   end subroutine test_structure_charge_slic
 
    !> Omit one required pointer at a time and expect the entry point to name it
    !>

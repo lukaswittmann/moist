@@ -7,6 +7,7 @@ module moist_api
       & c_f_pointer, c_funptr, c_int, c_int8_t, c_int64_t, c_loc, c_null_char, &
       & c_null_ptr, c_ptr, c_size_t, c_sizeof
    use, intrinsic :: iso_fortran_env, only: iostat_end, iostat_eor
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
    use moist_cavity_type, only: cavity_type
@@ -2355,7 +2356,7 @@ contains
 
    !> Create new molecular structure data (quantities in Bohr)
    function new_structure_api(verror, natoms, numbers, positions, &
-         & c_lattice, c_periodic) result(vmol) &
+         & c_lattice, c_periodic, c_charge) result(vmol) &
          & bind(C, name=namespace//"new_structure")
       !> Required diagnostic handle
       type(c_ptr), value :: verror
@@ -2369,12 +2370,15 @@ contains
       real(c_double), intent(in), optional :: c_lattice(3, 3)
       !> Optional periodicity flags by lattice direction
       logical(c_bool), intent(in), optional :: c_periodic(3)
+      !> Optional net charge in elementary charges, neutral when omitted
+      real(c_double), intent(in), optional :: c_charge
       !> Owned result, NULL on failure
       type(c_ptr) :: vmol
       !> Decoded error handle for argument validation
       type(vp_error), pointer :: error
       real(wp), allocatable :: lattice(:, :)
       logical, allocatable :: periodic(:)
+      real(wp) :: charge
       type(vp_structure), pointer :: mol
 
       vmol = c_null_ptr
@@ -2397,9 +2401,15 @@ contains
          allocate (periodic(3))
          periodic(:) = c_periodic
       end if
+      charge = 0.0_wp
+      if (present(c_charge)) charge = c_charge
+      if (.not. ieee_is_finite(charge)) then
+         call api_error(error%ptr, "new_structure", "Net charge must be finite")
+         return
+      end if
 
       allocate (mol)
-      call new(mol%ptr, numbers, positions, lattice=lattice, periodic=periodic)
+      call new(mol%ptr, numbers, positions, charge=charge, lattice=lattice, periodic=periodic)
       vmol = c_loc(mol)
 
       call verify_structure(error%ptr, mol%ptr)

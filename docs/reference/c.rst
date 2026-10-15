@@ -33,7 +33,7 @@ options with the caller's ``sizeof`` before assigning fields:
    moist_add_model_component(error, model, pcm);  /* model owns a copy */
    moist_delete(pcm);
    moist_structure mol = moist_new_structure(error, natoms, numbers, positions,
-                                             NULL, NULL);  /* NULL: molecular */
+                                             NULL, NULL, NULL);  /* molecular, neutral */
    moist_update_model(error, model, mol);
    moist_delete(mol);  /* the cavity and components copy the structure */
    moist_coupling cpl = moist_new_coupling(error, model);
@@ -41,8 +41,10 @@ options with the caller's ``sizeof`` before assigning fields:
    /* No build requests for this geometric cavity. */
    moist_build_model(error, model, cpl);
 
-The structure holds elements and geometry. Supply nuclear charges through
-the ``nuclear_charges`` request (:ref:`coupling-requests`).
+The structure holds elements, geometry and the net charge in elementary
+charges (``NULL`` for a neutral solute); SLIC reads the net charge for its
+static term. Supply nuclear charges through the ``nuclear_charges`` request
+(:ref:`coupling-requests`).
 
 Add every component before the first ``moist_update_model``; later additions
 are rejected.

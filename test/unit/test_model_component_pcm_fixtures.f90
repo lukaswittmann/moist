@@ -83,6 +83,8 @@ module test_model_component_pcm_fixtures
       real(wp) :: slic_gamma = -0.4_wp
       !> SLIC mu
       real(wp) :: slic_mu = 0.05_wp
+      !> SLIC static potential, hartree per elementary charge
+      real(wp) :: slic_phi_static = 0.0_wp
    end type pcm_physics
    !> Newton tolerance of SLIC, far below the finite-difference tolerances
    real(wp), parameter :: newton_tol = 1.0e-13_wp
@@ -215,7 +217,7 @@ contains
             call new_component_lpb(pcm, eps, phys%kappa, err, param, ctx=ctx)
          type is (model_continuum_component_slic)
             call new_component_slic(pcm, eps, phys%slic_alpha, phys%slic_beta, phys%slic_gamma, &
-               & err, param, mu=phys%slic_mu, ctx=ctx)
+               & err, param, mu=phys%slic_mu, phi_static=phys%slic_phi_static, ctx=ctx)
          type is (model_continuum_component_nonlocal)
             call new_component_nonlocal(pcm, eps, phys%eps_inf, phys%lambda, err, param, ctx=ctx)
          end select

@@ -572,15 +572,17 @@ moist_delete_error(moist_error* error) moist_API_SUFFIX__V_1_0;
 **/
 
 /// Create new molecular structure data (quantities in Bohr)
-/// The structure holds element numbers and geometry only; the nuclear charges
-/// of the host Hamiltonian arrive through the "nuclear_charges" coupling request
+/// The structure holds element numbers, geometry and the net charge; the
+/// nuclear charges of the host Hamiltonian arrive through the
+/// "nuclear_charges" coupling request
 moist_API_ENTRY moist_structure moist_API_CALL
 moist_new_structure(moist_error error,
                     int natoms,
                     const int* numbers /* [natoms] */,
                     const double* positions /* : row-major (natoms, 3) */,
                     const double* lattice /* : row-major (3, 3), vectors in rows */,
-                    const bool* periodic /* [3] */) moist_API_SUFFIX__V_1_0;
+                    const bool* periodic /* [3] */,
+                    const double* charge /* : net charge in e, NULL for neutral */) moist_API_SUFFIX__V_1_0;
 
 /// Delete molecular structure data
 moist_API_ENTRY void moist_API_CALL
