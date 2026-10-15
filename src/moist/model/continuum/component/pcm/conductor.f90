@@ -11,14 +11,14 @@ module moist_model_continuum_component_pcm_conductor
       & point_potential_request_type, nuclear_charge_request_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_register, request_require
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
-      & solver_type, moist_pcm_parameters_type
+      & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver
    use pcmgen_gauss_conductor, only: conductor_state, &
-      & conductor_assemble, conductor_medium, conductor_solve, conductor_weights
+      & conductor_assemble, conductor_medium, conductor_solve, conductor_weights, conductor_tangent
    use pcmgen_point_conductor, only: conductor_point_state, &
       & conductor_point_assemble, conductor_point_medium, conductor_point_solve, &
-      & conductor_point_weights
+      & conductor_point_weights, conductor_point_tangent
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
@@ -41,6 +41,7 @@ module moist_model_continuum_component_pcm_conductor
       procedure :: get_surface_weights => conductor_get_surface_weights
       procedure :: get_gradient_surface_weights => conductor_get_gradient_surface_weights
       procedure :: get_host_surface_weights => conductor_get_host_surface_weights
+      procedure :: surface_weight_tangent => conductor_surface_weight_tangent
       procedure :: declare_coupling => conductor_declare_coupling
    end type model_continuum_component_pcm_conductor
 
@@ -341,6 +342,89 @@ contains
          call self%get_host_surface_weights(coupling, acc, cavity%ngrid, error)
       end if
    end subroutine conductor_get_surface_weights
+
+   !> Directional derivative of the conductor weights and charges
+   !>
+   !> - Gaussian surface: position, width and switching channels
+   !> - Point surface: position and area channels
+   !> - No normal trace: `dvn` is ignored and `dw_vn` stays unallocated
+   !>
+   !> @param[in,out] self      Conductor component with current charges
+   !> @param[in]     cavity    Cavity the operator was assembled on
+   !> @param[in]     direction Surface direction
+   !> @param[in]     dphi      Potential-trace direction (ngrid)
+   !> @param[in,out] tangent   Initialized accumulator, receives the weight tangent
+   !> @param[out]    dw_phi    Tangent of the surface charges (ngrid)
+   !> @param[out]    error     Allocated on failure
+   !> @param[in]     dvn       Normal-trace direction, ignored
+   !> @param[out]    dw_vn     Normal-trace adjoint tangent, never allocated
+   subroutine conductor_surface_weight_tangent(self, cavity, direction, dphi, tangent, &
+         & dw_phi, error, dvn, dw_vn)
+      !> Conductor component with current charges
+      class(model_continuum_component_pcm_conductor), intent(inout) :: self
+      !> Cavity the operator was assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction
+      class(cavity_surface_adjoint_type), intent(in) :: direction
+      !> Potential-trace direction
+      real(wp), intent(in) :: dphi(:)
+      !> Accumulator of the weight tangent
+      class(cavity_surface_adjoint_type), intent(inout) :: tangent
+      !> Tangent of the surface charges
+      real(wp), allocatable, intent(out) :: dw_phi(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace direction
+      real(wp), intent(in), optional :: dvn(:)
+      !> Tangent of the normal-trace adjoint
+      real(wp), allocatable, intent(out), optional :: dw_vn(:)
+      !> Kernel direction blocks
+      real(wp), allocatable :: dr(:, :, :), dxi(:, :), df(:, :), da(:, :), dv(:, :)
+      !> Kernel tangent blocks
+      real(wp), allocatable :: hvp_r(:, :, :), hvp_xi(:, :), hvp_f(:, :), hvp_a(:, :), hvp_v(:, :)
+      !> Kernel weights, recomputed because the tangent requires them
+      real(wp), allocatable :: w_xyz(:, :), w_xi(:), w_f(:), w_a(:)
+      !> Dielectric-factor weight, unused
+      real(wp) :: w_feps
+      !> Number of grid points
+      integer :: ngrid
+
+      call pcm_tangent_require(self, cavity, dphi, error)
+      if (allocated(error)) return
+      ngrid = cavity%ngrid
+      if (self%is_inert()) then
+         allocate (dw_phi(ngrid), source=0.0_wp)
+         return
+      end if
+      call pcm_tangent_block(direction%w_xyz, ngrid, "w_xyz", dr, error)
+      if (allocated(error)) return
+      allocate (dv(ngrid, 1), hvp_r(3, ngrid, 1), hvp_v(ngrid, 1), w_xyz(3, ngrid))
+      dv(:, 1) = dphi
+      if (self%smeared) then
+         call pcm_tangent_block(direction%w_xi, ngrid, "w_xi", dxi, error)
+         if (allocated(error)) return
+         call pcm_tangent_block(direction%w_f, ngrid, "w_f", df, error)
+         if (allocated(error)) return
+         allocate (hvp_xi(ngrid, 1), hvp_f(ngrid, 1), w_xi(ngrid), w_f(ngrid))
+         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, w_feps, error)
+         if (allocated(error)) return
+         call conductor_tangent(self%gauss, dr, dxi, df, dv, hvp_r, hvp_xi, hvp_f, hvp_v, error)
+         if (allocated(error)) return
+         call tangent%add_surface_weights(error, w_xyz=hvp_r(:, :, 1), w_xi=hvp_xi(:, 1), &
+            & w_f=hvp_f(:, 1))
+      else
+         call pcm_tangent_block(direction%w_a, ngrid, "w_a", da, error)
+         if (allocated(error)) return
+         allocate (hvp_a(ngrid, 1), w_a(ngrid))
+         call conductor_point_weights(self%point, w_xyz, w_a, w_feps, error)
+         if (allocated(error)) return
+         call conductor_point_tangent(self%point, dr, da, dv, hvp_r, hvp_a, hvp_v, error)
+         if (allocated(error)) return
+         call tangent%add_surface_weights(error, w_xyz=hvp_r(:, :, 1), w_a=hvp_a(:, 1))
+      end if
+      if (allocated(error)) return
+      dw_phi = hvp_v(:, 1)
+   end subroutine conductor_surface_weight_tangent
 
    !> Include host trace geometry weights in the nuclear gradient
    subroutine conductor_get_gradient_surface_weights(self, coupling, cavity, acc, error)
