@@ -1130,8 +1130,7 @@ contains
    !> molecular point membership and k lattice stay
    !> fixed, with both reference owners tested. The EC case adds the host's
    !> fixed-point contraction of a geometry-dependent analytic potential.
-   !> Molecular cases use a smaller grid, one deformation and one FD step; set
-   !> MOIST_EXTENDED_MOZ_GRADIENTS=1 for the original grid, directions and steps.
+   !> Molecular cases use a smaller grid, one deformation and one FD step
    subroutine gradient_case(kind, mode, error, drism)
       integer, intent(in) :: kind, mode
       type(error_type), allocatable, intent(out) :: error
@@ -1150,11 +1149,10 @@ contains
       character(len=4), parameter :: corrections(3) = ["none", "PC  ", "PC+ "]
       real(wp), parameter :: steps(2) = [2.0e-4_wp, 1.0e-4_wp]
       real(wp), parameter :: translation(3) = [0.17_wp, -0.13_wp, 0.11_wp]
-      character(len=8) :: extended_setting
       real(wp), allocatable :: grad(:, :), delta(:, :), phi(:), spatial(:, :), host_delta(:), wphi(:)
       real(wp), allocatable :: q(:), dq(:), wq(:)
       real(wp) :: e0, e1, ep, em, dot, fd, eps, max_error
-      integer :: ic, ref, nref, direction, istep, nstep, ndirection, env_status, fd_evaluations, nrad, degree
+      integer :: ic, ref, nref, direction, istep, nstep, ndirection, fd_evaluations, nrad, degree
       logical :: compact
 
       call new_context(ctx, nthreads=2, verbosity=0)
@@ -1162,11 +1160,7 @@ contains
       fd_evaluations = 0
       nref = 1
       if (kind == 2) nref = 2
-      compact = .false.
-      if (kind == 2 .and. mode == 3) then
-         call get_environment_variable("MOIST_EXTENDED_MOZ_GRADIENTS", extended_setting, status=env_status)
-         compact = .not. (env_status == 0 .and. trim(extended_setting) == "1")
-      end if
+      compact = kind == 2 .and. mode == 3
       nstep = merge(1, size(steps), compact)
       ndirection = merge(1, 2, compact)
       nrad = merge(18, 36, compact)
