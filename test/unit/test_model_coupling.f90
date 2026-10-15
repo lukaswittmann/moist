@@ -30,6 +30,7 @@ module test_model_coupling
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
+   use moist_model_type, only: solvation_model_type
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -148,10 +149,13 @@ contains
       type(cavity_type_iswig) :: cavity
       type(model_continuum_type), target :: original
       type(model_continuum_type), allocatable, target :: copied
+      class(solvation_model_type), allocatable, target :: polymorphic_copy
+      class(solvation_model_type), pointer :: polymorphic_source
       type(coupling_type), pointer :: coupling
       !> Borrowed model cavity
       class(cavity_type), pointer :: cav
       real(wp) :: energy
+      integer :: mode
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
       call cpcm_model(original, cavity, ctx, mol, .false., error)
@@ -160,14 +164,33 @@ contains
       call original%new_coupling(coupling, err)
       call original%prepare_energy(coupling, err)
       call fill_point_charge_potential(cav, coupling, qat_vals, mol)
-      allocate(copied, source=original)
-      energy = 0.0_wp
-      call copied%get_energy(coupling, energy, err)
-      call check(error, allocated(err))
-      if (allocated(error)) return
-      deallocate(copied)
-      call original%get_energy(coupling, energy, err)
-      if (failed(error, err, "original survives destroying its copy")) return
+      polymorphic_source => original
+      do mode = 1, 3
+         if (mode == 3) then
+            allocate (model_continuum_type :: polymorphic_copy)
+            polymorphic_copy = polymorphic_source
+            energy = 0.0_wp
+            call polymorphic_copy%get_energy(coupling, energy, err)
+            call check(error, allocated(err))
+            if (allocated(error)) return
+            deallocate (polymorphic_copy)
+         else
+            if (mode == 1) then
+               allocate (copied, source=original)
+            else
+               allocate (copied)
+               copied = original
+            end if
+            energy = 0.0_wp
+            call copied%get_energy(coupling, energy, err)
+            call check(error, allocated(err))
+            if (allocated(error)) return
+            deallocate (copied)
+         end if
+         energy = 0.0_wp
+         call original%get_energy(coupling, energy, err)
+         if (failed(error, err, "original survives destroying its copy")) return
+      end do
       call original%update(mol, err)
       if (failed(error, err, "original registry remains owned")) return
    end subroutine test_model_copy

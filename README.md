@@ -179,8 +179,12 @@ The other cavity constructors are available as `moist cavity {numsa,iswig} <coor
 
 ### Other subcommands
 
-- `moist model gems <coord>` runs the GEMS solvation model; `--solvent` selects
-  the solvent and `--charge` the molecular charge.
+- `moist model rism1d <coord> -p run1d.toml` runs 1D solute-solvent RISM.
+- `moist model rism3d <coord> -p run3d.toml` runs 3D solute-solvent RISM.
+  Bulk VV is prepared internally. TOML describes the solvent, grid, potentials
+  and independent UV/VV solver settings. `--grad` requests analytical gradients.
+  See [the RISM recipe](docs/recipe/rism.rst) and [example inputs](examples/rism).
+- `moist model gems <coord>` remains a reserved preview command.
 - `moist solvent <name>` reports the tabulated properties of a solvent by name
   or alias.
 

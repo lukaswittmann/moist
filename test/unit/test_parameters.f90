@@ -29,10 +29,29 @@ module test_parameters
    type, extends(moist_model_parameters_type) :: vector_parameters_type
       real(wp) :: weights(2) = [1.0_wp, 2.0_wp]
       character(len=16) :: label = "default"
+      real(wp), allocatable :: optional_scale, optional_weights(:)
    contains
       procedure :: init_defaults => init_vector_defaults
       procedure :: register_entries => register_vector_entries
    end type vector_parameters_type
+
+   !> Middle level of a nested parameter set
+   type, extends(moist_model_parameters_type) :: middle_parameters_type
+      integer :: depth = 1
+      type(vector_parameters_type) :: leaf
+   contains
+      procedure :: init_defaults => init_middle_defaults
+      procedure :: register_entries => register_middle_entries
+   end type middle_parameters_type
+
+   !> Top level of a nested parameter set
+   type, extends(moist_model_parameters_type) :: outer_parameters_type
+      real(wp) :: scale = 1.0_wp
+      type(middle_parameters_type) :: solver
+   contains
+      procedure :: init_defaults => init_outer_defaults
+      procedure :: register_entries => register_outer_entries
+   end type outer_parameters_type
 
 contains
 
@@ -43,6 +62,8 @@ contains
       class(vector_parameters_type), intent(inout) :: self
       self%weights = [1.0_wp, 2.0_wp]
       self%label = "default"
+      if (allocated(self%optional_scale)) deallocate (self%optional_scale)
+      if (allocated(self%optional_weights)) deallocate (self%optional_weights)
    end subroutine init_vector_defaults
 
    !> Register vector and fixed-length string fields
@@ -52,7 +73,45 @@ contains
       class(vector_parameters_type), intent(inout), target :: self
       call self%register_real_vector("weights", self%weights)
       call self%register_string("label", self%label, level=2)
+      call self%register_alloc_real_scalar("optional_scale", self%optional_scale, level=2)
+      call self%register_alloc_real_vector("optional_weights", self%optional_weights, level=2)
    end subroutine register_vector_entries
+
+   !> Reset the middle level and its group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine init_middle_defaults(self)
+      class(middle_parameters_type), intent(inout) :: self
+      self%depth = 1
+      call self%leaf%init_defaults()
+   end subroutine init_middle_defaults
+
+   !> Register a scalar and the leaf group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine register_middle_entries(self)
+      class(middle_parameters_type), intent(inout), target :: self
+      call self%register_int_scalar("depth", self%depth)
+      call self%register_group("leaf", self%leaf)
+   end subroutine register_middle_entries
+
+   !> Reset the top level and its group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine init_outer_defaults(self)
+      class(outer_parameters_type), intent(inout) :: self
+      self%scale = 1.0_wp
+      call self%solver%init_defaults()
+   end subroutine init_outer_defaults
+
+   !> Register a scalar and the solver group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine register_outer_entries(self)
+      class(outer_parameters_type), intent(inout), target :: self
+      call self%register_real_scalar("scale", self%scale)
+      call self%register_group("solver", self%solver)
+   end subroutine register_outer_entries
 
    !> Print a parameter table into a scratch unit and read its lines back
    !>
@@ -79,6 +138,7 @@ contains
    subroutine test_print_levels(error)
       type(error_type), allocatable, intent(out) :: error
       type(vector_parameters_type) :: vector
+      type(outer_parameters_type) :: nested
       type(moist_gostshyp_parameters_type) :: gostshyp
       character(len=128) :: lines(64)
       integer :: nline, unit
@@ -88,6 +148,8 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(cavity_type_drop) :: drop
 
+      vector%optional_scale = 0.25_wp
+      vector%optional_weights = [3.0_wp, 4.0_wp]
       call capture_table(vector, lines, nline)
       call check(error, printed_entry(lines, "label", "default") .and. printed_entry(lines, "weights(1)", "1."), &
          & "a table without a level lists every field")
@@ -97,6 +159,19 @@ contains
       call check(error, printed_entry(lines, "label", "default"), "level 2 keeps the normal field")
       if (allocated(error)) return
       call check(error,.not. printed_entry(lines, "weights(1)", "1."), "level 2 drops the detailed field")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "optional_scale", "0.25"), "optional normal scalars print at level 2")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "optional_weights(1)", "3."), "optional normal vectors print at level 2")
+      if (allocated(error)) return
+
+      call capture_table(nested, lines, nline, level=2)
+      call check(error, printed_entry(lines, "label", "default"), "nested normal fields inherit the print level")
+      if (allocated(error)) return
+      call check(error, .not. printed_entry(lines, "weights(1)", "1."), "nested detailed fields are omitted at level 2")
+      if (allocated(error)) return
+      call capture_table(nested, lines, nline)
+      call check(error, printed_entry(lines, "weights(1)", "1."), "a later full table lost nested detailed fields")
       if (allocated(error)) return
 
       ! Every GOSTSHYP setting is detailed: the normal table is empty
@@ -253,6 +328,95 @@ contains
 
    end subroutine test_invalid_fields
 
+   !> Nested parameter sets read, write and fail under their key groups
+   !>
+   !> - Two group levels: solver.depth, solver.leaf.weights and solver.leaf.label
+   !> - Omitted nested fields keep their defaults; both formats round-trip
+   !> - Errors name the full key; a nested set alone reads unprefixed keys
+   subroutine test_nested_groups(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(outer_parameters_type) :: param
+      type(moist_error), allocatable :: err
+      integer :: format_index
+      !> Temporary path owned by this test
+      character(len=*), parameter :: path = "moist-test-parameters-nested.json"
+
+      call read_text(param, '{"scale": 2.0, "solver": {"depth": 3, "leaf": {"weights": [0.5, 4.0]}}}', err, error)
+      if (allocated(error)) return
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, param%scale == 2.0_wp .and. param%solver%depth == 3, more="nested scalars not read")
+      if (allocated(error)) return
+      call check(error, all(param%solver%leaf%weights == [0.5_wp, 4.0_wp]), more="nested vector not read")
+      if (allocated(error)) return
+      call check(error, trim(param%solver%leaf%label) == "default", more="omitted nested field lost its default")
+      if (allocated(error)) return
+      param%solver%leaf%label = "written"
+      do format_index = 1, 2
+         call roundtrip(param, "moist-test-parameters-nested", error, format_index)
+         if (allocated(error)) return
+         call check(error, param%scale == 2.0_wp .and. param%solver%depth == 3 .and. &
+            & all(param%solver%leaf%weights == [0.5_wp, 4.0_wp]) .and. trim(param%solver%leaf%label) == "written", &
+            & more="nested values changed in a round trip")
+         if (allocated(error)) return
+      end do
+
+      call read_text(param, '{"solver": {"leaf": {"weights": [1.0]}}}', err, error)
+      if (allocated(error)) return
+      call check(error, allocated(err), more="a nested vector of the wrong length was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid parameter vector: solver.leaf.weights") > 0, more=err%message)
+      if (allocated(error)) return
+      call read_text(param, '{"solver": {"leaf": 3}}', err, error)
+      if (allocated(error)) return
+      call check(error, allocated(err), more="a scalar nested group was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid parameter group: solver.leaf.") > 0, more=err%message)
+      if (allocated(error)) return
+
+      call read_text(param%solver%leaf, '{"weights": [7.0, 8.0]}', err, error)
+      if (allocated(error)) return
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, all(param%solver%leaf%weights == [7.0_wp, 8.0_wp]), &
+         & more="a nested set alone did not read unprefixed keys")
+
+   contains
+
+      !> Write one document and read it into a parameter set
+      !>
+      !> @param[inout] target_param Parameter set reading the document
+      !> @param[in] text JSON document
+      !> @param[out] err Library error of the read
+      !> @param[out] error Test failure from the file handling
+      subroutine read_text(target_param, text, err, error)
+         !> Parameter set reading the document
+         class(moist_model_parameters_type), intent(inout) :: target_param
+         !> JSON document
+         character(len=*), intent(in) :: text
+         !> Library error of the read
+         type(moist_error), allocatable, intent(out) :: err
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> File unit and I/O status
+         integer :: unit, stat
+
+         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         write(unit, "(a)", iostat=stat) text
+         close(unit)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         call target_param%read_file(path, err)
+         open(newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close(unit, status="delete", iostat=stat)
+         call check(error, stat, 0)
+      end subroutine read_text
+
+   end subroutine test_nested_groups
+
    !> Collect parameter API regressions
    !>
    !> @param[out] testsuite Tests to run
@@ -268,7 +432,8 @@ contains
          new_unittest("drop-contracts", test_drop_contracts), &
          new_unittest("configuration-fields", test_configuration_fields), &
          new_unittest("parameter-validation", test_parameter_validation), &
-         new_unittest("optional-overrides", test_optional_overrides)]
+         new_unittest("optional-overrides", test_optional_overrides), &
+         new_unittest("nested-groups", test_nested_groups)]
    end subroutine collect_parameters
 
    !> Check copied settings, derived values, and resetting to defaults

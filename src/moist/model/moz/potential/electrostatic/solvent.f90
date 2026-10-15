@@ -6,10 +6,9 @@
 !> - `coulomb_<model>_<environment>`: `moist_data_solvents` charges keyed by solvent id
 !> - Charge models: hirshfeld, resp, mbis, chelpg
 !> - Environments: gas, solvent, conductor
-!> - `coulomb_spce`: SPC/E charges for neutral water only
+!> - `coulomb_spce`, `coulomb_cspce`: identical SPC/E charges for neutral water only
 !> - `multipoles_mbis_<environment>`: stub for atom-centered multipoles in 6D MOZ, no kernel yet
 module moist_model_moz_potential_electrostatic_solvent
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_utils, only: to_lower
@@ -18,7 +17,8 @@ module moist_model_moz_potential_electrostatic_solvent
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
-   use moist_data_solvents, only: get_solvent_charges, get_solvent_id
+   use moist_data_solvents, only: get_solvent_charges
+   use moist_model_moz_solvent_water, only: is_water
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len, charge_label_len
    implicit none(type, external)
    private
@@ -29,7 +29,7 @@ module moist_model_moz_potential_electrostatic_solvent
    public :: coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor
    public :: coulomb_mbis_gas, coulomb_mbis_solvent, coulomb_mbis_conductor
    public :: coulomb_chelpg_gas, coulomb_chelpg_solvent, coulomb_chelpg_conductor
-   public :: coulomb_spce, is_water
+   public :: coulomb_spce, coulomb_cspce, is_water
    public :: multipoles_mbis_gas, multipoles_mbis_solvent, multipoles_mbis_conductor
 
    !> Length of an environment or charge-model choice
@@ -144,6 +144,8 @@ module moist_model_moz_potential_electrostatic_solvent
       & solvent_charges_type(environment="conductor", model="chelpg")
    !> SPC/E water charges
    type(solvent_model_charges_type), protected :: coulomb_spce = solvent_model_charges_type(set=charges_set_spce)
+   !> cSPC/E water charges; the same constants and implementation as SPC/E
+   type(solvent_model_charges_type), protected :: coulomb_cspce = solvent_model_charges_type(set=charges_set_spce)
    !> MBIS table multipoles, gas phase; stub
    type(solvent_multipoles_type), parameter :: multipoles_mbis_gas = &
       & solvent_multipoles_type(environment="gas", model="mbis")
@@ -547,34 +549,5 @@ contains
       !> Optional explicit nuclear gradient, Hartree/bohr (3, natom)
       real(wp), intent(inout), optional :: gradient(:, :)
    end subroutine solvent_model_charges_adjoint_3d
-
-   !> Whether the structure is one neutral, closed-shell water molecule
-   !>
-   !> - Non-water table solvent id: false
-   !>
-   !> @param[in] mol         structure with initialized atom identities
-   !> @param[in] solvent_id  optional solvent id of the table; 0 for a custom solvent
-   function is_water(mol, solvent_id) result(water)
-      !> Structure
-      class(structure_type), intent(in) :: mol
-      !> Optional solvent id of the table
-      integer, intent(in), optional :: solvent_id
-      !> Whether the structure is neutral H2O
-      logical :: water
-      type(error_type), allocatable :: error
-      integer :: water_id
-      water = .false.
-      if (present(solvent_id)) then
-         if (solvent_id /= 0) then
-            call get_solvent_id("water", water_id, error)
-            if (allocated(error)) return
-            if (solvent_id /= water_id) return
-         end if
-      end if
-      if (mol%nat /= 3) return
-      if (count(mol%num(mol%id) == 8) /= 1 .or. count(mol%num(mol%id) == 1) /= 2) return
-      if (.not. ieee_is_finite(mol%charge) .or. abs(mol%charge) > 1.0e-8_wp .or. mol%uhf /= 0) return
-      water = .true.
-   end function is_water
 
 end module moist_model_moz_potential_electrostatic_solvent

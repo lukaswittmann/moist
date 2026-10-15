@@ -1,0 +1,32 @@
+# moist model rism1d examples/rism/water.xyz -p examples/rism/run1d.toml
+closure = "KH"
+
+[system]
+solvent = "water"
+charge = 0.0
+
+[potential]
+lj = "cspce"
+charges = "cspce"
+
+[grid]
+kind = "radial"
+npts = 8192
+dr = 0.015  # bohr
+
+[convergence]
+tolerance = 1e-7
+
+[solver]
+name = "JFNK"
+
+[solvent]
+theory = "RISM"
+closure = "KH"
+
+[solvent.convergence]
+tolerance = 1e-11
+
+[solvent.potential]
+lj = "cspce"
+charges = "cspce"

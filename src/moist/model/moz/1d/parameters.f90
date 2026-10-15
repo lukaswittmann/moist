@@ -1,0 +1,155 @@
+!> Settings of the 1D MOZ (UV) solve
+!>
+!> JSON/TOML keys: closure, convergence.*, damping.*, solver.* with the solver
+!> controls as a nested group plus solver.name and solver.jfnk.precond*, and
+!> solvent.* with the settings of the 1D VV solve of the model's solvent copy.
+!> The model sets the solver verbosity and thread count from its run context
+module moist_model_moz_1d_parameters
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use mctc_env, only: wp, error_type, fatal_error
+   use mctc_io_utils, only: to_lower
+   use moist_model_parameters, only: moist_model_parameters_type
+   use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
+   use moist_model_moz_solver_parameters, only: moist_model_moz_solver_parameters_type
+   use moist_model_moz_solver_preconditioner, only: check_preconditioner_name
+   use moist_model_moz_1d_preconditioner, only: preconditioners_1d_uv
+   use moist_model_moz_solvent_vv_parameters, only: solvent_vv_parameters_type
+   implicit none(type, external)
+   private
+
+   public :: model_moz_1d_parameters_type
+
+   !> Settings of the 1D UV solve and of the solvent's VV solve
+   type, extends(moist_model_parameters_type) :: model_moz_1d_parameters_type
+      !> Closure: HNC, KH or PSE2-4
+      character(len=8) :: closure = "KH"
+      !> RMS residual below which the UV solve is converged
+      real(wp) :: tolerance = 1.0e-7_wp
+      !> Outer iterations of the UV solve
+      integer :: maxiter = 128
+      !> Reuse converged UV fields across host updates at fixed geometry
+      logical :: reuse_initial_guess = .true.
+      !> Small-k damping of updates the solver allows to post-process
+      logical :: damp_small_k = .true.
+      !> Wave number and k = 0 weight of the damping, 1/bohr
+      real(wp) :: damp_small_k_k0 = 1.0_wp, damp_small_k_min_weight = 0.15_wp
+      !> Solver: PICARD, DIIS, JFNK or HYBRID
+      character(len=8) :: solver_name = "JFNK"
+      !> Preconditioner of the Newton-Krylov solves: none or spectral
+      character(len=8) :: precond = "spectral"
+      !> Wave number, 1/bohr, and k = 0 weight of the spectral filter
+      real(wp) :: precond_k0 = 1.0_wp, precond_w0 = 0.1_wp
+      !> Solver controls of the UV solve
+      type(moist_model_moz_solver_parameters_type) :: solver
+      !> Settings of the VV solve of the model's solvent copy
+      type(solvent_vv_parameters_type) :: solvent
+   contains
+      !> Restore compiled defaults
+      procedure :: init_defaults => init_1d_defaults
+      !> Declare fields for JSON/TOML input, output and printing
+      procedure :: register_entries => register_1d_entries
+      !> Check names and ranges, including the solver and solvent settings
+      procedure :: validate => validate_1d_parameters
+   end type model_moz_1d_parameters_type
+
+contains
+
+   !> Restore compiled defaults
+   !>
+   !> @param[inout] self Parameter values
+   subroutine init_1d_defaults(self)
+      !> Parameter values
+      class(model_moz_1d_parameters_type), intent(inout) :: self
+      type(model_moz_1d_parameters_type) :: defaults
+
+      self%closure = defaults%closure
+      self%tolerance = defaults%tolerance
+      self%maxiter = defaults%maxiter
+      self%reuse_initial_guess = defaults%reuse_initial_guess
+      self%damp_small_k = defaults%damp_small_k
+      self%damp_small_k_k0 = defaults%damp_small_k_k0
+      self%damp_small_k_min_weight = defaults%damp_small_k_min_weight
+      self%solver_name = defaults%solver_name
+      self%precond = defaults%precond
+      self%precond_k0 = defaults%precond_k0
+      self%precond_w0 = defaults%precond_w0
+      call self%solver%init_defaults()
+      call self%solvent%init_defaults()
+   end subroutine init_1d_defaults
+
+   !> Declare parameter fields for JSON/TOML input, output and printing
+   !>
+   !> @param[inout] self Parameter values
+   subroutine register_1d_entries(self)
+      !> Parameter values
+      class(model_moz_1d_parameters_type), intent(inout), target :: self
+
+      call self%register_string("closure", self%closure)
+      call self%register_real_scalar("convergence.tolerance", self%tolerance)
+      call self%register_int_scalar("convergence.maxiter", self%maxiter)
+      call self%register_logical("convergence.reuse_initial_guess", self%reuse_initial_guess)
+      call self%register_logical("damping.small_k", self%damp_small_k)
+      call self%register_real_scalar("damping.small_k_k0", self%damp_small_k_k0)
+      call self%register_real_scalar("damping.small_k_min_weight", self%damp_small_k_min_weight)
+      call self%register_string("solver.name", self%solver_name)
+      call self%register_group("solver", self%solver)
+      call self%register_string("solver.jfnk.precond", self%precond)
+      call self%register_real_scalar("solver.jfnk.precond_k0", self%precond_k0)
+      call self%register_real_scalar("solver.jfnk.precond_w0", self%precond_w0)
+      call self%register_group("solvent", self%solvent)
+   end subroutine register_1d_entries
+
+   !> Check names and ranges, including the solver and solvent settings
+   !>
+   !> @param[inout] self Parameter values
+   !> @param[out] error First invalid setting
+   subroutine validate_1d_parameters(self, error)
+      !> Parameter values
+      class(model_moz_1d_parameters_type), intent(inout) :: self
+      !> First invalid setting
+      type(error_type), allocatable, intent(out) :: error
+      class(moist_model_moz_closure_type), allocatable :: closure
+
+      call new_closure(closure, self%closure, error)
+      if (allocated(error)) return
+      select case (to_lower(trim(adjustl(self%solver_name))))
+      case ("picard", "diis", "mdiis", "jfnk", "hybrid")
+         continue
+      case default
+         call fatal_error(error, "Unknown 1D MOZ solver: "//trim(self%solver_name)// &
+            & " (choose PICARD, DIIS, JFNK or HYBRID)")
+         return
+      end select
+      call check_preconditioner_name(self%precond, preconditioners_1d_uv, "1D UV", error)
+      if (allocated(error)) return
+      if (.not. positive(self%tolerance) .or. self%maxiter < 1) then
+         call fatal_error(error, "1D MOZ convergence needs a positive tolerance and iteration limit")
+      else if (.not. positive(self%damp_small_k_k0) .or. .not. weight(self%damp_small_k_min_weight)) then
+         call fatal_error(error, "1D MOZ damping needs a positive k0 and a k = 0 weight in [0, 1]")
+      else if (.not. positive(self%precond_k0) .or. .not. weight(self%precond_w0)) then
+         call fatal_error(error, "1D MOZ spectral filter needs a positive k0 and a k = 0 weight in [0, 1]")
+      else
+         call self%solver%validate(error)
+         if (.not. allocated(error)) call self%solvent%validate(error)
+      end if
+   end subroutine validate_1d_parameters
+
+   !> Finite positive value
+   !>
+   !> @param[in] value Scalar to check
+   pure logical function positive(value)
+      !> Scalar to check
+      real(wp), intent(in) :: value
+      positive = ieee_is_finite(value) .and. value > 0.0_wp
+   end function positive
+
+   !> Finite weight in [0, 1]
+   !>
+   !> @param[in] value Weight to check
+   pure logical function weight(value)
+      !> Weight to check
+      real(wp), intent(in) :: value
+      weight = ieee_is_finite(value) .and. value >= 0.0_wp .and. value <= 1.0_wp
+   end function weight
+
+end module moist_model_moz_1d_parameters

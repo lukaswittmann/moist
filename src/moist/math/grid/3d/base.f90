@@ -4,6 +4,8 @@ module moist_math_grid_3d_base
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_io, only: structure_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+   use moist_math_grid_3d_integration, only: integrate_weighted_values
+   use moist_math_grid_3d_kernel_integration, only: compensated_block_sum
 !$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    implicit none(type, external)
    private
@@ -94,6 +96,8 @@ module moist_math_grid_3d_base
       procedure(grid_destroy_i), deferred :: destroy
       !> Weighted volume integral of a field already tabulated on the points
       procedure :: integrate_field => grid_integrate_field_default
+      !> Compensated contribution of a field slice; merge its two components in block order
+      procedure :: integrate_field_block => grid_integrate_field_block
       !> Common storage cleanup used by concrete destroy methods
       procedure :: clear_geometry => grid_clear_geometry
    end type moist_math_grid_3d_type
@@ -101,7 +105,7 @@ module moist_math_grid_3d_base
    !> Abstract 3D Fourier transform engine
    !>
    !> - Bound to one grid, held by the concrete type as a typed pointer; owns
-   !>   whatever immutable transform plans/scratch the backend needs
+   !>   the transform plans and mutable scratch the backend needs
    !> - Built once per problem (`new_trafo` + `prepare`), reused across solver
    !>   iterations; must not outlive the grid it is bound to
    !> - Batched `fft_r2k`/`fft_k2r` each issued from a single thread (the
@@ -113,6 +117,20 @@ module moist_math_grid_3d_base
       procedure(grid_trafo_fft_r2k_i), deferred :: fft_r2k
       !> Backward Fourier transform (reciprocal space -> real space), all sites
       procedure(grid_trafo_fft_k2r_i), deferred :: fft_k2r
+      !> Transpose of fft_r2k under Re(sum(conjg(w_k)*df_k)) and sum(w_r*df_r)
+      !> Reciprocal input may be destroyed; includes quadrature and packed-spectrum weights
+      !> Optional; the default reports an unsupported operation
+      procedure :: fft_r2k_adj => grid_trafo_fft_r2k_adj_default
+      !> Transpose of fft_k2r with the same Euclidean real/complex pairing
+      !> Real input may be destroyed; includes inverse-transform normalization
+      !> Optional; the default reports an unsupported operation
+      procedure :: fft_k2r_adj => grid_trafo_fft_k2r_adj_default
+      !> Geometry pullback of fft_r2k at fixed field values and reciprocal lattice
+      !> Optional; the default reports an unsupported operation
+      procedure :: accumulate_r2k_geometry => grid_trafo_r2k_geometry_default
+      !> Geometry pullback of fft_k2r at fixed field values and reciprocal lattice
+      !> Optional; the default reports an unsupported operation
+      procedure :: accumulate_k2r_geometry => grid_trafo_k2r_geometry_default
       !> Release scratch and detach from the grid (idempotent)
       procedure(grid_trafo_destroy_i), deferred :: destroy
       !> Build the backend plans for `ntrans` simultaneous transforms;
@@ -538,6 +556,70 @@ contains
       ! error returns unallocated
    end subroutine grid_trafo_prepare_default
 
+   !> Report an unsupported forward-transform transpose
+   !>
+   !> @param[inout] self Transform engine
+   !> @param[inout] f_k Complex output seed (npts_k, nv)
+   !> @param[out] f_r Real input sensitivity (ngrid, nv); unspecified on error
+   !> @param[out] error Unsupported operation
+   subroutine grid_trafo_fft_r2k_adj_default(self, f_k, f_r, error)
+      class(moist_math_grid_3d_trafo_type), intent(inout) :: self
+      complex(wp), intent(inout), contiguous, target :: f_k(:, :)
+      real(wp), intent(out), contiguous, target :: f_r(:, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "3D transform does not support fft_r2k_adj")
+   end subroutine grid_trafo_fft_r2k_adj_default
+
+   !> Report an unsupported backward-transform transpose
+   !>
+   !> @param[inout] self Transform engine
+   !> @param[inout] f_r Real output seed (ngrid, nv)
+   !> @param[out] f_k Complex input sensitivity (npts_k, nv); unspecified on error
+   !> @param[out] error Unsupported operation
+   subroutine grid_trafo_fft_k2r_adj_default(self, f_r, f_k, error)
+      class(moist_math_grid_3d_trafo_type), intent(inout) :: self
+      real(wp), intent(inout), contiguous, target :: f_r(:, :)
+      complex(wp), intent(out), contiguous, target :: f_k(:, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "3D transform does not support fft_k2r_adj")
+   end subroutine grid_trafo_fft_k2r_adj_default
+
+   !> Report unsupported forward-transform geometry derivatives
+   !>
+   !> @param[inout] self Transform engine
+   !> @param[in] f_r Fixed primal real field (ngrid, nv)
+   !> @param[in] w_k Complex output seed under Re(sum(conjg(w_k)*dF)) (npts_k, nv)
+   !> @param[inout] acc Geometry sensitivities, unchanged on error
+   !> @param[out] error Unsupported operation
+   subroutine grid_trafo_r2k_geometry_default(self, f_r, w_k, acc, error)
+      class(moist_math_grid_3d_trafo_type), intent(inout) :: self
+      real(wp), intent(in) :: f_r(:, :)
+      complex(wp), intent(in) :: w_k(:, :)
+      type(volume_adjoint_type), intent(inout) :: acc
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "3D transform does not support accumulate_r2k_geometry")
+   end subroutine grid_trafo_r2k_geometry_default
+
+   !> Report unsupported backward-transform geometry derivatives
+   !>
+   !> @param[inout] self Transform engine
+   !> @param[in] f_k Fixed primal reciprocal field (npts_k, nv)
+   !> @param[in] w_r Real output seed under sum(w_r*df) (ngrid, nv)
+   !> @param[inout] acc Geometry sensitivities, unchanged on error
+   !> @param[out] error Unsupported operation
+   subroutine grid_trafo_k2r_geometry_default(self, f_k, w_r, acc, error)
+      class(moist_math_grid_3d_trafo_type), intent(inout) :: self
+      complex(wp), intent(in) :: f_k(:, :)
+      real(wp), intent(in) :: w_r(:, :)
+      type(volume_adjoint_type), intent(inout) :: acc
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "3D transform does not support accumulate_k2r_geometry")
+   end subroutine grid_trafo_k2r_geometry_default
+
    !> Validate the field blocks of one batched transform call
    !>
    !> - Grid built: `ngrid >= 1` and `npts_k >= 1`; a destroyed grid keeps its
@@ -579,8 +661,8 @@ contains
    !> - Unlike `integrate`, which samples an analytic function at the grid
    !>   points, consumes discrete field data already tabulated on the grid
    !>   (e.g. correlation functions from a converged RISM solve)
-   !> - Generic version walks every point and queries its weight; concrete
-   !>   grids with a uniform (or otherwise cheap) measure should override it
+   !> - Large fields use fixed compensated blocks shared by the worker team;
+   !>   the weight remains the grid's `measure(i)`, including overrides
    !>
    !> @param[in]  self    Grid instance
    !> @param[in]  f       Per-point field values (length ngrid); any other length is an error
@@ -596,23 +678,53 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: i
-      real(wp) :: correction, term, subtotal
-
       result = 0.0_wp
       if (size(f) /= self%ngrid) then
          call fatal_error(error, "3d grid: integrate_field needs one value per grid point")
          return
       end if
-      correction = 0.0_wp
-      ! Same compensated accumulation as the callback interface
-      do i = 1, self%ngrid
-         term = self%measure(i)*f(i) - correction
-         subtotal = result + term
-         correction = (subtotal - result) - term
-         result = subtotal
-      end do
+      result = integrate_weighted_values(f, self%team_size(), grid_quadrature_weight, self)
    end subroutine grid_integrate_field_default
+
+   !> Weighted contribution of f at grid points first:first+size(f)-1
+   !>
+   !> @param[in] self Grid providing measure(i), including overrides
+   !> @param[in] f Bounded field slice
+   !> @param[in] first One-based absolute grid index of f(1)
+   !> @param[out] partial Neumaier total and correction, both in integral units
+   !> @param[out] error Slice outside the grid
+   subroutine grid_integrate_field_block(self, f, first, partial, error)
+      class(moist_math_grid_3d_type), intent(in) :: self
+      real(wp), intent(in) :: f(:)
+      integer, intent(in) :: first
+      real(wp), intent(out) :: partial(2)
+      type(error_type), allocatable, intent(out) :: error
+
+      partial = 0.0_wp
+      if (first < 1 .or. first > self%ngrid + 1) then
+         call fatal_error(error, "3d grid: field block starts outside the grid")
+         return
+      end if
+      if (size(f) > self%ngrid - first + 1) then
+         call fatal_error(error, "3d grid: field block extends beyond the grid")
+         return
+      end if
+      call compensated_block_sum(f, 1, size(f), partial(1), partial(2), grid_quadrature_weight, self, first - 1)
+   end subroutine grid_integrate_field_block
+
+   !> Weight callback with an explicit borrowed context, avoiding a stack trampoline
+   pure function grid_quadrature_weight(context, i) result(weight)
+      class(*), intent(in) :: context
+      integer, intent(in) :: i
+      real(wp) :: weight
+
+      select type (grid => context)
+      class is (moist_math_grid_3d_type)
+         weight = grid%measure(i)
+      class default
+         error stop "grid quadrature: internal context is not a 3D grid"
+      end select
+   end function grid_quadrature_weight
 
    !> Report an unavailable volume geometry gradient
    !>

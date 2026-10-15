@@ -5,11 +5,13 @@ module moist_math_grid_3d_cartesian
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
-                                      integrand_3d, check_trafo_blocks
+      & check_trafo_blocks
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+   use moist_math_grid_3d_integration, only: integrate_values
+   use moist_math_grid_3d_kernel_integration, only: compensated_block_sum
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
-   use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
+   use, intrinsic :: iso_c_binding, only: c_int
    implicit none(type, external)
    private
 
@@ -78,6 +80,7 @@ module moist_math_grid_3d_cartesian
       procedure :: get_kref => cartesian_get_kref
       procedure :: destroy => cartesian_grid_3d_dealloc
       procedure :: integrate_field => cartesian_grid_3d_integrate_field
+      procedure :: integrate_field_block => cartesian_grid_3d_integrate_field_block
       procedure :: new_trafo => cartesian_grid_3d_new_trafo
       !> Box corner, bohr; grid point (1, 1, 1) sits at `origin + dr/2`
       procedure :: get_origin => cartesian_get_origin
@@ -89,16 +92,19 @@ module moist_math_grid_3d_cartesian
 
    !> 3D Fourier transform engine for a Cartesian grid
    !>
-   !> Stateless apart from the grid pointer; the backend transforms the
-   !> caller's buffers directly, which is thread-safe as long as the buffers
-   !> are distinct; a single instance may therefore be shared across
-   !> threads, but one per thread is equally fine
+   !> Stateless apart from the borrowed grid pointer; the backend transforms
+   !> the caller's buffers directly. Issue each batched call from one thread;
+   !> the backend distributes the work within its own worker pool.
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_cartesian_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
       class(moist_math_grid_3d_cartesian_type), pointer, private :: grid => null()
    contains
       procedure :: fft_r2k => cartesian_trafo_fft_r2k
       procedure :: fft_k2r => cartesian_trafo_fft_k2r
+      procedure :: fft_r2k_adj => cartesian_trafo_fft_r2k_adj
+      procedure :: fft_k2r_adj => cartesian_trafo_fft_k2r_adj
+      procedure :: accumulate_r2k_geometry => cartesian_trafo_r2k_geometry
+      procedure :: accumulate_k2r_geometry => cartesian_trafo_k2r_geometry
       procedure :: destroy => cartesian_trafo_destroy
    end type moist_math_grid_3d_cartesian_trafo_type
 
@@ -688,23 +694,40 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp) :: correction, term, subtotal
-      integer :: i
-
       result = 0.0_wp
       if (size(f) /= self%ngrid) then
          call fatal_error(error, "cartesian domain: integrate_field needs one value per grid point")
          return
       end if
-      correction = 0.0_wp
-      do i = 1, self%ngrid
-         term = f(i) - correction
-         subtotal = result + term
-         correction = (subtotal - result) - term
-         result = subtotal
-      end do
-      result = self%dv*result
+      result = self%dv*integrate_values(f, self%team_size())
    end subroutine cartesian_grid_3d_integrate_field
+
+   !> Compensated field slice with the uniform cell volume applied once
+   !>
+   !> @param[in] self Cartesian grid
+   !> @param[in] f Field values at first:first+size(f)-1
+   !> @param[in] first One-based absolute grid index
+   !> @param[out] partial Neumaier total and correction, in integral units
+   !> @param[out] error Slice outside the grid
+   subroutine cartesian_grid_3d_integrate_field_block(self, f, first, partial, error)
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      real(wp), intent(in) :: f(:)
+      integer, intent(in) :: first
+      real(wp), intent(out) :: partial(2)
+      type(error_type), allocatable, intent(out) :: error
+
+      partial = 0.0_wp
+      if (first < 1 .or. first > self%ngrid + 1) then
+         call fatal_error(error, "cartesian domain: field block starts outside the grid")
+         return
+      end if
+      if (size(f) > self%ngrid - first + 1) then
+         call fatal_error(error, "cartesian domain: field block extends beyond the grid")
+         return
+      end if
+      call compensated_block_sum(f, 1, size(f), partial(1), partial(2))
+      partial = self%dv*partial
+   end subroutine cartesian_grid_3d_integrate_field_block
 
    !> Box corner; grid point (1, 1, 1) sits at `origin + dr/2`
    !>
@@ -851,6 +874,102 @@ contains
          call fatal_error(error, "cartesian trafo: backward FFT backend failed")
       end if
    end subroutine cartesian_trafo_fft_k2r
+
+   !> Transpose of the forward FFT with an unweighted complex pairing
+   !>
+   !> C2R doubles the interior x modes of the packed spectrum. Halve their
+   !> seeds before calling it; x=0 and the even-nx Nyquist plane occur once.
+   !> Input f_k is scratch, as for fft_k2r.
+   subroutine cartesian_trafo_fft_r2k_adj(self, f_k, f_r, error)
+      class(moist_math_grid_3d_cartesian_trafo_type), intent(inout) :: self
+      complex(wp), intent(inout), contiguous, target :: f_k(:, :)
+      real(wp), intent(out), contiguous, target :: f_r(:, :)
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ik, iv, ix, nt
+      real(wp) :: scale
+
+      call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
+      nt = self%grid%team_size()
+      scale = self%grid%dv*self%grid%vbox
+      !$omp parallel do collapse(2) schedule(static) num_threads(nt) private(ix)
+      do iv = 1, size(f_k, 2)
+         do ik = 1, size(f_k, 1)
+            ix = mod(ik - 1, self%grid%nkx)
+            if (ix == 0 .or. 2*ix == self%grid%nx) then
+               f_k(ik, iv) = scale*f_k(ik, iv)
+            else
+               f_k(ik, iv) = (0.5_wp*scale)*f_k(ik, iv)
+            end if
+         end do
+      end do
+      !$omp end parallel do
+      call self%fft_k2r(f_k, f_r, error)
+   end subroutine cartesian_trafo_fft_r2k_adj
+
+   !> Transpose of the inverse FFT, including packed-spectrum multiplicity
+   subroutine cartesian_trafo_fft_k2r_adj(self, f_r, f_k, error)
+      class(moist_math_grid_3d_cartesian_trafo_type), intent(inout) :: self
+      real(wp), intent(inout), contiguous, target :: f_r(:, :)
+      complex(wp), intent(out), contiguous, target :: f_k(:, :)
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ik, iv, ix, nt
+      real(wp) :: scale
+
+      call self%fft_r2k(f_r, f_k, error)
+      if (allocated(error)) return
+      nt = self%grid%team_size()
+      scale = 1.0_wp/(self%grid%dv*self%grid%vbox)
+      !$omp parallel do collapse(2) schedule(static) num_threads(nt) private(ix)
+      do iv = 1, size(f_k, 2)
+         do ik = 1, size(f_k, 1)
+            ix = mod(ik - 1, self%grid%nkx)
+            if (ix == 0 .or. 2*ix == self%grid%nx) then
+               f_k(ik, iv) = scale*f_k(ik, iv)
+            else
+               f_k(ik, iv) = (2.0_wp*scale)*f_k(ik, iv)
+            end if
+         end do
+      end do
+      !$omp end parallel do
+   end subroutine cartesian_trafo_fft_k2r_adj
+
+   !> Fixed spacing, dimensions and relative point positions make the FFT
+   !> constant under the centroid translation admitted by this domain.
+   subroutine cartesian_trafo_r2k_geometry(self, f_r, w_k, acc, error)
+      !> Bound transform engine
+      class(moist_math_grid_3d_cartesian_trafo_type), intent(inout) :: self
+      !> Primal field
+      real(wp), intent(in) :: f_r(:, :)
+      !> Output seed
+      complex(wp), intent(in) :: w_k(:, :)
+      !> Shared volume sensitivities
+      type(volume_adjoint_type), intent(inout) :: acc
+      !> Invalid state or shapes
+      type(error_type), allocatable, intent(out) :: error
+
+      call cartesian_trafo_check_blocks(self, shape(f_r), shape(w_k), error)
+      if (allocated(error)) return
+      call self%grid%check_volume_adjoint(acc, error)
+   end subroutine cartesian_trafo_r2k_geometry
+
+   !> The inverse FFT is also constant under the allowed grid translation.
+   subroutine cartesian_trafo_k2r_geometry(self, f_k, w_r, acc, error)
+      !> Bound transform engine
+      class(moist_math_grid_3d_cartesian_trafo_type), intent(inout) :: self
+      !> Primal field
+      complex(wp), intent(in) :: f_k(:, :)
+      !> Output seed
+      real(wp), intent(in) :: w_r(:, :)
+      !> Shared volume sensitivities
+      type(volume_adjoint_type), intent(inout) :: acc
+      !> Invalid state or shapes
+      type(error_type), allocatable, intent(out) :: error
+
+      call cartesian_trafo_check_blocks(self, shape(w_r), shape(f_k), error)
+      if (allocated(error)) return
+      call self%grid%check_volume_adjoint(acc, error)
+   end subroutine cartesian_trafo_k2r_geometry
 
    !> Guard - trafo bound to a grid and block shapes match it
    !>

@@ -6,8 +6,10 @@ The shared model base is in ``src/moist/model/type.f90``; models are organized b
 
 * ``model/continuum`` contains cavity-based models and components.
 * ``model/moz`` contains molecular Ornstein Zernike-type theories, including the Reference Interaction Site Model (RISM) theories.
-   * ``model/moz/1d`` contains the VV and UV 1D-RISM model.
+   * ``model/moz/solvent`` contains the bulk solvent and its 1D VV solve.
+   * ``model/moz/1d`` contains the UV 1D-RISM model: solvation free energy at infinite dilution.
    * ``model/moz/3d`` contains the UV 3D-RISM model.
+   * ``model/moz/closure`` and ``model/moz/solver`` contain the closures and nonlinear solvers shared by the MOZ models.
 
 Solvation Model Interface
 -------------------------
@@ -32,6 +34,23 @@ The ``coupling_type`` holds the requests the host answers, visited one at a time
 The base provides ``new_coupling``, ``release_coupling`` and the ``prepare_*`` calls.
 Concrete models implement ``update``, ``atom_count``, ``declare_pass`` and the three evaluation calls; a model whose update waits for host answers overrides ``build``, calling the base ``model_build`` first.
 ``new_coupling`` requires an updated model and the ``prepare_*`` evaluation calls a built one.
+
+``copy_from(source, error)`` copies into an existing model of the same concrete
+type. The built-in families copy their owned data, start a fresh coupling registry,
+and borrow the source's run context. MOZ copies rebuild their solve resources on
+the next evaluation. ``copy = source`` uses the same hook, including through
+``class(solvation_model_type)`` variables and for nonoverlapping model arrays.
+Allocate an allocatable destination first, for example with ``allocate(copy, mold=source)``.
+For self-copy use ``call model%copy_from(model, error)``.
+Avoid overlapping array assignments such as ``models(1:2) = models(2:3)``;
+copy into a separate array of models before assigning back to the original.
+
+Custom families opt into copying by overriding ``copy_from``; the default reports
+an unsupported operation. ``copy_model_state`` supplies the common identity/type
+checks, coupling cleanup and context/state transfer for these overrides. The
+checked call returns incompatible-type or unsupported-copy errors; assignment
+stops on such an error because it has no error argument. ``allocate(source=...)``
+bypasses the hook and is unsuitable for models owning native transform resources.
 
 Model Component Interface
 -------------------------

@@ -4,7 +4,6 @@
 module moist_cli
    use, intrinsic :: iso_fortran_env, only : output_unit
    use mctc_env, only : error_type, fatal_error, wp
-   use mctc_io_convert, only: aatoau
    use mctc_io, only : get_filetype
    use moist, only : get_moist_version
    use moist_output_ascii, only : moist_header, moist_build_header
@@ -49,6 +48,8 @@ module moist_cli
       real(wp), allocatable :: charge
       real(wp) :: temperature = 298.15_wp
       real(wp) :: pressure_si = 101325.0_wp
+      !> Only explicitly supplied CLI values override a parameter-file state point
+      logical :: temperature_given = .false., pressure_given = .false.
       character(64) :: solvent = ""
 
       logical :: json = .false.
@@ -114,7 +115,7 @@ subroutine get_arguments(config, error)
    type(ArgumentParser), save :: parser
    type(ArgumentParser), save :: general_parent
    type(ArgumentParser), save :: model_parser
-   type(ArgumentParser), save :: model_subparsers(1)
+   type(ArgumentParser), save :: model_subparsers(3)
    type(ArgumentParser), save :: cavity_parser
    type(ArgumentParser), save :: cavity_subparsers(5)
    type(ArgumentParser), save :: drop_parser
@@ -123,7 +124,7 @@ subroutine get_arguments(config, error)
    type(ArgumentParser), save :: mc_subparsers(2)
    type(ArgumentParser), save :: solvent_parser
    type(Namespace) :: args
-   type(subsubparser_spec) :: model_specs(1)
+   type(subsubparser_spec) :: model_specs(3)
    type(subsubparser_spec) :: cavity_specs(4)
 
    character(len=:), allocatable :: version_string
@@ -152,8 +153,12 @@ subroutine get_arguments(config, error)
 
    call parser%add_subparsers(title="subcommands", dest="command")
 
-   call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
-      "Run the GEMS solvation model")
+   call model_specs(1)%init("gems", "GEMS model (reserved)", "moist model gems", &
+      "GEMS command, not implemented in this preview")
+   call model_specs(2)%init("rism1d", "1D solute-solvent RISM", "moist model rism1d", &
+      "Run 1D solute-solvent RISM with an internal bulk solvent solve")
+   call model_specs(3)%init("rism3d", "3D solute-solvent RISM", "moist model rism3d", &
+      "Run 3D solute-solvent RISM with an internal bulk solvent solve")
 
    call cavity_specs(1)%init("numsa", "NUMSA cavity", "moist cavity numsa", &
       "Construct NUMSA cavities")
@@ -213,7 +218,7 @@ subroutine get_arguments(config, error)
    select case(trim(command))
    case("model")
       if (.not. args%has_key("model_mode")) then
-         call fatal_error(error, "Currently no model is available.")
+         call fatal_error(error, "Select one of: gems, rism1d or rism3d")
          return
       end if
 
@@ -232,11 +237,15 @@ subroutine get_arguments(config, error)
 
       if (args%has_key("temperature")) then
          call args%get("temperature", config%temperature)
+         config%temperature_given = .true.
       end if
 
       if (args%has_key("pressure")) then
          call args%get("pressure", config%pressure_si)
+         config%pressure_given = .true.
       end if
+
+      if (args%has_key("grad")) call args%get("grad", config%grad)
 
       if (args%has_key("numgrad")) then
          call args%get("numgrad", config%numgrad)
@@ -465,7 +474,7 @@ contains
       call p%add_argument("-c", "--charge", &
          data_type="real", &
          metavar="REAL", &
-         help="Molecular charge, overwrites .CHRG file", &
+         help="Total molecular charge, overrides input and .CHRG", &
          group_idx=grp_system)
       call p%add_argument("-s", "--solvent", &
          default_val="", &
@@ -474,14 +483,12 @@ contains
          help="Solvent name", &
          group_idx=grp_system)
       call p%add_argument("--temperature", &
-         default_val=298.15_wp, &
          action=not_less_than(0.0_wp), &
          data_type="real", &
          metavar="REAL", &
          help="Temperature in Kelvin", &
          group_idx=grp_system)
       call p%add_argument("--pressure", &
-         default_val=101325.0_wp, &
          action=not_less_than(0.0_wp), &
          data_type="real", dest="pressure", &
          metavar="REAL", &
@@ -496,9 +503,12 @@ contains
          print_default=.false., &
          dest="parameters_path", &
          metavar="PATH", &
-         help="Path to custom model parameters file", &
+         help="Path to model input (.toml preferred; .json also supported)", &
          group_idx=grp_io)
 
+      call p%add_argument("-g", "--grad", action="store_true", &
+         help="Calculate analytical solvation gradients", &
+         group_idx=grp_advanced)
       call p%add_argument("--numgrad", action="store_true", &
          help="Calculate numerical gradients", &
          group_idx=grp_advanced)

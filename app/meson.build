@@ -7,6 +7,8 @@ moist_exe = executable(
    sources: files(
      'main.f90',
      'cli.f90',
+     'input.f90',
+     'setup.f90',
      'driver.f90',
    ),
    dependencies: app_deps,

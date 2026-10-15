@@ -8,7 +8,7 @@ module moist_model_continuum_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
-   use moist_model_type, only: solvation_model_type, model_build
+   use moist_model_type, only: solvation_model_type, model_build, copy_model_state
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
@@ -42,6 +42,8 @@ module moist_model_continuum_type
       logical :: force_forward_gradient = .false.
    contains
       final :: destroy_model
+      !> Copy owned geometry and components with a fresh coupling registry
+      procedure :: copy_from => continuum_copy
       procedure :: atom_count => model_atom_count
       procedure :: use_forward_gradient => model_use_forward_gradient
       procedure :: add_component
@@ -70,6 +72,33 @@ module moist_model_continuum_type
    end type model_continuum_type
 
 contains
+
+   !> Copy the owned cavity, components and their cached results
+   !>
+   !> @param[inout] self Destination; previous couplings and family data are replaced
+   !> @param[in] source Source model, whose run context remains borrowed
+   !> @param[out] error Incompatible concrete model types
+   subroutine continuum_copy(self, source, error)
+      !> Destination model
+      class(model_continuum_type), intent(inout) :: self
+      !> Source model
+      class(solvation_model_type), intent(in) :: source
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (other => source)
+      type is (model_continuum_type)
+         if (.not. copy_model_state(self, source, error)) return
+         if (allocated(self%cavity)) deallocate (self%cavity)
+         if (allocated(other%cavity)) allocate (self%cavity, source=other%cavity)
+         if (allocated(self%components)) deallocate (self%components)
+         if (allocated(other%components)) allocate (self%components, source=other%components)
+         self%configured = other%configured
+         self%force_forward_gradient = other%force_forward_gradient
+      class default
+         call fatal_error(error, "Continuum copies require the same concrete model type")
+      end select
+   end subroutine continuum_copy
 
    !> Construct an empty continuum model around an owned copy of a cavity
    !>
