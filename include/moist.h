@@ -103,8 +103,7 @@ typedef enum {
 /// Matrix-storage policy for a PCM solver
 typedef enum {
     moist_pcm_storage_dense = 1,
-    moist_pcm_storage_matrix_free = 2,
-    moist_pcm_storage_auto = 3
+    moist_pcm_storage_matrix_free = 2
 } moist_pcm_storage;
 
 /// DROP cavity class
@@ -332,7 +331,6 @@ typedef struct {
     int solver_restart;
     double solver_tol;
     moist_pcm_storage storage;
-    int memory_budget_gib;  /* GiB; default 4 */
     double newton_tol;
     int newton_maxiter;
 } moist_pcm_options;

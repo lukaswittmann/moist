@@ -49,10 +49,10 @@ are rejected.
 
 PCM constructors use one ``moist_pcm_options`` layout. Initialize it with
 ``moist_init_pcm_options`` before changing fields. ``solver`` is
-``moist_pcm_solver_dense`` (default) or ``moist_pcm_solver_iterative``;
-``storage`` is ``moist_pcm_storage_auto`` (default), ``dense`` or
-``matrix_free``. The remaining controls are ``solver_tol``,
-``solver_maxiter``, ``solver_restart``, ``memory_budget_gib`` (integer GiB),
+``moist_pcm_solver_iterative`` (default) or ``moist_pcm_solver_dense``;
+``storage`` is ``moist_pcm_storage_dense`` (default) or
+``moist_pcm_storage_matrix_free``. The remaining controls are ``solver_tol``,
+``solver_maxiter``, ``solver_restart``,
 ``newton_tol`` and ``newton_maxiter``. See :doc:`/models/components/pcm/index`
 for defaults and solver behavior.
 

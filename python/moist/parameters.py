@@ -37,7 +37,6 @@ class PCMStorage(IntEnum):
 
     DENSE = library.lib.moist_pcm_storage_dense
     MATRIX_FREE = library.lib.moist_pcm_storage_matrix_free
-    AUTO = library.lib.moist_pcm_storage_auto
 
 
 @lru_cache(maxsize=None)
@@ -157,8 +156,6 @@ class PCMParameters(_Parameters):
     solver_maxiter: int = _native_default("pcm", "solver_maxiter")
     solver_restart: int = _native_default("pcm", "solver_restart")
     storage: PCMStorage = _native_default("pcm", "storage")
-    # Positive integer GiB; native default is 4.
-    memory_budget_gib: int = _native_default("pcm", "memory_budget_gib")
     newton_tol: float = _native_default("pcm", "newton_tol")
     newton_maxiter: int = _native_default("pcm", "newton_maxiter")
 

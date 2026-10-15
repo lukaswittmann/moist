@@ -19,7 +19,7 @@ module moist_model_continuum_component_pcm_type
       & pcm_electrostatic_direct_gradient, &
       & pcm_electrostatic_normal_direct_gradient
    use moist_utils_timer, only: cat_energy
-   use moist_model_continuum_component_pcm_solvers, only: pcm_storage_auto, pcm_storage_dense, &
+   use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense, &
       & pcm_storage_matrix_free
    use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
@@ -52,7 +52,7 @@ module moist_model_continuum_component_pcm_type
    !> PCM solver configuration
    type, extends(moist_model_parameters_type) :: moist_pcm_parameters_type
       !> Linear solver selection
-      integer :: solver = solver_type%dense
+      integer :: solver = solver_type%iterative
       !> Iterative solver convergence tolerance
       real(wp) :: solver_tol = 1.0e-8_wp
       !> Maximum iterative solver steps
@@ -60,9 +60,7 @@ module moist_model_continuum_component_pcm_type
       !> Krylov dimension before GMRES restarts
       integer :: solver_restart = 100
       !> Operator storage choice for iterative solves
-      integer :: storage = pcm_storage_auto
-      !> Memory budget in GiB for automatic operator storage
-      integer :: memory_budget_gib = 4
+      integer :: storage = pcm_storage_dense
       !> Relative nonlinear residual threshold
       real(wp) :: newton_tol = 1.0e-10_wp
       !> Maximum Newton steps
@@ -251,9 +249,9 @@ contains
       if (self%solver < solver_type%dense .or. self%solver > solver_type%iterative .or. &
           self%solver_tol <= 0.0_wp .or. self%solver_tol /= self%solver_tol .or. &
           self%solver_maxiter < 1 .or. self%solver_restart < 1 .or. &
-          (self%storage /= pcm_storage_auto .and. self%storage /= pcm_storage_dense .and. &
+          (self%storage /= pcm_storage_dense .and. &
            self%storage /= pcm_storage_matrix_free) .or. &
-          self%memory_budget_gib < 1 .or. self%newton_tol <= 0.0_wp .or. &
+          self%newton_tol <= 0.0_wp .or. &
           self%newton_tol /= self%newton_tol .or. self%newton_maxiter < 1) then
          call fatal_error(error, "Invalid PCM solver parameters")
       end if
@@ -271,7 +269,6 @@ contains
       self%solver_maxiter = defaults%solver_maxiter
       self%solver_restart = defaults%solver_restart
       self%storage = defaults%storage
-      self%memory_budget_gib = defaults%memory_budget_gib
       self%newton_tol = defaults%newton_tol
       self%newton_maxiter = defaults%newton_maxiter
    end subroutine init_parameter_defaults
@@ -283,11 +280,10 @@ contains
       class(moist_pcm_parameters_type), intent(inout), target :: self
 
       call self%register_int_scalar("solver", self%solver, level=2)
-      call self%register_real_scalar("solver_tol", self%solver_tol, level=2)
+      call self%register_real_scalar("solver_tol", self%solver_tol)
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
       call self%register_int_scalar("solver_restart", self%solver_restart)
-      call self%register_int_scalar("storage", self%storage)
-      call self%register_int_scalar("memory_budget_gib", self%memory_budget_gib)
+      call self%register_int_scalar("storage", self%storage, level=2)
       call self%register_real_scalar("newton_tol", self%newton_tol)
       call self%register_int_scalar("newton_maxiter", self%newton_maxiter)
    end subroutine register_parameter_entries

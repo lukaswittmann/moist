@@ -225,8 +225,8 @@ contains
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_component(pcm, [character(len=32) :: "solver_maxiter"], error, &
-         normal=[character(len=32) :: "solver_tol"])
+      call require_component(pcm, [character(len=32) :: "solver_tol", "solver_maxiter"], error, &
+         normal=[character(len=32) :: "storage"])
       if (allocated(error)) return
 
       call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)

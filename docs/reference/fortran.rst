@@ -327,8 +327,7 @@ CPCM
 The host answers ``gaussian_potential`` at the grid points ``cavity%xyz`` with
 the widths ``cavity%xi0``; see :ref:`coupling-requests` for the operator.
 
-Available solvers are ``dense`` (the default) and ``iterative`` (restarted
-GMRES). The shared settings also control storage and nonlinear convergence;
+Available solvers are ``iterative`` (the default, restarted GMRES) and ``dense``. The shared settings also control storage and nonlinear convergence;
 see :doc:`/models/components/pcm/index`.
 
 COSMO

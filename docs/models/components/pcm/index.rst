@@ -35,17 +35,16 @@ The run context is optional at construction: pass ``ctx=`` in Fortran,
 context or inherits the model's context. Standalone evaluation requires
 an explicit context.
 
-``solver`` chooses ``dense`` (default) or ``iterative``. The iterative solver
+``solver`` chooses ``iterative`` (default) or ``dense``. The iterative solver
 is restarted GMRES with block-Jacobi preconditioning. ``solver_tol`` defaults
 to ``1e-8``, ``solver_maxiter`` to ``1000``, and ``solver_restart`` to ``100``.
-``storage`` chooses ``auto`` (default), ``dense``, or ``matrix_free`` for the
-operator; ``memory_budget_gib`` controls the automatic choice and defaults to
-4 GiB. ``newton_tol`` (``1e-10``) and ``newton_maxiter`` (``50``)
-control nonlinear models. The default dense solver does not use the iterative
-controls.
+``storage`` chooses ``dense`` (default) or ``matrix_free`` for the operator.
+``newton_tol`` (``1e-10``) and ``newton_maxiter`` (``50``) control nonlinear
+models. The dense solver does not use the iterative controls.
 
-The ``memory_budget_gib`` setting is a positive integer in GiB across Fortran,
-C, Python, JSON/TOML files, and parameter tables (1 GiB = 1,073,741,824 bytes).
+The parameter printout shows ``solver`` and ``storage`` at verbosity 2.
+Verbosity 3 and above also shows the solver and Newton tolerances and iteration
+controls.
 
 .. toctree::
    :maxdepth: 1

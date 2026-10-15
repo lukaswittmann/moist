@@ -67,8 +67,8 @@ phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda_, eps_solute``.
 All accept keyword-only ``parameters=PCMParameters(...)`` and optional
 ``context=...``. Its controls are
 ``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,
-``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.AUTO``,
-``DENSE`` or ``MATRIX_FREE``), ``memory_budget_gib`` (integer GiB), ``newton_tol`` and
+``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.DENSE``
+(default) or ``MATRIX_FREE``), ``newton_tol`` and
 ``newton_maxiter``. See :doc:`/models/components/pcm/index` for defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come

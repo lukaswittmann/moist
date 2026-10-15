@@ -297,7 +297,6 @@ contains
             solver%max_iter = self%param%solver_maxiter
             solver%restart = self%param%solver_restart
             solver%storage = self%param%storage
-            solver%memory_budget_gib = self%param%memory_budget_gib
             allocate (solver%preconditioner, source=pcm_block_jacobi(block_size=256))
          end select
       else
