@@ -28,12 +28,12 @@ Construction
 
 .. code-block:: fortran
 
-   use moist_data_solvents, only : solvation_system_type, new_solvation_system, get_solvent_id
+   use moist_data_solvents, only : solvent_system_type, new_solvent_system, get_solvent_id
    use moist_model_moz, only : solvent_vv_type, new_vv_solvent, model_moz_3d_type, new_moz_3d_model
    use moist_model_moz_potential, only : lj_spce, lj_gaff, lj_uff, lj_tm, coulomb_spce, &
       & coulomb_resp_solvent, monopole_type
 
-   type(solvation_system_type) :: system
+   type(solvent_system_type) :: system
    type(solvent_vv_type) :: solvent
    type(model_moz_3d_type) :: model
    type(monopole_type) :: monopoles
@@ -41,7 +41,7 @@ Construction
 
    ! Bulk solvent from the solvent table: id, temperature, density, structure
    call get_solvent_id("water", id, error)
-   call new_solvation_system(system, id, error=error)
+   call new_solvent_system(system, id, error=error)
    call new_vv_solvent(solvent, ctx, system, error)
 
    ! Water: SPC/E covers every site. Any other solvent: SPC/E covers nothing,

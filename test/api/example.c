@@ -4653,10 +4653,119 @@ cleanup:
     return failed;
 }
 
+#define REQUIRE(cond) do { if (!(cond)) { \
+    printf("  FAIL: %s (line %d)\n", #cond, __LINE__); goto cleanup; } } while (0)
+
+/* Solvent table lookups: values, aliases, size contract and the printout */
+int test_solvent_descriptors(void)
+{
+    printf("Start test: solvent descriptors\n");
+    moist_error error = moist_new_error();
+    moist_solvent_descriptors water, other, before;
+    unsigned char larger[sizeof(moist_solvent_descriptors) + 16];
+    char *text = NULL;
+    size_t needed = 0, length = 123;
+    int failed = 1;
+
+    /* Values the ORCA CPCM(water) references assume */
+    fill_sentinel(&water, sizeof water);
+    moist_get_solvent_descriptors(error, "  WATER ", &water, sizeof water);
+    REQUIRE(!moist_check_error(error));
+    REQUIRE(water.struct_size == sizeof water);
+    REQUIRE(water.id == 175);
+    REQUIRE(strcmp(water.name, "water") == 0);
+    REQUIRE(fabs(water.epsilon - 78.355) < 1e-12);
+    REQUIRE(fabs(water.refractive_index - 1.3328) < 1e-12);
+    REQUIRE(fabs(water.abraham_alpha - 0.82) < 1e-12);
+    REQUIRE(fabs(water.abraham_beta - 0.35) < 1e-12);
+    REQUIRE(fabs(water.surface_tension_si - 0.07199202032600779) < 1e-15);
+    REQUIRE(fabs(water.mass_density_si - 998.0) < 1e-12);
+    REQUIRE(fabs(water.molar_mass_si - 0.018015) < 1e-5);
+    REQUIRE(agrees_to(water.mass_density_au,
+                      water.number_density_au * water.molecular_mass_au, 1e-12));
+    REQUIRE(agrees_to(water.molecular_volume_au * water.number_density_au, 1.0, 1e-12));
+
+    /* Any alias, and the ID, give the same bytes, padding included */
+    fill_sentinel(&other, sizeof other);
+    moist_get_solvent_descriptors(error, "h2o", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && memcmp(&water, &other, sizeof water) == 0);
+    memset(&other, 0x5a, sizeof other);
+    moist_get_solvent_descriptors_by_id(error, water.id, &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && memcmp(&water, &other, sizeof water) == 0);
+    moist_get_solvent_descriptors(error, "DMSO", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && strcmp(other.name, "dimethylsulfoxide") == 0);
+
+    /* No stored geometry: table values present, derived values NaN */
+    moist_get_solvent_descriptors(error, "decalin", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && other.id == 94);
+    REQUIRE(isfinite(other.epsilon) && isfinite(other.mass_density_au));
+    REQUIRE(isnan(other.molar_mass_si) && isnan(other.number_density_au) &&
+            isnan(other.molecular_volume_au));
+
+    /* A newer host: moist fills its own layout and leaves the tail alone */
+    fill_sentinel(larger, sizeof larger);
+    moist_get_solvent_descriptors(error, "water", (moist_solvent_descriptors *)larger,
+                                  sizeof larger);
+    REQUIRE(!moist_check_error(error));
+    REQUIRE(memcmp(larger, &water, sizeof water) == 0);
+    REQUIRE(sentinel_intact(larger + sizeof water, sizeof larger - sizeof water));
+
+    /* Every failure leaves the struct untouched */
+    fill_sentinel(&before, sizeof before);
+    fill_sentinel(&other, sizeof other);
+    moist_get_solvent_descriptors(error, "FOO", &other, sizeof other);
+    REQUIRE(error_has_origin(error, "moist_get_solvent_descriptors"));
+    REQUIRE(!expect_failure(&error, "Unknown solvent: FOO", "unknown solvent name"));
+    moist_get_solvent_descriptors(error, "   ", &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Empty solvent alias", "blank solvent name"));
+    moist_get_solvent_descriptors(error, NULL, &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Solvent name is missing", "NULL solvent name"));
+    moist_get_solvent_descriptors(error, "water", &other, sizeof other - 1);
+    REQUIRE(!expect_failure(&error, "smaller than the 1.0 layout", "short descriptors"));
+    moist_get_solvent_descriptors_by_id(error, 0, &other, sizeof other);
+    REQUIRE(error_has_origin(error, "moist_get_solvent_descriptors_by_id"));
+    REQUIRE(!expect_failure(&error, "Unknown solvent ID: 0", "solvent ID 0"));
+    moist_get_solvent_descriptors_by_id(error, 9999, &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Unknown solvent ID: 9999", "solvent ID 9999"));
+    REQUIRE(memcmp(&before, &other, sizeof other) == 0);
+    moist_get_solvent_descriptors(error, "water", NULL, sizeof other);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors"));
+    moist_get_solvent_descriptors_by_id(error, 175, NULL, sizeof other);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors by ID"));
+
+    /* Printout of the struct, following the banner buffer rules */
+    moist_get_solvent_descriptors_text(error, &water, NULL, 0, &needed);
+    REQUIRE(!moist_check_error(error) && needed > 0);
+    text = malloc(needed + 1);
+    REQUIRE(text);
+    moist_get_solvent_descriptors_text(error, &water, text, needed + 1, &length);
+    REQUIRE(!moist_check_error(error) && length == needed && strlen(text) == needed);
+    REQUIRE(strncmp(text, "Solvent properties:", 19) == 0);
+    REQUIRE(strstr(text, "water") && strstr(text, "78.355"));
+    length = 123;
+    moist_get_solvent_descriptors_text(error, NULL, text, needed + 1, &length);
+    REQUIRE(text[0] == '\0' && length == 123);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors text"));
+    other = water;
+    other.struct_size = sizeof other - 1;
+    moist_get_solvent_descriptors_text(error, &other, NULL, 0, &length);
+    REQUIRE(!expect_failure(&error, "smaller than the 1.0 layout", "short descriptors text"));
+
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    free(text);
+    moist_delete(error);
+    return failed;
+}
+
+#undef REQUIRE
+
 static const struct {
     const char* name;
     int (*fn)(void);
 } test_registry[] = {
+    {"solvent_descriptors",                  test_solvent_descriptors},
     {"context", test_context},
     {"host_timers", test_host_timers},
     {"v1_contract", test_v1_contract},

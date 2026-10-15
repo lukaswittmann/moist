@@ -82,11 +82,9 @@ The settings printout (:doc:`context`) shows the values a model runs with.
 Solvents
 --------
 
-MOIST carries a table of 180 solvents.
+MOIST contains about 180 solvents with their descriptors and geometries.
 A lookup takes a name or a a moist internal solvent ID.
 Names ignore case and surrounding whitespace and accept various aliases, such as ``H2O``, ``water``, ..., or a CAS number.
-IDs are frozen: an ID never changes meaning, and new solvents are appended.
-A lookup needs no context and reads only constant tables, so any thread may call it; an unknown name or ID is an error.
 
 Solvent descriptors
    The result of a lookup: one table entry with the same fields in every language.
