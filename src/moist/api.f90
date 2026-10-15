@@ -172,7 +172,7 @@ module moist_api
       !> Caller allocation size in bytes
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> PCM linear solver selector
-      integer(c_int) :: solver = 1_c_int
+      integer(c_int) :: solver = 2_c_int
       !> Iteration cap for restarted GMRES
       integer(c_int) :: solver_maxiter = 1000_c_int
       !> Number of GMRES steps between restarts
@@ -180,9 +180,7 @@ module moist_api
       !> Residual threshold for restarted GMRES
       real(c_double) :: solver_tol = 1.0e-8_c_double
       !> Matrix storage selection
-      integer(c_int) :: storage = 3_c_int
-      !> Memory budget in GiB for automatic storage
-      integer(c_int) :: memory_budget_gib = 4_c_int
+      integer(c_int) :: storage = 1_c_int
       !> Nonlinear solve tolerance
       real(c_double) :: newton_tol = 1.0e-10_c_double
       !> Nonlinear iteration cap
@@ -443,7 +441,6 @@ contains
       value%solver_restart = native%solver_restart
       value%solver_tol = native%solver_tol
       value%storage = native%storage
-      value%memory_budget_gib = native%memory_budget_gib
       value%newton_tol = native%newton_tol
       value%newton_maxiter = native%newton_maxiter
    end function default_pcm_options
@@ -457,7 +454,6 @@ contains
       param%solver_restart = int(options%solver_restart)
       param%solver_tol = real(options%solver_tol, wp)
       param%storage = int(options%storage)
-      param%memory_budget_gib = int(options%memory_budget_gib, kind(param%memory_budget_gib))
       param%newton_tol = real(options%newton_tol, wp)
       param%newton_maxiter = int(options%newton_maxiter)
    end function pcm_parameters_from_options
@@ -1150,7 +1146,6 @@ contains
       defaults%solver_restart = values%solver_restart
       defaults%solver_tol = values%solver_tol
       defaults%storage = values%storage
-      defaults%memory_budget_gib = values%memory_budget_gib
       defaults%newton_tol = values%newton_tol
       defaults%newton_maxiter = values%newton_maxiter
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, pcm_options_min_size, error%ptr)
