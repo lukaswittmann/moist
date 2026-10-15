@@ -2,8 +2,6 @@
 module test_data
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type, fatal_error
-   use mctc_io, only: structure_type, new_structure
-   use mctc_io_codata2018, only: Avogadro_constant, atomic_unit_of_mass
    use mctc_io_symbols, only: to_symbol
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
 
@@ -15,10 +13,11 @@ module test_data
    use moist_data_radii_legacy, only: get_radius, get_radius_func, &
       & get_upper_bound, rad_type
    use moist_data_solvents, only: get_solvent_id, max_solvents, &
-      & solvation_system_type, new_solvation_system, solvent_multipole_data_type, &
-      & get_solvent_charges, get_solvent_multipoles
+      & solvent_system_type, new_solvent_system, solvent_multipole_data_type, &
+      & get_solvent_charges, get_solvent_multipoles, solvent_descriptors_type, &
+      & get_solvent_descriptors, get_solvent_descriptors_by_id, max_solvent_name_len
 
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
 
    implicit none(type, external)
    private
@@ -72,9 +71,12 @@ contains
                   new_unittest("solvent_system_constructs", test_solvent_system_constructs), &
                   new_unittest("solvent_system_validates_input", test_solvent_system_validation), &
                   new_unittest("solvent_system_all_ids", test_solvent_system_all_ids), &
+                  new_unittest("solvent_descriptors_water", test_solvent_descriptors_water), &
+                  new_unittest("solvent_descriptors_match_system", test_solvent_descriptors_match_system), &
+                  new_unittest("solvent_descriptors_reject_unknown", test_solvent_descriptors_unknown), &
+                  new_unittest("solvent_descriptors_print", test_solvent_descriptors_print), &
                   new_unittest("solvent_charge_data", test_solvent_charge_data), &
                   new_unittest("solvent_system_charge_accessors", test_solvent_system_charge_accessors), &
-                  new_unittest("solute_update_ownership", test_solute_update_ownership), &
                   new_unittest("water_higher_multipoles", test_water_higher_multipoles) &
                   ]
    end subroutine collect_data
@@ -709,12 +711,12 @@ contains
       call check(error, allocated(err), more="an unknown solvent alias was accepted")
    end subroutine test_solvent_blank_alias
 
-   !> A full solvation system builds for a real solvent and carries the table
+   !> A full solvent system builds for a real solvent and carries the table
    !> values through into the derived type
    subroutine test_solvent_system_constructs(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(moist_error_type), allocatable :: err
       integer :: water_id
 
@@ -724,28 +726,28 @@ contains
          return
       end if
 
-      call new_solvation_system(system, water_id, error=err)
+      call new_solvent_system(system, water_id, error=err)
       if (allocated(err)) then
          call test_failed(error, "water system failed to build: "//trim(err%message))
          return
       end if
 
-      call check(error, system%solvent_id, water_id, more="constructor stored the wrong id")
+      call check(error, system%solvent%id, water_id, more="constructor stored the wrong id")
       if (allocated(error)) return
-      call check(error, trim(system%solvent_name), "water", more="constructor stored the wrong name")
+      call check(error, trim(system%solvent%name), "water", more="constructor stored the wrong name")
       if (allocated(error)) return
-      call check(error, system%solvent_epsilon > 1.0_wp, "water permittivity must exceed vacuum")
+      call check(error, system%solvent%epsilon > 1.0_wp, "water permittivity must exceed vacuum")
       if (allocated(error)) return
       call check(error, system%temperature, 298.15_wp, thr=thr, more="default temperature")
       if (allocated(error)) return
       call check(error, system%pressure_si, 101325.0_wp, thr=thr, more="default pressure")
       if (allocated(error)) return
-      call check(error, system%solvent_molar_mass_si > 0.0_wp, "solvent molar mass must be positive")
+      call check(error, system%solvent%molar_mass_si > 0.0_wp, "solvent molar mass must be positive")
       if (allocated(error)) return
 
       ! Mass density in atomic units is number density times molecular mass
-      call check(error, system%solvent_mass_density_au, &
-                 system%solvent_number_density_au*system%solvent_mass_au, thr=thr, rel=.true., &
+      call check(error, system%solvent%mass_density_au, &
+                 system%solvent%number_density_au*system%solvent%molecular_mass_au, thr=thr, rel=.true., &
                  more="mass density and number density disagree in atomic units")
    end subroutine test_solvent_system_constructs
 
@@ -755,41 +757,41 @@ contains
    subroutine test_solvent_system_validation(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(moist_error_type), allocatable :: err
 
-      call new_solvation_system(system, max_solvents + 1, error=err)
+      call new_solvent_system(system, max_solvents + 1, error=err)
       call check(error, allocated(err), more="an unknown solvent id was accepted")
       if (allocated(error)) return
       deallocate (err)
 
-      call new_solvation_system(system, 0, error=err)
+      call new_solvent_system(system, 0, error=err)
       call check(error, allocated(err), more="solvent id 0 was accepted")
       if (allocated(error)) return
       deallocate (err)
 
-      call new_solvation_system(system, 175, temperature=-1.0_wp, error=err)
+      call new_solvent_system(system, 175, temperature=-1.0_wp, error=err)
       call check(error, allocated(err), more="a negative temperature was accepted")
       if (allocated(error)) return
       deallocate (err)
 
-      call new_solvation_system(system, 175, temperature=0.0_wp, error=err)
+      call new_solvent_system(system, 175, temperature=0.0_wp, error=err)
       call check(error, allocated(err), more="a zero temperature was accepted")
       if (allocated(error)) return
       deallocate (err)
 
-      call new_solvation_system(system, 175, pressure_si=-1.0_wp, error=err)
+      call new_solvent_system(system, 175, pressure_si=-1.0_wp, error=err)
       call check(error, allocated(err), more="a negative pressure was accepted")
    end subroutine test_solvent_system_validation
 
-   !> Every table entry either builds a solvation system or reports an error
+   !> Every table entry either builds a solvent system or reports an error
    !> that names its id. Entries without a geometry must not fail with a
    !> garbled message, and the geometry and charge tables must cover the same
    !> ids with the same atom counts
    subroutine test_solvent_system_all_ids(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(moist_error_type), allocatable :: err, err_charges
       real(wp), allocatable :: charges(:)
       character(len=16) :: id_str
@@ -802,22 +804,22 @@ contains
       include "../src/moist/data/solvents.inc"
 
       do id = 1, max_solvents
-         call new_solvation_system(system, id, error=err)
+         call new_solvent_system(system, id, error=err)
          call get_solvent_charges(id, "gas", "mbis", charges, err_charges)
          if (.not. allocated(err)) then
-            call check(error, system%solvent_id, id, more="constructor stored the wrong id")
+            call check(error, system%solvent%id, id, more="constructor stored the wrong id")
             if (allocated(error)) return
-            call check(error, system%solvent_epsilon, eps(id), thr=thr, more="constructor permittivity")
+            call check(error, system%solvent%epsilon, eps(id), thr=thr, more="constructor permittivity")
             if (allocated(error)) return
-            call check(error, system%solvent_refractive_index, refr(id), thr=thr, more="constructor refractive index")
+            call check(error, system%solvent%refractive_index, refr(id), thr=thr, more="constructor refractive index")
             if (allocated(error)) return
-            call check(error, system%solvent_alpha, A(id), thr=thr, more="constructor HB acidity")
+            call check(error, system%solvent%abraham_alpha, A(id), thr=thr, more="constructor HB acidity")
             if (allocated(error)) return
-            call check(error, system%solvent_beta, B(id), thr=thr, more="constructor HB basicity")
+            call check(error, system%solvent%abraham_beta, B(id), thr=thr, more="constructor HB basicity")
             if (allocated(error)) return
-            call check(error, system%solvent_surface_tension_si, g(id)*0.001_wp, thr=thr, more="constructor tension")
+            call check(error, system%solvent%surface_tension_si, g(id)*0.001_wp, thr=thr, more="constructor tension")
             if (allocated(error)) return
-            call check(error, system%solvent_mass_density_si, rho(id), thr=thr, more="constructor density")
+            call check(error, system%solvent%mass_density_si, rho(id), thr=thr, more="constructor density")
             if (allocated(error)) return
             call check(error, .not. allocated(err_charges), more="solvent builds but has no charges")
             if (allocated(error)) return
@@ -836,6 +838,192 @@ contains
          deallocate (err)
       end do
    end subroutine test_solvent_system_all_ids
+
+   !> Water by name and alias carries the table values the ORCA CPCM(water)
+   !> references assume, and its SI and atomic-unit twins agree
+   subroutine test_solvent_descriptors_water(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_descriptors_type) :: water, alias
+      type(moist_error_type), allocatable :: err
+
+      call get_solvent_descriptors("  WATER ", water, err)
+      if (allocated(err)) then
+         call test_failed(error, "'  WATER ' did not resolve: "//trim(err%message))
+         return
+      end if
+      call check(error, water%id, 175, more="water id")
+      if (allocated(error)) return
+      call check(error, water%name, "water", more="canonical name")
+      if (allocated(error)) return
+      call check(error, water%epsilon, 78.355_wp, thr=thr, more="water permittivity")
+      if (allocated(error)) return
+      call check(error, water%refractive_index, 1.3328_wp, thr=thr, more="water refractive index")
+      if (allocated(error)) return
+      call check(error, water%abraham_alpha, 0.82_wp, thr=thr, more="water HB acidity")
+      if (allocated(error)) return
+      call check(error, water%abraham_beta, 0.35_wp, thr=thr, more="water HB basicity")
+      if (allocated(error)) return
+      call check(error, water%surface_tension_si, 71.992020326007790_wp*0.001_wp, thr=thr, &
+         & more="water surface tension")
+      if (allocated(error)) return
+      call check(error, water%mass_density_si, 998.0_wp, thr=thr, more="water density")
+      if (allocated(error)) return
+      call check(error, water%molar_mass_si, 0.018015_wp, thr=1.0e-5_wp, more="water molar mass")
+      if (allocated(error)) return
+      call check(error, water%mass_density_au, water%number_density_au*water%molecular_mass_au, &
+         & thr=thr, rel=.true., more="mass and number density disagree in atomic units")
+      if (allocated(error)) return
+      call check(error, water%molecular_volume_au*water%number_density_au, 1.0_wp, thr=thr, &
+         & more="molecular volume is not the inverse number density")
+      if (allocated(error)) return
+
+      call get_solvent_descriptors("h2o", alias, err)
+      if (allocated(err)) then
+         call test_failed(error, "'h2o' did not resolve: "//trim(err%message))
+         return
+      end if
+      call check(error, alias%id, water%id, more="'h2o' resolved elsewhere")
+      if (allocated(error)) return
+      call check(error, alias%epsilon, water%epsilon, thr=thr, more="'h2o' permittivity")
+   end subroutine test_solvent_descriptors_water
+
+   !> Every ID gives the values new_solvent_system stores, every alias the
+   !> descriptors of its ID, and every canonical name fits the C struct. An
+   !> entry without a geometry keeps its table values, with NaN derived ones
+   subroutine test_solvent_descriptors_match_system(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_system_type) :: system
+      type(solvent_descriptors_type) :: descriptors, alias
+      type(moist_error_type), allocatable :: err
+      integer :: i, j
+      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
+      integer :: id_list(max_solvents)
+      character(len=64) :: name_list(max_solvents)
+      character(len=64) :: alias_list(10, max_solvents)
+
+      include "../src/moist/data/solvents.inc"
+
+      do i = 1, max_solvents
+         call check(error, len_trim(name_list(i)) <= max_solvent_name_len, &
+            & more="name '"//trim(name_list(i))//"' exceeds MOIST_NAME_MAX")
+         if (allocated(error)) return
+         call get_solvent_descriptors_by_id(id_list(i), descriptors, err)
+         if (allocated(err)) then
+            call test_failed(error, "lookup by id failed: "//trim(err%message))
+            return
+         end if
+         call check(error, descriptors%epsilon, eps(i), thr=thr, more="table permittivity")
+         if (allocated(error)) return
+         call check(error, descriptors%mass_density_si, rho(i), thr=thr, more="table density")
+         if (allocated(error)) return
+         do j = 1, 10
+            if (len_trim(alias_list(j, i)) == 0) cycle
+            call get_solvent_descriptors(alias_list(j, i), alias, err)
+            if (allocated(err)) then
+               call test_failed(error, "alias '"//trim(alias_list(j, i))//"' does not resolve: " &
+                  & //trim(err%message))
+               return
+            end if
+            call check(error, alias%id, descriptors%id, more="alias '"//trim(alias_list(j, i))//"' resolved elsewhere")
+            if (allocated(error)) return
+         end do
+         call new_solvent_system(system, id_list(i), error=err)
+         if (allocated(err)) then
+            ! Only a missing geometry stops the system; its derived values are NaN
+            call check(error, index(err%message, "No geometry") > 0, more="system: "//err%message)
+            if (allocated(error)) return
+            deallocate (err)
+            call check(error, ieee_is_nan(descriptors%molar_mass_si) &
+               & .and. ieee_is_nan(descriptors%molecular_mass_au) &
+               & .and. ieee_is_nan(descriptors%number_density_si) &
+               & .and. ieee_is_nan(descriptors%number_density_au) &
+               & .and. ieee_is_nan(descriptors%molecular_volume_si) &
+               & .and. ieee_is_nan(descriptors%molecular_volume_au), &
+               & more="derived values without a geometry must be NaN")
+            if (allocated(error)) return
+            call check(error, ieee_is_finite(descriptors%surface_tension_au) &
+               & .and. ieee_is_finite(descriptors%mass_density_au), &
+               & more="geometry-free values must stay finite")
+            if (allocated(error)) return
+            cycle
+         end if
+         ! The system stores the lookup as its solvent component
+         call check(error, system%solvent%id, descriptors%id, more="id")
+         if (allocated(error)) return
+         call check(error, system%solvent%number_density_au, descriptors%number_density_au, &
+            & thr=thr, rel=.true., more="number density")
+         if (allocated(error)) return
+      end do
+   end subroutine test_solvent_descriptors_match_system
+
+   !> Blank and unknown names and unknown IDs are errors
+   subroutine test_solvent_descriptors_unknown(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_descriptors_type) :: descriptors
+      type(moist_error_type), allocatable :: err
+
+      call get_solvent_descriptors("definitely-not-a-solvent", descriptors, err)
+      call check(error, allocated(err), more="an unknown solvent name was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "definitely-not-a-solvent") > 0, &
+         & more="error does not name the solvent: "//err%message)
+      if (allocated(error)) return
+      deallocate (err)
+
+      call get_solvent_descriptors("   ", descriptors, err)
+      call check(error, allocated(err), more="a blank solvent name was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+
+      call get_solvent_descriptors_by_id(0, descriptors, err)
+      call check(error, allocated(err), more="solvent id 0 was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+
+      call get_solvent_descriptors_by_id(max_solvents + 1, descriptors, err)
+      call check(error, allocated(err), more="an unknown solvent id was accepted")
+   end subroutine test_solvent_descriptors_unknown
+
+   !> The printout is the solvent block of the solvent system printout
+   subroutine test_solvent_descriptors_print(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_descriptors_type) :: descriptors
+      type(moist_error_type), allocatable :: err
+      integer :: unit, stat, nline
+      logical :: has_name
+      character(len=256) :: line
+
+      call get_solvent_descriptors("water", descriptors, err)
+      if (allocated(err)) then
+         call test_failed(error, "water did not resolve: "//trim(err%message))
+         return
+      end if
+      open (newunit=unit, status="scratch", action="readwrite", form="formatted")
+      call descriptors%print(unit)
+      rewind (unit)
+      read (unit, "(a)", iostat=stat) line
+      call check(error, stat == 0 .and. line == "Solvent properties:", more="block header: "//trim(line))
+      if (allocated(error)) then
+         close (unit)
+         return
+      end if
+      nline = 1
+      has_name = .false.
+      do
+         read (unit, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         nline = nline + 1
+         if (index(line, "Name") > 0) has_name = index(line, "water") > 0
+      end do
+      close (unit)
+      call check(error, has_name, more="printout does not name the solvent")
+      if (allocated(error)) return
+      call check(error, nline, 12, more="printout line count")
+   end subroutine test_solvent_descriptors_print
 
    !> Every charge scheme and MBIS moment set agrees on the atom count, and
    !> failed lookups clear the output
@@ -904,7 +1092,7 @@ contains
    !> select charge and multipole models independently
    subroutine test_solvent_system_charge_accessors(error)
       type(error_type), allocatable, intent(out) :: error
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_multipole_data_type) :: multipoles, ref_multipoles
       type(moist_error_type), allocatable :: err
       real(wp), allocatable :: charges(:), ref_charges(:)
@@ -912,7 +1100,7 @@ contains
          "hirshfeld", "resp", "mbis", "chelpg"]
       integer :: i
 
-      call new_solvation_system(system, 175, error=err)
+      call new_solvent_system(system, 175, error=err)
       if (allocated(err)) then
          call test_failed(error, "water system unavailable: "//err%message)
          return
@@ -971,65 +1159,6 @@ contains
       call system%get_multipoles("unknown", "mbis", multipoles, err)
       call check(error, allocated(err), "unknown environment should return an error")
    end subroutine test_solvent_system_charge_accessors
-
-   !> Repeated solute updates replace the geometry and recompute the molar
-   !> mass from zero
-   subroutine test_solute_update_ownership(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(solvation_system_type) :: system
-      type(structure_type) :: solute
-      type(moist_error_type), allocatable :: err
-      real(wp) :: carbon_mass, hydrogen_mass
-
-      ! Molar masses in kg/mol
-      call get_mass(6, carbon_mass, err)
-      if (.not. allocated(err)) call get_mass(1, hydrogen_mass, err)
-      if (allocated(err)) then
-         call test_failed(error, "mass lookup failed: "//trim(err%message))
-         return
-      end if
-      carbon_mass = carbon_mass*0.001_wp
-      hydrogen_mass = hydrogen_mass*0.001_wp
-
-      call new_solvation_system(system, 175, error=err)
-      if (allocated(err)) then
-         call test_failed(error, "water system failed to build: "//trim(err%message))
-         return
-      end if
-      call new_structure(solute, num=[6, 1], sym=["C", "H"], &
-                         xyz=reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2]))
-      call system%update(solute, err)
-      if (allocated(err)) then
-         call test_failed(error, "first solute update failed: "//trim(err%message))
-         return
-      end if
-      call check(error, allocated(system%solu_mol), more="update did not allocate the solute")
-      if (allocated(error)) return
-      call check(error, system%solu_mol%nat, 2, more="first solute atom count")
-      if (allocated(error)) return
-      call check(error, system%solu_mol%xyz(1, 1), 1.0_wp, thr=thr, more="first solute geometry")
-      if (allocated(error)) return
-      call check(error, system%solute_molar_mass_si, carbon_mass + hydrogen_mass, thr=thr, rel=.true., &
-                 more="first solute molar mass")
-      if (allocated(error)) return
-
-      call new_structure(solute, num=[6], sym=["C"], xyz=reshape([7.0_wp, 8.0_wp, 9.0_wp], [3, 1]))
-      call system%update(solute, err)
-      if (allocated(err)) then
-         call test_failed(error, "replacement solute update failed: "//trim(err%message))
-         return
-      end if
-      call check(error, system%solu_mol%nat, 1, more="replacement solute atom count")
-      if (allocated(error)) return
-      call check(error, system%solu_mol%xyz(1, 1), 7.0_wp, thr=thr, more="replacement solute geometry")
-      if (allocated(error)) return
-      call check(error, system%solute_molar_mass_si, carbon_mass, thr=thr, rel=.true., &
-                 more="molar mass not reset by the replacement")
-      if (allocated(error)) return
-      call check(error, system%solute_mass_au, carbon_mass/Avogadro_constant/atomic_unit_of_mass, &
-                 thr=thr, rel=.true., more="replacement solute mass in atomic units")
-   end subroutine test_solute_update_ownership
 
    !> Water MBIS moments are stored component-major, (component, atom). The
    !> second quadrupole and third octupole component of oxygen differ from

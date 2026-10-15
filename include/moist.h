@@ -463,6 +463,75 @@ moist_get_version_string(moist_error error, char *buffer, size_t capacity,
                          size_t *length) moist_API_SUFFIX__V_1_0;
 
 /*
+ * Solvent descriptors -- bulk properties of one solvent table entry
+ *
+ * - Table values follow the Minnesota Solvent Descriptor Database: epsilon
+ *   and surface tension at 298.15 K, refractive index at 293.15 K, density
+ *   mostly at 293.15 K
+ * - Derived values (molar mass, number density, molecular volume) come from
+ *   the stored solvent geometry
+ * - A quiet NaN marks a value the table lacks and carries into the values
+ *   derived from it; 0 is a real value (e.g. abraham_alpha of aprotic
+ *   solvents). Every table value is present; decalin (ID 94) has no stored
+ *   geometry, so its six geometry-derived values are NaN
+ * - IDs are frozen: an ID never changes meaning, new solvents are appended
+ *
+ * Size contract
+ * - Pass sizeof the struct as struct_size; smaller than the full 1.0 layout
+ *   is an error
+ * - moist writes min(struct_size, its own layout) bytes and records that
+ *   count in descriptors->struct_size; fields beyond it are untouched
+ * - No initialization needed; on any error *descriptors is untouched
+ *
+ * Need no context; pure table reads, safe on any thread
+ */
+typedef struct {
+    size_t struct_size;            /* bytes filled by moist */
+    int id;                        /* frozen table ID */
+    char name[MOIST_NAME_MAX + 1]; /* canonical name, lowercase */
+    double epsilon;                /* static relative permittivity */
+    double refractive_index;       /* sodium D line */
+    double abraham_alpha;          /* Abraham H-bond acidity */
+    double abraham_beta;           /* Abraham H-bond basicity */
+    double surface_tension_si;     /* macroscopic, N/m */
+    double surface_tension_au;     /* macroscopic, Eh/bohr^2 */
+    double mass_density_si;        /* kg/m^3 */
+    double mass_density_au;        /* m_e/bohr^3 */
+    double molar_mass_si;          /* kg/mol */
+    double molecular_mass_au;      /* mass of one molecule, m_e */
+    double number_density_si;      /* 1/m^3 */
+    double number_density_au;      /* 1/bohr^3 */
+    double molecular_volume_si;    /* volume per molecule, m^3 */
+    double molecular_volume_au;    /* volume per molecule, bohr^3 */
+    /* --- end of 1.0 layout --- */
+} moist_solvent_descriptors;
+
+/// Descriptors of a solvent by name or any alias (e.g. "H2O", "DMSO")
+/// Case-insensitive, surrounding whitespace ignored. Errors: NULL name or
+/// descriptors, struct_size below the 1.0 layout, blank or unknown name
+moist_API_ENTRY void moist_API_CALL
+moist_get_solvent_descriptors(moist_error error, const char *name,
+                              moist_solvent_descriptors *descriptors,
+                              size_t struct_size) moist_API_SUFFIX__V_1_0;
+
+/// Descriptors of a solvent by its table ID; errors as by name, and an
+/// unknown ID
+moist_API_ENTRY void moist_API_CALL
+moist_get_solvent_descriptors_by_id(moist_error error, int id,
+                                    moist_solvent_descriptors *descriptors,
+                                    size_t struct_size) moist_API_SUFFIX__V_1_0;
+
+/// Copy the "Solvent properties" printout of filled descriptors, or query its
+/// length, following moist_get_banner
+/// Formats the values passed, without a table lookup; struct_size below the
+/// 1.0 layout is an error. The host chooses where to print
+moist_API_ENTRY void moist_API_CALL
+moist_get_solvent_descriptors_text(moist_error error,
+                                   const moist_solvent_descriptors *descriptors,
+                                   char *buffer, size_t capacity,
+                                   size_t *length) moist_API_SUFFIX__V_1_0;
+
+/*
  * Error handle class
 **/
 

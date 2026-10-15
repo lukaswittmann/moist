@@ -60,9 +60,11 @@ from .parameters import (
 )
 from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, GaussRadii, Radii, SMDRadii
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, LevelSet
+from .solvent import SolventDescriptors, get_solvent_descriptors, get_solvent_descriptors_by_id
 
 __all__ = [
     "get_version_string", "get_banner",
+    "SolventDescriptors", "get_solvent_descriptors", "get_solvent_descriptors_by_id",
     "Context",
     "GaussianBasis",
     "DROPParameters",

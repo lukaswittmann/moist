@@ -4,7 +4,7 @@
 !> number density, structure) and the solvent potential, which refuses
 !> host-data terms and carries the mixing rule and Ng split of the VV
 !> tables. One site per atom. A custom solvent is a hand-filled
-!> `solvation_system_type` (solvent id 0, temperature, number density and
+!> `solvent_system_type` (solvent id 0, temperature, number density and
 !> structure). Will own the 1D VV solve and the solvent susceptibility; the UV
 !> models copy it
 !>
@@ -19,7 +19,7 @@ module moist_model_moz_solvent_vv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_data_solvents, only: solvation_system_type
+   use moist_data_solvents, only: solvent_system_type
    use moist_model_moz_potential, only: moz_potential_type
    implicit none(type, external)
    private
@@ -31,7 +31,7 @@ module moist_model_moz_solvent_vv
       !> Run context, borrowed for the lifetime of the solvent
       type(moist_context_type), pointer :: ctx => null()
       !> Solvent system: id, temperature, number density and structure (bohr)
-      type(solvation_system_type), private :: system
+      type(solvent_system_type), private :: system
       !> Solvent potential; refuses host-data terms. Second side of the UV tables
       type(moz_potential_type) :: potential
       !> Whether the solvent was constructed
@@ -55,11 +55,11 @@ module moist_model_moz_solvent_vv
 
 contains
 
-   !> Construct a bulk solvent from a solvation system
+   !> Construct a bulk solvent from a solvent system
    !>
    !> Reads the solvent id, temperature, number density
-   !> (`solvent_number_density_au`) and structure (`solv_mol`, bohr) of the
-   !> system; a table entry comes from `new_solvation_system`
+   !> (`solvent%number_density_au`) and structure (`solv_mol`, bohr) of the
+   !> system; a table entry comes from `new_solvent_system`
    !>
    !> @param[out] self Solvent
    !> @param[in] ctx Run context, borrowed for the lifetime of the solvent
@@ -71,7 +71,7 @@ contains
       !> Run context, borrowed for the lifetime of the solvent
       type(moist_context_type), intent(in), target :: ctx
       !> Solvent system
-      type(solvation_system_type), intent(in) :: system
+      type(solvent_system_type), intent(in) :: system
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       if (.not. allocated(system%solv_mol)) then
@@ -90,11 +90,11 @@ contains
          call fatal_error(error, "1D VV solvent temperature must be positive")
          return
       end if
-      if (.not. ieee_is_finite(system%solvent_number_density_au)) then
+      if (.not. ieee_is_finite(system%solvent%number_density_au)) then
          call fatal_error(error, "1D VV solvent number density must be finite")
          return
       end if
-      if (system%solvent_number_density_au <= 0.0_wp) then
+      if (system%solvent%number_density_au <= 0.0_wp) then
          call fatal_error(error, "1D VV solvent number density must be positive")
          return
       end if
@@ -121,8 +121,8 @@ contains
          call fatal_error(error, "Construct the 1D VV solvent before update")
          return
       end if
-      if (self%system%solvent_id > 0) then
-         call self%potential%update(self%system%solv_mol, error, self%system%solvent_id)
+      if (self%system%solvent%id > 0) then
+         call self%potential%update(self%system%solv_mol, error, self%system%solvent%id)
       else
          call self%potential%update(self%system%solv_mol, error)
       end if
@@ -192,7 +192,7 @@ contains
       !> Solvent id
       integer :: id
       id = 0
-      if (self%constructed) id = self%system%solvent_id
+      if (self%constructed) id = self%system%solvent%id
    end function vv_solvent_id
 
 end module moist_model_moz_solvent_vv

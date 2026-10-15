@@ -44,6 +44,34 @@ def get_banner(style="full"):
     return _native_text(lib.moist_get_banner, getattr(lib, "moist_banner_" + style))
 
 
+def _solvent_descriptors(entry, key):
+    descriptors = ffi.new("moist_solvent_descriptors *")
+    error_check(entry)(key, descriptors, ffi.sizeof(descriptors[0]))
+    return descriptors
+
+
+def get_solvent_descriptors(name):
+    """Native descriptors of a solvent by name or alias."""
+    if not isinstance(name, str):
+        raise TypeError("solvent name must be a str")
+    # C reads up to the first NUL, so a NUL would silently cut the name short
+    if "\0" in name:
+        raise ValueError("Solvent name contains a NUL character")
+    return _solvent_descriptors(lib.moist_get_solvent_descriptors, name.encode())
+
+
+def get_solvent_descriptors_by_id(solvent_id):
+    """Native descriptors of a solvent by table ID."""
+    if isinstance(solvent_id, bool) or not isinstance(solvent_id, int):
+        raise TypeError("solvent ID must be an int")
+    return _solvent_descriptors(lib.moist_get_solvent_descriptors_by_id, solvent_id)
+
+
+def get_solvent_descriptors_text(descriptors):
+    """Native "Solvent properties" printout of a descriptor struct."""
+    return _native_text(lib.moist_get_solvent_descriptors_text, descriptors)
+
+
 class Handle:
     """Base wrapper for opaque C handles."""
 

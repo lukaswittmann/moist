@@ -5,7 +5,7 @@ module test_moz_3d
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
-   use moist_data_solvents, only: solvation_system_type
+   use moist_data_solvents, only: solvent_system_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_term, only: potential_term_type
    use moist_model_moz_potential, only: moz_potential_type
@@ -410,7 +410,7 @@ contains
       type(moist_context_type), target :: ctx
       type(model_moz_3d_type), target :: model
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_vv_type) :: solvent
       type(moz_potential_type) :: solvent_pot
       type(fixed_charges_type) :: extra

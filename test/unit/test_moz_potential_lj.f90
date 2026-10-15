@@ -8,7 +8,7 @@ module test_moz_potential_lj
    use mctc_io_convert, only: aatoau, kcaltoau, kjtoau
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
-   use moist_data_solvents, only: solvation_system_type, new_solvation_system, get_solvent_id
+   use moist_data_solvents, only: solvent_system_type, new_solvent_system, get_solvent_id
    use moist_model_moz_potential_lj_base, only: lj_12_6_type, new_lj_12_6, lj_12_6_mix, lj_12_6_evaluate, &
       & lj_mixing_lorentz_berthelot, lj_mixing_geometric, check_lj_mixing
    use moist_model_moz_potential_lj_typed, only: lj_typed_type, lj_gaff
@@ -68,14 +68,14 @@ contains
       !> Solvent geometry, bohr
       type(structure_type), intent(out) :: mol
       type(moist_error), allocatable :: err
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       integer :: id
       call get_solvent_id(name, id, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return
       end if
-      call new_solvation_system(system, id, error=err)
+      call new_solvent_system(system, id, error=err)
       if (allocated(err)) then
          call test_failed(error, err%message)
          return

@@ -14,7 +14,7 @@ module moist_driver
    use moist_cli, only: run_config
    use moist_output_ascii, only: moist_header, moist_build_header, cavity_header
    use moist_data_solvents, only: get_solvent_id
-   use moist_data_solvents, only: solvation_system_type, new_solvation_system
+   use moist_data_solvents, only: solvent_system_type, new_solvent_system
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -63,8 +63,8 @@ contains
       !> Shared run context owned for the whole run borrowed by everything
       type(moist_context_type), target :: ctx
 
-      !> Solvation system type
-      type(solvation_system_type), allocatable :: system
+      !> Solvent system
+      type(solvent_system_type), allocatable :: system
 
       character(len=:), allocatable :: filename
       character(len=:), allocatable :: solvent
@@ -108,7 +108,7 @@ contains
          call get_solvent_id(trim(config%solvent), solvent_id, error)
          if (allocated(error)) return
          allocate (system)
-         call new_solvation_system(system, solvent_id, &
+         call new_solvent_system(system, solvent_id, &
                                               temperature=config%temperature, pressure_si=config%pressure_si, &
                                               error=error)
          if (allocated(error)) return
@@ -329,7 +329,7 @@ contains
       call get_solvent_id(solvent, solvent_id, error)
       if (allocated(error)) return
       allocate (system)
-      call new_solvation_system(system, solvent_id, &
+      call new_solvent_system(system, solvent_id, &
                                            temperature=config%temperature, pressure_si=config%pressure_si, &
                                            error=error)
       if (allocated(error)) return

@@ -207,6 +207,14 @@ derivative contractions.
 ``get_banner(style)`` returns its banner without printing (``full``, ``short``,
 ``ascii`` or ``build``).
 
+Solvents
+--------
+
+``get_solvent_descriptors(name)`` and ``get_solvent_descriptors_by_id(id)``
+return a frozen ``SolventDescriptors`` (:ref:`api-solvents`); an unknown
+solvent raises ``RuntimeError``. ``text()`` returns the printout and
+``print(file=None)`` prints it.
+
 .. _coupling-python:
 
 Host coupling
