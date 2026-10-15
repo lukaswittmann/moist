@@ -68,6 +68,7 @@ program tester
    use test_model_component_pcm_solvers, only: collect_model_component_pcm_solvers
    use test_model_component_pcm_layers, only: collect_model_component_pcm_layers
    use test_model_component_pcm_native_golden, only: collect_model_component_pcm_native_golden
+   use test_model_component_pcm_general, only: collect_model_component_pcm_general
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_continuum, only: collect_model_continuum
@@ -148,6 +149,7 @@ program tester
       & new_testsuite("model_component_pcm_solvers", collect_model_component_pcm_solvers), &
       & new_testsuite("model_component_pcm_layers", collect_model_component_pcm_layers), &
       & new_testsuite("model_component_pcm_native_golden", collect_model_component_pcm_native_golden), &
+      & new_testsuite("model_component_pcm_general", collect_model_component_pcm_general), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_continuum", collect_model_continuum), &

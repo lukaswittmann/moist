@@ -74,6 +74,7 @@ tests = [
   'model_component_pcm_solvers',
   'model_component_pcm_layers',
   'model_component_pcm_native_golden',
+  'model_component_pcm_general',
   'model_component_gostshyp',
   'model_component_pv',
   'model_continuum',
