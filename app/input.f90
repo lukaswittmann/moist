@@ -1,7 +1,4 @@
 !> Application settings layered over the native UV and bulk-VV parameters
-!>
-!> Root keys retain the native UV schema. The app adds system, grid, potential
-!> and solvent.potential groups; parsing stays in moist_model_parameters.
 module moist_input
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error

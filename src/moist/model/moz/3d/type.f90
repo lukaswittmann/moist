@@ -23,7 +23,7 @@ module moist_model_moz_3d_type
    use mctc_io_convert, only: autokcal, autoaa
    use mctc_io_utils, only: to_lower
    use moist_context, only: moist_context_type
-   use moist_model_type, only: solvation_model_type, invalidate_model, copy_model_state
+   use moist_model_type, only: solvation_model_type, invalidate_model
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
@@ -47,10 +47,6 @@ module moist_model_moz_3d_type
       & "MOZ 3D model supports point grids only; Gaussian-width grids are not supported yet"
 
    !> Direct 3D MOZ model; UV energy, host response and nuclear gradient
-   !>
-   !> Copy with assignment (=), allocating the destination first if allocatable.
-   !> Couplings and solve resources are not copied; the next evaluation rebuilds them.
-   !> Do not use allocate(source=...) for a prepared model: it bypasses assignment.
    type, extends(solvation_model_type) :: model_moz_3d_type
       !> Solute potential; add terms before `update`
       type(moz_potential_type) :: potential
@@ -87,8 +83,6 @@ module moist_model_moz_3d_type
       real(wp), allocatable, private :: lambda(:, :)
    contains
       final :: destroy_moz_3d_model
-      !> Copy model data with independent coupling and transform ownership
-      procedure :: copy_from => moz_3d_assign
       procedure :: invalidate => moz_3d_invalidate
       procedure :: update => moz_3d_update
       procedure :: get_energy => moz_3d_energy
@@ -117,57 +111,6 @@ module moist_model_moz_3d_type
    end type model_moz_3d_type
 
 contains
-
-   !> Copy physical data and cached results; rebuild solve resources on next evaluation
-   !>
-   !> @param[inout] self Destination; previous couplings and plans are released
-   !> @param[in] source Source; its context is borrowed and its data are copied
-   !> @param[out] error Incompatible concrete model types
-   subroutine moz_3d_assign(self, source, error)
-      !> Destination model
-      class(model_moz_3d_type), intent(inout) :: self
-      !> Source model
-      class(solvation_model_type), intent(in) :: source
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      select type (other => source)
-      type is (model_moz_3d_type)
-         if (.not. copy_model_state(self, source, error)) return
-         self%potential = other%potential
-         if (allocated(self%grid)) deallocate (self%grid)
-         if (allocated(other%grid)) allocate (self%grid, source=other%grid)
-         if (allocated(self%solvent)) deallocate (self%solvent)
-         if (allocated(other%solvent)) allocate (self%solvent, source=other%solvent)
-         self%params = other%params
-         self%response = other%response
-         self%response_ready = other%response_ready
-         self%solved = other%solved
-         self%thermo = other%thermo
-         self%thermo_items = other%thermo_items
-         self%total_charge = other%total_charge
-         self%box_lengths = other%box_lengths
-         if (allocated(other%finite_size)) allocate (self%finite_size, source=other%finite_size)
-
-         if (allocated(self%cr)) deallocate (self%cr)
-         if (allocated(self%tr)) deallocate (self%tr)
-         if (allocated(self%hr)) deallocate (self%hr)
-         if (allocated(self%u_sr)) deallocate (self%u_sr)
-         if (allocated(self%ur_lr)) deallocate (self%ur_lr)
-         if (allocated(self%uk_lr)) deallocate (self%uk_lr)
-         if (allocated(other%cr)) self%cr = other%cr
-         if (allocated(other%tr)) self%tr = other%tr
-         if (allocated(other%hr)) self%hr = other%hr
-         if (allocated(other%u_sr)) self%u_sr = other%u_sr
-         if (allocated(other%ur_lr)) self%ur_lr = other%ur_lr
-         if (allocated(other%uk_lr)) self%uk_lr = other%uk_lr
-         if (allocated(other%lambda)) self%lambda = other%lambda
-         ! Native plans, solver history and scratch must belong solely to the copy.
-         ! Keep it unallocated so solve_uv builds resources owned solely by the copy.
-      class default
-         call fatal_error(error, "MOZ 3D copies require the same concrete model type")
-      end select
-   end subroutine moz_3d_assign
 
    !> Copy the configured spatial grid, an updated bulk solvent and the settings
    !>

@@ -30,7 +30,6 @@ module test_model_coupling
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
-   use moist_model_type, only: solvation_model_type
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -80,7 +79,6 @@ contains
          new_unittest("two_distinct_pcm_components_order", test_order), &
          new_unittest("moments_energy_requirements_and_disabled", test_moments), &
          new_unittest("request_free_pv", test_pv), &
-         new_unittest("model_copy_owns_independent_couplings", test_model_copy), &
          new_unittest("model_staging_restarts_walk", test_model_restart), &
          new_unittest("phase_answer_reuse_and_energy_refresh", test_phase_reuse), &
          new_unittest("model_update_ends_walk", test_model_update_walk), &
@@ -139,61 +137,6 @@ contains
       if (allocated(error)) return
       call check(error, .not. second%next(), more="the potential is the only request")
    end subroutine test_invalidation
-
-   subroutine test_model_copy(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(structure_type) :: mol
-      type(radius_type_static) :: radii
-      type(cavity_type_iswig) :: cavity
-      type(model_continuum_type), target :: original
-      type(model_continuum_type), allocatable, target :: copied
-      class(solvation_model_type), allocatable, target :: polymorphic_copy
-      class(solvation_model_type), pointer :: polymorphic_source
-      type(coupling_type), pointer :: coupling
-      !> Borrowed model cavity
-      class(cavity_type), pointer :: cav
-      real(wp) :: energy
-      integer :: mode
-      call iswig_fixture(ctx, mol, radii, cavity, error)
-      if (allocated(error)) return
-      call cpcm_model(original, cavity, ctx, mol, .false., error)
-      if (allocated(error)) return
-      cav => original%cavity
-      call original%new_coupling(coupling, err)
-      call original%prepare_energy(coupling, err)
-      call fill_point_charge_potential(cav, coupling, qat_vals, mol)
-      polymorphic_source => original
-      do mode = 1, 3
-         if (mode == 3) then
-            allocate (model_continuum_type :: polymorphic_copy)
-            polymorphic_copy = polymorphic_source
-            energy = 0.0_wp
-            call polymorphic_copy%get_energy(coupling, energy, err)
-            call check(error, allocated(err))
-            if (allocated(error)) return
-            deallocate (polymorphic_copy)
-         else
-            if (mode == 1) then
-               allocate (copied, source=original)
-            else
-               allocate (copied)
-               copied = original
-            end if
-            energy = 0.0_wp
-            call copied%get_energy(coupling, energy, err)
-            call check(error, allocated(err))
-            if (allocated(error)) return
-            deallocate (copied)
-         end if
-         energy = 0.0_wp
-         call original%get_energy(coupling, energy, err)
-         if (failed(error, err, "original survives destroying its copy")) return
-      end do
-      call original%update(mol, err)
-      if (failed(error, err, "original registry remains owned")) return
-   end subroutine test_model_copy
 
    subroutine test_order(error)
       type(error_type), allocatable, intent(out) :: error

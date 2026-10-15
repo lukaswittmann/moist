@@ -28,7 +28,7 @@ module moist_model_type
    private
 
    !> Family overrides can call the base invalidation with their polymorphic self
-   public :: solvation_model_type, model_build, invalidate_model, copy_model_state
+   public :: solvation_model_type, model_build, invalidate_model
 
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
@@ -44,13 +44,6 @@ module moist_model_type
       !> Registry of model-owned host couplings
       type(coupling_registry_type), private :: couplings
    contains
-
-      !> Checked copy into the same concrete family; unsupported unless overridden
-      procedure :: copy_from => model_copy_from_default
-      !> Dispatch copying through the model interface, including polymorphic variables
-      generic :: assignment(=) => assign
-      !> GCC 13 misdispatches inherited defined assignment when this binding is non_overridable
-      procedure, private :: assign => model_assign
 
       !* ------------------------------ Update and build ------------------------------ *!
 
@@ -232,68 +225,6 @@ module moist_model_type
    end interface
 
 contains
-
-   !> Assign through the family's checked copy hook
-   !>
-   !> @param[inout] self Allocated destination of the same concrete type as source
-   !> @param[in] source Model whose run context remains borrowed
-   impure elemental subroutine model_assign(self, source)
-      !> Destination model
-      class(solvation_model_type), intent(inout) :: self
-      !> Source model
-      class(solvation_model_type), intent(in) :: source
-      !> Assignment has no error argument; checked callers use copy_from directly
-      type(error_type), allocatable :: error
-
-      call self%copy_from(source, error)
-      if (allocated(error)) error stop error%message
-   end subroutine model_assign
-
-   !> Report copying unsupported by a custom model family
-   !>
-   !> @param[inout] self Destination, unchanged on error
-   !> @param[in] source Source, unchanged
-   !> @param[out] error Unsupported copy operation
-   subroutine model_copy_from_default(self, source, error)
-      !> Destination model
-      class(solvation_model_type), intent(inout) :: self
-      !> Source model
-      class(solvation_model_type), intent(in) :: source
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call fatal_error(error, "This solvation model does not implement copying")
-   end subroutine model_copy_from_default
-
-   !> Prepare a same-family copy with a fresh coupling registry and borrowed context
-   !>
-   !> @param[inout] self Destination; invalidated before the family replaces its owned data
-   !> @param[in] source Source model
-   !> @param[out] error Incompatible concrete types; destination unchanged
-   !> @return Whether family data need copying; false for self-copy or an error
-   logical function copy_model_state(self, source, error) result(copy_data)
-      !> Destination and source models
-      class(solvation_model_type), intent(inout), target :: self
-      class(solvation_model_type), intent(in), target :: source
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      !> Borrowed pointer used only to compare model identity
-      class(solvation_model_type), pointer :: destination
-
-      copy_data = .false.
-      destination => self
-      if (associated(destination, source)) return
-      if (.not. same_type_as(self, source)) then
-         call fatal_error(error, "Model copies require the same concrete type")
-         return
-      end if
-      call self%clear_couplings()
-      call self%invalidate()
-      self%ctx => source%ctx
-      self%updated = source%updated
-      self%built = source%built
-      copy_data = .true.
-   end function copy_model_state
 
    !* ================================================================================= *!
    !*                                 Update and build                                  *!

@@ -354,11 +354,11 @@ if(MOIST_TESTS)
     geometry_cartesian geometry_type12 geometry_type3)
   set(moist_test_selected_moz_3d_uv
     parameters susceptibility_cartesian susceptibility_molecular susceptibility_refusals
-    equation_map equation_copy model_copy model_copy_polymorphic equation_setup_errors
+    equation_map equation_copy equation_setup_errors
     energy_cartesian finite_size_box energy_threads energy_blocks energy_refusals)
   set(moist_test_selected_moz_1d_uv
     parameters prepare_solvent block_products map_consistency jvp_affine
-    thread_independence setup_errors problem_setup_errors warm_start scf_reuse operator_cache model_copy charge_moment
+    thread_independence setup_errors problem_setup_errors warm_start scf_reuse operator_cache charge_moment
     water_in_water response_tables response_charges response_fixed host_charges
     energy_refusals pysofft_reference)
   set(moist_test_selected_moz_closure

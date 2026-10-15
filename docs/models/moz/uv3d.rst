@@ -37,20 +37,6 @@ An energy-only transform backend can implement just ``fft_r2k``, ``fft_k2r`` and
 ``destroy``. The transpose and geometry-derivative methods are optional; their defaults
 return an unsupported-operation error when a response or gradient requests them.
 
-Copy a model with ``copy = model`` or the checked ``call copy%copy_from(model, error)``.
-Allocate ``copy`` first with the same concrete type; ``allocate(copy, mold=model)``
-creates an empty destination without copying native resources. Assignment also
-dispatches through the copy hook for ``class(solvation_model_type)`` variables
-and nonoverlapping model arrays. For overlapping sections, first copy into a
-separate array of models, as described in :doc:`/models/index`.
-The copy retains the model data and cached solution, borrows the same run context,
-and owns a fresh coupling registry. Its problem, solver scratch and transform plans
-are rebuilt at the next evaluation, so the copy can outlive the original model.
-Create couplings through the copy itself. For self-copy, use
-``call model%copy_from(model, error)`` to avoid a compiler-created whole-model RHS temporary.
-Do not copy a prepared model with ``allocate(copy, source=model)``: Fortran bypasses
-defined assignment there and can share native transform handles.
-
 ``get_energy``
 
 * solves the solvent copy when needed, with the ``solvent`` settings and on the grid they name;

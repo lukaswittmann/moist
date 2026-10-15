@@ -29,7 +29,7 @@ module moist_model_moz_1d_type
    use mctc_io_convert, only: autokcal, autoaa
    use moist_math_packed_sym, only: packed_index_lut
    use moist_context, only: moist_context_type
-   use moist_model_type, only: solvation_model_type, invalidate_model, copy_model_state
+   use moist_model_type, only: solvation_model_type, invalidate_model
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, moist_phase_energy, &
@@ -79,8 +79,6 @@ module moist_model_moz_1d_type
       real(wp), allocatable, private :: lambda(:, :)
    contains
       final :: destroy_moz_1d_model
-      !> Copy physical data with independent couplings; rebuild solve resources on evaluation
-      procedure :: copy_from => moz_1d_copy
       !> Invalidate the UV solution, response guess and host couplings
       procedure :: invalidate => moz_1d_invalidate
       procedure :: update => moz_1d_update
@@ -109,54 +107,6 @@ module moist_model_moz_1d_type
    end type model_moz_1d_type
 
 contains
-
-   !> Copy physical data and cached fields, with independent solve resources
-   !>
-   !> @param[inout] self Destination; previous couplings and solve state are released
-   !> @param[in] source Source model, whose run context remains borrowed
-   !> @param[out] error Incompatible concrete model types
-   subroutine moz_1d_copy(self, source, error)
-      !> Destination model
-      class(model_moz_1d_type), intent(inout) :: self
-      !> Source model
-      class(solvation_model_type), intent(in) :: source
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      select type (other => source)
-      type is (model_moz_1d_type)
-         if (.not. copy_model_state(self, source, error)) return
-         self%potential = other%potential
-         self%rgrid = other%rgrid
-         self%kgrid = other%kgrid
-         if (allocated(self%solvent)) deallocate (self%solvent)
-         if (allocated(other%solvent)) allocate (self%solvent, source=other%solvent)
-         self%params = other%params
-         self%solved = other%solved
-         self%bulk_generation = other%bulk_generation
-         self%thermo = other%thermo
-         self%operators = other%operators
-         if (allocated(self%problem)) deallocate (self%problem)
-
-         if (allocated(self%xyz)) deallocate (self%xyz)
-         if (allocated(self%cr)) deallocate (self%cr)
-         if (allocated(self%tr)) deallocate (self%tr)
-         if (allocated(self%hr)) deallocate (self%hr)
-         if (allocated(self%u_sr)) deallocate (self%u_sr)
-         if (allocated(self%ur_lr)) deallocate (self%ur_lr)
-         if (allocated(self%uk_lr)) deallocate (self%uk_lr)
-         if (allocated(other%xyz)) self%xyz = other%xyz
-         if (allocated(other%cr)) self%cr = other%cr
-         if (allocated(other%tr)) self%tr = other%tr
-         if (allocated(other%hr)) self%hr = other%hr
-         if (allocated(other%u_sr)) self%u_sr = other%u_sr
-         if (allocated(other%ur_lr)) self%ur_lr = other%ur_lr
-         if (allocated(other%uk_lr)) self%uk_lr = other%uk_lr
-         if (allocated(other%lambda)) self%lambda = other%lambda
-      class default
-         call fatal_error(error, "MOZ 1D copies require the same concrete model type")
-      end select
-   end subroutine moz_1d_copy
 
    !> Copy the radial grid pair, an updated bulk solvent and the settings
    !>

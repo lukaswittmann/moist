@@ -9,7 +9,6 @@ module test_moz_1d_uv
    use mctc_env, only: wp, moist_error => error_type
    use testdrive, only: unittest_type, new_unittest, error_type, check, skip_test, test_failed
    use moist_context, only: moist_context_type, new_context
-   use moist_model_type, only: solvation_model_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair, &
       & transform_quadrature
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
@@ -75,7 +74,6 @@ contains
          & new_unittest("warm_start", check_warm_start), &
          & new_unittest("scf_reuse", check_scf_reuse), &
          & new_unittest("operator_cache", check_operator_cache), &
-         & new_unittest("model_copy", check_model_copy), &
          & new_unittest("charge_moment", check_charge_moment), &
          & new_unittest("water_in_water", check_water_in_water), &
          & new_unittest("response_tables", check_response_tables), &
@@ -1045,81 +1043,6 @@ contains
       if (.not. allocated(err)) call new_uniform_radial_pair(rgrid, kgrid, params%solvent%npts, params%solvent%dr, err)
       if (.not. allocated(err)) call new_moz_1d_model(model, ctx, rgrid, kgrid, solvent, err, params)
    end subroutine new_water_model
-
-   !> Concrete and base-interface copies rebuild independent 1D solve state
-   !>
-   !> @param[out] error Test failure
-   subroutine check_model_copy(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(model_moz_1d_type), allocatable, target :: source, copy
-      class(solvation_model_type), pointer :: base_source, base_copy
-      type(model_moz_1d_parameters_type) :: params
-      type(solvent_vv_type) :: solvent
-      type(structure_type) :: mol
-      type(custom_lj_type) :: lj
-      type(fixed_charges_type) :: charges
-      type(coupling_type), pointer :: coupling, source_coupling
-      type(response_type) :: response
-      real(wp) :: energy, gradient(3, 1)
-      integer :: pass
-
-      nullify (coupling, source_coupling)
-      call new_context(ctx, nthreads=1, verbosity=0)
-      call energy_settings(params)
-      allocate (source, copy)
-      call new_water_model(ctx, params, solvent, source, err)
-      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      if (.not. allocated(err)) call new_custom_lj(lj, [1.0_wp], [0.0_wp], err)
-      if (.not. allocated(err)) call new_fixed_charges(charges, [0.0_wp], err)
-      if (.not. allocated(err)) call source%potential%add(lj, err)
-      if (.not. allocated(err)) call source%potential%add(charges, err)
-      if (.not. allocated(err)) call source%update(mol, err)
-      energy = 0.0_wp
-      if (.not. allocated(err)) call model_energy(source, energy, err)
-      if (.not. allocated(err)) call source%new_coupling(source_coupling, err)
-      if (.not. allocated(err)) call source%prepare_energy(source_coupling, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      base_source => source
-      base_copy => copy
-      do pass = 1, 2
-         if (pass == 1) then
-            copy = source
-         else
-            base_copy = base_source
-         end if
-         call check(error, copy%is_updated() .and. copy%is_built() .and. copy%solvent_solved(), &
-            & more="1D copying lost model state")
-         if (allocated(error)) return
-         energy = 0.0_wp
-         call copy%get_energy(source_coupling, energy, err)
-         call check(error, allocated(err), more="1D copy accepted a source-owned coupling")
-         if (allocated(error)) return
-         deallocate (err)
-         if (pass == 2) then
-            call source%release_coupling(source_coupling)
-            nullify (base_source)
-            deallocate (source)
-         end if
-         energy = 0.0_wp
-         call model_energy(copy, energy, err)
-         if (.not. allocated(err)) call copy%new_coupling(coupling, err)
-         if (.not. allocated(err)) call copy%prepare_gradient(coupling, err)
-         gradient = 0.0_wp
-         if (.not. allocated(err)) call copy%get_gradient(coupling, response, gradient, err)
-         call copy%release_coupling(coupling)
-         call check_moist_error(error, err)
-         if (allocated(error)) return
-         call check(error, abs(energy) < 1.0e-12_wp .and. all(abs(gradient) < 1.0e-12_wp), &
-            & more="zero potentials produced energy or forces after 1D copying")
-         if (allocated(error)) return
-      end do
-      nullify (base_copy)
-      deallocate (copy)
-   end subroutine check_model_copy
 
    !> Energy through a coupling of the model, answering host charges when requested
    !>
