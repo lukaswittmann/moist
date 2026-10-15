@@ -362,6 +362,11 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
     with raises(ValueError, match="numbers must have shape"):
         Structure(numbers.reshape(1, -1), positions)
 
+    assert structure.charge == 0.0
+    assert Structure(numbers, positions, charge=-1).charge == -1.0
+    with raises(ValueError, match="charge must be finite"):
+        Structure(numbers, positions, charge=float("nan"))
+
 
 # -----------------------------------------------------------------------------
 # Host coupling protocol

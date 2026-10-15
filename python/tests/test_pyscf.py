@@ -47,6 +47,7 @@ from moist.interface import (
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
+    ModelComponentSLIC,
     Response,
     SolvationModel,
 )
@@ -1043,6 +1044,27 @@ def test_host_separates_elements_from_ecp_charges(monkeypatch):
     assert host.nuclear_charges[0] == 53 - mol.atom_nelec_core(0) < 53
     host.dm = np.zeros((mol.nao, mol.nao))
     assert host.cartesian_density().shape == (host.basis.ncart, host.basis.ncart)
+
+
+@pytest.mark.conventions
+def test_slic_static_term_reads_the_molecular_charge():
+    """``phi_static * Q`` reaches the SLIC energy with ``Q = mol.charge``.
+
+    The static term is a constant, so raising ``phi_static`` by 0.1 Eh/e
+    shifts the energy by exactly ``0.1 * mol.charge``.
+    """
+    mol = molecule("fluoroacetate", "def2-svp")
+    dm = reference_density("fluoroacetate", "def2-svp")
+    assert mol.charge == -1
+    assert PySCFHost(mol).structure().charge == mol.charge
+    energies = []
+    for phi_static in (0.0, 0.1):
+        # Water-like parameters, mu = -alpha tanh(-gamma)
+        slic = ModelComponentSLIC(EPSILON, 0.5, -2.0, -0.5, -0.5 * np.tanh(0.5), phi_static,
+                                  parameters=DENSE)
+        solvation = PySCFSolvation(mol, cavity_config(False), [slic], context=CONTEXT)
+        energies.append(solvation.evaluate(dm).energy)
+    assert energies[1] - energies[0] == pytest.approx(0.1 * mol.charge, rel=0.0, abs=1e-12)
 
 
 def _energy(model, coupling):

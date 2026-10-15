@@ -1079,10 +1079,11 @@ contains
       if (allocated(error)) return
 
       ! ... and it must do so without re-solving. Poisoning the cached charges
-      ! makes the solve count observable: a short circuit keeps the poisoned
-      ! charges (energy doubles with them), a fresh solve would overwrite them
+      ! and solve energy makes the solve count observable: a short circuit keeps
+      ! the poisoned values (energy doubles), a fresh solve would overwrite them
       ! and hand back the unpoisoned energy
       pcm_model%q(:) = 2.0_wp*pcm_model%q(:)
+      pcm_model%kernel_energy = 2.0_wp*pcm_model%kernel_energy
       energy_cached = 0.0_wp
       call pcm_model%get_energy(component_view(coupling), cavity, energy_cached, err)
       if (allocated(err)) then
@@ -1093,6 +1094,7 @@ contains
          & message="unchanged molecular potential triggered a fresh PCM solve")
       if (allocated(error)) return
       pcm_model%q(:) = 0.5_wp*pcm_model%q(:)
+      pcm_model%kernel_energy = 0.5_wp*pcm_model%kernel_energy
 
       ! Cycle 2: new potential, same geometry, deliberately no update() in between
       call pcm_model%prepare_energy(cavity, coupling, err)

@@ -440,8 +440,9 @@ class Structure:
     NumPy shape ``(natoms, 3)``; the wrapper converts that row-major memory to
     the native Fortran ``(3, natoms)`` view without an intermediate transpose.
 
-    ``numbers`` identify the elements.  The structure holds element numbers
-    and geometry only: the nuclear charges of the host Hamiltonian reach moist
+    ``numbers`` identify the elements.  The structure holds element numbers,
+    geometry and the net ``charge`` in elementary charges, which SLIC reads for
+    its static term.  The nuclear charges of the host Hamiltonian reach moist
     through the ``nuclear_charges`` coupling request.
     """
 
@@ -451,6 +452,8 @@ class Structure:
         positions: np.ndarray,
         lattice: Optional[np.ndarray] = None,
         periodic: Optional[np.ndarray] = None,
+        *,
+        charge: float = 0.0,
     ) -> None:
         _numbers = np.asarray(numbers)
         if _numbers.ndim != 1:
@@ -471,7 +474,12 @@ class Structure:
             if _periodic.shape != (3,):
                 raise ValueError("periodic must have shape (3,)")
 
+        _charge = float(charge)
+        if not np.isfinite(_charge):
+            raise ValueError("charge must be finite")
+
         self._natoms = natoms
+        self._charge = _charge
         self._numbers = np.array(_numbers, dtype=np.int32, order="C", copy=True)
         self._positions = _positions
         self._lattice = _lattice
@@ -484,6 +492,7 @@ class Structure:
             self._positions,
             self._lattice,
             self._periodic,
+            self._charge,
         )
 
     @staticmethod
@@ -509,6 +518,7 @@ class Structure:
             and np.array_equal(self._positions, other._positions)
             and self._optional_array_equal(self._lattice, other._lattice)
             and self._optional_array_equal(self._periodic, other._periodic)
+            and self._charge == other._charge
         )
 
     @staticmethod
@@ -541,6 +551,11 @@ class Structure:
     @property
     def periodic(self) -> Optional[np.ndarray]:
         return None if self._periodic is None else self._periodic.copy()
+
+    @property
+    def charge(self) -> float:
+        """Net charge in elementary charges."""
+        return self._charge
 
     def _as_handle(self) -> library.StructureHandle:
         return self._handle
@@ -1418,7 +1433,11 @@ class ModelComponentLPB(_ModelComponentPCMBase):
 
 
 class ModelComponentSLIC(_ModelComponentPCMBase):
-    """Solvation-layer interface condition component."""
+    """Solvation-layer interface condition component.
+
+    ``phi_static`` (hartree per elementary charge) adds ``phi_static * Q``,
+    with ``Q`` the ``charge`` of the :class:`Structure`.
+    """
 
     def __init__(self, epsilon: float, alpha: float, beta: float, gamma: float,
                  mu: float, phi_static: float, *, parameters: PCMParameters | None = None,

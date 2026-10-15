@@ -26,8 +26,6 @@ module moist_model_continuum_component_pcm_layer
       real(wp), allocatable :: qn(:)
       !> Host normal-derivative trace
       real(wp), allocatable :: vn(:)
-      !> Energy returned by the generated solve
-      real(wp) :: kernel_energy = 0.0_wp
       !> True when the cavity has Gaussian widths and switching factors
       logical :: smeared = .false.
       !> This model reads the normal derivative of the host potential
@@ -43,7 +41,6 @@ module moist_model_continuum_component_pcm_layer
       procedure :: potential_adjoint => layer_potential_adjoint
       procedure :: normal_trace_adjoint => layer_normal_trace_adjoint
       procedure :: uses_normal_trace => layer_uses_normal_trace
-      procedure :: get_energy => layer_get_energy
       procedure :: get_surface_weights => layer_get_surface_weights
       procedure :: get_gradient_surface_weights => layer_get_gradient_surface_weights
       procedure :: get_gradient => layer_get_gradient
@@ -393,18 +390,6 @@ contains
          allocate (w_vn(size(self%q)), source=0.0_wp)
       end if
    end subroutine layer_normal_trace_adjoint
-
-   !> Add the generated polarization energy
-   subroutine layer_get_energy(self, coupling, cavity, energy, error)
-      class(pcm_layer_base), intent(inout) :: self
-      class(coupling_view_type), intent(in) :: coupling
-      class(cavity_type), intent(inout) :: cavity
-      real(wp), intent(inout) :: energy
-      type(error_type), allocatable, intent(out) :: error
-      call self%ensure_charges(coupling, cavity, error)
-      if (allocated(error)) return
-      energy = energy + self%kernel_energy
-   end subroutine layer_get_energy
 
    !> Contract host potential derivatives for point or Gaussian surfaces
    subroutine layer_get_host_surface_weights(self, coupling, acc, ngrid, error)

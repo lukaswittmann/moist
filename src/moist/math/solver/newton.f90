@@ -298,6 +298,10 @@ contains
       linear_solver_use = newton_linear_solver_dense
       if (present(linear_solver)) linear_solver_use = linear_solver
       if (present(step_ctx)) linear_solver_use = newton_linear_solver_custom_step
+      if (linear_solver_use == newton_linear_solver_custom_step .and. .not. present(step_ctx)) then
+         call fatal_error(error, "Custom-step Newton mode requires step_ctx")
+         return
+      end if
 
       linesearch_use = newton_linesearch_backtrack
       if (present(linesearch)) linesearch_use = linesearch
@@ -586,7 +590,8 @@ contains
    !> @param[in]    x      Variables [n]
    !> @param[in]    fvec   Function values at x [m]
    !> @param[out]   p      Newton step [n]
-   !> @param[out]   istat  0 (failures are recorded by the caller, with p = 0)
+   !> @param[out]   istat  0 after the callback (its failures are recorded by the caller,
+   !>                      with p = 0), -1 without a callback
    subroutine wrapper_step_module(me, x, fvec, p, istat)
       class(nlesolver_type), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -595,11 +600,13 @@ contains
       integer, intent(out) :: istat
 
       p = 0.0_wp
-      istat = 0
+      ! A missing callback fails the step instead of returning p = 0
+      istat = -1
       select type (bridge => me)
       type is (moist_newton_bridge_type)
          if (associated(bridge%user_step_ctx) .and. allocated(bridge%user_context)) then
             call bridge%user_step_ctx(x, fvec, p, bridge%user_context)
+            istat = 0
          end if
       end select
    end subroutine wrapper_step_module
