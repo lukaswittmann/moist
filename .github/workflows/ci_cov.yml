@@ -112,7 +112,7 @@ jobs:
             --include-internal-functions \
             --gcov-ignore-errors=no_working_dir_found \
             --gcov-suspicious-hits-threshold=1099511627776 \
-            -x -o build/meson-logs/coverage.xml
+            --print-summary -x -o build/meson-logs/coverage.xml
 
       - name: Generate Python coverage report
         if: matrix.leg.name == 'coupling'
@@ -121,10 +121,20 @@ jobs:
           python -m coverage xml --rcfile="$RUNNER_TEMP/coveragerc" \
             -o build/meson-logs/python-coverage.xml
 
+      - name: Save coverage reports
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: coverage-${{ matrix.leg.name }}
+          path: build/meson-logs/*coverage.xml
+          if-no-files-found: error
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
           files: ${{ matrix.leg.name == 'coupling' && 'build/meson-logs/coverage.xml,build/meson-logs/python-coverage.xml' || 'build/meson-logs/coverage.xml' }}
+          # gcovr already applies the source filters; upload only its reports.
+          disable_search: true
+          plugins: noop
           flags: ${{ matrix.leg.name }}
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
