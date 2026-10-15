@@ -85,6 +85,7 @@ contains
       self%feps = pcm_layer_feps(epsilon)
       self%param = settings
       self%name = "LPB"
+      self%description = "Linearized Poisson-Boltzmann electrostatics with ionic screening"
       self%kappa = kappa
    end subroutine new_component_lpb
 

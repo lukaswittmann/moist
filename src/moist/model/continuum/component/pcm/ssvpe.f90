@@ -73,6 +73,7 @@ contains
       self%feps = pcm_layer_feps(epsilon)
       self%param = settings
       self%name = "SS(V)PE"
+      self%description = "Surface and simulation of volume polarization for electrostatics"
    end subroutine new_component_ssvpe
 
    !> Assemble the SS(V)PE operators
