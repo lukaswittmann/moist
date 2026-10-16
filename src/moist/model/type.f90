@@ -27,7 +27,8 @@ module moist_model_type
    implicit none(type, external)
    private
 
-   public :: solvation_model_type, model_build
+   !> Family overrides can call the base invalidation with their polymorphic self
+   public :: solvation_model_type, model_build, invalidate_model
 
    !> Abstract base solvation model
    type, abstract :: solvation_model_type

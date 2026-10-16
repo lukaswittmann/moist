@@ -10,6 +10,18 @@ module moist_math_blas_level3
 
    public :: wrap_gemm, wrap_trsm, wrap_syrk
 
+   public :: wrap_gemm_rows_tn, wrap_gemm_rows_nn
+
+   !> Gram product of row blocks without packing the matrix sections
+   interface wrap_gemm_rows_tn
+      module procedure :: wrap_dgemm_rows_tn
+   end interface wrap_gemm_rows_tn
+
+   !> Product of a row block and a small matrix without packing
+   interface wrap_gemm_rows_nn
+      module procedure :: wrap_dgemm_rows_nn
+   end interface wrap_gemm_rows_nn
+
    !> Performs one of the symmetric rank-k operations
    !>
    !>    C := alpha*A*A**T + beta*C,
@@ -569,5 +581,104 @@ contains
 
       call blas_syrk(ula, tra, n, k, a, amat, lda, b, cmat, ldc)
    end subroutine wrap_dsyrk
+
+   pure subroutine wrap_dgemm_rows_tn(amat, bmat, first, count, cmat, alpha, beta)
+      !> Complete matrices; retaining their shape avoids packing strided row blocks.
+      real(dp), intent(in), contiguous :: amat(:, :), bmat(:, :)
+      !> One-based block origin and height.
+      integer, intent(in) :: first, count
+      !> Gram result.
+      real(dp), intent(inout), contiguous :: cmat(:, :)
+      !> BLAS scale factors.
+      real(dp), intent(in) :: alpha, beta
+
+      call gemm_rows_tn_storage(size(amat, 1), size(amat, 2), amat, size(bmat, 1), size(bmat, 2), &
+         & bmat, first, count, cmat, alpha, beta)
+   end subroutine wrap_dgemm_rows_tn
+
+   pure subroutine gemm_rows_tn_storage(lda, na, amat, ldb, nb, bmat, first, count, cmat, alpha, beta)
+      !> Physical dimensions.
+      integer, intent(in) :: lda, na, ldb, nb
+      !> Explicit shape permits sequence association starting at an array element.
+      real(dp), intent(in) :: amat(lda, na), bmat(ldb, nb)
+      !> Row-block origin and height.
+      integer, intent(in) :: first, count
+      !> Gram result.
+      real(dp), intent(inout), contiguous :: cmat(:, :)
+      !> BLAS scale factors.
+      real(dp), intent(in) :: alpha, beta
+
+      if (na == 0 .or. nb == 0) return
+      if (count == 0) then
+         ! Empty row block: dgemm still applies C := beta*C, and amat(first, 1) may not exist
+         call scale_gemm_block(cmat, na, nb, beta)
+         return
+      end if
+      call dgemm("T", "N", int(na, blas_ik), int(nb, blas_ik), int(count, blas_ik), &
+         & alpha, amat(first, 1), int(lda, blas_ik), bmat(first, 1), int(ldb, blas_ik), &
+         & beta, cmat, int(max(1, size(cmat, 1)), blas_ik))
+   end subroutine gemm_rows_tn_storage
+
+   pure subroutine wrap_dgemm_rows_nn(amat, first, count, bmat, cmat, alpha, beta)
+      !> Complete matrix; retaining its shape avoids packing strided row blocks.
+      real(dp), intent(in), contiguous :: amat(:, :)
+      !> One-based block origin and height.
+      integer, intent(in) :: first, count
+      !> Small right factor.
+      real(dp), intent(in), contiguous :: bmat(:, :)
+      !> Result block.
+      real(dp), intent(inout), contiguous :: cmat(:, :)
+      !> BLAS scale factors.
+      real(dp), intent(in) :: alpha, beta
+
+      call gemm_rows_nn_storage(size(amat, 1), size(amat, 2), amat, first, count, bmat, cmat, &
+         & alpha, beta)
+   end subroutine wrap_dgemm_rows_nn
+
+   pure subroutine gemm_rows_nn_storage(lda, na, amat, first, count, bmat, cmat, alpha, beta)
+      !> Physical dimensions.
+      integer, intent(in) :: lda, na
+      !> Explicit shape permits sequence association starting at an array element.
+      real(dp), intent(in) :: amat(lda, na)
+      !> Row-block origin and height.
+      integer, intent(in) :: first, count
+      !> Small right factor.
+      real(dp), intent(in), contiguous :: bmat(:, :)
+      !> Result block.
+      real(dp), intent(inout), contiguous :: cmat(:, :)
+      !> BLAS scale factors.
+      real(dp), intent(in) :: alpha, beta
+
+      if (count == 0 .or. size(bmat, 2) == 0) return
+      if (na == 0) then
+         ! Empty inner dimension: dgemm still applies C := beta*C, and amat has no column
+         call scale_gemm_block(cmat, count, size(bmat, 2), beta)
+         return
+      end if
+      call dgemm("N", "N", int(count, blas_ik), int(size(bmat, 2), blas_ik), int(na, blas_ik), &
+         & alpha, amat(first, 1), int(lda, blas_ik), bmat, int(max(1, size(bmat, 1)), blas_ik), &
+         & beta, cmat, int(max(1, size(cmat, 1)), blas_ik))
+   end subroutine gemm_rows_nn_storage
+
+   !> Apply C := beta*C to the leading block, as dgemm does for an empty inner dimension
+   !>
+   !> @param[inout] cmat Result storage; only cmat(:m, :n) is touched
+   !> @param[in] m Block rows
+   !> @param[in] n Block columns
+   !> @param[in] beta Scale; zero overwrites without reading C
+   pure subroutine scale_gemm_block(cmat, m, n, beta)
+      !> Result storage; only cmat(:m, :n) is touched
+      real(dp), intent(inout) :: cmat(:, :)
+      !> Block rows and columns
+      integer, intent(in) :: m, n
+      !> BLAS output scale; zero overwrites without reading C
+      real(dp), intent(in) :: beta
+
+      if (beta == 0.0_dp) then
+         cmat(:m, :n) = 0.0_dp
+      else if (beta /= 1.0_dp) then
+         cmat(:m, :n) = beta*cmat(:m, :n)
+      end if
+   end subroutine scale_gemm_block
 
 end module moist_math_blas_level3

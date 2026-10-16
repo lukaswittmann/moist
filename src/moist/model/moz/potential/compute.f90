@@ -71,7 +71,7 @@ contains
       end if
    end subroutine potential_compute_1d
 
-   module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling)
+   module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge)
       class(moz_potential_type), intent(in) :: self
       class(moist_math_grid_3d_type), intent(in) :: grid
       real(wp), allocatable, intent(out) :: u_sr(:, :)
@@ -80,14 +80,19 @@ contains
       type(error_type), allocatable, intent(out) :: error
       class(moz_potential_type), intent(in), optional :: solvent
       class(coupling_type), intent(inout), target, optional :: coupling
+      real(wp), intent(out), optional :: net_charge
       type(potential_sites_type) :: site_u, site_v
       real(wp), allocatable :: phi_u(:)
+      if (present(net_charge)) net_charge = 0.0_wp
       if (.not. present(solvent)) then
          call fatal_error(error, "3D tables are solute-solvent tables; pass the solvent potential")
          return
       end if
       call resolve_sites(self, site_u, site_v, error, solvent, coupling)
       if (allocated(error)) return
+      if (present(net_charge)) then
+         if (allocated(site_u%q)) net_charge = sum(site_u%q)
+      end if
       if (site_u%has_field) then
          call field_3d(self, grid, phi_u, error, coupling)
          if (allocated(error)) return

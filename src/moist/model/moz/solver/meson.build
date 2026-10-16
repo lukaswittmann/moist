@@ -1,0 +1,16 @@
+srcs += files(
+   'adjoint.f90',
+   'base.f90',
+   'deflation.f90',
+   'diis.f90',
+   'evaluator.f90',
+   'factory.f90',
+   'hybrid.f90',
+   'iteration.f90',
+   'jfnk.f90',
+   'parameters.f90',
+   'picard.f90',
+   'preconditioner.f90',
+   'printer.f90',
+   'workspace.f90',
+)

@@ -12,7 +12,12 @@ module moist_driver
    use mctc_io, only: structure_type, read_structure, filetype
    use mctc_io_utils, only: to_lower
    use moist_cli, only: run_config
-   use moist_output_ascii, only: moist_header, moist_build_header, cavity_header
+   use moist_input, only: rism_input_type, new_rism_input
+   use moist_setup, only: new_rism_model, evaluate_rism_model, numerical_rism_gradient
+   use moist_model_type, only: solvation_model_type
+   use mctc_io_convert, only: autokcal
+   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_output_ascii, only: cavity_header
    use moist_data_solvents, only: get_solvent_id
    use moist_data_solvents, only: solvation_system_type, new_solvation_system
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
@@ -25,7 +30,6 @@ module moist_driver
    use moist_radii, only: radius_type, new_radii
    use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type, new_context
-!$ use omp_lib
 ! #ifdef WITH_MKL
 ! !$ use mkl_service
 ! #endif
@@ -65,6 +69,9 @@ contains
 
       !> Solvation system type
       type(solvation_system_type), allocatable :: system
+      !> TOML run settings, used only by the RISM commands
+      type(rism_input_type) :: rism_input
+      logical :: rism_mode
 
       character(len=:), allocatable :: filename
       character(len=:), allocatable :: solvent
@@ -302,11 +309,28 @@ contains
          return
       end if
 
+      !> Read native UV/VV settings plus app setup; CLI values override only when supplied
+      rism_mode = to_lower(config%mode) == "rism1d" .or. to_lower(config%mode) == "rism3d"
+      if (rism_mode) then
+         call new_rism_input(rism_input, trim(config%mode), error)
+         if (.not. allocated(error) .and. config%read_parameters) then
+            call rism_input%read_file(trim(config%parameters_path), error, strict=.true.)
+         end if
+         if (allocated(error)) return
+         if (allocated(config%temperature)) rism_input%system%temperature = config%temperature
+         if (allocated(config%pressure_si)) rism_input%system%pressure = config%pressure_si
+         if (allocated(rism_input%system%charge)) mol%charge = rism_input%system%charge
+         if (allocated(config%charge)) mol%charge = config%charge
+         rism_input%system%charge = mol%charge
+      end if
+
       !* ---------------------------------- Get Solvent ---------------------------------- *!
 
       ! Get solvent
       if (len_trim(config%solvent) > 0) then
          solvent = trim(config%solvent)
+      else if (rism_mode .and. len_trim(rism_input%system%solvent) > 0) then
+         solvent = trim(rism_input%system%solvent)
       else
          filename = join(dirname(config%input), ".SOLVENT")
          if (exists(filename)) then
@@ -325,6 +349,16 @@ contains
          return
       end if
 
+      if (rism_mode) then
+         rism_input%system%solvent = solvent
+         call run_rism(config, ctx, mol, rism_input, error)
+         if (allocated(error)) return
+         call ctx%timer%stop("total")
+         call ctx%timer%print("moist")
+         call ctx%delete()
+         return
+      end if
+
       call get_solvent_id(solvent, solvent_id, error)
       if (allocated(error)) return
       allocate (system)
@@ -337,11 +371,69 @@ contains
       !*                                  Solvation models                                 *!
       !* ================================================================================= *!
 
-      ! Exit, no models implemented in the current preview version
-      call fatal_error(error, "No solvation models implemented in the current preview version")
+      ! Reserved model commands without an implementation
+      call fatal_error(error, "The selected model command is not implemented: "//trim(config%mode))
       return
 
    end subroutine run_main
+
+   !> Run a standalone UV model through the domain-independent model interface
+   !>
+   !> @param[in] config CLI output and gradient options
+   !> @param[in] ctx Borrowed run context
+   !> @param[in] mol Solute with the resolved total charge
+   !> @param[inout] input Native model and application settings
+   !> @param[out] error Setup, solve or output error
+   subroutine run_rism(config, ctx, mol, input, error)
+      type(run_config), intent(in) :: config
+      type(moist_context_type), intent(in), target :: ctx
+      type(structure_type), intent(in) :: mol
+      type(rism_input_type), intent(inout) :: input
+      type(error_type), allocatable, intent(out) :: error
+      class(solvation_model_type), allocatable, target :: model
+      type(prettyprinter) :: pp
+      real(wp), allocatable :: gradient(:, :)
+      real(wp) :: energy
+      integer :: iat, unit, stat, close_stat
+
+      call new_rism_model(input, ctx, mol, model, error)
+      if (allocated(error)) return
+      if (ctx%verbosity(3)) then
+         pp = new_prettyprinter(unit=ctx%unit)
+         call pp%section("Resolved RISM input (lengths in bohr, energies in Hartree)")
+         call input%print_table(pp)
+      end if
+      if (config%grad) allocate(gradient(3, mol%nat))
+      if (config%grad .and. .not. config%numgrad) then
+         call evaluate_rism_model(model, energy, error, gradient)
+      else
+         call evaluate_rism_model(model, energy, error)
+         if (.not. allocated(error) .and. config%numgrad) then
+            call numerical_rism_gradient(model, mol, gradient, error)
+         end if
+      end if
+      if (allocated(error)) return
+      if (ctx%verbosity(1)) then
+         write(ctx%unit, "(a,f20.10,a,f16.6,a)") &
+            & "Final solvation free energy ", energy, " Eh ", energy*autokcal, " kcal/mol"
+         if (allocated(gradient)) then
+            write(ctx%unit, "(a)") "Solvation gradient (Hartree/bohr):"
+            do iat = 1, mol%nat
+               write(ctx%unit, "(i6,3es22.12)") iat, gradient(:, iat)
+            end do
+         end if
+      end if
+      if (config%writeenergy) then
+         open(newunit=unit, file=".GSOLV", status="replace", action="write", iostat=stat)
+         if (stat /= 0) then
+            call fatal_error(error, "Cannot open .GSOLV for writing")
+            return
+         end if
+         write(unit, "(es24.16)", iostat=stat) energy
+         close(unit, iostat=close_stat)
+         if (stat /= 0 .or. close_stat /= 0) call fatal_error(error, "Cannot write solvation energy to .GSOLV")
+      end if
+   end subroutine run_rism
 
    !> Construct a marching-cubes cavity, wiring up mesh export when --dump is set
    !>

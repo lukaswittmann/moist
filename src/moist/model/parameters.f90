@@ -3,7 +3,7 @@
 !>
 !> Derived types declare their fields in register_entries and defaults in
 !> init_defaults; each field carries a print level, 2 for the normal printout
-!> and 3 (default) for the detailed one
+!> and 3 (default) for the detailed one. Nested sets register under a key group.
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -23,10 +23,14 @@ module moist_model_parameters
       private
       !> Temporary document, present only during a file or print operation
       class(toml_value), allocatable :: document
+      !> Registered leaf paths during an explicitly strict input operation
+      type(toml_table), allocatable :: known_fields
       !> Whether registered fields are being read from the document
       logical :: reading = .false.
       !> First field-conversion error during the current operation
       type(error_type), allocatable :: failure
+      !> Key prefix of a nested set, present only during its group registration
+      character(len=:), allocatable :: prefix
       !> Highest field print level a table collection keeps; files keep every field
       integer :: print_level = huge(1)
    contains
@@ -45,11 +49,16 @@ module moist_model_parameters
       !> Print parameter values as an aligned key-value table
       procedure :: print_table
       procedure :: register_real_scalar
+      procedure :: register_alloc_real_scalar
       procedure :: register_int_scalar
       procedure :: register_logical
       procedure :: register_real_vector
+      procedure :: register_alloc_real_vector
       procedure :: register_string
       procedure :: register_alloc_string
+      !> Read or write a nested parameter set under a key group
+      procedure :: register_group
+      procedure, private :: qualified
       procedure, private :: field_parent
       procedure, private :: collect_document
       procedure, private :: clear_document
@@ -117,6 +126,7 @@ contains
    subroutine clear_document(self)
       class(moist_model_parameters_type), intent(inout) :: self
       if (allocated(self%document)) deallocate(self%document)
+      if (allocated(self%known_fields)) deallocate(self%known_fields)
       if (allocated(self%failure)) deallocate(self%failure)
       self%reading = .false.
    end subroutine clear_document
@@ -126,10 +136,12 @@ contains
    !> @param[inout] self Parameter values
    !> @param[in] filepath Input path ending in .json or .toml
    !> @param[out] error File, conversion, or validation error
-   subroutine read_file(self, filepath, error)
+   !> @param[in] strict Reject unregistered input keys; false when absent
+   subroutine read_file(self, filepath, error, strict)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: filepath
       type(error_type), allocatable, intent(out) :: error
+      logical, intent(in), optional :: strict
       type(toml_error), allocatable :: format_error
       type(toml_table), pointer :: root
       !> TOML parser result; moved into the shared document
@@ -156,14 +168,65 @@ contains
          else
             call self%init_defaults()
             self%reading = .true.
+            if (present(strict)) then
+               if (strict) allocate(self%known_fields)
+            end if
             call self%register_entries()
             call move_alloc(self%failure, error)
+            if (.not. allocated(error) .and. allocated(self%known_fields)) then
+               call check_known_fields(root, self%known_fields, "", error)
+            end if
          end if
       end if
       call self%clear_document()
       !$omp end critical (moist_parameter_documents)
       if (.not. allocated(error)) call self%validate(error)
    end subroutine read_file
+
+   !> Reject unknown leaves and empty unknown groups in a strict input document
+   !>
+   !> @param[inout] table Input table
+   !> @param[inout] known Registered fully qualified leaf paths
+   !> @param[in] prefix Path of this table, ending in a dot or empty
+   !> @param[out] error First unknown key or group
+   recursive subroutine check_known_fields(table, known, prefix, error)
+      type(toml_table), intent(inout) :: table, known
+      character(len=*), intent(in) :: prefix
+      type(error_type), allocatable, intent(out) :: error
+      type(toml_key), allocatable :: keys(:), registered(:)
+      class(toml_value), pointer :: value, field
+      character(len=:), allocatable :: path
+      integer :: i, j
+      logical :: found
+
+      call table%get_keys(keys)
+      call known%get_keys(registered)
+      do i = 1, size(keys)
+         path = prefix//keys(i)%key
+         if (index(keys(i)%key, ".") > 0) then
+            call fatal_error(error, "Literal dots in parameter keys are unsupported: "//path)
+            return
+         end if
+         call table%get(keys(i)%key, value)
+         if (.not. associated(value)) cycle
+         select type (value)
+         type is (toml_table)
+            found = .false.
+            do j = 1, size(registered)
+               if (index(registered(j)%key, path//".") == 1) found = .true.
+            end do
+            if (.not. found) then
+               call fatal_error(error, "Unknown parameter group: "//path)
+               return
+            end if
+            call check_known_fields(value, known, path//".", error)
+         class default
+            call known%get(path, field)
+            if (.not. associated(field)) call fatal_error(error, "Unknown parameter: "//path)
+         end select
+         if (allocated(error)) return
+      end do
+   end subroutine check_known_fields
 
    !> Collect parameter values into a temporary document
    !>
@@ -369,11 +432,21 @@ contains
       integer, intent(in), optional :: level
       type(toml_table), pointer :: child
       class(toml_value), pointer :: value
+      !> Key with the prefix of the nested set being registered
+      character(len=:), allocatable :: path
       integer :: first, dot, stat, field_level
 
       nullify(parent)
-      leaf = key
+      path = self%qualified(key)
+      leaf = path
       if (allocated(self%failure) .or. .not. allocated(self%document)) return
+      if (self%reading .and. allocated(self%known_fields)) then
+         call set_value(self%known_fields, path, .true., stat=stat)
+         if (stat /= 0) then
+            call fatal_error(self%failure, "Cannot register parameter: "//path)
+            return
+         end if
+      end if
       ! A table collected for a lower verbosity skips detailed fields
       if (.not. self%reading) then
          field_level = 3
@@ -383,26 +456,26 @@ contains
       parent => cast_to_table(self%document)
       first = 1
       do
-         dot = index(key(first:), ".")
+         dot = index(path(first:), ".")
          if (dot == 0) exit
          dot = dot + first - 1
          if (self%reading) then
-            call parent%get(key(first:dot-1), value)
+            call parent%get(path(first:dot-1), value)
             if (.not. associated(value)) then
                nullify(parent)
                return
             end if
          end if
-         call get_value(parent, key(first:dot-1), child, requested=.not. self%reading, stat=stat)
+         call get_value(parent, path(first:dot-1), child, requested=.not. self%reading, stat=stat)
          if (stat /= 0 .or. .not. associated(child)) then
-            call fatal_error(self%failure, "Invalid parameter group: "//key)
+            call fatal_error(self%failure, "Invalid parameter group: "//path)
             nullify(parent)
             return
          end if
          parent => child
          first = dot + 1
       end do
-      leaf = key(first:)
+      leaf = path(first:)
       if (self%reading) then
          call parent%get(leaf, value)
          if (.not. associated(value)) nullify(parent)
@@ -434,8 +507,36 @@ contains
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
-      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//self%qualified(key))
    end subroutine register_real_scalar
+
+   !> Read or write an optional real scalar; an absent key remains unallocated
+   !>
+   !> @param[inout] self Active document
+   !> @param[in] key Dotted field name
+   !> @param[inout] value Optional scalar
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_alloc_real_scalar(self, key, value, level)
+      class(moist_model_parameters_type), intent(inout), target :: self
+      character(len=*), intent(in) :: key
+      real(wp), allocatable, intent(inout) :: value
+      integer, intent(in), optional :: level
+      type(toml_table), pointer :: parent
+      character(len=:), allocatable :: leaf
+      real(wp) :: parsed
+      integer :: stat
+
+      if (.not. self%reading .and. .not. allocated(value)) return
+      call self%field_parent(key, parent, leaf, level)
+      if (.not. associated(parent)) return
+      if (self%reading) then
+         call get_value(parent, leaf, parsed, stat=stat)
+         if (stat == 0) value = parsed
+      else
+         call set_value(parent, leaf, value, stat=stat)
+      end if
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//self%qualified(key))
+   end subroutine register_alloc_real_scalar
 
    !> Read or write one int scalar field
    !>
@@ -462,7 +563,7 @@ contains
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
-      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//self%qualified(key))
    end subroutine register_int_scalar
 
    !> Read or write one logical field
@@ -490,7 +591,7 @@ contains
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
-      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//self%qualified(key))
    end subroutine register_logical
 
    !> Read or write a fixed-size real vector
@@ -532,8 +633,50 @@ contains
       else
          stat = 1
       end if
-      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter vector: "//key)
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter vector: "//self%qualified(key))
    end subroutine register_real_vector
+
+   !> Read or write an optional real vector of input-defined length
+   !>
+   !> @param[inout] self Active document
+   !> @param[in] key Dotted field name
+   !> @param[inout] values Optional vector; an absent key keeps its current value
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_alloc_real_vector(self, key, values, level)
+      class(moist_model_parameters_type), intent(inout), target :: self
+      character(len=*), intent(in) :: key
+      real(wp), allocatable, intent(inout) :: values(:)
+      integer, intent(in), optional :: level
+      type(toml_table), pointer :: parent
+      type(toml_array), pointer :: array
+      character(len=:), allocatable :: leaf
+      real(wp), allocatable :: parsed(:)
+      integer :: stat, i
+
+      if (.not. self%reading) then
+         if (allocated(values)) call self%register_real_vector(key, values, level)
+         return
+      end if
+      call self%field_parent(key, parent, leaf, level)
+      if (.not. associated(parent)) return
+      call get_value(parent, leaf, array, stat=stat)
+      if (stat == 0 .and. associated(array)) then
+         allocate(parsed(len(array)), stat=stat)
+         if (stat == 0) then
+            do i = 1, size(parsed)
+               call get_value(array, i, parsed(i), stat=stat)
+               if (stat /= 0) exit
+            end do
+         end if
+      else
+         stat = 1
+      end if
+      if (stat /= 0) then
+         call fatal_error(self%failure, "Invalid parameter vector: "//self%qualified(key))
+         return
+      end if
+      call move_alloc(parsed, values)
+   end subroutine register_alloc_real_vector
 
    !> Read or write an allocatable string; absent values remain unallocated
    !>
@@ -560,7 +703,7 @@ contains
       else
          call set_value(parent, leaf, value, stat=stat)
       end if
-      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter string: "//key)
+      if (stat /= 0) call fatal_error(self%failure, "Invalid parameter string: "//self%qualified(key))
    end subroutine register_alloc_string
 
    !> Read or write a fixed-length string, rejecting oversized input
@@ -582,10 +725,60 @@ contains
       call self%register_alloc_string(key, text, level)
       if (allocated(self%failure)) return
       if (len(text) > len(value)) then
-         call fatal_error(self%failure, "Parameter string is too long: "//key)
+         call fatal_error(self%failure, "Parameter string is too long: "//self%qualified(key))
          return
       end if
       value = text
    end subroutine register_string
+
+   !> Read or write a nested parameter set under a key group
+   !>
+   !> - the fields of child appear as `key.<field>`; groups nest
+   !> - init_defaults and validate of the owner must call those of child
+   !>
+   !> @param[inout] self Active document
+   !> @param[in] key Group name, without a trailing dot; empty registers at this level
+   !> @param[inout] child Nested parameter set, usually a component of self
+   recursive subroutine register_group(self, key, child)
+      class(moist_model_parameters_type), intent(inout), target :: self
+      character(len=*), intent(in) :: key
+      class(moist_model_parameters_type), intent(inout), target :: child
+      integer :: previous_level
+
+      if (allocated(self%failure) .or. .not. allocated(self%document)) return
+      previous_level = child%print_level
+      child%print_level = self%print_level
+      call move_alloc(self%document, child%document)
+      call move_alloc(self%known_fields, child%known_fields)
+      child%reading = self%reading
+      if (len(key) > 0) then
+         child%prefix = self%qualified(key)//"."
+      else if (allocated(self%prefix)) then
+         child%prefix = self%prefix
+      end if
+      call child%register_entries()
+      call move_alloc(child%document, self%document)
+      call move_alloc(child%known_fields, self%known_fields)
+      if (allocated(child%failure)) call move_alloc(child%failure, self%failure)
+      call child%clear_document()
+      child%print_level = previous_level
+      if (allocated(child%prefix)) deallocate(child%prefix)
+   end subroutine register_group
+
+   !> Field name with the prefix of the nested set being registered
+   !>
+   !> @param[in] self Parameter values
+   !> @param[in] key Dotted field name
+   pure function qualified(self, key) result(path)
+      class(moist_model_parameters_type), intent(in) :: self
+      character(len=*), intent(in) :: key
+      character(len=:), allocatable :: path
+
+      if (allocated(self%prefix)) then
+         path = self%prefix//key
+      else
+         path = key
+      end if
+   end function qualified
 
 end module moist_model_parameters

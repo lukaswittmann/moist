@@ -10,6 +10,13 @@ module moist_math_blas_level2
 
    public :: wrap_gemv, wrap_symv, wrap_ger
 
+   public :: wrap_gemv_rows
+
+   !> Matrix-vector product on a row block of complete matrix storage
+   interface wrap_gemv_rows
+      module procedure :: wrap_dgemv_rows
+   end interface wrap_gemv_rows
+
    !> Performs the rank 1 operation
    !>
    !>    A := alpha*x*y**T + A,
@@ -471,5 +478,36 @@ contains
       incy = 1
       call blas_ger(m, n, a, xvec, incx, yvec, incy, amat, lda)
    end subroutine wrap_dger
+
+   pure subroutine wrap_dgemv_rows(amat, first, count, xvec, yvec, alpha, beta, trans)
+      !> Complete matrix; retaining its shape avoids packing strided row blocks.
+      real(dp), intent(in), contiguous :: amat(:, :)
+      !> One-based block origin and height.
+      integer, intent(in) :: first, count
+      !> Source and destination vectors.
+      real(dp), intent(in), contiguous :: xvec(:)
+      real(dp), intent(inout), contiguous :: yvec(:)
+      !> BLAS scales and transpose selector.
+      real(dp), intent(in) :: alpha, beta
+      character(len=1), intent(in) :: trans
+
+      call gemv_rows_storage(size(amat, 1), size(amat, 2), amat, first, count, &
+         & xvec, yvec, alpha, beta, trans)
+   end subroutine wrap_dgemv_rows
+
+   pure subroutine gemv_rows_storage(lda, ncol, amat, first, count, xvec, yvec, alpha, beta, trans)
+      !> Physical dimensions and requested row block.
+      integer, intent(in) :: lda, ncol, first, count
+      !> Explicit shape permits sequence association starting at an array element.
+      real(dp), intent(in) :: amat(lda, ncol), xvec(:)
+      real(dp), intent(inout) :: yvec(:)
+      !> BLAS operation parameters.
+      real(dp), intent(in) :: alpha, beta
+      character(len=1), intent(in) :: trans
+
+      if (count == 0 .or. ncol == 0) return
+      call dgemv(trans, int(count, blas_ik), int(ncol, blas_ik), alpha, amat(first, 1), &
+         & int(lda, blas_ik), xvec, 1_blas_ik, beta, yvec, 1_blas_ik)
+   end subroutine gemv_rows_storage
 
 end module moist_math_blas_level2

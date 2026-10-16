@@ -179,22 +179,16 @@ The other cavity constructors are available as `moist cavity {numsa,iswig} <coor
 
 ### Other subcommands
 
-- `moist model gems <coord>` runs the GEMS solvation model; `--solvent` selects
-  the solvent and `--charge` the molecular charge.
-- `moist solvent <name>` reports the tabulated properties of a solvent by name
-  or alias.
+- `moist model rism1d <coord> -p run1d.toml` runs 1D solute-solvent RISM.
+- `moist model rism3d <coord> -p run3d.toml` runs 3D solute-solvent RISM. Bulk VV is prepared internally. TOML describes the solvent, grid, potentials and independent UV/VV solver settings. `--grad` requests analytical gradients. See [the RISM recipe](docs/recipe/rism.rst) and [example inputs](examples/rism).
+- `moist model gems <coord>` remains a reserved preview command.
+- `moist solvent <name>` reports the tabulated properties of a solvent by name or alias.
 
 ## API access
 
 `moist` provides first class API support for Fortran, C and Python.
 Other programming languages should try to interface with `moist` via one of those three APIs.
 To provide first class API support for a new language the interface specification should be available as meson build files.
-
-> [!Warning]
-> The public APIs (Fortran, C, and Python) are in development and may change; users should not rely on strict backwards compatibility.
->
-> All wishes or suggestions for the APIs (Fortran, C, Python) are very welcome; please [create a new issue](https://github.com/lukaswittmann/moist/issues/new).
-
 
 ### Fortran API
 

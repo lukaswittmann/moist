@@ -8,7 +8,20 @@ submodule(moist_model_moz_potential) moist_model_moz_potential_assembly
    use moist_model_moz_potential_kernel_ng, only: require_split_alpha
    implicit none(type, external)
 
+   !> Last change stamp handed out to any potential
+   integer(int64) :: last_stamp = 0_int64
+
 contains
+
+   !> Next change stamp, unique across all potentials and threads
+   function next_stamp() result(stamp)
+      !> New stamp
+      integer(int64) :: stamp
+      !$omp atomic capture
+      last_stamp = last_stamp + 1_int64
+      stamp = last_stamp
+      !$omp end atomic
+   end function next_stamp
 
    module subroutine potential_add(self, term, error)
       class(moz_potential_type), intent(inout) :: self
@@ -146,6 +159,7 @@ contains
       if (allocated(error)) return
       self%split = ng_split
       self%split_alpha = alpha
+      self%generation_stamp = next_stamp()
    end subroutine potential_set_ng_split
 
    module subroutine potential_set_mixing(self, mixing, error)
@@ -155,6 +169,7 @@ contains
       call check_lj_mixing(mixing, error)
       if (allocated(error)) return
       self%mixing_rule = mixing
+      self%generation_stamp = next_stamp()
    end subroutine potential_set_mixing
 
    pure module function potential_ng_split(self) result(ng_split)
@@ -193,6 +208,12 @@ contains
       logical :: updated
       updated = self%nat > 0
    end function potential_is_updated
+
+   pure module function potential_generation(self) result(generation)
+      class(moz_potential_type), intent(in) :: self
+      integer(int64) :: generation
+      generation = self%generation_stamp
+   end function potential_generation
 
    module subroutine potential_sites(self, sites, error, coupling)
       class(moz_potential_type), intent(in) :: self
@@ -317,7 +338,7 @@ contains
       end do
    end function potential_has_field
 
-   !> Drop the updated state, keeping the terms and settings
+   !> Drop the updated state, keeping the terms and settings; takes a fresh change stamp
    !>
    !> @param[in,out] self  potential
    subroutine drop_update(self)
@@ -326,6 +347,7 @@ contains
       self%nat = 0
       if (allocated(self%pair)) deallocate (self%pair)
       if (allocated(self%charge_owner)) deallocate (self%charge_owner)
+      self%generation_stamp = next_stamp()
    end subroutine drop_update
 
    !> Require nonempty updated term data, with `natom` LJ entries when present

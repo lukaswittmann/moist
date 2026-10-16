@@ -27,7 +27,7 @@ module test_moz_potential_electrostatic
    use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_multipoles_type, &
-      & solvent_model_charges_type, coulomb_resp_solvent, coulomb_spce, multipoles_mbis_gas
+      & solvent_model_charges_type, coulomb_resp_solvent, coulomb_spce, coulomb_cspce, multipoles_mbis_gas
    use moist_data_solvents, only: get_solvent_charges
    use test_moz_fixtures, only: water_id, new_water_system
    use moist_data_solvents, only: solvation_system_type, new_solvation_system, get_solvent_id
@@ -368,7 +368,7 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
-      type(solvent_model_charges_type) :: spce, unknown
+      type(solvent_model_charges_type) :: spce, cspce, unknown
       type(solvent_charges_type) :: resp
       type(solvation_system_type) :: system
       type(structure_type) :: mol, fragment
@@ -391,6 +391,14 @@ contains
       if (allocated(error)) return
 
       call check(error, all(spce%charges_covered(mol%nat)), more="SPC/E must cover water")
+      if (allocated(error)) return
+      cspce = coulomb_cspce
+      call cspce%update(mol, err, water_id)
+      if (.not. allocated(err)) call cspce%tail_charges(unbound, reference, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(reference == tail) .and. all(cspce%charges_covered(mol%nat)), &
+         & more="SPC/E and cSPC/E must share the same neutral-water charges")
       if (allocated(error)) return
 
       ! Non-neutral or non-water structure: atoms left for later charge terms
