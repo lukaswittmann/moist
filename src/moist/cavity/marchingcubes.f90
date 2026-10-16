@@ -27,7 +27,7 @@ module moist_cavity_marchingcubes
    use moist_cavity_type, only: cavity_type, update_cavity_base, build_cavity_base, cavity_declare_pass
    use moist_context, only: moist_context_type, resolve_num_threads
    use moist_radius_type, only: radius_type
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity, only: &
       moist_cavity_drop_lsf_isodensity_internal_type, &
@@ -730,6 +730,27 @@ contains
       end if
    end function vertex_interp
 
+   !> Clone the LSF once per thread for a value-only (max_deriv 0) parallel region
+   !>
+   !> @param[in]  lsf   LSF template
+   !> @param[in]  n     Number of slots: the team size of the region
+   !> @param[out] slots Per-thread clones
+   subroutine new_lsf_slots(lsf, n, slots)
+      !> LSF template
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Number of thread slots
+      integer, intent(in) :: n
+      !> Per-thread LSF clones
+      type(lsf_thread_slot), allocatable, intent(out) :: slots(:)
+      integer :: i
+
+      allocate (slots(n))
+      do i = 1, n
+         allocate (slots(i)%lsf, source=lsf)
+         call slots(i)%lsf%set_max_deriv(0)
+      end do
+   end subroutine new_lsf_slots
+
    !> Compute grid bounds from the atomic-radii extent plus a padding margin
    subroutine compute_lsf_grid_bounds(lsf, xyz, grid_min, grid_max, margin, spacing)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
@@ -837,8 +858,10 @@ contains
       type(prettylistprinter) :: plp_mc
       type(prettyprinter) :: pp
       integer :: verbose_level
-      !> Thread-private polymorphic LSF clone (each thread owns its own SSD)
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf_priv
+      !> Per-thread LSF clones (each thread owns its own)
+      type(lsf_thread_slot), allocatable :: lsf_slots(:)
+      !> Slot of the executing thread
+      integer :: islot
       !> Cached LSF values on (nx+1) x (ny+1) x (nz+1) vertex grid
       real(wp), allocatable :: grid_vals(:, :, :)
       real(wp) :: ptmp(3)
@@ -893,14 +916,13 @@ contains
       ! Pre-compute LSF values on the (nx+1)*(ny+1)*(nz+1) vertex grid
       allocate (grid_vals(0:nx, 0:ny, 0:nz))
       abort_requested = .false.
+      call new_lsf_slots(lsf, nt, lsf_slots)
       !$omp parallel num_threads(nt) default(none) &
-      !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz, &
+      !$omp& shared(grid_vals, lsf_slots, grid_min, coarse_spacing, nx, ny, nz, &
       !$omp&        abort_requested, error) &
-      !$omp& private(lsf_priv, ptmp, ix, iy, iz, lsf_error)
-      ! TODO: Check
-      if (allocated(lsf_priv)) deallocate (lsf_priv)
-      allocate (lsf_priv, source=lsf)
-      call lsf_priv%set_max_deriv(0)
+      !$omp& private(islot, ptmp, ix, iy, iz, lsf_error)
+      islot = 1
+      !$ islot = omp_get_thread_num() + 1
       !$omp do collapse(3) schedule(dynamic)
       do iz = 0, nz
          do iy = 0, ny
@@ -908,7 +930,7 @@ contains
                if (abort_requested) cycle
                ptmp = grid_min + coarse_spacing &
                       *real([ix, iy, iz], wp)
-               call lsf_priv%prepare(ptmp, lsf_error)
+               call lsf_slots(islot)%lsf%prepare(ptmp, lsf_error)
                ! The failure cannot be returned from inside this worksharing
                ! construct, so hand it to the shared `error` slot and let the
                ! flag drain the loop
@@ -921,7 +943,7 @@ contains
                   !$omp end critical (marchingcubes_abort)
                   cycle
                end if
-               call lsf_priv%f0(grid_vals(ix, iy, iz))
+               call lsf_slots(islot)%lsf%f0(grid_vals(ix, iy, iz))
             end do
          end do
       end do
@@ -975,13 +997,14 @@ contains
 !$       wall_start = omp_get_wtime()
       end if
 
+      call new_lsf_slots(lsf, nt, lsf_slots)
       !$omp parallel num_threads(nt) default(none) &
-      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, center, &
+      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf_slots, nx, ny, nz, center, &
       !$omp&        max_level, min_spacing, local_stack_size, &
       !$omp&        n_coarse_total, n_coarse_done, progress_interval, &
       !$omp&        dbg, wall_start, plp_mc, export_mesh, all_tris, &
       !$omp&        abort_requested, error) &
-      !$omp& private(lsf_priv, loc_stack, loc_top, ix, iy, iz, cube, lsf_error, &
+      !$omp& private(islot, loc_stack, loc_top, ix, iy, iz, cube, lsf_error, &
       !$omp&         mid, sub_vals, sub_min, sub_max, sub_area, sub_vol, &
       !$omp&         coarse_area, coarse_vol, coarse_tri, sub_tri, do_refine, &
       !$omp&         all_pos, all_neg, center_val, spacing_here, child, &
@@ -990,15 +1013,11 @@ contains
       !$omp& reduction(+:area, volume, tri_count, n_cubes_processed, &
       !$omp&           n_cubes_skipped, n_cubes_refined, n_cubes_accepted) &
       !$omp& reduction(min:h_min_seen)
-      ! TODO: Check
-      if (allocated(lsf_priv)) deallocate (lsf_priv)
-      allocate (lsf_priv, source=lsf)
-      call lsf_priv%set_max_deriv(0)
-      ! TODO: Check
+      islot = 1
+      !$ islot = omp_get_thread_num() + 1
       if (allocated(loc_stack)) deallocate (loc_stack)
       allocate (loc_stack(local_stack_size))
       if (export_mesh) then
-         ! TODO: Check
          if (allocated(loc_buf%v)) deallocate (loc_buf%v)
          allocate (loc_buf%v(9, 1024))
          loc_buf%n = 0
@@ -1037,7 +1056,7 @@ contains
 
                   all_pos = all(cube%vals > 0.0_wp)
                   all_neg = all(cube%vals < 0.0_wp)
-                  call lsf_priv%prepare(mid, lsf_error)
+                  call lsf_slots(islot)%lsf%prepare(mid, lsf_error)
                   if (allocated(lsf_error)) then
                      !$omp critical (marchingcubes_abort)
                      if (.not. abort_requested) then
@@ -1048,7 +1067,7 @@ contains
                      loc_top = 0
                      cycle
                   end if
-                  call lsf_priv%f0(center_val)
+                  call lsf_slots(islot)%lsf%f0(center_val)
                   if (all_pos .and. center_val < 0.0_wp) then
                      all_pos = .false.
                   end if
@@ -1087,7 +1106,7 @@ contains
 
                      call subdivide_cube(cube%minp, cube%maxp, mid, &
                                          cube%vals, sub_min, sub_max, sub_vals, &
-                                         lsf_priv, lsf_error)
+                                         lsf_slots(islot)%lsf, lsf_error)
                      if (allocated(lsf_error)) then
                         !$omp critical (marchingcubes_abort)
                         if (.not. abort_requested) then
@@ -1184,7 +1203,7 @@ contains
       deallocate (loc_stack)
       !$omp end parallel
 
-      deallocate (grid_vals)
+      deallocate (grid_vals, lsf_slots)
 
       ! Marching table orientation is opposite to our inside definition
       volume = -volume
