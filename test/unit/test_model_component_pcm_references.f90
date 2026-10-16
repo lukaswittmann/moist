@@ -1302,8 +1302,7 @@ contains
    !>   Tolerance: 1.5 times moist's 302-point error on DROP (its own finest
    !>   order) plus twice that gap; benzene, 2 % off on 302 points, is a
    !>   gross check
-   !> - Nonlocal molecules: no reference. NESSie.jl is tested only against the
-   !>   sinh-form Born energy; check its Born limit first
+   !> - Nonlocal molecules: no reference, rows commented out until one exists.
    function reference_table() result(rows)
       !> Rows of every model
       type(reference_row), allocatable :: rows(:)
@@ -1385,7 +1384,10 @@ contains
 
       rows = [rows, reference_row(pcm_nonlocal, ref_sphere, exact=.true., rtol=5.0e-3_wp, &
          & source="exact: per-mode series, Hildebrandt interface conditions")]
-      call add_reference_rows(rows, pcm_nonlocal, "none (NESSie.jl: check its Born limit)")
+
+      ! No reference for nonlocal yet
+      ! call add_reference_rows(rows, pcm_nonlocal, "none (NESSie.jl: check its Born limit)")
+
    end function reference_table
 
    !> Append the rows of one model on the molecular systems, water to benzene
