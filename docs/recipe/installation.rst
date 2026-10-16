@@ -5,7 +5,7 @@ Installing MOIST
 
 Requirements:
 
-- Fortran 2018 compiler (GCC or Intel)
+- Fortran 2018 compiler (GCC, Intel ifx or classic ifort)
 - C and C++17 compilers from the same toolchain (gcc/g++ or icx/icpx)
 - BLAS/LAPACK
 - meson or CMake 3.25+, with ninja
