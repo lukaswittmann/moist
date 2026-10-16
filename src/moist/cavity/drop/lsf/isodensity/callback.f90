@@ -143,7 +143,7 @@ contains
 
       self%callback_ptr = callback_ptr
       self%context = context
-      self%param = moist_cavity_drop_lsf_isodensity_param_type()
+      call self%param%init_defaults()
       if (present(param)) self%param = param
    end subroutine lsf_new
 

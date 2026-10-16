@@ -255,7 +255,7 @@ contains
       self%candidate_space = lsf_candidate_space_sorted
       self%name = "SvdW"
 
-      self%param = moist_cavity_drop_lsf_svdw_param_type()
+      call self%param%init_defaults()
       if (present(param)) self%param = param
    end subroutine lsf_new
 
