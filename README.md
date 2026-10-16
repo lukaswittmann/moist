@@ -33,28 +33,28 @@ MOIST is a modular library for implicit solvation in molecular quantum chemistry
 
 Every combination below builds and passes the full test suite in [CI](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml).
 
-| Platform                      | GCC 15         | Intel ifx 2025.1 | conda-forge GCC 15 | Python     |
-| ----------------------------- | -------------- | ---------------- | ------------------ | ---------- |
-| Linux x86_64 (Ubuntu 24.04)   | meson, CMake   | meson, CMake     | meson, CMake       | 3.10, 3.13 |
-| Linux arm64 (Ubuntu 24.04)    | meson, CMake   | –                | meson, CMake       | 3.13       |
-| macOS arm64 (macOS 15)        | meson, CMake   | –                | meson, CMake¹      | 3.13       |
-| Windows x86_64 (MSYS2 UCRT64) | meson, CMake²  | –                | –                  | –          |
+| Platform                      | GCC 15         | Intel ifx 2025.1 | Intel ifort 2021.12 | conda-forge GCC 15 | Python     |
+| ----------------------------- | -------------- | ---------------- | ------------------- | ------------------ | ---------- |
+| Linux x86_64 (Ubuntu 24.04)   | meson, CMake   | meson, CMake     | meson, CMake        | meson, CMake       | 3.10, 3.13 |
+| Linux arm64 (Ubuntu 24.04)    | meson, CMake   | –                | –                   | meson, CMake       | 3.13       |
+| macOS arm64 (macOS 15)        | meson, CMake   | –                | –                   | meson, CMake¹      | 3.13       |
+| Windows x86_64 (MSYS2 UCRT64) | meson, CMake²  | –                | –                   | –                  | –          |
 
 ¹ with clang 19 and libc++ as the C/C++ compilers\
 ² MSYS2 ships only its current GCC, at present 16.x
 
-- **BLAS/LAPACK:** reference LAPACK (Linux, GCC), MKL (ifx), OpenBLAS (conda-forge, Windows), Accelerate (macOS)
+- **BLAS/LAPACK:** reference LAPACK (Linux, GCC), MKL (ifx, ifort), OpenBLAS (conda-forge, Windows), Accelerate (macOS)
 - **ILP64:** 64-bit integer BLAS/LAPACK with GCC 15 and OpenBLAS on Linux x86_64
 - **Debug:** GCC 14 debug build with runtime checks (`-fcheck=bounds,do,mem,pointer`, `_GLIBCXX_ASSERTIONS`) on Linux x86_64
 - **Python:** the bindings are tested against PySCF, both from a meson build and as a pip-installed package
 
-The oldest tested compilers are GCC 14 and Intel ifx 2025.1; older versions may work but are not tested.
+The oldest tested compilers are GCC 14, Intel ifx 2025.1 and classic Intel ifort 2021.12; older versions may work but are not tested.
 
 ### Building from Source
 
 To build this project from the source code in this repository you need to have
 - a Fortran compiler supporting Fortran 2018
-- a C11 compiler and a C++17 compiler (*e.g.* gcc/g++ with gfortran, icx/icpx with ifx, or clang/clang++ with gfortran)
+- a C11 compiler and a C++17 compiler (*e.g.* gcc/g++ with gfortran, icx/icpx with ifx or ifort, or clang/clang++ with gfortran)
 - one of the supported build systems:
   - [meson](https://mesonbuild.com) version 0.57 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.8.2 or newer
   - [cmake](https://cmake.org) version 3.25 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
