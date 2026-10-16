@@ -35,6 +35,9 @@ jobs:
           - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
+          # Classic ifort 2021.12 from oneAPI 2024.1, which ships no icc/icpc
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 30}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
@@ -66,24 +69,33 @@ jobs:
         run: sudo apt-get install -y libopenblas64-dev
 
       - name: Install Intel MKL
-        if: matrix.compiler == 'intel'
+        if: startsWith(matrix.compiler, 'intel')
         run: |
           sudo apt-get install -y \
-            intel-oneapi-mkl-${{ matrix.version }} \
-            intel-oneapi-mkl-devel-${{ matrix.version }}
+            intel-oneapi-mkl-${{ matrix.mkl || matrix.version }} \
+            intel-oneapi-mkl-devel-${{ matrix.mkl || matrix.version }}
 
       - name: Setup Intel oneAPI environment
-        if: matrix.compiler == 'intel'
+        if: startsWith(matrix.compiler, 'intel')
         run: |
           source /opt/intel/oneapi/setvars.sh --force
           printenv >> "$GITHUB_ENV"
+
+      - name: Configure classic ifort
+        if: matrix.compiler == 'intel-classic'
+        run: |
+          echo "-diag-disable=10448,8711" > "$RUNNER_TEMP/ifort.cfg"
+          {
+            echo "IFORTCFG=$RUNNER_TEMP/ifort.cfg"
+            echo "CPATH=$CMPLR_ROOT/opt/compiler/include/intel64${CPATH:+:$CPATH}"
+          } >> "$GITHUB_ENV"
 
       - name: Set compiler environment
         run: |
           {
             echo "FC=${{ steps.setup-fortran.outputs.fc }}"
-            echo "CC=${{ steps.setup-fortran.outputs.cc }}"
-            echo "CXX=${{ steps.setup-fortran.outputs.cxx }}"
+            echo "CC=${{ matrix.cc || steps.setup-fortran.outputs.cc }}"
+            echo "CXX=${{ matrix.cxx || steps.setup-fortran.outputs.cxx }}"
             echo "FFLAGS=${{ matrix.fflags }}"
             echo "CXXFLAGS=${{ matrix.cxxflags }}"
           } >> "$GITHUB_ENV"
