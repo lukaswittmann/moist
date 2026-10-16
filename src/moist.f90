@@ -16,7 +16,7 @@ module moist
    use moist_version, only: get_moist_version
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
-   use moist_data_solvents, only: solvent_descriptors_type, get_solvent_descriptors, &
+   use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
       & get_solvent_descriptors_by_id
    use moist_build_info, only: git_commit, build_host
 

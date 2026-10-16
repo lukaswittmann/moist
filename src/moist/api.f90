@@ -52,8 +52,9 @@ module moist_api
    use moist_channels_fields, only: field_query_type, field_max_rank, &
       & field_real, field_int, field_bool
    use moist_version, only: get_moist_version
-   use moist_data_solvents, only: solvent_descriptors_type, get_solvent_descriptors, &
-      & get_solvent_descriptors_by_id, max_solvent_name_len
+   use moist_data_solvents, only: max_solvent_name_len
+   use moist_solvent_descriptors, only: solvent_descriptors_type, get_solvent_descriptors, &
+      & get_solvent_descriptors_by_id
    use moist_output_ascii, only: moist_banner_text
    implicit none(type, external)
    private

@@ -8,7 +8,8 @@ module test_moz_potential_lj
    use mctc_io_convert, only: aatoau, kcaltoau, kjtoau
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
-   use moist_data_solvents, only: solvent_system_type, new_solvent_system, get_solvent_id
+   use moist_data_solvents, only: get_solvent_id
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_model_moz_potential_lj_base, only: lj_12_6_type, new_lj_12_6, lj_12_6_mix, lj_12_6_evaluate, &
       & lj_mixing_lorentz_berthelot, lj_mixing_geometric, check_lj_mixing
    use moist_model_moz_potential_lj_typed, only: lj_typed_type, lj_gaff

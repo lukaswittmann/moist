@@ -19,7 +19,7 @@ module moist_model_moz_solvent_vv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_data_solvents, only: solvent_system_type
+   use moist_solvent_system, only: solvent_system_type
    use moist_model_moz_potential, only: moz_potential_type
    implicit none(type, external)
    private

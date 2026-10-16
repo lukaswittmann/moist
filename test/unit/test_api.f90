@@ -15,7 +15,7 @@ module test_api
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
-   use moist_data_solvents, only: solvent_system_type, new_solvent_system
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
    use moist_api, only: vp_context, new_context_api, delete_context_api, &
       & vp_cavity, vp_error, vp_response, get_response_field_real_api, &

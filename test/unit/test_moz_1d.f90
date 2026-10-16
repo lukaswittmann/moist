@@ -5,7 +5,7 @@ module test_moz_1d
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
-   use moist_data_solvents, only: solvent_system_type
+   use moist_solvent_system, only: solvent_system_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential, only: moz_potential_type, ec_charges_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj

@@ -15,6 +15,7 @@
 ! - CHELPG uses the same 0.3 Angstrom grid and 2.8 Angstrom rmax
 !
 subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
+   !DIR$ OPTIMIZE:0
    integer, intent(in) :: solvent_id
    character(len=*), intent(in) :: environment
    character(len=*), intent(in) :: model
