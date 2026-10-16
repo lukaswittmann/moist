@@ -50,7 +50,7 @@ moist_lib = library(
   version: lib_version,
   dependencies: lib_deps,
   include_directories: inc_dirs,
-  link_whole: data_lib,
+  objects: data_lib.extract_all_objects(recursive: false),
   link_args: moist_link_args,
   install: install,
 )

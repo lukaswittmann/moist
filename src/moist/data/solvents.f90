@@ -6,6 +6,8 @@
 module moist_data_solvents
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
+   use mctc_io, only: structure_type, new_structure
+   use mctc_io_symbols, only: to_number
    use mctc_io_utils, only: to_lower
    implicit none(type, external)
 
