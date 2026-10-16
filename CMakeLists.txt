@@ -318,6 +318,7 @@ if(MOIST_TESTS)
     model_component_pcm_electrostatics model_component_pcm_solvers
     model_component_pcm_interface model_component_pcm_derivatives
     model_component_pcm_references model_component_pcm_regression
+    model_component_pcm_vacuum
     model_component_gostshyp model_component_pv
     model_continuum channels model_coupling
   )

@@ -7,8 +7,8 @@
 !>   energy (see `reference_table`)
 !> - `switched_off_point`: a point switched off on the surface drops out of
 !>   the energy of every model, so a cavity may drop it without a jump
-!> - CPCM identities exact at any discretization: vacuum limit, rigid
-!>   translation, linearity in f(eps)
+!> - CPCM identities exact at any discretization: rigid translation, linearity
+!>   in f(eps)
 !> - Generated Gaussian IEF-PCM and SS(V)PE kernels against PySCF on an
 !>   identical surface
 module test_model_component_pcm_references
@@ -60,7 +60,10 @@ module test_model_component_pcm_references
    real(wp), parameter :: born_lambda = 25.0_wp
 
    !> Factors that switch a surface point off in `check_switched_off_point`
-   real(wp), parameter :: switch_off(2) = [1.0e-4_wp, 1.0e-8_wp]
+   !>
+   !> The decay is checked on the last two, where the leading order dominates: a
+   !> point surface has terms in s^(1/2) and s that can cancel near s = 1e-4
+   real(wp), parameter :: switch_off(3) = [1.0e-4_wp, 1.0e-8_wp, 1.0e-12_wp]
    !> Roundoff floor of the energy gap of a switched-off point, Eh
    real(wp), parameter :: thr_gap = 1.0e-12_wp
 
@@ -301,7 +304,6 @@ contains
          & new_unittest("nonlocal_born", test_nonlocal_born), &
          & new_unittest("nonlocal_reference", test_nonlocal_reference), &
          & new_unittest("nonlocal_switched_off_point", test_nonlocal_switched_off_point), &
-         & new_unittest("cpcm_vacuum_limit", test_cpcm_vacuum_limit), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
          & new_unittest("layer_kernels_vs_pyscf", test_layer_goldens) &
@@ -616,75 +618,6 @@ contains
    !* ================================================================================= *!
    !*                                   CPCM identities                                 *!
    !* ================================================================================= *!
-
-!> Test CPCM vacuum limit, where f(epsilon)=0 should give zero charges and energy
-   subroutine test_cpcm_vacuum_limit(error)
-
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-
-      type(structure_type) :: mol
-      type(model_continuum_component_cpcm) :: pcm_model
-      type(cavity_type_iswig) :: cavity
-      type(coupling_type) :: coupling
-      type(radius_type_static) :: radius_model
-      real(wp), parameter :: qat_vals(*) = [&
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
-         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
-      integer :: solvers(2)
-      character(len=20) :: solver_names(2)
-      real(wp) :: energy_array
-      integer :: i
-
-      !> Run context owned here and borrowed by the cavity and component
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0)
-
-      solvers = [solver_type%dense, solver_type%iterative]
-      solver_names = ["dense     ", "iterative "]
-
-      call get_structure(mol, "MB16-43", "01")
-      call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "Cavity setup failed: "//err%message)
-         return
-      end if
-
-      do i = 1, 2
-         call new_component_cpcm(pcm_model, epsilon=1.0_wp, error=err, &
-                                 param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
-            return
-         end if
-
-         call pcm_model%update(mol, cavity, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM update failed ("//trim(solver_names(i))//"): "//err%message)
-            return
-         end if
-         call stage_point_charge_energy(error, pcm_model, cavity, qat_vals, mol, coupling)
-         if (allocated(error)) return
-
-         energy_array = 0.0_wp
-         call pcm_model%get_energy(component_view(coupling), cavity, energy_array, err)
-         if (allocated(err)) then
-            call test_failed(error, "CPCM energy failed ("//trim(solver_names(i))//"): "//err%message)
-            return
-         end if
-
-         call check(error, energy_array, 0.0_wp, thr=thr, &
-            & message=trim(solver_names(i))//" vacuum energy should vanish")
-         if (allocated(error)) return
-
-         call check(error, maxval(abs(pcm_model%q)), 0.0_wp, thr=thr, &
-            & message=trim(solver_names(i))//" vacuum surface charges should vanish")
-         if (allocated(error)) return
-      end do
-
-   end subroutine test_cpcm_vacuum_limit
 
 !> The CPCM energy is invariant under rigid translation of the solute
 !>
@@ -1788,9 +1721,10 @@ contains
    !> switched off by a factor s: on a Gaussian surface its switching factor
    !> and its area (a = F R^2 w as on iSwiG, the width kept), on a point surface
    !> its area. The energy must approach that of the surface without the point,
-   !> the gap shrinking at least like s^(1/2), the order of the point-surface
-   !> self terms 1.0694 sqrt(4 pi/a). A gap that stays finite is a jump in the
-   !> energy wherever a cavity drops a point that is nearly switched off
+   !> the gap shrinking at least like s^(1/2) between the two smallest factors, the
+   !> order of the point-surface self terms 1.0694 sqrt(4 pi/a). A gap that stays
+   !> finite is a jump in the energy wherever a cavity drops a point that is nearly
+   !> switched off
    !>
    !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
@@ -1811,7 +1745,7 @@ contains
       !> Host charges on the solute atoms
       real(wp), allocatable :: q(:)
       !> Energy without the point, energies and gaps with the point switched off
-      real(wp) :: e_removed, e_off(2), gap(2)
+      real(wp) :: e_removed, e_off(3), gap(3)
       !> Solute, surface kind, point and factor indices
       integer :: imol, isurf, ipt, k
       !> Gaussian surface (else point surface)
@@ -1843,14 +1777,14 @@ contains
                if (allocated(error)) return
             end do
             gap = e_off - e_removed
-            write (context, '(a,", ",a,", ",a," surface, point ",i0,": gap ",es9.2, &
-               & " at s = ",es7.1,", ",es9.2," at s = ",es7.1)') trim(pcm%name), &
-               & trim(mol_label(imol)), trim(merge("Gaussian", "point   ", smeared)), ipt, &
-               & gap(1), switch_off(1), gap(2), switch_off(2)
+            write (context, '(a,", ",a,", ",a," surface, point ",i0,": gap ",3(es9.2, &
+               & " at s = ",es7.1,:,", "))') trim(pcm%name), trim(mol_label(imol)), &
+               & trim(merge("Gaussian", "point   ", smeared)), ipt, &
+               & (gap(k), switch_off(k), k=1, size(switch_off))
             call check(error, abs(gap(1)) > thr_gap, message="vacuous switched-off point", &
                & more=trim(context))
             if (allocated(error)) return
-            call check(error, abs(gap(2)) <= 2*sqrt(switch_off(2)/switch_off(1))*abs(gap(1)) &
+            call check(error, abs(gap(3)) <= 2*sqrt(switch_off(3)/switch_off(2))*abs(gap(2)) &
                & + thr_gap, message="switched-off point does not drop out of the energy", &
                & more=trim(context))
             if (allocated(error)) return

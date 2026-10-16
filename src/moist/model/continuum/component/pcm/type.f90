@@ -118,9 +118,6 @@ module moist_model_continuum_component_pcm_type
       !> Whether this component reads n dot grad(phi)
       procedure :: uses_normal_trace => pcm_component_uses_normal_trace
 
-      !> Whether the current medium has no electrostatic response
-      procedure :: is_inert => pcm_component_is_inert
-
       !> Adjoint of n dot grad(phi), zero for conductor models
       procedure :: normal_trace_adjoint => pcm_component_normal_trace_adjoint
 
@@ -195,14 +192,6 @@ contains
 
       uses = .false.
    end function pcm_component_uses_normal_trace
-
-   !> A conductor-like model is inert at zero dielectric factor
-   pure function pcm_component_is_inert(self) result(inert)
-      class(model_continuum_component_pcm), intent(in) :: self
-      logical :: inert
-
-      inert = self%feps == 0.0_wp
-   end function pcm_component_is_inert
 
    !> Default zero adjoint of the normal potential trace
    subroutine pcm_component_normal_trace_adjoint(self, w_vn, error)
@@ -775,7 +764,6 @@ contains
 
       call self%ensure_charges(coupling, cavity, error)
       if (allocated(error)) return
-      if (self%is_inert()) return
 
       call self%potential_adjoint(w_phi, error)
       if (allocated(error)) return

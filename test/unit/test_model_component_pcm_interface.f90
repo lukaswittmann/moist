@@ -18,7 +18,8 @@ module test_model_component_pcm_interface
       & fill_point_charge_potential, fill_point_charge_field, set_host_potential, &
       & fill_missing_with_zeros, stage_point_charge_energy
    use test_model_component_pcm_fixtures, only: npcm, new_pcm, make_component, seed_iswig, &
-      & fd_cavity, get_seed, mol_triatomic, get_solute, host_energy, host_charges
+      & fd_cavity, get_seed, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
+      & answer_sources
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
@@ -28,6 +29,7 @@ module test_model_component_pcm_interface
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii, radius_type_static, new_cosmo_radii
    use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
+   use moist_channels_response, only: response_type
    use moist_model_continuum_type, only: model_continuum_type, new_continuum_model
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & moist_pcm_parameters_type, solver_type
@@ -80,6 +82,8 @@ contains
          & new_unittest("cpcm_invalid_solver", test_cpcm_invalid_solver, should_fail=.true.), &
          & new_unittest("cpcm_grid_mismatch_guards", test_cpcm_grid_mismatch_guards), &
          & new_unittest("tangent_requires_solution", test_tangent_requires_solution), &
+         & new_unittest("gradient_failure_preserves_accumulator", &
+         & test_gradient_failure_preserves_accumulator), &
          & new_unittest("cpcm_reallocates_on_grid_change", test_cpcm_reallocate_on_ngrid_change), &
          & new_unittest("cpcm_stale_charge_regression", test_cpcm_stale_charge_regression), &
          & new_unittest("cpcm_records_shared_timer_tree", test_cpcm_timer_tree), &
@@ -138,8 +142,6 @@ contains
       call new_component_lpb(lpb, 1.0_wp, 0.1_wp, err, settings, ctx=ctx)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
-      call check(error,.not. lpb%is_inert())
-      if (allocated(error)) return
       call new_component_slic(slic, 80.0_wp, 0.1_wp, 0.2_wp, 0.3_wp, err, settings, ctx=ctx)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
@@ -150,7 +152,7 @@ contains
       if (allocated(error)) return
       call check(error, nonlocal%uses_normal_trace())
       if (allocated(error)) return
-      call check(error,.not. nonlocal%needs_curvature)
+      call check(error, nonlocal%needs_curvature)
       if (allocated(error)) return
       call check(error, debye_kappa(78.4_wp, 0.1_wp, 298.15_wp), 0.055_wp, thr=0.01_wp)
       call ctx%delete()
@@ -276,7 +278,7 @@ contains
             type is (cavity_type_drop)
                call check(error, cavity%param%do_normal .eqv. (had_normal .or. kind >= 3))
                if (allocated(error)) return
-               call check(error, cavity%param%do_curvature .eqv. (had_curvature .or. (kind >= 3 .and. kind <= 8)))
+               call check(error, cavity%param%do_curvature .eqv. (had_curvature .or. kind >= 3))
                if (allocated(error)) return
                call check(error, cavity%param%do_rho .and. .not. cavity%param%do_fine &
                   & .and. .not. cavity%param%do_grid_density .and. .not. cavity%param%do_r_iI)
@@ -286,7 +288,7 @@ contains
                if (allocated(error)) return
                call check(error, cavity%param%do_normal .eqv. (had_normal .or. kind >= 3))
                if (allocated(error)) return
-               call check(error, cavity%param%do_curvature .eqv. (had_curvature .or. (kind >= 3 .and. kind <= 8)))
+               call check(error, cavity%param%do_curvature .eqv. (had_curvature .or. kind >= 3))
             end select
             if (allocated(error)) return
             call check(error, (drop%param%do_normal .eqv. had_normal) &
@@ -305,12 +307,12 @@ contains
             if (allocated(error)) return
             select type (cavity => model%cavity)
             type is (cavity_type_iswig)
-               call check(error, cavity%need_curvature .eqv. (had_curvature .or. (kind >= 3 .and. kind <= 8)))
+               call check(error, cavity%need_curvature .eqv. (had_curvature .or. kind >= 3))
                if (allocated(error)) return
                call cavity%configure(curvature=.false., error=err)
                call check(error,.not. allocated(err))
                if (allocated(error)) return
-               call check(error, cavity%need_curvature .eqv. (had_curvature .or. (kind >= 3 .and. kind <= 8)))
+               call check(error, cavity%need_curvature .eqv. (had_curvature .or. kind >= 3))
             end select
             if (allocated(error)) return
             call check(error, iswig%need_curvature .eqv. had_curvature)
@@ -887,6 +889,68 @@ contains
          deallocate (err)
       end do
    end subroutine test_tangent_requires_solution
+
+   !> A failed gradient leaves the caller's accumulator untouched, in every model
+   !>
+   !> The synthetic cavity has no reverse-mode surface gradient, so the contraction
+   !> fails after the direct nuclear term is known
+   subroutine test_gradient_failure_preserves_accumulator(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the components
+      type(moist_context_type), target :: ctx
+      !> Component under test
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Solute and synthetic cavity
+      type(structure_type) :: mol
+      type(fd_cavity) :: cavity
+      !> Host coupling and the host part of the gradient phase
+      type(coupling_type), target :: coupling
+      type(response_type) :: response
+      !> Accumulator and its value on entry
+      real(wp), allocatable :: gradient(:, :), sentinel(:, :)
+      !> Energy
+      real(wp) :: energy
+      !> Model, atom and axis indices
+      integer :: kind, iat, ix
+
+      call new_context(ctx, verbosity=0)
+      call get_solute(mol_triatomic, mol)
+      call get_seed(seed_iswig, .true., mol, cavity, error)
+      if (allocated(error)) return
+      allocate (sentinel(3, mol%nat))
+      do iat = 1, mol%nat
+         do ix = 1, 3
+            sentinel(ix, iat) = real(10*iat + ix, wp)
+         end do
+      end do
+      do kind = 1, npcm
+         call new_pcm(kind, ctx, pcm, error)
+         if (allocated(error)) return
+         call stage_energy(pcm, mol, cavity, coupling, error)
+         if (allocated(error)) return
+         call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+         energy = 0.0_wp
+         call pcm%get_energy(component_view(coupling), cavity, energy, err)
+         call check_moist_error(error, err, trim(pcm%name)//": energy")
+         if (allocated(error)) return
+         call pcm%prepare_gradient(cavity, coupling, err)
+         call check_moist_error(error, err, trim(pcm%name)//": gradient staging")
+         if (allocated(error)) return
+         call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+         gradient = sentinel
+         call pcm%get_gradient(component_view(coupling), cavity, response, gradient, err)
+         call check(error, allocated(err), &
+            & message=trim(pcm%name)//": gradient on a cavity without surface gradient")
+         if (allocated(error)) return
+         deallocate (err)
+         call check(error, all(gradient == sentinel), &
+            & message=trim(pcm%name)//": failed gradient changed the accumulator")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gradient_failure_preserves_accumulator
 
    !* ================================================================================= *!
    !*                                       State                                       *!
