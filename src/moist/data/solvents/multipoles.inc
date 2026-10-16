@@ -18,7 +18,6 @@
 !     Octupole order: XXX YYY ZZZ XXY XXZ XYY XYZ XZZ YYZ YZZ
 !
 subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, error)
-   !DIR$ OPTIMIZE:0
    integer, intent(in) :: solvent_id
    character(len=*), intent(in) :: environment
    character(len=*), intent(in) :: model
