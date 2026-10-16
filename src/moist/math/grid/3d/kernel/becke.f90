@@ -387,73 +387,70 @@ contains
                real(wp) :: ui(3), uj(3), axis(3)
                integer :: i, j
 
-               associate (dist => dist(:, slot), probs => probs(:, slot), gradient => workers(:, :, slot), &
-                  & point_gradient => point_response)
-                  point_gradient = 0.0_wp
-                  dist = 0.0_wp
-                  do i = 1, size(dist)
-                     dist(i) = norm2(point - xyz(:, i))
-                  end do
-                  do i = 1, size(dist)
-                     probs(i) = becke_cell_log(i, dist, pair_r, pair_a, self)
-                  end do
-                  if (probs(owner) /= -huge(1.0_wp)) then
-                     peak = maxval(probs)
-                     probs = exp(probs - peak)
-                     probs = probs/sum(probs)
-                     owner_seed = seed*probs(owner)
-                     do i = 1, size(dist)
-                        log_seed = -owner_seed*probs(i)
-                        if (i == owner) then
-                           ! Sum other probabilities to retain derivatives of tiny partition tails
-                           log_seed = owner_seed*(sum(probs(:i - 1)) + sum(probs(i + 1:)))
-                        end if
-                        if (log_seed == 0.0_wp) cycle
-                        do j = 1, size(dist)
-                           if (j == i) cycle
-                           if (pair_r(j, i) <= 0.0_wp) cycle
-                           mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/pair_r(j, i)))
-                           nu = mu + pair_a(j, i)*(1.0_wp - mu*mu)
-                           block
-                              real(wp) :: t, tn, p, pn
-                              integer :: i
+               point_response = 0.0_wp
+               dist(:, slot) = 0.0_wp
+               do i = 1, size(dist(:, slot))
+                  dist(i, slot) = norm2(point - xyz(:, i))
+               end do
+               do i = 1, size(dist(:, slot))
+                  probs(i, slot) = becke_cell_log(i, dist(:, slot), pair_r, pair_a, self)
+               end do
+               if (probs(owner, slot) /= -huge(1.0_wp)) then
+                  peak = maxval(probs(:, slot))
+                  probs(:, slot) = exp(probs(:, slot) - peak)
+                  probs(:, slot) = probs(:, slot)/sum(probs(:, slot))
+                  owner_seed = seed*probs(owner, slot)
+                  do i = 1, size(dist(:, slot))
+                     log_seed = -owner_seed*probs(i, slot)
+                     if (i == owner) then
+                        ! Sum other probabilities to retain derivatives of tiny partition tails
+                        log_seed = owner_seed*(sum(probs(:i - 1, slot)) + sum(probs(i + 1:, slot)))
+                     end if
+                     if (log_seed == 0.0_wp) cycle
+                     do j = 1, size(dist(:, slot))
+                        if (j == i) cycle
+                        if (pair_r(j, i) <= 0.0_wp) cycle
+                        mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/pair_r(j, i)))
+                        nu = mu + pair_a(j, i)*(1.0_wp - mu*mu)
+                        block
+                           real(wp) :: t, tn, p, pn
+                           integer :: i
 
-                              s = 0.0_wp
-                              ds = 0.0_wp
-                              if (abs(nu) >= 1.0_wp) then
-                                 if (nu < 0.0_wp) s = 1.0_wp
-                              else
-                                 t = 0.5_wp*(1.0_wp - abs(nu))
-                                 p = -0.5_wp
-                                 do i = 1, self%k
-                                    tn = t**2*(3.0_wp - 2.0_wp*t)
-                                    pn = -6.0_wp*p*t*(-1.0_wp + t)
-                                    t = tn
-                                    p = pn
-                                 end do
-                                 s = t
-                                 ds = p
-                                 if (nu < 0.0_wp) then
-                                    s = 1.0_wp - s
-                                 end if
+                           s = 0.0_wp
+                           ds = 0.0_wp
+                           if (abs(nu) >= 1.0_wp) then
+                              if (nu < 0.0_wp) s = 1.0_wp
+                           else
+                              t = 0.5_wp*(1.0_wp - abs(nu))
+                              p = -0.5_wp
+                              do i = 1, self%k
+                                 tn = t**2*(3.0_wp - 2.0_wp*t)
+                                 pn = -6.0_wp*p*t*(-1.0_wp + t)
+                                 t = tn
+                                 p = pn
+                              end do
+                              s = t
+                              ds = p
+                              if (nu < 0.0_wp) then
+                                 s = 1.0_wp - s
                               end if
-                           end block
-                           if (s <= 0.0_wp .or. ds == 0.0_wp) cycle
-                           factor = (log_seed/s)*ds
-                           if (abs(mu) >= 1.0_wp) cycle
-                           factor = factor*(1.0_wp - 2.0_wp*pair_a(j, i)*mu)/pair_r(j, i)
-                           ui = 0.0_wp
-                           uj = 0.0_wp
-                           if (dist(i) > 0.0_wp) ui = (point - xyz(:, i))/dist(i)
-                           if (dist(j) > 0.0_wp) uj = (point - xyz(:, j))/dist(j)
-                           axis = (xyz(:, i) - xyz(:, j))/pair_r(j, i)
-                           point_gradient = point_gradient + factor*(ui - uj)
-                           gradient(:, i) = gradient(:, i) - factor*(ui + mu*axis)
-                           gradient(:, j) = gradient(:, j) + factor*(uj + mu*axis)
-                        end do
+                           end if
+                        end block
+                        if (s <= 0.0_wp .or. ds == 0.0_wp) cycle
+                        factor = (log_seed/s)*ds
+                        if (abs(mu) >= 1.0_wp) cycle
+                        factor = factor*(1.0_wp - 2.0_wp*pair_a(j, i)*mu)/pair_r(j, i)
+                        ui = 0.0_wp
+                        uj = 0.0_wp
+                        if (dist(i, slot) > 0.0_wp) ui = (point - xyz(:, i))/dist(i, slot)
+                        if (dist(j, slot) > 0.0_wp) uj = (point - xyz(:, j))/dist(j, slot)
+                        axis = (xyz(:, i) - xyz(:, j))/pair_r(j, i)
+                        point_response = point_response + factor*(ui - uj)
+                        workers(:, i, slot) = workers(:, i, slot) - factor*(ui + mu*axis)
+                        workers(:, j, slot) = workers(:, j, slot) + factor*(uj + mu*axis)
                      end do
-                  end if
-               end associate
+                  end do
+               end if
             end block point_math
          end if
          workers(:, owner, slot) = workers(:, owner, slot) + point_response + adjoint_xyz(:, ip)
@@ -589,73 +586,70 @@ contains
                real(wp) :: ui(3), uj(3), axis(3)
                integer :: i, j
 
-               associate (dist => dist(:, slot), probs => probs(:, slot), gradient => workers(:, :, slot), &
-                  & point_gradient => point_response)
-                  point_gradient = 0.0_wp
-                  dist = 0.0_wp
-                  do i = 1, size(dist)
-                     dist(i) = norm2(point - xyz(:, i))
-                  end do
-                  do i = 1, size(dist)
-                     probs(i) = becke_cell_log(i, dist, pair_r, pair_a, self)
-                  end do
-                  if (probs(owner) /= -huge(1.0_wp)) then
-                     peak = maxval(probs)
-                     probs = exp(probs - peak)
-                     probs = probs/sum(probs)
-                     owner_seed = seed*probs(owner)
-                     do i = 1, size(dist)
-                        log_seed = -owner_seed*probs(i)
-                        if (i == owner) then
-                           ! Sum other probabilities to retain derivatives of tiny partition tails
-                           log_seed = owner_seed*(sum(probs(:i - 1)) + sum(probs(i + 1:)))
-                        end if
-                        if (log_seed == 0.0_wp) cycle
-                        do j = 1, size(dist)
-                           if (j == i) cycle
-                           if (pair_r(j, i) <= 0.0_wp) cycle
-                           mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/pair_r(j, i)))
-                           nu = mu + pair_a(j, i)*(1.0_wp - mu*mu)
-                           block
-                              real(wp) :: t, tn, p, pn
-                              integer :: i
+               point_response = 0.0_wp
+               dist(:, slot) = 0.0_wp
+               do i = 1, size(dist(:, slot))
+                  dist(i, slot) = norm2(point - xyz(:, i))
+               end do
+               do i = 1, size(dist(:, slot))
+                  probs(i, slot) = becke_cell_log(i, dist(:, slot), pair_r, pair_a, self)
+               end do
+               if (probs(owner, slot) /= -huge(1.0_wp)) then
+                  peak = maxval(probs(:, slot))
+                  probs(:, slot) = exp(probs(:, slot) - peak)
+                  probs(:, slot) = probs(:, slot)/sum(probs(:, slot))
+                  owner_seed = seed*probs(owner, slot)
+                  do i = 1, size(dist(:, slot))
+                     log_seed = -owner_seed*probs(i, slot)
+                     if (i == owner) then
+                        ! Sum other probabilities to retain derivatives of tiny partition tails
+                        log_seed = owner_seed*(sum(probs(:i - 1, slot)) + sum(probs(i + 1:, slot)))
+                     end if
+                     if (log_seed == 0.0_wp) cycle
+                     do j = 1, size(dist(:, slot))
+                        if (j == i) cycle
+                        if (pair_r(j, i) <= 0.0_wp) cycle
+                        mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/pair_r(j, i)))
+                        nu = mu + pair_a(j, i)*(1.0_wp - mu*mu)
+                        block
+                           real(wp) :: t, tn, p, pn
+                           integer :: i
 
-                              s = 0.0_wp
-                              ds = 0.0_wp
-                              if (abs(nu) >= 1.0_wp) then
-                                 if (nu < 0.0_wp) s = 1.0_wp
-                              else
-                                 t = 0.5_wp*(1.0_wp - abs(nu))
-                                 p = -0.5_wp
-                                 do i = 1, self%k
-                                    tn = t**2*(3.0_wp - 2.0_wp*t)
-                                    pn = -6.0_wp*p*t*(-1.0_wp + t)
-                                    t = tn
-                                    p = pn
-                                 end do
-                                 s = t
-                                 ds = p
-                                 if (nu < 0.0_wp) then
-                                    s = 1.0_wp - s
-                                 end if
+                           s = 0.0_wp
+                           ds = 0.0_wp
+                           if (abs(nu) >= 1.0_wp) then
+                              if (nu < 0.0_wp) s = 1.0_wp
+                           else
+                              t = 0.5_wp*(1.0_wp - abs(nu))
+                              p = -0.5_wp
+                              do i = 1, self%k
+                                 tn = t**2*(3.0_wp - 2.0_wp*t)
+                                 pn = -6.0_wp*p*t*(-1.0_wp + t)
+                                 t = tn
+                                 p = pn
+                              end do
+                              s = t
+                              ds = p
+                              if (nu < 0.0_wp) then
+                                 s = 1.0_wp - s
                               end if
-                           end block
-                           if (s <= 0.0_wp .or. ds == 0.0_wp) cycle
-                           factor = (log_seed/s)*ds
-                           if (abs(mu) >= 1.0_wp) cycle
-                           factor = factor*(1.0_wp - 2.0_wp*pair_a(j, i)*mu)/pair_r(j, i)
-                           ui = 0.0_wp
-                           uj = 0.0_wp
-                           if (dist(i) > 0.0_wp) ui = (point - xyz(:, i))/dist(i)
-                           if (dist(j) > 0.0_wp) uj = (point - xyz(:, j))/dist(j)
-                           axis = (xyz(:, i) - xyz(:, j))/pair_r(j, i)
-                           point_gradient = point_gradient + factor*(ui - uj)
-                           gradient(:, i) = gradient(:, i) - factor*(ui + mu*axis)
-                           gradient(:, j) = gradient(:, j) + factor*(uj + mu*axis)
-                        end do
+                           end if
+                        end block
+                        if (s <= 0.0_wp .or. ds == 0.0_wp) cycle
+                        factor = (log_seed/s)*ds
+                        if (abs(mu) >= 1.0_wp) cycle
+                        factor = factor*(1.0_wp - 2.0_wp*pair_a(j, i)*mu)/pair_r(j, i)
+                        ui = 0.0_wp
+                        uj = 0.0_wp
+                        if (dist(i, slot) > 0.0_wp) ui = (point - xyz(:, i))/dist(i, slot)
+                        if (dist(j, slot) > 0.0_wp) uj = (point - xyz(:, j))/dist(j, slot)
+                        axis = (xyz(:, i) - xyz(:, j))/pair_r(j, i)
+                        point_response = point_response + factor*(ui - uj)
+                        workers(:, i, slot) = workers(:, i, slot) - factor*(ui + mu*axis)
+                        workers(:, j, slot) = workers(:, j, slot) + factor*(uj + mu*axis)
                      end do
-                  end if
-               end associate
+                  end do
+               end if
             end block point_math
          end if
          workers(:, owner, slot) = workers(:, owner, slot) + point_response + adjoint_xyz(:, ip)
@@ -799,204 +793,200 @@ contains
                real(wp) :: nu, nu_t, s, ds, d2s, peak, q, qt, alpha, alpha_t, log_p_t, first, second, beta, beta_t
                integer :: i, j, k
 
-               associate (dist => dist(:, slot), probs => probs(:, slot), hessian_vector => workers(:, :, &
-                  & slot), point_hessian_vector => point_response, log_t => log_t(:, slot), &
-                  & point_direction => direction(:, owner))
-                  point_hessian_vector = 0.0_wp
-                  dist = 0.0_wp
-                  do i = 1, size(dist)
-                     dist(i) = norm2(point - xyz(:, i))
+               point_response = 0.0_wp
+               dist(:, slot) = 0.0_wp
+               do i = 1, size(dist(:, slot))
+                  dist(i, slot) = norm2(point - xyz(:, i))
+               end do
+               positions(:, 1) = point
+               tangent(:, 1) = direction(:, owner)
+               probs(:, slot) = 0.0_wp
+               log_t(:, slot) = 0.0_wp
+               do i = 1, size(dist(:, slot))
+                  positions(:, 2) = xyz(:, i)
+                  tangent(:, 2) = direction(:, i)
+                  do j = 1, size(dist(:, slot))
+                     if (j == i) cycle
+                     positions(:, 3) = xyz(:, j)
+                     tangent(:, 3) = direction(:, j)
+                     ! Coordinate order 1: elliptic
+                     block
+                        real(wp) :: mu, r, a, unit(3, 3), mg(3)
+                        real(wp) :: c0
+
+                        g = 0.0_wp
+                        r = pair_r(j, i)
+                        a = pair_a(j, i)
+                        mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/r))
+                        nu = mu + a*(1.0_wp - mu*mu)
+                        if (abs(mu) < 1.0_wp) then
+                           unit = 0.0_wp
+                           if (dist(i, slot) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i, slot)
+                           if (dist(j, slot) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j, slot)
+                           unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
+                           c0 = (1.0_wp/r)*(-1.0_wp + 2.0_wp*a*mu)
+                           mg(1) = -c0
+                           mg(2) = c0
+                           mg(3) = c0*mu
+                           g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
+                           g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
+                           g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
+                        end if
+                     end block
+                     block
+                        real(wp) :: t, tn, p, pn
+                        integer :: i
+
+                        s = 0.0_wp
+                        ds = 0.0_wp
+                        if (abs(nu) >= 1.0_wp) then
+                           if (nu < 0.0_wp) s = 1.0_wp
+                        else
+                           t = 0.5_wp*(1.0_wp - abs(nu))
+                           p = -0.5_wp
+                           do i = 1, self%k
+                              tn = t**2*(3.0_wp - 2.0_wp*t)
+                              pn = -6.0_wp*p*t*(-1.0_wp + t)
+                              t = tn
+                              p = pn
+                           end do
+                           s = t
+                           ds = p
+                           if (nu < 0.0_wp) then
+                              s = 1.0_wp - s
+                           end if
+                        end if
+                     end block
+                     if (s <= 0.0_wp) then
+                        probs(i, slot) = -huge(1.0_wp)
+                        log_t(i, slot) = 0.0_wp
+                        exit
+                     end if
+                     probs(i, slot) = probs(i, slot) + log(s)
+                     log_t(i, slot) = log_t(i, slot) + (ds/s)*sum(g*tangent)
                   end do
-                  positions(:, 1) = point
-                  tangent(:, 1) = point_direction
-                  probs = 0.0_wp
-                  log_t = 0.0_wp
-                  do i = 1, size(dist)
+               end do
+               if (probs(owner, slot) /= -huge(1.0_wp)) then
+                  peak = maxval(probs(:, slot))
+                  probs(:, slot) = exp(probs(:, slot) - peak)
+                  probs(:, slot) = probs(:, slot)/sum(probs(:, slot))
+                  q = seed*probs(owner, slot)
+                  qt = q*sum(probs(:, slot)*(log_t(owner, slot) - log_t(:, slot)))
+                  do i = 1, size(dist(:, slot))
+                     log_p_t = sum(probs(:, slot)*(log_t(i, slot) - log_t(:, slot)))
+                     alpha = -q*probs(i, slot)
+                     alpha_t = -qt*probs(i, slot) - q*probs(i, slot)*log_p_t
+                     if (i == owner) then
+                        beta = 0.0_wp
+                        beta_t = 0.0_wp
+                        do k = 1, size(dist(:, slot))
+                           if (k == owner) cycle
+                           beta = beta + probs(k, slot)
+                           beta_t = beta_t + probs(k, slot)*sum(probs(:, slot)*(log_t(k, slot) - log_t(:, slot)))
+                        end do
+                        alpha = q*beta
+                        alpha_t = qt*beta + q*beta_t
+                     end if
+                     if (alpha == 0.0_wp .and. alpha_t == 0.0_wp) cycle
                      positions(:, 2) = xyz(:, i)
                      tangent(:, 2) = direction(:, i)
-                     do j = 1, size(dist)
+                     do j = 1, size(dist(:, slot))
                         if (j == i) cycle
                         positions(:, 3) = xyz(:, j)
                         tangent(:, 3) = direction(:, j)
-                        ! Coordinate order 1: elliptic
+                        ! Coordinate order 2: elliptic
                         block
                            real(wp) :: mu, r, a, unit(3, 3), mg(3)
-                           real(wp) :: c0
+                           real(wp) :: unit_t(3, 3), delta(3, 3), metric_t(3), mh(3)
+                           integer :: c
+                           real(wp) :: c0, c1, c2, c3, c4, c5, c6
 
                            g = 0.0_wp
+                           h = 0.0_wp
                            r = pair_r(j, i)
                            a = pair_a(j, i)
-                           mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/r))
+                           mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/r))
                            nu = mu + a*(1.0_wp - mu*mu)
                            if (abs(mu) < 1.0_wp) then
                               unit = 0.0_wp
-                              if (dist(i) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i)
-                              if (dist(j) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j)
+                              if (dist(i, slot) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i, slot)
+                              if (dist(j, slot) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j, slot)
                               unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
-                              c0 = (1.0_wp/r)*(-1.0_wp + 2.0_wp*a*mu)
-                              mg(1) = -c0
-                              mg(2) = c0
-                              mg(3) = c0*mu
+                              unit_t = 0.0_wp
+                              delta(:, 1) = tangent(:, 1) - tangent(:, 2)
+                              delta(:, 2) = tangent(:, 1) - tangent(:, 3)
+                              delta(:, 3) = tangent(:, 2) - tangent(:, 3)
+                              do c = 1, 3
+                                 metric_t(c) = dot_product(unit(:, c), delta(:, c))
+                              end do
+                              if (dist(i, slot) > 0.0_wp) unit_t(:, 1) = (delta(:, 1) - unit(:, 1)*metric_t(1))/dist(i, slot)
+                              if (dist(j, slot) > 0.0_wp) unit_t(:, 2) = (delta(:, 2) - unit(:, 2)*metric_t(2))/dist(j, slot)
+                              unit_t(:, 3) = (delta(:, 3) - unit(:, 3)*metric_t(3))/r
+                              c0 = 2.0_wp*a
+                              c1 = (1.0_wp/r)*(-1.0_wp + c0*mu)
+                              c2 = (1.0_wp/r**2)
+                              c3 = metric_t(3)*mu
+                              c4 = 4.0_wp*a
+                              c5 = c2*(metric_t(3) + c0*metric_t(1) - c0*metric_t(2) - c3*c4)
+                              c6 = c4*mu
+                              mg(1) = -c1
+                              mg(2) = c1
+                              mg(3) = c1*mu
+                              mh(1) = -c5
+                              mh(2) = c5
+                              mh(3) = c2*(metric_t(2) - metric_t(1) + 2.0_wp*c3 + c6*metric_t(1) - c6*metric_t(2) - &
+                                 & 6.0_wp*metric_t(3)*a*mu**2)
                               g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
                               g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
                               g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
+                              h(:, 1) = mh(1)*unit(:, 1) + mg(1)*unit_t(:, 1) + mh(2)*unit(:, 2) + mg(2)*unit_t(:, 2)
+                              h(:, 2) = -mh(1)*unit(:, 1) - mg(1)*unit_t(:, 1) + mh(3)*unit(:, 3) + mg(3)*unit_t(:, 3)
+                              h(:, 3) = -mh(2)*unit(:, 2) - mg(2)*unit_t(:, 2) - mh(3)*unit(:, 3) - mg(3)*unit_t(:, 3)
                            end if
                         end block
                         block
-                           real(wp) :: t, tn, p, pn
+                           real(wp) :: t, tn, p, pn, q, qn, c0, c1
                            integer :: i
 
                            s = 0.0_wp
                            ds = 0.0_wp
+                           d2s = 0.0_wp
                            if (abs(nu) >= 1.0_wp) then
                               if (nu < 0.0_wp) s = 1.0_wp
                            else
                               t = 0.5_wp*(1.0_wp - abs(nu))
                               p = -0.5_wp
+                              q = 0.0_wp
                               do i = 1, self%k
-                                 tn = t**2*(3.0_wp - 2.0_wp*t)
-                                 pn = -6.0_wp*p*t*(-1.0_wp + t)
+                                 c0 = 2.0_wp*t
+                                 c1 = 6.0_wp*t*(-1.0_wp + t)
+                                 tn = t**2*(3.0_wp - c0)
+                                 pn = -c1*p
+                                 qn = -c1*q - 6.0_wp*p**2*(-1.0_wp + c0)
                                  t = tn
                                  p = pn
+                                 q = qn
                               end do
                               s = t
                               ds = p
+                              d2s = q
                               if (nu < 0.0_wp) then
                                  s = 1.0_wp - s
+                                 d2s = -d2s
                               end if
                            end if
                         end block
-                        if (s <= 0.0_wp) then
-                           probs(i) = -huge(1.0_wp)
-                           log_t(i) = 0.0_wp
-                           exit
-                        end if
-                        probs(i) = probs(i) + log(s)
-                        log_t(i) = log_t(i) + (ds/s)*sum(g*tangent)
+                        if (s <= 0.0_wp) cycle
+                        first = ds/s
+                        second = d2s/s - first*first
+                        nu_t = sum(g*tangent)
+                        contribution = (alpha_t*first + alpha*second*nu_t)*g + alpha*first*h
+                        point_response = point_response + contribution(:, 1)
+                        workers(:, i, slot) = workers(:, i, slot) + contribution(:, 2)
+                        workers(:, j, slot) = workers(:, j, slot) + contribution(:, 3)
                      end do
                   end do
-                  if (probs(owner) /= -huge(1.0_wp)) then
-                     peak = maxval(probs)
-                     probs = exp(probs - peak)
-                     probs = probs/sum(probs)
-                     q = seed*probs(owner)
-                     qt = q*sum(probs*(log_t(owner) - log_t))
-                     do i = 1, size(dist)
-                        log_p_t = sum(probs*(log_t(i) - log_t))
-                        alpha = -q*probs(i)
-                        alpha_t = -qt*probs(i) - q*probs(i)*log_p_t
-                        if (i == owner) then
-                           beta = 0.0_wp
-                           beta_t = 0.0_wp
-                           do k = 1, size(dist)
-                              if (k == owner) cycle
-                              beta = beta + probs(k)
-                              beta_t = beta_t + probs(k)*sum(probs*(log_t(k) - log_t))
-                           end do
-                           alpha = q*beta
-                           alpha_t = qt*beta + q*beta_t
-                        end if
-                        if (alpha == 0.0_wp .and. alpha_t == 0.0_wp) cycle
-                        positions(:, 2) = xyz(:, i)
-                        tangent(:, 2) = direction(:, i)
-                        do j = 1, size(dist)
-                           if (j == i) cycle
-                           positions(:, 3) = xyz(:, j)
-                           tangent(:, 3) = direction(:, j)
-                           ! Coordinate order 2: elliptic
-                           block
-                              real(wp) :: mu, r, a, unit(3, 3), mg(3)
-                              real(wp) :: unit_t(3, 3), delta(3, 3), metric_t(3), mh(3)
-                              integer :: c
-                              real(wp) :: c0, c1, c2, c3, c4, c5, c6
-
-                              g = 0.0_wp
-                              h = 0.0_wp
-                              r = pair_r(j, i)
-                              a = pair_a(j, i)
-                              mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/r))
-                              nu = mu + a*(1.0_wp - mu*mu)
-                              if (abs(mu) < 1.0_wp) then
-                                 unit = 0.0_wp
-                                 if (dist(i) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i)
-                                 if (dist(j) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j)
-                                 unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
-                                 unit_t = 0.0_wp
-                                 delta(:, 1) = tangent(:, 1) - tangent(:, 2)
-                                 delta(:, 2) = tangent(:, 1) - tangent(:, 3)
-                                 delta(:, 3) = tangent(:, 2) - tangent(:, 3)
-                                 do c = 1, 3
-                                    metric_t(c) = dot_product(unit(:, c), delta(:, c))
-                                 end do
-                                 if (dist(i) > 0.0_wp) unit_t(:, 1) = (delta(:, 1) - unit(:, 1)*metric_t(1))/dist(i)
-                                 if (dist(j) > 0.0_wp) unit_t(:, 2) = (delta(:, 2) - unit(:, 2)*metric_t(2))/dist(j)
-                                 unit_t(:, 3) = (delta(:, 3) - unit(:, 3)*metric_t(3))/r
-                                 c0 = 2.0_wp*a
-                                 c1 = (1.0_wp/r)*(-1.0_wp + c0*mu)
-                                 c2 = (1.0_wp/r**2)
-                                 c3 = metric_t(3)*mu
-                                 c4 = 4.0_wp*a
-                                 c5 = c2*(metric_t(3) + c0*metric_t(1) - c0*metric_t(2) - c3*c4)
-                                 c6 = c4*mu
-                                 mg(1) = -c1
-                                 mg(2) = c1
-                                 mg(3) = c1*mu
-                                 mh(1) = -c5
-                                 mh(2) = c5
-                                 mh(3) = c2*(metric_t(2) - metric_t(1) + 2.0_wp*c3 + c6*metric_t(1) - c6*metric_t(2) - &
-                                    & 6.0_wp*metric_t(3)*a*mu**2)
-                                 g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
-                                 g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
-                                 g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
-                                 h(:, 1) = mh(1)*unit(:, 1) + mg(1)*unit_t(:, 1) + mh(2)*unit(:, 2) + mg(2)*unit_t(:, 2)
-                                 h(:, 2) = -mh(1)*unit(:, 1) - mg(1)*unit_t(:, 1) + mh(3)*unit(:, 3) + mg(3)*unit_t(:, 3)
-                                 h(:, 3) = -mh(2)*unit(:, 2) - mg(2)*unit_t(:, 2) - mh(3)*unit(:, 3) - mg(3)*unit_t(:, 3)
-                              end if
-                           end block
-                           block
-                              real(wp) :: t, tn, p, pn, q, qn, c0, c1
-                              integer :: i
-
-                              s = 0.0_wp
-                              ds = 0.0_wp
-                              d2s = 0.0_wp
-                              if (abs(nu) >= 1.0_wp) then
-                                 if (nu < 0.0_wp) s = 1.0_wp
-                              else
-                                 t = 0.5_wp*(1.0_wp - abs(nu))
-                                 p = -0.5_wp
-                                 q = 0.0_wp
-                                 do i = 1, self%k
-                                    c0 = 2.0_wp*t
-                                    c1 = 6.0_wp*t*(-1.0_wp + t)
-                                    tn = t**2*(3.0_wp - c0)
-                                    pn = -c1*p
-                                    qn = -c1*q - 6.0_wp*p**2*(-1.0_wp + c0)
-                                    t = tn
-                                    p = pn
-                                    q = qn
-                                 end do
-                                 s = t
-                                 ds = p
-                                 d2s = q
-                                 if (nu < 0.0_wp) then
-                                    s = 1.0_wp - s
-                                    d2s = -d2s
-                                 end if
-                              end if
-                           end block
-                           if (s <= 0.0_wp) cycle
-                           first = ds/s
-                           second = d2s/s - first*first
-                           nu_t = sum(g*tangent)
-                           contribution = (alpha_t*first + alpha*second*nu_t)*g + alpha*first*h
-                           point_hessian_vector = point_hessian_vector + contribution(:, 1)
-                           hessian_vector(:, i) = hessian_vector(:, i) + contribution(:, 2)
-                           hessian_vector(:, j) = hessian_vector(:, j) + contribution(:, 3)
-                        end do
-                     end do
-                  end if
-               end associate
+               end if
             end block point_math
          end if
          workers(:, owner, slot) = workers(:, owner, slot) + point_response
@@ -1143,204 +1133,200 @@ contains
                      real(wp) :: nu, nu_t, s, ds, d2s, peak, q, qt, alpha, alpha_t, log_p_t, first, second, beta, beta_t
                      integer :: i, j, k
 
-                     associate (dist => dist(:, slot), probs => probs(:, slot), hessian_vector => workers(:, :, &
-                        & slot), point_hessian_vector => point_response, log_t => log_t(:, slot), direction => &
-                        & basis(:, :, slot), point_direction => basis(:, owner, slot))
-                        point_hessian_vector = 0.0_wp
-                        dist = 0.0_wp
-                        do i = 1, size(dist)
-                           dist(i) = norm2(point - xyz(:, i))
+                     point_response = 0.0_wp
+                     dist(:, slot) = 0.0_wp
+                     do i = 1, size(dist(:, slot))
+                        dist(i, slot) = norm2(point - xyz(:, i))
+                     end do
+                     positions(:, 1) = point
+                     tangent(:, 1) = basis(:, owner, slot)
+                     probs(:, slot) = 0.0_wp
+                     log_t(:, slot) = 0.0_wp
+                     do i = 1, size(dist(:, slot))
+                        positions(:, 2) = xyz(:, i)
+                        tangent(:, 2) = basis(:, i, slot)
+                        do j = 1, size(dist(:, slot))
+                           if (j == i) cycle
+                           positions(:, 3) = xyz(:, j)
+                           tangent(:, 3) = basis(:, j, slot)
+                           ! Coordinate order 1: elliptic
+                           block
+                              real(wp) :: mu, r, a, unit(3, 3), mg(3)
+                              real(wp) :: c0
+
+                              g = 0.0_wp
+                              r = pair_r(j, i)
+                              a = pair_a(j, i)
+                              mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/r))
+                              nu = mu + a*(1.0_wp - mu*mu)
+                              if (abs(mu) < 1.0_wp) then
+                                 unit = 0.0_wp
+                                 if (dist(i, slot) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i, slot)
+                                 if (dist(j, slot) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j, slot)
+                                 unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
+                                 c0 = (1.0_wp/r)*(-1.0_wp + 2.0_wp*a*mu)
+                                 mg(1) = -c0
+                                 mg(2) = c0
+                                 mg(3) = c0*mu
+                                 g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
+                                 g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
+                                 g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
+                              end if
+                           end block
+                           block
+                              real(wp) :: t, tn, p, pn
+                              integer :: i
+
+                              s = 0.0_wp
+                              ds = 0.0_wp
+                              if (abs(nu) >= 1.0_wp) then
+                                 if (nu < 0.0_wp) s = 1.0_wp
+                              else
+                                 t = 0.5_wp*(1.0_wp - abs(nu))
+                                 p = -0.5_wp
+                                 do i = 1, self%k
+                                    tn = t**2*(3.0_wp - 2.0_wp*t)
+                                    pn = -6.0_wp*p*t*(-1.0_wp + t)
+                                    t = tn
+                                    p = pn
+                                 end do
+                                 s = t
+                                 ds = p
+                                 if (nu < 0.0_wp) then
+                                    s = 1.0_wp - s
+                                 end if
+                              end if
+                           end block
+                           if (s <= 0.0_wp) then
+                              probs(i, slot) = -huge(1.0_wp)
+                              log_t(i, slot) = 0.0_wp
+                              exit
+                           end if
+                           probs(i, slot) = probs(i, slot) + log(s)
+                           log_t(i, slot) = log_t(i, slot) + (ds/s)*sum(g*tangent)
                         end do
-                        positions(:, 1) = point
-                        tangent(:, 1) = point_direction
-                        probs = 0.0_wp
-                        log_t = 0.0_wp
-                        do i = 1, size(dist)
+                     end do
+                     if (probs(owner, slot) /= -huge(1.0_wp)) then
+                        peak = maxval(probs(:, slot))
+                        probs(:, slot) = exp(probs(:, slot) - peak)
+                        probs(:, slot) = probs(:, slot)/sum(probs(:, slot))
+                        q = seed*probs(owner, slot)
+                        qt = q*sum(probs(:, slot)*(log_t(owner, slot) - log_t(:, slot)))
+                        do i = 1, size(dist(:, slot))
+                           log_p_t = sum(probs(:, slot)*(log_t(i, slot) - log_t(:, slot)))
+                           alpha = -q*probs(i, slot)
+                           alpha_t = -qt*probs(i, slot) - q*probs(i, slot)*log_p_t
+                           if (i == owner) then
+                              beta = 0.0_wp
+                              beta_t = 0.0_wp
+                              do k = 1, size(dist(:, slot))
+                                 if (k == owner) cycle
+                                 beta = beta + probs(k, slot)
+                                 beta_t = beta_t + probs(k, slot)*sum(probs(:, slot)*(log_t(k, slot) - log_t(:, slot)))
+                              end do
+                              alpha = q*beta
+                              alpha_t = qt*beta + q*beta_t
+                           end if
+                           if (alpha == 0.0_wp .and. alpha_t == 0.0_wp) cycle
                            positions(:, 2) = xyz(:, i)
-                           tangent(:, 2) = direction(:, i)
-                           do j = 1, size(dist)
+                           tangent(:, 2) = basis(:, i, slot)
+                           do j = 1, size(dist(:, slot))
                               if (j == i) cycle
                               positions(:, 3) = xyz(:, j)
-                              tangent(:, 3) = direction(:, j)
-                              ! Coordinate order 1: elliptic
+                              tangent(:, 3) = basis(:, j, slot)
+                              ! Coordinate order 2: elliptic
                               block
                                  real(wp) :: mu, r, a, unit(3, 3), mg(3)
-                                 real(wp) :: c0
+                                 real(wp) :: unit_t(3, 3), delta(3, 3), metric_t(3), mh(3)
+                                 integer :: c
+                                 real(wp) :: c0, c1, c2, c3, c4, c5, c6
 
                                  g = 0.0_wp
+                                 h = 0.0_wp
                                  r = pair_r(j, i)
                                  a = pair_a(j, i)
-                                 mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/r))
+                                 mu = max(-1.0_wp, min(1.0_wp, (dist(i, slot) - dist(j, slot))/r))
                                  nu = mu + a*(1.0_wp - mu*mu)
                                  if (abs(mu) < 1.0_wp) then
                                     unit = 0.0_wp
-                                    if (dist(i) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i)
-                                    if (dist(j) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j)
+                                    if (dist(i, slot) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i, slot)
+                                    if (dist(j, slot) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j, slot)
                                     unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
-                                    c0 = (1.0_wp/r)*(-1.0_wp + 2.0_wp*a*mu)
-                                    mg(1) = -c0
-                                    mg(2) = c0
-                                    mg(3) = c0*mu
+                                    unit_t = 0.0_wp
+                                    delta(:, 1) = tangent(:, 1) - tangent(:, 2)
+                                    delta(:, 2) = tangent(:, 1) - tangent(:, 3)
+                                    delta(:, 3) = tangent(:, 2) - tangent(:, 3)
+                                    do c = 1, 3
+                                       metric_t(c) = dot_product(unit(:, c), delta(:, c))
+                                    end do
+                                    if (dist(i, slot) > 0.0_wp) unit_t(:, 1) = (delta(:, 1) - unit(:, 1)*metric_t(1))/dist(i, slot)
+                                    if (dist(j, slot) > 0.0_wp) unit_t(:, 2) = (delta(:, 2) - unit(:, 2)*metric_t(2))/dist(j, slot)
+                                    unit_t(:, 3) = (delta(:, 3) - unit(:, 3)*metric_t(3))/r
+                                    c0 = 2.0_wp*a
+                                    c1 = (1.0_wp/r)*(-1.0_wp + c0*mu)
+                                    c2 = (1.0_wp/r**2)
+                                    c3 = metric_t(3)*mu
+                                    c4 = 4.0_wp*a
+                                    c5 = c2*(metric_t(3) + c0*metric_t(1) - c0*metric_t(2) - c3*c4)
+                                    c6 = c4*mu
+                                    mg(1) = -c1
+                                    mg(2) = c1
+                                    mg(3) = c1*mu
+                                    mh(1) = -c5
+                                    mh(2) = c5
+                                    mh(3) = c2*(metric_t(2) - metric_t(1) + 2.0_wp*c3 + c6*metric_t(1) - c6*metric_t(2) - &
+                                       & 6.0_wp*metric_t(3)*a*mu**2)
                                     g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
                                     g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
                                     g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
+                                    h(:, 1) = mh(1)*unit(:, 1) + mg(1)*unit_t(:, 1) + mh(2)*unit(:, 2) + mg(2)*unit_t(:, 2)
+                                    h(:, 2) = -mh(1)*unit(:, 1) - mg(1)*unit_t(:, 1) + mh(3)*unit(:, 3) + mg(3)*unit_t(:, 3)
+                                    h(:, 3) = -mh(2)*unit(:, 2) - mg(2)*unit_t(:, 2) - mh(3)*unit(:, 3) - mg(3)*unit_t(:, 3)
                                  end if
                               end block
                               block
-                                 real(wp) :: t, tn, p, pn
+                                 real(wp) :: t, tn, p, pn, q, qn, c0, c1
                                  integer :: i
 
                                  s = 0.0_wp
                                  ds = 0.0_wp
+                                 d2s = 0.0_wp
                                  if (abs(nu) >= 1.0_wp) then
                                     if (nu < 0.0_wp) s = 1.0_wp
                                  else
                                     t = 0.5_wp*(1.0_wp - abs(nu))
                                     p = -0.5_wp
+                                    q = 0.0_wp
                                     do i = 1, self%k
-                                       tn = t**2*(3.0_wp - 2.0_wp*t)
-                                       pn = -6.0_wp*p*t*(-1.0_wp + t)
+                                       c0 = 2.0_wp*t
+                                       c1 = 6.0_wp*t*(-1.0_wp + t)
+                                       tn = t**2*(3.0_wp - c0)
+                                       pn = -c1*p
+                                       qn = -c1*q - 6.0_wp*p**2*(-1.0_wp + c0)
                                        t = tn
                                        p = pn
+                                       q = qn
                                     end do
                                     s = t
                                     ds = p
+                                    d2s = q
                                     if (nu < 0.0_wp) then
                                        s = 1.0_wp - s
+                                       d2s = -d2s
                                     end if
                                  end if
                               end block
-                              if (s <= 0.0_wp) then
-                                 probs(i) = -huge(1.0_wp)
-                                 log_t(i) = 0.0_wp
-                                 exit
-                              end if
-                              probs(i) = probs(i) + log(s)
-                              log_t(i) = log_t(i) + (ds/s)*sum(g*tangent)
+                              if (s <= 0.0_wp) cycle
+                              first = ds/s
+                              second = d2s/s - first*first
+                              nu_t = sum(g*tangent)
+                              contribution = (alpha_t*first + alpha*second*nu_t)*g + alpha*first*h
+                              point_response = point_response + contribution(:, 1)
+                              workers(:, i, slot) = workers(:, i, slot) + contribution(:, 2)
+                              workers(:, j, slot) = workers(:, j, slot) + contribution(:, 3)
                            end do
                         end do
-                        if (probs(owner) /= -huge(1.0_wp)) then
-                           peak = maxval(probs)
-                           probs = exp(probs - peak)
-                           probs = probs/sum(probs)
-                           q = seed*probs(owner)
-                           qt = q*sum(probs*(log_t(owner) - log_t))
-                           do i = 1, size(dist)
-                              log_p_t = sum(probs*(log_t(i) - log_t))
-                              alpha = -q*probs(i)
-                              alpha_t = -qt*probs(i) - q*probs(i)*log_p_t
-                              if (i == owner) then
-                                 beta = 0.0_wp
-                                 beta_t = 0.0_wp
-                                 do k = 1, size(dist)
-                                    if (k == owner) cycle
-                                    beta = beta + probs(k)
-                                    beta_t = beta_t + probs(k)*sum(probs*(log_t(k) - log_t))
-                                 end do
-                                 alpha = q*beta
-                                 alpha_t = qt*beta + q*beta_t
-                              end if
-                              if (alpha == 0.0_wp .and. alpha_t == 0.0_wp) cycle
-                              positions(:, 2) = xyz(:, i)
-                              tangent(:, 2) = direction(:, i)
-                              do j = 1, size(dist)
-                                 if (j == i) cycle
-                                 positions(:, 3) = xyz(:, j)
-                                 tangent(:, 3) = direction(:, j)
-                                 ! Coordinate order 2: elliptic
-                                 block
-                                    real(wp) :: mu, r, a, unit(3, 3), mg(3)
-                                    real(wp) :: unit_t(3, 3), delta(3, 3), metric_t(3), mh(3)
-                                    integer :: c
-                                    real(wp) :: c0, c1, c2, c3, c4, c5, c6
-
-                                    g = 0.0_wp
-                                    h = 0.0_wp
-                                    r = pair_r(j, i)
-                                    a = pair_a(j, i)
-                                    mu = max(-1.0_wp, min(1.0_wp, (dist(i) - dist(j))/r))
-                                    nu = mu + a*(1.0_wp - mu*mu)
-                                    if (abs(mu) < 1.0_wp) then
-                                       unit = 0.0_wp
-                                       if (dist(i) > 0.0_wp) unit(:, 1) = (positions(:, 1) - positions(:, 2))/dist(i)
-                                       if (dist(j) > 0.0_wp) unit(:, 2) = (positions(:, 1) - positions(:, 3))/dist(j)
-                                       unit(:, 3) = (positions(:, 2) - positions(:, 3))/r
-                                       unit_t = 0.0_wp
-                                       delta(:, 1) = tangent(:, 1) - tangent(:, 2)
-                                       delta(:, 2) = tangent(:, 1) - tangent(:, 3)
-                                       delta(:, 3) = tangent(:, 2) - tangent(:, 3)
-                                       do c = 1, 3
-                                          metric_t(c) = dot_product(unit(:, c), delta(:, c))
-                                       end do
-                                       if (dist(i) > 0.0_wp) unit_t(:, 1) = (delta(:, 1) - unit(:, 1)*metric_t(1))/dist(i)
-                                       if (dist(j) > 0.0_wp) unit_t(:, 2) = (delta(:, 2) - unit(:, 2)*metric_t(2))/dist(j)
-                                       unit_t(:, 3) = (delta(:, 3) - unit(:, 3)*metric_t(3))/r
-                                       c0 = 2.0_wp*a
-                                       c1 = (1.0_wp/r)*(-1.0_wp + c0*mu)
-                                       c2 = (1.0_wp/r**2)
-                                       c3 = metric_t(3)*mu
-                                       c4 = 4.0_wp*a
-                                       c5 = c2*(metric_t(3) + c0*metric_t(1) - c0*metric_t(2) - c3*c4)
-                                       c6 = c4*mu
-                                       mg(1) = -c1
-                                       mg(2) = c1
-                                       mg(3) = c1*mu
-                                       mh(1) = -c5
-                                       mh(2) = c5
-                                       mh(3) = c2*(metric_t(2) - metric_t(1) + 2.0_wp*c3 + c6*metric_t(1) - c6*metric_t(2) - &
-                                          & 6.0_wp*metric_t(3)*a*mu**2)
-                                       g(:, 1) = mg(1)*unit(:, 1) + mg(2)*unit(:, 2)
-                                       g(:, 2) = -mg(1)*unit(:, 1) + mg(3)*unit(:, 3)
-                                       g(:, 3) = -mg(2)*unit(:, 2) - mg(3)*unit(:, 3)
-                                       h(:, 1) = mh(1)*unit(:, 1) + mg(1)*unit_t(:, 1) + mh(2)*unit(:, 2) + mg(2)*unit_t(:, 2)
-                                       h(:, 2) = -mh(1)*unit(:, 1) - mg(1)*unit_t(:, 1) + mh(3)*unit(:, 3) + mg(3)*unit_t(:, 3)
-                                       h(:, 3) = -mh(2)*unit(:, 2) - mg(2)*unit_t(:, 2) - mh(3)*unit(:, 3) - mg(3)*unit_t(:, 3)
-                                    end if
-                                 end block
-                                 block
-                                    real(wp) :: t, tn, p, pn, q, qn, c0, c1
-                                    integer :: i
-
-                                    s = 0.0_wp
-                                    ds = 0.0_wp
-                                    d2s = 0.0_wp
-                                    if (abs(nu) >= 1.0_wp) then
-                                       if (nu < 0.0_wp) s = 1.0_wp
-                                    else
-                                       t = 0.5_wp*(1.0_wp - abs(nu))
-                                       p = -0.5_wp
-                                       q = 0.0_wp
-                                       do i = 1, self%k
-                                          c0 = 2.0_wp*t
-                                          c1 = 6.0_wp*t*(-1.0_wp + t)
-                                          tn = t**2*(3.0_wp - c0)
-                                          pn = -c1*p
-                                          qn = -c1*q - 6.0_wp*p**2*(-1.0_wp + c0)
-                                          t = tn
-                                          p = pn
-                                          q = qn
-                                       end do
-                                       s = t
-                                       ds = p
-                                       d2s = q
-                                       if (nu < 0.0_wp) then
-                                          s = 1.0_wp - s
-                                          d2s = -d2s
-                                       end if
-                                    end if
-                                 end block
-                                 if (s <= 0.0_wp) cycle
-                                 first = ds/s
-                                 second = d2s/s - first*first
-                                 nu_t = sum(g*tangent)
-                                 contribution = (alpha_t*first + alpha*second*nu_t)*g + alpha*first*h
-                                 point_hessian_vector = point_hessian_vector + contribution(:, 1)
-                                 hessian_vector(:, i) = hessian_vector(:, i) + contribution(:, 2)
-                                 hessian_vector(:, j) = hessian_vector(:, j) + contribution(:, 3)
-                              end do
-                           end do
-                        end if
-                     end associate
+                     end if
                   end block point_math
                end if
                workers(:, owner, slot) = workers(:, owner, slot) + point_response
