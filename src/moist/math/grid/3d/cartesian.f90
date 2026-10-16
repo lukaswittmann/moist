@@ -7,8 +7,6 @@ module moist_math_grid_3d_cartesian
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
       & check_trafo_blocks
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
-   use moist_math_grid_3d_integration, only: integrate_values
-   use moist_math_grid_3d_kernel_integration, only: compensated_block_sum
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
    use, intrinsic :: iso_c_binding, only: c_int
@@ -79,8 +77,6 @@ module moist_math_grid_3d_cartesian
       !> Phase reference of the FFT: grid point (1, 1, 1), bohr
       procedure :: get_kref => cartesian_get_kref
       procedure :: destroy => cartesian_grid_3d_dealloc
-      procedure :: integrate_field => cartesian_grid_3d_integrate_field
-      procedure :: integrate_field_block => cartesian_grid_3d_integrate_field_block
       procedure :: new_trafo => cartesian_grid_3d_new_trafo
       !> Box corner, bohr; grid point (1, 1, 1) sits at `origin + dr/2`
       procedure :: get_origin => cartesian_get_origin
@@ -674,61 +670,6 @@ contains
       self%origin = 0.0_wp
    end subroutine cartesian_grid_3d_dealloc
 
-   !> Volume integral of a field already tabulated on the grid points
-   !>
-   !> Every Cartesian cell carries the same volume element `dV = dr**3`, so
-   !> the weighted sum collapses to `dV * sum(f)`; compensated summation
-   !> preserves small field contributions on fine grids
-   !>
-   !> @param[in]  self    Grid instance
-   !> @param[in]  f       Per-point field values (length ngrid); any other length is an error
-   !> @param[out] result  Quadrature result
-   !> @param[out] error   Error handling
-   subroutine cartesian_grid_3d_integrate_field(self, f, result, error)
-      !> Grid instance
-      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
-      !> Per-point field values (length ngrid)
-      real(wp), intent(in) :: f(:)
-      !> Quadrature result
-      real(wp), intent(out) :: result
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      result = 0.0_wp
-      if (size(f) /= self%ngrid) then
-         call fatal_error(error, "cartesian domain: integrate_field needs one value per grid point")
-         return
-      end if
-      result = self%dv*integrate_values(f, self%team_size())
-   end subroutine cartesian_grid_3d_integrate_field
-
-   !> Compensated field slice with the uniform cell volume applied once
-   !>
-   !> @param[in] self Cartesian grid
-   !> @param[in] f Field values at first:first+size(f)-1
-   !> @param[in] first One-based absolute grid index
-   !> @param[out] partial Neumaier total and correction, in integral units
-   !> @param[out] error Slice outside the grid
-   subroutine cartesian_grid_3d_integrate_field_block(self, f, first, partial, error)
-      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
-      real(wp), intent(in) :: f(:)
-      integer, intent(in) :: first
-      real(wp), intent(out) :: partial(2)
-      type(error_type), allocatable, intent(out) :: error
-
-      partial = 0.0_wp
-      if (first < 1 .or. first > self%ngrid + 1) then
-         call fatal_error(error, "cartesian domain: field block starts outside the grid")
-         return
-      end if
-      if (size(f) > self%ngrid - first + 1) then
-         call fatal_error(error, "cartesian domain: field block extends beyond the grid")
-         return
-      end if
-      call compensated_block_sum(f, 1, size(f), partial(1), partial(2))
-      partial = self%dv*partial
-   end subroutine cartesian_grid_3d_integrate_field_block
-
    !> Box corner; grid point (1, 1, 1) sits at `origin + dr/2`
    !>
    !> @param[in] self Grid instance
@@ -791,8 +732,8 @@ contains
    !>   backend thread pool, using the OpenMP thread budget
    !> - Input preserved despite its `intent(inout)`; callers may treat it as
    !>   read-only on return
-   !> - Each result multiplied by `dV = dr**3` to match the continuous
-   !>   Fourier convention used elsewhere in moist
+   !> - Final quadrature weights from w(:), folded into the backend scale
+   !>   for uniform weights; nonuniform weights use a weighted input copy
    !> - Nonzero backend status reported through `error`
    !>
    !> @param[in,out] self  Trafo instance
@@ -809,24 +750,23 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Use one backend team across all FFT lines, including small site counts
-      integer :: nthreads, iv
+      real(wp), allocatable :: weighted(:, :)
+      integer :: iv, stat
 
       call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
-      nthreads = self%grid%team_size()
-      ! Rank-three calls avoid batched-view overhead when only one worker is available
-      if (nthreads == 1) then
+      if (all(self%grid%w == self%grid%w(1))) then
+         call cartesian_fft_forward(self%grid, f_r, f_k, self%grid%w(1), error)
+      else
+         allocate (weighted, mold=f_r, stat=stat)
+         if (stat /= 0) then
+            call fatal_error(error, "cartesian trafo: cannot allocate weighted input")
+            return
+         end if
          do iv = 1, size(f_r, 2)
-            call cartesian_fft_r2k_one(self%grid, f_r(:, iv), f_k(:, iv), error)
-            if (allocated(error)) return
+            weighted(:, iv) = self%grid%w*f_r(:, iv)
          end do
-         return
-      end if
-      if (moist_fft_r2c_3d_batch(int(self%grid%nz, c_int), int(self%grid%ny, c_int), &
-         & int(self%grid%nx, c_int), int(size(f_r, 2), c_int), f_r, f_k, &
-         & self%grid%dv, int(nthreads, c_int)) /= 0) then
-         call fatal_error(error, "cartesian trafo: forward FFT backend failed")
+         call cartesian_fft_forward(self%grid, weighted, f_k, 1.0_wp, error)
       end if
    end subroutine cartesian_trafo_fft_r2k
 
@@ -887,11 +827,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer :: ik, iv, ix, nt
       real(wp) :: scale
+      logical :: uniform
 
       call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
       nt = self%grid%team_size()
-      scale = self%grid%dv*self%grid%vbox
+      uniform = all(self%grid%w == self%grid%w(1))
+      scale = self%grid%vbox
+      if (uniform) scale = scale*self%grid%w(1)
       !$omp parallel do collapse(2) schedule(static) num_threads(nt) private(ix)
       do iv = 1, size(f_k, 2)
          do ik = 1, size(f_k, 1)
@@ -905,6 +848,12 @@ contains
       end do
       !$omp end parallel do
       call self%fft_k2r(f_k, f_r, error)
+      if (allocated(error)) return
+      if (.not. uniform) then
+         do iv = 1, size(f_r, 2)
+            f_r(:, iv) = self%grid%w*f_r(:, iv)
+         end do
+      end if
    end subroutine cartesian_trafo_fft_r2k_adj
 
    !> Transpose of the inverse FFT, including packed-spectrum multiplicity
@@ -916,10 +865,12 @@ contains
       integer :: ik, iv, ix, nt
       real(wp) :: scale
 
-      call self%fft_r2k(f_r, f_k, error)
+      call cartesian_trafo_check_blocks(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
+      call cartesian_fft_forward(self%grid, f_r, f_k, 1.0_wp, error)
       if (allocated(error)) return
       nt = self%grid%team_size()
-      scale = 1.0_wp/(self%grid%dv*self%grid%vbox)
+      scale = 1.0_wp/self%grid%vbox
       !$omp parallel do collapse(2) schedule(static) num_threads(nt) private(ix)
       do iv = 1, size(f_k, 2)
          do ik = 1, size(f_k, 1)
@@ -992,32 +943,77 @@ contains
          return
       end if
       call check_trafo_blocks(self%grid%ngrid, self%grid%npts_k, shape_r, shape_k, error)
+      if (allocated(error)) return
+      if (.not. allocated(self%grid%w)) then
+         call fatal_error(error, "cartesian trafo: grid has no integration weights")
+         return
+      end if
+      if (size(self%grid%w) /= self%grid%ngrid) then
+         call fatal_error(error, "cartesian trafo: integration weights must have ngrid entries")
+      end if
    end subroutine cartesian_trafo_check_blocks
+
+   !> Forward FFT with an explicit scalar normalization
+   !>
+   !> @param[in] grid Grid supplying the transform geometry and worker count
+   !> @param[in,out] f_r Real-space field block, preserved on return
+   !> @param[out] f_k Reciprocal-space field block
+   !> @param[in] scale Scalar factor applied by the backend
+   !> @param[out] error Backend failure
+   subroutine cartesian_fft_forward(grid, f_r, f_k, scale, error)
+      !> Transform geometry and worker count
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: grid
+      !> Real-space field block, (ngrid, nv)
+      real(wp), intent(inout), contiguous, target :: f_r(:, :)
+      !> Reciprocal-space field block, (npts_k, nv)
+      complex(wp), intent(out), contiguous, target :: f_k(:, :)
+      !> Backend normalization
+      real(wp), intent(in) :: scale
+      !> Backend failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: nthreads, iv
+
+      nthreads = grid%team_size()
+      ! Rank-three calls avoid batched-view overhead with one worker
+      if (nthreads == 1) then
+         do iv = 1, size(f_r, 2)
+            call cartesian_fft_r2k_one(grid, f_r(:, iv), f_k(:, iv), scale, error)
+            if (allocated(error)) return
+         end do
+      else
+         if (moist_fft_r2c_3d_batch(int(grid%nz, c_int), int(grid%ny, c_int), &
+            & int(grid%nx, c_int), int(size(f_r, 2), c_int), f_r, f_k, scale, int(nthreads, c_int)) /= 0) then
+            call fatal_error(error, "cartesian trafo: forward FFT backend failed")
+         end if
+      end if
+   end subroutine cartesian_fft_forward
 
    !> Single-column forward R2C transform
    !>
    !> - Backend takes logical extents in the order (n0, n1, n2) with n0 the
    !>   slowest dimension; flat memory is Fortran column-major with x
    !>   fastest, so extents are passed as (nz, ny, nx)
-   !> - `dV = dr**3` factor matching moist's continuous Fourier convention
-   !>   folded into the transform rather than applied in a second pass
+   !> - Scalar normalization folded into the backend
    !>
    !> @param[in]     grid  Grid supplying the transform geometry
    !> @param[in,out] f_r   One real-space field (ngrid); preserved on return
    !> @param[out]    f_k   One reciprocal-space field (npts_k)
+   !> @param[in]     scale Scalar factor applied by the backend
    !> @param[out]    error A nonzero backend status
-   subroutine cartesian_fft_r2k_one(grid, f_r, f_k, error)
+   subroutine cartesian_fft_r2k_one(grid, f_r, f_k, scale, error)
       !> Grid supplying the transform geometry
       type(moist_math_grid_3d_cartesian_type), intent(in) :: grid
       !> Real-space field column
       real(wp), intent(inout), contiguous, target :: f_r(:)
       !> Reciprocal-space field column
       complex(wp), intent(out), contiguous, target :: f_k(:)
+      !> Backend normalization
+      real(wp), intent(in) :: scale
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       if (moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), &
-         & int(grid%nx, c_int), f_r, f_k, grid%dv) /= 0) then
+         & int(grid%nx, c_int), f_r, f_k, scale) /= 0) then
          call fatal_error(error, "cartesian trafo: forward FFT backend failed")
       end if
    end subroutine cartesian_fft_r2k_one

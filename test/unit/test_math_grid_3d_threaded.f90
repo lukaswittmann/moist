@@ -9,7 +9,7 @@
 !> - Radial transforms: one trafo per thread, cloned from a shared template
 !> - Molecular partition kernels: weights, gradient and curvature of every
 !>   scheme with one and two workers, and called from an enclosing team
-!> - Compensated field quadrature: thread-count agreement, cancellation and custom measures
+!> - Compensated field quadrature: thread-count agreement, cancellation and stored volume weights
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
 !$    & omp_get_max_active_levels
@@ -84,12 +84,6 @@ module test_math_grid_3d_threaded
       type(mctc_error), allocatable :: error
    end type grid_call_type
 
-   !> Verify that the generic field quadrature honors a custom measure binding
-   type, extends(moist_math_grid_3d_molecular_type) :: field_weight_grid_type
-   contains
-      procedure :: measure => field_weight
-   end type field_weight_grid_type
-
 contains
 
    !> Collect all math_grid_3d_threaded tests
@@ -145,19 +139,11 @@ contains
 !$    call omp_set_num_threads(min(4, max_threads))
    end subroutine enter_threaded
 
-   pure function field_weight(self, i) result(weight)
-      class(field_weight_grid_type), intent(in) :: self
-      integer, intent(in) :: i
-      real(wp) :: weight
-
-      weight = 2.0_wp*self%w(i)
-   end function field_weight
-
    !> Strong cancellation, variable weights, strided fields and enclosing teams
    subroutine test_compensated_integration(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(field_weight_grid_type) :: weighted
+      type(moist_math_grid_3d_molecular_type) :: weighted
       type(mctc_error), allocatable :: merr
       type(grid_call_type) :: nested_calls(4)
       integer, parameter :: workers(3) = [1, 2, 4]
@@ -182,14 +168,14 @@ contains
       allocate (weighted%w(n), f(2*n), source=0.0_wp)
       do i = 1, n
          f(2*i - 1) = 1.0_wp
-         weighted%w(i) = real(mod(i, 7) + 1, wp)/8.0_wp
+         weighted%w(i) = real(mod(i, 7) + 1, wp)/4.0_wp
       end do
       f(1) = 1.0e16_wp
       f(2*n - 1) = -1.0e16_wp
-      weighted%w(1) = 1.0_wp
-      weighted%w(n) = 1.0_wp
+      weighted%w(1) = 2.0_wp
+      weighted%w(n) = 2.0_wp
       cart_reference = real(n - 2, wp)*0.5_wp**3
-      weighted_reference = 2.0_wp*sum(weighted%w(2:n - 1))
+      weighted_reference = sum(weighted%w(2:n - 1))
       do nt = 1, size(workers)
          cart%nthreads = min(workers(nt), max_threads)
          weighted%nthreads = cart%nthreads
@@ -199,12 +185,20 @@ contains
          if (allocated(error)) return
          call check(error, cart_result == cart_reference, more="Cartesian compensated sum lost small terms")
          if (allocated(error)) return
-         call check(error, weighted_result == weighted_reference, more="weighted sum lost terms or bypassed measure")
+         call check(error, weighted_result == weighted_reference, more="weighted sum lost terms or ignored stored weights")
          if (allocated(error)) return
       end do
 
-      ! Producers may supply bounded, strided slices. Absolute indices must reach
-      ! the custom measure, and both compensated components must survive merging.
+      ! Stored weights also govern Cartesian quadrature
+      cart%w = weighted%w
+      cart_reference = weighted_reference
+      call cart%integrate_field(f(1:2*n:2), cart_result, merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      call check(error, cart_result == cart_reference, more="Cartesian quadrature ignored stored weights")
+      if (allocated(error)) return
+
+      ! Bounded, strided slices retain absolute weight indices and both compensated components
       nb = 1 + (n - 1)/4093
       allocate (partial(2, nb))
       do kind = 1, 2
@@ -244,11 +238,12 @@ contains
       if (allocated(error)) return
 
       ! Keep the small serial and empty-field contracts, and reject wrong field lengths.
+      weighted%w = weighted%w(:3)
       weighted%ngrid = 3
       call weighted%integrate_field([1.0_wp, -1.0_wp, 0.25_wp], weighted_result, merr)
       call check_moist_error(error, merr)
       if (allocated(error)) return
-      call check(error, weighted_result, 2.0_wp*(weighted%w(1) - weighted%w(2) + 0.25_wp*weighted%w(3)), &
+      call check(error, weighted_result, weighted%w(1) - weighted%w(2) + 0.25_wp*weighted%w(3), &
          & thr=1.0e-14_wp, more="small field quadrature changed")
       if (allocated(error)) return
       call weighted%integrate_field(f(:2), weighted_result, merr)

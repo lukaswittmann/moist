@@ -330,10 +330,17 @@ contains
       call self%trafo%fft_r2k_adj(self%ck_work, wc, error)
    end subroutine equation_adjoint
 
-   !> Copy the integration weights once for a response evaluation
+   !> Copy the owned grid's final quadrature weights for response evaluation
+   !>
+   !> @param[in] self Prepared equation
+   !> @param[out] weights Integration weights, bohr**3 (ngrid)
+   !> @param[out] error Unprepared equation or invalid weight storage
    subroutine equation_integration_weights(self, weights, error)
+      !> Prepared equation
       class(uv3d_equation_type), intent(in) :: self
+      !> Integration weights, bohr**3 (ngrid)
       real(wp), allocatable, intent(out) :: weights(:)
+      !> Unprepared equation or invalid weight storage
       type(error_type), allocatable, intent(out) :: error
 
       if (.not. self%ready()) then

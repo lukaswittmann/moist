@@ -37,6 +37,8 @@ contains
          & new_unittest("equation_molecular", equation_molecular), &
          & new_unittest("tables_cartesian", tables_cartesian), &
          & new_unittest("tables_molecular", tables_molecular), &
+         & new_unittest("tables_weighted_cartesian", tables_weighted_cartesian), &
+         & new_unittest("tables_weighted_molecular", tables_weighted_molecular), &
          & new_unittest("host_charges", host_charges), &
          & new_unittest("host_field", host_field), &
          & new_unittest("fixed_terms", fixed_terms), &
@@ -65,9 +67,10 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: cart
       type(moist_math_grid_3d_molecular_type) :: mole
       type(moist_math_grid_atomic_recipe_type) :: recipe
+      integer :: i
 
       call new(mol, [1, 8], reshape([-0.4_wp, 0.2_wp, 0.1_wp, 0.9_wp, -0.1_wp, 0.3_wp], [3, 2]))
-      if (kind == 1) then
+      if (kind == 1 .or. kind == 4) then
          call new_cartesian_point_grid(cart, err, 9, 8, 7, 0.9_wp, margin=0.0_wp)
          if (.not. allocated(err)) call cart%update(mol, err)
          if (.not. allocated(err)) allocate (grid, source=cart)
@@ -80,6 +83,11 @@ contains
       end if
       if (allocated(err)) return
       grid%nthreads = 2
+      if (kind >= 3) then
+         do i = 1, grid%ngrid
+            grid%w(i) = grid%w(i)*(1.0_wp + 0.125_wp*real(mod(i, 5), wp))
+         end do
+      end if
    end subroutine make_grid
 
    !> Small nonsymmetric, nonconstant solvent response, including a stable tail.
@@ -242,6 +250,24 @@ contains
       call tables_case(2, error)
    end subroutine tables_molecular
 
+   !> Check response consistency with nonuniform stored Cartesian weights
+   !>
+   !> @param[out] error Test failure
+   subroutine tables_weighted_cartesian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call tables_case(4, error)
+   end subroutine tables_weighted_cartesian
+
+   !> Check response consistency with modified stored molecular weights
+   !>
+   !> @param[out] error Test failure
+   subroutine tables_weighted_molecular(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call tables_case(3, error)
+   end subroutine tables_weighted_molecular
+
    !> All closures, all tables (real and imaginary k seeds), varied energy and
    !> moment seeds, warm starts and a zero objective, against converged energies.
    subroutine tables_case(kind, error)
@@ -255,17 +281,20 @@ contains
       character(len=4), parameter :: closures(5) = ["HNC ", "KH  ", "PSE2", "PSE3", "PSE4"]
       real(wp), parameter :: shifts(4) = [0.0_wp, 0.7_wp, 0.4_wp, 0.7_wp]
       real(wp), parameter :: weights(4) = [1.0_wp, 1.0_wp, 2.5_wp, 0.0_wp]
-      real(wp), parameter :: beta = 1.7_wp, eps = 1.0e-4_wp
+      real(wp), parameter :: beta = 1.7_wp
       real(wp), allocatable :: sr(:, :), lr(:, :), wr(:, :), wl(:, :), lambda(:, :), direction(:, :)
       real(wp), allocatable :: vs(:, :), vl(:, :), old_wr(:, :), old_wl(:, :)
       complex(wp), allocatable :: uk(:, :), wk(:, :), dk(:, :), vk(:, :), old_wk(:, :)
-      real(wp) :: gp, gm, dp, dm, fd, dot, max_error
+      real(wp) :: gp, gm, dp, dm, fd, dot, max_error, eps
       integer :: ic, is, itab, i, col
 
       call make_grid(kind, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call make_data(grid, response, sr, lr, uk)
+      ! Keep the weighted Cartesian KH stencil local to its closure branch
+      eps = 1.0e-4_wp
+      if (kind == 4) eps = 1.0e-5_wp
       allocate (direction, mold=sr)
       allocate (dk, mold=uk)
       do col = 1, 2

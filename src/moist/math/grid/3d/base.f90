@@ -49,7 +49,7 @@ module moist_math_grid_3d_base
       integer :: natom = 0
       !> Real-space coordinates, bohr (3, ngrid)
       real(wp), allocatable :: xyz(:, :)
-      !> Volume integration weights, bohr**3
+      !> Final volume integration weights, bohr**3 (ngrid)
       real(wp), allocatable :: w(:)
       !> Owning atom, one based; zero for unowned points
       integer, allocatable :: owner(:)
@@ -88,8 +88,6 @@ module moist_math_grid_3d_base
       procedure(grid_get_kref_i), deferred :: get_kref
       !> Weighted volume integral of a scalar integrand sampled at the points
       procedure :: integrate => grid_integrate
-      !> Integration weight (volume element) of grid point i
-      procedure :: measure => grid_measure
       !> Allocate the transform engine matching this grid, bound to it
       procedure(grid_new_trafo_i), deferred :: new_trafo
       !> Release all storage (idempotent)
@@ -477,20 +475,6 @@ contains
       r = self%xyz(:, i)
    end function grid_point
 
-   !> Volume weight from the authoritative domain discretization
-   !>
-   !> @param[in] self Grid instance
-   !> @param[in] i Point index
-   pure function grid_measure(self, i) result(w)
-      !> Grid instance
-      class(moist_math_grid_3d_type), intent(in) :: self
-      !> Point index
-      integer, intent(in) :: i
-      !> Integration weight, bohr**3
-      real(wp) :: w
-      w = self%w(i)
-   end function grid_measure
-
    !> Common update preamble shared by every concrete grid
    !>
    !> - Zero `natom` first: any failure from here on leaves the grid unusable
@@ -656,13 +640,12 @@ contains
       end if
    end subroutine check_trafo_blocks
 
-   !> Default field quadrature: `result = sum_i measure(i) * f(i)`
+   !> Default field quadrature: `result = sum_i w(i) * f(i)`
    !>
    !> - Unlike `integrate`, which samples an analytic function at the grid
    !>   points, consumes discrete field data already tabulated on the grid
    !>   (e.g. correlation functions from a converged RISM solve)
-   !> - Large fields use fixed compensated blocks shared by the worker team;
-   !>   the weight remains the grid's `measure(i)`, including overrides
+   !> - Final weights from w(:), with fixed compensated blocks for large fields
    !>
    !> @param[in]  self    Grid instance
    !> @param[in]  f       Per-point field values (length ngrid); any other length is an error
@@ -683,12 +666,13 @@ contains
          call fatal_error(error, "3d grid: integrate_field needs one value per grid point")
          return
       end if
-      result = integrate_weighted_values(f, self%team_size(), grid_quadrature_weight, self)
+      if (size(f) == 0) return
+      result = integrate_weighted_values(f, self%team_size(), self%w)
    end subroutine grid_integrate_field_default
 
    !> Weighted contribution of f at grid points first:first+size(f)-1
    !>
-   !> @param[in] self Grid providing measure(i), including overrides
+   !> @param[in] self Grid providing final volume weights
    !> @param[in] f Bounded field slice
    !> @param[in] first One-based absolute grid index of f(1)
    !> @param[out] partial Neumaier total and correction, both in integral units
@@ -709,22 +693,9 @@ contains
          call fatal_error(error, "3d grid: field block extends beyond the grid")
          return
       end if
-      call compensated_block_sum(f, 1, size(f), partial(1), partial(2), grid_quadrature_weight, self, first - 1)
+      if (size(f) == 0) return
+      call compensated_block_sum(f, 1, size(f), partial(1), partial(2), self%w(first:first + size(f) - 1))
    end subroutine grid_integrate_field_block
-
-   !> Weight callback with an explicit borrowed context, avoiding a stack trampoline
-   pure function grid_quadrature_weight(context, i) result(weight)
-      class(*), intent(in) :: context
-      integer, intent(in) :: i
-      real(wp) :: weight
-
-      select type (grid => context)
-      class is (moist_math_grid_3d_type)
-         weight = grid%measure(i)
-      class default
-         error stop "grid quadrature: internal context is not a 3D grid"
-      end select
-   end function grid_quadrature_weight
 
    !> Report an unavailable volume geometry gradient
    !>

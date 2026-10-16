@@ -1,8 +1,8 @@
 !> Fixed-block volume quadrature with compensated, reproducible accumulation
 module moist_math_grid_3d_integration
    use mctc_env, only: wp
-   use moist_math_grid_3d_kernel_integration, only: integration_weight, &
-      & compensated_sum, compensated_weighted_sum, compensated_block_sum, merge_compensated_sums
+   use moist_math_grid_3d_kernel_integration, only: compensated_sum, compensated_weighted_sum, &
+      & compensated_block_sum, merge_compensated_sums
 !$ use omp_lib, only: omp_in_parallel
    implicit none(type, external)
    private
@@ -29,32 +29,44 @@ contains
       total = integrate_blocks(f, nthreads)
    end function integrate_values
 
-   !> Weighted sum, retaining the domain's per-point weight dispatch
+   !> Weighted sum from final volume weights, without a whole-field temporary
    !>
-   !> The pure callback and context remain borrowed until all workers finish.
-   function integrate_weighted_values(f, nthreads, weight, context) result(total)
+   !> @param[in] f Tabulated field values
+   !> @param[in] nthreads Worker budget
+   !> @param[in] weights Final volume weights, bohr**3, same length as f
+   function integrate_weighted_values(f, nthreads, weights) result(total)
+      !> Tabulated field values
       real(wp), intent(in) :: f(:)
+      !> Worker budget
       integer, intent(in) :: nthreads
-      procedure(integration_weight) :: weight
-      class(*), intent(in) :: context
+      !> Final volume weights, bohr**3
+      real(wp), intent(in) :: weights(:)
+      !> Weighted integral
       real(wp) :: total
 
-      total = integrate_blocks(f, nthreads, weight, context)
+      total = integrate_blocks(f, nthreads, weights)
    end function integrate_weighted_values
 
-   !> Partition, evaluate and merge; weighted callers supply both optional arguments
-   function integrate_blocks(f, nthreads, weight, context) result(total)
+   !> Partition, evaluate and merge; weighted callers supply final volume weights
+   !>
+   !> @param[in] f Tabulated field values
+   !> @param[in] nthreads Worker budget
+   !> @param[in] weights Optional volume weights, bohr**3, same length as f
+   function integrate_blocks(f, nthreads, weights) result(total)
+      !> Tabulated field values
       real(wp), intent(in) :: f(:)
+      !> Worker budget
       integer, intent(in) :: nthreads
-      procedure(integration_weight), optional :: weight
-      class(*), optional, intent(in) :: context
+      !> Optional volume weights, bohr**3
+      real(wp), optional, intent(in) :: weights(:)
+      !> Integral and running correction
       real(wp) :: total, correction
       real(wp), allocatable :: partial(:, :)
       integer :: nb, nt, b, first, last
 
       if (size(f) < parallel_threshold) then
-         if (present(weight)) then
-            call compensated_weighted_sum(f, 1, size(f), weight, context, total, correction)
+         if (present(weights)) then
+            call compensated_weighted_sum(f, 1, size(f), weights, total, correction)
          else
             call compensated_sum(f, 1, size(f), total, correction)
          end if
@@ -69,7 +81,7 @@ contains
       do b = 1, nb
          first = 1 + (b - 1)*block_size
          last = first + min(block_size - 1, size(f) - first)
-         call compensated_block_sum(f, first, last, partial(1, b), partial(2, b), weight, context)
+         call compensated_block_sum(f, first, last, partial(1, b), partial(2, b), weights)
       end do
       !$omp end parallel do
       total = merge_compensated_sums(partial)

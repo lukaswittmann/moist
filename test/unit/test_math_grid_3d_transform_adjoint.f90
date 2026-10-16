@@ -124,22 +124,52 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_cartesian_type), target :: grid
       class(moist_math_grid_3d_trafo_type), allocatable :: trafo
-      integer :: nt
+      real(wp), allocatable :: field(:, :), original(:, :)
+      complex(wp), allocatable :: transformed(:, :)
+      real(wp) :: expected
+      integer :: nt, mode, i, col
 
       call new(mol, [1], reshape([0.3_wp, -0.4_wp, 0.7_wp], [3, 1]))
       call new_cartesian_point_grid(grid, err, nx, 7, 6, 0.73_wp, margin=0.0_wp)
       if (.not. allocated(err)) call grid%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      do nt = 1, 4, 3
-         grid%nthreads = nt
-         call grid%new_trafo(trafo, err)
-         if (.not. allocated(err)) call trafo%prepare(3, err)
-         call check_moist_error(error, err)
-         if (allocated(error)) return
-         call check_pairing(grid, trafo, 1.0e-11_wp, error)
-         if (allocated(error)) return
-         deallocate (trafo)
+      allocate (field(grid%ngrid, 3), transformed(grid%npts_k, 3))
+      do col = 1, 3
+         do i = 1, grid%ngrid
+            field(i, col) = sin(0.13_wp*real(i*col, wp))
+         end do
+      end do
+      original = field
+      do mode = 1, 3
+         grid%w = grid%get_cell_volume()
+         if (mode == 2) grid%w = 1.5_wp*grid%w
+         if (mode == 3) then
+            do i = 1, grid%ngrid
+               grid%w(i) = grid%w(i)*(0.5_wp + 0.125_wp*real(mod(i, 7), wp))
+            end do
+            grid%w(1) = 0.0_wp
+            grid%w(2) = -abs(grid%w(2))
+         end if
+         do nt = 1, 4, 3
+            grid%nthreads = nt
+            call grid%new_trafo(trafo, err)
+            if (.not. allocated(err)) call trafo%prepare(3, err)
+            if (.not. allocated(err)) call trafo%fft_r2k(field, transformed, err)
+            call check_moist_error(error, err)
+            if (allocated(error)) return
+            call check(error, all(field == original), more="weighted FFT changed its input")
+            if (allocated(error)) return
+            do col = 1, 3
+               expected = sum(grid%w*original(:, col))
+               call check(error, abs(transformed(1, col) - expected) < 1.0e-11_wp*max(1.0_wp, abs(expected)), &
+                  & more="FFT zero mode differs from stored-weight quadrature")
+               if (allocated(error)) return
+            end do
+            call check_pairing(grid, trafo, 1.0e-11_wp, error)
+            if (allocated(error)) return
+            deallocate (trafo)
+         end do
       end do
    end subroutine cartesian_case
 

@@ -101,7 +101,7 @@ test_timeouts = {
 test_selected = {
   'moz_1d_gradient': ['intramolecular', 'equation_geometry', 'problem_geometry', 'gradient_fixed', 'gradient_host',
     'gradient_drism_fixed', 'gradient_drism_host'],
-  'moz_3d_response': ['equation_cartesian', 'equation_molecular', 'tables_cartesian', 'tables_molecular',
+  'moz_3d_response': ['equation_cartesian', 'equation_molecular', 'tables_cartesian', 'tables_molecular', 'tables_weighted_cartesian', 'tables_weighted_molecular',
     'scf_tables_cartesian', 'scf_tables_molecular', 'scf_fallback', 'scf_host', 'cold_guesses',
     'host_charges', 'host_field', 'fixed_terms', 'geometry_cartesian', 'geometry_molecular',
     'gradient_cartesian', 'gradient_charges', 'gradient_molecular', 'gradient_ec',
