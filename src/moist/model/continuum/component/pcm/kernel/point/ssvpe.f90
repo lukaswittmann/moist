@@ -906,7 +906,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp31, tmp32, tmp33) &
-      !$omp& reduction(+: tmp28, tmp29, tmp30)
+      !$omp& reduction(+: tmp28, tmp29, tmp30) &
+      !$omp& default(private)
       block
          real(wp) :: tmp40, tmp41, tmp42, tmp43, tmp44, tmp45, tmp46, tmp47, tmp48, tmp49, tmp50, &
                      tmp51, tmp52, tmp53, tmp54, tmp55, tmp58, tmp62, tmp34, tmp35, tmp36, tmp37, &
@@ -1612,7 +1613,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp11, tmp30) &
-      !$omp& reduction(+: tmp1, tmp28)
+      !$omp& reduction(+: tmp1, tmp28) &
+      !$omp& default(private)
       block
          real(wp) :: tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, &
                      tmp45, tmp46, tmp47, tmp48, tmp50, tmp54, tmp56, tmp61, tmp63, tmp32, tmp33
@@ -1788,7 +1790,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp105) &
-      !$omp& reduction(+: tmp106)
+      !$omp& reduction(+: tmp106) &
+      !$omp& default(private)
       block
          real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, &
                      tmp117, tmp118, tmp119, tmp120, tmp121, tmp124, tmp128, tmp131, tmp136, &
@@ -1949,7 +1952,8 @@ contains
       tmp183 = tmp184
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dr, npt, state, tmp182, tmp183)
+      !$omp& shared(dr, npt, state, tmp182, tmp183) &
+      !$omp& default(private)
       block
          real(wp) :: tmp186, tmp187, tmp188, tmp189, tmp190, tmp191, tmp192, tmp193, tmp195, &
                      tmp199, tmp201, tmp206, tmp208, tmp185
@@ -2065,7 +2069,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state) &
-      !$omp& reduction(+: tmp236)
+      !$omp& reduction(+: tmp236) &
+      !$omp& default(private)
       block
          real(wp) :: tmp238, tmp239, tmp240, tmp241, tmp242, tmp243, tmp244, tmp245, tmp246, &
                      tmp247, tmp248, tmp249, tmp250, tmp251, tmp254, tmp258, tmp261, tmp266, &
@@ -2219,7 +2224,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state) &
-      !$omp& reduction(+: tmp305)
+      !$omp& reduction(+: tmp305) &
+      !$omp& default(private)
       block
          real(wp) :: tmp307, tmp308, tmp309, tmp310, tmp311, tmp312, tmp313, tmp314, tmp315, &
                      tmp316, tmp317, tmp318, tmp319, tmp320, tmp323, tmp327, tmp330, tmp335, &
@@ -2377,7 +2383,8 @@ contains
       tmp379 = tmp380
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dr, npt, state, tmp379)
+      !$omp& shared(dr, npt, state, tmp379) &
+      !$omp& default(private)
       block
          real(wp) :: tmp382, tmp383, tmp384, tmp385, tmp386, tmp387, tmp388, tmp389, tmp391, &
                      tmp395, tmp397, tmp402, tmp404, tmp381
@@ -2492,7 +2499,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dr, npt, state) &
-      !$omp& reduction(+: tmp431)
+      !$omp& reduction(+: tmp431) &
+      !$omp& default(private)
       block
          real(wp) :: tmp433, tmp434, tmp435, tmp436, tmp437, tmp438, tmp439, tmp440, tmp442, &
                      tmp446, tmp448, tmp453, tmp455
@@ -2598,7 +2606,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp230, tmp233, tmp234, tmp425) &
-      !$omp& shared(tmp429, tmp473, tmp476, tmp478, tmp479, tmp480)
+      !$omp& shared(tmp429, tmp473, tmp476, tmp478, tmp479, tmp480) &
+      !$omp& default(private)
       block
          real(wp) :: tmp485, tmp486, tmp487, tmp488, tmp489, tmp490, tmp491, tmp492, tmp493, &
                      tmp494, tmp495, tmp496, tmp497, tmp498, tmp499, tmp500, tmp501, tmp502, &
@@ -2882,7 +2891,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp230, tmp233, tmp234, tmp425) &
       !$omp& shared(tmp429, tmp473, tmp474, tmp605, tmp609) &
-      !$omp& reduction(+: tmp610, tmp611, tmp612)
+      !$omp& reduction(+: tmp610, tmp611, tmp612) &
+      !$omp& default(private)
       block
          real(wp) :: tmp616, tmp617, tmp618, tmp619, tmp620, tmp621, tmp622, tmp623, tmp624, &
                      tmp625, tmp626, tmp627, tmp628, tmp629, tmp630, tmp631, tmp632, tmp633, &
@@ -3405,7 +3415,8 @@ contains
       tmp853 = tmp854
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dn, dr, npt, state, tmp853)
+      !$omp& shared(dn, dr, npt, state, tmp853) &
+      !$omp& default(private)
       block
          real(wp) :: tmp856, tmp857, tmp858, tmp859, tmp860, tmp861, tmp862, tmp863, tmp864, &
                      tmp865, tmp866, tmp867, tmp868, tmp869, tmp872, tmp876, tmp879, tmp884, &
@@ -4216,7 +4227,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp39, tmp40, tmp41) &
-      !$omp& reduction(+: tmp36, tmp37, tmp38)
+      !$omp& reduction(+: tmp36, tmp37, tmp38) &
+      !$omp& default(private)
       block
          real(wp) :: tmp48, tmp49, tmp50, tmp51, tmp52, tmp53, tmp63, tmp66, tmp70
          complex(wp) :: tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60, tmp61, tmp62, tmp42, &
@@ -4966,7 +4978,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp11, tmp30) &
-      !$omp& reduction(+: tmp1, tmp28)
+      !$omp& reduction(+: tmp1, tmp28) &
+      !$omp& default(private)
       block
          real(wp) :: tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, tmp41, tmp42, tmp43, tmp44, tmp45, &
                      tmp46, tmp48, tmp50, tmp54, tmp56, tmp61, tmp63
@@ -5145,7 +5158,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp107) &
-      !$omp& reduction(+: tmp108)
+      !$omp& reduction(+: tmp108) &
+      !$omp& default(private)
       block
          real(wp) :: tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, tmp117, tmp118, tmp119, &
                      tmp120, tmp121, tmp122, tmp123, tmp126, tmp130, tmp133, tmp138, tmp141
@@ -5316,7 +5330,8 @@ contains
       tmp193 = tmp194
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dr, npt, state, tmp192, tmp193)
+      !$omp& shared(dr, npt, state, tmp192, tmp193) &
+      !$omp& default(private)
       block
          real(wp) :: tmp196, tmp197, tmp198, tmp199, tmp200, tmp201, tmp203, tmp205, tmp209, &
                      tmp211, tmp216, tmp218
@@ -5435,7 +5450,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state) &
-      !$omp& reduction(+: tmp246)
+      !$omp& reduction(+: tmp246) &
+      !$omp& default(private)
       block
          real(wp) :: tmp249, tmp250, tmp251, tmp252, tmp253, tmp254, tmp255, tmp256, tmp257, &
                      tmp258, tmp259, tmp260, tmp261, tmp264, tmp268, tmp271, tmp276, tmp279
@@ -5593,7 +5609,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state) &
-      !$omp& reduction(+: tmp317)
+      !$omp& reduction(+: tmp317) &
+      !$omp& default(private)
       block
          real(wp) :: tmp320, tmp321, tmp322, tmp323, tmp324, tmp325, tmp326, tmp327, tmp328, &
                      tmp329, tmp330, tmp331, tmp332, tmp335, tmp339, tmp342, tmp347, tmp350
@@ -5759,7 +5776,8 @@ contains
       tmp397 = tmp398
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dr, npt, state, tmp397)
+      !$omp& shared(dr, npt, state, tmp397) &
+      !$omp& default(private)
       block
          real(wp) :: tmp400, tmp401, tmp402, tmp403, tmp404, tmp405, tmp407, tmp409, tmp413, &
                      tmp415, tmp420, tmp422
@@ -5879,7 +5897,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dr, npt, state) &
-      !$omp& reduction(+: tmp451)
+      !$omp& reduction(+: tmp451) &
+      !$omp& default(private)
       block
          real(wp) :: tmp453, tmp454, tmp455, tmp456, tmp457, tmp458, tmp460, tmp462, tmp466, &
                      tmp468, tmp473, tmp475
@@ -5990,7 +6009,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp240, tmp243, tmp244, tmp443) &
-      !$omp& shared(tmp449, tmp495, tmp498, tmp500, tmp501, tmp502)
+      !$omp& shared(tmp449, tmp495, tmp498, tmp500, tmp501, tmp502) &
+      !$omp& default(private)
       block
          real(wp) :: tmp508, tmp509, tmp510, tmp511, tmp512, tmp513, tmp514, tmp515, tmp516, &
                      tmp517, tmp518, tmp519, tmp531, tmp534, tmp538, tmp541, tmp546, tmp549
@@ -6280,7 +6300,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp240, tmp243, tmp244, tmp443) &
       !$omp& shared(tmp449, tmp495, tmp496, tmp629, tmp635) &
-      !$omp& reduction(+: tmp636, tmp637, tmp638)
+      !$omp& reduction(+: tmp636, tmp637, tmp638) &
+      !$omp& default(private)
       block
          real(wp) :: tmp642, tmp643, tmp644, tmp645, tmp646, tmp647, tmp660, tmp661, tmp662, &
                      tmp663, tmp664, tmp665, tmp672, tmp675, tmp679, tmp709, tmp713, tmp719
@@ -6805,7 +6826,8 @@ contains
       tmp879 = tmp880
       !$omp parallel &
       !$omp& private(i, j) &
-      !$omp& shared(dn, dr, npt, state, tmp879)
+      !$omp& shared(dn, dr, npt, state, tmp879) &
+      !$omp& default(private)
       block
          real(wp) :: tmp882, tmp883, tmp884, tmp885, tmp886, tmp887, tmp888, tmp889, tmp890, &
                      tmp891, tmp892, tmp893, tmp895, tmp898, tmp902, tmp905, tmp910, tmp913
@@ -7506,7 +7528,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp11) &
-      !$omp& reduction(+: tmp1)
+      !$omp& reduction(+: tmp1) &
+      !$omp& default(private)
       block
          real(wp) :: tmp14, tmp15, tmp16, tmp17, tmp18, tmp19, tmp20, tmp21, tmp22, tmp25, tmp29, &
                      tmp13
@@ -7620,7 +7643,8 @@ contains
          !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state) &
-         !$omp& reduction(+: tmp51)
+         !$omp& reduction(+: tmp51) &
+         !$omp& default(private)
          block
             real(wp) :: tmp58, tmp59, tmp60, tmp61, tmp62, tmp65, tmp69
 
@@ -7681,7 +7705,8 @@ contains
          !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state, tmp75) &
-         !$omp& reduction(+: tmp76)
+         !$omp& reduction(+: tmp76) &
+         !$omp& default(private)
          block
             real(wp) :: tmp78, tmp79, tmp80, tmp81, tmp82, tmp83, tmp84, tmp85, tmp88, tmp92
 
@@ -7757,7 +7782,8 @@ contains
          tmp105 = tmp106
          !$omp parallel &
          !$omp& private(i, j) &
-         !$omp& shared(npt, state, tmp105)
+         !$omp& shared(npt, state, tmp105) &
+         !$omp& default(private)
          block
             real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp118, &
                         tmp122, tmp107
@@ -7841,7 +7867,8 @@ contains
          tmp136 = tmp137
          !$omp parallel &
          !$omp& private(i, j) &
-         !$omp& shared(npt, state, tmp135, tmp136)
+         !$omp& shared(npt, state, tmp135, tmp136) &
+         !$omp& default(private)
          block
             real(wp) :: tmp139, tmp140, tmp141, tmp142, tmp143, tmp146, tmp150, tmp138
 
@@ -8065,7 +8092,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp20, tmp9) &
-      !$omp& reduction(+: tmp18, tmp2)
+      !$omp& reduction(+: tmp18, tmp2) &
+      !$omp& default(private)
       block
          real(wp) :: tmp24, tmp25, tmp26, tmp27, tmp28, tmp29, tmp30, tmp31, tmp32, tmp35, tmp39, &
                      tmp22, tmp23
@@ -8221,7 +8249,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp89, tmp90, tmp91) &
-      !$omp& reduction(+: tmp82, tmp83, tmp87, tmp88)
+      !$omp& reduction(+: tmp82, tmp83, tmp87, tmp88) &
+      !$omp& default(private)
       block
          real(wp) :: tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp105, tmp106, tmp107, &
                      tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp117, tmp121, &
@@ -8969,7 +8998,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp21, tmp3, tmp38, tmp54) &
-      !$omp& reduction(+: tmp14, tmp4, tmp47, tmp49)
+      !$omp& reduction(+: tmp14, tmp4, tmp47, tmp49) &
+      !$omp& default(private)
       block
          real(wp) :: tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68, tmp69, &
                      tmp70, tmp71, tmp72, tmp73, tmp74, tmp75, tmp77, tmp81, tmp83, tmp88, tmp90, &
@@ -9209,7 +9239,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp140, tmp141, tmp142, tmp145) &
       !$omp& shared(tmp146, tmp147, tmp148, tmp151) &
-      !$omp& reduction(+: tmp152, tmp163)
+      !$omp& reduction(+: tmp152, tmp163) &
+      !$omp& default(private)
       block
          real(wp) :: tmp176, tmp177, tmp178, tmp179, tmp180, tmp181, tmp182, tmp183, tmp184, &
                      tmp185, tmp186, tmp187, tmp188, tmp189, tmp190, tmp191, tmp192, tmp193, &
@@ -9487,7 +9518,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp287, tmp288, tmp293, tmp300) &
       !$omp& shared(tmp304, tmp306) &
-      !$omp& reduction(+: tmp294, tmp296)
+      !$omp& reduction(+: tmp294, tmp296) &
+      !$omp& default(private)
       block
          real(wp) :: tmp313, tmp314, tmp315, tmp316, tmp317, tmp318, tmp319, tmp320, tmp321, &
                      tmp322, tmp323, tmp324, tmp325, tmp326, tmp327, tmp328, tmp329, tmp330, &
@@ -9705,7 +9737,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp287, tmp288, tmp293, tmp3, tmp395) &
       !$omp& shared(tmp398, tmp399, tmp402, tmp405, tmp409, tmp410, tmp411) &
-      !$omp& reduction(+: tmp406, tmp407, tmp408)
+      !$omp& reduction(+: tmp406, tmp407, tmp408) &
+      !$omp& default(private)
       block
          real(wp) :: tmp418, tmp419, tmp420, tmp421, tmp422, tmp423, tmp424, tmp425, tmp426, &
                      tmp427, tmp428, tmp429, tmp430, tmp431, tmp432, tmp433, tmp434, tmp435, &
@@ -10467,7 +10500,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp1, tmp14, tmp3) &
-      !$omp& reduction(+: tmp4)
+      !$omp& reduction(+: tmp4) &
+      !$omp& default(private)
       block
          real(wp) :: tmp17, tmp18, tmp19, tmp20, tmp21, tmp22, tmp23, tmp24, tmp25, tmp28, tmp32, &
                      tmp16
@@ -10795,7 +10829,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp11) &
-      !$omp& reduction(+: tmp1)
+      !$omp& reduction(+: tmp1) &
+      !$omp& default(private)
       block
          real(wp) :: tmp15, tmp16, tmp17, tmp18, tmp19, tmp20, tmp22, tmp25, tmp29
          complex(wp) :: tmp14, tmp21, tmp13
@@ -10909,7 +10944,8 @@ contains
          !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state) &
-         !$omp& reduction(+: tmp51)
+         !$omp& reduction(+: tmp51) &
+         !$omp& default(private)
          block
             real(wp) :: tmp58, tmp59, tmp60, tmp62, tmp65, tmp69
             complex(wp) :: tmp61
@@ -10971,7 +11007,8 @@ contains
          !$omp parallel &
          !$omp& private(i, j) &
          !$omp& shared(npt, state, tmp75) &
-         !$omp& reduction(+: tmp76)
+         !$omp& reduction(+: tmp76) &
+         !$omp& default(private)
          block
             real(wp) :: tmp78, tmp79, tmp80, tmp81, tmp82, tmp83, tmp85, tmp88, tmp92
             complex(wp) :: tmp84
@@ -11050,7 +11087,8 @@ contains
          tmp105 = tmp106
          !$omp parallel &
          !$omp& private(i, j) &
-         !$omp& shared(npt, state, tmp105)
+         !$omp& shared(npt, state, tmp105) &
+         !$omp& default(private)
          block
             real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp115, tmp118, tmp122
             complex(wp) :: tmp114, tmp107
@@ -11134,7 +11172,8 @@ contains
          tmp136 = tmp137
          !$omp parallel &
          !$omp& private(i, j) &
-         !$omp& shared(npt, state, tmp135, tmp136)
+         !$omp& shared(npt, state, tmp135, tmp136) &
+         !$omp& default(private)
          block
             real(wp) :: tmp139, tmp140, tmp141, tmp143, tmp146, tmp150
             complex(wp) :: tmp142, tmp138
@@ -11364,7 +11403,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp20, tmp9) &
-      !$omp& reduction(+: tmp18, tmp2)
+      !$omp& reduction(+: tmp18, tmp2) &
+      !$omp& default(private)
       block
          real(wp) :: tmp24, tmp25, tmp26, tmp28, tmp29, tmp30, tmp32, tmp35, tmp39
          complex(wp) :: tmp27, tmp31, tmp22, tmp23
@@ -11520,7 +11560,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp89, tmp90, tmp91) &
-      !$omp& reduction(+: tmp82, tmp83, tmp87, tmp88)
+      !$omp& reduction(+: tmp82, tmp83, tmp87, tmp88) &
+      !$omp& default(private)
       block
          real(wp) :: tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp114, tmp117, tmp121
          complex(wp) :: tmp105, tmp106, tmp107, tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, &
@@ -12274,7 +12315,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp21, tmp3, tmp38, tmp54) &
-      !$omp& reduction(+: tmp14, tmp4, tmp47, tmp49)
+      !$omp& reduction(+: tmp14, tmp4, tmp47, tmp49) &
+      !$omp& default(private)
       block
          real(wp) :: tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp66, tmp67, tmp68, tmp69, tmp70, &
                      tmp71, tmp75, tmp77, tmp81, tmp83, tmp88, tmp90
@@ -12514,7 +12556,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp140, tmp141, tmp142, tmp145) &
       !$omp& shared(tmp146, tmp147, tmp148, tmp151) &
-      !$omp& reduction(+: tmp152, tmp163)
+      !$omp& reduction(+: tmp152, tmp163) &
+      !$omp& default(private)
       block
          real(wp) :: tmp177, tmp178, tmp179, tmp180, tmp181, tmp182, tmp183, tmp184, tmp185, &
                      tmp186, tmp187, tmp188, tmp199, tmp202, tmp206, tmp209, tmp214, tmp217
@@ -12794,7 +12837,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp287, tmp288, tmp293, tmp300) &
       !$omp& shared(tmp304, tmp306) &
-      !$omp& reduction(+: tmp294, tmp296)
+      !$omp& reduction(+: tmp294, tmp296) &
+      !$omp& default(private)
       block
          real(wp) :: tmp314, tmp315, tmp316, tmp317, tmp318, tmp319, tmp322, tmp323, tmp324, &
                      tmp325, tmp326, tmp327, tmp330, tmp333, tmp337, tmp343, tmp347, tmp352
@@ -13012,7 +13056,8 @@ contains
       !$omp& private(i, j) &
       !$omp& shared(dn, dr, npt, state, tmp287, tmp288, tmp293, tmp3, tmp395) &
       !$omp& shared(tmp398, tmp399, tmp402, tmp405, tmp409, tmp410, tmp411) &
-      !$omp& reduction(+: tmp406, tmp407, tmp408)
+      !$omp& reduction(+: tmp406, tmp407, tmp408) &
+      !$omp& default(private)
       block
          real(wp) :: tmp418, tmp419, tmp420, tmp421, tmp422, tmp423, tmp436, tmp437, tmp438, &
                      tmp439, tmp440, tmp441, tmp448, tmp451, tmp455, tmp485, tmp489, tmp495
@@ -13776,7 +13821,8 @@ contains
       !$omp parallel &
       !$omp& private(i, j) &
       !$omp& shared(npt, state, tmp1, tmp14, tmp3) &
-      !$omp& reduction(+: tmp4)
+      !$omp& reduction(+: tmp4) &
+      !$omp& default(private)
       block
          real(wp) :: tmp17, tmp18, tmp19, tmp20, tmp21, tmp22, tmp25, tmp28, tmp32
          complex(wp) :: tmp23, tmp24, tmp16
@@ -14085,7 +14131,8 @@ contains
             tmp1 = tmp7
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp1, x)
+            !$omp& shared(self, tmp1, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp16, tmp20, tmp8
 
@@ -14157,7 +14204,8 @@ contains
             tmp26 = tmp34
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp26, x)
+            !$omp& shared(self, tmp26, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp46, tmp50, &
                            tmp35
@@ -14239,7 +14287,8 @@ contains
             tmp64 = tmp65
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp63, tmp64)
+            !$omp& shared(self, tmp63, tmp64) &
+            !$omp& default(private)
             block
                real(wp) :: tmp67, tmp68, tmp69, tmp70, tmp71, tmp74, tmp78, tmp66
 
@@ -14302,7 +14351,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
-            !$omp& reduction(+: tmp84)
+            !$omp& reduction(+: tmp84) &
+            !$omp& default(private)
             block
                real(wp) :: tmp85, tmp86, tmp87, tmp88, tmp89, tmp92, tmp96
 
@@ -14363,7 +14413,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp102) &
-            !$omp& reduction(+: tmp103)
+            !$omp& reduction(+: tmp103) &
+            !$omp& default(private)
             block
                real(wp) :: tmp105, tmp106, tmp107, tmp108, tmp109, tmp110, tmp111, tmp112, tmp115, &
                            tmp119
@@ -14476,7 +14527,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
-            !$omp& reduction(+: tmp1)
+            !$omp& reduction(+: tmp1) &
+            !$omp& default(private)
             block
                real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp12, tmp15, tmp19
 
@@ -14546,7 +14598,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp25) &
-            !$omp& reduction(+: tmp26)
+            !$omp& reduction(+: tmp26) &
+            !$omp& default(private)
             block
                real(wp) :: tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49
 
@@ -14622,7 +14675,8 @@ contains
             tmp62 = tmp63
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp62, x)
+            !$omp& shared(self, tmp62, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp65, tmp66, tmp67, tmp68, tmp69, tmp70, tmp71, tmp72, tmp75, tmp79, &
                            tmp64
@@ -14704,7 +14758,8 @@ contains
             tmp93 = tmp94
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp92, tmp93)
+            !$omp& shared(self, tmp92, tmp93) &
+            !$omp& default(private)
             block
                real(wp) :: tmp96, tmp97, tmp98, tmp99, tmp100, tmp103, tmp107, tmp95
 
@@ -15301,7 +15356,8 @@ contains
             tmp1 = tmp7
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp1, x)
+            !$omp& shared(self, tmp1, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp10, tmp11, tmp12, tmp13, tmp16, tmp20
                complex(wp) :: tmp9, tmp8
@@ -15374,7 +15430,8 @@ contains
             tmp26 = tmp34
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp26, x)
+            !$omp& shared(self, tmp26, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp46, tmp50
                complex(wp) :: tmp36, tmp35
@@ -15458,7 +15515,8 @@ contains
             tmp64 = tmp65
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp63, tmp64)
+            !$omp& shared(self, tmp63, tmp64) &
+            !$omp& default(private)
             block
                real(wp) :: tmp67, tmp68, tmp69, tmp71, tmp74, tmp78
                complex(wp) :: tmp70, tmp66
@@ -15522,7 +15580,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
-            !$omp& reduction(+: tmp84)
+            !$omp& reduction(+: tmp84) &
+            !$omp& default(private)
             block
                real(wp) :: tmp86, tmp87, tmp88, tmp89, tmp92, tmp96
                complex(wp) :: tmp85
@@ -15584,7 +15643,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp102) &
-            !$omp& reduction(+: tmp103)
+            !$omp& reduction(+: tmp103) &
+            !$omp& default(private)
             block
                real(wp) :: tmp106, tmp107, tmp108, tmp109, tmp110, tmp111, tmp112, tmp115, tmp119
                complex(wp) :: tmp105
@@ -15698,7 +15758,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, x) &
-            !$omp& reduction(+: tmp1)
+            !$omp& reduction(+: tmp1) &
+            !$omp& default(private)
             block
                real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp15, tmp19
                complex(wp) :: tmp8
@@ -15769,7 +15830,8 @@ contains
             !$omp parallel &
             !$omp& private(i, j) &
             !$omp& shared(self, tmp25) &
-            !$omp& reduction(+: tmp26)
+            !$omp& reduction(+: tmp26) &
+            !$omp& default(private)
             block
                real(wp) :: tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49
                complex(wp) :: tmp35
@@ -15848,7 +15910,8 @@ contains
             tmp62 = tmp63
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp62, x)
+            !$omp& shared(self, tmp62, x) &
+            !$omp& default(private)
             block
                real(wp) :: tmp66, tmp67, tmp68, tmp69, tmp70, tmp71, tmp72, tmp75, tmp79
                complex(wp) :: tmp65, tmp64
@@ -15932,7 +15995,8 @@ contains
             tmp93 = tmp94
             !$omp parallel &
             !$omp& private(i, j) &
-            !$omp& shared(self, tmp92, tmp93)
+            !$omp& shared(self, tmp92, tmp93) &
+            !$omp& default(private)
             block
                real(wp) :: tmp96, tmp97, tmp98, tmp100, tmp103, tmp107
                complex(wp) :: tmp99, tmp95
