@@ -84,6 +84,10 @@ module moist_cavity_type
       real(wp), allocatable :: xi0(:)
       !> Outward unit normal of each surface point (3, ngrid)
       real(wp), allocatable :: normal0(:, :)
+      !> First principal curvature at each surface point (ngrid)
+      real(wp), allocatable :: k1(:)
+      !> Second principal curvature at each surface point (ngrid)
+      real(wp), allocatable :: k2(:)
       !> Point volume element (divergence theorem), bohr**3 (ngrid)
       real(wp), allocatable :: v(:)
 
@@ -114,6 +118,8 @@ module moist_cavity_type
       !> Registry of the couplings minted by this cavity
       type(coupling_registry_type), private :: couplings
    contains
+      !> Request optional surface geometry before update
+      procedure :: configure => configure_cavity_default
 
       !* ------------------------------ Update and build ------------------------------ *!
 
@@ -232,6 +238,33 @@ module moist_cavity_type
    end interface
 
 contains
+
+   !> Reject optional properties unsupported by a cavity implementation
+   !>
+   !> @param[in,out] self Cavity instance
+   !> @param[in] normal Request surface normals
+   !> @param[in] curvature Request principal curvatures
+   !> @param[out] error Unsupported property error
+   subroutine configure_cavity_default(self, normal, curvature, error)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Request surface normals
+      logical, intent(in), optional :: normal
+      !> Request principal curvatures
+      logical, intent(in), optional :: curvature
+      !> Unsupported property error
+      type(error_type), allocatable, intent(out) :: error
+
+      if (present(normal)) then
+         if (normal) then
+            call fatal_error(error, "This cavity does not provide surface normals")
+            return
+         end if
+      end if
+      if (present(curvature)) then
+         if (curvature) call fatal_error(error, "This cavity does not provide principal curvatures")
+      end if
+   end subroutine configure_cavity_default
 
    !* ================================================================================= *!
    !*                                 Update and build                                  *!
@@ -365,6 +398,8 @@ contains
       if (allocated(self%f)) deallocate (self%f)
       if (allocated(self%xi0)) deallocate (self%xi0)
       if (allocated(self%normal0)) deallocate (self%normal0)
+      if (allocated(self%k1)) deallocate (self%k1)
+      if (allocated(self%k2)) deallocate (self%k2)
       if (allocated(self%v)) deallocate (self%v)
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)
@@ -723,6 +758,8 @@ contains
       call query%add_real("f", "Gaussian switching factor per grid point (ngrid)", self%f)
       call query%add_real("xi0", "Gaussian width per grid point (ngrid)", self%xi0)
       call query%add_real2("normal0", "Outward unit normal per grid point (3, ngrid)", self%normal0)
+      call query%add_real("k1", "First principal curvature (ngrid)", self%k1)
+      call query%add_real("k2", "Second principal curvature (ngrid)", self%k2)
       call query%add_real("v", "Grid point volume element, bohr**3 (ngrid)", self%v)
       call query%add_int("owner", "Sphere each grid point belongs to, 0-based (ngrid)", &
          & self%owner, zero_based=.true.)

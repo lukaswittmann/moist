@@ -16,6 +16,8 @@ module moist
    use moist_version, only: get_moist_version
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
+   use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
+      & get_solvent_descriptors_by_id
    use moist_build_info, only: git_commit, build_host
 
    use moist_model, only: solvation_model_type, model_continuum_type, new_continuum_model, &
@@ -52,6 +54,7 @@ module moist
    public :: get_moist_version
    public :: cavity_type_drop, new_cavity_drop
    public :: radius_type, new_radii
+   public :: solvent_descriptors_type, get_solvent_descriptors, get_solvent_descriptors_by_id
    public :: git_commit, build_host
    public :: solvation_model_type, model_continuum_type, new_continuum_model, &
       & model_moz_1d_type, new_moz_1d_model, model_moz_3d_type, new_moz_3d_model

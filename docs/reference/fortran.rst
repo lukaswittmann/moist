@@ -15,10 +15,6 @@ error. Missing fields keep their defaults. ``print_parameters`` prints JSON.
 DROP recomputes its derived settings both on ``read_file`` and in the cavity
 constructor.
 
-``solvation_system_type`` holds physical properties and molecular structures.
-Create it with ``new_solvation_system`` from ``moist_data_solvents``; it does not
-extend the configuration parameter base.
-
 .. code-block:: fortran
 
    use moist, only: moist_cavity_drop_parameters_type, new_cavity_drop
@@ -290,10 +286,15 @@ coefficients for the host's integrals.
      - Requests it declares
      - Response items it produces
    * - CPCM, COSMO
-     - ``gaussian_potential`` with independently required ``phi``,
+     - ``gaussian_potential`` or ``point_potential`` with independently required ``phi``,
        ``dphi_dr`` and ``dphi_dxi`` outputs; ``nuclear_charges`` (``z``) for gradients
      - ``potential_adjoint`` (``w_phi``, :math:`\mathrm{d}E/\mathrm{d}\phi`;
        the induced charges for a stationary PCM)
+   * - IEF-PCM, SS(V)PE, DPCM, LPB, SLIC, nonlocal
+     - ``gaussian_potential`` or ``point_potential``; ``dphi_dr`` supplies the
+       normal derivative and the second derivatives enter cavity gradients
+       (where required); ``nuclear_charges`` (``z``) for gradients
+     - ``potential_adjoint`` (``w_phi`` and ``w_dphi_dr`` where needed)
    * - PV
      - None
      - None of its own
@@ -320,14 +321,14 @@ CPCM
    type(model_continuum_component_cpcm) :: cpcm
 
    call new_component_cpcm(cpcm, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 The host answers ``gaussian_potential`` at the grid points ``cavity%xyz`` with
 the widths ``cavity%xi0``; see :ref:`coupling-requests` for the operator.
 
-Available solvers are ``inversion``, ``lu``, ``cholesky`` (the default), and
-``iterative``.
+Available solvers are ``iterative`` (the default, restarted GMRES) and ``dense``. The shared settings also control storage and nonlinear convergence;
+see :doc:`/models/components/pcm/index`.
 
 COSMO
 ~~~~~
@@ -344,7 +345,7 @@ with the same host requests and solver options as CPCM:
    type(model_continuum_component_cosmo) :: cosmo
 
    call new_component_cosmo(cosmo, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 PV
@@ -435,6 +436,17 @@ accumulating belong to the model and are module procedures of
 ``moist_channels_coupling`` and ``moist_channels_response``, which ``moist``
 does not re-export.
 
+Solvents
+--------
+
+``get_solvent_descriptors(name, descriptors, error)`` and
+``get_solvent_descriptors_by_id(id, descriptors, error)``, exported by
+``moist``, fill a ``solvent_descriptors_type`` (:ref:`api-solvents`);
+``descriptors%print(unit)`` writes the printout, to standard output by default.
+``new_solvent_system(system, id, error=error)`` from ``moist_solvent``
+builds a ``solvent_system_type``; the optional ``temperature`` (K) and
+``pressure_si`` (Pa) default to 298.15 K and 1 atm.
+
 .. _coupling-fortran:
 
 Host coupling
@@ -488,7 +500,7 @@ The response is walked the same way, one item copy at a time.
 
    call model%prepare_response(coupling, error)
    ! Walk the requests again as above: on a fixed cavity phi is kept and
-   ! nothing is missing; a density-dependent cavity also needs dphi_dr, dphi_dxi.
+   ! nothing is missing; check derivative outputs for the chosen PCM and cavity.
    call model%get_response(coupling, response, error)
    do while (response%next())
       select type (item => response%item())
@@ -521,6 +533,16 @@ into ``query%rvals``. The typed components remain the way to read them.
 ``get_gradient(coupling, response, gradient, error)`` fills the response with
 the host part of the gradient phase, walked the same way, and adds to
 ``gradient(3, nat)``.
+
+The continuum model normally contracts cavity derivatives in reverse mode.
+For an independent forward-Jacobian reference, call
+``model%use_forward_gradient(.true.)``; a standalone component exposes
+``get_forward_gradient(coupling, cavity, response, gradient, error)``.
+The PCM forward reference supports the position, Gaussian-width and switching
+channels used by Gaussian CPCM and COSMO. It reports an error for nonzero
+area, integration-weight, normal or curvature channels, whose Jacobians are
+outside the base cavity interface. PV retains its forward volume derivative;
+active GOSTSHYP requires reverse mode.
 
 On a density-dependent cavity, retain the response-phase density weights
 before calling ``get_gradient``, which replaces the response items. Use those

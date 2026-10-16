@@ -10,8 +10,8 @@ module test_cavity_iswig
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_diagnostic, only: find_disconnected_cavities
    use moist_cavity_type, only: write_cavity_csv_debug
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
-      & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
+   use test_pcm_conductor_probe, only: probe_conductor_matrix, &
+      & probe_conductor_bilinear_weights, probe_conductor_nuclear_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
@@ -62,8 +62,8 @@ contains
 
    !> Lebedev sizes without a fitted iSwiG width are refused by name
    !>
-   !> - 74 has negative weights, 38 is a valid rule without a fitted value,
-   !>   7 is no Lebedev size
+   !> - 74 and 230 have negative weights (no fitted value), 7 is no Lebedev
+   !>   size
    !> - All three must be reported as unsupported in iSwiG, before any grid
    !>   is built
    subroutine test_unsupported_lebedev_size(error)
@@ -71,7 +71,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: sizes(3) = [74, 38, 7]
+      integer, parameter :: sizes(3) = [74, 230, 7]
       type(structure_type) :: mol
       type(cavity_type_iswig), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
@@ -94,7 +94,7 @@ contains
       do isize = 1, size(sizes)
          allocate (cav)
          call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-            param=moist_cavity_iswig_parameters_type(num_leb=sizes(isize)), ctx=ctx)
+                               param=moist_cavity_iswig_parameters_type(num_leb=sizes(isize)), ctx=ctx)
          if (.not. allocated(cavity_error)) call cav%update(mol, error=cavity_error)
          if (.not. allocated(cavity_error)) then
             call test_failed(error, "iSwiG accepted a Lebedev size without a fitted width")
@@ -139,7 +139,7 @@ contains
 
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=1202), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=1202), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -150,11 +150,25 @@ contains
          & more="iSwiG cavity does not borrow the caller-owned run context")
       if (allocated(error)) return
 
+      call cav%configure(normal=.true., curvature=.true., error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
       call cav%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
+      call check(error, allocated(cav%k1) .and. allocated(cav%k2), &
+         & more="Requested principal curvatures were not stored")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cav%k1 - 1.0_wp/radii(1))), 0.0_wp, thr=1.0e-12_wp, &
+         & more="First principal curvature of a sphere is incorrect")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cav%k2 - 1.0_wp/radii(1))), 0.0_wp, thr=1.0e-12_wp, &
+         & more="Second principal curvature of a sphere is incorrect")
+      if (allocated(error)) return
 
       call check(error, cav%nsph, mol%nat, "Updated cavity sphere count")
       if (allocated(error)) return
@@ -192,7 +206,7 @@ contains
       end if
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=302), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=302), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -339,7 +353,7 @@ contains
       end if
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=14), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=14), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -367,11 +381,11 @@ contains
       call read_scratch(print_unit, print_lines)
       call read_scratch(log_unit, log_lines)
 
-      call check(error, .not. allocated(xyz_error), more="XYZ writer failed")
+      call check(error,.not. allocated(xyz_error), more="XYZ writer failed")
       if (allocated(error)) return
-      call check(error, .not. allocated(csv_error), more="CSV writer failed")
+      call check(error,.not. allocated(csv_error), more="CSV writer failed")
       if (allocated(error)) return
-      call check(error, .not. allocated(pqr_error), more="PQR writer failed")
+      call check(error,.not. allocated(pqr_error), more="PQR writer failed")
       if (allocated(error)) return
 
       ! XYZ: count, title, then one helium per point in Angstrom
@@ -413,9 +427,9 @@ contains
       call check(error, size(pqr_lines), cav%ngrid + 1, more="PQR record count")
       if (allocated(error)) return
       do i = 1, cav%ngrid
-         call check(error, pqr_lines(i)(1:6) == "HETATM", more="PQR record type")
+         call check(error, pqr_lines(i) (1:6) == "HETATM", more="PQR record type")
          if (allocated(error)) return
-         read (pqr_lines(i)(23:54), "(i4,4x,3f8.3)", iostat=stat) owner, point
+         read (pqr_lines(i) (23:54), "(i4,4x,3f8.3)", iostat=stat) owner, point
          call check(error, stat == 0 .and. owner == cav%owner(i), more="PQR owner column")
          if (allocated(error)) return
          call check(error, maxval(abs(point - cav%xyz(:, i)*autoaa)), 0.0_wp, thr=1.0e-3_wp, &
@@ -438,7 +452,7 @@ contains
       call check(error, any(index(print_lines, "Total volume") > 0), &
          & more="print did not reach the explicit unit")
       if (allocated(error)) return
-      call check(error, .not. any(index(print_lines, "[Info]") > 0), &
+      call check(error,.not. any(index(print_lines, "[Info]") > 0), &
          & more="explicit print unit received writer notices")
 
    end subroutine test_debug_writers
@@ -466,7 +480,7 @@ contains
       !> File name stem owned by this test
       character(len=*), parameter :: stem = "moist-test-cavity_iswig-debug_writer_guards"
 
-      call check(error, .not. associated(cav%ctx), more="bare cavity borrows a context")
+      call check(error,.not. associated(cav%ctx), more="bare cavity borrows a context")
       if (allocated(error)) return
 
       call cav%write_xyz_debug(stem//".xyz", cavity_error)
@@ -507,13 +521,13 @@ contains
       if (allocated(error)) return
 
       inquire (file=stem//".xyz", exist=exists)
-      call check(error, .not. exists, more="refused XYZ writer created a file")
+      call check(error,.not. exists, more="refused XYZ writer created a file")
       if (allocated(error)) return
       inquire (file=stem//".csv", exist=exists)
-      call check(error, .not. exists, more="refused CSV writer created a file")
+      call check(error,.not. exists, more="refused CSV writer created a file")
       if (allocated(error)) return
       inquire (file=stem//".pqr", exist=exists)
-      call check(error, .not. exists, more="refused PQR writer created a file")
+      call check(error,.not. exists, more="refused PQR writer created a file")
       if (allocated(error)) return
 
       ! No totals yet: print warns instead of reporting
@@ -663,16 +677,17 @@ contains
       call check(error, cav%ngrid, ngrid_ref, &
          & more="Number of grid points does not match")
 
-      ! Independent references
-      switch_ref = 1240.5362859882753_wp
+      ! Independent references: numpy replica of the iSwiG rule on PySCF's
+      ! Lebedev nodes, zeta = 4.90101060987
+      switch_ref = 1240.5362915526180_wp
       call check(error, sum(cav%f), switch_ref, thr=REFERENCE_THR, &
          & more="Switching function does not match")
 
-      area_ref = 565.0168717938371_wp
+      area_ref = 565.01687384673539_wp
       call check(error, cav%total_area, area_ref, thr=REFERENCE_THR, &
          & more="Cavity total area does not match")
 
-      volume_ref = 454.4127542443011_wp
+      volume_ref = 454.41275558137346_wp
       call check(error, cav%total_volume, volume_ref, thr=REFERENCE_THR, &
          & more="Cavity total volume does not match")
 
@@ -758,7 +773,7 @@ contains
 
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -773,7 +788,7 @@ contains
 
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -942,7 +957,8 @@ contains
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
                call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f), ctx=ctx)
+                                     param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), &
+                                                                              cut_a=cut_a, cut_f=cut_f), ctx=ctx)
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -958,7 +974,8 @@ contains
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
                call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f), ctx=ctx)
+                                     param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), &
+                                                                              cut_a=cut_a, cut_f=cut_f), ctx=ctx)
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -974,7 +991,8 @@ contains
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
                call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f), ctx=ctx)
+                                     param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), &
+                                                                              cut_a=cut_a, cut_f=cut_f), ctx=ctx)
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -990,7 +1008,8 @@ contains
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
                call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f), ctx=ctx)
+                                     param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), &
+                                                                              cut_a=cut_a, cut_f=cut_f), ctx=ctx)
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -1013,7 +1032,8 @@ contains
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
          call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f), ctx=ctx)
+                               param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), &
+                                                                        cut_a=cut_a, cut_f=cut_f), ctx=ctx)
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -1220,7 +1240,7 @@ contains
 
       n = cav%ngrid
       allocate (amat(n, n))
-      call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
+      call probe_conductor_matrix(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1236,9 +1256,10 @@ contains
       end do
 
       ! Test diagonal: A_ii = xi_i * sqrt(2/pi) / F_i
+      ! Equivalent generated expressions may differ by a few ulp at large 1/F
       do i = 1, n
          diag_ref = cav%xi0(i)*sqrt(2.0_wp/pi)/cav%f(i)
-         call check(error, amat(i, i), diag_ref, thr=thr, &
+         call check(error, amat(i, i), diag_ref, thr=8.0_wp*epsilon(1.0_wp)*abs(diag_ref), &
             & more="A-matrix diagonal does not match xi*sqrt(2/pi)/F")
          if (allocated(error)) return
       end do
@@ -1279,11 +1300,12 @@ contains
 
    !> Cross-validation of the iSwiG CPCM electrostatics against ORCA 6.1.1
    subroutine test_amat_orca_reference(error)
-      use moist_model_continuum_component_pcm_solvers, only: solve_pcm_cholesky
+      use pcmgen_gauss_conductor, only: conductor_state, &
+         & conductor_assemble, conductor_medium, conductor_solve
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      type(cavity_type_iswig) :: cav
+      type(conductor_state) :: state
       type(mctc_error), allocatable :: cavity_error
       integer, parameter :: npts = 272
       !> Dielectric constant of the ORCA reference run (water)
@@ -1292,7 +1314,7 @@ contains
       real(wp), parameter :: e_ref = -0.037719806_wp
       real(wp) :: feps, e_ours
       real(wp) :: ref(7, npts)
-      real(wp), allocatable :: phi(:), q_ref(:), q(:), rhs(:), amat(:, :)
+      real(wp), allocatable :: phi(:), q_ref(:), q(:), grad_v(:)
 
       ! ORCA reface table: x, y, z, zeta, F, phi, q_conductor per point
       ref(:, 1) = [3.292331345_wp, 3.586705171_wp, -2.417637305_wp, &
@@ -1840,26 +1862,24 @@ contains
       ref(:, 272) = [-1.286737287_wp, -3.778422911_wp, -1.924452277_wp, &
          & 1.83081357923673_wp, 0.00095424479095_wp, 0.065792319_wp, -0.000025192_wp]
 
-      ! Populate iSwiG cavity with ORCA equiv. inputs
-      cav%ngrid = npts
-      cav%xyz = ref(1:3, :)
-      cav%xi0 = ref(4, :)
-      cav%f = ref(5, :)
-
       ! Scale ORCA's unscaled conductor charges
       feps = (eps_ref - 1.0_wp)/eps_ref
       phi = ref(6, :)
       q_ref = ref(7, :)*feps
 
-      allocate (amat(npts, npts), q(npts))
-      call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
+      allocate (q(npts), grad_v(npts))
+      call conductor_assemble(state, ref(1:3, :), ref(4, :), ref(5, :), cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
 
-      rhs = -feps*phi
-      call solve_pcm_cholesky(amat, rhs, q, cavity_error)
+      call conductor_medium(state, feps, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call conductor_solve(state, phi, e_ours, q, grad_v, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1880,7 +1900,7 @@ contains
 
    !> Numerical vs analytical test for the contracted A-matrix derivative
    !> Uses 5-point finite differences on q1^T A q2 to verify the
-   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain
+   !> `probe_conductor_bilinear_weights` + `probe_conductor_nuclear_gradient` chain
    subroutine test_amat_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1914,7 +1934,7 @@ contains
       ! Build reference cavity to set up charge vectors
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1946,7 +1966,7 @@ contains
       end if
 
       allocate (w_xi(n), w_f(n), w_xyz(3, n))
-      call pcm_amat_surface_weights(cav%xi0, cav%f, cav%xyz, q1, q2, &
+      call probe_conductor_bilinear_weights(cav%xi0, cav%f, cav%xyz, q1, q2, &
          & w_xi, w_f, w_xyz, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -1954,7 +1974,7 @@ contains
       end if
 
       allocate (ana_grad(3, mol%nat))
-      call pcm_amat_nuclear_gradient(cav%xi1_rA, cav%f1_rA, cav%xyz1_rA, &
+      call probe_conductor_nuclear_gradient(cav%xi1_rA, cav%f1_rA, cav%xyz1_rA, &
          & w_xi, w_f, w_xyz, ana_grad, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -2018,7 +2038,7 @@ contains
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
          call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-            param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp), ctx=ctx)
+                               param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp), ctx=ctx)
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -2034,7 +2054,7 @@ contains
          end if
          if (allocated(amat)) deallocate (amat)
          allocate (amat(cav%ngrid, cav%ngrid))
-         call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
+         call probe_conductor_matrix(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -2107,7 +2127,7 @@ contains
 
       allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -2240,7 +2260,7 @@ contains
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
          call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
-            param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F), ctx=ctx)
+                               param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F), ctx=ctx)
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return

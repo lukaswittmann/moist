@@ -1,10 +1,5 @@
 
 subroutine get_solvent_geometry(solvent_id, mol, error)
-   use mctc_io, only: structure_type, new_structure
-   use mctc_env, only: wp
-   use mctc_env_error, only: error_type, fatal_error
-   use mctc_io_symbols, only: to_number
-
    integer, intent(in) :: solvent_id
    type(structure_type), allocatable, intent(out) :: mol
    type(error_type), allocatable, intent(out) :: error

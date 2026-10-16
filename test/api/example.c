@@ -182,7 +182,7 @@ static int read_field_int(moist_error error, moist_cavity cav, const char* name,
 }
 
 /* DROP fields most callers want, read in one go by name */
-static int read_drop_fields(moist_error error, moist_cavity cav, int ngrid,
+static int read_drop_fields(moist_error error, moist_cavity cav,
                             int* nmax, double* normal, double* wleb,
                             double* r_iI0, double* f, double* rho)
 {
@@ -287,7 +287,7 @@ static void host_update_model(moist_error error, moist_model model, moist_coupli
 static moist_structure make_h2o(moist_error error)
 {
     return moist_new_structure(error, H2O_NATOMS, h2o_numbers, h2o_positions,
-                               NULL, NULL);
+                               NULL, NULL, NULL);
 }
 
 int test_version(void)
@@ -348,13 +348,12 @@ int test_drop_cavity(void)
     double* xi = NULL;
     double* f = NULL;
     double* rho = NULL;
-    double* amat0 = NULL;
 
     const int natoms = 1;
     int numbers[1] = {1};
     double positions[3] = {0.0, 0.0, 0.0};
 
-    mol = moist_new_structure(error, natoms, numbers, positions, NULL, NULL);
+    mol = moist_new_structure(error, natoms, numbers, positions, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -409,10 +408,9 @@ int test_drop_cavity(void)
     xi = (double*)malloc((size_t)ngrid * sizeof(double));
     f = (double*)malloc((size_t)ngrid * sizeof(double));
     rho = (double*)malloc((size_t)ngrid * sizeof(double));
-    amat0 = (double*)malloc((size_t)ngrid * (size_t)ngrid * sizeof(double));
 
     if (!xyz || !a || !owner || !converged || !vradii || !asph || !normal ||
-        !wleb || !r_iI0 || !xi || !f || !rho || !amat0) {
+        !wleb || !r_iI0 || !xi || !f || !rho) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
     }
@@ -427,12 +425,12 @@ int test_drop_cavity(void)
     }
 
     // Get DROP results by name
-    if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
+    if (read_drop_fields(error, cav, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;
     }
 
-    // Assemble A-matrix and get xi values (DROP-specific)
-    moist_assemble_amat(error, cav, ngrid, amat0, xi);
+    // Read the Gaussian width from the built cavity
+    moist_get_cavity_field_real(error, cav, "xi0", xi);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -451,7 +449,6 @@ int test_drop_cavity(void)
 cleanup:
     free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
     free(normal); free(wleb); free(r_iI0); free(xi); free(f); free(rho);
-    free(amat0);
 
     // Free handles and verify they reset to NULL (generic delete)
     moist_delete_cavity(&cav);
@@ -728,7 +725,7 @@ int test_h2o_cavity(void)
     printf("  Cavity surface area: %.4f Bohr²\n", area);
     printf("  Cavity volume: %.4f Bohr^3\n", volume);
 
-    if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
+    if (read_drop_fields(error, cav, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;
     }
 
@@ -792,13 +789,6 @@ int test_cavity_gradient(void)
     double* xyz1_rA = NULL;          // (3, 3, nsph, ngrid)
     double* r_iI1_rA = NULL;         // (3, nsph, ngrid)
     double* rho1_rA = NULL;          // (3, nsph, ngrid)
-    double* Amat0 = NULL;            // (ngrid, ngrid)
-    double* Amat1_rA = NULL;         // (3, nsph, ngrid, ngrid)
-    double* xi = NULL;               // (ngrid)
-    double* q1 = NULL;               // (ngrid)
-    double* q2 = NULL;               // (ngrid)
-    double* grad_contract = NULL;    // (3, nsph)
-    double* grad_ref = NULL;         // (3, nsph)
     double* surface_q = NULL;        // (ngrid)
     double* surface_q_scaled = NULL; // (ngrid)
     double* qefield = NULL;          // (3, ngrid)
@@ -808,7 +798,7 @@ int test_cavity_gradient(void)
     double* grad_ne = NULL;          // (3, nsph)
     double* grad_ne_scaled = NULL;   // (3, nsph)
     /* Outputs of the surface-to-LSF contraction, own buffers rather than
-     * reused from the A-matrix. w_lsf2 is Fortran (3,3,ngrid) */
+     * reused from another contraction. w_lsf2 is Fortran (3,3,ngrid) */
     double* w_lsf0 = NULL;           // (ngrid)
     double* w_lsf1 = NULL;           // (3, ngrid)
     double* w_lsf2 = NULL;           // (3, 3, ngrid)
@@ -964,100 +954,6 @@ int test_cavity_gradient(void)
     printf("    y: %12.6f\n", V_tot1_rA[1]);
     printf("    z: %12.6f\n", V_tot1_rA[2]);
 
-    // Get A-matrix with gradient
-    printf("  Computing A-matrix gradient...\n");
-    Amat0 = (double*)malloc(ngrid * ngrid * sizeof(double));
-    Amat1_rA = (double*)malloc(3 * nsph * ngrid * ngrid * sizeof(double));
-    xi = (double*)malloc(ngrid * sizeof(double));
-
-    if (!Amat0 || !Amat1_rA || !xi) {
-        printf("Error: Memory allocation failed for A-matrix arrays\n");
-        goto cleanup;
-    }
-
-    moist_get_amat_gradient(error, cav, nsph, ngrid, Amat0, Amat1_rA, xi);
-    if (moist_check_error(error)) {
-        show_error(error);
-        goto cleanup;
-    }
-
-    /* Independent accessors must forward the same matrix and widths */
-    double *matrix_check = malloc((size_t)ngrid * ngrid * sizeof(double));
-    double *width_check = malloc((size_t)ngrid * sizeof(double));
-    if (!matrix_check || !width_check) {
-        free(matrix_check); free(width_check);
-        goto cleanup;
-    }
-    /* Every accessor clears the pending error on entry, so each failure is
-     * reported before the next call */
-    moist_assemble_amat(error, cav, ngrid, matrix_check, width_check);
-    if (moist_check_error(error)) {
-        show_error(error);
-        free(matrix_check); free(width_check);
-        goto cleanup;
-    }
-    int matrix_agrees = 1;
-    for (size_t i = 0; i < (size_t)ngrid * ngrid; i++)
-        if (!agrees_to(matrix_check[i], Amat0[i], 1e-12)) matrix_agrees = 0;
-    for (int i = 0; i < ngrid; i++)
-        if (!agrees_to(width_check[i], xi[i], 1e-12)) matrix_agrees = 0;
-    moist_get_cavity_field_real(error, cav, "xi0", width_check);
-    if (moist_check_error(error)) {
-        show_error(error);
-        free(matrix_check); free(width_check);
-        goto cleanup;
-    }
-    for (int i = 0; i < ngrid; i++)
-        if (!agrees_to(width_check[i], xi[i], 1e-12)) matrix_agrees = 0;
-    free(matrix_check); free(width_check);
-    if (!matrix_agrees) {
-        printf("  Error: A-matrix or width accessor disagrees\n");
-        goto cleanup;
-    }
-
-    printf("  A-matrix diagonal element A[0,0]: %12.6f\n", Amat0[0]);
-    printf("  xi[0]: %12.6f\n", xi[0]);
-
-    // Validate Fortran column-major layout and symmetry for Amat0/Amat1_rA
-    const double sym_tol = 1e-12;
-    int max_check = ngrid < 4 ? ngrid : 4;
-    int layout_ok = 1;
-
-    for (int i = 0; i < max_check && layout_ok; i++) {
-        for (int j = 0; j < max_check; j++) {
-            size_t ij = idx_f2(i, j, ngrid);
-            size_t ji = idx_f2(j, i, ngrid);
-            if (fabs(Amat0[ij] - Amat0[ji]) > sym_tol) {
-                printf("  Error: A-matrix symmetry failed at (%d,%d)\n", i, j);
-                layout_ok = 0;
-                break;
-            }
-        }
-    }
-
-    if (layout_ok && nsph > 0) {
-        for (int i = 0; i < max_check && layout_ok; i++) {
-            for (int j = 0; j < max_check; j++) {
-                for (int axis = 0; axis < 3; axis++) {
-                    size_t ij = idx_f4(axis, 0, i, j, 3, nsph, ngrid);
-                    size_t ji = idx_f4(axis, 0, j, i, 3, nsph, ngrid);
-                    if (fabs(Amat1_rA[ij] - Amat1_rA[ji]) > sym_tol) {
-                        printf("  Error: Amat1_rA symmetry failed at axis=%d i=%d j=%d\n", axis, i, j);
-                        layout_ok = 0;
-                        break;
-                    }
-                }
-                if (!layout_ok) break;
-            }
-        }
-    }
-
-    // Test API: contract_amat1_q1q2_rA
-    q1 = (double*)malloc(ngrid * sizeof(double));
-    q2 = (double*)malloc(ngrid * sizeof(double));
-    grad_contract = (double*)malloc(3 * nsph * sizeof(double));
-    grad_ref = (double*)malloc(3 * nsph * sizeof(double));
-
     // Test API: contract_pcm_nuclear_gradient
     surface_q = (double*)malloc(ngrid * sizeof(double));
     surface_q_scaled = (double*)malloc(ngrid * sizeof(double));
@@ -1073,8 +969,7 @@ int test_cavity_gradient(void)
     w_lsf1 = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     w_lsf2 = (double*)malloc((size_t)9 * ngrid * sizeof(double));
 
-    if (!q1 || !q2 || !grad_contract || !grad_ref ||
-        !surface_q || !surface_q_scaled || !qefield || !qefield_scaled ||
+    if (!surface_q || !surface_q_scaled || !qefield || !qefield_scaled ||
         !za || !grad_ne_zero || !grad_ne || !grad_ne_scaled ||
         !w_lsf0 || !w_lsf1 || !w_lsf2) {
         printf("Error: Memory allocation failed for contraction API test arrays\n");
@@ -1097,66 +992,6 @@ int test_cavity_gradient(void)
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
-    }
-
-    for (int i = 0; i < ngrid; i++) {
-        q1[i] = xi[i];
-        q2[i] = 0.5 * xi[i] + 1.0e-3 * (double)(i + 1);
-    }
-
-    moist_contract_amat1_q1q2_rA(error, cav, q1, q2, grad_contract);
-    if (moist_check_error(error)) {
-        show_error(error);
-        goto cleanup;
-    }
-
-    // Symmetry check: for symmetric dA, q1^T(dA)q2 == q2^T(dA)q1
-    moist_contract_amat1_q1q2_rA(error, cav, q2, q1, grad_ref);
-    if (moist_check_error(error)) {
-        show_error(error);
-        goto cleanup;
-    }
-
-    int contract_ok = 1;
-    const double contract_tol = 1e-12;
-    /* Independently sum the exported derivative tensor. Symmetry alone can
-     * hide a shared sign or normalization error in the contraction */
-    for (int atom = 0; atom < nsph; atom++) {
-        for (int axis = 0; axis < 3; axis++) {
-            double expected = 0.0;
-            for (int i = 0; i < ngrid; i++) {
-                for (int j = 0; j < ngrid; j++) {
-                    expected += q1[i] * Amat1_rA[idx_f4(axis, atom, i, j, 3, nsph, ngrid)] * q2[j];
-                }
-            }
-            if (!agrees_to(grad_contract[idx_f2(axis, atom, 3)], expected, 1e-10)) {
-                printf("  Error: A-matrix contraction disagrees with exported tensor\n");
-                contract_ok = 0;
-            }
-        }
-    }
-    double contract_norm = 0.0;
-    for (int iatom = 0; iatom < nsph && contract_ok; iatom++) {
-        for (int iaxis = 0; iaxis < 3; iaxis++) {
-            size_t idx = idx_f2(iaxis, iatom, 3);
-            if (!agrees_to(grad_contract[idx], grad_ref[idx], contract_tol)) {
-                printf("  Error: contract_amat1_q1q2_rA symmetry check failed at axis=%d atom=%d\n", iaxis, iatom);
-                contract_ok = 0;
-                break;
-            }
-            if (!isfinite(grad_contract[idx])) {
-                printf("  Error: contract_amat1_q1q2_rA produced non-finite values\n");
-                contract_ok = 0;
-                break;
-            }
-            contract_norm += grad_contract[idx] * grad_contract[idx];
-        }
-    }
-    /* An all-zero result passes symmetry and finiteness too; check the
-     * magnitude as well */
-    if (contract_ok && contract_norm < 1e-20) {
-        printf("  Error: contract_amat1_q1q2_rA norm is essentially zero\n");
-        contract_ok = 0;
     }
 
     // Zero-input check for contract_pcm_nuclear_gradient: should return zero gradient
@@ -1190,10 +1025,11 @@ int test_cavity_gradient(void)
 
     // Homogeneity check: f(2*q, 2*qefield) = 2*f(q, qefield)
     for (int i = 0; i < ngrid; i++) {
-        surface_q[i] = q1[i];
+        surface_q[i] = 0.01 * (double)(i + 1);
         surface_q_scaled[i] = 2.0 * surface_q[i];
         for (int iaxis = 0; iaxis < 3; iaxis++) {
-            double val = 0.02 * (double)(iaxis + 1) * q2[i];
+            double val = 0.02 * (double)(iaxis + 1) *
+                         (0.5 + 1.0e-3 * (double)(i + 1));
             qefield[idx_f2(iaxis, i, 3)] = val;
             qefield_scaled[idx_f2(iaxis, i, 3)] = 2.0 * val;
         }
@@ -1282,10 +1118,7 @@ int test_cavity_gradient(void)
         printf("  Error: Area gradient is essentially zero\n");
         result = 1;
     }
-    if (!layout_ok) {
-        result = 1;
-    }
-    if (!contract_ok || !nuc_elec_ok) {
+    if (!nuc_elec_ok) {
         result = 1;
     }
 
@@ -1296,8 +1129,6 @@ int test_cavity_gradient(void)
 cleanup:
     free(A_tot1_rA); free(V_tot1_rA); free(asph1_rA); free(vsph1_rA);
     free(xyz1_rA); free(r_iI1_rA); free(rho1_rA);
-    free(Amat0); free(Amat1_rA); free(xi);
-    free(q1); free(q2); free(grad_contract); free(grad_ref);
     free(surface_q); free(surface_q_scaled); free(qefield); free(qefield_scaled);
     free(za); free(grad_ne_zero); free(grad_ne); free(grad_ne_scaled);
     free(w_lsf0); free(w_lsf1); free(w_lsf2);
@@ -2580,7 +2411,6 @@ int test_capacity_validation(void)
     double* f = NULL;
     double* rho = NULL;
     int* numbering = NULL;
-    double* amat0 = NULL;
     double* xi = NULL;
     double* gaussian_f = NULL;
     double* big_xyz = NULL;
@@ -2611,7 +2441,6 @@ int test_capacity_validation(void)
     const size_t n_owner = (size_t)ngrid * sizeof(int);
     const size_t n_conv = (size_t)ngrid * sizeof(bool);
     const size_t n_sph = (size_t)nsph * sizeof(double);
-    const size_t n_amat = (size_t)ngrid * (size_t)ngrid * sizeof(double);
 
     xyz = (double*)malloc(n_xyz);
     a = (double*)malloc(n_a);
@@ -2624,12 +2453,11 @@ int test_capacity_validation(void)
     f = (double*)malloc(n_a);
     rho = (double*)malloc(n_a);
     numbering = (int*)malloc(n_owner);
-    amat0 = (double*)malloc(n_amat);
     xi = (double*)malloc(n_a);
     gaussian_f = (double*)malloc(n_a);
 
     if (!xyz || !a || !owner || !converged || !vradii || !asph || !wleb ||
-        !r_iI0 || !f || !rho || !numbering || !amat0 || !xi ||
+        !r_iI0 || !f || !rho || !numbering || !xi ||
         !gaussian_f) {
         printf("  Error: memory allocation failed\n");
         goto cleanup;
@@ -2736,23 +2564,6 @@ int test_capacity_validation(void)
     }
 
     if (result == 0) {
-        fill_sentinel(amat0, n_amat); fill_sentinel(xi, n_a);
-
-        moist_assemble_amat(error, cav, short_ngrid, amat0, xi);
-        if (!moist_check_error(error)) {
-            printf("  FAIL: assemble_amat accepted a short capacity\n");
-            result = 1;
-        } else {
-            if (!sentinel_intact(amat0, n_amat) || !sentinel_intact(xi, n_a)) {
-                printf("  FAIL: assemble_amat wrote into a rejected buffer\n");
-                result = 1;
-            }
-            moist_delete_error(&error);
-            error = moist_new_error();
-        }
-    }
-
-    if (result == 0) {
         fill_sentinel(xi, n_a); fill_sentinel(gaussian_f, n_a);
 
         moist_get_cavity_gaussian(error, cav, short_ngrid, xi, gaussian_f);
@@ -2804,7 +2615,7 @@ int test_capacity_validation(void)
 cleanup:
     free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
     free(wleb); free(r_iI0); free(f); free(rho); free(numbering);
-    free(amat0); free(xi); free(gaussian_f);
+    free(xi); free(gaussian_f);
     free(big_xyz); free(big_a); free(big_owner); free(big_conv);
     free(big_radii); free(big_asph);
 
@@ -2934,13 +2745,13 @@ int test_error_origins(void)
     iso.rho_iso = -1;
     lsf = moist_new_isodensity_lsf(error, 0, NULL, NULL, NULL, NULL, NULL, &iso);
     REQUIRE_ORIGIN("moist_new_isodensity_lsf");
-    mol = moist_new_structure(error, 2, numbers, coincident, NULL, NULL);
+    mol = moist_new_structure(error, 2, numbers, coincident, NULL, NULL, NULL);
     REQUIRE_ORIGIN("moist_new_structure");
     moist_delete_structure(&mol);
-    mol = moist_new_structure(error, 2, NULL, positions, NULL, NULL);
+    mol = moist_new_structure(error, 2, NULL, positions, NULL, NULL, NULL);
     REQUIRE_ORIGIN("moist_new_structure");
     if (mol) goto cleanup;
-    mol = moist_new_structure(error, 2, numbers, positions, NULL, NULL);
+    mol = moist_new_structure(error, 2, numbers, positions, NULL, NULL, NULL);
     if (!mol || moist_check_error(error)) goto cleanup;
     moist_update_structure(error, mol, coincident, NULL);
     REQUIRE_ORIGIN("moist_update_structure");
@@ -3042,7 +2853,7 @@ int test_model_density_rejection(void)
     cavity = fixture_isodensity_internal(error, 1, &atom, &angular, &primitives,
         &exponent, &coefficient, 1e-3, NULL, &nleb, NULL, NULL, NULL);
     if (!cavity || moist_check_error(error)) goto cleanup;
-    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
+    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL, NULL);
     if (!mol || moist_check_error(error)) goto cleanup;
     model = moist_new_model(error, fixture_context, cavity);
     pcm = moist_new_cpcm_component(error, NULL, 32, NULL);
@@ -3104,7 +2915,7 @@ int test_parts_without_context(void)
     const int hydrogen = 1;
     const double position[3] = {0};
     int failed = 1;
-    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
+    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL, NULL);
     cavity = moist_new_iswig_cavity(error, NULL, NULL, NULL);
     pv = moist_new_pv_component(error, NULL, 1e-4);
     if (!mol || !cavity || !pv || moist_check_error(error)) goto cleanup;
@@ -3351,7 +3162,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     moist_structure mol = make_h2o(error);
     moist_pcm_options pcm_options;
     moist_init_pcm_options(error, &pcm_options, sizeof pcm_options);
-    pcm_options.solver = moist_pcm_solver_lu;
+    pcm_options.solver = moist_pcm_solver_dense;
     moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_options);
     moist_model model = moist_new_model(error, fixture_context, cav);
     moist_coupling cpl = NULL, other = NULL;
@@ -3716,7 +3527,7 @@ int test_coupling_protocol_density_cavity(void)
     REQUIRE(dcart);
     for (int c = 0; c < ncart; ++c) dcart[idx_f2(c, c, ncart)] = 2.0;
     moist_init_pcm_options(error, &pcm_options, sizeof pcm_options);
-    pcm_options.solver = moist_pcm_solver_lu;
+    pcm_options.solver = moist_pcm_solver_dense;
     pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_options);
     model = moist_new_model(error, fixture_context, cav);
     REQUIRE(pcm && model && !moist_check_error(error));
@@ -4519,7 +4330,8 @@ struct cfc_options_1_0 {
     int m;
 };
 
-struct pcm_options_1_0 {
+/* Obsolete PCM layout, retained only to verify rejection */
+struct legacy_pcm_options {
     size_t struct_size;
     moist_pcm_solver solver;
     int solver_maxiter;
@@ -4532,9 +4344,7 @@ int test_options_1_0_prefix(void)
     moist_error error = moist_new_error();
     moist_lsf lsf = NULL;
     moist_cavity cavity = NULL;
-    moist_component pcm = NULL;
     struct { struct cfc_options_1_0 prefix; double appended; } cfc;
-    struct { struct pcm_options_1_0 prefix; double appended; } pcm_options;
     struct { struct drop_options_1_0 prefix; double appended; } future;
     int failed = 1;
     memset(&future, 0x5a, sizeof future);
@@ -4556,16 +4366,8 @@ int test_options_1_0_prefix(void)
     lsf = moist_new_cfc_lsf(error, (const moist_cfc_options *)&cfc.prefix);
     if (!lsf || moist_check_error(error)) goto cleanup;
 
-    memset(&pcm_options, 0x5a, sizeof pcm_options);
-    moist_init_pcm_options(error, (moist_pcm_options *)&pcm_options.prefix, sizeof pcm_options.prefix);
-    if (moist_check_error(error) || pcm_options.prefix.struct_size != sizeof pcm_options.prefix) goto cleanup;
-    for (size_t i = sizeof pcm_options.prefix; i < sizeof pcm_options; ++i)
-        if (((unsigned char *)&pcm_options)[i] != 0x5a) goto cleanup;
-    pcm = moist_new_cpcm_component(error, NULL, 80.0, (const moist_pcm_options *)&pcm_options.prefix);
-    if (!pcm || moist_check_error(error)) goto cleanup;
     failed = 0;
 cleanup:
-    moist_delete(pcm);
     if (failed) show_error(error);
     moist_delete(cavity);
     moist_delete(lsf);
@@ -4668,7 +4470,11 @@ int test_options_padding(void)
         MARK_FIELD(pcm, struct_size);
         MARK_FIELD(pcm, solver);
         MARK_FIELD(pcm, solver_maxiter);
+        MARK_FIELD(pcm, solver_restart);
         MARK_FIELD(pcm, solver_tol);
+        MARK_FIELD(pcm, storage);
+        MARK_FIELD(pcm, newton_tol);
+        MARK_FIELD(pcm, newton_maxiter);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_pcm_options(error, &value, sizeof value);
@@ -4689,10 +4495,22 @@ int test_pcm_solver_options(void)
     moist_error error = moist_new_error();
     moist_component pcm = NULL;
     moist_pcm_options options;
+    struct legacy_pcm_options legacy;
     int failed = 1;
+    /* An old PCM struct must be refused before reading or writing past it. */
+    memset(&legacy, 0x5a, sizeof legacy);
+    moist_init_pcm_options(error, (moist_pcm_options *)&legacy, sizeof legacy);
+    if (!moist_check_error(error)) goto cleanup;
+    for (size_t i = 0; i < sizeof legacy; ++i)
+        if (((unsigned char *)&legacy)[i] != 0x5a) goto cleanup;
+    legacy.struct_size = sizeof legacy;
+    pcm = moist_new_cpcm_component(error, NULL, 78.4, (const moist_pcm_options *)&legacy);
+    if (pcm || !moist_check_error(error)) goto cleanup;
     moist_init_pcm_options(error, &options, sizeof options);
     if (moist_check_error(error)) goto cleanup;
-    /* Defaults are the native ones: a positive threshold and a positive cap */
+    /* Generated solver IDs and native defaults use the current layout. */
+    if (moist_pcm_solver_dense != 1 || moist_pcm_solver_iterative != 2) goto cleanup;
+    if (options.solver != moist_pcm_solver_iterative || options.storage != moist_pcm_storage_dense) goto cleanup;
     if (!(options.solver_tol > 0.0) || options.solver_maxiter < 1) goto cleanup;
     options.solver = moist_pcm_solver_iterative;
     options.solver_tol = 1.0e-8;
@@ -4753,7 +4571,7 @@ int test_v1_contract(void)
     moist_get_version_string(error, buffer, 1, &length);
     if (buffer[0] != '\0') goto cleanup;
 
-    /* Every C layout must match its frozen Fortran minimum, including padding */
+    /* Every C layout must match its required Fortran minimum, including padding */
 #define CHECK_OPTIONS_LAYOUT(kind) do { \
     moist_##kind##_options value; \
     moist_init_##kind##_options(error, &value, sizeof value); \
@@ -4834,10 +4652,119 @@ cleanup:
     return failed;
 }
 
+#define REQUIRE(cond) do { if (!(cond)) { \
+    printf("  FAIL: %s (line %d)\n", #cond, __LINE__); goto cleanup; } } while (0)
+
+/* Solvent table lookups: values, aliases, size contract and the printout */
+int test_solvent_descriptors(void)
+{
+    printf("Start test: solvent descriptors\n");
+    moist_error error = moist_new_error();
+    moist_solvent_descriptors water, other, before;
+    unsigned char larger[sizeof(moist_solvent_descriptors) + 16];
+    char *text = NULL;
+    size_t needed = 0, length = 123;
+    int failed = 1;
+
+    /* Values the ORCA CPCM(water) references assume */
+    fill_sentinel(&water, sizeof water);
+    moist_get_solvent_descriptors(error, "  WATER ", &water, sizeof water);
+    REQUIRE(!moist_check_error(error));
+    REQUIRE(water.struct_size == sizeof water);
+    REQUIRE(water.id == 175);
+    REQUIRE(strcmp(water.name, "water") == 0);
+    REQUIRE(fabs(water.epsilon - 78.355) < 1e-12);
+    REQUIRE(fabs(water.refractive_index - 1.3328) < 1e-12);
+    REQUIRE(fabs(water.abraham_alpha - 0.82) < 1e-12);
+    REQUIRE(fabs(water.abraham_beta - 0.35) < 1e-12);
+    REQUIRE(fabs(water.surface_tension_si - 0.07199202032600779) < 1e-15);
+    REQUIRE(fabs(water.mass_density_si - 998.0) < 1e-12);
+    REQUIRE(fabs(water.molar_mass_si - 0.018015) < 1e-5);
+    REQUIRE(agrees_to(water.mass_density_au,
+                      water.number_density_au * water.molecular_mass_au, 1e-12));
+    REQUIRE(agrees_to(water.molecular_volume_au * water.number_density_au, 1.0, 1e-12));
+
+    /* Any alias, and the ID, give the same bytes, padding included */
+    fill_sentinel(&other, sizeof other);
+    moist_get_solvent_descriptors(error, "h2o", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && memcmp(&water, &other, sizeof water) == 0);
+    memset(&other, 0x5a, sizeof other);
+    moist_get_solvent_descriptors_by_id(error, water.id, &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && memcmp(&water, &other, sizeof water) == 0);
+    moist_get_solvent_descriptors(error, "DMSO", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && strcmp(other.name, "dimethylsulfoxide") == 0);
+
+    /* No stored geometry: table values present, derived values NaN */
+    moist_get_solvent_descriptors(error, "decalin", &other, sizeof other);
+    REQUIRE(!moist_check_error(error) && other.id == 94);
+    REQUIRE(isfinite(other.epsilon) && isfinite(other.mass_density_au));
+    REQUIRE(isnan(other.molar_mass_si) && isnan(other.number_density_au) &&
+            isnan(other.molecular_volume_au));
+
+    /* A newer host: moist fills its own layout and leaves the tail alone */
+    fill_sentinel(larger, sizeof larger);
+    moist_get_solvent_descriptors(error, "water", (moist_solvent_descriptors *)larger,
+                                  sizeof larger);
+    REQUIRE(!moist_check_error(error));
+    REQUIRE(memcmp(larger, &water, sizeof water) == 0);
+    REQUIRE(sentinel_intact(larger + sizeof water, sizeof larger - sizeof water));
+
+    /* Every failure leaves the struct untouched */
+    fill_sentinel(&before, sizeof before);
+    fill_sentinel(&other, sizeof other);
+    moist_get_solvent_descriptors(error, "FOO", &other, sizeof other);
+    REQUIRE(error_has_origin(error, "moist_get_solvent_descriptors"));
+    REQUIRE(!expect_failure(&error, "Unknown solvent: FOO", "unknown solvent name"));
+    moist_get_solvent_descriptors(error, "   ", &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Empty solvent alias", "blank solvent name"));
+    moist_get_solvent_descriptors(error, NULL, &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Solvent name is missing", "NULL solvent name"));
+    moist_get_solvent_descriptors(error, "water", &other, sizeof other - 1);
+    REQUIRE(!expect_failure(&error, "smaller than the 1.0 layout", "short descriptors"));
+    moist_get_solvent_descriptors_by_id(error, 0, &other, sizeof other);
+    REQUIRE(error_has_origin(error, "moist_get_solvent_descriptors_by_id"));
+    REQUIRE(!expect_failure(&error, "Unknown solvent ID: 0", "solvent ID 0"));
+    moist_get_solvent_descriptors_by_id(error, 9999, &other, sizeof other);
+    REQUIRE(!expect_failure(&error, "Unknown solvent ID: 9999", "solvent ID 9999"));
+    REQUIRE(memcmp(&before, &other, sizeof other) == 0);
+    moist_get_solvent_descriptors(error, "water", NULL, sizeof other);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors"));
+    moist_get_solvent_descriptors_by_id(error, 175, NULL, sizeof other);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors by ID"));
+
+    /* Printout of the struct, following the banner buffer rules */
+    moist_get_solvent_descriptors_text(error, &water, NULL, 0, &needed);
+    REQUIRE(!moist_check_error(error) && needed > 0);
+    text = malloc(needed + 1);
+    REQUIRE(text);
+    moist_get_solvent_descriptors_text(error, &water, text, needed + 1, &length);
+    REQUIRE(!moist_check_error(error) && length == needed && strlen(text) == needed);
+    REQUIRE(strncmp(text, "Solvent properties:", 19) == 0);
+    REQUIRE(strstr(text, "water") && strstr(text, "78.355"));
+    length = 123;
+    moist_get_solvent_descriptors_text(error, NULL, text, needed + 1, &length);
+    REQUIRE(text[0] == '\0' && length == 123);
+    REQUIRE(!expect_failure(&error, "Descriptors pointer is missing", "NULL descriptors text"));
+    other = water;
+    other.struct_size = sizeof other - 1;
+    moist_get_solvent_descriptors_text(error, &other, NULL, 0, &length);
+    REQUIRE(!expect_failure(&error, "smaller than the 1.0 layout", "short descriptors text"));
+
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    free(text);
+    moist_delete(error);
+    return failed;
+}
+
+#undef REQUIRE
+
 static const struct {
     const char* name;
     int (*fn)(void);
 } test_registry[] = {
+    {"solvent_descriptors",                  test_solvent_descriptors},
     {"context", test_context},
     {"host_timers", test_host_timers},
     {"v1_contract", test_v1_contract},

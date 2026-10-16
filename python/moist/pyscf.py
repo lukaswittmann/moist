@@ -212,16 +212,16 @@ class PySCFHost:
     def structure(self) -> Structure:
         """Return the molecular structure in moist's representation (bohr).
 
-        ``numbers`` are the elements; the nuclear charges of the Hamiltonian,
-        ``atom_charges()``, are answered through the ``nuclear_charges``
-        coupling request instead.
+        ``numbers`` are the elements and ``charge`` the net charge of ``mol``;
+        the nuclear charges of the Hamiltonian, ``atom_charges()``, are
+        answered through the ``nuclear_charges`` coupling request instead.
         """
         from pyscf import gto
 
         if self.mol.has_ecp():
             raise ValueError("effective core potentials are not supported")
         numbers = [gto.charge(self.mol.atom_pure_symbol(i)) for i in range(self.mol.natm)]
-        return Structure(numbers, self.mol.atom_coords())
+        return Structure(numbers, self.mol.atom_coords(), charge=self.mol.charge)
 
     def _density_matrix(self) -> np.ndarray:
         if self.dm is None:
@@ -378,6 +378,60 @@ class PySCFHost:
         """Return ``dphi/dr`` at the grid points, ``(ngrid, 3)``: the ``dphi_dr`` output."""
         return np.ascontiguousarray((self._grad_phi_nuc(coords, xi) + self._grad_phi_elec(coords, xi)).T)
 
+    def surface_potential_hessian(self, coords: np.ndarray, xi=None) -> np.ndarray:
+        """Return the raw spatial Hessian of the same point or Gaussian potential."""
+        from scipy.special import erf
+
+        coords = np.asarray(coords)
+        delta = coords[:, None, :] - self.mol.atom_coords()[None, :, :]
+        dist = np.linalg.norm(delta, axis=2)
+        if xi is None:
+            radial = dist**-3
+            radial_prime = -3.0 * dist**-5
+        else:
+            width = np.asarray(xi)[:, None]
+            x = width * dist
+            numerator = erf(x) - 2.0 * x * np.exp(-x*x) / np.sqrt(np.pi)
+            radial = np.divide(numerator, dist**3, out=np.zeros_like(dist), where=dist != 0)
+            radial_prime = np.divide(
+                4.0 * width**3 * np.exp(-x*x) / np.sqrt(np.pi) * dist**3 - 3.0 * numerator,
+                dist**5, out=np.zeros_like(dist), where=dist != 0)
+            small = np.abs(x) < 1e-3
+            radial = np.where(small, 4.0 * width**3 / (3.0*np.sqrt(np.pi)) *
+                              (1.0 - 0.6*x*x + 3.0*x**4/14.0), radial)
+            radial_prime = np.where(small, 4.0 * width**5 / (3.0*np.sqrt(np.pi)) *
+                                    (-1.2 + 6.0*x*x/7.0), radial_prime)
+        nuclear = -np.einsum("A,iA,ab->iab", self.mol.atom_charges(), radial, np.eye(3))
+        nuclear -= np.einsum("A,iA,iAa,iAb->iab", self.mol.atom_charges(),
+                             radial_prime, delta, delta)
+        dm = self._density_matrix()
+        if xi is None:
+            step = 2e-4
+            electronic = np.empty_like(nuclear)
+            for axis in range(3):
+                offset = np.zeros_like(coords)
+                offset[:, axis] = step
+                electronic[:, :, axis] = (
+                    self._grad_phi_elec(coords + offset) - self._grad_phi_elec(coords - offset)
+                ).T / (2.0 * step)
+        else:
+            integrals = self._gaussian_integrals(coords, xi, "int3c2e_ipip2")
+            electronic = -np.einsum("kuvi,uv->ik", integrals, dm).reshape(-1, 3, 3)
+        return np.ascontiguousarray(nuclear + electronic)
+
+    def _d2phi_dr_dxi(self, coords: np.ndarray, xi: np.ndarray) -> np.ndarray:
+        """Return the mixed spatial/width derivative of the Gaussian potential."""
+        coords = np.asarray(coords)
+        xi = np.asarray(xi)
+        delta = coords[:, None, :] - self.mol.atom_coords()[None, :, :]
+        dist2 = np.sum(delta*delta, axis=2)
+        radial = 4.0 * xi[:, None]**2 * np.exp(-xi[:, None]**2 * dist2) / np.sqrt(np.pi)
+        nuclear = -np.einsum("A,iA,iAk->ik", self.mol.atom_charges(), radial, delta)
+        step = 1e-4 * np.maximum(1.0, xi)
+        electronic = (self._grad_phi_elec(coords, xi + step) -
+                      self._grad_phi_elec(coords, xi - step)).T / (2.0 * step[:, None])
+        return np.ascontiguousarray(nuclear + electronic)
+
     def _dphi_dxi(self, coords: np.ndarray, xi: np.ndarray) -> np.ndarray:
         """Return the raw derivative of the Gaussian potential with respect to its width."""
         delta = np.asarray(coords)[:, None, :] - self.mol.atom_coords()[None, :, :]
@@ -400,6 +454,12 @@ class PySCFHost:
     def fock_potential(self, coords: np.ndarray, xi: np.ndarray, w_phi: np.ndarray) -> np.ndarray:
         """Return ``sum_i w_phi_i dphi_i/dP``: potential adjoint times the Gaussian integrals."""
         return -np.einsum("i,uvi->uv", np.asarray(w_phi), self._gaussian_integrals(coords, xi))
+
+    def fock_potential_gradient(self, coords: np.ndarray, xi: np.ndarray,
+                                weights: np.ndarray) -> np.ndarray:
+        """Contract spatial-potential derivative weights with their AO integrals."""
+        return np.einsum("ik,kuvi->uv", np.asarray(weights),
+                         self._gaussian_integrals(coords, xi, "int3c2e_ip2"))
 
     def _fock_lsf(self, coords: np.ndarray, density: DensityResponse) -> np.ndarray:
         """Return ``d rho/dP`` contracted with the density adjoints.
@@ -451,6 +511,20 @@ class PySCFHost:
             lo, hi = self._aoslice[atom, 2:4]
             gradient[:, atom] = weighted[:, lo:hi].sum(axis=1)
         return np.ascontiguousarray(gradient.T)
+
+    def _gradient_dphi_dr(self, coords: np.ndarray, weights: np.ndarray,
+                          xi: np.ndarray) -> np.ndarray:
+        """Contract spatial-potential weights with AO-center nuclear derivatives."""
+        dm = self._density_matrix()
+        integrals = self._gaussian_integrals(coords, xi, "int3c2e_ip1ip2")
+        integrals = integrals.reshape(3, 3, self.mol.nao, self.mol.nao, -1)
+        weighted = -2.0 * np.einsum("ij,kjuvi,uv->ku", np.asarray(weights),
+                                    integrals, dm)
+        gradient = np.zeros((self.mol.natm, 3))
+        for atom in range(self.mol.natm):
+            lo, hi = self._aoslice[atom, 2:4]
+            gradient[atom] = weighted[:, lo:hi].sum(axis=1)
+        return np.ascontiguousarray(gradient)
 
     def _gradient_lsf(self, coords: np.ndarray, density: DensityResponse) -> np.ndarray:
         """Return density adjoints contracted with ``d rho/dR_A`` at fixed P, ``(natm, 3)``.
@@ -860,6 +934,8 @@ class PySCFSolvation:
                 outputs["phi"] = self.host.surface_potential(coords)
             if "dphi_dr" in request.missing:
                 outputs["dphi_dr"] = self.host.surface_potential_gradient(coords)
+            if "d2phi_dr2" in request.missing:
+                outputs["d2phi_dr2"] = self.host.surface_potential_hessian(coords)
             coupling.answer(**outputs)
         elif isinstance(request, GaussianPotentialRequest):
             xi = self._xi = cavity.xi0
@@ -868,6 +944,10 @@ class PySCFSolvation:
                 outputs["phi"] = self.host.surface_potential(coords, xi)
             if "dphi_dr" in request.missing:
                 outputs["dphi_dr"] = self.host.surface_potential_gradient(coords, xi)
+            if "d2phi_dr2" in request.missing:
+                outputs["d2phi_dr2"] = self.host.surface_potential_hessian(coords, xi)
+            if "d2phi_dr_dxi" in request.missing:
+                outputs["d2phi_dr_dxi"] = self.host._d2phi_dr_dxi(coords, xi)
             if "dphi_dxi" in request.missing:
                 outputs["dphi_dxi"] = self.host._dphi_dxi(coords, xi)
             coupling.answer(**outputs)
@@ -969,6 +1049,8 @@ class PySCFSolvation:
                 with timer(item.name):
                     if isinstance(item, PotentialAdjointResponse):
                         fock += self.host.fock_potential(coords, self._xi, item.w_phi)
+                        if item.w_dphi_dr is not None:
+                            fock += self.host.fock_potential_gradient(coords, self._xi, item.w_dphi_dr)
                     elif isinstance(item, GaussianAmplitudeResponse):
                         fock += self._bound_moments().fock(item)
                     elif isinstance(item, DensityResponse):
@@ -1025,6 +1107,9 @@ class PySCFSolvation:
                     if isinstance(item, PotentialAdjointResponse):
                         channels["potential"] = self.host._gradient_phi(
                             coords, np.asarray(item.w_phi), xi=self._xi)
+                        if item.w_dphi_dr is not None:
+                            channels["potential"] += self.host._gradient_dphi_dr(
+                                coords, np.asarray(item.w_dphi_dr), self._xi)
                     elif isinstance(item, GaussianAmplitudeResponse):
                         channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
                     elif isinstance(item, DensityResponse):

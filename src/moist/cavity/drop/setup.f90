@@ -1,6 +1,5 @@
 !> DROP setup and preprocessing routines
 submodule(moist_cavity_drop) moist_cavity_drop_setup
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none(type, external)
 
@@ -188,7 +187,6 @@ contains
    module subroutine compute_switching_function(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
       type(prettyprinter) :: pp
       real(wp) :: lsf0_gradnorm
       real(wp) :: perc_iswig, perc_anchor
@@ -205,9 +203,7 @@ contains
       allocate (self%iswig_f0(self%nmax), source=1.0_wp)
       if (allocated(self%f)) deallocate (self%f)
       allocate (self%f(self%nmax), source=1.0_wp)
-      !$omp parallel num_threads(nthreads) default(shared) private(i, lsf, lsf0_gradnorm, cg_start, cg_n)
-      allocate (lsf, source=self%lsf_model)
-
+      !$omp parallel num_threads(nthreads) default(shared) private(i, lsf0_gradnorm, cg_start, cg_n)
       !$omp do schedule(static)
       do i = 1, self%nmax
 

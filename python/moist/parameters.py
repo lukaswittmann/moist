@@ -18,9 +18,7 @@ from . import library
 class PCMSolver(IntEnum):
     """PCM solver values from the C ABI."""
 
-    INVERSION = library.lib.moist_pcm_solver_inversion
-    LU = library.lib.moist_pcm_solver_lu
-    CHOLESKY = library.lib.moist_pcm_solver_cholesky
+    DENSE = library.lib.moist_pcm_solver_dense
     ITERATIVE = library.lib.moist_pcm_solver_iterative
 
 
@@ -32,6 +30,13 @@ class IsodensityBasis(IntEnum):
 
     CARTESIAN = library.lib.moist_isodensity_basis_cartesian
     SPHERICAL = library.lib.moist_isodensity_basis_spherical
+
+
+class PCMStorage(IntEnum):
+    """PCM matrix-storage values from the C ABI."""
+
+    DENSE = library.lib.moist_pcm_storage_dense
+    MATRIX_FREE = library.lib.moist_pcm_storage_matrix_free
 
 
 @lru_cache(maxsize=None)
@@ -143,15 +148,16 @@ class IsodensityParameters(_Parameters):
 
 @dataclass(frozen=True, kw_only=True)
 class PCMParameters(_Parameters):
-    """Numerical settings shared by CPCM and COSMO.
-
-    ``solver_tol`` and ``solver_maxiter`` are read only by the iterative solver.
-    """
+    """Numerical settings shared by all PCM components."""
 
     _kind = "pcm"
     solver: PCMSolver = _native_default("pcm", "solver")
     solver_tol: float = _native_default("pcm", "solver_tol")
     solver_maxiter: int = _native_default("pcm", "solver_maxiter")
+    solver_restart: int = _native_default("pcm", "solver_restart")
+    storage: PCMStorage = _native_default("pcm", "storage")
+    newton_tol: float = _native_default("pcm", "newton_tol")
+    newton_maxiter: int = _native_default("pcm", "newton_maxiter")
 
     def __post_init__(self):
         value = self.solver
@@ -161,8 +167,16 @@ class PCMParameters(_Parameters):
             except KeyError as exc:
                 raise ValueError(f"Unknown PCM solver {value!r}") from exc
         object.__setattr__(self, "solver", PCMSolver(value))
+        storage = self.storage
+        if isinstance(storage, str):
+            try:
+                storage = PCMStorage[storage.upper()]
+            except KeyError as exc:
+                raise ValueError(f"Unknown PCM storage {storage!r}") from exc
+        object.__setattr__(self, "storage", PCMStorage(storage))
         super().__post_init__()
         object.__setattr__(self, "solver", PCMSolver(self.solver))
+        object.__setattr__(self, "storage", PCMStorage(self.storage))
 
 
 @dataclass(frozen=True, kw_only=True)

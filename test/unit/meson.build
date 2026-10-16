@@ -66,12 +66,16 @@ tests = [
   'cavity_marchingcubes',
   'cavity_reference',
   'cavity_surface_adjoint',
-  'model_component_pcm_amat',
   'model_component_pcm_amat_kernel',
   'model_component_pcm_amat_assembly',
   'model_component_pcm_amat_adjoint',
   'model_component_pcm_electrostatics',
-  'model_component_pcm_cpcm',
+  'model_component_pcm_solvers',
+  'model_component_pcm_interface',
+  'model_component_pcm_derivatives',
+  'model_component_pcm_references',
+  'model_component_pcm_regression',
+  'model_component_pcm_vacuum',
   'model_component_gostshyp',
   'model_component_pv',
   'model_continuum',
@@ -104,8 +108,10 @@ test_selected = {
 test_srcs = files(
   'main.F90',
   'test_helpers.f90',
+  'test_pcm_conductor_probe.f90',
   'test_moz_fixtures.f90',
   'test_model_component_helper.f90',
+  'test_model_component_pcm_fixtures.f90',
 )
 
 foreach t : tests

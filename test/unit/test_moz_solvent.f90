@@ -5,7 +5,7 @@ module test_moz_solvent
    use mctc_io_convert, only: aatoau
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
-   use moist_data_solvents, only: solvation_system_type, new_solvation_system
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_math_packed_sym, only: packed_index, npair_from_ns
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
@@ -49,7 +49,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_vv_type) :: solvent
       type(structure_type) :: mol
 
@@ -77,7 +77,7 @@ contains
          & more="O-H distance is not in bohr")
       if (allocated(error)) return
 
-      call new_solvation_system(system, water_id, temperature=350.0_wp, error=err)
+      call new_solvent_system(system, water_id, temperature=350.0_wp, error=err)
       if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
       if (.not. allocated(err)) call solvent%potential%set_mixing(lj_mixing_geometric, err)
       call check_moist_error(error, err)
@@ -109,15 +109,15 @@ contains
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(solvent_vv_type) :: solvent
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(structure_type) :: mol, copy
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp, 0.0_wp, 0.0_wp, &
          & -0.5_wp, 1.7_wp, 0.0_wp], [3, 3]))
-      system%solvent_id = 0
+      system%solvent%id = 0
       system%temperature = 298.15_wp
-      system%solvent_number_density_au = 5.0e-3_wp
+      system%solvent%number_density_au = 5.0e-3_wp
       call new_vv_solvent(solvent, ctx, system, err)
       call check(error, allocated(err), more="a system without structure was accepted")
       if (allocated(error)) return
@@ -137,14 +137,14 @@ contains
       call check(error, all(copy%xyz == mol%xyz), more="the structure is not kept as given (bohr)")
       if (allocated(error)) return
 
-      system%solvent_number_density_au = 0.0_wp
+      system%solvent%number_density_au = 0.0_wp
       call new_vv_solvent(solvent, ctx, system, err)
       call check(error, allocated(err), more="a zero density was accepted")
       if (allocated(error)) return
       call check(error, index(err%message, "density must be positive") > 0, more=err%message)
       if (allocated(error)) return
       deallocate (err)
-      system%solvent_number_density_au = 5.0e-3_wp
+      system%solvent%number_density_au = 5.0e-3_wp
       call new(system%solv_mol, [integer ::], reshape([real(wp) ::], [3, 0]))
       call new_vv_solvent(solvent, ctx, system, err)
       call check(error, allocated(err), more="an empty structure was accepted")
@@ -160,7 +160,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_vv_type) :: solvent
       real(wp), parameter :: water_per_bohr3 = 3.33e-2_wp/aatoau**3
 
@@ -172,7 +172,7 @@ contains
       call check(error, abs(water_per_bohr3 - 4.94e-3_wp) < 0.01_wp*4.94e-3_wp, &
          & more="reference conversion of the water density is wrong")
       if (allocated(error)) return
-      call check(error, system%solvent_number_density_au, water_per_bohr3, thr=0.01_wp, rel=.true., &
+      call check(error, system%solvent%number_density_au, water_per_bohr3, thr=0.01_wp, rel=.true., &
          & more="water number density is off by more than 1%")
    end subroutine check_density_derivation
 
@@ -182,7 +182,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_vv_type) :: solvent
       type(moz_potential_type) :: pot
       type(monopole_type) :: host
@@ -221,7 +221,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(solvent_vv_type) :: solvent, unconstructed
 
       call unconstructed%update(err)

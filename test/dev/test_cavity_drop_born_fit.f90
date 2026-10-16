@@ -5,8 +5,11 @@
 !> a swept radius. To honour the project convention that test molecules
 !> come from mstore, we load MB16-43/H2 and park its second atom 100 bohr
 !> away with a 1e-3 bohr radius. That atom's surface area (~1e-5 bohr^2)
-!> and Born contribution are O(1e-7) - well below the test's
-!> max_rel_energy_error = 1e-4 tolerance
+!> and Born contribution are negligible next to the test's
+!> max_rel_energy_error
+!>
+!> The fitted values are the shared iSwiG/DROP table in
+!> src/moist/cavity/bornzeta.f90
 module test_cavity_drop_born_fit
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -20,8 +23,9 @@ module test_cavity_drop_born_fit
    use moist_cavity_drop_lsf_svdw, only : moist_cavity_drop_lsf_svdw_type
    use moist_math_grid_angular_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
-   use moist_model_continuum_component_pcm_solvers, only : solve_pcm_cholesky
-   use moist_model_continuum_component_pcm_amat, only : assemble_pcm_amat
+   use moist_model_continuum_component_pcm_solvers, only : pcm_dense_solver
+   use pcmgen_gauss_conductor, only : conductor_state, &
+      & conductor_assemble, conductor_medium, conductor_solve
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
@@ -43,14 +47,16 @@ module test_cavity_drop_born_fit
    real(wp), parameter :: zeta_lower = 1.0_wp
    !> Fitting upper bound for zeta
    real(wp), parameter :: zeta_upper = 10.0_wp
+   !> Initial half-width of the root bracket around the tabulated zeta
+   real(wp), parameter :: bracket_width = 1.0e-2_wp
    !> Maximum tolerated relative energy error after fitting
-   real(wp), parameter :: max_rel_energy_error = 1.0e-4_wp
+   real(wp), parameter :: max_rel_energy_error = 1.0e-12_wp
    !> Maximum tolerated difference to the constructor-selected zeta
-   real(wp), parameter :: max_zeta_param_error = 2.0e-4_wp
-   !> Stop threshold for the golden-section fit interval
-   real(wp), parameter :: fit_interval_tol = 1.0e-4_wp
-   !> Maximum golden-section iterations
-   integer, parameter :: fit_maxiter = 40
+   real(wp), parameter :: max_zeta_param_error = 1.0e-10_wp
+   !> Stop threshold for the width of the root bracket
+   real(wp), parameter :: fit_bracket_tol = 1.0e-12_wp
+   !> Maximum root-finding iterations
+   integer, parameter :: fit_maxiter = 100
 
 contains
 
@@ -74,7 +80,7 @@ contains
       type(prettylistprinter) :: plp
 
       ntested = 0
-      plp = new_prettylistprinter([8, 12, 14, 14, 42], &
+      plp = new_prettylistprinter([8, 12, 15, 14, 42], &
          [character(len=14) :: "Lebedev", "Status", "zeta", "max rel err", "Note"], &
          unit=error_unit, offset=4, column_gap=2)
 
@@ -161,7 +167,7 @@ contains
       call plp%begin_row()
       call plp%add(nleb)
       call plp%add("fitted")
-      call plp%add(zeta_fit, fmt="es14.6")
+      call plp%add(zeta_fit, fmt="f15.11")
       call plp%add(max_error, fmt="es14.6")
       call plp%add("validated against Born radii set")
       call plp%end_row()
@@ -251,7 +257,14 @@ contains
       supported = .not. any(weights < 0.0_wp)
    end function drop_supports_lebedev_grid
 
-   !> Fit zeta by minimizing summed squared relative Born-energy errors
+   !> Fit zeta as the root of the relative Born-energy error
+   !>
+   !> - The error is monotone in zeta: wider Gaussians (smaller zeta) screen
+   !>   more and lower the energy
+   !> - Brackets the root around the tabulated value, widening as needed, then
+   !>   narrows it by regula falsi with the Illinois modification
+   !> - The C-PCM energy scales exactly as 1/R, so the first radius suffices;
+   !>   all radii are checked after the fit
    subroutine fit_zeta(cavities, zeta_fit, message)
       !> Spherical DROP cavities
       type(cavity_type_drop), intent(inout) :: cavities(:)
@@ -260,68 +273,79 @@ contains
       !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
-      real(wp) :: a, b, c, d, fc, fd, gr
-      integer :: iter
+      real(wp) :: a, b, c, fa, fb, fc, width
+      integer :: iter, kept
 
-      gr = (sqrt(5.0_wp) - 1.0_wp) / 2.0_wp
-
-      a = zeta_lower
-      b = zeta_upper
-      c = b - gr * (b - a)
-      d = a + gr * (b - a)
-
-      call born_fit_objective(cavities, c, fc, message)
+      zeta_fit = cavities(1)%param%iswig_xi_born
+      width = bracket_width
+      a = max(zeta_lower, zeta_fit - width)
+      b = min(zeta_upper, zeta_fit + width)
+      call born_relative_error(cavities(1), a, fa, message)
       if (allocated(message)) return
-      call born_fit_objective(cavities, d, fd, message)
+      call born_relative_error(cavities(1), b, fb, message)
       if (allocated(message)) return
 
-      do iter = 1, fit_maxiter
-         if (abs(b - a) < fit_interval_tol) exit
-
-         if (fc < fd) then
-            b = d
-            d = c
-            fd = fc
-            c = b - gr * (b - a)
-            call born_fit_objective(cavities, c, fc, message)
-            if (allocated(message)) return
-         else
-            a = c
-            c = d
-            fc = fd
-            d = a + gr * (b - a)
-            call born_fit_objective(cavities, d, fd, message)
-            if (allocated(message)) return
+      do while (sign(1.0_wp, fa) == sign(1.0_wp, fb))
+         if (a <= zeta_lower .and. b >= zeta_upper) then
+            message = "Born error does not change sign for zeta in [" // real_string(zeta_lower) &
+               // ", " // real_string(zeta_upper) // "]"
+            return
          end if
+         width = 4.0_wp * width
+         a = max(zeta_lower, zeta_fit - width)
+         b = min(zeta_upper, zeta_fit + width)
+         call born_relative_error(cavities(1), a, fa, message)
+         if (allocated(message)) return
+         call born_relative_error(cavities(1), b, fb, message)
+         if (allocated(message)) return
       end do
 
-      zeta_fit = 0.5_wp * (a + b)
+      ! kept: endpoint retained by the last step (-1 for a, +1 for b)
+      kept = 0
+      do iter = 1, fit_maxiter
+         c = (a * fb - b * fa) / (fb - fa)
+         call born_relative_error(cavities(1), c, fc, message)
+         if (allocated(message)) return
+         if (fc == 0.0_wp) exit
+         if (sign(1.0_wp, fc) == sign(1.0_wp, fa)) then
+            a = c
+            fa = fc
+            if (kept == 1) fb = 0.5_wp * fb
+            kept = 1
+         else
+            b = c
+            fb = fc
+            if (kept == -1) fa = 0.5_wp * fa
+            kept = -1
+         end if
+         if (b - a < fit_bracket_tol) exit
+      end do
+      if (iter > fit_maxiter) then
+         message = "Born zeta root not bracketed to " // real_string(fit_bracket_tol) &
+            // " after " // int_string(fit_maxiter) // " steps; bracket " // real_string(b - a)
+         return
+      end if
+
+      zeta_fit = c
    end subroutine fit_zeta
 
-   !> Compute summed squared relative Born-energy errors for one zeta
-   subroutine born_fit_objective(cavities, zeta, objective, message)
-      !> Spherical DROP cavities
-      type(cavity_type_drop), intent(inout) :: cavities(:)
+   !> Relative Born-energy error of one cavity for one zeta
+   subroutine born_relative_error(cavity, zeta, rel_error, message)
+      !> Spherical DROP cavity, built with the first reference radius
+      type(cavity_type_drop), intent(inout) :: cavity
       !> Candidate zeta value
       real(wp), intent(in) :: zeta
-      !> Summed squared relative error
-      real(wp), intent(out) :: objective
+      !> Relative error E / E_Born - 1
+      real(wp), intent(out) :: rel_error
       !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
-      real(wp) :: energy, reference, rel_error
+      real(wp) :: energy
 
-      objective = 0.0_wp
-      ! For a single centered charge in a one-atom spherical cavity, the CPCM
-      ! energy scales exactly as 1/R. One radius is sufficient for fitting;
-      ! all radii are checked after the fitted zeta is found
-      call compute_drop_born_energy(cavities(1), zeta, energy, message)
+      call compute_drop_born_energy(cavity, zeta, energy, message)
       if (allocated(message)) return
-
-      reference = analytical_born_energy(sphere_radii(1))
-      rel_error = (energy - reference) / reference
-      objective = rel_error**2
-   end subroutine born_fit_objective
+      rel_error = energy / analytical_born_energy(sphere_radii(1)) - 1.0_wp
+   end subroutine born_relative_error
 
    !> Validate the final fit and return the maximum relative error
    subroutine validate_fit(cavities, zeta, max_error, message)
@@ -360,10 +384,11 @@ contains
       character(len=:), allocatable, intent(out) :: message
 
       type(mctc_error), allocatable :: cavity_error
-      real(wp), allocatable :: amat(:, :)
+      type(conductor_state) :: pcm
+      type(pcm_dense_solver) :: solver
       real(wp), allocatable :: phi(:)
-      real(wp), allocatable :: rhs(:)
       real(wp), allocatable :: sigma(:)
+      real(wp), allocatable :: grad_phi(:)
       integer :: igrid
 
       cavity%iswig%swx = zeta
@@ -373,26 +398,27 @@ contains
          return
       end if
 
-      allocate(amat(cavity%ngrid, cavity%ngrid))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, cavity_error)
+      call conductor_assemble(pcm, cavity%xyz, cavity%xi0, cavity%f, cavity_error, solver)
       if (allocated(cavity_error)) then
-         message = "DROP A-matrix assembly failed: " // trim(cavity_error%message)
+         message = "DROP conductor assembly failed: " // trim(cavity_error%message)
+         return
+      end if
+      call conductor_medium(pcm, feps, cavity_error)
+      if (allocated(cavity_error)) then
+         message = "DROP conductor medium failed: " // trim(cavity_error%message)
          return
       end if
 
-      allocate(phi(cavity%ngrid), rhs(cavity%ngrid), sigma(cavity%ngrid))
+      allocate(phi(cavity%ngrid), sigma(cavity%ngrid), grad_phi(cavity%ngrid))
       do igrid = 1, cavity%ngrid
          phi(igrid) = source_charge / norm2(cavity%xyz(:, igrid))
       end do
 
-      rhs = -feps * phi
-      call solve_pcm_cholesky(amat, rhs, sigma, error=cavity_error)
+      call conductor_solve(pcm, phi, energy, sigma, grad_phi, cavity_error)
       if (allocated(cavity_error)) then
-         message = "CPCM Cholesky solve failed: " // trim(cavity_error%message)
+         message = "DROP conductor solve failed: " // trim(cavity_error%message)
          return
       end if
-
-      energy = 0.5_wp * dot_product(sigma, phi)
    end subroutine compute_drop_born_energy
 
    !> Analytical Born solvation energy for a central unit charge in a sphere

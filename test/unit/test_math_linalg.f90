@@ -6,7 +6,7 @@ module test_math_linalg
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
                                 outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
                                 outer4, sym4_31, sym4_22, sym4_211
-   use moist_math_lapack, only: getrf, getri
+   use moist_math_lapack, only: getrf, getri, getrs, sytrf, sytrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: dsyev
    ! Raw vendored linalg solver APIs (upstream test ports folded into this suite)
@@ -59,6 +59,8 @@ contains
                   new_unittest("mat3x3_inv_full", test_mat3x3_inv_full), &
                   new_unittest("mat3x3_inv_singular", test_mat3x3_inv_singular), &
                   new_unittest("mat3x3_inv_lapack", test_mat3x3_inv_vs_lapack), &
+                  new_unittest("complex_lu_solve", test_complex_lu_solve), &
+                  new_unittest("symmetric_indefinite_solve", test_symmetric_indefinite_solve), &
                   new_unittest("tangent_frame_orthonormal", test_tangent_frame_orthonormal), &
                   new_unittest("tangent_frame_axes", test_tangent_frame_axes), &
                   new_unittest("sym3_21", test_sym3_21), &
@@ -254,6 +256,68 @@ contains
       call check(error, maxval(abs(Ainv_analytic - Ainv_lapack)) < 1.0e-10_wp, &
                  "Analytic and LAPACK inversions should match")
    end subroutine test_mat3x3_inv_vs_lapack
+
+   !> Check complex LU and plain transpose solve.
+   subroutine test_complex_lu_solve(error)
+      type(error_type), allocatable, intent(out) :: error
+      complex(wp) :: a(2, 2), af(2, 2), b(2, 1), x(2, 1)
+      integer :: ipiv(2), info
+
+      a(:, 1) = [cmplx(2.0_wp, 1.0_wp, wp), cmplx(1.0_wp, -1.0_wp, wp)]
+      a(:, 2) = [cmplx(1.0_wp, 2.0_wp, wp), cmplx(3.0_wp, -1.0_wp, wp)]
+      x(:, 1) = [cmplx(1.0_wp, -2.0_wp, wp), cmplx(-1.0_wp, 1.0_wp, wp)]
+      af = a
+      b = matmul(a, x)
+      call getrf(af, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call getrs(af, b, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call check(error, maxval(abs(b - x)) < 1.0e-12_wp)
+      if (allocated(error)) return
+      b = matmul(transpose(a), x)
+      call getrs(af, b, ipiv, info, trans="t")
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call check(error, maxval(abs(b - x)) < 1.0e-12_wp)
+   end subroutine test_complex_lu_solve
+
+   !> Check real and complex symmetric indefinite factorization and solve.
+   subroutine test_symmetric_indefinite_solve(error)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: a(2, 2), af(2, 2), b(2, 1), x(2, 1)
+      complex(wp) :: az(2, 2), azf(2, 2), bz(2, 1), xz(2, 1)
+      integer :: ipiv(2), info
+
+      a(:, 1) = [0.0_wp, 2.0_wp]
+      a(:, 2) = [2.0_wp, 1.0_wp]
+      x(:, 1) = [1.0_wp, -2.0_wp]
+      af = a
+      b = matmul(a, x)
+      call sytrf(af, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call sytrs(af, b, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call check(error, maxval(abs(b - x)) < 1.0e-12_wp)
+      if (allocated(error)) return
+
+      az = cmplx(a, 0.0_wp, wp)
+      az(1, 2) = cmplx(2.0_wp, 1.0_wp, wp)
+      az(2, 1) = az(1, 2)
+      xz(:, 1) = [cmplx(1.0_wp, 1.0_wp, wp), cmplx(-2.0_wp, 0.5_wp, wp)]
+      azf = az
+      bz = matmul(az, xz)
+      call sytrf(azf, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call sytrs(azf, bz, ipiv, info)
+      call check(error, info == 0)
+      if (allocated(error)) return
+      call check(error, maxval(abs(bz - xz)) < 1.0e-12_wp)
+   end subroutine test_symmetric_indefinite_solve
 
    !> Check tangent-frame orthonormality
    subroutine test_tangent_frame_orthonormal(error)

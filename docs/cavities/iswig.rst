@@ -15,8 +15,8 @@ All three are fields of the optional settings object; omitting it selects the co
 
 ``num_leb`` in Fortran, ``nleb`` in C and Python (integer, default ``110``)
    Number of Lebedev quadrature points per atomic sphere; the primary accuracy/cost setting.
-   **Must be one of the supported sizes**: 14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202.
-   Any other value raises an error, because each grid has a fitted Born ``zeta`` (the Gaussian width scale).
+   **Must be one of the supported sizes**: 6, 14, 26, 38, 50, 86, 110, 146, 170, 194, 302, 350, 434, 590, 770, 974, 1202, 1454, 1730, 2030, 2354, 2702, 3074, 3470, 3890, 4334, 4802, 5294, 5810.
+   Any other value raises an error, because each grid has a fitted Born ``zeta`` (the Gaussian width scale), shared with :doc:`DROP <drop>`.
 
 ``cut_f`` (real, default ``1.0e-10``)
    Switching-value cutoff. A point is kept only if its switching function exceeds this value. Used when ``cut_a`` is not positive.

@@ -8,8 +8,8 @@ module moist_math_solver_newton
    use moist_math_solver_type, only: solver_base_type
 
    use nlesolver_module, only: nlesolver_type, NLESOLVER_SPARSITY_DENSE, NLESOLVER_SPARSITY_LSQR, &
-      & NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR, NLESOLVER_LINESEARCH_SIMPLE, &
-      & NLESOLVER_LINESEARCH_BACKTRACKING, NLESOLVER_LINESEARCH_EXACT, &
+      & NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR, NLESOLVER_SPARSITY_CUSTOM_STEP, &
+      & NLESOLVER_LINESEARCH_SIMPLE, NLESOLVER_LINESEARCH_BACKTRACKING, NLESOLVER_LINESEARCH_EXACT, &
       & NLESOLVER_LINESEARCH_FIXEDPOINT, NLESOLVER_IGNORE_BOUNDS, NLESOLVER_SCALAR_BOUNDS, &
       & NLESOLVER_VECTOR_BOUNDS, NLESOLVER_WALL_BOUNDS
    implicit none(type, external)
@@ -19,6 +19,7 @@ module moist_math_solver_newton
    public :: new_newton_solver  ! Factory function (unified interface)
    public :: newton_linear_solver_dense, newton_linear_solver_lsqr
    public :: newton_linear_solver_lusol, newton_linear_solver_lsmr
+   public :: newton_linear_solver_custom_step
    public :: newton_linesearch_simple, newton_linesearch_backtrack
    public :: newton_linesearch_exact, newton_linesearch_fixedpoint
    public :: newton_bounds_ignore, newton_bounds_scalar
@@ -29,6 +30,8 @@ module moist_math_solver_newton
    integer, parameter :: newton_linear_solver_lsqr = NLESOLVER_SPARSITY_LSQR
    integer, parameter :: newton_linear_solver_lusol = NLESOLVER_SPARSITY_LUSOL
    integer, parameter :: newton_linear_solver_lsmr = NLESOLVER_SPARSITY_LSMR
+   !> The caller computes each Newton step (step_ctx); no Jacobian is formed
+   integer, parameter :: newton_linear_solver_custom_step = NLESOLVER_SPARSITY_CUSTOM_STEP
 
    !> Line search options
    integer, parameter :: newton_linesearch_simple = NLESOLVER_LINESEARCH_SIMPLE
@@ -108,6 +111,19 @@ module moist_math_solver_newton
          class(*), intent(in) :: context              !> user context data
       end subroutine grad_context_interface
 
+      !> Compute the Newton step p = -J(x)^-1 f without forming J (with context)
+      !>
+      !> A failure cannot be reported to the solver: record it in the context and
+      !> return p = 0, which stops the iterations (no change in x)
+      subroutine step_context_interface(x, f, p, context)
+         import :: wp
+         implicit none(type, external)
+         real(wp), dimension(:), intent(in) :: x      !> variables
+         real(wp), dimension(:), intent(in) :: f      !> function values at x
+         real(wp), dimension(:), intent(out) :: p     !> Newton step
+         class(*), intent(in) :: context              !> user context data
+      end subroutine step_context_interface
+
       !> Compute the Jacobian matrix (sparse, with context)
       subroutine grad_sparse_context_interface(x, jac_sparse, context)
          import :: wp
@@ -170,6 +186,7 @@ module moist_math_solver_newton
       procedure(func_context_interface), pointer, nopass :: user_func_ctx => null()
       procedure(grad_context_interface), pointer, nopass :: user_grad_ctx => null()
       procedure(grad_sparse_context_interface), pointer, nopass :: user_grad_sparse_ctx => null()
+      procedure(step_context_interface), pointer, nopass :: user_step_ctx => null()
       procedure(debug_callback_context_interface), pointer, nopass :: user_debug_ctx => null()
       procedure(user_input_check_context_interface), pointer, nopass :: user_check_ctx => null()
 
@@ -211,6 +228,7 @@ contains
    subroutine new_newton_solver(solver, n, m, error, &
                                 func, grad, grad_sparse, debug_callback, user_input_check, &
                                 func_ctx, grad_ctx, grad_sparse_ctx, debug_callback_ctx, user_input_check_ctx, context, &
+                                step_ctx, &
                                 max_iter, tol, tolx, linear_solver, linesearch, use_broyden, broyden_update_n, &
                                 alpha, alpha_min, alpha_max, bounds_mode, xlow, xupp, verbose, iunit, &
                                 irow, icol, debug_unit)
@@ -230,7 +248,10 @@ contains
       procedure(grad_sparse_context_interface), optional :: grad_sparse_ctx
       procedure(debug_callback_context_interface), optional :: debug_callback_ctx
       procedure(user_input_check_context_interface), optional :: user_input_check_ctx
-      class(*), intent(in), optional :: context
+      ! target: the solver keeps a copy, whose pointer components the callbacks follow
+      class(*), intent(in), optional, target :: context
+      ! Newton step computed by the caller (context-aware; selects the custom step mode)
+      procedure(step_context_interface), optional :: step_ctx
       ! Solver options
       integer, intent(in), optional :: max_iter
       real(wp), intent(in), optional :: tol
@@ -276,6 +297,11 @@ contains
 
       linear_solver_use = newton_linear_solver_dense
       if (present(linear_solver)) linear_solver_use = linear_solver
+      if (present(step_ctx)) linear_solver_use = newton_linear_solver_custom_step
+      if (linear_solver_use == newton_linear_solver_custom_step .and. .not. present(step_ctx)) then
+         call fatal_error(error, "Custom-step Newton mode requires step_ctx")
+         return
+      end if
 
       linesearch_use = newton_linesearch_backtrack
       if (present(linesearch)) linesearch_use = linesearch
@@ -301,7 +327,8 @@ contains
       verbose_use = .false.
       if (present(verbose)) verbose_use = verbose
 
-      use_context_interface = present(func_ctx) .or. present(grad_ctx) .or. present(grad_sparse_ctx)
+      use_context_interface = present(func_ctx) .or. present(grad_ctx) &
+         & .or. present(grad_sparse_ctx) .or. present(step_ctx)
 
       ! Determine which interface to use (context-aware takes precedence)
       if (use_context_interface) then
@@ -328,6 +355,7 @@ contains
             bridge%user_func_ctx => func_ctx
             if (present(grad_ctx)) bridge%user_grad_ctx => grad_ctx
             if (present(grad_sparse_ctx)) bridge%user_grad_sparse_ctx => grad_sparse_ctx
+            if (present(step_ctx)) bridge%user_step_ctx => step_ctx
             if (present(debug_callback_ctx)) then
                bridge%user_debug_ctx => debug_callback_ctx
                bridge%debug_mode = .true.
@@ -364,7 +392,8 @@ contains
          irow=irow, icol=icol, &
          bounds_mode=bounds_mode_use, xlow=xlow, xupp=xupp, &
          export_iteration=wrapper_export_module, &
-         user_input_check=wrapper_check_module)
+         user_input_check=wrapper_check_module, &
+         custom_step=wrapper_step_module)
 
       ! Check initialization status
       call tmp%solver%status(istat, message)
@@ -493,6 +522,7 @@ contains
             bridge%user_func_ctx => null()
             bridge%user_grad_ctx => null()
             bridge%user_grad_sparse_ctx => null()
+            bridge%user_step_ctx => null()
             bridge%user_debug_ctx => null()
             bridge%user_check_ctx => null()
 
@@ -554,6 +584,33 @@ contains
       end select
    end subroutine wrapper_grad_module
 
+   !> Internal wrapper for the caller's Newton step (custom step mode)
+   !>
+   !> @param[inout] me     nlesolver instance (dispatches through the bridge)
+   !> @param[in]    x      Variables [n]
+   !> @param[in]    fvec   Function values at x [m]
+   !> @param[out]   p      Newton step [n]
+   !> @param[out]   istat  0 after the callback (its failures are recorded by the caller,
+   !>                      with p = 0), -1 without a callback
+   subroutine wrapper_step_module(me, x, fvec, p, istat)
+      class(nlesolver_type), intent(inout) :: me
+      real(wp), dimension(:), intent(in) :: x
+      real(wp), dimension(:), intent(in) :: fvec
+      real(wp), dimension(:), intent(out) :: p
+      integer, intent(out) :: istat
+
+      p = 0.0_wp
+      ! A missing callback fails the step instead of returning p = 0
+      istat = -1
+      select type (bridge => me)
+      type is (moist_newton_bridge_type)
+         if (associated(bridge%user_step_ctx) .and. allocated(bridge%user_context)) then
+            call bridge%user_step_ctx(x, fvec, p, bridge%user_context)
+            istat = 0
+         end if
+      end select
+   end subroutine wrapper_step_module
+
    !> Decode error code into a detailed error message
    !>
    !> Provides human-readable descriptions for all Newton solver error codes
@@ -604,6 +661,8 @@ contains
          code_desc = "Error adjusting search direction for bounds"
       case (-18)
          code_desc = "Invalid norm_mode"
+      case (-19)
+         code_desc = "Custom step mode needs step_ctx and no Broyden update"
       case (-999)
          code_desc = "Solver not initialized"
       case (-1004)

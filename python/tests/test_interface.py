@@ -43,6 +43,8 @@ CONTEXT = moist.Context()
 #: Shared small-grid parameters for tests that only fix ``nleb``
 _DROP_NLEB26 = DROPParameters(nleb=26)
 _ISWIG_NLEB26 = ISwiGParameters(nleb=26)
+#: Dense solves for tests that pin the solver
+_PCM_DENSE = PCMParameters(solver="dense")
 #: Small-grid parameters keyed by cavity type, for tests parametrized over it
 _NLEB26_PARAMETERS = {CavityDROP: _DROP_NLEB26, CavityISwiG: _ISWIG_NLEB26}
 
@@ -94,8 +96,8 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     result = cavity.cavity
 
     assert len(result.a) == 70
-    assert np.asarray(result.a).sum() == approx(151.6278477636, rel=1e-10)
-    assert result.volume == approx(173.4128767106, rel=1e-10)
+    assert np.asarray(result.a).sum() == approx(151.6278652743, rel=1e-10)
+    assert result.volume == approx(173.4128251402, rel=1e-10)
 
 
 @pytest.mark.parametrize(
@@ -360,6 +362,11 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
     with raises(ValueError, match="numbers must have shape"):
         Structure(numbers.reshape(1, -1), positions)
 
+    assert structure.charge == 0.0
+    assert Structure(numbers, positions, charge=-1).charge == -1.0
+    with raises(ValueError, match="charge must be finite"):
+        Structure(numbers, positions, charge=float("nan"))
+
 
 # -----------------------------------------------------------------------------
 # Host coupling protocol
@@ -522,7 +529,7 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
     """The native settings printout: cavity, then each component by position."""
     model = SolvationModel(
         CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
-        [ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu")), ModelComponentPV(2.5e-4)],
+        [ModelComponentCPCM(32.0, parameters=PCMParameters(solver="iterative")), ModelComponentPV(2.5e-4)],
     )
 
     text = model.parameters_text()
@@ -579,11 +586,26 @@ def test_component_views_keep_their_model(diatomic) -> None:
 
 
 def test_cosmo_is_a_standalone_pcm_component() -> None:
-    cpcm = ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu"))
-    cosmo = ModelComponentCOSMO(32.0, parameters=PCMParameters(solver="lu"))
+    cpcm = ModelComponentCPCM(32.0, parameters=PCMParameters(solver="dense"))
+    cosmo = ModelComponentCOSMO(32.0, parameters=PCMParameters(solver="dense"))
 
     assert cpcm.epsilon == cosmo.epsilon == 32.0
-    assert cpcm.solver is cosmo.solver is PCMSolver.LU
+    assert cpcm.solver is cosmo.solver is PCMSolver.DENSE
+
+
+@pytest.mark.parametrize("factory", [
+    lambda: moist.ModelComponentIEFPCM(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentSSVPE(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentDPCM(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentDPCMOriginal(32.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentLPB(32.0, 0.1, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentSLIC(32.0, 0.2, 0.5, 0.8, 0.1, 0.0, parameters=_PCM_DENSE),
+    lambda: moist.ModelComponentNonlocal(32.0, 4.0, 1.0, 1.0, parameters=_PCM_DENSE),
+])
+def test_new_pcm_component_constructors(factory) -> None:
+    component = factory()
+    assert component.solver is PCMSolver.DENSE
+
 
 
 def test_cosmo_rejects_an_invalid_dielectric() -> None:
@@ -794,16 +816,19 @@ def test_request_outputs_are_named_and_ordered(diatomic) -> None:
             assert _still_missing(coupling, request) == set()
             continue
         assert request.name == "gaussian_potential"
-        assert tuple(request._outputs) == ("phi", "dphi_dr", "dphi_dxi")
-        assert request.missing == set(request._outputs)
+        assert tuple(request._outputs) == (
+            "phi", "dphi_dr", "dphi_dxi", "d2phi_dr2", "d2phi_dr_dxi"
+        )
+        assert request.missing == {"phi", "dphi_dr", "dphi_dxi"}
         with raises(TypeError, match="has no output 'gt'"):
             coupling.answer(gt=np.zeros(ngrid))
         with raises(TypeError):
             coupling.answer(np.zeros(ngrid))
         # Neither refusal stored anything.
-        assert _still_missing(coupling, request) == set(request._outputs)
+        assert _still_missing(coupling, request) == {"phi", "dphi_dr", "dphi_dxi"}
 
-        coupling.answer(phi=np.zeros(ngrid), dphi_dr=np.zeros((ngrid, 3)), dphi_dxi=np.zeros(ngrid))
+        coupling.answer(phi=np.zeros(ngrid), dphi_dr=np.zeros((ngrid, 3)),
+                        dphi_dxi=np.zeros(ngrid))
         assert _still_missing(coupling, request) == set()
         # ``None`` skips an output rather than un-answering it.
         coupling.answer(phi=None)
@@ -1177,6 +1202,8 @@ _RNG = np.random.default_rng(11)
 
 
 @pytest.mark.parametrize("kind,arrays", [
+    (PotentialAdjointResponse, {"w_phi": _RNG.standard_normal(_NGRID),
+                               "w_dphi_dr": _RNG.standard_normal((_NGRID, 3))}),
     (GaussianAmplitudeResponse, {"w_overlap": _RNG.standard_normal(_NGRID),
                                  "w_normal_deriv": _RNG.standard_normal(_NGRID)}),
     (AtomicMultipoleAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM),
@@ -1206,6 +1233,15 @@ def test_an_order_the_model_never_consumed_is_none(monkeypatch) -> None:
     np.testing.assert_array_equal(item.dg_dq, dg_dq)
     assert item.dg_dmu is None
     assert item.dg_dtheta is None
+
+
+def test_absent_potential_gradient_weights_are_none(monkeypatch) -> None:
+    """A model using only potential values does not declare spatial weights."""
+    w_phi = np.arange(1.0, 1.0 + _NGRID)
+    _fake_native_response(monkeypatch, "potential_adjoint", {"w_phi": w_phi})
+    (item,) = Response._from_handle(None)
+    np.testing.assert_array_equal(item.w_phi, w_phi)
+    assert item.w_dphi_dr is None
 
 
 def test_response_bindings_refuse_to_drift_from_the_library(monkeypatch) -> None:
@@ -1668,7 +1704,8 @@ def test_answer_forwards_each_declared_output_in_order(two_requests, monkeypatch
     ngrid = model.cavity.ngrid
     shapes = {
         "gaussian_potential": {"phi": (ngrid,), "dphi_dr": (ngrid, 3),
-                               "dphi_dxi": (ngrid,)},
+                               "dphi_dxi": (ngrid,), "d2phi_dr2": (ngrid, 3, 3),
+                               "d2phi_dr_dxi": (ngrid, 3)},
         "gaussian_moments": {"gt": (ngrid,), "pt": (ngrid, 3),
                              "mt": (ngrid, 3, 3), "rt": (ngrid, 3)},
     }

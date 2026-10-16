@@ -33,6 +33,16 @@ if host_machine.system() == 'windows'
   moist_link_args = cxx.get_supported_link_arguments('-Wl,--exclude-libs,ALL')
 endif
 
+# src/moist/data at -O0
+data_lib = static_library(
+  'moist-data',
+  sources: data_srcs,
+  dependencies: lib_deps,
+  fortran_args: '-O0',
+  pic: true,
+  install: false,
+)
+
 # Library target
 moist_lib = library(
   meson.project_name(),
@@ -40,12 +50,17 @@ moist_lib = library(
   version: lib_version,
   dependencies: lib_deps,
   include_directories: inc_dirs,
+  objects: data_lib.extract_all_objects(recursive: false),
   link_args: moist_link_args,
   install: install,
 )
 
 # Export dependency for other projects and test suite
-moist_inc = [moist_lib.private_dir_include(), include_directories('include')]
+moist_inc = [
+  moist_lib.private_dir_include(),
+  data_lib.private_dir_include(),
+  include_directories('include'),
+]
 moist_dep = declare_dependency(
   link_with: moist_lib,
   include_directories: moist_inc,
