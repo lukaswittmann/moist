@@ -195,6 +195,10 @@ configure_file(
 )
 list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 
+# src/moist/data at -O0
+file(GLOB moist_data_srcs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/data/*.f90")
+set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
   VERSION "${PROJECT_VERSION}"

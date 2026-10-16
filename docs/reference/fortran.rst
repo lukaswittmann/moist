@@ -443,7 +443,7 @@ Solvents
 ``get_solvent_descriptors_by_id(id, descriptors, error)``, exported by
 ``moist``, fill a ``solvent_descriptors_type`` (:ref:`api-solvents`);
 ``descriptors%print(unit)`` writes the printout, to standard output by default.
-``new_solvent_system(system, id, error=error)`` from ``moist_data_solvents``
+``new_solvent_system(system, id, error=error)`` from ``moist_solvent``
 builds a ``solvent_system_type``; the optional ``temperature`` (K) and
 ``pressure_si`` (Pa) default to 298.15 K and 1 atm.
 

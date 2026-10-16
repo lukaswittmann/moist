@@ -11,7 +11,7 @@ module test_moz_fixtures
    use moist_channels_coupling, only: coupling_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
-   use moist_data_solvents, only: solvent_system_type, new_solvent_system
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6

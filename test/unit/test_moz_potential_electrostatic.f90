@@ -28,9 +28,9 @@ module test_moz_potential_electrostatic
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_multipoles_type, &
       & solvent_model_charges_type, coulomb_resp_solvent, coulomb_spce, multipoles_mbis_gas
-   use moist_data_solvents, only: get_solvent_charges
+   use moist_data_solvents, only: get_solvent_charges, get_solvent_id
    use test_moz_fixtures, only: water_id, new_water_system
-   use moist_data_solvents, only: solvent_system_type, new_solvent_system, get_solvent_id
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use test_helpers, only: check_moist_error
    use test_moz_potential_kernel, only: make_potential, make_solute, make_solvent, make_grid, &
       & check_close, sigma_u, eps_u, q_u, sigma_v, eps_v, q_v, weights_3d, eval_functional, lb, weights_1d, &

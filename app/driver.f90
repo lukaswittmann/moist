@@ -14,7 +14,7 @@ module moist_driver
    use moist_cli, only: run_config
    use moist_output_ascii, only: moist_header, moist_build_header, cavity_header
    use moist_data_solvents, only: get_solvent_id
-   use moist_data_solvents, only: solvent_system_type, new_solvent_system
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop

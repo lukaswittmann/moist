@@ -1,5 +1,6 @@
 
 subroutine get_solvent_geometry(solvent_id, mol, error)
+   !DIR$ OPTIMIZE:0
    use mctc_io, only: structure_type, new_structure
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error

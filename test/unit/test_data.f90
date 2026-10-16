@@ -12,10 +12,11 @@ module test_data
       & arad_max_elem => max_elem
    use moist_data_radii_legacy, only: get_radius, get_radius_func, &
       & get_upper_bound, rad_type
-   use moist_data_solvents, only: get_solvent_id, max_solvents, &
-      & solvent_system_type, new_solvent_system, solvent_multipole_data_type, &
-      & get_solvent_charges, get_solvent_multipoles, solvent_descriptors_type, &
-      & get_solvent_descriptors, get_solvent_descriptors_by_id, max_solvent_name_len
+   use moist_data_solvents, only: get_solvent_id, max_solvents, solvent_multipole_data_type, &
+      & get_solvent_charges, get_solvent_multipoles, max_solvent_name_len, get_solvent_table
+   use moist_solvent_descriptors, only: solvent_descriptors_type, get_solvent_descriptors, &
+      & get_solvent_descriptors_by_id
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
 
@@ -626,7 +627,7 @@ contains
       character(len=64) :: name_list(max_solvents)
       character(len=64) :: alias_list(10, max_solvents)
 
-      include "../src/moist/data/solvents.inc"
+      call get_solvent_table(id_list, name_list, alias_list, eps, refr, A, B, g, rho)
 
       do i = 1, max_solvents
          do j = 1, 10
@@ -801,7 +802,7 @@ contains
       character(len=64) :: name_list(max_solvents)
       character(len=64) :: alias_list(10, max_solvents)
 
-      include "../src/moist/data/solvents.inc"
+      call get_solvent_table(id_list, name_list, alias_list, eps, refr, A, B, g, rho)
 
       do id = 1, max_solvents
          call new_solvent_system(system, id, error=err)
@@ -903,7 +904,7 @@ contains
       character(len=64) :: name_list(max_solvents)
       character(len=64) :: alias_list(10, max_solvents)
 
-      include "../src/moist/data/solvents.inc"
+      call get_solvent_table(id_list, name_list, alias_list, eps, refr, A, B, g, rho)
 
       do i = 1, max_solvents
          call check(error, len_trim(name_list(i)) <= max_solvent_name_len, &
