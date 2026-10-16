@@ -72,6 +72,7 @@ program tester
    use test_model_component_pcm_derivatives, only: collect_model_component_pcm_derivatives
    use test_model_component_pcm_references, only: collect_model_component_pcm_references
    use test_model_component_pcm_regression, only: collect_model_component_pcm_regression
+   use test_model_component_pcm_vacuum, only: collect_model_component_pcm_vacuum
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_continuum, only: collect_model_continuum
@@ -156,6 +157,7 @@ program tester
       & new_testsuite("model_component_pcm_derivatives", collect_model_component_pcm_derivatives), &
       & new_testsuite("model_component_pcm_references", collect_model_component_pcm_references), &
       & new_testsuite("model_component_pcm_regression", collect_model_component_pcm_regression), &
+      & new_testsuite("model_component_pcm_vacuum", collect_model_component_pcm_vacuum), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_continuum", collect_model_continuum), &

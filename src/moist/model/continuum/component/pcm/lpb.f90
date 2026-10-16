@@ -40,7 +40,6 @@ module moist_model_continuum_component_pcm_lpb
       procedure :: solve_layer => lpb_solve_layer
       procedure :: layer_weights => lpb_layer_weights
       procedure :: layer_tangent => lpb_layer_tangent
-      procedure :: is_inert => lpb_is_inert
    end type model_continuum_component_lpb
 
 contains
@@ -246,13 +245,6 @@ contains
             & hvp_k1, hvp_k2, hvp_a, hvp_v, error)
       end if
    end subroutine lpb_layer_tangent
-
-   !> Screening can polarize even when epsilon is one
-   pure function lpb_is_inert(self) result(inert)
-      class(model_continuum_component_lpb), intent(in) :: self
-      logical :: inert
-      inert = self%feps == 0.0_wp .and. self%kappa == 0.0_wp
-   end function lpb_is_inert
 
    !> Inverse Debye screening length of a 1:1 electrolyte, in inverse bohr
    pure function debye_kappa(epsilon, ionic_strength, temperature) result(kappa)

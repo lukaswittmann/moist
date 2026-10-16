@@ -8,7 +8,6 @@ module moist_model_continuum_component_pcm_layer
       & coupling_request_type, point_potential_request_type, gaussian_potential_request_type, &
       & nuclear_charge_request_type, moist_phase_energy, moist_phase_response, moist_phase_gradient, &
       & coupling_register, request_require
-   use moist_channels_response, only: response_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
       & pcm_tangent_block, pcm_tangent_require
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
@@ -43,7 +42,6 @@ module moist_model_continuum_component_pcm_layer
       procedure :: uses_normal_trace => layer_uses_normal_trace
       procedure :: get_surface_weights => layer_get_surface_weights
       procedure :: get_gradient_surface_weights => layer_get_gradient_surface_weights
-      procedure :: get_gradient => layer_get_gradient
       procedure :: declare_coupling => layer_declare_coupling
       procedure :: get_host_surface_weights => layer_get_host_surface_weights
       procedure :: surface_weight_tangent => layer_surface_weight_tangent
@@ -463,25 +461,6 @@ contains
          call layer_add_host_normal_weights(self, coupling, cavity, acc, error)
       end if
    end subroutine layer_get_gradient_surface_weights
-
-   !> Forward gradient path equivalent to the reverse surface contraction
-   subroutine layer_get_gradient(self, coupling, cavity, response, gradient, error)
-      class(pcm_layer_base), intent(inout) :: self
-      class(coupling_view_type), intent(in) :: coupling
-      class(cavity_type), intent(inout) :: cavity
-      type(response_type), intent(inout) :: response
-      real(wp), intent(inout) :: gradient(:, :)
-      type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
-      call self%get_trace_response(coupling, cavity, response, error)
-      if (allocated(error)) return
-      call self%get_direct_gradient(coupling, cavity, gradient, error)
-      if (allocated(error)) return
-      call acc%init(cavity%ngrid)
-      call self%get_gradient_surface_weights(coupling, cavity, acc, error)
-      if (allocated(error)) return
-      call cavity%get_surface_gradient(acc, gradient, error)
-   end subroutine layer_get_gradient
 
    !> Directional derivative of the generated weights and trace adjoints
    !>

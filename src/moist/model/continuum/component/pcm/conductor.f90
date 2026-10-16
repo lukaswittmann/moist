@@ -339,7 +339,6 @@ contains
 
       call self%ensure_charges(coupling, cavity, error)
       if (allocated(error)) return
-      if (self%is_inert()) return
       allocate (w_xyz(3, cavity%ngrid))
       if (self%smeared) then
          allocate (w_xi(cavity%ngrid), w_f(cavity%ngrid))
@@ -407,10 +406,6 @@ contains
       call pcm_tangent_require(self, cavity, dphi, error)
       if (allocated(error)) return
       ngrid = cavity%ngrid
-      if (self%is_inert()) then
-         allocate (dw_phi(ngrid), source=0.0_wp)
-         return
-      end if
       call pcm_tangent_block(direction%w_xyz, ngrid, "w_xyz", dr, error)
       if (allocated(error)) return
       allocate (dv(ngrid, 1), hvp_r(3, ngrid, 1), hvp_v(ngrid, 1), w_xyz(3, ngrid))
