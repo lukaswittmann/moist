@@ -1173,6 +1173,9 @@ contains
       nact = size(dphi, 1)
       nrhs = size(dphi, 2)
       if (size(run_off) == 1 .and. run_off(1) == 0 .and. nact == self%nfun) then
+         ! TODO: this gemm (and the one in contract_panels) runs per point inside
+         ! the OpenMP projection; pthreaded OpenBLAS can fight with that
+         ! (~2x slower for ~600 functions)
          call gemm(self%dens, phi(:, 0:nrhs - 1), dphi)
       else if (nrhs == 1) then
          call contract_runs(self, phi, dphi, run_off, run_len)

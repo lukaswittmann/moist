@@ -222,7 +222,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals)
+  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
   target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
@@ -382,9 +382,12 @@ if(MOIST_TESTS)
       add_test(NAME ${suite} COMMAND moist-tester ${suite})
       set(runs ${suite})
     endif()
+    # Serial BLAS: suites run their tests in an OpenMP parallel; meson runs suites
+    # concurrently, so threaded BLAS (MKL on intel25, pthreaded OpenBLAS on the
+    # conda, ilp64 and MSYS2 legs) oversubscribes
     set_tests_properties(${runs} PROPERTIES
-      ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-      TIMEOUT 360
+      ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR};MKL_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1"
+      TIMEOUT 420
     )
   endforeach()
 endif()

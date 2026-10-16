@@ -294,7 +294,12 @@ contains
             solver%max_iter = self%param%solver_maxiter
             solver%restart = self%param%solver_restart
             solver%storage = self%param%storage
-            allocate (solver%preconditioner, source=pcm_block_jacobi(block_size=256))
+            ! Typed allocate; ifx seems to have issues here sometimes
+            allocate (pcm_block_jacobi :: solver%preconditioner)
+            select type (preconditioner => solver%preconditioner)
+            type is (pcm_block_jacobi)
+               preconditioner%block_size = 256
+            end select
          end select
       else
          allocate (pcm_dense_solver :: solver)
