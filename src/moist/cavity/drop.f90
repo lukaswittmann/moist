@@ -5,6 +5,7 @@ module moist_cavity_drop
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
+   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc
    use moist_math_lapack, only: getrf, getrs
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
@@ -603,6 +604,25 @@ contains
 
    end subroutine new_cavity_drop
 
+   !> Record DROP and its level set on the cavity's context; called by
+   !> `update`, which also covers a cavity adopted by a model
+   subroutine cite_cavity_drop(self)
+      !> Cavity instance
+      class(cavity_type_drop), intent(inout) :: self
+
+      if (.not. associated(self%ctx)) return
+      call self%ctx%cite(citation_drop)
+      select type (m => self%lsf_model)
+      type is (moist_cavity_drop_lsf_cfc_type)
+         call self%ctx%cite(citation_cfc)
+      type is (moist_cavity_drop_lsf_isodensity_internal_type)
+         call self%ctx%cite(citation_isodensity)
+      type is (moist_cavity_drop_lsf_isodensity_callback_type)
+         call self%ctx%cite(citation_isodensity)
+      end select
+
+   end subroutine cite_cavity_drop
+
    !> Construction settings of the cavity
    !>
    !> @param[in] self DROP cavity instance
@@ -710,6 +730,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call cite_cavity_drop(self)
 
       !> Set number of spheres
       self%nsph = mol%nat

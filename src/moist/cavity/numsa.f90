@@ -8,6 +8,7 @@
 !>   [DOI: 10.1002/jcc.10321](https://doi.org/10.1002/jcc.10321)
 !>
 module moist_cavity_numsa
+   use moist_output_citations, only: citation_numsa
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
@@ -187,6 +188,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call self%ctx%cite(citation_numsa)
 
       nat = mol%nat
       self%nsph = nat

@@ -4,9 +4,17 @@
 % the BibTeX "--" convention; acronyms are brace-protected so the bibliography
 % style does not lowercase them.
 %
-% Note: the registry lists the DROP/moist paper twice (once under the "General"
-% label "moist", once under the "Cavities" label "DROP/SvdW"); it is one
-% publication and appears here once as wittmann2026drop.
+% wittmann2026moist uses the Zenodo concept DOI, which resolves to the latest
+% release (same as CITATION.cff); a misc entry because pybtex drops the
+% publisher of software entries.
+
+@misc{wittmann2026moist,
+  author       = {Wittmann, L.},
+  title        = {{MOIST}: The Modular and Open-source Implicit Solvation Toolkit},
+  howpublished = {Computer software, Zenodo},
+  year         = {2026},
+  doi          = {10.5281/zenodo.23473416},
+}
 
 @article{wittmann2026drop,
   author  = {Wittmann, L. and Pausch, A.},
@@ -91,6 +99,28 @@
   number  = {8},
   pages   = {2108--2116},
   doi     = {10.1021/acs.jpca.4c08065},
+}
+
+@article{scheurer2021gostshyp,
+  author  = {Scheurer, M. and Dreuw, A. and Epifanovsky, E. and Head-Gordon, M. and Stauch, T.},
+  title   = {Modeling Molecules under Pressure with {G}aussian Potentials},
+  journal = {J. Chem. Theory Comput.},
+  year    = {2021},
+  volume  = {17},
+  number  = {1},
+  pages   = {583--597},
+  doi     = {10.1021/acs.jctc.0c01212},
+}
+
+@article{pausch2025gostshyp,
+  author  = {Pausch, A. and Zeller, F. and Neudecker, T.},
+  title   = {An Integral-Direct {GOSTSHYP} Algorithm for the Computation of High Pressure Effects on Molecular and Electronic Structure},
+  journal = {J. Chem. Theory Comput.},
+  year    = {2025},
+  volume  = {21},
+  number  = {2},
+  pages   = {747--761},
+  doi     = {10.1021/acs.jctc.4c01502},
 }
 
 @techreport{kraft1988slsqp,

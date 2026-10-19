@@ -1,4 +1,5 @@
 module moist_cavity_iswig
+   use moist_output_citations, only: citation_iswig, citation_iswig_adaptive
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -203,6 +204,8 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call self%ctx%cite(citation_iswig)
+      call self%ctx%cite(citation_iswig_adaptive)
 
       !> Set number of spheres
       self%nsph = mol%nat
