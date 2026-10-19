@@ -4,14 +4,10 @@
 
   [![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/LICENSE)
   [![Version](https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases)](https://github.com/lukaswittmann/moist/releases/latest)
+  [![DOI](https://zenodo.org/badge/1255788295.svg)](https://zenodo.org/badge/latestdoi/1255788295)
   [![Build](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main)](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml)
   [![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
   [![Coverage](https://codecov.io/gh/lukaswittmann/moist/branch/main/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
-
-  <!-- [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational)](#tested-platforms)
-  [![Compilers](https://img.shields.io/badge/compilers-GCC%2014--16%20%7C%20Intel%20ifx%202025-informational)](#tested-platforms)
-  [![Build systems](https://img.shields.io/badge/build%20systems-meson%20%7C%20CMake-informational)](#tested-platforms)
-  [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.13-informational)](#tested-platforms) -->
 
 </div>
 
@@ -230,7 +226,13 @@ Contributions are welcome; see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the code
 
 ## Citation
 
-There is no dedicated toolkit paper yet, so for now please cite `moist` using the DROP cavity work, together with the references for the specific cavities, models, and solvers you used:
+If you use `moist`, please cite the software itself (see [`CITATION.cff`](CITATION.cff); the DOI badge above links to the latest release):
+
+- L. Wittmann, *MOIST: The Modular and Open-source Implicit Solvation Toolkit*
+  [Computer software], Zenodo 2026.
+  <https://doi.org/10.5281/zenodo.23473416>
+
+together with the DROP cavity work and the references for the specific cavities, models, and solvers you used:
 
 - L. Wittmann, A. Pausch, *A Smooth and Fully Differentiable Molecular Cavity
   Based on Discretization via Reference-Onto-Surface Projection*, ChemRxiv 2026.
