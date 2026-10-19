@@ -1,4 +1,5 @@
 module moist_cavity_iswig
+   use moist_output_citations, only: citation_iswig, citation_iswig_adaptive
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -140,6 +141,10 @@ contains
       if (present(param)) settings = param
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
+      if (associated(self%ctx)) then
+         call self%ctx%cite(citation_iswig)
+         call self%ctx%cite(citation_iswig_adaptive)
+      end if
       self%label = "vdW iSwiG"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)

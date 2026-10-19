@@ -298,6 +298,7 @@ contains
          end block
          call ctx%timer%stop("total")
          call ctx%timer%print("moist")
+         call ctx%print_citations()
          call ctx%delete()
          return
       end if

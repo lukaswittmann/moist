@@ -28,6 +28,12 @@ module moist_cavity_marchingcubes
    use moist_context, only: moist_context_type, resolve_num_threads
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_isodensity, only: &
+      moist_cavity_drop_lsf_isodensity_internal_type, &
+      moist_cavity_drop_lsf_isodensity_callback_type
+   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
       & coupling_close_view
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
@@ -465,6 +471,18 @@ contains
       allocate(self%radius_model, source=radius_model)
       if (allocated(self%lsf_model)) deallocate(self%lsf_model)
       allocate(self%lsf_model, source=lsf_model)
+      ! The level set; the SvdW surface comes with the DROP work
+      if (associated(self%ctx)) then
+         call self%ctx%cite(citation_drop)
+         select type (lsf_model)
+         type is (moist_cavity_drop_lsf_cfc_type)
+            call self%ctx%cite(citation_cfc)
+         type is (moist_cavity_drop_lsf_isodensity_internal_type)
+            call self%ctx%cite(citation_isodensity)
+         type is (moist_cavity_drop_lsf_isodensity_callback_type)
+            call self%ctx%cite(citation_isodensity)
+         end select
+      end if
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
       self%updated = .false.

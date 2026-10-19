@@ -1,7 +1,7 @@
 GOSTSHYP
 ========
 
-GOSTSHYP (Gaussians On Surface Tesserae Simulating HYdrostatic Pressure) applies pressure through Gaussian potentials on the cavity surface.
+GOSTSHYP (Gaussians On Surface Tesserae Simulating HYdrostatic Pressure) :cite:p:`scheurer2021gostshyp,pausch2025gostshyp` applies pressure through Gaussian potentials on the cavity surface.
 Their amplitudes depend on the electron density and the requested pressure.
 
 For each surface point with position :math:`\mathbf C_i`, area :math:`a_i` and normal :math:`\mathbf n_i`,

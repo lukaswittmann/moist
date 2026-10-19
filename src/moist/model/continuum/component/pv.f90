@@ -2,6 +2,7 @@
 module moist_model_continuum_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use moist_output_citations, only: citation_pv
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
@@ -48,7 +49,10 @@ contains
       self%name = "PV"
       self%description = "Pressure-volume work, pressure times cavity volume"
       self%pressure = pressure
-      if (present(ctx)) self%ctx => ctx
+      if (present(ctx)) then
+         self%ctx => ctx
+         call self%ctx%cite(citation_pv)
+      end if
 
    end subroutine new_component_pv
 

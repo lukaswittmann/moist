@@ -10,6 +10,7 @@ module moist_model_continuum_component_gostshyp
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_model_parameters, only: moist_model_parameters_type
+   use moist_output_citations, only: citation_gostshyp
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
@@ -103,7 +104,10 @@ contains
       self%description = "Gaussians On Surface Tesserae To Simulate HYdrostatic Pressure"
       self%pressure = pressure
       if (present(param)) self%param = param
-      if (present(ctx)) self%ctx => ctx
+      if (present(ctx)) then
+         self%ctx => ctx
+         call self%ctx%cite(citation_gostshyp)
+      end if
       if (present(error)) call validate_settings(self, error)
 
    end subroutine new_component_gostshyp

@@ -9,6 +9,10 @@ MOIST Documentation
    :target: https://github.com/lukaswittmann/moist/releases/latest
    :alt: Version
 
+.. image:: https://zenodo.org/badge/1255788295.svg
+   :target: https://zenodo.org/badge/latestdoi/1255788295
+   :alt: DOI
+
 .. image:: https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main
    :target: https://github.com/lukaswittmann/moist/actions
    :alt: CI

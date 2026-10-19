@@ -13,7 +13,9 @@
 !>     pointer, every borrower appends into this one timer tree; the host
 !>     times its own work through the context's `start_timer`/`stop_timer`,
 !>     under a top-level `Host` node, never through `timer%start`/`timer%stop`,
-!>     which belong to moist's own nodes
+!>     which belong to moist's own nodes,
+!>   * `cite`      - the citation labels of the parts that ran; like the timer,
+!>     every borrower records into this one list, printed at the end of a run
 !>
 !> Verbosity levels; a host calls moist once per SCF iteration and geometry
 !> step, so each level also bounds how often it prints:
@@ -31,6 +33,7 @@ module moist_context
    use mctc_env, only: error_type, fatal_error
    use moist_utils_timer, only: timer_type, timer_name_len => name_len, cat_host
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_output_citations, only: citation_label_len, citation_moist, print_citations
 !$ use omp_lib, only: omp_get_max_threads
    implicit none(type, external)
    private
@@ -79,6 +82,10 @@ module moist_context
       integer, allocatable, private :: host_frames(:)
       !> Number of open host timer nodes, `Host` included
       integer, private :: nhost = 0
+      !> Citation labels recorded by `cite`, in first-use order
+      character(len=citation_label_len), allocatable, private :: cited(:)
+      !> Number of recorded citation labels
+      integer, private :: ncited = 0
    contains
       !> Tear down the owned timer and close any owned files
       procedure :: delete => delete_context
@@ -107,6 +114,10 @@ module moist_context
       procedure :: start_timer => context_start_timer
       !> Stop the innermost open host timer by name
       procedure :: stop_timer => context_stop_timer
+      !> Record that a part with this citation label ran
+      procedure :: cite => context_cite
+      !> Print the General citations plus those recorded by `cite`
+      procedure :: print_citations => context_print_citations
    end type moist_context_type
 
 contains
@@ -181,9 +192,7 @@ contains
          end if
       end if
 
-      ! Debug output defaults to the main unit; a separate file splits the stream,
-      ! but only when debug is actually enabled -- otherwise no orphan file is
-      ! created (nothing would ever be written to it)
+      ! Debug output defaults to the main unit
       self%debug_unit = self%unit
       if (present(debugfile) .and. self%debug) then
          open (newunit=iu, file=debugfile, status="replace", action="write", iostat=stat)
@@ -194,6 +203,9 @@ contains
             self%debugfile = debugfile
          end if
       end if
+
+      ! Cite moist package
+      call self%cite(citation_moist)
 
       ! The timer report follows the verbosity: silent at 0, deeper from 1 on
       call self%timer%new(verbose=self%level > 1, unit=self%unit, &
@@ -222,6 +234,8 @@ contains
       call self%timer%delete()
       self%nhost = 0
       if (allocated(self%host_frames)) deallocate (self%host_frames)
+      self%ncited = 0
+      if (allocated(self%cited)) deallocate (self%cited)
 
    end subroutine delete_context
 
@@ -623,5 +637,57 @@ contains
       call pp%blank()
 
    end subroutine context_print_settings
+
+   !> Record a citation label, once; parts call this from their constructors,
+   !> where the context is available, with one of the `citation_*` labels of
+   !> `moist_output_citations`
+   !>
+   !> @param[in]  label  registry label of the part that ran
+   subroutine context_cite(self, label)
+      !> Context instance
+      class(moist_context_type), intent(inout) :: self
+      !> Registry label
+      character(len=*), intent(in) :: label
+      !> Grown label list
+      character(len=citation_label_len), allocatable :: cited(:)
+
+      if (self%ncited > 0) then
+         if (any(self%cited(:self%ncited) == label)) return
+      end if
+
+      if (.not. allocated(self%cited)) allocate (self%cited(8))
+      if (self%ncited == size(self%cited)) then
+         allocate (cited(2*self%ncited))
+         cited(:self%ncited) = self%cited(:self%ncited)
+         call move_alloc(cited, self%cited)
+      end if
+      self%ncited = self%ncited + 1
+      self%cited(self%ncited) = label
+
+   end subroutine context_cite
+
+   !> Print the General citations plus those recorded by `cite`; silent at
+   !> verbosity 0
+   !>
+   !> @param[in]  unit  optional output unit override (default `self%unit`)
+   subroutine context_print_citations(self, unit)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Optional output unit override
+      integer, intent(in), optional :: unit
+      !> Effective output unit
+      integer :: iu
+
+      if (self%level < 1) return
+      iu = self%unit
+      if (present(unit)) iu = unit
+
+      if (allocated(self%cited)) then
+         call print_citations(iu, self%cited(:self%ncited))
+      else
+         call print_citations(iu, [character(len=citation_label_len) ::])
+      end if
+
+   end subroutine context_print_citations
 
 end module moist_context

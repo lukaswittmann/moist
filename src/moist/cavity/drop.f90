@@ -5,6 +5,8 @@ module moist_cavity_drop
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
+   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc, &
+                                     citation_slsqp
    use moist_math_lapack, only: getrf, getrs
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
@@ -573,6 +575,19 @@ contains
       end if
       !> Push the cavity-derived screening threshold into the LSF
       self%lsf_model%screening_threshold = self%param%screening_threshold
+
+      ! DROP, its level set and SLSQP, which every level below the octree search runs
+      if (associated(self%ctx)) then
+         call self%ctx%cite(citation_drop)
+         select type (lsf_model)
+         type is (moist_cavity_drop_lsf_cfc_type)
+            call self%ctx%cite(citation_cfc)
+         type is (moist_cavity_drop_lsf_isodensity_internal_type)
+            call self%ctx%cite(citation_isodensity)
+         type is (moist_cavity_drop_lsf_isodensity_callback_type)
+            call self%ctx%cite(citation_isodensity)
+         end select
+      end if
 
       !> Set up weight switching function
       call new_swif_sigmoid_bump(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &

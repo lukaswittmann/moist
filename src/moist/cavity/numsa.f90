@@ -8,6 +8,7 @@
 !>   [DOI: 10.1002/jcc.10321](https://doi.org/10.1002/jcc.10321)
 !>
 module moist_cavity_numsa
+   use moist_output_citations, only: citation_numsa
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
@@ -144,6 +145,7 @@ contains
       if (present(param)) settings = param
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
+      if (associated(self%ctx)) call self%ctx%cite(citation_numsa)
       self%label = "NUMSA"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)

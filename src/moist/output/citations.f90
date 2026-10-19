@@ -9,8 +9,34 @@ module moist_output_citations
    implicit none(type, external)
    private
 
-   public :: citation_entry_type, moist_citations, num_citations
+   public :: citation_entry_type, moist_citations, num_citations, citation_label_len
    public :: print_citations, print_citations_by_category, print_citations_by_label
+   public :: citation_moist, citation_drop, citation_isodensity, citation_iswig
+   public :: citation_iswig_adaptive, citation_numsa, citation_cfc, citation_smd
+   public :: citation_slsqp, citation_lbfgsb, citation_fmin, citation_lsqr
+   public :: citation_lsmr, citation_lusol, citation_pv, citation_gostshyp
+
+   !> Registry labels; a part records the ones it used through `ctx%cite`
+   character(len=*), parameter :: citation_moist = "moist"
+   character(len=*), parameter :: citation_drop = "DROP/SvdW"
+   character(len=*), parameter :: citation_isodensity = "DROP/Isodensity"
+   character(len=*), parameter :: citation_iswig = "Improved Switching Gaussian Approach (iSwiG)"
+   character(len=*), parameter :: citation_iswig_adaptive = "Improved Switching Gaussian Approach (iSwiG) " &
+      & // "with dynamic radii"
+   character(len=*), parameter :: citation_numsa = "Numerical Surface Area (numSA)"
+   character(len=*), parameter :: citation_cfc = "COSMO Fine Cavity (CFC)"
+   character(len=*), parameter :: citation_smd = "SMD"
+   character(len=*), parameter :: citation_slsqp = "SLSQP"
+   character(len=*), parameter :: citation_lbfgsb = "L-BFGS-B"
+   character(len=*), parameter :: citation_fmin = "fmin"
+   character(len=*), parameter :: citation_lsqr = "LSQR"
+   character(len=*), parameter :: citation_lsmr = "LSMR"
+   character(len=*), parameter :: citation_lusol = "LUSOL"
+   character(len=*), parameter :: citation_pv = "Pressure-volume term (PV)"
+   character(len=*), parameter :: citation_gostshyp = "GOSTSHYP"
+
+   !> Length that holds every label
+   integer, parameter :: citation_label_len = 80
 
    !> A single literature reference
    type :: citation_entry_type
@@ -29,7 +55,7 @@ module moist_output_citations
    end type citation_entry_type
 
    !> Number of entries in the registry
-   integer, parameter :: num_citations = 19
+   integer, parameter :: num_citations = 21
 
    !> The global citation registry, populated in init_citations()
    type(citation_entry_type), target :: moist_citations(num_citations)
@@ -46,28 +72,27 @@ contains
    subroutine init_citations()
       if (initialised) return
 
-      ! No dedicated toolkit paper yet; cite the DROP cavity work for now
+      ! Concept DOI: resolves to the latest release
       moist_citations(1) = citation_entry_type( &
                            category="General", &
-                           label="moist", &
-                           authors="Wittmann, L., Pausch, A.", &
-                           title="A Smooth and Fully Differentiable Molecular Cavity Based on "// &
-                           " Discretization via Reference-Onto-Surface Projection", &
-                           journal="ChemRxiv 2026", &
-                           doi="https://doi.org/10.26434/chemrxiv.15003893/v2")
+                           label=citation_moist, &
+                           authors="Wittmann, L.", &
+                           title="MOIST: The Modular and Open-source Implicit Solvation Toolkit.", &
+                           journal="Computer software, Zenodo 2026", &
+                           doi="https://doi.org/10.5281/zenodo.23473416")
 
       moist_citations(2) = citation_entry_type( &
                            category="Cavities", &
-                           label="DROP/SvdW", &
+                           label=citation_drop, &
                            authors="Wittmann, L., Pausch, A.", &
                            title="A Smooth and Fully Differentiable Molecular Cavity Based on "// &
-                           " Discretization via Reference-Onto-Surface Projection", &
+                           "Discretization via Reference-Onto-Surface Projection", &
                            journal="ChemRxiv 2026", &
                            doi="https://doi.org/10.26434/chemrxiv.15003893/v2")
 
       moist_citations(3) = citation_entry_type( &
                            category="Cavities", &
-                           label="DROP/Isodensity", &
+                           label=citation_isodensity, &
                            authors="Wittmann, L.", &
                            title="From Density to Boundary and Back: A Fully Differentiable, "// &
                            "Self-Consistent Isodensity Cavity.", &
@@ -76,7 +101,7 @@ contains
 
       moist_citations(4) = citation_entry_type( &
                            category="Cavities", &
-                           label="Improved Switching Gaussian Approach (iSwiG)", &
+                           label=citation_iswig, &
                            authors="Lange, A.W., Herbert, J.M.", &
                            title="A smooth, nonsingular, and faithful discretization scheme "// &
                            "for PCM: the switching/Gaussian approach.", &
@@ -85,7 +110,7 @@ contains
 
       moist_citations(5) = citation_entry_type( &
                            category="Cavities", &
-                           label="Improved Switching Gaussian Approach (iSwiG) with adaptive radii", &
+                           label=citation_iswig_adaptive, &
                            authors="Wittmann, L., Garcia-Rates, M., Riplinger, C.", &
                            title="Analytical first derivatives of the SCF energy for the "// &
                            "conductor-like PCM with non-static radii.", &
@@ -94,7 +119,7 @@ contains
 
       moist_citations(6) = citation_entry_type( &
                            category="Cavities", &
-                           label="Numerical Surface Area (numSA)", &
+                           label=citation_numsa, &
                            authors="Im, W., Lee, M.S., Brooks, C.L.", &
                            title="Generalized born model with a simple smoothing function.", &
                            journal="J. Comput. Chem. 2003, 24", &
@@ -102,7 +127,7 @@ contains
 
       moist_citations(7) = citation_entry_type( &
                            category="Cavities", &
-                           label="COSMO Fine Cavity (CFC)", &
+                           label=citation_cfc, &
                            authors="Klamt, A., Diedenhofen, M.", &
                            title="A refined cavity construction algorithm for the conductor-like screening model.", &
                            journal="J. Comput. Chem. 2018, 39, 1648-1655", &
@@ -110,7 +135,7 @@ contains
 
       moist_citations(8) = citation_entry_type( &
                            category="Models", &
-                           label="SMD", &
+                           label=citation_smd, &
                            authors="Marenich, A.V., Cramer, C.J., Truhlar, D.G.", &
                            title="Universal Solvation Model Based on Solute Electron Density "// &
                            "and on a Continuum Model of the Solvent Defined by the "// &
@@ -120,7 +145,7 @@ contains
 
       moist_citations(9) = citation_entry_type( &
                            category="Solvers", &
-                           label="SLSQP", &
+                           label=citation_slsqp, &
                            authors="Kraft, D.", &
                            title="A software package for sequential quadratic programming.", &
                            journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
@@ -128,7 +153,7 @@ contains
 
       moist_citations(10) = citation_entry_type( &
                             category="Solvers", &
-                            label="SLSQP", &
+                            label=citation_slsqp, &
                             authors="Kraft, D.", &
                             title="Algorithm 733: TOMP - Fortran modules for "// &
                             "optimal control calculations.", &
@@ -137,7 +162,7 @@ contains
 
       moist_citations(11) = citation_entry_type( &
                             category="Solvers", &
-                            label="L-BFGS-B", &
+                            label=citation_lbfgsb, &
                             authors="Byrd, R.H., Lu, P., Nocedal, J., Zhu, C.", &
                             title="A limited memory algorithm for bound constrained optimization.", &
                             journal="SIAM J. Sci. Comput. 1995, 16, 1190-1208", &
@@ -145,7 +170,7 @@ contains
 
       moist_citations(12) = citation_entry_type( &
                             category="Solvers", &
-                            label="L-BFGS-B", &
+                            label=citation_lbfgsb, &
                             authors="Zhu, C., Byrd, R.H., Lu, P., Nocedal, J.", &
                             title="Algorithm 778: L-BFGS-B: Fortran subroutines for "// &
                             "large-scale bound-constrained optimization.", &
@@ -154,7 +179,7 @@ contains
 
       moist_citations(13) = citation_entry_type( &
                             category="Solvers", &
-                            label="L-BFGS-B", &
+                            label=citation_lbfgsb, &
                             authors="Morales, J.L., Nocedal, J.", &
                             title="Remark on Algorithm 778: L-BFGS-B: Fortran subroutines "// &
                             "for large-scale bound constrained optimization.", &
@@ -163,7 +188,7 @@ contains
 
       moist_citations(14) = citation_entry_type( &
                             category="Solvers", &
-                            label="fmin", &
+                            label=citation_fmin, &
                             authors="Brent, R.P.", &
                             title="Algorithms for Minimization Without Derivatives.", &
                             journal="Prentice-Hall, Englewood Cliffs, NJ, 1973", &
@@ -171,7 +196,7 @@ contains
 
       moist_citations(15) = citation_entry_type( &
                             category="Solvers", &
-                            label="LSQR", &
+                            label=citation_lsqr, &
                             authors="Paige, C.C., Saunders, M.A.", &
                             title="LSQR: An algorithm for sparse linear equations and "// &
                             "sparse least squares.", &
@@ -180,7 +205,7 @@ contains
 
       moist_citations(16) = citation_entry_type( &
                             category="Solvers", &
-                            label="LSMR", &
+                            label=citation_lsmr, &
                             authors="Fong, D.C.-L., Saunders, M.A.", &
                             title="LSMR: An iterative algorithm for sparse "// &
                             "least-squares problems.", &
@@ -189,7 +214,7 @@ contains
 
       moist_citations(17) = citation_entry_type( &
                             category="Solvers", &
-                            label="LUSOL", &
+                            label=citation_lusol, &
                             authors="Gill, P.E., Murray, W., Saunders, M.A., Wright, M.H.", &
                             title="Maintaining LU factors of a general sparse matrix.", &
                             journal="Linear Algebra Appl. 1987, 88-89, 239-270", &
@@ -197,7 +222,7 @@ contains
 
       moist_citations(18) = citation_entry_type( &
                             category="Models", &
-                            label="Pressure-volume term (PV)", &
+                            label=citation_pv, &
                             authors="Spooner, J., Yanciw, B., Wiebe, B., Weinberg, N.", &
                             title="Reaction Profiles and Energy Surfaces of Compressed Species.", &
                             journal="J. Phys. Chem. A 2014, 118, 765-777", &
@@ -205,12 +230,29 @@ contains
 
       moist_citations(19) = citation_entry_type( &
                             category="Models", &
-                            label="Pressure-volume term (PV)", &
+                            label=citation_pv, &
                             authors="Zeller, F., Pracht, P., Neudecker, T.", &
                             title="Using Conformational Sampling to Model Spectral and Structural "// &
                             "Changes of Molecules at Elevated Pressures.", &
                             journal="J. Phys. Chem. A 2025, 129, 2108-2116", &
                             doi="https://doi.org/10.1021/acs.jpca.4c08065")
+
+      moist_citations(20) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_gostshyp, &
+                            authors="Scheurer, M., Dreuw, A., Epifanovsky, E., Head-Gordon, M., Stauch, T.", &
+                            title="Modeling Molecules under Pressure with Gaussian Potentials.", &
+                            journal="J. Chem. Theory Comput. 2021, 17, 583-597", &
+                            doi="https://doi.org/10.1021/acs.jctc.0c01212")
+
+      moist_citations(21) = citation_entry_type( &
+                            category="Models", &
+                            label=citation_gostshyp, &
+                            authors="Pausch, A., Zeller, F., Neudecker, T.", &
+                            title="An Integral-Direct GOSTSHYP Algorithm for the Computation of "// &
+                            "High Pressure Effects on Molecular and Electronic Structure.", &
+                            journal="J. Chem. Theory Comput. 2025, 21, 747-761", &
+                            doi="https://doi.org/10.1021/acs.jctc.4c01502")
 
       initialised = .true.
    end subroutine init_citations
@@ -230,65 +272,92 @@ contains
    !> Print a single citation entry with consistent formatting
    !>
    !> - long lines are word-wrapped at wrap_width characters
-   subroutine print_entry(unit, entry)
+   subroutine print_entry(unit, entry, indent)
       !> Fortran I/O unit
       integer, intent(in) :: unit
       !> Citation to print
       type(citation_entry_type), intent(in) :: entry
+      !> Prefix of every line
+      character(len=*), intent(in) :: indent
 
-      call print_wrapped(unit, entry%authors, "    ", wrap_width)
-      call print_wrapped(unit, entry%title, "    ", wrap_width)
+      call print_wrapped(unit, entry%authors, indent, wrap_width)
+      call print_wrapped(unit, entry%title, indent, wrap_width)
       if (len_trim(entry%doi) > 0) then
-         call print_wrapped(unit, entry%journal//", "//entry%doi, "    ", wrap_width)
+         call print_wrapped(unit, entry%journal//", "//entry%doi, indent, wrap_width)
       else
-         call print_wrapped(unit, entry%journal, "    ", wrap_width)
+         call print_wrapped(unit, entry%journal, indent, wrap_width)
       end if
       write (unit, "(a)") ""
    end subroutine print_entry
 
-   !> Print all citations, grouped by category
-   subroutine print_citations(unit)
+   !> Print the General entries (the moist package), which always print, then
+   !> the other citations grouped by category: all of them, or with `labels`
+   !> only those labels
+   subroutine print_citations(unit, labels)
       !> Fortran I/O unit
       integer, intent(in) :: unit
+      !> Labels to print besides the General entries; absent prints all
+      character(len=*), intent(in), optional :: labels(:)
+
+      integer :: i
 
       call init_citations()
 
       write (unit, "(a)") "Please include the appropriate citations when using our work:"
       write (unit, "(a)") ""
 
-      call print_citations_by_category(unit, "General")
-      call print_citations_by_category(unit, "Cavities")
-      call print_citations_by_category(unit, "Models")
-      call print_citations_by_category(unit, "Solvers")
+      ! The package itself, outside any category
+      do i = 1, num_citations
+         if (moist_citations(i)%category == "General") call print_entry(unit, moist_citations(i), "  ")
+      end do
+
+      call print_citations_by_category(unit, "Cavities", labels)
+      call print_citations_by_category(unit, "Models", labels)
+      call print_citations_by_category(unit, "Solvers", labels)
 
    end subroutine print_citations
 
    !> Print all citations matching a given category
    !>
-   !> - entries are grouped under their label as sub-header
-   subroutine print_citations_by_category(unit, category)
+   !> - absent `labels`, entries are grouped under their label as sub-header
+   !> - with `labels`, only entries carrying one of them, without sub-headers;
+   !>   the category header is skipped when none match
+   subroutine print_citations_by_category(unit, category, labels)
       !> Fortran I/O unit
       integer, intent(in) :: unit
       !> Category to filter by (e.g. "General", "Cavities", "Models")
       character(len=*), intent(in) :: category
+      !> Labels to keep; absent keeps all
+      character(len=*), intent(in), optional :: labels(:)
 
       integer :: i
+      logical :: header_done
       character(len=:), allocatable :: last_label
 
       call init_citations()
 
-      call print_category_header(unit, category)
-
+      header_done = .false.
       last_label = ""
       do i = 1, num_citations
          if (moist_citations(i)%category /= category) cycle
+         if (present(labels)) then
+            if (.not. any(labels == moist_citations(i)%label)) cycle
+         end if
+         if (.not. header_done) then
+            call print_category_header(unit, category)
+            header_done = .true.
+         end if
+         if (present(labels)) then
+            call print_entry(unit, moist_citations(i), "  ")
+            cycle
+         end if
          ! Print label sub-header when it changes
          if (moist_citations(i)%label /= last_label) then
             write (unit, '(2x,a,a,":")') "", moist_citations(i)%label
             write (unit, "(a)") ""
             last_label = moist_citations(i)%label
          end if
-         call print_entry(unit, moist_citations(i))
+         call print_entry(unit, moist_citations(i), "    ")
       end do
 
    end subroutine print_citations_by_category
@@ -313,7 +382,7 @@ contains
             write (unit, "(a)") ""
             found = .true.
          end if
-         call print_entry(unit, moist_citations(i))
+         call print_entry(unit, moist_citations(i), "  ")
       end do
 
    end subroutine print_citations_by_label

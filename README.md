@@ -244,7 +244,7 @@ For the isodensity cavity (ρ-DROP), please also cite
   Self-Consistent Isodensity Cavity*, ChemRxiv 2026.
   <https://doi.org/10.26434/chemrxiv.15007095/v1>
 
-The full, context-appropriate citation list is maintained inside the program and printed by
+At the end of a run, `moist` prints the citations for the cavities, models, and solvers it used; the full list is printed by
 
 ```sh
 moist --citation
