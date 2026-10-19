@@ -581,6 +581,8 @@ contains
                   new_unittest("array_capacity_oversized", test_capacity_oversized), &
                   new_unittest("isodensity_callback_fails_first_call", test_iso_callback_fails_first), &
                   new_unittest("isodensity_callback_fails_mid_loop", test_iso_callback_fails_mid_loop), &
+                  new_unittest("bad_cavity_sizes_after_deferred_update", test_sizes_after_update_fails, &
+                               should_fail=.true.), &
                   new_unittest("init_options_without_error_handle", test_init_options_null_error), &
                   new_unittest("shared_context_thread_budget", test_shared_context_thread_budget), &
                   new_unittest("borrowed_cavity_keeps_context", test_borrowed_cavity_keeps_context), &
@@ -1694,6 +1696,38 @@ contains
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_iso_callback_fails_mid_loop
+
+   !> The sizes of a deferring cavity updated to a moved structure but not
+   !> built are refused, not read from the surface of the previous structure
+   !>
+   !> The core fill of the callback level set defers the projection to the
+   !> build phase
+   subroutine test_sizes_after_update_fails(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vmoved, vcav
+      type(iso_cb_ctx), target :: ctx
+      integer(c_int), parameter :: numbers(3) = [8, 1, 1]
+      real(c_double) :: moved(3, 3)
+      integer(c_int) :: ngrid, nsph
+
+      call run_iso_callback_update(err, verror, vmol, vcav, ctx)
+      if (.not. allocated(err%ptr)) then
+         moved = cb_centers
+         moved(1, :) = moved(1, :) + 0.5_c_double
+         vmoved = moist_new_structure(verror, 3_c_int, numbers, moved)
+         if (.not. allocated(err%ptr)) call moist_update_cavity(verror, vcav, vmoved)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_sizes(verror, vcav, ngrid, nsph)
+         if (allocated(err%ptr)) then
+            if (index(err%ptr%message, "[moist_get_cavity_sizes] Cavity is not built") > 0) then
+               call test_failed(error, err%ptr%message)
+            end if
+         end if
+         call moist_delete_structure(vmoved)
+      end if
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_sizes_after_update_fails
 
    !> Response field reads write exactly the logical shape at all ranks, leave
    !> the rest of a larger buffer untouched, and name a missing current item,
@@ -2942,6 +2976,8 @@ contains
          stub%xyz = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 2.0_wp], [3, 2])
          allocate (stub%sphxyz(3, 1), source=0.0_wp)
          allocate (stub%xyz1_rA(3, 3, 2, 2), source=0.0_wp)
+         ! A hand-built surface, so the surface readers take it
+         stub%built = .true.
       end select
 
    end subroutine new_stub_cavity

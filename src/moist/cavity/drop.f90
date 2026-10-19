@@ -1035,6 +1035,8 @@ contains
 
       call self%require_context(error)
       if (allocated(error)) return
+      call self%require_built(error)
+      if (allocated(error)) return
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)

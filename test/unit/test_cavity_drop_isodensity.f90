@@ -211,7 +211,10 @@ contains
                   new_unittest("rebuild_follows_the_density", test_rebuild_follows_density), &
                   new_unittest("core_fill_refuses_charges_out_of_range", test_core_fill_charge_range), &
                   new_unittest("marchingcubes_follows_the_density", test_marchingcubes_follows_density), &
-                  new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives) &
+                  new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives), &
+                  new_unittest("bad_gradient_after_update", test_gradient_after_update_fails, should_fail=.true.), &
+                  new_unittest("bad_gradient_after_prepare_build", test_gradient_after_staging_fails, &
+                               should_fail=.true.) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -3910,7 +3913,88 @@ contains
       if (allocated(error)) return
       call check(error, all(cavity%sphxyz(:, 1) == mol%xyz(:, 1)), &
                  more="the spheres do not follow the new structure")
+      if (allocated(error)) return
+      call check(error, cavity%ngrid == 0 .and. .not. allocated(cavity%xyz) .and. &
+                 .not. allocated(cavity%total_area) .and. .not. allocated(cavity%total_volume), &
+                 more="the update kept the surface arrays of the previous structure")
    end subroutine test_update_drops_surface
+
+   !> Raise the test failure only when `err` names the expected refusal
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   outcome: a clean return or a different error fails the test
+   !>
+   !> @param[out] error    Test failure, set only on the expected error
+   !> @param[in]  err      Library error, possibly unallocated
+   !> @param[in]  expected Substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> A nuclear gradient of a cavity updated to a new structure but not built
+   !> is refused, not taken from the surface of the previous structure
+   subroutine test_gradient_after_update_fails(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(mctc_error), allocatable :: cavity_error
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call update_iso_cavity(cavity, mol, pseudo_atom_density(), [54.0_wp], cavity_error)
+      if (allocated(cavity_error)) return
+      mol%xyz(1, 1) = mol%xyz(1, 1) + 0.5_wp
+      call cavity%update(mol, cavity_error)
+      if (allocated(cavity_error)) return
+      call cavity%get_gradient(cavity_error)
+      call expect_error(error, cavity_error, "Cavity must be built first")
+   end subroutine test_gradient_after_update_fails
+
+   !> A nuclear gradient of a built cavity whose build phase is staged again is
+   !> refused, not taken from the surface of the previous density
+   subroutine test_gradient_after_staging_fails(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_context_type), target :: ctx
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: cavity_error
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_pseudo_atom_cavity(cavity, mol, ctx, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call cavity%update(mol, cavity_error)
+      if (.not. allocated(cavity_error)) &
+         & call build_with_density(cavity, coupling, pseudo_atom_density(), cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%prepare_build(coupling, cavity_error)
+      if (allocated(cavity_error)) return
+      call cavity%get_gradient(cavity_error)
+      call expect_error(error, cavity_error, "Cavity must be built first")
+   end subroutine test_gradient_after_staging_fails
 
    !> A deferring cavity is not built from `prepare_build` until a `build`
    !> succeeds

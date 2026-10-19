@@ -706,9 +706,10 @@ moist_delete_response(moist_response* response) moist_API_SUFFIX__V_1_0;
 
 /// Stage the build phase: clear every answer of the coupling and start a new
 /// walk over the requests the build reads; the atom count comes from the
-/// structure of the latest moist_update_model. A cavity that waits for its
-/// build phase drops its surface until the next build succeeds, and every
-/// coupling of the model loses its answers over it
+/// structure of the latest moist_update_model. A model whose cavity waits for
+/// its build phase is not built until the next build succeeds, and every
+/// coupling of the model loses its answers over it; the cavity keeps its last
+/// built surface until that build replaces it
 moist_API_ENTRY void moist_API_CALL
 moist_prepare_model_build(moist_error error,
                           moist_model model,

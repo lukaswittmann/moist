@@ -37,6 +37,8 @@ contains
       !> Density chain-rule factor dS/drho
       real(wp) :: factor
 
+      call self%require_built(error)
+      if (allocated(error)) return
       if (.not. allocated(self%lsf_model)) then
          call fatal_error(error, "get_surface_response_drop: level-set model is not initialized")
          return

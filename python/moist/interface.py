@@ -1599,9 +1599,10 @@ class SolvationModel:
 
         Like ``moist_prepare_model_build``: the walk then visits the requests
         the build reads, :class:`DensityMatrixRequest` and
-        :class:`NuclearChargesRequest`.  A cavity that waits for its build
-        phase drops its surface until the next :meth:`build` succeeds, and
-        every coupling of the model loses its answers over it.
+        :class:`NuclearChargesRequest`.  A model whose cavity waits for its
+        build phase is not built until the next :meth:`build` succeeds, and
+        every coupling of the model loses its answers over it; the cavity
+        keeps its last built surface until that build replaces it.
         """
         self._require_updated()
         self._cavity._snapshot_cache = None

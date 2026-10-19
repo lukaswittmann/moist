@@ -197,17 +197,19 @@ contains
       real(wp), intent(out) :: u(:)
       !> Optional radial derivative, Hartree/bohr
       real(wp), intent(out), optional :: du_dr(:)
-      real(wp) :: sr6
+      real(wp) :: sr2, sr6
       integer :: ir
       if (present(du_dr)) then
          do ir = 1, size(r)
-            sr6 = (sigma_ij/r(ir))**6
+            sr2 = (sigma_ij/r(ir))*(sigma_ij/r(ir))
+            sr6 = sr2*sr2*sr2
             u(ir) = 4.0_wp*eps_ij*(sr6*sr6 - sr6)
             du_dr(ir) = -24.0_wp*eps_ij*(2.0_wp*sr6*sr6 - sr6)/r(ir)
          end do
       else
          do ir = 1, size(r)
-            sr6 = (sigma_ij/r(ir))**6
+            sr2 = (sigma_ij/r(ir))*(sigma_ij/r(ir))
+            sr6 = sr2*sr2*sr2
             u(ir) = 4.0_wp*eps_ij*(sr6*sr6 - sr6)
          end do
       end if

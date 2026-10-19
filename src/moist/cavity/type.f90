@@ -241,6 +241,8 @@ contains
    !>
    !> - invalidates every coupling the cavity minted; neither updated nor
    !>   built until the caller's `update` succeeds
+   !> - drops the surface of the previous structure, so neither a deferred nor
+   !>   a failed update leaves it readable
    !> - copies `mol`, which may be `self%mol` itself
    !>
    !> @param[in,out] self  Cavity instance
@@ -259,7 +261,7 @@ contains
 
       call self%couplings%invalidate()
       self%updated = .false.
-      self%built = .false.
+      call self%clear_surface()
       tmp = mol
       self%mol = tmp
 
@@ -282,7 +284,7 @@ contains
    !>
    !> - clears every answer of the coupling; the atom count comes from the
    !>   structure of the latest `update`
-   !> - a deferring cavity is not built until the next `build` succeeds
+   !> - a deferring cavity drops its surface until the next `build` succeeds
    !>
    !> @param[in,out] self     Updated cavity
    !> @param[in,out] coupling Coupling to stage
@@ -297,7 +299,7 @@ contains
 
       call self%require_updated(error)
       if (allocated(error)) return
-      if (self%defers_build()) self%built = .false.
+      if (self%defers_build()) call self%clear_surface()
       call coupling_invalidate(coupling)
       call cavity_declare_pass(self, coupling, error)
       if (allocated(error)) return
@@ -603,6 +605,8 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call self%require_built(error)
+      if (allocated(error)) return
       call self%contract_surface_gradient(acc, gradient, error)
       if (allocated(error)) return
       call add_volume_origin_gradient(acc%w_c, gradient)

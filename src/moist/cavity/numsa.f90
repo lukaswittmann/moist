@@ -258,6 +258,8 @@ contains
       class(cavity_type_numsa), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      call self%require_built(error)
+      if (allocated(error)) return
       ! area_grad already prepared during update; ensure allocated
       if (.not. allocated(self%area_grad)) then
          call fatal_error(error, "Area gradient requested before cavity update in numsa cavity.")

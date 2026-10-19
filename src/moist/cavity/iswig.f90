@@ -295,6 +295,8 @@ contains
       !> Volume origin and the per-point volume derivative wrt. it
       real(wp) :: origin(3), dv_dc(3)
 
+      call self%require_built(error)
+      if (allocated(error)) return
       nsph = size(self%radii)
       origin = self%get_volume_origin()
 

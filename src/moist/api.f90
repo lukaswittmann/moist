@@ -3700,6 +3700,10 @@ contains
       end if
 
       associate (cavity => cav%ptr)
+         if (.not. cavity%is_built()) then
+            call api_error(error%ptr, "assemble_amat", unbuilt_cavity_message)
+            return
+         end if
          ngrid = cavity%ngrid
          if (ngrid_cap < ngrid) then
             call api_error(error%ptr, "assemble_amat", &
@@ -3758,6 +3762,10 @@ contains
 
       if (.not. associated(cav%ptr)) then
          call api_error(error%ptr, "get_cavity_gaussian", "Cavity is not initialized")
+         return
+      end if
+      if (.not. cav%ptr%is_built()) then
+         call api_error(error%ptr, "get_cavity_gaussian", unbuilt_cavity_message)
          return
       end if
       if (ngrid_cap < cav%ptr%ngrid) then
@@ -3926,7 +3934,7 @@ contains
          return
       end if
 
-      if (.not. allocated(cav%ptr%total_area)) then
+      if (.not. cav%ptr%is_built()) then
          call api_error(error%ptr, "get_cavity_sizes", unbuilt_cavity_message)
          return
       end if
@@ -4043,7 +4051,7 @@ contains
          return
       end if
 
-      if (.not. allocated(cav%ptr%total_area)) then
+      if (.not. cav%ptr%is_built()) then
          call api_error(error%ptr, "get_cavity_results", unbuilt_cavity_message)
          return
       end if
@@ -5795,7 +5803,7 @@ contains
          return
       end if
 
-      if (.not. allocated(cav%ptr%total_area)) then
+      if (.not. cav%ptr%is_built()) then
          call api_error(error%ptr, "compute_cavity_gradient", unbuilt_cavity_message)
          return
       end if
@@ -5839,7 +5847,7 @@ contains
          return
       end if
 
-      if (.not. allocated(cav%ptr%total_area)) then
+      if (.not. cav%ptr%is_built()) then
          call api_error(error%ptr, "compute_anchor_gradient", unbuilt_cavity_message)
          return
       end if
