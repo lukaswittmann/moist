@@ -18,8 +18,8 @@
 <br clear="right">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/_static/dark_moist_animated.svg">
-  <source media="(prefers-color-scheme: light)" srcset="docs/_static/white_moist_animated.svg">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/_static/logos/moist-animated-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="docs/_static/logos/moist-animated-light.svg">
   <img align="right" src="docs/_static/white_moist_animated.svg" width="420">
 </picture>
 
