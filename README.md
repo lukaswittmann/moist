@@ -232,7 +232,7 @@ If you use `moist`, please cite the software itself (see [`CITATION.cff`](CITATI
   [Computer software], Zenodo 2026.
   <https://doi.org/10.5281/zenodo.23473416>
 
-together with the DROP cavity work and the references for the specific cavities, models, and solvers you used:
+together with the references for the cavities, models, and solvers you used. For the DROP cavities, these include
 
 - L. Wittmann, A. Pausch, *A Smooth and Fully Differentiable Molecular Cavity
   Based on Discretization via Reference-Onto-Surface Projection*, ChemRxiv 2026.

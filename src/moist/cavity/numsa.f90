@@ -145,7 +145,6 @@ contains
       if (present(param)) settings = param
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
-      if (associated(self%ctx)) call self%ctx%cite(citation_numsa)
       self%label = "NUMSA"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
@@ -189,6 +188,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call self%ctx%cite(citation_numsa)
 
       nat = mol%nat
       self%nsph = nat

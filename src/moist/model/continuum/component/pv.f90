@@ -49,10 +49,7 @@ contains
       self%name = "PV"
       self%description = "Pressure-volume work, pressure times cavity volume"
       self%pressure = pressure
-      if (present(ctx)) then
-         self%ctx => ctx
-         call self%ctx%cite(citation_pv)
-      end if
+      if (present(ctx)) self%ctx => ctx
 
    end subroutine new_component_pv
 
@@ -88,6 +85,8 @@ contains
 
       call self%require_context(error)
       if (allocated(error)) return
+
+      call self%ctx%cite(citation_pv)
 
       self%mol_solu = mol
       if (.not. allocated(cavity%total_volume)) then

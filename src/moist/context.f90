@@ -638,8 +638,8 @@ contains
 
    end subroutine context_print_settings
 
-   !> Record a citation label, once; parts call this from their constructors,
-   !> where the context is available, with one of the `citation_*` labels of
+   !> Record a citation label, once; parts call this from `update`, after
+   !> `require_context`, with one of the `citation_*` labels of
    !> `moist_output_citations`
    !>
    !> @param[in]  label  registry label of the part that ran

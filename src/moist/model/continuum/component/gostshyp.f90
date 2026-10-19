@@ -104,10 +104,7 @@ contains
       self%description = "Gaussians On Surface Tesserae To Simulate HYdrostatic Pressure"
       self%pressure = pressure
       if (present(param)) self%param = param
-      if (present(ctx)) then
-         self%ctx => ctx
-         call self%ctx%cite(citation_gostshyp)
-      end if
+      if (present(ctx)) self%ctx => ctx
       if (present(error)) call validate_settings(self, error)
 
    end subroutine new_component_gostshyp
@@ -146,6 +143,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call self%ctx%cite(citation_gostshyp)
 
       self%mol_solu = mol
       if (.not. allocated(cavity%a) .or. .not. allocated(cavity%xyz) .or. &

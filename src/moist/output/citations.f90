@@ -68,9 +68,18 @@ module moist_output_citations
 
 contains
 
-   !> Populate the registry (called lazily on first access)
+   !> Populate the registry once (called lazily on first access)
+   !>
+   !> - contexts on different threads may print concurrently, so the first
+   !>   fill is serialized; the critical construct also publishes the entries
    subroutine init_citations()
-      if (initialised) return
+      !$omp critical(moist_citations_init)
+      if (.not. initialised) call fill_citations()
+      !$omp end critical(moist_citations_init)
+   end subroutine init_citations
+
+   !> Fill the registry entries
+   subroutine fill_citations()
 
       ! Concept DOI: resolves to the latest release
       moist_citations(1) = citation_entry_type( &
@@ -255,7 +264,7 @@ contains
                             doi="https://doi.org/10.1021/acs.jctc.4c01502")
 
       initialised = .true.
-   end subroutine init_citations
+   end subroutine fill_citations
 
    !> Print category header
    subroutine print_category_header(unit, category)

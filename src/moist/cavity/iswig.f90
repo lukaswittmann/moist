@@ -141,10 +141,6 @@ contains
       if (present(param)) settings = param
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
-      if (associated(self%ctx)) then
-         call self%ctx%cite(citation_iswig)
-         call self%ctx%cite(citation_iswig_adaptive)
-      end if
       self%label = "vdW iSwiG"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
@@ -208,6 +204,8 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
+      call self%ctx%cite(citation_iswig)
+      call self%ctx%cite(citation_iswig_adaptive)
 
       !> Set number of spheres
       self%nsph = mol%nat
