@@ -20,11 +20,11 @@ import numpy as np
 from . import library
 from .library import FieldInfo
 from .context import Context, _context_handle, _resolve_context
-from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
+from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet, MT
 from .radii import Radii
 from .density import GaussianBasis
 from .parameters import (
-    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
+    DROPParameters, ISwiGParameters, MTParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
 )
 
 
@@ -1016,6 +1016,53 @@ class CavityDROP(_CavityDROPBase):
         state = getattr(self._handle, "callback_state", None)
         if state is not None:
             state.raise_if_failed()
+
+
+class CavityMT(_CavityGenericBase):
+    """Frozen marching-tetrahedra surface with near equal-area planar patches.
+
+    Supports SvdW, CFC and callback/internal isodensity level sets. Rebuild
+    after geometry or density changes; nuclear and density geometry response
+    are unavailable. Mesh diagnostics are accessible through ``get``.
+    """
+
+    def __init__(self, *, lsf: LevelSet | None = None,
+                 parameters: MTParameters | None = None,
+                 radii: Radii | None = None, source=None, pass_order=None,
+                 basis: GaussianBasis | None = None, context: Context | None = None) -> None:
+        self._context = _resolve_context(context, optional=True)
+        self._configuration = MT(
+            lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
+        )
+        super().__init__(self.lsf._new_cavity(
+            self.parameters, self.radius_model._as_handle(), source, pass_order, basis,
+            context=_context_handle(context),
+        ))
+
+    @property
+    def lsf(self):
+        return self.configuration.lsf
+
+    @property
+    def density_dependent(self):
+        return self.lsf.density_dependent
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _CavityMTBorrowed(handle, self)
+
+    _before_native_update = CavityDROP._before_native_update
+    _raise_callback_failure = CavityDROP._raise_callback_failure
+    isodensity_layout = _CavityDROPBase.isodensity_layout
+
+
+class _CavityMTBorrowed(_CavityGenericBorrowed):
+    """Generic snapshot and LSF layout of a model-owned frozen surface."""
+
+    @property
+    def lsf(self):
+        return self.configuration.lsf
+
+    isodensity_layout = _CavityDROPBase.isodensity_layout
 
 
 #: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:

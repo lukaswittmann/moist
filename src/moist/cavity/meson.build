@@ -7,6 +7,10 @@ srcs += files(
   'numsa.f90',
   'bornzeta.f90',
   'iswig.f90',
-  'marchingcubes.f90',
+  'mc.f90',
+  'mt/parameters.f90',
+  'mt/mesh.f90',
+  'mt/patches.f90',
+  'mt.f90',
   'drop.f90',
 )

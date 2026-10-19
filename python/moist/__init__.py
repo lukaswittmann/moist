@@ -13,6 +13,7 @@ from .interface import (
     Cavity,
     CavityDROP,
     CavityISwiG,
+    CavityMT,
     CavitySnapshot,
     CavitySnapshotDROP,
     ComponentView,
@@ -51,6 +52,7 @@ from .parameters import (
     CFCParameters,
     DROPParameters,
     ISwiGParameters,
+    MTParameters,
     IsodensityBasis,
     IsodensityParameters,
     PCMParameters,
@@ -59,7 +61,7 @@ from .parameters import (
     SvdWParameters,
 )
 from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, GaussRadii, Radii, SMDRadii
-from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, LevelSet
+from .configuration import CFC, DROP, ISwiG, MT, Isodensity, SvdW, CavityConfiguration, LevelSet
 from .solvent import SolventDescriptors, get_solvent_descriptors, get_solvent_descriptors_by_id
 
 __all__ = [
@@ -69,6 +71,7 @@ __all__ = [
     "GaussianBasis",
     "DROPParameters",
     "ISwiGParameters",
+    "MTParameters",
     "SvdWParameters",
     "CFCParameters",
     "IsodensityBasis",
@@ -87,6 +90,7 @@ __all__ = [
     "CavityConfiguration",
     "DROP",
     "ISwiG",
+    "MT",
     "SvdW",
     "CFC",
     "Isodensity",
@@ -96,6 +100,7 @@ __all__ = [
     "Cavity",
     "CavityDROP",
     "CavityISwiG",
+    "CavityMT",
     "CavitySnapshot",
     "CavitySnapshotDROP",
     "ComponentView",

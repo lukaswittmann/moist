@@ -85,6 +85,26 @@ class DROPParameters(_Parameters):
 
 
 @dataclass(frozen=True, kw_only=True)
+class MTParameters(_Parameters):
+    """Frozen mesh and planar patch settings; lengths in bohr, areas in bohr**2.
+
+    ``spacing`` controls the raw surface mesh, while ``target_area`` controls
+    the compact quadrature. Defaults come from the native parameter type.
+    """
+
+    _kind = "mt"
+    spacing: float = _native_default("mt", "spacing")
+    target_area: float = _native_default("mt", "target_area")
+    area_tolerance: float = _native_default("mt", "area_tolerance")
+    gaussian_scale: float = _native_default("mt", "gaussian_scale")
+    w_0ls_from: float = _native_default("mt", "w_0ls_from")
+    w_0ls_to: float = _native_default("mt", "w_0ls_to")
+    w_0ls_p: float = _native_default("mt", "w_0ls_p")
+    w_0ls_a: float = _native_default("mt", "w_0ls_a")
+    weight_cutoff: float = _native_default("mt", "weight_cutoff")
+
+
+@dataclass(frozen=True, kw_only=True)
 class ISwiGParameters(_Parameters):
     """iSwiG grid settings; positive ``cut_a`` selects the area cutoff."""
 

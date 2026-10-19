@@ -86,6 +86,8 @@ def test_model_accumulators():
 
 def test_cyclic_garbage_deletes_coupling_before_model(monkeypatch):
     """Deleting a coupling reaches into its model, whatever order GC finds them in."""
+    # Drain unrelated exception-traceback cycles before observing finalizers.
+    gc.collect()
     order = []
     for kind in (library.ModelHandle, library.CouplingHandle):
         delete = kind._delete
@@ -318,3 +320,94 @@ def test_banner_style_reaches_native_entry(style, native_style, monkeypatch):
     assert moist.get_banner(style) == "banner text"
     assert calls == [(library.lib.moist_get_banner,
                       (getattr(library.lib, native_style),))]
+
+
+def test_mt_c_options_and_constructor():
+    """NULL defaults, copied LSF handles and size validation follow the C ABI."""
+    ffi, lib = library.ffi, library.lib
+    options = library._options("mt")
+    assert options.struct_size == ffi.sizeof("moist_mt_options")
+    lsf = library.error_check(lib.moist_new_svdw_lsf)(ffi.NULL)
+    try:
+        for settings in (ffi.NULL, options):
+            handle = library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, lsf, ffi.NULL, settings,
+            )
+            cavity = library.CavityHandle.with_gc(handle)
+            assert cavity.handle != ffi.NULL
+        options.struct_size = ffi.sizeof("size_t")
+        with pytest.raises(RuntimeError):
+            library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, lsf, ffi.NULL, options,
+            )
+        with pytest.raises(RuntimeError, match="LSF handle is required"):
+            library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, ffi.NULL, ffi.NULL, ffi.NULL,
+            )
+    finally:
+        lib.moist_delete_lsf(ffi.new("moist_lsf *", lsf))
+
+
+def test_mt_model_copy_pv_and_gradient_refusal():
+    cavity = moist.CavityMT(
+        parameters=moist.MTParameters(spacing=0.4, target_area=1.5),
+    )
+    pressure = 1.e-4
+    model = moist.SolvationModel(CONTEXT, cavity, [moist.ModelComponentPV(pressure)])
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    assert type(model.cavity.snapshot()) is moist.CavitySnapshot
+    assert _energy(model) == pytest.approx(pressure * model.cavity.volume)
+    with pytest.raises(RuntimeError):
+        library.compute_cavity_gradient(model.cavity._handle)
+    # A failed gradient request leaves the frozen surface usable.
+    assert _energy(model) == pytest.approx(pressure * model.cavity.volume)
+
+
+def test_mt_cpcm_internal_isodensity_has_only_frozen_potential_response(build_with):
+    """A density-built MT surface gives CPCM energy and its fixed-geometry adjoint."""
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                               exponents=[.5], coefficients=[1.])
+    cavity = moist.CavityMT(
+        lsf=moist.Isodensity(parameters=moist.IsodensityParameters(core_fill=False)),
+        parameters=moist.MTParameters(spacing=0.4, target_area=1.5), basis=basis,
+    )
+    pressure = 1.e-4
+    # The finite-difference check below is tighter than the default solver tolerance
+    solver = moist.PCMParameters(solver_tol=1.e-13)
+    model = moist.SolvationModel(
+        CONTEXT, cavity,
+        [moist.ModelComponentCPCM(32., parameters=solver), moist.ModelComponentPV(pressure)],
+    )
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    coupling = build_with(model, dcart=np.ones((1, 1)))
+    surface = model.cavity.snapshot()
+    phi = 1. / np.linalg.norm(surface.xyz, axis=1)
+
+    def energy(potential):
+        model.prepare_energy(coupling)
+        for request in coupling:
+            assert isinstance(request, moist.GaussianPotentialRequest)
+            assert request.missing == {"phi"}
+            coupling.answer(phi=potential)
+        result = np.array(0.)
+        model.get_energy(coupling, result)
+        return float(result)
+
+    actual = energy(phi)
+    assert np.isfinite(actual)
+    assert actual - pressure * surface.volume < 0.
+    assert actual == pytest.approx(sum(item.energy for item in model.components))
+    model.prepare_response(coupling)
+    assert list(coupling) == []
+    (response,) = model.get_response(coupling)
+    assert isinstance(response, moist.PotentialAdjointResponse)
+    assert response.w_phi.shape == (surface.ngrid,)
+    assert np.all(np.isfinite(response.w_phi))
+    assert np.linalg.norm(response.w_phi) > 0.
+    # A density-defined surface still has no density geometry response in MT.
+    assert model.cavity.density_dependent
+    direction = np.linspace(-0.5, 0.7, surface.ngrid)
+    step = 1.e-4
+    difference = (energy(phi + step * direction) - energy(phi - step * direction)) / (2. * step)
+    assert difference == pytest.approx(np.dot(response.w_phi, direction), rel=1.e-8, abs=1.e-10)
+    np.testing.assert_array_equal(model.cavity.snapshot().xyz, surface.xyz)

@@ -317,7 +317,8 @@ if(MOIST_TESTS)
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_cpcm
     cavity_drop_properties
-    cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
+    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
+    cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
     model_component_pcm_electrostatics model_component_pcm_solvers

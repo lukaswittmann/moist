@@ -159,8 +159,6 @@ contains
    end subroutine test_constructors
 
    !> All PCM models inherit missing contexts and preserve explicit ones
-   !>
-   !> @param[out] error Test failure
    subroutine test_optional_context(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -233,8 +231,6 @@ contains
    end subroutine test_optional_context
 
    !> Required geometry is enabled on model copies without clearing requested extras
-   !>
-   !> @param[out] error Test failure
    subroutine test_cavity_requirements(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -323,8 +319,6 @@ contains
    end subroutine test_cavity_requirements
 
    !> Model update computes required normals and curvatures without do_fine
-   !>
-   !> @param[out] error Test failure
    subroutine test_automatic_cavity_geometry(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -836,8 +830,6 @@ contains
    !> - After `update` the operators are new and no charges exist yet: refused
    !> - Directly after the energy, with no surface weights requested: accepted
    !> - After a second `update` the charges belong to the previous operators: refused
-   !>
-   !> @param[out] error Test failure
    subroutine test_tangent_requires_solution(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

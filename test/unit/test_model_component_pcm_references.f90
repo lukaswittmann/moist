@@ -315,8 +315,6 @@ contains
    !* ================================================================================= *!
 
    !> CPCM: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -324,8 +322,6 @@ contains
    end subroutine test_cpcm_born
 
    !> CPCM: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -333,8 +329,6 @@ contains
    end subroutine test_cpcm_reference
 
    !> CPCM: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -342,8 +336,6 @@ contains
    end subroutine test_cpcm_switched_off_point
 
    !> COSMO: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -351,8 +343,6 @@ contains
    end subroutine test_cosmo_born
 
    !> COSMO: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -360,8 +350,6 @@ contains
    end subroutine test_cosmo_reference
 
    !> COSMO: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -369,8 +357,6 @@ contains
    end subroutine test_cosmo_switched_off_point
 
    !> IEF-PCM: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -378,8 +364,6 @@ contains
    end subroutine test_iefpcm_born
 
    !> IEF-PCM: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -387,8 +371,6 @@ contains
    end subroutine test_iefpcm_reference
 
    !> IEF-PCM: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -396,8 +378,6 @@ contains
    end subroutine test_iefpcm_switched_off_point
 
    !> SS(V)PE: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -405,8 +385,6 @@ contains
    end subroutine test_ssvpe_born
 
    !> SS(V)PE: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -414,8 +392,6 @@ contains
    end subroutine test_ssvpe_reference
 
    !> SS(V)PE: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -423,8 +399,6 @@ contains
    end subroutine test_ssvpe_switched_off_point
 
    !> DPCM: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -432,8 +406,6 @@ contains
    end subroutine test_dpcm_born
 
    !> DPCM: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -441,8 +413,6 @@ contains
    end subroutine test_dpcm_reference
 
    !> DPCM: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -450,8 +420,6 @@ contains
    end subroutine test_dpcm_switched_off_point
 
    !> Original DPCM: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -459,8 +427,6 @@ contains
    end subroutine test_dpcm_original_born
 
    !> Original DPCM: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -468,8 +434,6 @@ contains
    end subroutine test_dpcm_original_reference
 
    !> DPCM original: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -477,8 +441,6 @@ contains
    end subroutine test_dpcm_original_switched_off_point
 
    !> LPB: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -486,8 +448,6 @@ contains
    end subroutine test_lpb_born
 
    !> LPB: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -495,8 +455,6 @@ contains
    end subroutine test_lpb_reference
 
    !> LPB: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -504,8 +462,6 @@ contains
    end subroutine test_lpb_switched_off_point
 
    !> SLIC: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -513,8 +469,6 @@ contains
    end subroutine test_slic_born
 
    !> SLIC: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -525,8 +479,6 @@ contains
    !>
    !> Born ion of either sign; the static term is a constant, so raising
    !> phi_static by 0.1 Eh/e shifts the energy by exactly 0.1*Q
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_static_potential(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -580,8 +532,6 @@ contains
    end subroutine test_slic_static_potential
 
    !> SLIC: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -589,8 +539,6 @@ contains
    end subroutine test_slic_switched_off_point
 
    !> Nonlocal: Born ion
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_born(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -598,8 +546,6 @@ contains
    end subroutine test_nonlocal_born
 
    !> Nonlocal: reference energies of other codes and the literature
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_reference(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -607,8 +553,6 @@ contains
    end subroutine test_nonlocal_reference
 
    !> Nonlocal: a switched-off point drops out of the energy
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_switched_off_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -904,8 +848,6 @@ contains
    !> iSwiG surface (SLIC: SvdW-DROP, see `first_seed`); the even models give
    !> the same energy for both signs, SLIC solvates the anion more strongly for
    !> beta < 0
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    subroutine check_born(error, kind)
       !> Test failure
@@ -1059,8 +1001,6 @@ contains
    !>
    !> Every row of the model is evaluated. A filled row must agree within its
    !> tolerance; pending rows skip the test and list the moist energies
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    subroutine check_reference(error, kind)
       !> Test failure
@@ -1725,8 +1665,6 @@ contains
    !> order of the point-surface self terms 1.0694 sqrt(4 pi/a). A gap that stays
    !> finite is a jump in the energy wherever a cavity drops a point that is nearly
    !> switched off
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    subroutine check_switched_off_point(error, kind)
       !> Test failure

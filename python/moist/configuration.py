@@ -13,7 +13,7 @@ from typing import ClassVar
 from . import library
 from .density import GaussianBasis
 from .parameters import (
-    CFCParameters, DROPParameters, ISwiGParameters, IsodensityParameters,
+    CFCParameters, DROPParameters, ISwiGParameters, IsodensityParameters, MTParameters,
     SvdWParameters, _resolve,
 )
 from .radii import Radii, _resolve_radii
@@ -134,6 +134,36 @@ class DROP(CavityConfiguration):
 
         return CavityDROP(lsf=self.lsf, parameters=self.parameters, radii=self.radii,
                           source=source, pass_order=pass_order, basis=basis, context=context)
+
+
+@dataclass(frozen=True, init=False)
+class MT(CavityConfiguration):
+    """Frozen marching-tetrahedra discretization with compact planar patches."""
+
+    lsf: LevelSet
+    parameters: MTParameters
+    radii: Radii
+    name: ClassVar[str] = "MT"
+
+    def __init__(self, *, lsf: LevelSet, parameters: MTParameters | None = None,
+                 radii: Radii | None = None):
+        if not isinstance(lsf, LevelSet):
+            raise TypeError("MT requires an LSF such as SvdW, CFC or Isodensity")
+        object.__setattr__(self, "lsf", lsf)
+        object.__setattr__(self, "parameters", _resolve(MTParameters, parameters))
+        object.__setattr__(self, "radii", _resolve_radii(radii))
+
+    @property
+    def density_dependent(self):
+        return self.lsf.density_dependent
+
+    def build(self, *, context=None, source=None, pass_order=None, basis=None):
+        from .interface import CavityMT
+
+        return CavityMT(
+            lsf=self.lsf, parameters=self.parameters, radii=self.radii,
+            source=source, pass_order=pass_order, basis=basis, context=context,
+        )
 
 
 @dataclass(frozen=True, init=False)

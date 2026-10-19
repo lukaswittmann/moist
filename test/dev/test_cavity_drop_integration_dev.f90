@@ -12,7 +12,7 @@ module test_cavity_drop_integration_dev
    use, intrinsic :: iso_fortran_env, only: error_unit
 
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_mc, only: integrate_surface_mc
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_utils_env, only: resolve_dir, ensure_dir
    use moist_context, only: moist_context_type, new_context
@@ -618,7 +618,7 @@ contains
       call lsf%update(mol, radii_local)
 
       ! Integrate using marching cubes
-      call integrate_surface_marching_cubes(lsf, mol%xyz, &
+      call integrate_surface_mc(lsf, mol%xyz, &
                                             mc_area, mc_volume, mc_error, debug=.false., &
                                             target_spacing=target_spacing)
       if (allocated(mc_error)) then

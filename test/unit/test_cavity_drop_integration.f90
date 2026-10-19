@@ -3,7 +3,7 @@
 !> Shared structures and DROP settings for both level-set kinds:
 !> - SvdW: `blend_k`, `blend_2b`, `blend_3b`; marching-cubes area and volume
 !> - CFC: `a1`, `a2`, `c`; kernel fixes `m = 4`
-!>   Marching-cubes cavity via `new_cavity_marchingcubes`, default spacing,
+!>   Marching-cubes cavity via `new_cavity_mc`, default spacing,
 !>   unscreened CFC level set, and `default_cpcm_radii`; matching shape parameters
 !>
 !> One test per (kind, structure) pair

@@ -367,8 +367,6 @@ contains
    end subroutine test_branching_xi_fd
 
    !> CPCM and PV gradients through the forward and reverse model paths
-   !>
-   !> @param[out] error Test failure
    subroutine test_model_forward_reverse(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -377,8 +375,6 @@ contains
    end subroutine test_model_forward_reverse
 
    !> COSMO and PV gradients through the forward and reverse model paths
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_model_forward_reverse(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

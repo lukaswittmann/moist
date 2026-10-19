@@ -37,6 +37,8 @@ module moist_api
    use moist_utils_timer, only: timer_name_len => name_len
    use moist_radii, only: radius_type, new_radii, radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
+   use moist_cavity_mt, only: cavity_type_mt, &
+      & new_cavity_mt, moist_cavity_mt_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -75,6 +77,34 @@ module moist_api
       !> Owning handle plus dependent cavity and model handles (updated atomically)
       integer :: references = 1
    end type vp_context
+
+   !> Frozen 1.0 marching-tetrahedra options layout
+   type, bind(C) :: api_mt_options_v1_0
+      !> Caller allocation size in bytes
+      integer(c_size_t) :: struct_size = 0_c_size_t
+      !> Maximum Cartesian surface-cell side in bohr
+      real(c_double) :: spacing = 0.0_c_double
+      !> Target planar patch area in bohr squared
+      real(c_double) :: target_area = 0.0_c_double
+      !> Relative patch-area tolerance
+      real(c_double) :: area_tolerance = 0.0_c_double
+      !> Gaussian width scale
+      real(c_double) :: gaussian_scale = 0.0_c_double
+      !> Lower low-gradient switch bound
+      real(c_double) :: w_0ls_from = 0.0_c_double
+      !> Upper low-gradient switch bound
+      real(c_double) :: w_0ls_to = 0.0_c_double
+      !> Low-gradient switch power
+      real(c_double) :: w_0ls_p = 0.0_c_double
+      !> Low-gradient switch shape
+      real(c_double) :: w_0ls_a = 0.0_c_double
+      !> Minimum retained switch weight
+      real(c_double) :: weight_cutoff = 0.0_c_double
+   end type api_mt_options_v1_0
+
+   !> Minimum accepted marching-tetrahedra options allocation
+   integer(c_size_t), parameter :: mt_options_min_size = &
+      & c_sizeof(api_mt_options_v1_0())
 
    !> Frozen 1.0 drop layout; a future addition needs a new versioned type
    type, bind(C) :: api_drop_options_v1_0
@@ -334,6 +364,7 @@ module moist_api
    public :: vp_coupling, vp_response, vp_context
    public :: new_context_api, delete_context_api, get_context_num_threads_api, print_context_timer_api, &
       & print_context_timer_simple_api, start_context_timer_api, stop_context_timer_api
+   public :: create_mt_cavity_api
    public :: create_drop_cavity_api, create_iswig_cavity_api, create_model_api
    public :: get_version_api, get_version_string_api
    public :: get_solvent_descriptors_api, get_solvent_descriptors_by_id_api
@@ -494,6 +525,23 @@ contains
       value%cut_a = native%cut_a
       value%cut_f = native%cut_f
    end function default_iswig_options
+
+   !> Obtain marching-tetrahedra defaults from the native parameter type
+   function default_mt_options() result(value)
+      !> Interoperable options
+      type(api_mt_options_v1_0) :: value
+      !> Native compiled defaults
+      type(moist_cavity_mt_parameters_type) :: native
+      value%spacing = real(native%spacing, c_double)
+      value%target_area = real(native%target_area, c_double)
+      value%area_tolerance = real(native%area_tolerance, c_double)
+      value%gaussian_scale = real(native%gaussian_scale, c_double)
+      value%w_0ls_from = real(native%w_0ls_from, c_double)
+      value%w_0ls_to = real(native%w_0ls_to, c_double)
+      value%w_0ls_p = real(native%w_0ls_p, c_double)
+      value%w_0ls_a = real(native%w_0ls_a, c_double)
+      value%weight_cutoff = real(native%weight_cutoff, c_double)
+   end function default_mt_options
 
    !> Obtain drop defaults from the native parameter type
    function default_drop_options() result(value)
@@ -893,6 +941,64 @@ contains
       nthreads = 0
       if (associated(cavity%ctx)) nthreads = cavity%ctx%get_num_threads()
    end function cavity_num_threads
+
+   !> Initialize marching-tetrahedra options within the caller's allocation
+   !>
+   !> @param[in] verror Diagnostic handle
+   !> @param[in] options Caller-owned options buffer
+   !> @param[in] bytes Caller allocation in bytes
+   subroutine init_mt_options_api(verror, options, bytes) bind(C, name=namespace//"init_mt_options")
+      !> Error handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Caller-owned options buffer
+      type(c_ptr), value, intent(in) :: options
+      !> Allocated byte count
+      integer(c_size_t), value, intent(in) :: bytes
+      !> Compiled defaults
+      type(api_mt_options_v1_0), target :: defaults
+      !> Default values; only named components are copied to the wire layout
+      type(api_mt_options_v1_0) :: values
+      !> Decoded error handle
+      type(vp_error), pointer :: error
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      values = default_mt_options()
+      call zero_options_storage(c_loc(defaults), c_sizeof(defaults))
+      defaults%struct_size = bytes
+      defaults%spacing = values%spacing
+      defaults%target_area = values%target_area
+      defaults%area_tolerance = values%area_tolerance
+      defaults%gaussian_scale = values%gaussian_scale
+      defaults%w_0ls_from = values%w_0ls_from
+      defaults%w_0ls_to = values%w_0ls_to
+      defaults%w_0ls_p = values%w_0ls_p
+      defaults%w_0ls_a = values%w_0ls_a
+      defaults%weight_cutoff = values%weight_cutoff
+      call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, mt_options_min_size, error%ptr)
+      call prefix_api_error(error%ptr, "init_mt_options")
+   end subroutine init_mt_options_api
+
+   !> Decode optional marching-tetrahedra options into an independent value
+   !>
+   !> @param[in] options Optional options buffer; NULL selects defaults
+   !> @param[out] value Independent native-default-initialized settings
+   !> @param[out] error Invalid caller allocation size
+   subroutine read_mt_options(options, value, error)
+      !> Optional caller options; NULL selects defaults
+      type(c_ptr), intent(in) :: options
+      !> Default-initialized result
+      type(api_mt_options_v1_0), intent(out), target :: value
+      !> Diagnostic on invalid size
+      type(error_type), allocatable, intent(out) :: error
+      !> Caller allocation size, the common first field
+      integer(c_size_t), pointer :: bytes
+      value = default_mt_options()
+      value%struct_size = c_sizeof(value)
+      if (.not. c_associated(options)) return
+      call c_f_pointer(options, bytes)
+      call copy_options(options, c_loc(value), c_sizeof(value), bytes, mt_options_min_size, error)
+   end subroutine read_mt_options
 
    !> Initialize drop options within the caller's allocation
    subroutine init_drop_options_api(verror, options, bytes) bind(C, name=namespace//"init_drop_options")
@@ -1520,6 +1626,83 @@ contains
       allocate (radii, source=source%ptr, stat=stat)
       if (stat /= 0) call fatal_error(error, "Cannot copy radii")
    end subroutine read_api_radii
+
+   !> Construct a marching-tetrahedra cavity from copied configuration
+   !>
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context; NULL runs the cavity on its model's
+   !> @param[in] vlsf     level-set function handle, copied into the cavity
+   !> @param[in] vradii   radii handle; NULL selects CPCM radii
+   !> @param[in] options  settings; NULL selects compiled defaults
+   function create_mt_cavity_api(verror, vcontext, vlsf, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_mt_cavity")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Shared run context retained by the cavity, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Level-set function handle, copied into the cavity
+      type(c_ptr), value, intent(in) :: vlsf
+      type(vp_lsf), pointer :: lsf
+      !> Radii handle; NULL selects defaults in constructors
+      type(c_ptr), value, intent(in) :: vradii
+      !> Optional settings; NULL selects compiled defaults
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      !> Context borrowed by the constructed cavity; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
+      type(api_mt_options_v1_0) :: o
+      class(radius_type), allocatable :: radii
+      integer :: stat
+      nullify (lsf, cav)
+      handle = c_null_ptr
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      call read_mt_options(options, o, error%ptr)
+      call prefix_api_error(error%ptr, "new_mt_cavity")
+      if (allocated(error%ptr)) return
+      if (.not. c_associated(vlsf)) then
+         call api_error(error%ptr, "new_mt_cavity", "LSF handle is required")
+         return
+      end if
+      call c_f_pointer(vlsf, lsf)
+      if (.not. allocated(lsf%ptr)) then
+         call api_error(error%ptr, "new_mt_cavity", "LSF is not initialized")
+         return
+      end if
+      call read_api_radii(vradii, radii, error%ptr)
+      call prefix_api_error(error%ptr, "new_mt_cavity")
+      if (allocated(error%ptr)) return
+      allocate (cav, stat=stat)
+      if (stat == 0) allocate (cavity_type_mt :: cav%ptr, stat=stat)
+      if (stat /= 0) then
+         if (associated(cav)) deallocate (cav)
+         call api_error(error%ptr, "new_mt_cavity", "Cannot allocate cavity")
+         return
+      end if
+      call acquire_context(vcontext, cav%shared_ctx, ctx)
+      select type (item => cav%ptr)
+      type is (cavity_type_mt)
+         call new_cavity_mt(item, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
+            & param=moist_cavity_mt_parameters_type( &
+            & spacing=real(o%spacing, wp), target_area=real(o%target_area, wp), &
+            & area_tolerance=real(o%area_tolerance, wp), gaussian_scale=real(o%gaussian_scale, wp), &
+            & w_0ls_from=real(o%w_0ls_from, wp), w_0ls_to=real(o%w_0ls_to, wp), &
+            & w_0ls_p=real(o%w_0ls_p, wp), w_0ls_a=real(o%w_0ls_a, wp), &
+            & weight_cutoff=real(o%weight_cutoff, wp)), ctx=ctx)
+      end select
+      call prefix_api_error(error%ptr, "new_mt_cavity")
+      if (allocated(error%ptr)) then
+         if (associated(cav%ptr)) deallocate (cav%ptr)
+         call release_shared_context(cav%shared_ctx)
+         deallocate (cav)
+         return
+      end if
+      handle = c_loc(cav)
+   end function create_mt_cavity_api
 
    !> Construct a drop cavity from copied configuration
    !>
@@ -4105,6 +4288,8 @@ contains
 
       type(vp_error), pointer :: error
       type(vp_cavity), pointer :: cav
+      !> Borrowed level-set model of either supported cavity type
+      class(moist_cavity_drop_lsf_type), pointer :: lsf_model
       integer(c_int), pointer :: p_ncart, p_nshell
       integer(c_int), pointer :: shell_off(:), comp_lx(:), comp_ly(:), comp_lz(:)
 
@@ -4128,39 +4313,46 @@ contains
             call api_error(error%ptr, "get_isodensity_cart_layout", "Cavity has no LSF model")
             return
          end if
-         select type (lsf => cavity%lsf_model)
-         type is (moist_cavity_drop_lsf_isodensity_internal_type)
-            if (c_associated(c_ncart)) then
-               call c_f_pointer(c_ncart, p_ncart)
-               p_ncart = int(lsf%gto%ncart, c_int)
-            end if
-            if (c_associated(c_nshell)) then
-               call c_f_pointer(c_nshell, p_nshell)
-               p_nshell = int(lsf%gto%nshell, c_int)
-            end if
-            if (c_associated(c_shell_off)) then
-               call c_f_pointer(c_shell_off, shell_off, [lsf%gto%nshell + 1])
-               shell_off = int(lsf%gto%sh_coff, c_int)
-            end if
-            if (c_associated(c_comp_lx)) then
-               call c_f_pointer(c_comp_lx, comp_lx, [lsf%gto%ncart])
-               comp_lx = int(lsf%gto%comp_l(1, :), c_int)
-            end if
-            if (c_associated(c_comp_ly)) then
-               call c_f_pointer(c_comp_ly, comp_ly, [lsf%gto%ncart])
-               comp_ly = int(lsf%gto%comp_l(2, :), c_int)
-            end if
-            if (c_associated(c_comp_lz)) then
-               call c_f_pointer(c_comp_lz, comp_lz, [lsf%gto%ncart])
-               comp_lz = int(lsf%gto%comp_l(3, :), c_int)
-            end if
-         class default
-            call api_error(error%ptr, "get_isodensity_cart_layout", &
-                           "Cavity LSF is not the internal isodensity type")
-         end select
+         lsf_model => cavity%lsf_model
+      type is (cavity_type_mt)
+         if (.not. allocated(cavity%lsf_model)) then
+            call api_error(error%ptr, "get_isodensity_cart_layout", "Cavity has no LSF model")
+            return
+         end if
+         lsf_model => cavity%lsf_model
+      class default
+         call api_error(error%ptr, "get_isodensity_cart_layout", "Cavity has no LSF model")
+         return
+      end select
+      select type (lsf => lsf_model)
+      type is (moist_cavity_drop_lsf_isodensity_internal_type)
+         if (c_associated(c_ncart)) then
+            call c_f_pointer(c_ncart, p_ncart)
+            p_ncart = int(lsf%gto%ncart, c_int)
+         end if
+         if (c_associated(c_nshell)) then
+            call c_f_pointer(c_nshell, p_nshell)
+            p_nshell = int(lsf%gto%nshell, c_int)
+         end if
+         if (c_associated(c_shell_off)) then
+            call c_f_pointer(c_shell_off, shell_off, [lsf%gto%nshell + 1])
+            shell_off = int(lsf%gto%sh_coff, c_int)
+         end if
+         if (c_associated(c_comp_lx)) then
+            call c_f_pointer(c_comp_lx, comp_lx, [lsf%gto%ncart])
+            comp_lx = int(lsf%gto%comp_l(1, :), c_int)
+         end if
+         if (c_associated(c_comp_ly)) then
+            call c_f_pointer(c_comp_ly, comp_ly, [lsf%gto%ncart])
+            comp_ly = int(lsf%gto%comp_l(2, :), c_int)
+         end if
+         if (c_associated(c_comp_lz)) then
+            call c_f_pointer(c_comp_lz, comp_lz, [lsf%gto%ncart])
+            comp_lz = int(lsf%gto%comp_l(3, :), c_int)
+         end if
       class default
          call api_error(error%ptr, "get_isodensity_cart_layout", &
-                        "Cavity is not DROP type")
+                        "Cavity LSF is not the internal isodensity type")
       end select
    end subroutine get_isodensity_cart_layout_api
 
@@ -4410,7 +4602,7 @@ contains
          return
       end if
 
-      if (.not. cav%ptr%is_built()) then
+      if (.not. cav%ptr%is_built() .or. .not. allocated(cav%ptr%total_area)) then
          call api_error(error%ptr, "get_cavity_sizes", unbuilt_cavity_message)
          return
       end if
@@ -4527,7 +4719,7 @@ contains
          return
       end if
 
-      if (.not. cav%ptr%is_built()) then
+      if (.not. cav%ptr%is_built() .or. .not. allocated(cav%ptr%total_area)) then
          call api_error(error%ptr, "get_cavity_results", unbuilt_cavity_message)
          return
       end if
@@ -6299,7 +6491,7 @@ contains
          return
       end if
 
-      if (.not. cav%ptr%is_built()) then
+      if (.not. cav%ptr%is_built() .or. .not. allocated(cav%ptr%total_area)) then
          call api_error(error%ptr, "compute_cavity_gradient", unbuilt_cavity_message)
          return
       end if
@@ -6343,7 +6535,7 @@ contains
          return
       end if
 
-      if (.not. cav%ptr%is_built()) then
+      if (.not. cav%ptr%is_built() .or. .not. allocated(cav%ptr%total_area)) then
          call api_error(error%ptr, "compute_anchor_gradient", unbuilt_cavity_message)
          return
       end if

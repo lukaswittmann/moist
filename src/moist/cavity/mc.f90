@@ -8,14 +8,13 @@
 !> - serves as an independent numerical reference for whatever LSF it is given
 !>
 !> Two entry points live here:
-!>   - [[cavity_type_marchingcubes]], the [[cavity_type]] extension, constructed
+!>   - [[cavity_type_mc]], the [[cavity_type]] extension, constructed
 !>     with an LSF template exactly like [[cavity_type_drop]]
-!>   - [[integrate_surface_marching_cubes]], the bare integration kernel, for
+!>   - [[integrate_surface_mc]], the bare integration kernel, for
 !>     callers (benchmarks, convergence sweeps) that hold an LSF but no cavity
 !>
-!> TODO: Add actual discretization, so this can be used for PCM and other surface-based models
-!>       Advantage: The grid point are is very homogeneous so good for (open)COSMO-RS
-module moist_cavity_marchingcubes
+!> Gaussian surface quadrature is provided separately by [[cavity_type_mt]]
+module moist_cavity_mc
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -42,13 +41,13 @@ module moist_cavity_marchingcubes
    implicit none(type, external)
    private
 
-   public :: cavity_type_marchingcubes
-   public :: new_cavity_marchingcubes
+   public :: cavity_type_mc
+   public :: new_cavity_mc
 
-   public :: moist_cavity_marchingcubes_parameters_type
+   public :: moist_cavity_mc_parameters_type
 
    !> Marching-cubes construction parameters
-   type, extends(moist_model_parameters_type) :: moist_cavity_marchingcubes_parameters_type
+   type, extends(moist_model_parameters_type) :: moist_cavity_mc_parameters_type
       !> Grid spacing in bohr
       real(wp) :: spacing = 0.2_wp
       !> Optional OBJ output path
@@ -62,10 +61,10 @@ module moist_cavity_marchingcubes
       procedure :: register_entries => register_parameter_entries
       !> Check grid spacing
       procedure :: validate => validate_mc_parameters
-   end type moist_cavity_marchingcubes_parameters_type
+   end type moist_cavity_mc_parameters_type
 
    !> Marching-cubes cavity state
-   type, extends(cavity_type) :: cavity_type_marchingcubes
+   type, extends(cavity_type) :: cavity_type_mc
 
       !> Level set function model, constructed once at cavity setup; the
       !> integrator source-allocates one thread-local clone per OpenMP thread
@@ -73,22 +72,22 @@ module moist_cavity_marchingcubes
 
       !> Construction settings: finest grid spacing, bohr, and the OBJ and PQR
       !> mesh export paths (export off when unallocated)
-      type(moist_cavity_marchingcubes_parameters_type) :: param
+      type(moist_cavity_mc_parameters_type) :: param
 
    contains
       !> Integrate the isosurface for a new geometry
-      procedure :: update => update_cavity_marchingcubes
+      procedure :: update => update_cavity_mc
       !> Whether the level set requires build-phase answers before the integration
-      procedure :: defers_build => marchingcubes_defers_build
+      procedure :: defers_build => mc_defers_build
       !> Read the build-phase answers and integrate the deferred isosurface
-      procedure :: build => build_cavity_marchingcubes
+      procedure :: build => build_cavity_mc
       !> Declare the build-phase requests of the level set
-      procedure :: declare_coupling => declare_coupling_marchingcubes
+      procedure :: declare_coupling => declare_coupling_mc
       !> Marching cubes exposes no analytic nuclear derivatives
-      procedure :: get_gradient => get_gradient_marchingcubes
+      procedure :: get_gradient => get_gradient_mc
       !> Construction settings
-      procedure :: parameters => marchingcubes_parameters
-   end type cavity_type_marchingcubes
+      procedure :: parameters => mc_parameters
+   end type cavity_type_mc
 
    !> Growable buffer for collecting triangle vertices from marching cubes
    type :: mc_tri_buffer_type
@@ -397,7 +396,7 @@ module moist_cavity_marchingcubes
       -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 ], [16, 256])
    !&>
 
-   public :: integrate_surface_marching_cubes
+   public :: integrate_surface_mc
 
 contains
 
@@ -406,7 +405,7 @@ contains
    !> @param[inout] self Grid configuration
    !> @param[out] error Invalid spacing
    subroutine validate_mc_parameters(self, error)
-      class(moist_cavity_marchingcubes_parameters_type), intent(inout) :: self
+      class(moist_cavity_mc_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
       if (self%spacing <= 0.0_wp) call fatal_error(error, "Marching cubes grid spacing must be positive")
@@ -416,8 +415,8 @@ contains
    !>
    !> @param[inout] self Parameter values
    subroutine init_parameter_defaults(self)
-      class(moist_cavity_marchingcubes_parameters_type), intent(inout) :: self
-      type(moist_cavity_marchingcubes_parameters_type) :: defaults
+      class(moist_cavity_mc_parameters_type), intent(inout) :: self
+      type(moist_cavity_mc_parameters_type) :: defaults
 
       self%spacing = defaults%spacing
       if (allocated(self%obj_file)) deallocate(self%obj_file)
@@ -428,7 +427,7 @@ contains
    !>
    !> @param[inout] self Parameter values
    subroutine register_parameter_entries(self)
-      class(moist_cavity_marchingcubes_parameters_type), intent(inout), target :: self
+      class(moist_cavity_mc_parameters_type), intent(inout), target :: self
 
       call self%register_real_scalar("spacing", self%spacing, level=2)
       call self%register_alloc_string("obj_file", self%obj_file)
@@ -443,9 +442,9 @@ contains
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
-   subroutine new_cavity_marchingcubes(self, radius_model, lsf_model, error, param, ctx)
+   subroutine new_cavity_mc(self, radius_model, lsf_model, error, param, ctx)
       !> Cavity to initialize
-      type(cavity_type_marchingcubes), intent(inout) :: self
+      type(cavity_type_mc), intent(inout) :: self
       !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
       !> Level set function to copy
@@ -453,11 +452,11 @@ contains
       !> Construction error
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
-      type(moist_cavity_marchingcubes_parameters_type), intent(in), optional :: param
+      type(moist_cavity_mc_parameters_type), intent(in), optional :: param
       !> Borrowed run context; omitted, a model supplies its own
       type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
-      type(moist_cavity_marchingcubes_parameters_type) :: settings
+      type(moist_cavity_mc_parameters_type) :: settings
 
       if (present(param)) settings = param
       call settings%validate(error)
@@ -476,13 +475,13 @@ contains
       call self%clear_surface()
       call self%clear_couplings()
 
-   end subroutine new_cavity_marchingcubes
+   end subroutine new_cavity_mc
 
    !> Record the DROP work and the level set on the cavity's context; called
    !> by `update`, which also covers a cavity adopted by a model
-   subroutine cite_cavity_marchingcubes(self)
+   subroutine cite_cavity_mc(self)
       !> Cavity instance
-      class(cavity_type_marchingcubes), intent(inout) :: self
+      class(cavity_type_mc), intent(inout) :: self
 
       if (.not. associated(self%ctx)) return
       call self%ctx%cite(citation_drop)
@@ -495,20 +494,20 @@ contains
          call self%ctx%cite(citation_isodensity)
       end select
 
-   end subroutine cite_cavity_marchingcubes
+   end subroutine cite_cavity_mc
 
    !> Construction settings of the cavity
    !>
    !> @param[in] self Marching-cubes cavity instance
-   function marchingcubes_parameters(self) result(param)
+   function mc_parameters(self) result(param)
       !> Marching-cubes cavity instance
-      class(cavity_type_marchingcubes), intent(in), target :: self
+      class(cavity_type_mc), intent(in), target :: self
       !> Settings, valid while the cavity is
       class(moist_model_parameters_type), pointer :: param
 
       param => self%param
 
-   end function marchingcubes_parameters
+   end function mc_parameters
 
    !* ================================================================================= *!
    !*                          Update Cavity (integrate surface)                        *!
@@ -523,8 +522,8 @@ contains
    !> @param[inout] self     Cavity instance
    !> @param[in]    mol      Molecular structure
    !> @param[out]   error    Error handling
-   subroutine update_cavity_marchingcubes(self, mol, error)
-      class(cavity_type_marchingcubes), intent(inout) :: self
+   subroutine update_cavity_mc(self, mol, error)
+      class(cavity_type_mc), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
@@ -532,7 +531,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
-      call cite_cavity_marchingcubes(self)
+      call cite_cavity_mc(self)
 
       !> Set number of spheres
       self%nsph = mol%nat
@@ -551,27 +550,27 @@ contains
 
       !> The integration waits for the density matrix or the nuclear charges
       if (.not. self%defers_build()) then
-         call integrate_surface_mc(self, error)
+         call construct_mc_surface(self, error)
          if (allocated(error)) return
       end if
       self%updated = .true.
       self%built = .not. self%defers_build()
 
-   end subroutine update_cavity_marchingcubes
+   end subroutine update_cavity_mc
 
    !> Whether the level set requires build-phase answers before the integration
    !>
    !> @param[in] self Cavity instance
-   function marchingcubes_defers_build(self) result(defers)
+   function mc_defers_build(self) result(defers)
       !> Cavity instance
-      class(cavity_type_marchingcubes), intent(in) :: self
+      class(cavity_type_mc), intent(in) :: self
       !> Whether `update` leaves the integration to `build`
       logical :: defers
 
       defers = .false.
       if (allocated(self%lsf_model)) defers = self%lsf_model%requires_build_inputs()
 
-   end function marchingcubes_defers_build
+   end function mc_defers_build
 
    !> Read the build phase, then integrate a deferred surface
    !>
@@ -582,9 +581,9 @@ contains
    !> @param[inout] self     Updated cavity
    !> @param[inout] coupling Coupling staged by `prepare_build`
    !> @param[out]   error    Error handling
-   subroutine build_cavity_marchingcubes(self, coupling, error)
+   subroutine build_cavity_mc(self, coupling, error)
       !> Cavity instance
-      class(cavity_type_marchingcubes), intent(inout) :: self
+      class(cavity_type_mc), intent(inout) :: self
       !> Coupling staged by `prepare_build`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
@@ -600,21 +599,21 @@ contains
       call self%lsf_model%read_build(view, self%mol, error)
       call coupling_close_view(coupling)
       if (allocated(error)) return
-      call integrate_surface_mc(self, error)
+      call construct_mc_surface(self, error)
       if (allocated(error)) return
       self%built = .true.
       call cavity_declare_pass(self, coupling, error)
 
-   end subroutine build_cavity_marchingcubes
+   end subroutine build_cavity_mc
 
    !> Declare the build-phase requests of the level set at the cavity scope
    !>
    !> @param[in]    self     Cavity instance
    !> @param[inout] coupling Coupling being declared
    !> @param[out]   error    Error handling
-   subroutine declare_coupling_marchingcubes(self, coupling, error)
+   subroutine declare_coupling_mc(self, coupling, error)
       !> Cavity instance
-      class(cavity_type_marchingcubes), intent(in) :: self
+      class(cavity_type_mc), intent(in) :: self
       !> Coupling being declared
       type(coupling_type), intent(inout) :: coupling
       !> Error handling
@@ -622,15 +621,15 @@ contains
 
       if (allocated(self%lsf_model)) call self%lsf_model%declare_coupling(coupling, error)
 
-   end subroutine declare_coupling_marchingcubes
+   end subroutine declare_coupling_mc
 
    !> Integrate the isosurface of the stored structure, radii and sphere centres
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling
-   subroutine integrate_surface_mc(self, error)
+   subroutine construct_mc_surface(self, error)
       !> Cavity instance
-      class(cavity_type_marchingcubes), intent(inout) :: self
+      class(cavity_type_mc), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -644,11 +643,11 @@ contains
       allocate (self%total_volume)
 
       call self%ctx%timer%start("Marching cubes", category=cat_properties)
-      call integrate_marching_cubes_export(self, error)
+      call integrate_mc_export(self, error)
       call self%ctx%timer%stop("Marching cubes")
       if (allocated(error)) return
 
-   end subroutine integrate_surface_mc
+   end subroutine construct_mc_surface
 
    !> Run the integrator, forwarding only the mesh-export paths that were requested
    !>
@@ -657,40 +656,40 @@ contains
    !>
    !> @param[inout] self  Cavity instance holding the LSF and the output slots
    !> @param[out]   error LSF evaluation failure raised by the integrator
-   subroutine integrate_marching_cubes_export(self, error)
-      class(cavity_type_marchingcubes), intent(inout) :: self
+   subroutine integrate_mc_export(self, error)
+      class(cavity_type_mc), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
       if (allocated(self%param%obj_file) .and. allocated(self%param%pqr_file)) then
-         call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
+         call integrate_surface_mc(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file, pqr_file=self%param%pqr_file)
       else if (allocated(self%param%obj_file)) then
-         call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
+         call integrate_surface_mc(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file)
       else if (allocated(self%param%pqr_file)) then
-         call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
+         call integrate_surface_mc(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads(), &
                                                pqr_file=self%param%pqr_file)
       else
-         call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
+         call integrate_surface_mc(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity(), debug=self%ctx%debug, &
                                                nthreads=self%ctx%get_num_threads())
       end if
 
-   end subroutine integrate_marching_cubes_export
+   end subroutine integrate_mc_export
 
    !* ================================================================================= *!
    !*                                 First derivatives                                 *!
@@ -702,15 +701,15 @@ contains
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling
-   subroutine get_gradient_marchingcubes(self, error)
-      class(cavity_type_marchingcubes), intent(inout) :: self
+   subroutine get_gradient_mc(self, error)
+      class(cavity_type_mc), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       call fatal_error(error, &
                        "Marching cubes provides no analytic nuclear gradients")
 
-   end subroutine get_gradient_marchingcubes
+   end subroutine get_gradient_mc
 
    !* ================================================================================= *!
    !*                              Marching cubes kernel                                *!
@@ -798,7 +797,7 @@ contains
    !> @param[in]  obj_file        Wavefront OBJ mesh output path (optional)
    !> @param[in]  pqr_file        PQR file output path with triangle centroids (optional)
    !> @param[out] error           LSF evaluation failure; area/volume are invalid
-   subroutine integrate_surface_marching_cubes(lsf, xyz, area, volume, error, &
+   subroutine integrate_surface_mc(lsf, xyz, area, volume, error, &
                                                target_spacing, debug, verbosity, obj_file, pqr_file, nthreads)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       real(wp), intent(in) :: xyz(:, :)
@@ -935,12 +934,12 @@ contains
                ! construct, so hand it to the shared `error` slot and let the
                ! flag drain the loop
                if (allocated(lsf_error)) then
-                  !$omp critical (marchingcubes_abort)
+                  !$omp critical (mc_abort)
                   if (.not. abort_requested) then
                      abort_requested = .true.
                      call move_alloc(lsf_error, error)
                   end if
-                  !$omp end critical (marchingcubes_abort)
+                  !$omp end critical (mc_abort)
                   cycle
                end if
                call lsf_slots(islot)%lsf%f0(grid_vals(ix, iy, iz))
@@ -1058,12 +1057,12 @@ contains
                   all_neg = all(cube%vals < 0.0_wp)
                   call lsf_slots(islot)%lsf%prepare(mid, lsf_error)
                   if (allocated(lsf_error)) then
-                     !$omp critical (marchingcubes_abort)
+                     !$omp critical (mc_abort)
                      if (.not. abort_requested) then
                         abort_requested = .true.
                         call move_alloc(lsf_error, error)
                      end if
-                     !$omp end critical (marchingcubes_abort)
+                     !$omp end critical (mc_abort)
                      loc_top = 0
                      cycle
                   end if
@@ -1108,12 +1107,12 @@ contains
                                          cube%vals, sub_min, sub_max, sub_vals, &
                                          lsf_slots(islot)%lsf, lsf_error)
                      if (allocated(lsf_error)) then
-                        !$omp critical (marchingcubes_abort)
+                        !$omp critical (mc_abort)
                         if (.not. abort_requested) then
                            abort_requested = .true.
                            call move_alloc(lsf_error, error)
                         end if
-                        !$omp end critical (marchingcubes_abort)
+                        !$omp end critical (mc_abort)
                         loc_top = 0
                         cycle
                      end if
@@ -1238,7 +1237,7 @@ contains
          call pp%kv("Wall time (s)", progress_elapsed)
          call pp%pop()
       end if
-   end subroutine integrate_surface_marching_cubes
+   end subroutine integrate_surface_mc
 
    !> March a single cube defined by its minimum point and edge length
    !>
@@ -1515,4 +1514,4 @@ contains
       write (output_unit, "(a,1x,a)") "[Info] Wrote MC PQR to", trim(filename)
    end subroutine write_mc_pqr
 
-end module moist_cavity_marchingcubes
+end module moist_cavity_mc

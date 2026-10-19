@@ -9,7 +9,7 @@ module test_cavity_drop_convergence
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_mc, only: integrate_surface_mc
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_data_radii_legacy, only: get_radius_func
@@ -35,7 +35,7 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
          new_unittest("convergence_drop_lebedev", test_convergence_drop_lebedev), &
-         new_unittest("convergence_marching_cubes", test_convergence_marching_cubes), &
+         new_unittest("convergence_mc", test_convergence_mc), &
          new_unittest("convergence_iswig_lebedev", test_convergence_iswig_lebedev), &
          new_unittest("convergence_drop_gradient", test_convergence_drop_gradient), &
          new_unittest("convergence_drop_nleb_blendk", test_convergence_drop_nleb_blendk), &
@@ -138,7 +138,7 @@ contains
    end subroutine test_convergence_drop_lebedev
 
    !> Test convergence of marching cubes area and volume w.r.t. grid spacing
-   subroutine test_convergence_marching_cubes(error)
+   subroutine test_convergence_mc(error)
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: mc_error
 
@@ -179,7 +179,7 @@ contains
          call lsf%update(mol, radii)
 
          do igrid = 1, n_spacings
-            call integrate_surface_marching_cubes(lsf, mol%xyz, areas(igrid), volumes(igrid), &
+            call integrate_surface_mc(lsf, mol%xyz, areas(igrid), volumes(igrid), &
                mc_error, target_spacing=spacings(igrid))
             if (allocated(mc_error)) then
                call test_failed(error, mc_error%message)
@@ -217,7 +217,7 @@ contains
 
       if (allocated(radii)) deallocate(radii)
 
-   end subroutine test_convergence_marching_cubes
+   end subroutine test_convergence_mc
 
    !> Test convergence of iSWiG cavity area and volume w.r.t. Lebedev grid size
    subroutine test_convergence_iswig_lebedev(error)

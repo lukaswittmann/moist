@@ -256,6 +256,24 @@ moist_stop_context_timer(moist_error error, moist_context context,
  */
 typedef struct {
     size_t struct_size;
+    double spacing; /* Maximum Cartesian surface-cell side in bohr */
+    double target_area; /* Target planar patch area in bohr squared */
+    double area_tolerance; /* Relative patch-area tolerance */
+    double gaussian_scale; /* Gaussian width scale */
+    double w_0ls_from; /* Lower low-gradient switch bound */
+    double w_0ls_to; /* Upper low-gradient switch bound */
+    double w_0ls_p; /* Low-gradient switch power */
+    double w_0ls_a; /* Low-gradient switch shape */
+    double weight_cutoff; /* Minimum retained switch weight */
+    /* --- end of 1.0 layout --- */
+} moist_mt_options;
+
+moist_API_ENTRY void moist_API_CALL
+moist_init_mt_options(moist_error error,
+    moist_mt_options *options, size_t struct_size) moist_API_SUFFIX__V_1_0;
+
+typedef struct {
+    size_t struct_size;
     int nleb;
     bool do_fine;
     double tolerance;
@@ -402,6 +420,14 @@ moist_API_ENTRY moist_cavity moist_API_CALL
 moist_new_drop_cavity(moist_error error, moist_context context, moist_lsf lsf,
                       moist_radii radii,
                       const moist_drop_options *options) moist_API_SUFFIX__V_1_0;
+
+/// Construct a frozen marching-tetrahedra surface, copying LSF and radii
+/// NULL radii selects CPCM radii; NULL options selects native defaults
+/// Supports every native LSF; geometry derivatives are unavailable
+moist_API_ENTRY moist_cavity moist_API_CALL
+moist_new_mt_cavity(moist_error error, moist_context context,
+    moist_lsf lsf, moist_radii radii,
+    const moist_mt_options *options) moist_API_SUFFIX__V_1_0;
 
 /// Construct iSwiG, copying radii; NULL radii selects CPCM, NULL options defaults
 moist_API_ENTRY moist_cavity moist_API_CALL

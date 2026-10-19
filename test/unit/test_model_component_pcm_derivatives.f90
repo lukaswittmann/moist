@@ -189,8 +189,6 @@ contains
    !* ================================================================================= *!
 
    !> CPCM: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -201,8 +199,6 @@ contains
    !>
    !> Default solver tolerance; the energy carries the residual correction of
    !> the generated solve, so the analytic weights stay its exact derivative
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_iterative_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -210,8 +206,6 @@ contains
    end subroutine test_cpcm_iterative_surface_gradient
 
    !> CPCM: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -219,8 +213,6 @@ contains
    end subroutine test_cpcm_tangent
 
    !> CPCM: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_cpcm_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -228,8 +220,6 @@ contains
    end subroutine test_cpcm_nuclear_gradient
 
    !> COSMO: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -237,8 +227,6 @@ contains
    end subroutine test_cosmo_surface_gradient
 
    !> COSMO: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -246,8 +234,6 @@ contains
    end subroutine test_cosmo_tangent
 
    !> COSMO: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_cosmo_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -255,8 +241,6 @@ contains
    end subroutine test_cosmo_nuclear_gradient
 
    !> IEF-PCM: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -264,8 +248,6 @@ contains
    end subroutine test_iefpcm_surface_gradient
 
    !> IEF-PCM: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -273,8 +255,6 @@ contains
    end subroutine test_iefpcm_tangent
 
    !> IEF-PCM: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_iefpcm_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -282,8 +262,6 @@ contains
    end subroutine test_iefpcm_nuclear_gradient
 
    !> SS(V)PE: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -291,8 +269,6 @@ contains
    end subroutine test_ssvpe_surface_gradient
 
    !> SS(V)PE: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -300,8 +276,6 @@ contains
    end subroutine test_ssvpe_tangent
 
    !> SS(V)PE: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_ssvpe_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -309,8 +283,6 @@ contains
    end subroutine test_ssvpe_nuclear_gradient
 
    !> DPCM: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -318,8 +290,6 @@ contains
    end subroutine test_dpcm_surface_gradient
 
    !> DPCM: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -327,8 +297,6 @@ contains
    end subroutine test_dpcm_tangent
 
    !> DPCM: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -336,8 +304,6 @@ contains
    end subroutine test_dpcm_nuclear_gradient
 
    !> Original DPCM: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -345,8 +311,6 @@ contains
    end subroutine test_dpcm_original_surface_gradient
 
    !> Original DPCM: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -354,8 +318,6 @@ contains
    end subroutine test_dpcm_original_tangent
 
    !> Original DPCM: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_dpcm_original_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -363,8 +325,6 @@ contains
    end subroutine test_dpcm_original_nuclear_gradient
 
    !> LPB: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -372,8 +332,6 @@ contains
    end subroutine test_lpb_surface_gradient
 
    !> LPB: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -381,8 +339,6 @@ contains
    end subroutine test_lpb_tangent
 
    !> LPB: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_lpb_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -390,8 +346,6 @@ contains
    end subroutine test_lpb_nuclear_gradient
 
    !> SLIC: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -399,8 +353,6 @@ contains
    end subroutine test_slic_surface_gradient
 
    !> SLIC: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -408,8 +360,6 @@ contains
    end subroutine test_slic_tangent
 
    !> SLIC: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_slic_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -417,8 +367,6 @@ contains
    end subroutine test_slic_nuclear_gradient
 
    !> Nonlocal: surface and trace gradients
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_surface_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -426,8 +374,6 @@ contains
    end subroutine test_nonlocal_surface_gradient
 
    !> Nonlocal: surface weight tangent
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_tangent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -435,8 +381,6 @@ contains
    end subroutine test_nonlocal_tangent
 
    !> Nonlocal: nuclear gradient
-   !>
-   !> @param[out] error Test failure
    subroutine test_nonlocal_nuclear_gradient(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -471,8 +415,6 @@ contains
    end subroutine run_surface_gradient
 
    !> Surface weight tangent on both seeds (SLIC: DROP only), Gaussian and point surfaces of every solute
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    subroutine run_tangent(error, kind)
       !> Test failure
@@ -493,8 +435,6 @@ contains
    end subroutine run_tangent
 
    !> Nuclear gradient on rebuilt iSwiG and SvdW-DROP cavities of every solute (SLIC: DROP only)
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    subroutine run_nuclear_gradient(error, kind)
       !> Test failure
@@ -963,8 +903,6 @@ contains
    !> nuclei, so the energy difference over a nuclear displacement is the
    !> complete gradient. Small solutes difference every coordinate, larger ones
    !> move all nuclei at once along a few fixed directions
-   !>
-   !> @param[out] error Test failure
    !> @param[in]  kind  Model identifier
    !> @param[in]  imol  Solute index
    !> @param[in]  seed  Cavity kind rebuilt at every geometry

@@ -5,7 +5,7 @@ module test_parameters
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_model_parameters, only: moist_model_parameters_type
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
-                    moist_cavity_numsa_parameters_type, moist_cavity_marchingcubes_parameters_type, &
+                    moist_cavity_numsa_parameters_type, moist_cavity_mc_parameters_type, &
                     moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
                     moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
    use moist_cavity_type, only: cavity_type
@@ -48,8 +48,6 @@ module test_parameters
 contains
 
    !> Check model-specific physical inputs before the first update
-   !>
-   !> @param[out] error Test failure
    subroutine test_pcm_physical_inputs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -823,7 +821,7 @@ contains
       type(moist_cavity_drop_parameters_type) :: drop
       type(moist_cavity_iswig_parameters_type) :: iswig
       type(moist_cavity_numsa_parameters_type) :: numsa
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
@@ -1196,7 +1194,7 @@ contains
       type(moist_cavity_drop_parameters_type) :: drop
       type(moist_cavity_iswig_parameters_type) :: iswig
       type(moist_cavity_numsa_parameters_type) :: numsa
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
@@ -1392,7 +1390,7 @@ contains
       type(moist_error), allocatable :: err
       !> Parameter classes with numerical validation
       type(moist_cavity_drop_parameters_type) :: drop
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
       type(moist_pcm_parameters_type) :: pcm
       !> Invalid solver cases
       integer :: invalid

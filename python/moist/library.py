@@ -284,10 +284,10 @@ def _construct(kind, handle_type, *args, context, required=False):
     return handle
 
 
-def _drop_from_lsf(lsf, options, radii=None, *, context=None):
+def _drop_from_lsf(lsf, options, radii=None, *, context=None, kind="drop"):
     """Copy an LSF into a cavity and release the temporary LSF handle."""
     try:
-        return _construct("drop_cavity", CavityHandle,
+        return _construct(f"{kind}_cavity", CavityHandle,
                           lsf, ffi.NULL if radii is None else radii.handle, options,
                           context=context)
     finally:
@@ -300,7 +300,8 @@ def new_drop_cavity(parameters, lsf_parameters, radii=None, *, context=None) -> 
     options = parameters._as_options()
     lsf_options = lsf_parameters._as_options()
     constructor = getattr(lib, f"moist_new_{lsf_parameters._kind}_lsf")
-    return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii, context=context)
+    return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii,
+                          context=context, kind=parameters._kind)
 
 
 def new_internal_isodensity_cavity(basis, parameters, lsf_parameters, radii=None, *, context=None):
@@ -311,7 +312,8 @@ def new_internal_isodensity_cavity(basis, parameters, lsf_parameters, radii=None
     lsf = error_check(lib.moist_new_isodensity_lsf)(
         len(basis.shell_atom), *[_cast("int*" if i < 3 else "double*", a)
                                  for i, a in enumerate(arrays)], lsf_parameters._as_options())
-    return _drop_from_lsf(lsf, parameters._as_options(), radii, context=context)
+    return _drop_from_lsf(lsf, parameters._as_options(), radii,
+                          context=context, kind=parameters._kind)
 
 
 def isodensity_layout(cavity):
@@ -480,7 +482,7 @@ def new_drop_cavity_isodensity_callback(
     lsf = error_check(lib.moist_new_isodensity_callback_lsf)(
         c_callback, ffi.NULL, lsf_options
     )
-    handle = _drop_from_lsf(lsf, options, radii, context=context)
+    handle = _drop_from_lsf(lsf, options, radii, context=context, kind=parameters._kind)
     handle.callback_state = state
     handle.callback_ref = c_callback
     return handle

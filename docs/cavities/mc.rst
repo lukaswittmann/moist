@@ -8,8 +8,8 @@ Marching cubes integrates the zero level set of a given level set function.
    This approach produces no surface discretization (no grid points); it only integrates the cavity.
    ``update`` fills ``total_area`` (bohr\ :sup:`2`) and ``total_volume`` (bohr\ :sup:`3`) but no grid fields (``ngrid`` stays 0), which makes it an independent numerical reference for any LSF.
 
-The implementation lives in ``src/moist/cavity/marchingcubes.f90``; the cavity type is ``cavity_type_marchingcubes`` and the constructor is ``new_cavity_marchingcubes``.
-The bare integration kernel ``integrate_surface_marching_cubes`` is public as well, for callers that hold an LSF but no cavity.
+The implementation lives in ``src/moist/cavity/mc.f90``; the cavity type is ``cavity_type_mc`` and the constructor is ``new_cavity_mc``.
+The bare integration kernel ``integrate_surface_mc`` is public as well, for callers that hold an LSF but no cavity.
 
 
 Settings
@@ -52,14 +52,14 @@ It takes the same LSF and radius models as a DROP cavity.
 .. code-block:: fortran
 
    use mctc_env, only : wp
-   use moist_cavity_marchingcubes, only : cavity_type_marchingcubes, &
-      & new_cavity_marchingcubes, moist_cavity_marchingcubes_parameters_type
+   use moist_cavity_mc, only : cavity_type_mc, &
+      & new_cavity_mc, moist_cavity_mc_parameters_type
 
-   type(cavity_type_marchingcubes) :: cavity
+   type(cavity_type_mc) :: cavity
 
-   call new_cavity_marchingcubes(cavity, radius_model=radii, &
+   call new_cavity_mc(cavity, radius_model=radii, &
       & lsf_model=svdw, error=error, &
-      & param=moist_cavity_marchingcubes_parameters_type(spacing=0.2_wp), ctx=ctx)
+      & param=moist_cavity_mc_parameters_type(spacing=0.2_wp), ctx=ctx)
    if (allocated(error)) error stop error%message
 
    call cavity%update(mol, error)

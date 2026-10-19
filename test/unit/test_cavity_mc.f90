@@ -1,14 +1,14 @@
 !> Tests for the marching-cubes cavity
-module test_cavity_marchingcubes
+module test_cavity_mc
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
-   use moist_cavity_marchingcubes, only: moist_cavity_marchingcubes_parameters_type
+   use moist_cavity_mc, only: moist_cavity_mc_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use moist_cavity, only: cavity_type_marchingcubes, new_cavity_marchingcubes
+   use moist_cavity, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
@@ -16,7 +16,7 @@ module test_cavity_marchingcubes
    implicit none(type, external)
    private
 
-   public :: collect_cavity_marchingcubes
+   public :: collect_cavity_mc
 
    !> Finest marching-cubes spacing used throughout; the adaptive refinement
    !> reaches roughly 0.2 % on area and 0.4 % on volume for a sphere at this
@@ -85,7 +85,7 @@ module test_cavity_marchingcubes
 contains
 
    !> Collect all exported unit tests
-   subroutine collect_cavity_marchingcubes(testsuite)
+   subroutine collect_cavity_mc(testsuite)
 
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -118,12 +118,12 @@ contains
          & new_unittest(case_to_string(cases(16)), test_case_016) &
          & ]
 
-   end subroutine collect_cavity_marchingcubes
+   end subroutine collect_cavity_mc
 
    !> Unsupported geometry requests fail before a cavity update
    subroutine test_rejects_optional_geometry(error)
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_type_marchingcubes) :: cav
+      type(cavity_type_mc) :: cav
       type(mctc_error), allocatable :: cavity_error
 
       call cav%configure(normal=.true., error=cavity_error)
@@ -147,7 +147,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), intent(inout), target :: ctx
       type(structure_type), intent(out) :: mol
-      type(cavity_type_marchingcubes), allocatable, intent(out) :: cav
+      type(cavity_type_mc), allocatable, intent(out) :: cav
       real(wp), intent(in) :: radii(:)
       real(wp), intent(in) :: xyz(:, :)
       real(wp), intent(in), optional :: spacing
@@ -174,8 +174,8 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=grid_spacing), ctx=ctx)
+      call new_cavity_mc(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_mc_parameters_type(spacing=grid_spacing), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -198,7 +198,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), intent(inout), target :: ctx
       type(structure_type), intent(out) :: mol
-      type(cavity_type_marchingcubes), allocatable, intent(out) :: cav
+      type(cavity_type_mc), allocatable, intent(out) :: cav
       real(wp), intent(in), optional :: spacing
 
       real(wp) :: xyz(3, 1)
@@ -215,7 +215,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -262,7 +262,7 @@ contains
       real(wp), parameter :: radii(*) = [1.5_wp, 2.0_wp, 3.0_wp, 4.5_wp, 6.0_wp]
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -304,7 +304,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -349,7 +349,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -392,7 +392,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
       !> Local run context borrowed by the cavity built here
@@ -411,8 +411,8 @@ contains
          blend_2b=c%blend_2b, blend_3b=c%blend_3b))
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING), ctx=ctx)
+      call new_cavity_mc(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_mc_parameters_type(spacing=MC_SPACING), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -451,7 +451,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -501,7 +501,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
@@ -534,7 +534,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       class(radius_type), allocatable :: radius_model
       type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
@@ -543,7 +543,7 @@ contains
       real(wp) :: radii(1)
       real(wp) :: xyz(3, 1)
       !> Compiled spacing default, independent of constructor forwarding
-      type(moist_cavity_marchingcubes_parameters_type) :: defaults
+      type(moist_cavity_mc_parameters_type) :: defaults
 
       call new_context(ctx, nthreads=0, verbosity=0)
 
@@ -560,7 +560,7 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
+      call new_cavity_mc(cav, radius_model=radius_model, lsf_model=svdw_template, &
          error=cavity_error, ctx=ctx)
       call check(error, .not. allocated(cavity_error), &
          & more="Default marching-cubes parameters must construct successfully")
@@ -572,15 +572,15 @@ contains
          & more="Omitted parameters must use the compiled spacing")
       if (allocated(error)) return
 
-      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=0.0_wp), ctx=ctx)
+      call new_cavity_mc(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_mc_parameters_type(spacing=0.0_wp), ctx=ctx)
 
       call check(error, allocated(cavity_error), &
          & more="A zero marching-cubes spacing must be rejected")
       if (allocated(error)) return
 
-      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=-MC_SPACING), ctx=ctx)
+      call new_cavity_mc(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_mc_parameters_type(spacing=-MC_SPACING), ctx=ctx)
       call check(error, allocated(cavity_error), &
          & more="A negative marching-cubes spacing must be rejected")
 
@@ -599,7 +599,7 @@ contains
       integer, intent(in) :: case_idx
 
       type(structure_type) :: mol
-      type(cavity_type_marchingcubes), allocatable :: cav
+      type(cavity_type_mc), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
       !> Local run context borrowed by the cavity built here
@@ -613,10 +613,10 @@ contains
          blend_2b=cases(case_idx)%blend_2b, blend_3b=cases(case_idx)%blend_3b))
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING), ctx=ctx)
+      call new_cavity_mc(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_mc_parameters_type(spacing=MC_SPACING), ctx=ctx)
       if (allocated(cavity_error)) then
-         call test_failed(error, "new_cavity_marchingcubes failed for "// &
+         call test_failed(error, "new_cavity_mc failed for "// &
             & case_to_string(cases(case_idx))//": "//cavity_error%message)
          return
       end if
@@ -739,4 +739,4 @@ contains
       call run_single_case(error, 16)
    end subroutine test_case_016
 
-end module test_cavity_marchingcubes
+end module test_cavity_mc

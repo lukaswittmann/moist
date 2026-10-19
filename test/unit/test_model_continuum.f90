@@ -28,7 +28,7 @@ module test_model_continuum
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
+   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
@@ -712,7 +712,7 @@ contains
       type(cavity_type_drop) :: drop
       type(cavity_type_iswig) :: iswig
       type(cavity_type_numsa) :: numsa
-      type(cavity_type_marchingcubes) :: mc
+      type(cavity_type_mc) :: mc
       !> Cavity kind
       integer :: icase
 
@@ -735,8 +735,8 @@ contains
             if (.not. allocated(err)) call new_cavity_numsa(numsa, radius_model, err)
             if (.not. allocated(err)) call check_model_context(numsa, "NUMSA")
          case (4)
-            call new_cavity_marchingcubes(mc, radius_model, svdw, err, ctx=first)
-            if (.not. allocated(err)) call new_cavity_marchingcubes(mc, radius_model, svdw, err)
+            call new_cavity_mc(mc, radius_model, svdw, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_mc(mc, radius_model, svdw, err)
             if (.not. allocated(err)) call check_model_context(mc, "marching cubes")
          case default
             error stop "test_model_continuum: unhandled case in reconstructed_cavity_context"

@@ -4,7 +4,8 @@ module moist
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
-   use moist_cavity_marchingcubes, only: moist_cavity_marchingcubes_parameters_type
+   use moist_cavity_mc, only: moist_cavity_mc_parameters_type, cavity_type_mc, new_cavity_mc
+   use moist_cavity_mt, only: moist_cavity_mt_parameters_type, cavity_type_mt, new_cavity_mt
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
@@ -44,7 +45,9 @@ module moist
    public :: moist_cavity_drop_parameters_type
    public :: moist_cavity_iswig_parameters_type
    public :: moist_cavity_numsa_parameters_type
-   public :: moist_cavity_marchingcubes_parameters_type
+   public :: moist_cavity_mc_parameters_type
+   public :: moist_cavity_mt_parameters_type, cavity_type_mt, new_cavity_mt
+   public :: cavity_type_mc, new_cavity_mc
    public :: moist_pcm_parameters_type, moist_gostshyp_parameters_type
    public :: moist_cavity_drop_lsf_svdw_param_type
    public :: moist_cavity_drop_lsf_cfc_param_type
