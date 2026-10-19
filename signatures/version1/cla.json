@@ -1,3 +1,12 @@
 {
-   "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "trajkovski67",
+      "id": 237029389,
+      "comment_id": 6262946694,
+      "created_at": "2026-10-19T08:25:16Z",
+      "repoId": 1255788295,
+      "pullRequestNo": 26
+    }
+  ]
 }
