@@ -1,0 +1,5 @@
+subdir('1d')
+subdir('3d')
+subdir('potential')
+subdir('solvent')
+srcs += files('potential.f90')

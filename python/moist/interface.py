@@ -1,9 +1,10 @@
 """Object-oriented Python interface for moist solvation models.
 
 Live cavity objects own their behaviour, snapshots are explicit values, and a
-model drives the same host coupling protocol as the Fortran interface --
-create a coupling, prepare a phase, walk the requests with ``for request in
-coupling`` and answer the missing outputs of each with
+model drives the same host coupling protocol as the C and Fortran interfaces
+-- update with the structure, create a coupling, run the build phase
+(``prepare_build``, answer, ``build``), prepare a phase, walk the requests
+with ``for request in coupling`` and answer the missing outputs of each with
 ``coupling.answer(...)``, then read the result and contract every item of the
 response with ``for item in response``.
 """
@@ -11,18 +12,19 @@ response with ``for item in response``.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, fields
+from dataclasses import MISSING, dataclass, fields
 from typing import Callable, ClassVar, Iterable, Iterator, Optional, Protocol, Union
 
 import numpy as np
 
 from . import library
-from .library import CavityField
+from .library import FieldInfo
+from .context import Context, _context_handle, _resolve_context
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
 from .radii import Radii
-from .density import InternalDensity
+from .density import GaussianBasis
 from .parameters import (
-    DROPParameters, ISwiGParameters, ModelParameters, PCMParameters, PCMSolver, _resolve,
+    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
 )
 
 
@@ -55,7 +57,7 @@ class _ImmutableArrayValue:
 
 @dataclass(frozen=True)
 class CavitySnapshot(_ImmutableArrayValue):
-    """Generic cavity data copied from one successful update.
+    """Generic cavity data copied from a completed surface.
 
     Field names match moist's own native names:
 
@@ -97,7 +99,7 @@ class CavitySnapshot(_ImmutableArrayValue):
 
 @dataclass(frozen=True)
 class CavitySnapshotDROP(CavitySnapshot):
-    """DROP-specific cavity data copied from one successful update.
+    """DROP-specific cavity data copied from a completed surface.
 
     ``nmax``
         Grid points allocated per sphere before pruning.
@@ -218,24 +220,94 @@ class DensityResponse(_ImmutableArrayValue):
 
 
 @dataclass(frozen=True)
-class GostshypAmplitudeResponse(_ImmutableArrayValue):
-    """GOSTSHYP amplitude item of a solvation response.
+class GaussianAmplitudeResponse(_ImmutableArrayValue):
+    """Gaussian amplitude item of a solvation response.
 
     ``w_overlap``, ``w_normal_deriv``
-        ``(ngrid,)`` amplitudes for the Gaussian value and its normal
-        derivative; the host completes its Fock contribution as
+        ``(ngrid,)`` amplitudes conjugate to the host's Gaussian blocks
+        ``g[u, v, i] = <u|G_i|v>`` and ``f[u, v, i] = n_i . grad_r g[u, v, i]``,
+        the counterpart of the Gaussian moment request; the host completes its
+        Fock contribution as
         ``F += sum_i [w_overlap[i] g[..., i] + w_normal_deriv[i] f[..., i]]``.
     """
 
     #: Native item name
-    name: ClassVar[str] = "gostshyp_amplitude"
+    name: ClassVar[str] = "gaussian_amplitude"
 
     w_overlap: np.ndarray
     w_normal_deriv: np.ndarray
 
 
+@dataclass(frozen=True)
+class AtomicMultipoleAdjointResponse(_ImmutableArrayValue):
+    """Atomic multipole adjoint item of a solvation response.
+
+    ``dg_dq``, ``dg_dmu``, ``dg_dtheta``
+        ``(natom,)``, ``(natom, 3)`` and ``(natom, 3, 3)`` weights conjugate to
+        the solute's atomic charges, dipoles and quadrupoles, ``dE/dq_A``,
+        ``dE/dmu_A`` and ``dE/dtheta_A``; the counterpart of the atomic
+        multipole request.  The host contracts them with its own derivatives of
+        the multipoles, ``d/dP`` for the Fock matrix and ``d/dR`` at fixed
+        density for the gradient.  Quadrupole weights use ``[atom,b,a]`` for
+        native ``(a,b,atom)``.
+
+    An array of a multipole order the model never consumed is ``None``, never
+    zeros.
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "atomic_multipole_adjoint"
+
+    dg_dq: Optional[np.ndarray] = None
+    dg_dmu: Optional[np.ndarray] = None
+    dg_dtheta: Optional[np.ndarray] = None
+
+
+@dataclass(frozen=True)
+class AtomicChargeAdjointResponse(_ImmutableArrayValue):
+    """Atomic charge adjoint item of a solvation response.
+
+    ``dg_dq``
+        ``(natom,)`` weights conjugate to the solute's atomic partial charges,
+        ``dE/dq_A``; the counterpart of the atomic charge request.  The host
+        contracts them with its own ``d q_A/dP`` for the Fock matrix and
+        ``d q_A/dR`` for the gradient.
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "atomic_charge_adjoint"
+
+    dg_dq: np.ndarray
+
+
+@dataclass(frozen=True)
+class RadialPotentialAdjointResponse(_ImmutableArrayValue):
+    """Radial potential adjoint item of a solvation response.
+
+    ``dg_dphi``
+        ``(natom, ngrid)`` weights conjugate to the site-resolved radial
+        potential, ``dE/dphi_a(r_i)`` with indices ``[atom, point]`` for native
+        ``(point, atom)``; the counterpart of the radial potential request.
+        The host contracts them with its own site-decomposed potential
+        operator for the Fock matrix and with ``d phi_a(r_i)/dR`` for the
+        gradient.
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "radial_potential_adjoint"
+
+    dg_dphi: np.ndarray
+
+
 #: One item of a solvation response
-_ResponseItem = Union[PotentialAdjointResponse, DensityResponse, GostshypAmplitudeResponse]
+_ResponseItem = Union[
+    PotentialAdjointResponse,
+    DensityResponse,
+    GaussianAmplitudeResponse,
+    AtomicMultipoleAdjointResponse,
+    AtomicChargeAdjointResponse,
+    RadialPotentialAdjointResponse,
+]
 
 
 class Response:
@@ -246,14 +318,16 @@ class Response:
     with its own derivative of those quantities.
 
     Iterating a response yields the items the model produced, in native order:
-    :class:`PotentialAdjointResponse`, :class:`DensityResponse` and
-    :class:`GostshypAmplitudeResponse`, each with its native item name as
+    :class:`PotentialAdjointResponse`, :class:`DensityResponse`,
+    :class:`GaussianAmplitudeResponse`, :class:`AtomicMultipoleAdjointResponse`,
+    :class:`AtomicChargeAdjointResponse` and
+    :class:`RadialPotentialAdjointResponse`, each with its native item name as
     ``name`` and its arrays as attributes.  Select on the item's class,
     contract every item, and raise on one the host does not know: unlike an
     unanswered request, a skipped item fails nowhere.  An item this model, on
     this cavity, in this phase does not produce is not there -- a fixed cavity
-    has no density response, a model without GOSTSHYP no amplitudes -- and
-    absence is never filled in with zeros.
+    has no density response, a model without GOSTSHYP no Gaussian amplitudes
+    -- and absence is never filled in with zeros.
 
     A response is a plain value copied out of the native result of one
     ``get_response``/``get_gradient`` call; it holds no reference to the
@@ -279,47 +353,74 @@ class Response:
         return f"<Response {[item.name for item in self._items]}>"
 
     @classmethod
-    def _from_handle(
-        cls, handle: library.ResponseHandle, ngrid: int
-    ) -> "Response":
-        """Walk the native response and copy every item it carries, each array by name."""
+    def _from_handle(cls, handle: library.ResponseHandle) -> "Response":
+        """Walk the native response and copy every item it carries, each array as it declares it."""
         items = []
         while library.next_response_item(handle):
             name = library.get_response_item_name(handle)
             kind = _RESPONSE_ITEMS.get(name)
             if kind is None:
                 raise RuntimeError(f"Unknown response item '{name}' from the native library")
-            items.append(kind(**{
-                array.name: _read_response_array(handle, array.name, ngrid)
-                for array in fields(kind)
-            }))
+            arrays = _read_native_fields(
+                handle,
+                library.get_response_field_count,
+                library.get_response_field_info,
+                library.get_response_field_real,
+            )
+            items.append(_typed_item(kind, arrays))
         return cls(items)
 
 
 #: Native response item name -> the value type holding its arrays
 _RESPONSE_ITEMS = {
     kind.name: kind
-    for kind in (PotentialAdjointResponse, DensityResponse, GostshypAmplitudeResponse)
-}
-
-#: Extents after the grid axis of every response array, keyed by array name
-#: (unique across items), as moist.h documents them; the buffer is allocated
-#: to exactly this shape
-_RESPONSE_ARRAYS = {
-    "w_phi": (),
-    "w_rho": (),
-    "w_grad_rho": (3,),
-    "w_hess_rho": (3, 3),
-    "w_overlap": (),
-    "w_normal_deriv": (),
+    for kind in (
+        PotentialAdjointResponse,
+        DensityResponse,
+        GaussianAmplitudeResponse,
+        AtomicMultipoleAdjointResponse,
+        AtomicChargeAdjointResponse,
+        RadialPotentialAdjointResponse,
+    )
 }
 
 
-def _read_response_array(handle: library.ResponseHandle, array: str, ngrid: int) -> np.ndarray:
-    """Copy one array of the current native item, ``(ngrid, ...)``."""
-    values = np.empty((ngrid, *_RESPONSE_ARRAYS[array]), dtype=np.float64)
-    library.get_response_array(handle, array, values)
+def _read_native_fields(handle, count, info, read) -> dict[str, np.ndarray]:
+    """Copy every real field the current native item or request declares, in its declared shape."""
+    values = {}
+    for index in range(count(handle)):
+        field = info(handle, index)
+        values[field.name] = np.empty(field.shape, dtype=np.float64)
+        read(handle, field.name, values[field.name])
     return values
+
+
+def _typed_item(kind: type, arrays: dict[str, np.ndarray]) -> _ResponseItem:
+    """Build a response item from the arrays its native counterpart declares.
+
+    The two sides must agree: an array the class has no attribute for, and an
+    attribute without a default the native item does not declare, both mean
+    the bindings drifted from the library.  An undeclared attribute with a
+    default -- an optional array the model did not compute -- keeps it.
+    """
+    attributes = fields(kind)
+    unknown = sorted(set(arrays) - {attribute.name for attribute in attributes})
+    if unknown:
+        raise RuntimeError(
+            f"Response item '{kind.name}' declares array '{unknown[0]}', "
+            f"which {kind.__name__} does not have"
+        )
+    missing = [
+        attribute.name for attribute in attributes
+        if attribute.name not in arrays
+        and attribute.default is MISSING and attribute.default_factory is MISSING
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Response item '{kind.name}' does not declare array '{missing[0]}', "
+            f"which {kind.__name__} requires"
+        )
+    return kind(**arrays)
 
 
 # -----------------------------------------------------------------------------
@@ -333,6 +434,10 @@ class Structure:
     Coordinates and lattice vectors are in Bohr.  Positions use the natural
     NumPy shape ``(natoms, 3)``; the wrapper converts that row-major memory to
     the native Fortran ``(3, natoms)`` view without an intermediate transpose.
+
+    ``numbers`` identify the elements.  The structure holds element numbers
+    and geometry only: the nuclear charges of the host Hamiltonian reach moist
+    through the ``nuclear_charges`` coupling request.
     """
 
     def __init__(
@@ -457,9 +562,9 @@ def _guarded_native_update(cavity: Cavity, native: Callable[[], None]) -> None:
     callback instead of letting it cross the native frames.  The recorded
     failure is re-raised on both paths: after a native error, where it is the
     more specific cause, and after an apparently successful call, which the
-    native side reports when the callback was the one that failed.  Both
-    :meth:`Cavity.update` and :meth:`SolvationModel.update` drive the same
-    protocol; only the surrounding bookkeeping differs.
+    native side reports when the callback was the one that failed.  The
+    updates and builds of :class:`Cavity` and :class:`SolvationModel` all run
+    through it: a callback cavity evaluates its level set in either.
     """
     cavity._before_native_update()
     try:
@@ -474,18 +579,25 @@ class Cavity(ABC):
     """Live cavity object.
 
     A cavity owns behaviour and native state.  :meth:`snapshot` returns an
-    explicit copied value for a particular successful update.  Model-owned
+    explicit copied value for a completed surface. Model-owned
     cavity views expose the same read/derivative behaviour but cannot be rebuilt
     independently of their model.
     """
 
     density_dependent = False
 
+    @property
+    def context(self) -> Context | None:
+        """Run context the cavity runs on; ``None`` until a model supplies one."""
+        return self._context
+
     def __init__(self, handle: library.CavityHandle, *, owned: bool = True) -> None:
         self._handle = handle
         self._owned = owned
         self._updated = False
         self._snapshot_cache: Optional[CavitySnapshot] = None
+        #: Atom count of the structure staged by the latest update
+        self._staged_natoms: Optional[int] = None
 
     @property
     def configuration(self):
@@ -517,17 +629,65 @@ class Cavity(ABC):
     def _raise_callback_failure(self) -> None:
         """Hook for callback-backed cavities."""
 
-    def update(self, structure: Structure) -> None:
+    def _require_owned(self) -> None:
         if not self._owned:
             raise RuntimeError("A model-owned cavity must be updated through its model")
+
+    def update(self, structure: Structure) -> None:
+        """Prepare the geometry and invalidate this cavity's couplings.
+
+        Equivalent to ``moist_update_cavity``. Follow the :ref:`coupling-build`
+        to supply host inputs and complete any deferred surface construction.
+        """
+        self._require_owned()
         self._invalidate()
-        source = getattr(self, "_density_source", None)
-        if isinstance(source, InternalDensity):
-            library.set_isodensity_density(self._handle, source.density_matrix)
         _guarded_native_update(
             self, lambda: library.update_cavity(self._handle, structure._as_handle())
         )
+        self._staged_natoms = len(structure)
         self._mark_updated()
+
+    def new_coupling(self) -> Coupling:
+        """Mint a coupling of this standalone cavity for its build phase.
+
+        Like ``moist_new_cavity_coupling``: needs no update, and a model-owned
+        cavity refuses, its model's coupling answers the build phase.
+        """
+        return Coupling(self)
+
+    def prepare_build(self, coupling: Coupling) -> None:
+        """Stage the build phase: clear every answer of ``coupling`` and restart its walk.
+
+        Like ``moist_prepare_cavity_build``: the walk then visits the requests
+        the build reads, :class:`DensityMatrixRequest` and
+        :class:`NuclearChargesRequest`.  A cavity that waits for its build
+        phase drops its surface until the next :meth:`build` succeeds.
+        """
+        self._require_owned()
+        self._snapshot_cache = None
+        library.prepare_cavity_build(self._handle, coupling._handle)
+
+    def build(self, coupling: Coupling) -> None:
+        """Complete the surface from the build-phase answers of ``coupling``.
+
+        Like ``moist_build_cavity``: fails by name on a wrong staging or a
+        missing output, and a failed deferred build leaves no surface. The coupling
+        keeps its build-phase answers; every other coupling of the cavity is
+        invalidated.
+        """
+        self._require_owned()
+        self._snapshot_cache = None
+        _guarded_native_update(
+            self, lambda: library.build_cavity(self._handle, coupling._handle)
+        )
+
+    def _coupling_ngrid(self) -> int:
+        """Grid size the coupling's grid outputs run over."""
+        return library.get_cavity_sizes(self._handle)[0]
+
+    def _coupling_natoms(self) -> Optional[int]:
+        """Atom count of the staged structure."""
+        return self._staged_natoms
 
     def _require_updated(self) -> None:
         if not self._updated:
@@ -548,7 +708,7 @@ class Cavity(ABC):
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         """Wrap the model-owned native copy without taking update ownership."""
 
-    def fields(self) -> tuple[library.CavityField, ...]:
+    def fields(self) -> tuple[library.FieldInfo, ...]:
         """Describe every result this cavity currently holds.
 
         The list is the cavity's own declaration, so it covers whichever type
@@ -682,10 +842,11 @@ class CavityISwiG(_CavityGenericBase):
     """iSwiG cavity built from shared parameters and a radius model."""
 
     def __init__(self, *, parameters: ISwiGParameters | None = None,
-                 radii: Radii | None = None) -> None:
+                 radii: Radii | None = None, context: Context | None = None) -> None:
+        self._context = _resolve_context(context, optional=True)
         self._configuration = ISwiG(parameters=parameters, radii=radii)
         super().__init__(library.new_iswig_cavity(
-            self.parameters, self.radius_model._as_handle()
+            self.parameters, self.radius_model._as_handle(), context=_context_handle(context),
         ))
 
 
@@ -750,7 +911,10 @@ class _CavityDROPBase(Cavity):
         return library.contract_pcm_nuclear_gradient(self._handle, w_phi, w_xyz, charges)
 
     def isodensity_layout(self):
-        """Return shell offsets and monomial powers ``(ncart,3)`` for internal density."""
+        """Return shell offsets and monomial powers ``(ncart, 3)`` of an internal isodensity.
+
+        The cartesian order the host's ``dcart`` answer must use.
+        """
         return library.isodensity_layout(self._handle)
 
     def compute_anchor_gradient(self) -> None:
@@ -818,19 +982,22 @@ class _CavityDROPBorrowed(_CavityDROPBase):
 class CavityDROP(_CavityDROPBase):
     """DROP cavity composed from an LSF, parameters and radii.
 
-    Omitted ``lsf`` selects SvdW.  Density-backed surfaces accept a live
-    ``source`` separately from their immutable LSF parameters.
+    Omitted ``lsf`` selects SvdW.  An isodensity surface takes ``basis``, a
+    :class:`GaussianBasis` for moist's internal evaluator (the host answers
+    ``dcart`` in the build phase), or ``source``, a pointwise density callback.
     """
 
     def __init__(self, *, lsf: LevelSet | None = None,
                  parameters: DROPParameters | None = None, radii: Radii | None = None, source=None,
-                 pass_order=None) -> None:
+                 pass_order=None, basis: GaussianBasis | None = None,
+                 context: Context | None = None) -> None:
+        self._context = _resolve_context(context, optional=True)
         self._configuration = DROP(
             lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
         )
-        self._density_source = source
         super().__init__(self.lsf._new_cavity(
-            self.parameters, self.radius_model._as_handle(), source, pass_order
+            self.parameters, self.radius_model._as_handle(), source, pass_order, basis,
+            context=_context_handle(context),
         ))
 
     @property
@@ -859,7 +1026,12 @@ IsodensityCallback = Callable[..., DensityDerivatives]
 
 
 class IsodensitySource(Protocol):
-    """Provider of bare density derivatives, independent of LSF settings."""
+    """Provider of bare density derivatives, independent of LSF settings.
+
+    The density is pulled point by point during surface construction, outside the
+    coupling; the nuclear charges of the core fill are answered in the build
+    phase like any other output.
+    """
 
     def density(self, point: np.ndarray, order: int) -> DensityDerivatives:
         """Return the density and its spatial derivatives through ``order``."""
@@ -894,8 +1066,11 @@ class CouplingRequest:
     #: Canonical name of the request kind
     name: str = ""
     #: Output names this kind can answer, in native order, each with its
-    #: extents after the grid axis
+    #: extents after the leading axis
     _outputs: dict[str, tuple[int, ...]] = {}
+    #: What the leading axes run over: ``"grid"`` (ngrid), ``"atom"`` (natoms)
+    #: or ``"request_pair"`` (n, n) with ``n`` the request's own size input
+    _extent: str = "grid"
 
     __slots__ = ("_missing",)
 
@@ -965,22 +1140,87 @@ class GaussianMomentRequest(CouplingRequest):
 
     @classmethod
     def _inputs(cls, coupling: Coupling) -> dict:
-        width = np.empty(coupling._model.cavity.ngrid, dtype=np.float64)
-        library.get_coupling_request_width(coupling._handle, width)
-        return {"width": width}
+        inputs = _read_native_fields(
+            coupling._handle,
+            library.get_coupling_request_field_count,
+            library.get_coupling_request_field_info,
+            library.get_coupling_request_field_real,
+        )
+        if "width" not in inputs:
+            raise RuntimeError(f"Coupling request '{cls.name}' does not declare input 'width'")
+        return {"width": inputs["width"]}
+
+
+class NuclearChargesRequest(CouplingRequest):
+    """Nuclear charges of the host Hamiltonian, ``z`` of shape ``(natoms,)``.
+
+    The atomic numbers minus the core electrons an ECP replaces; an
+    all-electron host answers the atomic numbers.  Asked for in the build
+    phase by an isodensity cavity with the core fill on, and in the gradient
+    phase by PCM components unless the build phase already answered it.
+    """
+    name = "nuclear_charges"
+    _outputs = {"z": ()}
+    _extent = "atom"
+    __slots__ = ()
+
+
+class DensityMatrixRequest(CouplingRequest):
+    """Host density matrix ``dcart`` of shape ``(nbasis, nbasis)``, symmetric.
+
+    Asked for in the build phase by an internal isodensity cavity, in its
+    Cartesian-monomial basis (``cavity.isodensity_layout()``).  The size
+    :attr:`nbasis` is the request's own input, copied with the snapshot.
+    """
+    name = "density_matrix"
+    _outputs = {"dcart": ()}
+    _extent = "request_pair"
+    __slots__ = ("_nbasis",)
+
+    def __init__(self, missing: Iterable[str], nbasis: int) -> None:
+        super().__init__(missing)
+        self._nbasis = int(nbasis)
+
+    @property
+    def nbasis(self) -> int:
+        """Basis function count, both extents of ``dcart``."""
+        return self._nbasis
+
+    @classmethod
+    def _inputs(cls, coupling: Coupling) -> dict:
+        inputs = _read_native_fields(
+            coupling._handle,
+            library.get_coupling_request_field_count,
+            library.get_coupling_request_field_info,
+            library.get_coupling_request_field_real,
+        )
+        if "nbasis" not in inputs:
+            raise RuntimeError(f"Coupling request '{cls.name}' does not declare input 'nbasis'")
+        return {"nbasis": int(inputs["nbasis"])}
 
 
 _REQUEST_CLASSES = {
-    cls.name: cls for cls in (PointPotentialRequest, GaussianPotentialRequest, GaussianMomentRequest)
+    cls.name: cls for cls in (PointPotentialRequest, GaussianPotentialRequest, GaussianMomentRequest,
+                              NuclearChargesRequest, DensityMatrixRequest)
 }
 
 
 class Coupling:
     """A model's requests to the host, with a cursor that walks them.
 
-    Create one with :meth:`SolvationModel.new_coupling`; several may coexist
-    on one model, each with its own answers and cursor.  One phase of the host
-    loop reads::
+    Create one with :meth:`SolvationModel.new_coupling`, or with
+    :meth:`Cavity.new_coupling` for a standalone cavity; several may coexist
+    on one owner, each with its own answers and cursor.  The host loop reads::
+
+        model.update(structure)
+        coupling = model.new_coupling()
+        model.prepare_build(coupling)
+        for request in coupling:
+            if isinstance(request, DensityMatrixRequest):
+                coupling.answer(dcart=dcart)
+            elif isinstance(request, NuclearChargesRequest):
+                coupling.answer(z=z)
+        model.build(coupling)
 
         model.prepare_energy(coupling)
         for request in coupling:
@@ -998,7 +1238,7 @@ class Coupling:
     answer for instance, and yields nothing once everything is answered.
     Leaving a loop early, by ``break`` or an exception, leaves the cursor
     where it is, and the next loop resumes the pass after that request.
-    ``prepare_*`` and a model update restart the walk; a coupling that is not
+    ``prepare_*`` and an update restart the walk; a coupling that is not
     staged yields nothing.  The cursor belongs to the coupling, not to the
     loop, so loops over one coupling share it.
 
@@ -1009,10 +1249,26 @@ class Coupling:
     and on every required output still missing.
     """
 
-    def __init__(self, model: SolvationModel) -> None:
-        # Private: keeps the model alive and supplies the cavity grid size
-        self._model = model
-        self._handle = library.new_coupling(model._model)
+    def __init__(self, owner: SolvationModel | Cavity) -> None:
+        # Private: keeps the owner alive and supplies the extents
+        self._owner = owner
+        if isinstance(owner, Cavity):
+            self._handle = library.new_cavity_coupling(owner._as_handle())
+        else:
+            self._handle = library.new_coupling(owner._model)
+
+    def _shape(self, extent: str) -> tuple[int, ...]:
+        """Leading extents of an output over ``extent``."""
+        if extent == "atom":
+            natoms = self._owner._coupling_natoms()
+            if natoms is None:
+                raise RuntimeError("The coupling has no structure yet to size per-atom outputs")
+            return (natoms,)
+        if extent == "request_pair":
+            # The current request carries its own size, read like any input
+            nbasis = self._current_kind()._inputs(self)["nbasis"]
+            return (nbasis, nbasis)
+        return (self._owner._coupling_ngrid(),)
 
     def __iter__(self) -> Iterator[CouplingRequest]:
         """Walk the current pass, one snapshot per request with a missing output."""
@@ -1032,35 +1288,42 @@ class Coupling:
 
         Each output is an array ``(ngrid, ...)`` shaped as the request kind
         declares it (see :ref:`coupling-requests`), with ``ngrid`` the grid size
-        of ``model.cavity``.  The shape is checked against that declaration
-        before the value reaches moist, which reads exactly that many values.
+        of ``model.cavity``; ``nuclear_charges`` ``z`` is ``(natoms,)`` and
+        ``density_matrix`` ``dcart`` is ``(ncart, ncart)`` and symmetric, in
+        the cartesian order of ``cavity.isodensity_layout()``.  The shape, and
+        the symmetry of ``dcart``, are checked before the value reaches moist,
+        which reads exactly that many values.
         The outputs are stored one at a time in the kind's output order: a
-        rejected output stays missing until a valid retry, those before it keep
-        their answers, and those after it are not submitted.  Answering an
-        output that already has an answer replaces it.
+        native rejection clears that output, while Python validation leaves
+        any previous answer intact. Earlier submissions survive; later ones
+        are skipped. A valid answer replaces any previous value.
 
         :raises RuntimeError: when no request is current -- no loop has
             reached one yet, the pass has ended, or a ``prepare_*`` or model
             update restarted the walk -- or when moist rejects a value, such
             as a non-finite one.
         :raises TypeError: for a keyword the current request does not declare.
-        :raises ValueError: for an array that does not convert to float64 or
-            does not have the output's declared shape.
+        :raises ValueError: for an array that does not convert to float64,
+            does not have the output's declared shape, or a ``dcart`` that is
+            not symmetric.
         """
         kind = self._current_kind()
         unknown = set(outputs) - set(kind._outputs)
         if unknown:
             raise TypeError(f"{kind.name} has no output {sorted(unknown)[0]!r}")
-        ngrid = self._model.cavity.ngrid
+        leading = self._shape(kind._extent)
         for name, extents in kind._outputs.items():
             value = outputs.get(name)
             if value is None:
                 continue
             array = np.ascontiguousarray(value, dtype=np.float64)
-            if array.shape != (ngrid, *extents):
+            if array.shape != (*leading, *extents):
                 raise ValueError(
-                    f"{kind.name}: {name} must have shape {(ngrid, *extents)}, got {array.shape}"
+                    f"{kind.name}: {name} must have shape {(*leading, *extents)}, got {array.shape}"
                 )
+            if kind._extent == "request_pair" and np.all(np.isfinite(array)) \
+                    and not np.allclose(array, array.T, rtol=1e-12, atol=1e-14):
+                raise ValueError(f"{kind.name}: {name} must be symmetric")
             library.answer_coupling_request(self._handle, name, array)
 
 
@@ -1072,8 +1335,14 @@ class Coupling:
 class SolvationModelComponent:
     """Immutable model-component configuration backed by a native constructor."""
 
-    def __init__(self, handle: library.ComponentHandle) -> None:
+    def __init__(self, handle: library.ComponentHandle, context: Context | None) -> None:
         self._handle = handle
+        self._context = context
+
+    @property
+    def context(self) -> Context | None:
+        """Own run context; ``None`` runs the component on its model's."""
+        return self._context
 
     def _as_handle(self) -> library.ComponentHandle:
         return self._handle
@@ -1082,10 +1351,12 @@ class SolvationModelComponent:
 class _ModelComponentPCMBase(SolvationModelComponent):
     """PCM physical input and immutable numerical parameters."""
 
-    def __init__(self, epsilon, constructor, parameters) -> None:
+    def __init__(self, epsilon, constructor, parameters, context) -> None:
+        context = _resolve_context(context, optional=True)
         self._parameters = _resolve(PCMParameters, parameters)
         self._epsilon = float(epsilon)
-        super().__init__(constructor(self._epsilon, self.parameters))
+        super().__init__(constructor(self._epsilon, self.parameters, context=_context_handle(context)),
+                         context)
 
     @property
     def parameters(self) -> PCMParameters:
@@ -1103,23 +1374,27 @@ class _ModelComponentPCMBase(SolvationModelComponent):
 class ModelComponentCPCM(_ModelComponentPCMBase):
     """Conductor-like polarizable continuum component."""
 
-    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, library.new_cpcm_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_cpcm_component, parameters, context)
 
 
 class ModelComponentCOSMO(_ModelComponentPCMBase):
     """Conductor-like screening-model component."""
 
-    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, library.new_cosmo_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_cosmo_component, parameters, context)
 
 
 class ModelComponentPV(SolvationModelComponent):
     """Pressure-volume energy component ``pressure * cavity volume``."""
 
-    def __init__(self, pressure: float) -> None:
+    def __init__(self, pressure: float, *, context: Context | None = None) -> None:
+        context = _resolve_context(context, optional=True)
         self._pressure = float(pressure)
-        super().__init__(library.new_pv_component(self._pressure))
+        super().__init__(library.new_pv_component(self._pressure, context=_context_handle(context)),
+                         context)
 
     @property
     def pressure(self) -> float:
@@ -1129,13 +1404,83 @@ class ModelComponentPV(SolvationModelComponent):
 class ModelComponentGOSTSHYP(SolvationModelComponent):
     """GOSTSHYP hydrostatic-pressure component."""
 
-    def __init__(self, pressure: float) -> None:
+    def __init__(self, pressure: float, *, parameters: GOSTSHYPParameters | None = None,
+                 context: Context | None = None) -> None:
+        context = _resolve_context(context, optional=True)
         self._pressure = float(pressure)
-        super().__init__(library.new_gostshyp_component(self._pressure))
+        self._parameters = _resolve(GOSTSHYPParameters, parameters)
+        super().__init__(library.new_gostshyp_component(self._pressure, self._parameters,
+                                                      context=_context_handle(context)),
+                         context)
 
     @property
     def pressure(self) -> float:
         return self._pressure
+
+
+    @property
+    def parameters(self) -> GOSTSHYPParameters:
+        return self._parameters
+
+
+class ComponentView:
+    """Live view of one component of a :class:`SolvationModel`.
+
+    Every access reads the native model, so the view always reports its latest
+    evaluation and caches nothing. The view holds its model, which keeps the
+    native model alive for as long as the view exists.
+    """
+
+    def __init__(self, model: SolvationModel, index: int) -> None:
+        self._model = model
+        self._index = index
+
+    @property
+    def index(self) -> int:
+        """Position in the model, counting from zero in construction order."""
+        return self._index
+
+    @property
+    def configuration(self) -> SolvationModelComponent:
+        """The configuration this component was built from."""
+        return self._model._components[self._index]
+
+    @property
+    def name(self) -> str:
+        """Native name, e.g. ``"CPCM"``; a component added twice repeats it."""
+        return library.get_model_component_name(self._model._model, self._index)
+
+    @property
+    def description(self) -> str:
+        """Native one-line description, e.g. of the dielectric scaling."""
+        return library.get_model_component_description(self._model._model, self._index)
+
+    @property
+    def energy(self) -> float:
+        """Contribution to the latest :meth:`SolvationModel.get_energy`, in Hartree.
+
+        Raises like :meth:`get` while unavailable: before the first evaluation,
+        after an update, and for a component that failed or was not reached
+        by a failed evaluation.
+        """
+        return float(self.get("energy"))
+
+    def fields(self) -> tuple[library.FieldInfo, ...]:
+        """Describe every result this component currently holds."""
+        return library.list_model_component_fields(self._model._model, self._index)
+
+    def get(self, name: str):
+        """Return one named result, using moist's own name for it.
+
+        A result the component does not currently hold raises; an unavailable
+        energy is absent rather than zero. A scalar comes back as a NumPy
+        scalar.
+        """
+        return library.get_model_component_field(self._model._model, self._index, name)
+
+    def describe(self, name: str) -> str:
+        """Return moist's one-line description of a named result."""
+        return library.get_model_component_field_about(self._model._model, self._index, name)
 
 
 # -----------------------------------------------------------------------------
@@ -1148,10 +1493,9 @@ class SolvationModel:
 
     def __init__(
         self,
+        context: Context,
         cavity: Cavity,
         components: list[SolvationModelComponent] | tuple[SolvationModelComponent, ...],
-        *,
-        parameters: Optional[ModelParameters] = None,
     ) -> None:
         if not isinstance(cavity, Cavity):
             raise TypeError("cavity must be a moist Cavity object")
@@ -1161,33 +1505,72 @@ class SolvationModel:
         if any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must contain only SolvationModelComponent objects")
 
-        self._parameters = _resolve(ModelParameters, parameters)
+        self._context = _resolve_context(context)
         self._updated = False
         self._natoms: Optional[int] = None
+        #: Atom count of the structure staged by the latest update
+        self._staged_natoms: Optional[int] = None
         self._source_cavity = cavity
         self._components = items
         #: Reusable native response handle
         self._response: Optional[library.ResponseHandle] = None
         self._model = library.new_general_model(
+            self.context._as_handle(),
             cavity._as_handle(),
             [item._as_handle() for item in items],
-            parameters=self.parameters,
         )
         borrowed = library.get_model_cavity(self._model)
         self._cavity = cavity._model_view(borrowed)
+        # The copy keeps the source cavity's own context, else runs on the model's
+        self._cavity._context = cavity.context if cavity.context is not None else self.context
 
     @property
-    def parameters(self) -> ModelParameters:
-        return self._parameters
+    def context(self) -> Context:
+        """Run context of the model and of every part created without one."""
+        return self._context
 
     @property
-    def components(self) -> tuple[SolvationModelComponent, ...]:
-        return self._components
+    def components(self) -> tuple[ComponentView, ...]:
+        """Live views of the native components, in construction order.
+
+        Each view reads its name and results from the native model and reaches
+        its constructor input through ``configuration``.
+        """
+        count = library.get_model_component_count(self._model)
+        return tuple(ComponentView(self, index) for index in range(count))
 
     @property
     def cavity(self) -> Cavity:
         """The authoritative model-owned live cavity; the source of every grid input."""
         return self._cavity
+
+    def parameters_text(self) -> str:
+        """Return the native settings printout: the cavity, then every component.
+
+        Component sections are headed by their 1-based position. Empty at
+        context verbosity 0, the normal settings from 1, the detailed ones
+        from 3. No update is needed.
+        """
+        return library.get_model_parameters_text(self._model)
+
+    def print_parameters(self, file=None) -> None:
+        """Print :meth:`parameters_text` to ``file``, standard output by default."""
+        print(self.parameters_text(), end="", file=file)
+
+    def radii_text(self) -> str:
+        """Return the native radii table of the current structure.
+
+        One row per element, or a short summary for custom radii. Empty at
+        context verbosity 0, printed from 1. Available right after
+        :meth:`update`, also before a deferred build; no update prints it on
+        its own.
+        """
+        self._require_updated()
+        return library.get_model_radii_text(self._model)
+
+    def print_radii(self, file=None) -> None:
+        """Print :meth:`radii_text` to ``file``, standard output by default."""
+        print(self.radii_text(), end="", file=file)
 
     def _invalidate(self) -> None:
         self._updated = False
@@ -1195,22 +1578,58 @@ class SolvationModel:
         self._cavity._invalidate()
 
     def update(self, structure: Structure) -> None:
-        """Rebuild the cavity and the components.
+        """Prepare the geometry and invalidate every model coupling.
 
-        Invalidates every coupling of the model, even at an unchanged grid
-        size: its answers go stale and its walk ends, so prepare it again.
+        Equivalent to ``moist_update_model``. Follow the :ref:`coupling-build`
+        to complete any deferred cavity and component construction.
+        Prepare couplings again even when the grid size is unchanged.
         """
         self._invalidate()
-        source = getattr(self._source_cavity, "_density_source", None)
-        if isinstance(source, InternalDensity):
-            library.set_isodensity_density(self._model, source.density_matrix, model=True)
         _guarded_native_update(
             self._source_cavity,
             lambda: library.update_model(self._model, structure._as_handle()),
         )
+        self._staged_natoms = len(structure)
         self._natoms = len(structure)
         self._updated = True
         self._cavity._mark_updated()
+
+    def prepare_build(self, coupling: Coupling) -> None:
+        """Stage the build phase: clear every answer of ``coupling`` and restart its walk.
+
+        Like ``moist_prepare_model_build``: the walk then visits the requests
+        the build reads, :class:`DensityMatrixRequest` and
+        :class:`NuclearChargesRequest`.  A model whose cavity waits for its
+        build phase is not built until the next :meth:`build` succeeds, and
+        every coupling of the model loses its answers over it; the cavity
+        keeps its last built surface until that build replaces it.
+        """
+        self._require_updated()
+        self._cavity._snapshot_cache = None
+        library.prepare_model_build(self._model, coupling._handle)
+
+    def build(self, coupling: Coupling) -> None:
+        """Complete the model from the build-phase answers of ``coupling``.
+
+        Like ``moist_build_model``: fails by name on a wrong staging or a
+        missing output, and a failed deferred build leaves no surface. The coupling
+        keeps its build-phase answers for the later phases; every other
+        coupling of the model is invalidated.
+        """
+        self._require_updated()
+        self._cavity._snapshot_cache = None
+        _guarded_native_update(
+            self._source_cavity,
+            lambda: library.build_model(self._model, coupling._handle),
+        )
+
+    def _coupling_ngrid(self) -> int:
+        """Grid size the coupling's grid outputs run over."""
+        return self.cavity.ngrid
+
+    def _coupling_natoms(self) -> Optional[int]:
+        """Atom count of the staged structure."""
+        return self._staged_natoms
 
     def _require_updated(self) -> None:
         if not self._updated:
@@ -1236,7 +1655,7 @@ class SolvationModel:
         return self._response
 
     def prepare_energy(self, coupling: Coupling) -> None:
-        """Stage the energy phase: mark every answer stale and restart the walk."""
+        """Stage energy, retaining build answers and clearing all other answers."""
         self._require_updated()
         library.prepare_model_energy(self._model, coupling._handle)
 
@@ -1265,13 +1684,13 @@ class SolvationModel:
 
         Exactly what this model produces in this phase and nothing else: the
         potential adjoint, the density weights of a density-backed cavity and
-        the GOSTSHYP amplitudes.  An item this configuration does not produce
-        is absent, never zero.
+        the Gaussian amplitudes of GOSTSHYP.  An item this configuration does
+        not produce is absent, never zero.
         """
         self._require_updated()
         handle = self._response_handle()
         library.get_model_response(self._model, coupling._handle, handle)
-        return Response._from_handle(handle, self._cavity.ngrid)
+        return Response._from_handle(handle)
 
     def get_gradient(self, coupling: Coupling, gradient: np.ndarray) -> Response:
         """Return the nuclear gradient of a staged gradient phase, plus its host part.
@@ -1287,4 +1706,4 @@ class SolvationModel:
         library.get_model_gradient(
             self._model, coupling._handle, handle, self._natoms, gradient
         )
-        return Response._from_handle(handle, self._cavity.ngrid)
+        return Response._from_handle(handle)

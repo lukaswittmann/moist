@@ -109,6 +109,9 @@ contains
       !> Timer handle
       integer :: h_sgrad
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       call check_surface_adjoint(self, acc, "get_surface_gradient_drop", error)
       if (allocated(error)) return
       if (any(shape(gradient) /= [3, self%nsph])) then

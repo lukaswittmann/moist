@@ -36,6 +36,46 @@ module moist_math_solver_fmin
       end function func
    end interface
 
+   type, abstract, public :: fmin_function
+      !! A function object to be minimized by [[fmin]].
+      !!
+      !! Extend this type with whatever state the function needs and pass an
+      !! instance to [[fmin]]. This is the preferred way to minimize a function
+      !! that depends on local data: passing an internal procedure that uses
+      !! variables of its host instead makes gfortran build a trampoline on the
+      !! stack, which in turn requires an executable stack in every program
+      !! that links the library.
+   contains
+      procedure(fmin_eval), deferred :: eval !! evaluate the function
+   end type fmin_function
+
+   abstract interface
+      function fmin_eval(self, x) result(f)
+        !! interface for [[fmin_function]] evaluation
+         import :: wp, fmin_function
+         implicit none
+         class(fmin_function), intent(inout) :: self
+         real(wp), intent(in) :: x  !! indep. variable
+         real(wp)            :: f  !! function value `f(x)`
+      end function fmin_eval
+   end interface
+
+   type, extends(fmin_function) :: fmin_procedure_function
+      !! Adapts a plain procedure to [[fmin_function]], so that
+      !! both forms of [[fmin]] share one implementation.
+      private
+      procedure(func), pointer, nopass :: f => null() !! the function to minimize
+   contains
+      procedure :: eval => fmin_procedure_eval
+   end type fmin_procedure_function
+
+   interface fmin
+      !! 1D derivative-free function minimizer, for a procedure
+      !! or for a [[fmin_function]] object.
+      module procedure :: fmin_procedure
+      module procedure :: fmin_functor
+   end interface fmin
+
    public :: fmin
 
 contains
@@ -70,11 +110,11 @@ contains
 !### See also
 !  * [fmin from Netlib](http://www.netlib.org/fmm/fmin.f)
 
-   function fmin(f, ax, bx, tol) result(xmin)
+   function fmin_functor(f, ax, bx, tol) result(xmin)
 
       implicit none
 
-      procedure(func)     :: f    !! the function to minimize
+      class(fmin_function), intent(inout) :: f !! the function to minimize
       real(wp), intent(in) :: ax   !! left endpoint of initial interval
       real(wp), intent(in) :: bx   !! right endpoint of initial interval
       real(wp), intent(in) :: tol  !! desired length of the interval of
@@ -97,7 +137,7 @@ contains
       w = v
       x = v
       e = 0.0_wp
-      fx = f(x)
+      fx = f%eval(x)
       fv = fx
       fw = fx
 
@@ -179,7 +219,7 @@ contains
          else
             u = x + sign(tol1, d)
          end if
-         fu = f(u)
+         fu = f%eval(u)
 
          !  update a, b, v, w, and x
 
@@ -210,6 +250,50 @@ contains
 
       xmin = x
 
-   end function fmin
+   end function fmin_functor
+!*****************************************************************************************
+
+!*****************************************************************************************
+!>
+!  [[fmin]] for a function given as a procedure.
+!
+!  The procedure is wrapped in a [[fmin_procedure_function]] and minimized by
+!  [[fmin_functor]]; the result is identical.
+
+   function fmin_procedure(f, ax, bx, tol) result(xmin)
+
+      implicit none
+
+      procedure(func)     :: f    !! the function to minimize
+      real(wp), intent(in) :: ax   !! left endpoint of initial interval
+      real(wp), intent(in) :: bx   !! right endpoint of initial interval
+      real(wp), intent(in) :: tol  !! desired length of the interval of
+                                !! uncertainty of the final result (>=0)
+      real(wp)            :: xmin !! abcissa approximating the point where
+                                !! f attains a minimum
+
+      type(fmin_procedure_function) :: fun
+
+      fun%f => f
+      xmin = fmin_functor(fun, ax, bx, tol)
+
+   end function fmin_procedure
+!*****************************************************************************************
+
+!*****************************************************************************************
+!>
+!  Evaluate the wrapped procedure of a [[fmin_procedure_function]].
+
+   function fmin_procedure_eval(self, x) result(f)
+
+      implicit none
+
+      class(fmin_procedure_function), intent(inout) :: self
+      real(wp), intent(in) :: x  !! indep. variable
+      real(wp)            :: f  !! function value `f(x)`
+
+      f = self%f(x)
+
+   end function fmin_procedure_eval
 
 end module moist_math_solver_fmin

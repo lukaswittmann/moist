@@ -39,116 +39,89 @@ contains
    !>
    !> @param[out] self       static radii model
    !> @param[in]  model_tag  legacy radii selector tag
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_static_radii(self, model_tag, verbosity)
+   subroutine new_static_radii(self, model_tag)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
       !> Legacy radii selector tag
       integer, intent(in) :: model_tag
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
       self%nat = 0
       self%model_tag = model_tag
-      if (present(verbosity)) then
-         self%verbosity = verbosity
-      else
-         self%verbosity = 0
-      end if
    end subroutine new_static_radii
 
    !> Constructor for CPCM static radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_cpcm_radii(self, verbosity)
+   subroutine new_cpcm_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%cpcm, verbosity)
+      call new_static_radii(self, rad_type%cpcm)
    end subroutine new_cpcm_radii
 
    !> Constructor for SMD static radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_smd_radii(self, verbosity)
+   subroutine new_smd_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%smd, verbosity)
+      call new_static_radii(self, rad_type%smd)
    end subroutine new_smd_radii
 
    !> Constructor for D3 static radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_d3_radii(self, verbosity)
+   subroutine new_d3_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%d3, verbosity)
+      call new_static_radii(self, rad_type%d3)
    end subroutine new_d3_radii
 
    !> Constructor for COSMO static radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_cosmo_radii(self, verbosity)
+   subroutine new_cosmo_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%cosmo, verbosity)
+      call new_static_radii(self, rad_type%cosmo)
    end subroutine new_cosmo_radii
 
    !> Constructor for Bondi static radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_bondi_radii(self, verbosity)
+   subroutine new_bondi_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%bondi, verbosity)
+      call new_static_radii(self, rad_type%bondi)
    end subroutine new_bondi_radii
 
    !> Constructor for Rahm (2016) atomic radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_rahm_radii(self, verbosity)
+   subroutine new_rahm_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%rahm, verbosity)
+      call new_static_radii(self, rad_type%rahm)
    end subroutine new_rahm_radii
 
    !> Constructor for Gaussian charge scheme (Bondi-based, scaled) radii
    !>
    !> @param[out] self       static radii model
-   !> @param[in]  verbosity  optional print level for diagnostics
-   subroutine new_gauss_radii(self, verbosity)
+   subroutine new_gauss_radii(self)
       !> Static radii model
       type(radius_type_static), intent(out) :: self
-      !> Optional print level
-      integer, intent(in), optional :: verbosity
 
-      call new_static_radii(self, rad_type%gauss, verbosity)
+      call new_static_radii(self, rad_type%gauss)
    end subroutine new_gauss_radii
 
    !> Print unique elemental radii present in the current molecule
+   !>
+   !> Nothing before the first update; the table ends in a blank line and a flush
    !>
    !> @param[in] self  static radii model
    !> @param[in] unit  optional output unit
@@ -177,6 +150,8 @@ contains
       !> Lookup error, used only to skip unparametrised elements
       type(error_type), allocatable :: lookup_error
 
+      if (.not. allocated(self%atomic_numbers)) return
+      if (size(self%atomic_numbers) < 1) return
       zmax = maxval(self%atomic_numbers)
       allocate (has_element(zmax), source=.false.)
       do iat = 1, size(self%atomic_numbers)
@@ -188,14 +163,13 @@ contains
       plp = new_prettylistprinter([6, 6, 10, 10], &
                                   [character(len=9) :: "Num", "Sym", "R (A)", "R (bohr)"], &
                                   unit=unit)
-      call plp%header("RADII")
-      call plp%blank()
       call plp%print_header()
       call plp%separator()
 
       do iz = 1, zmax
          if (.not. has_element(iz)) cycle
 
+         sym = to_symbol(iz)
          call plp%begin_row()
          call plp%add(iz)
          call plp%add(trim(sym))
@@ -207,12 +181,12 @@ contains
             call plp%add("n/a")
          else
             r_ang = r_bohr*autoaa
-            sym = to_symbol(iz)
             call plp%add(r_ang, fmt="f10.4")
             call plp%add(r_bohr, fmt="f10.4")
          end if
          call plp%end_row()
       end do
+      call plp%blank()
    end subroutine print_static_radii
 
    !> Update cached static radii and derivatives for a molecular structure

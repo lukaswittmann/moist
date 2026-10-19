@@ -1,6 +1,5 @@
 !> Fast algorithm for computing the Boys function:
 !> Beylkin, G. & Sharma, S., J. Chem. Phys. 155, 174117 (2021)
-
 module moist_math_boys
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -8,7 +7,10 @@ module moist_math_boys
    implicit none(type, external)
    private
 
+   public :: boys0, boys01, boys012, boys_x_far, boys_x_taylor
    public :: dboysfun1, dboysfun12, zboysfun00
+
+   !* -------------------------- Beylkin & Beylkin fast boys -------------------------- *!
 
    real(wp), parameter :: tol = 1.0E-03_wp
    real(wp), parameter :: sqrtpio2 = 0.886226925452758014_wp
@@ -135,7 +137,16 @@ module moist_math_boys
                           2.2138172422680093E-10_wp, &
                           6.594161760037707E-14_wp]
 
+   !* ------------------------------ Code generated boys ------------------------------ *!
+
+   !> Boys argument below which `boys01` uses its Taylor series
+   real(wp), parameter :: boys_x_taylor = 0.5_wp
+   !> Boys argument above which erf(sqrt(x)) == 1 and exp(-x) == 0 in double precision
+   real(wp), parameter :: boys_x_far = 81.0_wp
+
 contains
+
+   !* -------------------------- Beylkin & Beylkin fast boys -------------------------- *!
 
    !> Computes real Boys functions F_n(x) for n=0 and n=1
    !>
@@ -283,5 +294,209 @@ contains
 
       return
    end subroutine zboysfun00
+
+   !* ------------------------------ Code generated boys ------------------------------ *!
+
+   !> Boys function F0(x) = sqrt(pi/(4x))*erf(sqrt(x)) for x >= 0
+   !>
+   !> Uses the degree-16 Taylor series below boys_x_taylor and the
+   !> closed erf form above it.  The saturated branch drops erf entirely
+   !>
+   !> @param[in]  x   Boys argument (p*r)**2
+   !> @param[out] f0  Boys function F0(x)
+   pure subroutine boys0(x, f0)
+      !> Boys argument
+      real(wp), intent(in) :: x
+      !> Boys function F0(x)
+      real(wp), intent(out) :: f0
+
+      !> Square root of the Boys argument
+      real(wp) :: sqrtx
+
+      if (x <= boys_x_taylor) then
+         f0 = 1.4483264643598138e-15_wp
+         f0 = f0*x - 2.466827010264457e-14_wp
+         f0 = f0*x + 3.9554295164585257e-13_wp
+         f0 = f0*x - 5.9477940136376354e-12_wp
+         f0 = f0*x + 8.35070279514724e-11_wp
+         f0 = f0*x - 1.0892221037148573e-09_wp
+         f0 = f0*x + 1.3122532963802806e-08_wp
+         f0 = f0*x - 1.4503852223150468e-07_wp
+         f0 = f0*x + 1.4589169000933706e-06_wp
+         f0 = f0*x - 1.3227513227513228e-05_wp
+         f0 = f0*x + 0.00010683760683760684_wp
+         f0 = f0*x - 0.0007575757575757576_wp
+         f0 = f0*x + 0.004629629629629629_wp
+         f0 = f0*x - 0.023809523809523808_wp
+         f0 = f0*x + 0.1_wp
+         f0 = f0*x - 0.3333333333333333_wp
+         f0 = f0*x + 1.0_wp
+      else
+         sqrtx = sqrt(x)
+         if (x >= boys_x_far) then
+            f0 = 0.88622692545275801_wp/sqrtx
+         else
+            f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+         end if
+      end if
+
+   end subroutine boys0
+
+   !> Boys functions F0(x), F1(x) and the Gaussian factor exp(-x)
+   !>
+   !> @param[in]  x   Boys argument (p*r)**2
+   !> @param[out] f0  Boys function F0(x)
+   !> @param[out] f1  Boys function F1(x)
+   !> @param[out] ex  Gaussian factor exp(-x)
+   pure subroutine boys01(x, f0, f1, ex)
+      !> Boys argument
+      real(wp), intent(in) :: x
+      !> Boys functions F0(x) and F1(x)
+      real(wp), intent(out) :: f0, f1
+      !> Gaussian factor exp(-x)
+      real(wp), intent(out) :: ex
+
+      ! Square root of the Boys argument and the recursion denominator
+      real(wp) :: sqrtx, inv2x
+
+      if (x <= boys_x_taylor) then
+         ex = exp(-x)
+         f0 = 1.4483264643598138e-15_wp
+         f0 = f0*x - 2.466827010264457e-14_wp
+         f0 = f0*x + 3.9554295164585257e-13_wp
+         f0 = f0*x - 5.9477940136376354e-12_wp
+         f0 = f0*x + 8.35070279514724e-11_wp
+         f0 = f0*x - 1.0892221037148573e-09_wp
+         f0 = f0*x + 1.3122532963802806e-08_wp
+         f0 = f0*x - 1.4503852223150468e-07_wp
+         f0 = f0*x + 1.4589169000933706e-06_wp
+         f0 = f0*x - 1.3227513227513228e-05_wp
+         f0 = f0*x + 0.00010683760683760684_wp
+         f0 = f0*x - 0.0007575757575757576_wp
+         f0 = f0*x + 0.004629629629629629_wp
+         f0 = f0*x - 0.023809523809523808_wp
+         f0 = f0*x + 0.1_wp
+         f0 = f0*x - 0.3333333333333333_wp
+         f0 = f0*x + 1.0_wp
+         f1 = 1.3655649521106815e-15_wp
+         f1 = f1*x - 2.317322342975702e-14_wp
+         f1 = f1*x + 3.7002405153966856e-13_wp
+         f1 = f1*x - 5.537601323041936e-12_wp
+         f1 = f1*x + 7.732132217728926e-11_wp
+         f1 = f1*x - 1.0020843354176688e-09_wp
+         f1 = f1*x + 1.1981443140863431e-08_wp
+         f1 = f1*x - 1.3122532963802806e-07_wp
+         f1 = f1*x + 1.3053467000835422e-06_wp
+         f1 = f1*x - 1.1671335200746965e-05_wp
+         f1 = f1*x + 9.259259259259259e-05_wp
+         f1 = f1*x - 0.000641025641025641_wp
+         f1 = f1*x + 0.003787878787878788_wp
+         f1 = f1*x - 0.018518518518518517_wp
+         f1 = f1*x + 0.07142857142857142_wp
+         f1 = f1*x - 0.2_wp
+         f1 = f1*x + 0.3333333333333333_wp
+      else if (x >= boys_x_far) then
+         ex = 0.0_wp
+         sqrtx = sqrt(x)
+         f0 = 0.88622692545275801_wp/sqrtx
+         f1 = 0.5_wp*f0/x
+      else
+         sqrtx = sqrt(x)
+         ex = exp(-x)
+         inv2x = 0.5_wp/x
+         f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+         f1 = (f0 - ex)*inv2x
+      end if
+
+   end subroutine boys01
+
+   !> Boys functions F0(x), F1(x), F2(x) and the Gaussian factor exp(-x)
+   !>
+   !> @param[in]  x   Boys argument (p*r)**2
+   !> @param[out] f0  Boys function F0(x)
+   !> @param[out] f1  Boys function F1(x)
+   !> @param[out] f2  Boys function F2(x)
+   !> @param[out] ex  Gaussian factor exp(-x)
+   pure subroutine boys012(x, f0, f1, f2, ex)
+      !> Boys argument
+      real(wp), intent(in) :: x
+      !> Boys functions F0(x), F1(x) and F2(x)
+      real(wp), intent(out) :: f0, f1, f2
+      !> Gaussian factor exp(-x)
+      real(wp), intent(out) :: ex
+
+      !> Square root of the Boys argument and the recursion denominator
+      real(wp) :: sqrtx, inv2x
+
+      if (x <= boys_x_taylor) then
+         ex = exp(-x)
+         f0 = 1.4483264643598138e-15_wp
+         f0 = f0*x - 2.466827010264457e-14_wp
+         f0 = f0*x + 3.9554295164585257e-13_wp
+         f0 = f0*x - 5.9477940136376354e-12_wp
+         f0 = f0*x + 8.35070279514724e-11_wp
+         f0 = f0*x - 1.0892221037148573e-09_wp
+         f0 = f0*x + 1.3122532963802806e-08_wp
+         f0 = f0*x - 1.4503852223150468e-07_wp
+         f0 = f0*x + 1.4589169000933706e-06_wp
+         f0 = f0*x - 1.3227513227513228e-05_wp
+         f0 = f0*x + 0.00010683760683760684_wp
+         f0 = f0*x - 0.0007575757575757576_wp
+         f0 = f0*x + 0.004629629629629629_wp
+         f0 = f0*x - 0.023809523809523808_wp
+         f0 = f0*x + 0.1_wp
+         f0 = f0*x - 0.3333333333333333_wp
+         f0 = f0*x + 1.0_wp
+         f1 = 1.3655649521106815e-15_wp
+         f1 = f1*x - 2.317322342975702e-14_wp
+         f1 = f1*x + 3.7002405153966856e-13_wp
+         f1 = f1*x - 5.537601323041936e-12_wp
+         f1 = f1*x + 7.732132217728926e-11_wp
+         f1 = f1*x - 1.0020843354176688e-09_wp
+         f1 = f1*x + 1.1981443140863431e-08_wp
+         f1 = f1*x - 1.3122532963802806e-07_wp
+         f1 = f1*x + 1.3053467000835422e-06_wp
+         f1 = f1*x - 1.1671335200746965e-05_wp
+         f1 = f1*x + 9.259259259259259e-05_wp
+         f1 = f1*x - 0.000641025641025641_wp
+         f1 = f1*x + 0.003787878787878788_wp
+         f1 = f1*x - 0.018518518518518517_wp
+         f1 = f1*x + 0.07142857142857142_wp
+         f1 = f1*x - 0.2_wp
+         f1 = f1*x + 0.3333333333333333_wp
+         f2 = 1.291750630374969e-15_wp
+         f2 = f2*x - 2.1849039233770904e-14_wp
+         f2 = f2*x + 3.475983514463553e-13_wp
+         f2 = f2*x - 5.18033672155536e-12_wp
+         f2 = f2*x + 7.198881719954517e-11_wp
+         f2 = f2*x - 9.278558661274711e-10_wp
+         f2 = f2*x + 1.1022927689594356e-08_wp
+         f2 = f2*x - 1.198144314086343e-07_wp
+         f2 = f2*x + 1.1810279667422524e-06_wp
+         f2 = f2*x - 1.0442773600668338e-05_wp
+         f2 = f2*x + 8.169934640522875e-05_wp
+         f2 = f2*x - 0.0005555555555555556_wp
+         f2 = f2*x + 0.003205128205128205_wp
+         f2 = f2*x - 0.015151515151515152_wp
+         f2 = f2*x + 0.05555555555555555_wp
+         f2 = f2*x - 0.14285714285714285_wp
+         f2 = f2*x + 0.2_wp
+      else if (x >= boys_x_far) then
+         ex = 0.0_wp
+         sqrtx = sqrt(x)
+         inv2x = 0.5_wp/x
+         f0 = 0.88622692545275801_wp/sqrtx
+         f1 = f0*inv2x
+         f2 = 3.0_wp*f1*inv2x
+      else
+         sqrtx = sqrt(x)
+         ex = exp(-x)
+         inv2x = 0.5_wp/x
+         f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+         f1 = (f0 - ex)*inv2x
+         f2 = (3.0_wp*f1 - ex)*inv2x
+      end if
+
+   end subroutine boys012
 
 end module moist_math_boys

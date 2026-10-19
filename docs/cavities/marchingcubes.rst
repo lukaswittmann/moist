@@ -57,9 +57,9 @@ It takes the same LSF and radius models as a DROP cavity.
 
    type(cavity_type_marchingcubes) :: cavity
 
-   call new_cavity_marchingcubes(cavity, ctx, radius_model=radii, &
+   call new_cavity_marchingcubes(cavity, radius_model=radii, &
       & lsf_model=svdw, error=error, &
-      & param=moist_cavity_marchingcubes_parameters_type(spacing=0.2_wp))
+      & param=moist_cavity_marchingcubes_parameters_type(spacing=0.2_wp), ctx=ctx)
    if (allocated(error)) error stop error%message
 
    call cavity%update(mol, error)

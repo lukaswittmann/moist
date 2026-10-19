@@ -1,6 +1,5 @@
 !> DROP setup and preprocessing routines
 submodule(moist_cavity_drop) moist_cavity_drop_setup
-   use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none(type, external)
@@ -34,7 +33,7 @@ contains
       ! Build iSwig atom-atom neighbour list (sorted by distance for early exit)
       call self%iswig%update(self%mol, self%radii, wleb_max=maxval(self%anchor_wleb0))
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Molecular cell grid:")
@@ -83,7 +82,7 @@ contains
       call self%grid_adj_list%init(cutoff=cutoff)
       call self%grid_adj_list%update(self%xyz(:, 1:self%ngrid))
 
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Grid neighbour list:")
@@ -163,8 +162,8 @@ contains
          do jj = 1, self%param%num_leb
             ii = ii + 1
 
-            ! Construct raw Lebedev weight from ang_weight(jj)
-            self%wleb(ii) = self%ang_weight(jj)*(4.0_wp*pi)
+            ! Solid-angle Lebedev weight
+            self%wleb(ii) = self%ang_weight(jj)
 
             ! Cartesian location of point on sphere i:
             self%xyz(1, ii) = self%mol%xyz(1, i) + self%radii(i)*self%ang_grid(1, jj)
@@ -197,14 +196,16 @@ contains
       integer :: i
       integer :: cg_start, cg_n
       integer :: n_iswig_removed, n_anchor_additional
+      integer :: nthreads
 
+      nthreads = self%ctx%get_num_threads()
       if (allocated(self%anchor_xi0)) deallocate (self%anchor_xi0)
       allocate (self%anchor_xi0(self%nmax), source=0.0_wp)
       if (allocated(self%iswig_f0)) deallocate (self%iswig_f0)
       allocate (self%iswig_f0(self%nmax), source=1.0_wp)
       if (allocated(self%f)) deallocate (self%f)
       allocate (self%f(self%nmax), source=1.0_wp)
-      !$omp parallel default(shared) private(i, lsf, lsf0_gradnorm, cg_start, cg_n)
+      !$omp parallel num_threads(nthreads) default(shared) private(i, lsf, lsf0_gradnorm, cg_start, cg_n)
       allocate (lsf, source=self%lsf_model)
 
       !$omp do schedule(static)
@@ -221,7 +222,7 @@ contains
       !> Total switching function
       self%f = self%iswig_f0
 
-      if (self%ctx%verbosity > 1) then
+      if (self%ctx%verbosity(4)) then
          n_iswig_removed = count(self%iswig_f0 < self%param%wleb_cut)
          n_anchor_additional = count((self%iswig_f0 >= self%param%wleb_cut) .and. &
                                      (self%f < self%param%wleb_cut))

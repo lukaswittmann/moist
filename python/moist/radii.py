@@ -53,6 +53,13 @@ class BondiRadii(Radii):
     _kind = "bondi"
 
 
+@dataclass(frozen=True)
+class GaussRadii(Radii):
+    """Gaussian charge scheme radii, including the 1.2 scale factor."""
+
+    _kind = "gauss"
+
+
 @dataclass(frozen=True, init=False)
 class CustomRadii(Radii):
     """Positive radii by atom, or by element when ``numbers`` is supplied.

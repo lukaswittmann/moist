@@ -17,16 +17,17 @@ pressure, separate from numerical settings:
 .. code-block:: python
 
    from moist import (
-       CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
+       Context, CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
        ModelComponentCPCM, PCMParameters, PCMSolver, SolvationModel,
    )
 
+   context = Context(nthreads=4)  # 0: current OpenMP setting
    cavity = CavityDROP(
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
        parameters=DROPParameters(nleb=194, proj_level=3),
    )
-   model = SolvationModel(cavity, [
+   model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
            78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
        ),
@@ -37,22 +38,40 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``lsf=CFC()`` or ``lsf=Isodensity(...)`` and all DROP level sets share
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
-the surface independently. ``PCMParameters`` applies to both CPCM and COSMO;
-``ModelParameters`` controls model logging.
+the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
+``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
+negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
+
+``Context(nthreads=0, verbosity=2, debug=False)`` creates the
+:ref:`run context <api-context>`. The defaults take the calling thread's OpenMP
+setting (``OMP_NUM_THREADS`` unless the host changed it), print the normal
+output (:ref:`levels <verbosity>`) and leave the debug stream off; a negative thread
+count raises. Everything built on a context retains it.
+``context.print_timer()`` prints the recorded timings on the process standard
+output; ``context.print_timer(simple=True)`` prints the compact form.
+``with context.timer(name):`` times host work under the report's ``Host`` node
+(:ref:`rules <api-context>`); ``context.start_timer`` and ``context.stop_timer``
+are the unpaired form.
+
+``SolvationModel(context, cavity, components)`` requires the context as its first argument.
+Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
+raises.
+``cavity.context``, ``component.context`` and ``model.context`` expose the contexts; ``context.nthreads`` reports its thread count. The context alone sets verbosity and debug output.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
 native. Parameter objects are immutable and keyword-only.
 Constraints are checked by the native constructor.
-Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``. 
+Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters`` and ``component.parameters``.
 ``cavity.radius_model`` is the radius configuration; ``cavity.radii`` remains the computed per-sphere radii after an update.
 
 Radii and density sources
 -------------------------
 
 Available radii are ``CPCMRadii``, ``SMDRadii``, ``D3Radii``, ``COSMORadii``,
-``BondiRadii`` and ``CustomRadii``. Omitted radii select CPCM. Custom radii are
-in bohr, specified either in molecular atom order or by atomic number:
+``BondiRadii``, ``GaussRadii`` and ``CustomRadii``. ``GaussRadii`` uses the Gaussian
+charge scheme table, including its 1.2 scale factor. Omitted radii select CPCM.
+Custom radii are in bohr, specified either in molecular atom order or by atomic number:
 
 .. code-block:: python
 
@@ -61,16 +80,16 @@ in bohr, specified either in molecular atom order or by atomic number:
    atom_radii = CustomRadii([2.67, 2.33, 2.33])
    element_radii = CustomRadii([2.33, 2.67], numbers=[1, 8])
 
-An isodensity cavity takes its live density source separately from its LSF
-settings. The source is a callable or an object with ``density(point, order)``;
-it returns the bare density and its spatial derivatives, through the requested
-order (1, 2 or 3). See :doc:`/cavities/isodensity` for the density convention.
+An isodensity cavity takes its density separately from its LSF settings: a ``GaussianBasis`` for moist's internal evaluator (``basis=``, see below), or a callback source (``source=``), a callable or an object with ``density(point, order)``.
+A callback returns the bare density and its spatial derivatives, through the requested order (1, 2 or 3), and stays outside the coupling.
+See :doc:`/cavities/isodensity` for the density convention.
 
 .. code-block:: python
 
    from moist import Isodensity, IsodensityParameters
 
    cavity = CavityDROP(
+       context=context,
        lsf=Isodensity(parameters=IsodensityParameters(rho_iso=1e-3)),
        parameters=DROPParameters(nleb=194, proj_maxiter=200),
        source=density_provider,
@@ -94,8 +113,8 @@ PySCF. Use ``dataclasses.replace`` to derive settings for a new calculation:
 
    config = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=194))
    finer = replace(config, parameters=replace(config.parameters, nleb=302))
-   first = config.build()
-   second = config.build()  # independent native state
+   first = config.build(context=context)
+   second = config.build(context=context)  # independent native state
 
 Configurations and parameters can be compared, pickled, or converted to
 dictionaries using ``dataclasses.asdict``. For reproducibility, record the
@@ -117,14 +136,33 @@ C-contiguous float64 array of shape ``(natoms,3)`` and returns the host response
 Both leave their accumulator unchanged on failure. ``get_response(coupling)``
 returns a fresh ``Response``.
 
+``model.components`` contains live views in construction order: ``name``,
+one-line ``description``, ``energy`` (the latest ``get_energy`` contribution in
+Hartree) and ``configuration`` (the original component). ``energy`` raises
+``KeyError`` before evaluation and after an update or deferred rebuild; ``fields()``, ``get(name)``
+and ``describe(name)`` work as on a cavity:
+
+.. code-block:: python
+
+   energy = np.array(0.0)
+   model.get_energy(coupling, energy)
+   for component in model.components:
+       print(component.name, component.energy)
+
+``model.parameters_text()`` returns native settings: the cavity, then components
+numbered from 1, with descriptions, solvent inputs and registered settings.
+``model.print_parameters(file=None)`` prints them to standard output by default.
+Neither needs an update.
+``model.radii_text()`` and ``model.print_radii(file=None)`` do the same for the
+radii table of the current structure, one row per element or a short summary
+for custom radii; they need ``update`` and are ready before a deferred build.
+
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
-``a`` and ``f`` mirror ``model%cavity`` in Fortran, and ``cavity.get(name)``
-reads any other field the cavity holds. ``Structure`` copies input arrays on
-construction and update; mutating an input NumPy array cannot change the
-stored geometry, call ``update`` explicitly. See :doc:`coupling` for the
-protocol Python drives with ``for request in coupling``,
-``coupling.answer(**outputs)`` and ``for item in response``, and
-:ref:`coupling-requests` for every output's shape.
+``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
+its :doc:`fields`. ``Structure(numbers, positions)`` stores elements and
+geometry, copying input arrays. Call ``update`` to change the geometry.
+Supply nuclear charges through the ``nuclear_charges`` request
+(:ref:`coupling-requests`).
 
 Internal Gaussian density
 -------------------------
@@ -132,23 +170,25 @@ Internal Gaussian density
 The same ``IsodensityParameters`` control both callback and native Gaussian
 sources. Basis data and the live density are separate from those settings::
 
-   from moist import GaussianBasis, InternalDensity, DROP, Isodensity
+   from moist import GaussianBasis, DROP, Isodensity
 
    basis = GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                          exponents=[0.5], coefficients=[1.0])
-   source = InternalDensity(basis, [[1.0]])
-   cavity = DROP(lsf=Isodensity()).build(source=source)
+   cavity = DROP(lsf=Isodensity()).build(context=context, basis=basis)
    shell_offsets, powers = cavity.isodensity_layout()
 
 Shell atom indices and offsets are zero-based; ``powers`` has shape ``(ncart,3)``.
 Coefficients include primitive normalization. The matrix must already be transformed
 into the queried Cartesian-monomial layout; a host's spherical AO density cannot
 be passed directly. Both basis and density inputs are copied.
+For a host with spherical basis functions, ``IsodensityParameters(basis="spherical")``
+(``IsodensityBasis.SPHERICAL``) contracts that matrix over the :math:`2l+1` spherical
+functions per shell (faster); a matrix from a Cartesian-basis host is then rejected.
 
-Assign ``source.density_matrix`` before each cavity or model update. Updates
-install it on the correct native owner; merely assigning it does not change an
-already completed evaluation. Internal evaluation supplies spatial density
-derivatives. The host still supplies its own basis-center derivative contractions.
+Supply the density matrix and nuclear charges through the :ref:`coupling-build`,
+as shown below. Standalone cavities expose the same calls as models.
+MOIST evaluates spatial density derivatives; the host supplies basis-center
+derivative contractions.
 
 ``get_version_string()`` returns the linked library's full release string;
 ``get_banner(style)`` returns its banner without printing (``full``, ``short``,
@@ -160,10 +200,11 @@ Host coupling
 -------------
 
 The shared :doc:`coupling` protocol defines the requests, response items and
-phase lifecycle. Create a coupling after updating the model; the coupling
-keeps its model alive.
+phase lifecycle. Create a coupling after updating the model; it keeps the
+model alive. Prepare it again after ``model.update`` invalidates its answers.
 
-The outline below shows the Python calls. ``host_potential`` and ``host_fock``
+The outline below shows the Python calls; ``dcart`` is the host's density matrix
+in the layout above. ``host_potential`` and ``host_fock``
 stand for host integral routines; complete the derivative request and
 contraction loops for the chosen model. On a density-dependent cavity, retain
 the response-phase ``DensityResponse`` before obtaining the gradient response
@@ -173,15 +214,29 @@ and use it for the additional density derivative contractions described in
 Python mirrors the same names. Iterating a coupling advances the native
 cursor: each step yields a snapshot of the current request, and the loop ends
 with the pass. ``coupling.answer`` takes the outputs of the current request
-by keyword with the grid axis first. Iterating a response yields its items.
+by keyword with the grid axis first (the atom axis for ``z``). Iterating a response yields its items.
 Grid inputs are read from ``model.cavity``.
 
 .. code-block:: python
 
    import numpy as np
-   from moist import GaussianPotentialRequest, PotentialAdjointResponse
+   from moist import (
+       DensityMatrixRequest, GaussianPotentialRequest,
+       NuclearChargesRequest, PotentialAdjointResponse,
+   )
 
+   model.update(structure)
    coupling = model.new_coupling()
+   model.prepare_build(coupling)
+   for request in coupling:
+       if isinstance(request, DensityMatrixRequest):
+           coupling.answer(dcart=dcart)
+       elif isinstance(request, NuclearChargesRequest):
+           coupling.answer(z=host_nuclear_charges)
+       else:
+           raise NotImplementedError(f"unsupported request {request.name}")
+   model.build(coupling)
+
    model.prepare_energy(coupling)
    for request in coupling:
        if isinstance(request, GaussianPotentialRequest):
@@ -204,7 +259,10 @@ Grid inputs are read from ``model.cavity``.
 
    model.prepare_gradient(coupling)
    for request in coupling:
-       ...  # answer the missing derivative outputs the same way
+       if isinstance(request, NuclearChargesRequest):
+           coupling.answer(z=host_nuclear_charges)
+       else:
+           ...  # answer the missing derivative outputs the same way
    gradient = np.zeros((natoms, 3))
    response = model.get_gradient(coupling, gradient)
    for item in response:
@@ -212,24 +270,27 @@ Grid inputs are read from ``model.cavity``.
 
 Each request is a snapshot taken when it is yielded: ``name`` is a class
 attribute, ``missing`` the frozenset of output names missing at that moment,
-and ``GaussianMomentRequest.width`` an immutable copy of the widths. An output
+``GaussianMomentRequest.width`` an immutable copy of the widths and
+``DensityMatrixRequest.nbasis`` the size of ``dcart``. An output
 the request does not have is never in ``missing``.
 ``coupling.answer(**outputs)`` accepts any subset of the current request's
 outputs, and ``None`` skips one. An unknown keyword raises ``TypeError`` and
 no current request ``RuntimeError``, both before anything is submitted. The
-rest go in declaration order, each validated on its own: the first rejection --
-``ValueError`` for a wrong shape, ``RuntimeError`` for a native one -- leaves
-that output missing, keeps the outputs submitted before it and skips the rest
-of the call. A ``break`` leaves the pass for the next loop to resume;
+rest go in declaration order. Python validation errors (such as a wrong shape
+or asymmetric ``dcart``) leave any previous answer intact; native rejections
+(such as non-finite values) clear that output. Either stops the call, keeping
+earlier submissions and skipping later ones. A ``break`` leaves the pass for the next loop to resume;
 a loop that ran to the end lets the next one start a new pass.
 
 A ``Response`` is a plain value copied out of the native result: iterating it
 yields the items the model produced, in native order, as
-``PotentialAdjointResponse``, ``DensityResponse`` or
-``GostshypAmplitudeResponse``. Each item has the native item name as its
-``name`` class attribute and its arrays as attributes named as in the response
-table, with the grid axis first. The :doc:`pyscf` module drives these loops for
-PySCF.
+``PotentialAdjointResponse``, ``DensityResponse``,
+``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``,
+``AtomicChargeAdjointResponse`` or ``RadialPotentialAdjointResponse``. Each
+item has the native item name as its ``name`` class attribute and its arrays
+as attributes named as their Fortran components, with the dimensions reversed.
+``AtomicMultipoleAdjointResponse`` arrays the model did not compute are
+``None``. The :doc:`pyscf` module drives these loops for PySCF.
 
 API
 ---

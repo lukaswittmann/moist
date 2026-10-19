@@ -63,6 +63,14 @@ class Handle:
         raise NotImplementedError("Delete function not implemented")
 
 
+class ContextHandle(Handle):
+    """Owning handle for a shared native run context."""
+
+    @staticmethod
+    def _delete(handle):
+        lib.moist_delete_context(ffi.new("moist_context *", handle))
+
+
 class StructureHandle(Handle):
     @staticmethod
     def _delete(handle):
@@ -192,38 +200,88 @@ def _options(kind, **values):
     return options
 
 
-def _drop_from_lsf(lsf, options, radii=None):
+def new_context(nthreads=0, verbosity=0, debug=False):
+    for name, value in (("nthreads", nthreads), ("verbosity", verbosity)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an int")
+    if not isinstance(debug, bool):
+        raise TypeError("debug must be a bool")
+    return ContextHandle.with_gc(error_check(lib.moist_new_context)(nthreads, verbosity, debug))
+
+
+def get_context_num_threads(context):
+    value = ffi.new("int *")
+    error_check(lib.moist_get_context_num_threads)(context.handle, value)
+    return value[0]
+
+
+def print_context_timer(context, simple=False):
+    if simple:
+        error_check(lib.moist_print_context_timer_simple)(context.handle)
+    else:
+        error_check(lib.moist_print_context_timer)(context.handle)
+
+
+def start_context_timer(context, name):
+    error_check(lib.moist_start_context_timer)(context.handle, _timer_name(name))
+
+
+def stop_context_timer(context, name):
+    error_check(lib.moist_stop_context_timer)(context.handle, _timer_name(name))
+
+
+def _timer_name(name):
+    """UTF-8 bytes of a timer name; the context checks the rest of the naming rules."""
+    if not isinstance(name, str):
+        raise TypeError("timer name must be a str")
+    # C reads up to the first NUL, so a NUL would silently cut the name short
+    if "\0" in name:
+        raise ValueError("Timer name contains a control character")
+    return name.encode()
+
+
+def _construct(kind, handle_type, *args, context, required=False):
+    """Call ``moist_new_<kind>``; ``context=None`` passes NULL unless required."""
+    if context is None and not required:
+        native = ffi.NULL
+    elif isinstance(context, ContextHandle):
+        native = context.handle
+    else:
+        raise TypeError("context must be a ContextHandle")
+    value = error_check(getattr(lib, f"moist_new_{kind}"))(native, *args)
+    handle = handle_type.with_gc(value)
+    handle._context_owner = context
+    return handle
+
+
+def _drop_from_lsf(lsf, options, radii=None, *, context=None):
     """Copy an LSF into a cavity and release the temporary LSF handle."""
     try:
-        return CavityHandle.with_gc(
-            error_check(lib.moist_new_drop_cavity)(
-                lsf, ffi.NULL if radii is None else radii.handle, options
-            )
-        )
+        return _construct("drop_cavity", CavityHandle,
+                          lsf, ffi.NULL if radii is None else radii.handle, options,
+                          context=context)
     finally:
         ptr = ffi.new("moist_lsf *", lsf)
         lib.moist_delete_lsf(ptr)
 
 
-def new_drop_cavity(parameters, lsf_parameters, radii=None) -> CavityHandle:
+def new_drop_cavity(parameters, lsf_parameters, radii=None, *, context=None) -> CavityHandle:
     """Copy a geometric LSF and radii into a DROP cavity."""
     options = parameters._as_options()
     lsf_options = lsf_parameters._as_options()
     constructor = getattr(lib, f"moist_new_{lsf_parameters._kind}_lsf")
-    return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii)
+    return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii, context=context)
 
 
-def new_internal_isodensity_cavity(source, parameters, lsf_parameters, radii=None):
-    basis = source.basis
+def new_internal_isodensity_cavity(basis, parameters, lsf_parameters, radii=None, *, context=None):
+    """Copy an internal isodensity LSF over ``basis`` and radii into a DROP cavity."""
     arrays = [np.asarray(getattr(basis, name), dtype=dtype) for name, dtype in (
         ("shell_atom", np.int32), ("shell_l", np.int32), ("shell_nprim", np.int32),
         ("exponents", np.float64), ("coefficients", np.float64))]
     lsf = error_check(lib.moist_new_isodensity_lsf)(
         len(basis.shell_atom), *[_cast("int*" if i < 3 else "double*", a)
                                  for i, a in enumerate(arrays)], lsf_parameters._as_options())
-    cavity = _drop_from_lsf(lsf, parameters._as_options(), radii)
-    set_isodensity_density(cavity, source.density_matrix)
-    return cavity
+    return _drop_from_lsf(lsf, parameters._as_options(), radii, context=context)
 
 
 def isodensity_layout(cavity):
@@ -237,20 +295,10 @@ def isodensity_layout(cavity):
     return offsets, np.stack(powers, axis=1)
 
 
-def set_isodensity_density(handle, density, *, model=False):
-    array = np.asarray(density, dtype=np.float64, order="C")
-    if array.ndim != 2 or array.shape[0] != array.shape[1]:
-        raise ValueError("density must be a square matrix")
-    entry = lib.moist_set_model_isodensity_density if model else lib.moist_set_isodensity_density
-    error_check(entry)(handle.handle, len(array), _cast("double*", array))
-
-
-def new_iswig_cavity(parameters, radii=None) -> CavityHandle:
-    return CavityHandle.with_gc(
-        error_check(lib.moist_new_iswig_cavity)(
-            ffi.NULL if radii is None else radii.handle, parameters._as_options()
-        )
-    )
+def new_iswig_cavity(parameters, radii=None, *, context=None) -> CavityHandle:
+    return _construct("iswig_cavity", CavityHandle,
+                      ffi.NULL if radii is None else radii.handle, parameters._as_options(),
+                      context=context)
 
 
 def new_radii(kind: str) -> RadiiHandle:
@@ -325,7 +373,7 @@ def _callback_takes_order(callback) -> bool:
 
 
 def new_drop_cavity_isodensity_callback(
-    callback, parameters, lsf_parameters, radii=None, *, pass_order=None,
+    callback, parameters, lsf_parameters, radii=None, *, pass_order=None, context=None,
 ) -> CavityHandle:
     """Build a callback cavity, retaining its callback and exception state.
 
@@ -402,17 +450,25 @@ def new_drop_cavity_isodensity_callback(
     lsf = error_check(lib.moist_new_isodensity_callback_lsf)(
         c_callback, ffi.NULL, lsf_options
     )
-    handle = _drop_from_lsf(lsf, options, radii)
+    handle = _drop_from_lsf(lsf, options, radii, context=context)
     handle.callback_state = state
     handle.callback_ref = c_callback
     return handle
 
 
 def update_model(model: ModelHandle, structure: StructureHandle) -> None:
-    return error_check(lib.moist_update_model)(
-        model.handle,
-        structure.handle,
-    )
+    """Update a model with a structure: everything that needs no host state."""
+    error_check(lib.moist_update_model)(model.handle, structure.handle)
+
+
+def prepare_model_build(model: ModelHandle, coupling: CouplingHandle) -> None:
+    """Stage the build phase of a model coupling."""
+    error_check(lib.moist_prepare_model_build)(model.handle, coupling.handle)
+
+
+def build_model(model: ModelHandle, coupling: CouplingHandle) -> None:
+    """Complete a model from the answered build phase of a coupling."""
+    error_check(lib.moist_build_model)(model.handle, coupling.handle)
 
 
 def get_model_cavity(model: ModelHandle) -> CavityHandle:
@@ -423,57 +479,47 @@ def get_model_cavity(model: ModelHandle) -> CavityHandle:
     return handle
 
 
-def new_cpcm_component(epsilon: float, parameters) -> ComponentHandle:
+def new_cpcm_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
     """Create a CPCM component for a general solvation model."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cpcm_component)(float(epsilon), parameters._as_options())
-    )
+    return _construct("cpcm_component", ComponentHandle, float(epsilon), parameters._as_options(),
+                      context=context)
 
 
-def new_cosmo_component(epsilon: float, parameters) -> ComponentHandle:
+def new_cosmo_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
     """Create a COSMO component for a general solvation model."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cosmo_component)(float(epsilon), parameters._as_options())
-    )
+    return _construct("cosmo_component", ComponentHandle, float(epsilon), parameters._as_options(),
+                      context=context)
 
 
-def new_pv_component(pressure: float) -> ComponentHandle:
+def new_pv_component(pressure: float, *, context=None) -> ComponentHandle:
     """Create a pressure-volume component whose energy is pressure times volume."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_pv_component)(float(pressure))
-    )
+    return _construct("pv_component", ComponentHandle, float(pressure), context=context)
 
 
-def new_gostshyp_component(pressure: float) -> ComponentHandle:
+def new_gostshyp_component(pressure: float, parameters, *, context=None) -> ComponentHandle:
     """Create a GOSTSHYP hydrostatic-pressure component.
 
     ``pressure`` is in Hartree/bohr^3.  The component declares a Gaussian
     moment request on every coupling and cannot form the moments itself; the
     host answers it with :func:`answer_coupling_request` and reads the amplitudes back
-    with :func:`get_response_array`.
+    with :func:`get_response_field_real`.
     """
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_gostshyp_component)(float(pressure))
-    )
+    return _construct("gostshyp_component", ComponentHandle, float(pressure), parameters._as_options(),
+                      context=context)
 
 
 def new_general_model(
+    context,
     cavity: CavityHandle,
     components: list[ComponentHandle],
-    parameters,
 ) -> ModelHandle:
     """Create a general model and append copies of the requested components."""
 
-    model = ModelHandle.with_gc(
-        error_check(lib.moist_new_model)(
-            cavity.handle,
-            parameters._as_options(),
-        )
-    )
+    model = _construct("model", ModelHandle, cavity.handle, context=context, required=True)
     # Native copies borrow Python callbacks; keep the owning handle alive.
     model._source_cavity = cavity
     for component in components:
@@ -486,21 +532,8 @@ def new_general_model(
 # -----------------------------------------------------------------------------
 # Host coupling protocol
 # -----------------------------------------------------------------------------
-#
-# A coupling carries the model's requests and a cursor over them; one response
-# handle receives what a phase hands back and carries a cursor over its items.
-# next_coupling_request() and next_response_item() move the cursors, and the
-# other request and response functions act on the request or item they stopped
-# at, failing by name when none is current. Requests and response items are
-# identified by their canonical names, never by an index or a token. Grid
-# inputs are read from the model's cavity. Like the C entries they bind, these
-# functions take no sizes: moist reads and writes exactly the documented
-# shape, so an array passed in has to have it. Only the element type and the
-# layout are checked here, which the pointer cast relies on.
-
-
-# Parent model of every live coupling, keyed by the native coupling address
-_COUPLING_PARENTS: dict[int, ModelHandle] = {}
+# Parent model or cavity of every live coupling, keyed by the native coupling address
+_COUPLING_PARENTS: dict[int, ModelHandle | CavityHandle] = {}
 
 
 def _release_coupling(handle):
@@ -511,10 +544,18 @@ def _release_coupling(handle):
 
 
 def new_coupling(model: ModelHandle) -> CouplingHandle:
-    """Declare the host coupling of an updated general model."""
+    """Declare a host coupling of an updated general model."""
 
     handle = error_check(lib.moist_new_coupling)(model.handle)
     _COUPLING_PARENTS[int(ffi.cast("uintptr_t", handle))] = model
+    return CouplingHandle(ffi.gc(handle, _release_coupling))
+
+
+def new_cavity_coupling(cavity: CavityHandle) -> CouplingHandle:
+    """Declare the build-phase coupling of an updated standalone cavity."""
+
+    handle = error_check(lib.moist_new_cavity_coupling)(cavity.handle)
+    _COUPLING_PARENTS[int(ffi.cast("uintptr_t", handle))] = cavity
     return CouplingHandle(ffi.gc(handle, _release_coupling))
 
 
@@ -635,23 +676,12 @@ def get_coupling_request_missing(coupling: CouplingHandle, name: str) -> bool:
     return bool(value[0])
 
 
-def get_coupling_request_width(coupling: CouplingHandle, width: np.ndarray) -> None:
-    """Copy the Gaussian moment exponents of the current request into ``width``.
-
-    ``width`` is a float64 array of the cavity's grid size, filled in bohr**-2.
-    """
-
-    _native_array(width, "width", writable=True)
-    error_check(lib.moist_get_coupling_request_width)(
-        coupling.handle, _cast("double*", width))
-
-
 def answer_coupling_request(coupling: CouplingHandle, name: str, values: np.ndarray) -> None:
     """Submit one named output of the current request.
 
-    ``values`` is a C-contiguous float64 array ``(ngrid, ...)`` on the cavity
-    grid with the output's trailing extents; moist reads exactly that many
-    values.  A rejected output stays missing until a valid retry; the others
+    ``values`` is a C-contiguous float64 array ``(n, ...)`` with ``n`` the
+    grid size, the atom count or ``(nbasis, nbasis)`` by the output's extent,
+    then the output's trailing extents; moist reads exactly that many values.  A rejected output stays missing until a valid retry; the others
     are unaffected.
     """
 
@@ -681,28 +711,19 @@ def get_response_item_name(response: ResponseHandle) -> str:
     return ffi.string(buffer).decode()
 
 
-def get_response_array(response: ResponseHandle, array: str, values: np.ndarray) -> None:
-    """Copy one named array of the current item into ``values``.
-
-    ``values`` is a C-contiguous float64 array ``(ngrid, ...)``: ``w_phi``,
-    ``w_rho``, ``w_overlap`` and ``w_normal_deriv`` are ``(ngrid,)``,
-    ``w_grad_rho`` is ``(ngrid, 3)`` and ``w_hess_rho`` is ``(ngrid, 3, 3)``
-    with indices ``[point, b, a]`` for native ``(a, b, point)``; moist writes
-    exactly that many values.  No current item and an array the current item
-    does not have are refused by name before anything is written.
-    """
-
-    _native_array(values, array, writable=True)
-    error_check(lib.moist_get_response_array)(
-        response.handle, array.encode(), _cast("double*", values)
-    )
-
-
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
-    return error_check(lib.moist_update_cavity)(
-        cavity.handle,
-        structure.handle,
-    )
+    """Update a standalone cavity with a structure: everything that needs no host state."""
+    error_check(lib.moist_update_cavity)(cavity.handle, structure.handle)
+
+
+def prepare_cavity_build(cavity: CavityHandle, coupling: CouplingHandle) -> None:
+    """Stage the build phase of a cavity coupling."""
+    error_check(lib.moist_prepare_cavity_build)(cavity.handle, coupling.handle)
+
+
+def build_cavity(cavity: CavityHandle, coupling: CouplingHandle) -> None:
+    """Complete a standalone cavity from the answered build phase of a coupling."""
+    error_check(lib.moist_build_cavity)(cavity.handle, coupling.handle)
 
 
 def get_cavity_sizes(cavity: CavityHandle) -> tuple[int, int]:
@@ -781,11 +802,13 @@ _FIELD_NAME_CAP = lib.MOIST_FIELD_NAME_MAX + 1
 
 
 @dataclass(frozen=True)
-class CavityField:
-    """Shape and type of one readable cavity field.
+class FieldInfo:
+    """Shape and type of one named field.
 
-    ``shape`` is empty for a scalar and otherwise carries the extents in
-    C order, slowest-varying first. Grid vectors have shape ``(ngrid, 3)``.
+    Describes a field of a cavity, an array of the current response item or
+    an input of the current coupling request. ``shape`` is empty for a scalar
+    and otherwise carries the extents in C order, slowest-varying first. Grid
+    vectors have shape ``(ngrid, 3)``.
     """
 
     name: str
@@ -794,16 +817,23 @@ class CavityField:
     count: int
 
 
-def get_cavity_field_count(cavity: CavityHandle) -> int:
-    """Return how many named result fields the cavity currently holds."""
+def _field_count(entry, owner: Handle, *path) -> int:
+    """Return the field count a ``moist_get_*_field_count`` entry reports.
+
+    ``path`` holds the arguments that address a part of the owner, such as a
+    component index; they follow the owner's handle.
+    """
 
     nfield = ffi.new("int *")
-    error_check(lib.moist_get_cavity_field_count)(cavity.handle, nfield)
+    error_check(entry)(owner.handle, *path, nfield)
     return int(nfield[0])
 
 
-def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
-    """Describe the field at ``index``, counting from zero."""
+def _field_info(entry, owner: Handle, index: int, *path) -> FieldInfo:
+    """Return the descriptor a ``moist_get_*_field_info`` entry reports.
+
+    ``path`` addresses a part of the owner as in :func:`_field_count`.
+    """
 
     name = ffi.new(f"char[{_FIELD_NAME_CAP}]")
     dtype = ffi.new("int *")
@@ -811,8 +841,9 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     dims = ffi.new(f"int[{_FIELD_MAX_RANK}]")
     count = ffi.new("int *")
 
-    error_check(lib.moist_get_cavity_field_info)(
-        cavity.handle,
+    error_check(entry)(
+        owner.handle,
+        *path,
         int(index),
         name,
         dtype,
@@ -825,7 +856,7 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     if tag not in _FIELD_READER:
         raise ValueError(f"moist reported an unknown field type tag {tag}")
 
-    return CavityField(
+    return FieldInfo(
         name=ffi.string(name).decode(),
         dtype=np.dtype(_FIELD_READER[tag][1]),
         shape=tuple(int(dims[i]) for i in range(int(rank[0]))),
@@ -833,7 +864,19 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     )
 
 
-def list_cavity_fields(cavity: CavityHandle) -> tuple[CavityField, ...]:
+def get_cavity_field_count(cavity: CavityHandle) -> int:
+    """Return how many named result fields the cavity currently holds."""
+
+    return _field_count(lib.moist_get_cavity_field_count, cavity)
+
+
+def get_cavity_field_info(cavity: CavityHandle, index: int) -> FieldInfo:
+    """Describe the field at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_cavity_field_info, cavity, index)
+
+
+def list_cavity_fields(cavity: CavityHandle) -> tuple[FieldInfo, ...]:
     """Describe every result the cavity currently holds.
 
     The list is what the cavity itself declares, so it grows with the cavity
@@ -862,7 +905,7 @@ def get_cavity_field_about(cavity: CavityHandle, name: str) -> str:
 def get_cavity_field(
     cavity: CavityHandle,
     name: str,
-    info: Optional[CavityField] = None,
+    info: Optional[FieldInfo] = None,
 ) -> np.ndarray:
     """Return one named cavity result.
 
@@ -921,7 +964,7 @@ def get_cavity_fields(
     }
 
 
-def _find_cavity_field(cavity: CavityHandle, name: str) -> CavityField:
+def _find_cavity_field(cavity: CavityHandle, name: str) -> FieldInfo:
     for field in list_cavity_fields(cavity):
         if field.name == name:
             return field
@@ -933,6 +976,189 @@ def _tag_of(dtype: np.dtype) -> int:
         if dtype == np.dtype(candidate):
             return tag
     raise ValueError(f"no moist field accessor for dtype {dtype}")
+
+
+# -----------------------------------------------------------------------------
+# Components of a general model
+# -----------------------------------------------------------------------------
+
+
+def get_model_component_count(model: ModelHandle) -> int:
+    """Return how many components a general model holds."""
+
+    count = ffi.new("int *")
+    error_check(lib.moist_get_model_component_count)(model.handle, count)
+    return int(count[0])
+
+
+def get_model_component_name(model: ModelHandle, index: int) -> str:
+    """Return the name of the component at ``index``, e.g. ``"CPCM"``."""
+
+    return _native_text(lib.moist_get_model_component_name, model.handle, int(index))
+
+
+def get_model_component_description(model: ModelHandle, index: int) -> str:
+    """Return the one-line description of the component at ``index``."""
+
+    return _native_text(lib.moist_get_model_component_description, model.handle, int(index))
+
+
+def get_model_parameters_text(model: ModelHandle) -> str:
+    """Return the settings printout of a general model: cavity, then components.
+
+    Each component section is headed by its 1-based position. The text ends in
+    a newline; printing it is left to the caller.
+    """
+
+    return _native_text(lib.moist_get_model_parameters_text, model.handle)
+
+
+def get_model_radii_text(model: ModelHandle) -> str:
+    """Return the radii table of the current structure of a general model.
+
+    Available right after the update, also before a deferred build. The text
+    ends in a newline; printing it is left to the caller.
+    """
+
+    return _native_text(lib.moist_get_model_radii_text, model.handle)
+
+
+def get_model_component_field_count(model: ModelHandle, index: int) -> int:
+    """Return how many results the component at ``index`` currently holds."""
+
+    return _field_count(lib.moist_get_model_component_field_count, model, int(index))
+
+
+def get_model_component_field_info(model: ModelHandle, index: int, field: int) -> FieldInfo:
+    """Describe result ``field`` of the component at ``index``, both counting from zero."""
+
+    return _field_info(lib.moist_get_model_component_field_info, model, field, int(index))
+
+
+def list_model_component_fields(model: ModelHandle, index: int) -> tuple[FieldInfo, ...]:
+    """Describe every result the component at ``index`` currently holds."""
+
+    return tuple(
+        get_model_component_field_info(model, index, field)
+        for field in range(get_model_component_field_count(model, index))
+    )
+
+
+def get_model_component_field_about(model: ModelHandle, index: int, name: str) -> str:
+    """Return the one-line description of a named result of a component."""
+
+    return _native_text(
+        lib.moist_get_model_component_field_about, model.handle, int(index), _char(name)
+    )
+
+
+def get_model_component_field(
+    model: ModelHandle,
+    index: int,
+    name: str,
+    info: Optional[FieldInfo] = None,
+):
+    """Return one named result of the component at ``index``.
+
+    A result the component does not hold -- unknown, or not computed since the
+    last update -- raises rather than returning zeros. A scalar comes back as a
+    NumPy scalar, an array C-contiguous with the reported C shape.
+    """
+
+    if info is None:
+        known = {field.name: field for field in list_model_component_fields(model, index)}
+        if name not in known:
+            raise KeyError(
+                f"component {index} ({get_model_component_name(model, index)}) "
+                f"does not hold a field named {name!r}"
+            )
+        info = known[name]
+    if _tag_of(info.dtype) != FIELD_REAL:
+        raise ValueError(f"no moist component field accessor for dtype {info.dtype}")
+
+    values = np.zeros(info.count, dtype=np.float64)
+    error_check(lib.moist_get_model_component_field_real)(
+        model.handle, int(index), _char(name), _cast("double*", values)
+    )
+    if not info.shape:
+        return values[0]
+    return values.reshape(info.shape, order="C")
+
+
+# -----------------------------------------------------------------------------
+# Named fields of the current response item and coupling request
+# -----------------------------------------------------------------------------
+
+
+def get_response_field_count(response: ResponseHandle) -> int:
+    """Return how many named arrays the current response item declares."""
+
+    return _field_count(lib.moist_get_response_field_count, response)
+
+
+def get_response_field_info(response: ResponseHandle, index: int) -> FieldInfo:
+    """Describe the array of the current response item at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_response_field_info, response, index)
+
+
+def get_response_field_about(response: ResponseHandle, name: str) -> str:
+    """Return the one-line description of a named array of the current response item."""
+
+    return _native_text(lib.moist_get_response_field_about, response.handle, _char(name))
+
+
+def get_response_field_real(response: ResponseHandle, name: str, values: np.ndarray) -> None:
+    """Copy one named array of the current response item into ``values``.
+
+    ``values`` is a C-contiguous float64 array of the shape
+    :func:`get_response_field_info` reports -- ``w_hess_rho`` is
+    ``(ngrid, 3, 3)`` with indices ``[point, b, a]`` for native
+    ``(a, b, point)``; moist writes exactly that many values.  No current item
+    and an array the current item does not declare are refused by name before
+    anything is written.
+    """
+
+    _native_array(values, name, writable=True)
+    error_check(lib.moist_get_response_field_real)(
+        response.handle, _char(name), _cast("double*", values)
+    )
+
+
+def get_coupling_request_field_count(coupling: CouplingHandle) -> int:
+    """Return how many named inputs the current request declares; a kind without inputs has none."""
+
+    return _field_count(lib.moist_get_coupling_request_field_count, coupling)
+
+
+def get_coupling_request_field_info(coupling: CouplingHandle, index: int) -> FieldInfo:
+    """Describe the input of the current request at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_coupling_request_field_info, coupling, index)
+
+
+def get_coupling_request_field_about(coupling: CouplingHandle, name: str) -> str:
+    """Return the one-line description of a named input of the current request."""
+
+    return _native_text(lib.moist_get_coupling_request_field_about, coupling.handle, _char(name))
+
+
+def get_coupling_request_field_real(
+    coupling: CouplingHandle, name: str, values: np.ndarray
+) -> None:
+    """Copy one named input of the current request into ``values``.
+
+    ``values`` is a C-contiguous float64 array of the shape
+    :func:`get_coupling_request_field_info` reports -- the Gaussian moment
+    ``width`` is ``(ngrid,)``, in bohr**-2; moist writes exactly that many
+    values.  No current request and an input the current request does not
+    declare are refused by name before anything is written.
+    """
+
+    _native_array(values, name, writable=True)
+    error_check(lib.moist_get_coupling_request_field_real)(
+        coupling.handle, _char(name), _cast("double*", values)
+    )
 
 
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:

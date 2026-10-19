@@ -1,4 +1,4 @@
 [wrap-git]
 directory = test-drive
-url = https://github.com/lukaswittmann/test-drive
-revision = make_output-race
+url = https://github.com/fortran-lang/test-drive
+revision = 791484a79a24cbc00be6f74e53c6e030cb75efe2

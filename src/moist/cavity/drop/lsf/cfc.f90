@@ -195,6 +195,7 @@ contains
       ! The atom / pair sweeps index the base's candidate-space geometry mirror
       ! directly, so candidate ids must arrive spatially sorted
       self%candidate_space = lsf_candidate_space_sorted
+      self%name = "CFC"
 
       self%param = moist_cavity_drop_lsf_cfc_param_type()
       if (present(param)) self%param = param

@@ -1,7 +1,7 @@
 DROP Cavities
 =============
 
-.. image:: /_static/drop.svg
+.. image:: /_static/logos/drop.svg
    :alt: DROP cavity construction
    :align: right
 
@@ -28,7 +28,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_a.svg
+      .. image:: /_static/figures/drop/reference-cavity.svg
          :alt: Isodensity surface and van der Waals reference cavity
          :align: center
          :width: 65%
@@ -41,7 +41,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_b.svg
+      .. image:: /_static/figures/drop/projection.svg
          :alt: Projection of reference quadrature points onto the isodensity surface
          :align: center
          :width: 80%
@@ -51,7 +51,7 @@ This makes the cavity suitable for continuum-solvation models that require smoot
 
    .. grid-item::
 
-      .. image:: /_static/drop_scheme_c.svg
+      .. image:: /_static/figures/drop/weight-mapping.svg
          :alt: Quadrature weight mapping onto the isodensity surface
          :align: center
          :width: 80%
@@ -89,8 +89,8 @@ Only the LSF changes between :doc:`SvdW-DROP <svdw>`, :doc:`CFC-DROP <cfc>` and 
 
          type(cavity_type_drop) :: cavity
 
-         call new_cavity_drop(cavity, ctx, radius_model=radii, lsf_model=lsf, &
-            & error=error, param=moist_cavity_drop_parameters_type(num_leb=194))
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, &
+            & error=error, param=moist_cavity_drop_parameters_type(num_leb=194), ctx=ctx)
          if (allocated(error)) error stop error%message
 
    .. tab-item:: C
@@ -102,7 +102,7 @@ Only the LSF changes between :doc:`SvdW-DROP <svdw>`, :doc:`CFC-DROP <cfc>` and 
          moist_init_drop_options(error, &options, sizeof options);
          options.nleb = 194;
 
-         moist_cavity cavity = moist_new_drop_cavity(error, lsf, radii, &options);
+         moist_cavity cavity = moist_new_drop_cavity(error, context, lsf, radii, &options);
          moist_delete(lsf);    /* cavity owns a copy */
          moist_delete(radii);
 
@@ -114,7 +114,7 @@ Only the LSF changes between :doc:`SvdW-DROP <svdw>`, :doc:`CFC-DROP <cfc>` and 
          from moist import CavityDROP, CPCMRadii, DROPParameters, SvdW
 
          cavity = CavityDROP(
-             lsf=SvdW(), radii=CPCMRadii(),
+             context=context, lsf=SvdW(), radii=CPCMRadii(),
              parameters=DROPParameters(nleb=194),
          )
 
@@ -129,7 +129,8 @@ Settings
 Settings can be supplied two ways:
 
 - **Parameter file**: parameters  in a JSON or TOML file, read via ``load_file`` (e.g. ``grid.num_leb``, ``projection.level``). The full key set is registered in ``register_cavity_drop_entries``.
-- **Settings object**: When constructing the ``moist_cavity_drop_parameters_type``, via the constructor ``param%new``, allows setting all parameters (``nleb``, ``tolerance``, ``proj_maxiter``, ``proj_level``, ``branch_weight_s``, ``rho_grid_h``, ``wleb_prune_level``). The C and Python options expose those seven plus ``do_fine`` (logical, default false; computes all available surface properties), ``debug`` and ``verbosity``.
+- **Settings object**: When constructing the ``moist_cavity_drop_parameters_type``, via the constructor ``param%new``, allows setting all parameters (``nleb``, ``tolerance``, ``proj_maxiter``, ``proj_level``, ``branch_weight_s``, ``rho_grid_h``, ``wleb_prune_level``). The C and Python options expose those seven plus ``do_fine`` (logical, default false; computes all available surface properties); verbosity and debug come from the run context.
+- **Optional properties**: ``do_grid_density``, ``do_curvature``, ``do_normal``, ``do_r_iI`` and ``do_rho`` switch single surface properties on (default false). ``do_fine`` switches all five on.
 
 
 Level Set Functions (LSF)

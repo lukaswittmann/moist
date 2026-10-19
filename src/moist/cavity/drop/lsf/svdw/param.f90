@@ -104,6 +104,7 @@ contains
       call pp%kv("Smoothing (2b)", self%blend_2b)
       call pp%kv("Smoothing (3b)", self%blend_3b)
       call pp%pop()
+      call pp%blank()
    end subroutine print_lsf_svdw_param
 
 end module moist_cavity_drop_lsf_svdw_param

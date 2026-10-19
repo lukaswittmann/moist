@@ -240,7 +240,7 @@ contains
             darg = self%k*width*(1.0_wp/(p*p) + 1.0_wp/(q*q))
             d2arg = 2.0_wp*self%k*width*(1.0_wp/(q*q*q) - 1.0_wp/(p*p*p))
 
-            bump = 0.5_wp*(1.0_wp + erf(arg))
+            bump = 0.5_wp*erfc(-arg)
             dbump = inv_sqrtpi*exp(-(arg*arg))*darg
             d2bump = inv_sqrtpi*exp(-(arg*arg))*(d2arg - 2.0_wp*arg*darg*darg)
          end if

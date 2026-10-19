@@ -42,8 +42,8 @@ iSwiG needs a :ref:`radius model <cavity-radii>` and builds the discretization d
 
          type(cavity_type_iswig) :: cavity
 
-         call new_cavity_iswig(cavity, ctx, radius_model=radii, error=error, &
-            & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp))
+         call new_cavity_iswig(cavity, radius_model=radii, error=error, &
+            & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp), ctx=ctx)
          if (allocated(error)) error stop error%message
 
    .. tab-item:: C
@@ -56,7 +56,7 @@ iSwiG needs a :ref:`radius model <cavity-radii>` and builds the discretization d
          options.nleb = 194;
          options.cut_f = 1.0e-10;
 
-         moist_cavity cavity = moist_new_iswig_cavity(error, radii, &options);
+         moist_cavity cavity = moist_new_iswig_cavity(error, context, radii, &options);
          moist_delete(radii);  /* cavity owns a copy */
 
    .. tab-item:: Python
@@ -67,6 +67,7 @@ iSwiG needs a :ref:`radius model <cavity-radii>` and builds the discretization d
          from moist import CavityISwiG, CPCMRadii, ISwiGParameters
 
          cavity = CavityISwiG(
+             context=context,
              radii=CPCMRadii(),
              parameters=ISwiGParameters(nleb=194, cut_f=1.0e-10),
          )

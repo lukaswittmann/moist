@@ -11,6 +11,7 @@ module test_cavity_numsa
    use moist_radii, only: radius_type_static
    use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: fd4_scalar
    implicit none(type, external)
    private
 
@@ -64,13 +65,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -86,6 +87,9 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
+
+      call check(error, cav%nsph, mol%nat, "Updated cavity sphere count")
+      if (allocated(error)) return
 
       do i = 1, mol%nat
          call check(error, cav%asph(i), ref(i), thr=thr2)
@@ -122,13 +126,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "02")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -174,13 +178,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -212,13 +216,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -265,13 +269,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "05")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -318,13 +322,13 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -411,7 +415,9 @@ contains
 
             mol%xyz(ic, iat) = x0
 
-            grad(ic, iat) = (am2 - 8.0_wp*am1 + 8.0_wp*ap1 - ap2)/(12.0_wp*stepsize)
+            ! Fails on a nonfinite reference, which the absolute check would pass
+            call fd4_scalar(ap2, ap1, am1, am2, stepsize, grad(ic, iat), error)
+            if (allocated(error)) return
          end do
       end do
 

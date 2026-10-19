@@ -4,14 +4,22 @@ on:
   # push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   fortitude:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install fortitude
-        run: pip install fortitude-lint
+        run: pip install fortitude-lint==0.9.2
 
       - name: Run fortitude
         continue-on-error: true

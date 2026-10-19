@@ -41,8 +41,25 @@ module moist_cavity_drop_parameters
       !> Number of Lebedev quadrature points per atomic sphere
       integer :: num_leb = 194
 
-      !> Compute all optional cavity properties
+      !> Compute all optional cavity properties; sets every `do_*` flag below
       logical :: do_fine = .false.
+
+      !* ----------------------------- Optional properties ---------------------------- *!
+
+      !> Compute the local grid point density
+      logical :: do_grid_density = .false.
+
+      !> Compute principal (and with this mean and Gaussian) curvatures
+      logical :: do_curvature = .false.
+
+      !> Store surface normal vectors at grid points
+      logical :: do_normal = .false.
+
+      !> Store sphere-center to grid point distances
+      logical :: do_r_iI = .false.
+
+      !> Store anchor-to-projected-point displacement distances
+      logical :: do_rho = .false.
 
       !* ---------------------------------- Tolerance --------------------------------- *!
 
@@ -106,7 +123,7 @@ module moist_cavity_drop_parameters
 
       !* ---------------------------------- Screening --------------------------------- *!
 
-      !> Distance cutoff for grid point adj. list
+      !> Distance cutoff for grid point adj. list, derived as `4*rho_grid_h`
       real(wp) :: adj_list_grid_cutoff = 1.0_wp
       !> Below this atom count, the cell grid collapses to a single full-scan cell
       !>
@@ -255,6 +272,12 @@ contains
       ! Grid
       self%num_leb = fresh%num_leb
       self%do_fine = fresh%do_fine
+      ! Optional properties
+      self%do_grid_density = fresh%do_grid_density
+      self%do_curvature = fresh%do_curvature
+      self%do_normal = fresh%do_normal
+      self%do_r_iI = fresh%do_r_iI
+      self%do_rho = fresh%do_rho
       ! Tolerance (master; proj_tol, wleb_cut, branch_sep_cut are derived
       ! from this in compute_derived; LSF screening lives on the LSF concrete)
       self%tolerance = fresh%tolerance
@@ -358,6 +381,15 @@ contains
       !> Grid point adjacency list cutoff from density kernel length
       self%adj_list_grid_cutoff = 4.0_wp*self%rho_grid_h
 
+      !> `do_fine` switches every optional property on; never switches one off
+      if (self%do_fine) then
+         self%do_grid_density = .true.
+         self%do_curvature = .true.
+         self%do_normal = .true.
+         self%do_r_iI = .true.
+         self%do_rho = .true.
+      end if
+
       !> Derive weight switching bounds from level
       select case (self%wleb_prune_level)
       case (0)
@@ -407,6 +439,12 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout), target :: self
 
       call self%register_logical("do_fine", self%do_fine)
+      ! Optional properties
+      call self%register_logical("do_grid_density", self%do_grid_density)
+      call self%register_logical("do_curvature", self%do_curvature)
+      call self%register_logical("do_normal", self%do_normal)
+      call self%register_logical("do_r_iI", self%do_r_iI)
+      call self%register_logical("do_rho", self%do_rho)
       ! Grid
       call self%register_int_scalar("grid.num_leb", self%num_leb)
       ! Tolerance (master; wleb_cut, proj_tol, branch_sep are derived;
@@ -555,21 +593,28 @@ contains
    !> @param[in] self Parameter container to display
    !> @param[in] unit Output unit (default `output_unit`); callers holding a run
    !>                 context pass `ctx%unit` so this honours a log file
-   subroutine print_parameters(self, unit)
+   !> @param[in] level Verbosity level; below 3 only the normal settings print
+   !>                  (default: all)
+   subroutine print_parameters(self, unit, level)
       class(moist_cavity_drop_parameters_type), intent(in) :: self
       !> Output unit override
       integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
       type(prettyprinter) :: pp
       !> Effective output unit
       integer :: iu
+      !> Whether the detailed settings print
+      logical :: detailed
 
       iu = output_unit
       if (present(unit)) iu = unit
+      detailed = .true.
+      if (present(level)) detailed = level >= 3
 
       pp = new_prettyprinter(unit=iu)
 
-      call pp%blank()
-      call pp%push("Cavity Parameters:")
+      call pp%push("DROP Parameters:")
 
       call pp%push("Discretization:")
       call pp%kv("Number of Leb. points", self%num_leb)
@@ -577,52 +622,69 @@ contains
 
       call pp%push("Tolerance:")
       call pp%kv("Main tolerance", self%tolerance)
-      call pp%kv("Projection tol.", self%proj_tol)
-      call pp%kv("Screening threshold", self%screening_threshold)
-      call pp%kv("Weight cutoff", self%wleb_cut)
-      call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
-      call pp%pop()
-
-      call pp%push("Switching:")
-      call pp%kv("f_crit start", self%w_0ls_from)
-      call pp%kv("f_crit end", self%w_0ls_to)
-      call pp%kv("f_foc start", self%w_0tra_from)
-      call pp%kv("f_foc end", self%w_0tra_to)
-      call pp%kv("Wleb switch level", self%wleb_prune_level)
-      if (self%wleb_prune_level > 0) then
-         call pp%kv("Wleb switch from", self%wleb_prune_from)
-         call pp%kv("Wleb switch to", self%wleb_prune_to)
+      if (detailed) then
+         call pp%kv("Projection tol.", self%proj_tol)
+         call pp%kv("Screening threshold", self%screening_threshold)
+         call pp%kv("Weight cutoff", self%wleb_cut)
+         call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
       end if
       call pp%pop()
 
-      call pp%push("Gaussians:")
-      call pp%kv("xi_born", self%iswig_xi_born)
-      call pp%pop()
+      if (detailed) then
+         call pp%push("Switching:")
+         call pp%kv("f_crit start", self%w_0ls_from)
+         call pp%kv("f_crit end", self%w_0ls_to)
+         call pp%kv("f_foc start", self%w_0tra_from)
+         call pp%kv("f_foc end", self%w_0tra_to)
+         call pp%kv("Wleb switch level", self%wleb_prune_level)
+         if (self%wleb_prune_level > 0) then
+            call pp%kv("Wleb switch from", self%wleb_prune_from)
+            call pp%kv("Wleb switch to", self%wleb_prune_to)
+         end if
+         call pp%pop()
 
-      call pp%push("Objective function:")
-      call pp%kv("Alpha", self%phi_alpha)
-      call pp%pop()
+         call pp%push("Gaussians:")
+         call pp%kv("xi_born", self%iswig_xi_born)
+         call pp%pop()
+
+         call pp%push("Objective function:")
+         call pp%kv("Alpha", self%phi_alpha)
+         call pp%pop()
+      end if
 
       call pp%push("Projection settings:")
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
-      call pp%kv("Maximum iterations", self%proj_maxiter)
-      if (self%proj_level >= 9) then
-         call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
-         call pp%kv("Octree box budget", self%octree_max_boxes)
-         call pp%kv("Octree seed mode", self%octree_seed_mode)
+      if (detailed) then
+         call pp%kv("Maximum iterations", self%proj_maxiter)
+         if (self%proj_level >= 9) then
+            call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
+            call pp%kv("Octree box budget", self%octree_max_boxes)
+            call pp%kv("Octree seed mode", self%octree_seed_mode)
+         end if
       end if
       call pp%pop()
 
-      call pp%push("Branching:")
-      call pp%kv("Softmax scale", self%branch_weight_s)
-      call pp%kv("Weight floor", self%branch_weight_floor)
-      call pp%kv("Max. objective excess", self%branch_dphi_max)
-      call pp%pop()
+      if (detailed) then
+         call pp%push("Branching:")
+         call pp%kv("Softmax scale", self%branch_weight_s)
+         call pp%kv("Weight floor", self%branch_weight_floor)
+         call pp%kv("Max. objective excess", self%branch_dphi_max)
+         call pp%pop()
 
-      call pp%push("Screening:")
-      call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
-      call pp%kv("Cell grid fraction", self%cell_grid_fraction)
-      call pp%pop()
+         call pp%push("Screening:")
+         call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
+         call pp%kv("Cell grid fraction", self%cell_grid_fraction)
+         call pp%pop()
+
+         call pp%push("Optional properties:")
+         call pp%kv("Grid point density", self%do_grid_density)
+         call pp%kv("Curvature", self%do_curvature)
+         call pp%kv("Surface normals", self%do_normal)
+         call pp%kv("r_iI distances", self%do_r_iI)
+         call pp%kv("rho displacements", self%do_rho)
+         call pp%pop()
+      end if
+      call pp%blank()
 
    end subroutine print_parameters
 

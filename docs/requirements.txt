@@ -1,5 +1,8 @@
 cffi
 numpy
+# Docutils 0.19 emits unbalanced HTML for bibliography citation containers.
+docutils>=0.20
+sphinx>=7.0.1
 sphinx_book_theme
 sphinx_copybutton
 sphinx_design

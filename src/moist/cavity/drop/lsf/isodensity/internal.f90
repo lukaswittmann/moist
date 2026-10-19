@@ -12,8 +12,11 @@
 !>    S(r) = scale * (rho_iso - rho(r))
 !>
 !> The host code has to provide
-!> - Basis set (once)
-!> - Density matrix (once per SCF step)
+!> - Basis set (once, at construction)
+!> - Density matrix (once per SCF step), as the `density_matrix` answer of the
+!>   build phase, read by `read_build` before the projection
+!> - Nuclear charges of the core fill, as the `nuclear_charges` answer, while
+!>   the fill is on
 !>
 !> The isodensity surface is a level set of the density itself, so the level set
 !> function carries no *explicit* nuclear-position dependence for the cavity
@@ -24,9 +27,13 @@ module moist_cavity_drop_lsf_isodensity_internal
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
-   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
+      isodensity_max_nuclear_charge
+   use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
+      & request_require, moist_phase_build, nuclear_charge_request_type, density_matrix_request_type
    implicit none(type, external)
    private
 
@@ -56,20 +63,19 @@ module moist_cavity_drop_lsf_isodensity_internal
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
-      !> Per-instance scratch AO-derivative table (ncart, 0:nslot-1), sized to the
-      !> highest order this instance has been asked for so far
-      real(wp), allocatable :: phi(:, :)
-      !> Per-instance scratch density-weighted value vector (ncart)
-      real(wp), allocatable :: t0(:)
-      !> Per-instance scratch density-weighted gradient vectors (ncart, 3)
-      real(wp), allocatable :: tm(:, :)
-      !> Per-instance scratch density-weighted Hessian vectors (ncart, 6)
-      real(wp), allocatable :: tmm(:, :)
-      !> Per-instance scratch active-component index list (ncart)
-      integer, allocatable :: act(:)
+      !> Core fill of the ECP nuclei in the bound structure
+      type(moist_iso_core_fill_type) :: core
+      !> Nuclear charges of the host Hamiltonian (nat); unallocated means no ECP nucleus
+      real(wp), allocatable :: z(:)
+      !> Per-instance evaluation scratch, sized on first use
+      type(moist_iso_gto_work_type) :: work
    contains
       procedure, public :: new => lsf_new
       procedure, public :: set_density => lsf_set_density
+      procedure, public :: set_nuclear_charges => lsf_set_nuclear_charges
+      procedure, public :: declare_coupling => lsf_declare_coupling
+      procedure, public :: read_build => lsf_read_build
+      procedure, public :: requires_build_inputs => lsf_requires_build_inputs
       procedure, public :: update => lsf_update
       procedure, public :: prepare => lsf_prepare
       procedure, public :: prepare_subset => lsf_prepare_subset
@@ -85,6 +91,7 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
+      procedure, public :: check_surface => lsf_check_surface
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
@@ -113,28 +120,24 @@ contains
 
       !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
+      self%name = "Isodensity"
 
       self%radius_dependent = .false.
 
-      call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
-      if (allocated(error)) return
-      !> The per-instance scratch is sized from `gto%ncart`, so a re-configured
-      !> basis invalidates it; dropping it here makes `lsf_prepare_impl` size it
-      !> again, while keeping it would let a larger basis write past its end
-      if (allocated(self%phi)) deallocate (self%phi)
-      if (allocated(self%t0)) deallocate (self%t0)
-      if (allocated(self%tm)) deallocate (self%tm)
-      if (allocated(self%tmm)) deallocate (self%tmm)
-      if (allocated(self%act)) deallocate (self%act)
       self%param = moist_cavity_drop_lsf_isodensity_param_type()
       if (present(param)) self%param = param
+      call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error, basis=self%param%basis)
+      if (allocated(error)) return
+      !> Scratch sized for the previous basis; resized on first use
+      self%work = moist_iso_gto_work_type()
    end subroutine lsf_new
 
    !> Install the cartesian-monomial density matrix for the current SCF step
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    dcart Density matrix in the cartesian-monomial basis
-   !> @param[out]   error Set on a size mismatch
+   !> @param[out]   error Set on a size mismatch or, in the spherical
+   !>                     representation, a density outside the spherical subspace
    subroutine lsf_set_density(self, dcart, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: dcart(:, :)
@@ -142,6 +145,85 @@ contains
 
       call self%gto%set_density(dcart, error)
    end subroutine lsf_set_density
+
+   !> Declare the build-phase requests at the cavity scope
+   !>
+   !> - `density_matrix`, required: the density this level set is built from
+   !> - `nuclear_charges`, required while the core fill is on
+   !>
+   !> @param[in]    self     LSF instance
+   !> @param[inout] coupling Coupling being declared
+   !> @param[out]   error    Error handling
+   subroutine lsf_declare_coupling(self, coupling, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      type(coupling_type), intent(inout) :: coupling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(density_matrix_request_type) :: density
+      type(nuclear_charge_request_type) :: charges
+
+      ! The density matrix runs over the cartesian-monomial basis
+      density%nbasis = self%gto%ncart
+      call request_require(density, moist_phase_build, "dcart", error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "density_matrix", density, error)
+      if (allocated(error)) return
+      call request_require(charges, moist_phase_build, "z", self%param%fills_core(), error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "nuclear_charges", charges, error)
+   end subroutine lsf_declare_coupling
+
+   !> Read the density matrix and, with the core fill on, the nuclear charges
+   !>
+   !> @param[inout] self     LSF instance
+   !> @param[in]    coupling Cavity-scoped view of the build phase
+   !> @param[in]    mol      Structure of the cavity's latest update
+   !> @param[out]   error    Missing answer, a density the basis rejects or a
+   !>                        charge outside (0, Z]
+   subroutine lsf_read_build(self, coupling, mol, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      type(structure_type), intent(in) :: mol
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: dcart(:, :), z(:)
+
+      call coupling%read("density_matrix", "dcart", dcart, error)
+      if (allocated(error)) return
+      call self%set_density(dcart, error)
+      if (allocated(error)) return
+      if (.not. self%param%fills_core()) return
+      call coupling%read("nuclear_charges", "z", z, error)
+      if (allocated(error)) return
+      call iso_check_nuclear_charges(mol, z, error)
+      if (allocated(error)) return
+      call self%set_nuclear_charges(z)
+   end subroutine lsf_read_build
+
+   !> Whether the projection waits for build-phase answers
+   !>
+   !> The density matrix, always
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_requires_build_inputs(self) result(requires)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      logical :: requires
+
+      requires = .true.
+   end function lsf_requires_build_inputs
+
+   !> Store the nuclear charges of the host Hamiltonian for the core fill
+   !>
+   !> Read by the next `update`; atoms with `z < Z` are ECP nuclei
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    z    Nuclear charges (nat)
+   subroutine lsf_set_nuclear_charges(self, z)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
+      real(wp), intent(in) :: z(:)
+
+      self%z = z
+   end subroutine lsf_set_nuclear_charges
 
    !> Bind molecular geometry and refresh the shell centers
    !>
@@ -157,10 +239,8 @@ contains
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
-      self%zmax = 0.0_wp
-      if (allocated(mol%num)) then
-         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
-      end if
+      self%zmax = isodensity_max_nuclear_charge(mol)
+      call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
@@ -173,7 +253,7 @@ contains
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
-      call lsf_prepare_impl(self, point)
+      call lsf_prepare_impl(self, point, error)
    end subroutine lsf_prepare
 
    !> Shared prepare body: evaluate the level set at `point` and cache it
@@ -182,45 +262,36 @@ contains
    !>
    !> @param[inout] self       LSF instance
    !> @param[in]    point      Evaluation point in Bohr
+   !> @param[out]   error      Set when the point lies in an ECP core fill outside the cavity
    !> @param[in]    cand_atoms Optional candidate owner-atom list
-   subroutine lsf_prepare_impl(self, point, cand_atoms)
+   subroutine lsf_prepare_impl(self, point, error, cand_atoms)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
+      type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: cand_atoms(:)
 
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       real(wp) :: d4rho(ndim, ndim, ndim, ndim)
-      integer :: nderiv, nslot
+      integer :: nderiv, inside
 
       nderiv = min(max(self%max_deriv, 1), 4)
-      nslot = moist_iso_gto_nslot(nderiv)
-
-      if (.not. allocated(self%phi)) then
-         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
-         allocate (self%t0(self%gto%ncart))
-         allocate (self%tm(self%gto%ncart, 3))
-         allocate (self%act(self%gto%ncart))
-      else if (size(self%phi, 2) < nslot) then
-         deallocate (self%phi)
-         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
-      end if
-      if (nderiv >= 4 .and. .not. allocated(self%tmm)) allocate (self%tmm(self%gto%ncart, 6))
 
       select case (nderiv)
       case (:1)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, cand_atoms=cand_atoms)
       case (2)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
       case (3)
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                            cand_atoms=cand_atoms)
       case default
-         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
-                            rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms, &
-                            d4rho=d4rho, tmm=self%tmm)
+         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                            cand_atoms=cand_atoms, d4rho=d4rho)
       end select
+      ! Every candidate list holds the shells of a point's nearby nuclei, so the
+      ! fill is added whatever the screening
+      call self%core%add(point, nderiv, rho, drho, d2rho, d3rho, d4rho, inside)
+      call self%core%check(inside, rho, error)
 
       self%point = point
 
@@ -251,7 +322,7 @@ contains
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
 
-      call lsf_prepare_impl(self, point, cand_atoms=candidate_indices)
+      call lsf_prepare_impl(self, point, error, cand_atoms=candidate_indices)
    end subroutine lsf_prepare_subset
 
    !> Record requested derivative order
@@ -432,7 +503,7 @@ contains
       !> Surface-free radius
       real(wp) :: r
 
-      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0, self%core%log_grad_bound())
    end function lsf_exclusion_radius
 
    !> Chain-rule factor between the level set and the density it is built from
@@ -455,5 +526,20 @@ contains
       factor = -self%param%scale
       available = .true.
    end function lsf_density_adjoint_factor
+
+   !> Reject projected surface points inside an ECP core fill
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  xyz       Cavity points in Bohr (3, n)
+   !> @param[in]  projected Whether each point is a converged surface projection (n)
+   !> @param[out] error     Set at the first projected point inside a fill ball
+   subroutine lsf_check_surface(self, xyz, projected, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      real(wp), intent(in) :: xyz(:, :)
+      logical, intent(in) :: projected(:)
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%core%check_surface(xyz, projected, error)
+   end subroutine lsf_check_surface
 
 end module moist_cavity_drop_lsf_isodensity_internal

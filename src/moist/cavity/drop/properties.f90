@@ -36,7 +36,9 @@ contains
       real(wp) :: xi, yi, zi, xj, yj, zj, dx, dy, dz
       real(wp) :: kval
       type(smoothing_kernel_wendland_type) :: kernel
+      integer :: nthreads
 
+      nthreads = self%ctx%get_num_threads()
       ! Allocate output arrays
       if (allocated(self%rho_grid)) deallocate (self%rho_grid)
       allocate (self%rho_grid(self%ngrid), source=0.0_wp)
@@ -62,7 +64,7 @@ contains
       ! simply accumulate all neighbour contributions into each point
       ! Self-contribution (diagonal) is added separately
 
-      !$omp parallel do default(shared) &
+      !$omp parallel do num_threads(nthreads) default(shared) &
       !$omp& private(igrid, jj, jgrid, xi, yi, zi, dx, dy, dz, d2, d, kval) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
@@ -101,7 +103,7 @@ contains
 
       ! Evaluate the anchor density at each active point against the complete
       ! (unfiltered) Lebedev grid of its owner sphere
-      !$omp parallel do default(shared) &
+      !$omp parallel do num_threads(nthreads) default(shared) &
       !$omp& private(igrid, isph, jj, xi, yi, zi, xj, yj, zj, &
       !$omp&   dx, dy, dz, d2, d, kval) &
       !$omp& schedule(dynamic)
@@ -128,7 +130,7 @@ contains
                d = sqrt(d2)
                kval = kernel%f0(d)
                self%rho_grid_anchor(igrid) = self%rho_grid_anchor(igrid) &
-                                             + kval*self%ang_weight(jj)*(4.0_wp*pi)
+                                             + kval*self%ang_weight(jj)
             end if
          end do
       end do
@@ -141,6 +143,7 @@ contains
       block
          logical, allocatable :: mask(:)
          integer :: n_small_density
+         character(len=256) :: report
 
          allocate (mask(self%ngrid))
          mask = self%rho_grid(1:self%ngrid) < 1.0e-10_wp
@@ -150,11 +153,11 @@ contains
             self%rho_grid = self%rho_grid_anchor
          end where
 
-         if ((n_small_density > 0) .and. (self%ctx%verbosity >= 1)) then
-            write (self%ctx%unit, "(A, I0, A)") &
-               "Warning: ", n_small_density, &
+         if (n_small_density > 0) then
+            write (report, "(i0,a)") n_small_density, &
                " grid points have very small soft densities. "// &
                "Using hard sphere density for these points. Results may be unreliable."
+            call self%ctx%warning(trim(report))
          end if
 
       end block
@@ -179,7 +182,12 @@ contains
       integer :: i, isph
       real(wp) :: area_i, volume_i
       real(wp), allocatable :: asph_local(:), vsph_local(:)
+      integer :: nthreads
+      !> Volume origin moving with the molecule
+      real(wp) :: origin(3)
 
+      nthreads = self%ctx%get_num_threads()
+      origin = self%get_volume_origin()
       if (allocated(self%a)) deallocate (self%a)
       allocate (self%a(self%ngrid), source=0.0_wp)
       if (allocated(self%asph)) deallocate (self%asph)
@@ -191,7 +199,7 @@ contains
       allocate (self%vsph(self%nsph), source=0.0_wp)
       if (.not. allocated(self%total_volume)) allocate (self%total_volume)
 
-      !$omp parallel default(shared) private(i, isph, area_i, volume_i, asph_local, vsph_local)
+      !$omp parallel num_threads(nthreads) default(shared) private(i, isph, area_i, volume_i, asph_local, vsph_local)
       allocate (asph_local(self%nsph), source=0.0_wp)
       allocate (vsph_local(self%nsph), source=0.0_wp)
 
@@ -205,7 +213,7 @@ contains
 
          ! Compute volume element using divergence theorem
          volume_i = 1.0_wp/3.0_wp*area_i &
-                    *dot_product(self%xyz(:, i), self%normal0(:, i))
+                    *dot_product(self%xyz(:, i) - origin, self%normal0(:, i))
          self%v(i) = volume_i
 
          ! Accumulate per sphere in thread-local buffers
@@ -679,7 +687,7 @@ contains
             end if
             call pp%pop()
 
-            if (self%ctx%verbosity >= 3) then
+            if (self%ctx%verbosity(3)) then
                if (npatch > 0) then
                   call pp%blank()
                   call pp%push("Per-patch curvatures")

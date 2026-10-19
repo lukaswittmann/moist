@@ -24,7 +24,8 @@ contains
                   new_unittest("rot_z_to_y", test_rot_z_to_y), &
                   new_unittest("rot_z_to_arbitrary", test_rot_z_to_arbitrary), &
                   new_unittest("rot_orthogonality", test_rot_orthogonality), &
-                  new_unittest("rot_determinant", test_rot_determinant) &
+                  new_unittest("rot_determinant", test_rot_determinant), &
+                  new_unittest("rot_unit_vector_properties", test_rot_unit_vector_properties) &
                   ]
    end subroutine collect_math_trig
 
@@ -155,5 +156,46 @@ contains
 
       call check(error, abs(det - 1.0_wp) < thr, "Determinant should be +1")
    end subroutine test_rot_determinant
+
+   !> Check proper rotations for signed axes, quadrants, and both pole branches
+   subroutine test_rot_unit_vector_properties(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: directions(3, 12), n(3), R(3, 3), RtR(3, 3), identity(3, 3)
+      real(wp) :: det, mapping_tol
+      integer :: k
+
+      directions(:, 1) = [0.0_wp, 0.0_wp, 1.0_wp]
+      directions(:, 2) = [0.0_wp, 0.0_wp, -1.0_wp]
+      directions(:, 3) = [-1.0_wp, 0.0_wp, 0.0_wp]
+      directions(:, 4) = [0.0_wp, -1.0_wp, 0.0_wp]
+      directions(:, 5) = [-1.0_wp, 2.0_wp, 3.0_wp]
+      directions(:, 6) = [1.0_wp, -2.0_wp, -3.0_wp]
+      directions(:, 7) = [-1.0_wp, -2.0_wp, -3.0_wp]
+      directions(:, 8) = [1.0_wp, 2.0_wp, -3.0_wp]
+      directions(:, 9) = [0.001_wp, -0.002_wp, 1.0_wp]
+      directions(:, 10) = [-0.001_wp, 0.002_wp, -1.0_wp]
+      directions(:, 11) = [1.0e-8_wp, -2.0e-8_wp, 1.0_wp]
+      directions(:, 12) = [-1.0e-8_wp, 2.0e-8_wp, -1.0_wp]
+      identity = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, &
+                          0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+      do k = 1, size(directions, 2)
+         n = directions(:, k)/norm2(directions(:, k))
+         call rotation_z_to_n(n, R)
+         mapping_tol = thr
+         ! Pole fallback permits transverse error up to sqrt(2*1e-14)
+         if (abs(n(3)) > 1.0_wp - 1.0e-14_wp) mapping_tol = 2.0e-7_wp
+         call check(error, maxval(abs(R(:, 3) - n)) < mapping_tol, "Rotation must map z to target")
+         if (allocated(error)) return
+         RtR = matmul(transpose(R), R)
+         call check(error, maxval(abs(RtR - identity)) < thr, "Rotation must preserve lengths and angles")
+         if (allocated(error)) return
+         det = R(1, 1)*(R(2, 2)*R(3, 3) - R(2, 3)*R(3, 2)) &
+               - R(1, 2)*(R(2, 1)*R(3, 3) - R(2, 3)*R(3, 1)) &
+               + R(1, 3)*(R(2, 1)*R(3, 2) - R(2, 2)*R(3, 1))
+         call check(error, abs(det - 1.0_wp) < thr, "Rotation must preserve handedness")
+         if (allocated(error)) return
+      end do
+   end subroutine test_rot_unit_vector_properties
 
 end module test_math_trig

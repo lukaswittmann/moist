@@ -1,9 +1,9 @@
-subdir('component')
-subdir('gems')
+subdir('continuum')
+subdir('moz')
 
 srcs += files(
   'parameters.f90',
   'type.f90',
-  'general.f90',
-  'component.f90',
+  'continuum.f90',
+  'moz.f90',
 )

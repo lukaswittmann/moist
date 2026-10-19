@@ -1,7 +1,7 @@
 !> Test suite for the timer
 module test_utils_timer
-   use mctc_env, only: wp
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use mctc_env, only: wp, i8
+   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
    use moist_utils_timer, only: timer_type, cat_setup, cat_gradient
    implicit none(type, external)
@@ -27,7 +27,13 @@ contains
          new_unittest("double_start_poisons", test_double_start_poisons), &
          new_unittest("stale_handle_safe", test_stale_handle_safe), &
          new_unittest("unwind_to_depth", test_unwind_to_depth), &
-         new_unittest("reset_and_inactive", test_reset_and_inactive) &
+         new_unittest("reset_and_inactive", test_reset_and_inactive), &
+         new_unittest("seconds_scale", test_seconds_scale), &
+         new_unittest("growth_preserves_tree", test_growth_preserves_tree), &
+         new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
+         new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts), &
+         new_unittest("simple_report", test_simple_report), &
+         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers) &
          ]
 
    end subroutine collect_utils_timer
@@ -69,6 +75,13 @@ contains
       end do
       call t%stop()
       t_five = t%get("many/inner")
+      ! A subsequent short interval cannot erase previously accumulated time
+      call t%start("many")
+      call t%start("inner")
+      call t%stop()
+      call t%stop()
+      call check(error, t%get("many/inner") >= t_five, "re-entry preserves all previous intervals")
+      if (allocated(error)) return
 
       call check(error, t_once > 0.0_wp, "single interval must accrue time")
       if (allocated(error)) return
@@ -379,5 +392,294 @@ contains
       call t%start("noop")
       call t%stop()
    end subroutine test_reset_and_inactive
+
+   !> Seconds agree with independent enclosing and enclosed wall-clock intervals
+   subroutine test_seconds_scale(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer(i8) :: before_new, after_new, before_start, after_start, before_stop, after_stop
+      integer(i8) :: before_get, after_get, rate, tick
+      real(wp) :: seconds, lower, upper
+
+      call system_clock(before_new, rate)
+      ! Without a clock there is nothing to measure, and the polling loop below
+      ! would never exit
+      if (rate <= 0) then
+         call skip_test(error, "system clock reports no count rate")
+         return
+      end if
+      call t%new()
+      call system_clock(after_new)
+      call system_clock(before_start)
+      call t%start("measured")
+      call system_clock(after_start)
+      ! Independent clock polling guarantees a measurable interval even at -O2
+      do
+         call system_clock(tick)
+         if (real(tick - after_start, wp)/real(rate, wp) >= 0.02_wp) exit
+      end do
+      call system_clock(before_stop)
+      call t%stop()
+      call system_clock(after_stop)
+      seconds = t%get("measured")
+      lower = real(before_stop - after_start, wp)/real(rate, wp)
+      upper = real(after_stop - before_start, wp)/real(rate, wp)
+      call check(error, seconds >= 0.5_wp*lower .and. seconds <= 2.0_wp*upper, &
+                 "node seconds must use clock rate")
+      if (allocated(error)) return
+      call system_clock(before_get)
+      seconds = t%get()
+      call system_clock(after_get)
+      lower = real(before_get - after_new, wp)/real(rate, wp)
+      upper = real(after_get - before_new, wp)/real(rate, wp)
+      call check(error, seconds >= 0.5_wp*lower .and. seconds <= 2.0_wp*upper, &
+                 "total seconds must use clock rate")
+      call t%delete()
+   end subroutine test_seconds_scale
+
+   !> Growing the registry, hash table and nesting stack preserves existing nodes
+   subroutine test_growth_preserves_tree(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: i, h, saved, ids(80)
+      character(len=16) :: name
+      real(wp) :: saved_time
+
+      call t%new()
+      call t%start("saved")
+      call busy()
+      call t%stop()
+      saved = t%resolve("saved", 0)
+      saved_time = t%node_time(saved)
+      do i = 1, 80
+         write (name, "(a,i0)") "node", i
+         call t%start(trim(name))
+         ids(i) = t%current()
+      end do
+      call check(error, t%current_depth() == 80, "deep stack grows")
+      if (allocated(error)) return
+      do i = 80, 1, -1
+         write (name, "(a,i0)") "node", i
+         call check(error, t%current() == ids(i), "stack retains open handles across growth")
+         if (allocated(error)) return
+         call check(error, t%node_name(ids(i)) == trim(name), "names survive node growth")
+         if (allocated(error)) return
+         call check(error, t%node_depth(ids(i)) == i - 1, "parents survive node growth")
+         if (allocated(error)) return
+         if (i == 1) then
+            h = t%resolve(trim(name), 0)
+         else
+            h = t%resolve(trim(name), ids(max(1, i - 1)))
+         end if
+         call check(error, h == ids(i), "rehashing retains existing name-parent pairs")
+         if (allocated(error)) return
+         call t%stop()
+      end do
+      call check(error, t%num_nodes() == 81, "resolving grown tree creates no duplicates")
+      if (allocated(error)) return
+      call check(error, t%node_time(saved) == saved_time, "accumulated ticks survive growth")
+      call t%delete()
+   end subroutine test_growth_preserves_tree
+
+   !> Reset closes open frames and clears persistent imbalance while preserving handles
+   subroutine test_reset_open_and_poisoned(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: h
+
+      call t%new()
+      h = t%resolve("poisoned", 0)
+      call t%stop(h)
+      call check(error, ieee_is_nan(t%node_time(h)), "stop without start poisons node")
+      if (allocated(error)) return
+      call t%start("open")
+      call t%reset()
+      call check(error, t%num_nodes() == 2, "reset preserves registered tree")
+      if (allocated(error)) return
+      call check(error, t%current_depth() == 0 .and. t%current() == 0, "reset empties stack")
+      if (allocated(error)) return
+      call check(error, t%get("open") == 0.0_wp, "reset closes open timers")
+      if (allocated(error)) return
+      call check(error, t%node_time(h) == 0.0_wp, "reset clears poisoning")
+      if (allocated(error)) return
+      call t%start(h)
+      call busy()
+      call t%stop(h)
+      ! >= 0, not > 0: one busy() may not advance a coarse clock; poisoning gives NaN
+      call check(error, t%node_time(h) >= 0.0_wp, "handle remains usable after reset")
+      if (allocated(error)) return
+      call t%new()
+      call check(error, t%num_nodes() == 0 .and. t%current_depth() == 0, "new clears previous tree")
+      call t%delete()
+   end subroutine test_reset_open_and_poisoned
+
+   !> Handles distinguish equal leaf names and named mismatch restores the stack
+   subroutine test_handle_and_mismatch_contracts(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: a, b, ha, hb, i, parents(80), leaves(80)
+      character(len=16) :: name
+
+      call t%new()
+      ! Many distinct pairs exercise probing collisions without assuming slot layout
+      do i = 1, 80
+         write (name, "(a,i0)") "parent", i
+         parents(i) = t%resolve(trim(name), 0)
+      end do
+      do i = 1, 80
+         leaves(i) = t%resolve("same_leaf", parents(i))
+         call check(error, count(leaves(1:i) == leaves(i)) == 1, "parent identity survives hash probing")
+         if (allocated(error)) return
+      end do
+      a = t%resolve("A", 0)
+      b = t%resolve("B", 0)
+      ha = t%resolve("leaf", a)
+      hb = t%resolve("leaf", b)
+      call check(error, ha /= hb, "equal names under distinct parents have distinct handles")
+      if (allocated(error)) return
+      call t%start(ha)
+      call busy()
+      call t%stop(ha)
+      call check(error, t%get("B/leaf") == 0.0_wp, "path lookup observes parent identity")
+      if (allocated(error)) return
+      call check(error, t%current_depth() == 0, "handle start and stop do not push frames")
+      if (allocated(error)) return
+      call t%start("outer")
+      call t%start("inner")
+      call t%stop("absent")
+      call check(error, t%current_depth() == 2, "unknown stop name preserves open stack")
+      if (allocated(error)) return
+      call t%stop("outer")
+      call check(error, t%current_depth() == 0 .and. t%current() == 0, "mismatch empties skipped stack")
+      if (allocated(error)) return
+      call t%stop()
+      call check(error, t%current_depth() == 0, "stop on empty stack keeps it empty")
+      if (allocated(error)) return
+      call check(error, .not. ieee_is_nan(t%get("outer")), "stop on empty stack is a no-op")
+      call t%delete()
+   end subroutine test_handle_and_mismatch_contracts
+
+   !> The simple report shows levels 0-2 and the wall time, without the full
+   !> report's shares, category pivot or CPU time; the full report of the same
+   !> tree is the positive control
+   subroutine test_simple_report(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      character(len=*), parameter :: markers(*) = [character(len=12) :: &
+         "lvl0_root", "lvl1_child", "lvl2_grand", "lvl3_deep", &
+         "Wall time", "%tot", "by category", "CPU-time"]
+      logical :: found(size(markers))
+
+      call t%new(verbose=.true.)
+      call t%start("lvl0_root", category=cat_setup)
+      call t%start("lvl1_child")
+      call t%start("lvl2_grand")
+      call t%start("lvl3_deep")
+      call busy()
+      call t%stop()
+      call t%stop()
+      call t%stop()
+      call t%stop()
+
+      call scan_report(t, .true., markers, found, error)
+      if (allocated(error)) return
+      call check(error, all(found(1:3)) .and. .not. found(4), "simple report shows levels 0-2 only")
+      if (allocated(error)) return
+      call check(error, found(5), "simple report closes with the wall time")
+      if (allocated(error)) return
+      call check(error, .not. any(found(6:8)), "simple report has no shares, categories or CPU time")
+      if (allocated(error)) return
+
+      call scan_report(t, .true., markers, found, error, max_depth=huge(1))
+      if (allocated(error)) return
+      call check(error, found(3) .and. .not. found(4), "simple report caps a deeper request at level 2")
+      if (allocated(error)) return
+
+      call scan_report(t, .true., markers, found, error, max_depth=1)
+      if (allocated(error)) return
+      call check(error, found(2) .and. .not. found(3), "simple report honours a shallower request")
+      if (allocated(error)) return
+
+      call scan_report(t, .false., markers, found, error)
+      if (allocated(error)) return
+      call check(error, found(4) .and. all(found(6:8)), &
+                 "full report shows level 3, shares, categories and CPU time")
+      call t%delete()
+   end subroutine test_simple_report
+
+   !> Both reports show a timer that is still open as running, without a NaN in
+   !> the tree or the category pivot, and leave it measuring: after its stop it
+   !> reads a finite time
+   subroutine test_report_leaves_open_timers(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      character(len=*), parameter :: markers(*) = [character(len=12) :: &
+         "running", "NaN", "by category"]
+      logical :: found(size(markers))
+
+      call t%new(verbose=.true.)
+      call t%start("closed", category=cat_setup)
+      call busy()
+      call t%stop()
+      call t%start("open", category=cat_gradient)
+      call t%start("inner")
+      call busy()
+
+      call scan_report(t, .false., markers, found, error)
+      if (allocated(error)) return
+      call check(error, found(1) .and. .not. found(2), "full report shows open timers as running")
+      if (allocated(error)) return
+      call check(error, found(3), "full report keeps the pivot of the closed timers")
+      if (allocated(error)) return
+      call scan_report(t, .true., markers, found, error)
+      if (allocated(error)) return
+      call check(error, found(1) .and. .not. found(2), "simple report shows open timers as running")
+      if (allocated(error)) return
+
+      call t%stop("inner")
+      call t%stop("open")
+      call check(error, .not. ieee_is_nan(t%get("open")), "a report leaves an open timer measuring")
+      if (allocated(error)) return
+      call check(error, .not. ieee_is_nan(t%get("open/inner")), "a report leaves a nested open timer measuring")
+      call t%delete()
+   end subroutine test_report_leaves_open_timers
+
+   !> Write a report of `t` to a scratch unit and report which markers appear
+   !>
+   !> @param[inout] t          timer to report
+   !> @param[in]    simple     write the simple report instead of the full one
+   !> @param[in]    markers    substrings to look for
+   !> @param[out]   found      whether each marker appears in the report
+   !> @param[out]   error      scratch-unit failure
+   !> @param[in]    max_depth  optional depth passed to the report
+   subroutine scan_report(t, simple, markers, found, error, max_depth)
+      type(timer_type), intent(inout) :: t
+      logical, intent(in) :: simple
+      character(len=*), intent(in) :: markers(:)
+      logical, intent(out) :: found(:)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: max_depth
+      integer :: iu, stat, k
+      character(256) :: line
+
+      found = .false.
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the timer report opens")
+      if (allocated(error)) return
+      if (simple) then
+         call t%write_simple(iu, max_depth=max_depth)
+      else
+         call t%write(iu, max_depth=max_depth)
+      end if
+      rewind (iu)
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         do k = 1, size(markers)
+            found(k) = found(k) .or. index(line, trim(markers(k))) > 0
+         end do
+      end do
+      close (iu)
+   end subroutine scan_report
 
 end module test_utils_timer

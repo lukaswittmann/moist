@@ -1,4 +1,4 @@
 [wrap-git]
 directory = fclap
 url = https://github.com/chselz/fclap
-revision = head
+revision = v0.1.0

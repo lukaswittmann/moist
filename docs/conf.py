@@ -29,10 +29,15 @@ bibtex_bibfiles = ["_static/references.bib"]
 
 html_theme = "sphinx_book_theme"
 html_title = project
-html_logo = "_static/moist.svg"
+html_logo = "_static/logos/moist-light.svg"
 html_favicon = html_logo
 
 html_theme_options = {
+    "logo": {
+        "image_light": "_static/logos/moist-light.svg",
+        "image_dark": "_static/logos/moist-dark.svg",
+        "alt_text": "MOIST",
+    },
     "repository_url": "https://github.com/lukaswittmann/moist",
     "repository_branch": "main",
     "use_repository_button": True,
@@ -46,6 +51,7 @@ html_sidebars = {}
 
 html_static_path = ["_static"]
 templates_path = ["_templates"]
+exclude_patterns = ["_build"]
 
 autodoc_typehints = "none"
 autodoc_mock_imports = ["moist.library", "numpy", "ase", "pyscf"]

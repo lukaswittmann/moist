@@ -1,7 +1,7 @@
 !> Unit tests for the CPCM solvation model component
 module test_model_component_pcm_cpcm
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use test_helpers, only: component_view
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -9,13 +9,14 @@ module test_model_component_pcm_cpcm
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
+   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type, &
+      & nuclear_charge_request_type
    use moist_channels_response, only: response_type
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, new_component_cosmo
-   use moist_model_component_pcm_solvers, only: solve_pcm_lu
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop_lsf_isodensity_internal, only: &
@@ -40,7 +41,8 @@ module test_model_component_pcm_cpcm
    public :: collect_model_component_pcm_cpcm
 
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
-   real(wp), parameter :: thr2 = sqrt(epsilon(1.0_wp))
+   !> Absolute tolerance for charge and energy identities
+   real(wp), parameter :: thr2 = 1.0e-12_wp
 
    !> Host surface potential driving the surface-weight test
    real(wp), parameter :: sw_phi(ngrid_sw) = [-0.31_wp, 0.22_wp, -0.17_wp, 0.41_wp, &
@@ -75,6 +77,7 @@ contains
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
          & new_unittest("cpcm_molecular_surface_weights", test_cpcm_molecular_surface_weights), &
          & new_unittest("cpcm_nuclear_gradient", test_cpcm_nuclear_gradient), &
+         & new_unittest("cpcm_nuclear_gradient_ecp", test_cpcm_nuclear_gradient_ecp), &
          & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
@@ -92,7 +95,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       class(radius_type), allocatable :: radius_model
@@ -109,7 +112,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -124,8 +127,8 @@ contains
       e_ref = -0.5_wp*(epsilon - 1.0_wp)/epsilon/rad
 
       do ileb = 1, size(nlebs)
-         call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(ileb)))
+         call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(ileb)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "Cavity initialization failed: "//err%message)
             return
@@ -136,8 +139,8 @@ contains
             return
          end if
 
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -213,7 +216,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -231,7 +234,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
       solvers = [solver_type%inversion, solver_type%lu, &
@@ -244,8 +247,8 @@ contains
 
       ! Build cavity
       call new_cosmo_radii(radius_model)
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=50))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity initialization failed: "//err%message)
          return
@@ -261,16 +264,16 @@ contains
 
       ! Test all 4 solvers
       do i = 1, 4
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
          end if
 
          ! Tighten CG tolerance
-         pcm_model%solver_tol = 1.0e-14_wp
-         pcm_model%solver_maxiter = 10000
+         pcm_model%param%solver_tol = 1.0e-14_wp
+         pcm_model%param%solver_maxiter = 10000
 
          call pcm_model%update(mol, cavity, err)
          if (allocated(err)) then
@@ -318,7 +321,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -333,7 +336,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       solvers = [solver_type%inversion, solver_type%lu, &
                  solver_type%cholesky, solver_type%iterative]
@@ -348,8 +351,8 @@ contains
       end if
 
       do i = 1, 4
-         call new_component_cpcm(pcm_model, ctx, epsilon=1.0_wp, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)))
+         call new_component_cpcm(pcm_model, epsilon=1.0_wp, error=err, &
+            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
@@ -390,7 +393,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
+      type(model_continuum_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       !> Coupling carrying the point-charge trace, and one whose potential
       !> request is answered directly with the array read back from it
@@ -405,7 +408,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -414,8 +417,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_internal, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_internal, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Internal CPCM initialization failed: "//err%message)
          return
@@ -439,8 +442,8 @@ contains
       allocate (phi_ref, source=pcm_internal%phi)
       allocate (q_ref, source=pcm_internal%q)
 
-      call new_component_cpcm(pcm_external, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_external, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "External-potential CPCM initialization failed: "//err%message)
          return
@@ -491,7 +494,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Never built: declares no potential request at all
       type(coupling_type) :: coupling
@@ -503,7 +506,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -512,8 +515,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -556,7 +559,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
+      type(model_continuum_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -569,7 +572,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -578,8 +581,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_internal, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_internal, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Internal CPCM initialization failed: "//err%message)
          return
@@ -603,8 +606,8 @@ contains
       allocate (amat_ref, source=pcm_internal%amat)
       allocate (q_ref, source=pcm_internal%q)
 
-      call new_component_cpcm(pcm_external, ctx, epsilon=78.4_wp, external_matrix=amat_ref, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_external, epsilon=78.4_wp, external_matrix=amat_ref, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "External-matrix CPCM initialization failed: "//err%message)
          return
@@ -641,7 +644,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(coupling_type) :: coupling
       !> Never updated; only its (empty) grid data reach the component
       type(cavity_type_iswig) :: cavity
@@ -650,10 +653,10 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! No coupling is built either: the missing matrix must be reported first
-      call new_component_cpcm(pcm_model, ctx, 78.4_wp, error=err)
+      call new_component_cpcm(pcm_model, 78.4_wp, error=err, ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -675,7 +678,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -687,7 +690,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -696,8 +699,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=-1))
+      call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=-1), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization unexpectedly failed: "//err%message)
          return
@@ -729,7 +732,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -743,7 +746,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -758,8 +761,8 @@ contains
          bad_amat(i, i) = -1.0_wp
       end do
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, external_matrix=bad_amat, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%iterative))
+      call new_component_cpcm(pcm_model, epsilon=78.4_wp, external_matrix=bad_amat, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%iterative), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -789,7 +792,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_reused, pcm_fresh
+      type(model_continuum_component_cpcm) :: pcm_reused, pcm_fresh
       type(cavity_type_iswig) :: cavity_small, cavity_large
       !> One potential trace per cavity grid
       type(coupling_type) :: coupling_small, coupling_large
@@ -802,7 +805,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_small, cavity_small, err)
@@ -816,8 +819,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_reused, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_reused, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Reused CPCM initialization failed: "//err%message)
          return
@@ -862,8 +865,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_fresh, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_fresh, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -904,7 +907,7 @@ contains
       !> Molecular structure
       type(structure_type) :: mol
       !> Component under test
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       !> Two cavities of the same molecule on different Lebedev grids
       type(cavity_type_iswig) :: cavity_small, cavity_large
       !> One potential trace per cavity grid
@@ -925,7 +928,7 @@ contains
       !> Run context owned here and borrowed by the cavities and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_small, cavity_small, err)
@@ -942,8 +945,8 @@ contains
          & more="both cavities have the same grid size, the test is vacuous")
       if (allocated(error)) return
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1020,7 +1023,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -1035,7 +1038,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=2)
+      call new_context(ctx, nthreads=0, verbosity=2)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -1044,8 +1047,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1125,7 +1128,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model, pcm_fresh
+      type(model_continuum_component_cpcm) :: pcm_model, pcm_fresh
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
@@ -1141,7 +1144,7 @@ contains
       !> Run context owned here and borrowed by the cavity and components
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -1150,8 +1153,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1221,8 +1224,8 @@ contains
       if (allocated(error)) return
 
       ! Same statement against an independently constructed model
-      call new_component_cpcm(pcm_fresh, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_fresh, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -1272,7 +1275,7 @@ contains
       !> System name for error messages
       character(len=*), intent(in) :: system_name
 
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1284,7 +1287,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
       solvers = [solver_type%inversion, solver_type%lu, &
@@ -1294,8 +1297,8 @@ contains
 
       ! Build cavity and point-charge potential trace
       call new_cosmo_radii(radius_model)
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=50))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity initialization failed: "//err%message)
          return
@@ -1308,8 +1311,8 @@ contains
 
       ! Test all 4 solvers
       do i = 1, 4
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solvers(i)))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solvers(i)), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed for "// &
                              trim(solver_names(i))//" solver")
@@ -1317,8 +1320,8 @@ contains
          end if
 
          ! Set CG tolerance
-         pcm_model%solver_tol = 1.0e-14_wp
-         pcm_model%solver_maxiter = 10000
+         pcm_model%param%solver_tol = 1.0e-14_wp
+         pcm_model%param%solver_maxiter = 10000
 
          call pcm_model%update(mol, cavity, err)
          if (allocated(err)) then
@@ -1365,7 +1368,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1384,7 +1387,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Print header
       print "(a)", ""
@@ -1418,8 +1421,8 @@ contains
 
          ! Build cavity
          call new_cosmo_radii(radius_model)
-         call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-            param=moist_cavity_iswig_parameters_type(num_leb=50))
+         call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+            param=moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "Cavity initialization failed: "//err%message)
             return
@@ -1431,8 +1434,8 @@ contains
          end if
          ! One coupling per cavity, staged with a throwaway component; the
          ! timed components below share it
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%lu))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (staging)")
             return
@@ -1442,8 +1445,8 @@ contains
 
          ! ===== Time LU solver (reference) =====
          call system_clock(t1)
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%lu))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (lu)")
             return
@@ -1467,8 +1470,8 @@ contains
 
          ! ===== Time Cholesky solver =====
          call system_clock(t1)
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (cholesky)")
             return
@@ -1492,8 +1495,8 @@ contains
 
          ! ===== Time iterative solver =====
          call system_clock(t1)
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%iterative))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%iterative), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (iterative)")
             return
@@ -1517,8 +1520,8 @@ contains
 
          ! ===== Time inversion solver =====
          call system_clock(t1)
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%inversion))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%inversion), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (inversion)")
             return
@@ -1581,8 +1584,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(solvation_model_component_cpcm) :: pcm_model
-      type(solvation_model_component_cosmo) :: cosmo_model
+      type(model_continuum_component_cpcm) :: pcm_model
+      type(model_continuum_component_cosmo) :: cosmo_model
       !> Dielectric constants that must be rejected
       real(wp), parameter :: bad_epsilon(*) = [0.0_wp, 0.5_wp, -1.0_wp]
       !> Index over the rejected dielectric constants
@@ -1591,10 +1594,10 @@ contains
       !> Run context owned here and borrowed by the components
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       do ieps = 1, size(bad_epsilon)
-         call new_component_cpcm(pcm_model, ctx, bad_epsilon(ieps), error=err)
+         call new_component_cpcm(pcm_model, bad_epsilon(ieps), error=err, ctx=ctx)
          call check(error, allocated(err), "CPCM accepted a dielectric below one")
          if (allocated(error)) return
          call check(error, index(err%message, "must be >= 1") > 0, &
@@ -1602,7 +1605,7 @@ contains
          if (allocated(error)) return
          deallocate (err)
 
-         call new_component_cosmo(cosmo_model, ctx, bad_epsilon(ieps), error=err)
+         call new_component_cosmo(cosmo_model, bad_epsilon(ieps), error=err, ctx=ctx)
          call check(error, allocated(err), "COSMO accepted a dielectric below one")
          if (allocated(error)) return
          call check(error, index(err%message, "must be >= 1") > 0, &
@@ -1612,14 +1615,14 @@ contains
       end do
 
       ! The vacuum limit is a valid model, not an error
-      call new_component_cpcm(pcm_model, ctx, 1.0_wp, error=err)
+      call new_component_cpcm(pcm_model, 1.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err), "CPCM rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, pcm_model%feps, 0.0_wp, thr=thr, &
          & message="CPCM f(eps) is not zero at eps = 1")
       if (allocated(error)) return
 
-      call new_component_cosmo(cosmo_model, ctx, 1.0_wp, error=err)
+      call new_component_cosmo(cosmo_model, 1.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err), "COSMO rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, cosmo_model%feps, 0.0_wp, thr=thr, &
@@ -1640,7 +1643,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_drop) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(surface_fixture) :: surface
@@ -1671,7 +1674,7 @@ contains
       type(moist_context_type), target :: ctx
 
       moving_potential = .false.
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! A single dummy center: with a host-supplied potential the molecular
       ! geometry never enters the energy, but update() stores it
@@ -1679,15 +1682,19 @@ contains
       call new(mol, [1], xyz_mol)
 
       ! Synthetic surface carrying only the fields the CPCM matrix reads
+      cavity%nsph = mol%nat
       cavity%ngrid = ngrid_sw
       allocate (cavity%a, source=sw_areas)
+      ! The hand-built surface counts as updated and built
+      cavity%updated = .true.
+      cavity%built = .true.
       allocate (cavity%xi0, source=sw_xis)
       allocate (cavity%f, source=sw_fs)
       allocate (cavity%xyz, source=sw_xyz)
       allocate (cavity%normal0, source=sw_normals)
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1755,7 +1762,6 @@ contains
          & 0.0_wp, thr=thr, message="type-bound xyz weights disagree with PCM weights")
       if (allocated(error)) return
 
-      cavity%nsph = 1
       allocate (cavity%xi1_rA(3, 1, ngrid_sw))
       allocate (cavity%f1_rA(3, 1, ngrid_sw))
       allocate (cavity%xyz1_rA(3, 3, 1, ngrid_sw))
@@ -1894,7 +1900,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(coupling_type) :: coupling
@@ -1934,7 +1940,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
@@ -1950,8 +1956,8 @@ contains
          phi(ig) = 0.05_wp*sin(0.83_wp*real(ig, wp)) - 0.01_wp
       end do
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%lu))
+      call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%lu), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1997,7 +2003,8 @@ contains
             if (allocated(error)) return
          end do
          cavity%xi0(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/dxi at grid point ", ig
          call check(error, weights%w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
@@ -2011,7 +2018,8 @@ contains
             if (allocated(error)) return
          end do
          cavity%f(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/df at grid point ", ig
          call check(error, weights%w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
@@ -2025,7 +2033,8 @@ contains
                if (allocated(error)) return
             end do
             cavity%xyz(iax, ig) = saved
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), xyz_step)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xyz_step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid point ", ig
             call check(error, weights%w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                & more=trim(context))
@@ -2067,9 +2076,28 @@ contains
    end subroutine test_cpcm_molecular_surface_weights
 
 !> Check the complete CPCM nuclear gradient against finite differences
+   subroutine test_cpcm_nuclear_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_cpcm_nuclear_gradient(error, core=0)
+   end subroutine test_cpcm_nuclear_gradient
+
+!> Check the CPCM nuclear gradient of an ECP host against finite differences
+!>
+!> The host potential is that of the reduced charges `z`, so the direct term
+!> must use the `z` the host answers in `nuclear_charges`
+   subroutine test_cpcm_nuclear_gradient_ecp(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_cpcm_nuclear_gradient(error, core=2)
+   end subroutine test_cpcm_nuclear_gradient_ecp
+
+!> Check the complete CPCM nuclear gradient against finite differences
 !>
 !> This exercises the component entry point end to end with the point-charge
-!> potential of the nuclear charges Z supplied through the coupling trace and
+!> potential of the nuclear charges supplied through the coupling trace and
 !> re-evaluated on every displaced cavity. Both terms in
 !>
 !>    dE/dR_A = q^T dphi/dR_A
@@ -2079,10 +2107,13 @@ contains
 !> its switching factors while the source charges move with the nuclei
 !>
 !> @param[out] error Test failure
-   subroutine test_cpcm_nuclear_gradient(error)
+!> @param[in]  core  ECP core electrons on one displaced atom (0: all-electron)
+   subroutine check_cpcm_nuclear_gradient(error, core)
 
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> ECP core electrons on one displaced atom
+      integer, intent(in) :: core
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -2090,17 +2121,27 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Point-charge potential trace, refilled on every displaced cavity
       type(coupling_type) :: coupling
-      !> Point charges generating the potential: the nuclear charges Z, so the
-      !> analytic gradient's moving sources coincide with the potential's
+      !> Point charges generating the potential: the host's nuclear charges, so
+      !> the analytic gradient's moving sources coincide with the potential's
       real(wp), allocatable :: qat(:)
+      !> Nuclear charges of the ECP variant
+      integer, allocatable :: zat(:)
       !> Atom index used to fill the charges
       integer :: iat
       !> Analytic PCM nuclear gradient
       real(wp), allocatable :: gradient(:, :)
+      !> Manufactured width-gradient probes and raw host width derivative
+      real(wp), allocatable :: width_gradient(:, :, :), width_derivative(:)
+      !> Surface point and probe index for the width contraction
+      integer :: width_point, iprobe
+      !> Saved cavity width derivative at the probe point and expected probe difference
+      real(wp), allocatable :: saved_xi1(:, :), width_expected(:, :)
+      !> Probe-difference residual and its tolerance
+      real(wp) :: width_residual, width_thr
       !> Energy of the reference geometry, solved to stage the gradient phase
       real(wp) :: energy
       !> Host part of the gradient phase, unused here
@@ -2127,22 +2168,28 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
-      allocate (qat(mols(1)%nat))
-      do iat = 1, mols(1)%nat
-         qat(iat) = real(mols(1)%num(mols(1)%id(iat)), wp)
-      end do
+      zat = mols(1)%num(mols(1)%id)
+      if (core > 0) then
+         ! The core goes on an atom the finite differences below displace: only
+         ! its own direct term carries its charge
+         iat = findloc(zat(:min(2, mols(1)%nat)) > core, .true., dim=1)
+         call check(error, iat > 0, more="ECP variant needs a displaced atom heavier than its core")
+         if (allocated(error)) return
+         zat(iat) = zat(iat) - core
+      end if
+      qat = real(zat, wp)
 
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb)
       if (allocated(err)) then
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2181,6 +2228,60 @@ contains
          & more="CPCM nuclear gradient is zero, the test is vacuous")
       if (allocated(error)) return
 
+      ! Isolate the raw host width contraction using a manufactured cavity
+      ! derivative; the identical matrix and direct terms cancel between probes,
+      ! leaving q_i dphi/dxi_i xi1_rA(:, :, i) at the probe point
+      width_point = maxloc(abs(pcm_model%q), dim=1)
+      allocate (width_gradient(3, mols(1)%nat, 2), source=0.0_wp)
+      allocate (width_derivative(cavity%ngrid), source=0.0_wp)
+      saved_xi1 = cavity%xi1_rA(:, :, width_point)
+      cavity%xi1_rA(2, 1, width_point) = 0.37_wp
+      width_expected = pcm_model%q(width_point)*0.23_wp*cavity%xi1_rA(:, :, width_point)
+      call check(error, abs(width_expected(2, 1)) > 1.0e-8_wp, &
+         & more="manufactured CPCM width gradient is zero")
+      if (allocated(error)) return
+      do iprobe = 1, 2
+         call stage_point_charge_energy(error, pcm_model, cavity, qat, mols(1), coupling)
+         if (allocated(error)) return
+         call pcm_model%prepare_gradient(cavity, coupling, err)
+         if (allocated(err)) then
+            call test_failed(error, "Width-gradient staging failed: "//err%message)
+            return
+         end if
+         width_derivative(width_point) = real(iprobe - 1, wp)*0.23_wp
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (gaussian_potential_request_type)
+               call coupling%answer("dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid), err)
+               if (.not. allocated(err)) call coupling%answer("dphi_dxi", width_derivative, err)
+            type is (nuclear_charge_request_type)
+               call coupling%answer("z", qat, err)
+            end select
+            if (allocated(err)) then
+               call test_failed(error, "Width-gradient input failed: "//err%message)
+               return
+            end if
+         end do
+         call pcm_model%get_gradient(component_view(coupling), cavity, response, &
+            & width_gradient(:, :, iprobe), err)
+         if (allocated(err)) then
+            call test_failed(error, "Width-gradient probe failed: "//err%message)
+            return
+         end if
+      end do
+      ! Absolute 5e-12 with a 10x looser fallback relative to max|gradient|: the
+      ! charges are bitwise identical between probes, but the adjoint contraction
+      ! reduces over OpenMP threads in no fixed order, so a few ulp of |gradient|
+      ! may differ; measured 5.6e-17 at max|gradient| = 10 (macOS arm64 gfortran
+      ! 14.3, two and four threads)
+      width_residual = maxval(abs(width_gradient(:, :, 2) - width_gradient(:, :, 1) &
+         & - width_expected))
+      width_thr = max(5.0e-12_wp, 5.0e-11_wp*maxval(abs(width_gradient)))
+      call check(error, width_residual, 0.0_wp, thr=width_thr, &
+         & more="CPCM nuclear raw width contraction")
+      if (allocated(error)) return
+      cavity%xi1_rA(:, :, width_point) = saved_xi1
+
       do iatom = 1, min(2, mols(1)%nat)
          do iaxis = 1, 3
             saved = mols(1)%xyz(iaxis, iatom)
@@ -2190,7 +2291,8 @@ contains
                call displaced_energy(trial, values(k))
                if (allocated(error)) return
             end do
-            fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+            call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "CPCM gradient atom ", iatom, &
                & ", axis ", iaxis
             call check(error, gradient(iaxis, iatom), fd, &
@@ -2238,7 +2340,7 @@ contains
          end if
       end subroutine displaced_energy
 
-   end subroutine test_cpcm_nuclear_gradient
+   end subroutine check_cpcm_nuclear_gradient
 
 !> Check the external-potential CPCM nuclear gradient against finite differences
 !>
@@ -2249,8 +2351,6 @@ contains
 !> construction (the direct term) and the host position weight through the
 !> complete component entry point, and pins that a mis-shaped weight answer
 !> is refused before the accumulator is touched
-!>
-!> @param[out] error Test failure
    subroutine test_cpcm_external_nuclear_gradient(error)
 
       !> Test failure
@@ -2262,7 +2362,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> External coupling data
       type(coupling_type), target :: coupling
@@ -2298,7 +2398,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
@@ -2308,8 +2408,8 @@ contains
          return
       end if
 
-      call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2343,6 +2443,17 @@ contains
          call test_failed(error, "Gradient staging failed: "//err%message)
          return
       end if
+      ! The nuclear charges of the external potential in a pass of their own
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (nuclear_charge_request_type)
+            call coupling%answer("z", real(mols(1)%num(mols(1)%id), wp), err)
+            if (allocated(err)) then
+               call test_failed(error, "Answering the nuclear charges failed: "//err%message)
+               return
+            end if
+         end select
+      end do
       ! One step of the walk: the potential request stays current below, so
       ! the mis-shaped answer further down replaces this one
       if (.not. coupling%next()) then
@@ -2405,7 +2516,8 @@ contains
             call displaced_external_energy(trial, values(k))
             if (allocated(error)) return
          end do
-         fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+         call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "external CPCM gradient atom 1, axis ", iaxis
          call check(error, gradient(iaxis, 1), fd, &
             & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
@@ -2528,7 +2640,7 @@ contains
 
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: shifted
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)
@@ -2547,7 +2659,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
 
@@ -2560,8 +2672,8 @@ contains
             call test_failed(error, "Cavity setup failed: "//err%message)
             return
          end if
-         call new_component_cpcm(pcm_model, ctx, epsilon=epsilon, error=err, &
-            param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+         call new_component_cpcm(pcm_model, epsilon=epsilon, error=err, &
+            param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -2641,7 +2753,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)
@@ -2658,7 +2770,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
 
@@ -2676,8 +2788,8 @@ contains
          feps_ref = 0.0_wp
          do ieps = 1, size(epsilons)
             feps = (epsilons(ieps) - 1.0_wp)/epsilons(ieps)
-            call new_component_cpcm(pcm_model, ctx, epsilon=epsilons(ieps), error=err, &
-               param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+            call new_component_cpcm(pcm_model, epsilon=epsilons(ieps), error=err, &
+               param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
             if (allocated(err)) then
                call test_failed(error, "CPCM initialization failed: "//err%message)
                return

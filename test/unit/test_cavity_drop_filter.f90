@@ -2,7 +2,7 @@
 module test_cavity_drop_filter
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
-   use moist_context, only: moist_context_type
+   use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
@@ -54,7 +54,9 @@ contains
                   new_unittest("branch_uniform_phi", test_branch_uniform_phi), &
                   new_unittest("branch_dominant_sibling", test_branch_dominant_sibling), &
                   new_unittest("branch_all_below_cut_fallback", test_branch_fallback), &
-                  new_unittest("branch_softmax_width_limits", test_branch_width_limits) &
+                  new_unittest("branch_softmax_width_limits", test_branch_width_limits), &
+                  new_unittest("branch_pruning_contract_edges", test_branch_contract_edges), &
+                  new_unittest("branch_report_is_passive", test_branch_report_is_passive) &
                   ]
 
    end subroutine collect_cavity_drop_filter
@@ -248,7 +250,7 @@ contains
       integer, parameter :: n = 4
       integer :: i
 
-      ctx%verbosity = 0
+      call new_context(ctx, nthreads=0, verbosity=0)
       cav%ctx => ctx
       cav%ngrid = n
       cav%param%wleb_cut = 0.5_wp
@@ -647,6 +649,164 @@ contains
 
    end subroutine test_branch_width_limits
 
+   !> Strict cutoff with a leading discarded sibling, a lone final point whose
+   !> branch count collapses during weighting, and exact ties at the cutoff
+   subroutine test_branch_contract_edges(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop) :: cav
+      type(moist_context_type), target :: ctx
+      type(moist_error_type), allocatable :: failed
+      integer, parameter :: n = 4
+      real(wp) :: wleb(n), f(n), wref(2)
+      integer :: i, j
+
+      wleb = [100.0_wp, 0.01_wp, 2.0_wp, 0.6_wp]
+      f = [0.2_wp, 0.001_wp, 1.0_wp, 1.0_wp]
+      call build_cavity(cav, ctx, n, wleb, f)
+      cav%param%wleb_cut = 0.1_wp
+      call cav%branch_weight%init(1.0_wp)
+      cav%anchor_id = [80, 80, 80, 81]
+      cav%branch_count = [3, 3, 3, 2]
+      cav%phi0 = [20.0_wp, 0.0_wp, 0.3_wp, 7.0_wp]
+      wref = ref_softmax(cav%phi0(2:3), 1.0_wp)
+
+      call cav%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "pruning succeeds")
+      if (allocated(error)) return
+      call check(error, cav%wbranch(1), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp)
+      if (allocated(error)) return
+      do i = 2, 3
+         call check(error, cav%wbranch(i), wref(i - 1), thr_abs=SOFTMAX_THR, thr_rel=SOFTMAX_THR)
+         if (allocated(error)) return
+         call check(error, cav%wleb(i), wleb(i)*wref(i - 1), &
+                    thr_abs=SOFTMAX_THR, thr_rel=SOFTMAX_THR)
+         if (allocated(error)) return
+         call check(error, cav%branch_count(i), 2, "two retained siblings")
+         if (allocated(error)) return
+      end do
+      !> Point 4 is alone in its group but still has branch_count > 1, so it is weighted
+      call check(error, cav%wbranch(4), 1.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp)
+      if (allocated(error)) return
+      call check(error, cav%branch_count(4), 1, "lone final branch collapses during weighting")
+      if (allocated(error)) return
+      do i = 1, n
+         do j = 1, 3
+            call check(error, cav%xyz(j, i), tag2(SLOT_XYZ, i, j), "branch geometry preserved")
+            if (allocated(error)) return
+         end do
+         call check(error, cav%owner(i), itag(SLOT_OWNER, i), "branch owner preserved")
+         if (allocated(error)) return
+      end do
+
+      !> Equal weights exactly at the cutoff are all rejected, so the fallback keeps one
+      !> sibling; which of the tied siblings survives is not part of the contract
+      wleb = 1.0_wp
+      f = 1.0_wp
+      call build_cavity(cav, ctx, n, wleb, f)
+      cav%param%wleb_cut = 0.25_wp
+      call cav%branch_weight%init(1.0_wp)
+      cav%anchor_id = 82
+      cav%branch_count = n
+      cav%phi0 = 0.0_wp
+      call cav%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "boundary weighting succeeds")
+      if (allocated(error)) return
+      call check(error, count(cav%wbranch(1:n) == 1.0_wp), 1, "exactly one tied sibling survives")
+      if (allocated(error)) return
+      call check(error, count(cav%wbranch(1:n) == 0.0_wp), n - 1, &
+                 "the other tied siblings are discarded")
+      if (allocated(error)) return
+      do i = 1, n
+         call check(error, cav%branch_count(i), 1, "tie fallback keeps a single branch")
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_branch_contract_edges
+
+   !> The verbose branch report is passive and describes the actual outcome
+   !>
+   !> A group that survives intact, one that loses a sibling and one that collapses
+   !> are weighted at verbosity 0 and 5; the weights agree bitwise and the log
+   !> carries the summary and the per-group tables, with the dropped-point count
+   subroutine test_branch_report_is_passive(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop) :: cav, quiet
+      type(moist_context_type), target :: ctx, ctx_quiet
+      type(moist_error_type), allocatable :: failed
+      integer, parameter :: n = 8
+      character(len=*), parameter :: path = "test_cavity_drop_filter_report.tmp"
+      real(wp) :: wleb(n), f(n)
+      character(len=256) :: line
+      integer :: iu, stat, nfinal, ninitial, ntable, ndropped
+      logical :: same
+
+      wleb = 1.0_wp
+      f = 1.0_wp
+      call build_cavity(quiet, ctx_quiet, n, wleb, f)
+      call build_cavity(cav, ctx, n, wleb, f)
+      call new_context(ctx, nthreads=0, verbosity=5, logfile=path)
+      call check(error, ctx%io_stat, 0, "report log opens")
+      if (allocated(error)) return
+
+      call setup(quiet)
+      call setup(cav)
+      call quiet%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "quiet weighting succeeds")
+      if (allocated(error)) return
+      call cav%compute_branch_weights(failed)
+      call check(error, .not. allocated(failed), "verbose weighting succeeds")
+      if (allocated(error)) return
+      call ctx%delete()
+
+      same = all(cav%wbranch == quiet%wbranch) .and. all(cav%wleb == quiet%wleb) &
+             .and. all(cav%branch_count == quiet%branch_count)
+
+      nfinal = 0
+      ninitial = 0
+      ntable = 0
+      ndropped = -1
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
+      call check(error, stat, 0, "report log exists")
+      if (allocated(error)) return
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "Branch weighting (initial)") > 0) ninitial = ninitial + 1
+         if (index(line, "Branch weighting (final)") > 0) nfinal = nfinal + 1
+         if (index(line, "anchor_id") > 0) ntable = ntable + 1
+         if (index(line, "Branched points (dropped)") > 0) then
+            read (line(index(line, "...") + 3:), *, iostat=stat) ndropped
+         end if
+      end do
+      close (iu, status="delete")
+
+      call check(error, same, "weights, folded weights and counts independent of verbosity")
+      if (allocated(error)) return
+      call check(error, ninitial, 1, "one initial summary")
+      if (allocated(error)) return
+      call check(error, nfinal, 1, "one final summary")
+      if (allocated(error)) return
+      call check(error, ntable, 2, "one detail table per branched group")
+      if (allocated(error)) return
+      call check(error, ndropped, 1, "reported dropped points match the pruned sibling")
+
+   contains
+
+      subroutine setup(c)
+         type(cavity_type_drop), intent(inout) :: c
+         c%param%wleb_cut = 1.0e-3_wp
+         call c%branch_weight%init(1.0_wp)
+         c%anchor_id = [10, 11, 11, 11, 12, 13, 13, 14]
+         c%branch_count = [1, 3, 3, 3, 1, 2, 2, 1]
+         c%phi0 = [0.0_wp, 0.0_wp, 0.2_wp, 0.5_wp, 0.0_wp, 0.0_wp, 12.0_wp, 0.0_wp]
+      end subroutine setup
+
+   end subroutine test_branch_report_is_passive
+
    !* ================================================================================= *!
    !*                                      Fixture                                      *!
    !* ================================================================================= *!
@@ -673,7 +833,7 @@ contains
 
       integer :: i, j
 
-      ctx%verbosity = 0
+      call new_context(ctx, nthreads=0, verbosity=0)
       cav%ctx => ctx
       cav%ngrid = n
 

@@ -24,6 +24,16 @@ class PCMSolver(IntEnum):
     ITERATIVE = library.lib.moist_pcm_solver_iterative
 
 
+class IsodensityBasis(IntEnum):
+    """Density representation of the internal isodensity LSF, from the C ABI.
+
+    ``SPHERICAL`` requires a host with spherical basis functions.
+    """
+
+    CARTESIAN = library.lib.moist_isodensity_basis_cartesian
+    SPHERICAL = library.lib.moist_isodensity_basis_spherical
+
+
 @lru_cache(maxsize=None)
 def _default(kind, name):
     return getattr(library._options(kind), name)
@@ -60,8 +70,6 @@ class DROPParameters(_Parameters):
 
     _kind = "drop"
     nleb: int = _native_default("drop", "nleb")
-    debug: bool = _native_default("drop", "debug")
-    verbosity: int = _native_default("drop", "verbosity")
     do_fine: bool = _native_default("drop", "do_fine")
     tolerance: float = _native_default("drop", "tolerance")
     proj_maxiter: int = _native_default("drop", "proj_maxiter")
@@ -77,8 +85,6 @@ class ISwiGParameters(_Parameters):
 
     _kind = "iswig"
     nleb: int = _native_default("iswig", "nleb")
-    debug: bool = _native_default("iswig", "debug")
-    verbosity: int = _native_default("iswig", "verbosity")
     cut_a: float = _native_default("iswig", "cut_a")
     cut_f: float = _native_default("iswig", "cut_f")
 
@@ -107,11 +113,32 @@ class CFCParameters(_Parameters):
 
 @dataclass(frozen=True, kw_only=True)
 class IsodensityParameters(_Parameters):
-    """Level set ``scale * (rho_iso - rho)``; density in electrons/bohr**3."""
+    """Level set ``scale * (rho_iso - rho)``; density in electrons/bohr**3.
+
+    ``core_fill`` adds a compact density bump at every ECP nucleus (host
+    nuclear charge below the atomic number, answered through the
+    ``nuclear_charges`` request), so a pseudo-density cannot dip below ``rho_iso``
+    there; the outer surface is left untouched. The bump reaches
+    ``core_radius_fraction`` times the atom's cavity radius (at most 2 bohr).
+    """
 
     _kind = "isodensity"
     rho_iso: float = _native_default("isodensity", "rho_iso")
     scale: float = _native_default("isodensity", "scale")
+    basis: IsodensityBasis = _native_default("isodensity", "basis")
+    core_fill: bool = _native_default("isodensity", "core_fill")
+    core_radius_fraction: float = _native_default("isodensity", "core_radius_fraction")
+
+    def __post_init__(self):
+        value = self.basis
+        if isinstance(value, str):
+            try:
+                value = IsodensityBasis[value.upper()]
+            except KeyError as exc:
+                raise ValueError(f"Unknown isodensity basis {value!r}") from exc
+        object.__setattr__(self, "basis", IsodensityBasis(value))
+        super().__post_init__()
+        object.__setattr__(self, "basis", IsodensityBasis(self.basis))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -139,12 +166,18 @@ class PCMParameters(_Parameters):
 
 
 @dataclass(frozen=True, kw_only=True)
-class ModelParameters(_Parameters):
-    """Logging settings for a composed solvation model."""
+class GOSTSHYPParameters(_Parameters):
+    """Fixed C-infinity switch of the reciprocal trace, from start to end in bohr**-4.
 
-    _kind = "model"
-    debug: bool = _native_default("model", "debug")
-    verbosity: int = _native_default("model", "verbosity")
+    Points with ``|ftilde|`` at or below the start are off; at or above the end
+    the energy is the plain reciprocal. Negative pressure amplitudes remain
+    unless suppression is explicitly enabled.
+    """
+
+    _kind = "gostshyp"
+    regularization_start: float = _native_default("gostshyp", "regularization_start")
+    regularization_end: float = _native_default("gostshyp", "regularization_end")
+    suppress_negative_amplitudes: bool = _native_default("gostshyp", "suppress_negative_amplitudes")
 
 
 def _resolve(parameter_type, parameters):

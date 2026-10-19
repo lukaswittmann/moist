@@ -17,15 +17,46 @@ from moist import ModelComponentCPCM, ModelComponentPV, ModelComponentGOSTSHYP
 from moist.interface import SolvationModel
 from moist.pyscf import CFC, DROP, ISwiG, Isodensity, SvdW  # registers .MOIST()
 from moist import (
-    DROPParameters, ISwiGParameters, IsodensityParameters, ModelParameters, PCMParameters,
+    Context, DROPParameters, ISwiGParameters, IsodensityParameters, PCMParameters,
     CustomRadii,
 )
 from moist.pyscf import PySCFHost, PySCFSolvation
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 CAVITIES = {"svdw-drop": DROP(lsf=SvdW(), parameters=DROPParameters(nleb=26)),
             "cfc-drop": DROP(lsf=CFC(), parameters=DROPParameters(nleb=26)),
             "iswig": ISwiG(parameters=ISwiGParameters(nleb=26)),
             "rho-drop": DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=26))}
+
+
+FD_ATOL = 1e-10
+FD_RTOL = 1e-9
+FD_SCF_ATOL = 5e-10  # Total gradients through displaced SCF solutions
+FD_SCF_RTOL = 5e-9
+FD_DENSITY_STEP = 1e-3  # Density-matrix direction amplitude
+FD_NUCLEAR_STEP = 1e-3  # Bohr
+FD_SCF_STEP = 1e-2  # Bohr
+FD_SCF_ENERGY_TOL = 1e-14
+FD_SCF_GRAD_TOL = 1e-10
+
+
+def assert_fd(analytic, reference, atol=FD_ATOL, rtol=FD_RTOL):
+    assert np.isfinite(analytic) and np.isfinite(reference)
+    assert abs(analytic - reference) <= max(atol, rtol * abs(reference))
+
+
+def fd4(energy, step):
+    minus2, minus1, plus1, plus2 = [energy(k * step) for k in (-2, -1, 1, 2)]
+    return ((plus1 - minus1) * 8 - (plus2 - minus2)) / (12 * step)
+
+
+def fd6(energy, step):
+    minus3, minus2, minus1, plus1, plus2, plus3 = [
+        energy(k * step) for k in (-3, -2, -1, 1, 2, 3)]
+    return (45 * (plus1 - minus1) - 9 * (plus2 - minus2) +
+            (plus3 - minus3)) / (60 * step)
 
 
 @pytest.fixture
@@ -37,7 +68,7 @@ def mol():
 def attach(mf, cavity="svdw-drop", components=None):
     if components is None:
         components = [ModelComponentCPCM(32.0)]
-    return mf.MOIST(cavity=CAVITIES[cavity], components=components)
+    return mf.MOIST(cavity=CAVITIES[cavity], components=components, context=CONTEXT)
 
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "cfc-drop", "iswig", "rho-drop"])
@@ -82,12 +113,13 @@ def test_scf_energy_fock_and_spin_contract(mol, method, cavity):
 
 @pytest.mark.parametrize("cavity,builds", [("svdw-drop", 1), ("rho-drop", 2)])
 def test_cache_by_density_value_and_geometry(mol, monkeypatch, cavity, builds):
+    # A geometric cavity is built once per geometry, an isodensity one per density
     calls = []
-    update = SolvationModel.update
-    def counted(self, structure):
-        calls.append(structure)
-        return update(self, structure)
-    monkeypatch.setattr(SolvationModel, "update", counted)
+    build = SolvationModel.build
+    def counted(self, coupling):
+        calls.append(coupling)
+        return build(self, coupling)
+    monkeypatch.setattr(SolvationModel, "build", counted)
     mf = attach(mol.RHF(), cavity)
     dm = mf.get_init_guess()
     first = mf.with_moist.evaluate(dm)
@@ -137,10 +169,9 @@ def test_nonlinear_fock_is_energy_derivative(mol, cavity):
     direction += direction.T
     direction /= np.linalg.norm(direction)
     analytic = np.einsum("ij,ji", mf.with_moist.evaluate(dm).fock, direction)
-    h = 1e-5
-    numerical = (mf.with_moist.evaluate(dm + h*direction).energy -
-                 mf.with_moist.evaluate(dm - h*direction).energy) / (2*h)
-    assert analytic == pytest.approx(numerical, abs=2e-7)
+    numerical = fd4(lambda offset: mf.with_moist.evaluate(dm + offset*direction).energy,
+                    FD_DENSITY_STEP)
+    assert_fd(analytic, numerical)
 
 
 @pytest.mark.parametrize("method", ["RHF", "RKS", "UHF", "UKS"])
@@ -149,7 +180,8 @@ def test_total_gradient_and_subset(mol, method, cavity):
     if method.startswith("U"):
         mol.charge, mol.spin = 1, 1
         mol.build()
-    base = getattr(mol, method)().set(conv_tol=1e-12, conv_tol_grad=1e-8)
+    base = getattr(mol, method)().set(conv_tol=FD_SCF_ENERGY_TOL,
+                                      conv_tol_grad=FD_SCF_GRAD_TOL, max_cycle=150)
     if method.endswith("KS"):
         base.xc = "lda,vwn"
         base.grids.level = 0
@@ -161,16 +193,14 @@ def test_total_gradient_and_subset(mol, method, cavity):
     analytic = grad.kernel()
     subset = grad.kernel(atmlst=[2, 0])
     np.testing.assert_allclose(subset, analytic[[2, 0]], atol=1e-10)
-    h = 2e-4
-    values = []
-    for offset in [-1, 1]:
+    def energy(offset):
         xyz = mol.atom_coords()
-        xyz[1, 2] += offset*h
+        xyz[1, 2] += offset
         moved = mol.set_geom_(xyz, unit="Bohr", inplace=False)
-        displaced = mf.copy().reset(moved).run()
+        displaced = mf.copy().reset(moved).run(dm0=mf.make_rdm1())
         assert displaced.converged
-        values.append(displaced.e_tot)
-    assert analytic[1, 2] == pytest.approx((values[1]-values[0])/(2*h), abs=3e-6)
+        return displaced.e_tot
+    assert_fd(analytic[1, 2], fd6(energy, FD_SCF_STEP), FD_SCF_ATOL, FD_SCF_RTOL)
 
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "rho-drop"])
@@ -212,22 +242,20 @@ def test_gostshyp_composition(mol, cavity):
     analytic_gradient = mf.with_moist.gradient(dm)
     assert np.isfinite(analytic_gradient).all()
     direction = np.eye(dm.shape[0])
-    h = 1e-5
-    density_fd = (mf.with_moist.evaluate(dm + h*direction).energy -
-                  mf.with_moist.evaluate(dm - h*direction).energy) / (2*h)
-    assert np.einsum("ij,ji", result.fock, direction) == pytest.approx(density_fd, abs=2e-7)
-    samples = []
-    for offset in [-1, 1]:
+    density_fd = fd4(lambda offset: mf.with_moist.evaluate(dm + offset*direction).energy,
+                     FD_DENSITY_STEP)
+    assert_fd(np.einsum("ij,ji", result.fock, direction), density_fd)
+    def energy(offset):
         xyz = mol.atom_coords()
-        xyz[1, 2] += offset*h
+        xyz[1, 2] += offset
         moved = mol.set_geom_(xyz, unit="Bohr", inplace=False)
-        samples.append(mf.copy().reset(moved).with_moist.evaluate(dm).energy)
-    assert analytic_gradient[1, 2] == pytest.approx((samples[1]-samples[0])/(2*h), abs=2e-7)
+        return mf.copy().reset(moved).with_moist.evaluate(dm).energy
+    assert_fd(analytic_gradient[1, 2], fd4(energy, FD_NUCLEAR_STEP))
 
 
 def test_unsupported_operations_are_explicit(mol, monkeypatch):
     with pytest.raises(TypeError, match="cavity must"):
-        mol.RHF().MOIST(cavity="invalid", components=[ModelComponentCPCM(32)])
+        mol.RHF().MOIST(cavity="invalid", components=[ModelComponentCPCM(32)], context=CONTEXT)
     with pytest.raises(TypeError, match="keyword"):
         ISwiG(rho_iso=4e-4)
     with pytest.raises(TypeError, match="keyword"):
@@ -291,8 +319,8 @@ def test_explicit_molecule_does_not_poison_gradient(mol):
 def test_reusable_cavity_and_lsf_configuration(mol):
     surface = Isodensity()
     config = DROP(lsf=surface, parameters=DROPParameters(nleb=26))
-    first = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
-    second = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
+    first = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)], context=CONTEXT)
+    second = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)], context=CONTEXT)
     first.with_moist.set(cavity=replace(
         config, parameters=replace(config.parameters, nleb=50)))
     assert config.parameters.nleb == 26
@@ -338,10 +366,10 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     radii = CustomRadii([3., 2.5, 2.5])
     config = DROP(lsf=surface, parameters=parameters, radii=radii)
     terms = [ModelComponentCPCM(32, parameters=PCMParameters(solver="lu"))]
-    mf = mol.RHF().MOIST(cavity=config, components=terms, parameters=ModelParameters())
+    mf = mol.RHF().MOIST(cavity=config, components=terms, context=CONTEXT)
     dm = mf.get_init_guess()
     result = mf.with_moist.evaluate(dm)
-    reference = PySCFSolvation(mol, config, terms)
+    reference = PySCFSolvation(mol, config, terms, context=CONTEXT)
     expected = reference.evaluate(dm)
     assert result.energy == pytest.approx(expected.energy, abs=1e-12)
     np.testing.assert_allclose(result.fock, expected.fock, atol=1e-12)
@@ -354,18 +382,20 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     assert mf.copy().with_moist.cavity == updated
 
 
-def test_density_fit_preserves_model_parameters(mol):
-    parameters = ModelParameters(debug=True, verbosity=0)
+def test_density_fit_preserves_context(mol):
+    context = Context(verbosity=0, debug=True)
     mf = mol.RHF().MOIST(cavity=CAVITIES["iswig"],
-                         components=[ModelComponentPV(1e-4)], parameters=parameters)
+                         components=[ModelComponentPV(1e-4)], context=context)
     fitted = mf.density_fit()
-    assert fitted.with_moist.parameters == parameters
+    assert fitted.with_moist.context is context
     assert fitted.with_moist.cavity == mf.with_moist.cavity
     assert fitted.with_moist.components == mf.with_moist.components
 
 
-def test_host_rejects_fractional_atomic_numbers(mol, monkeypatch):
+def test_host_charges_reach_the_coupling_not_the_structure(mol, monkeypatch):
     host = PySCFHost(mol)
     monkeypatch.setattr(mol, "atom_charges", lambda: np.array([8.5, 1., 1.]))
-    with pytest.raises(ValueError, match="integer vector"):
-        host.structure()
+    # The elements come from the atom symbols, the charges of the Hamiltonian
+    # are the nuclear_charges answer as they are
+    np.testing.assert_array_equal(host.structure().numbers, [8, 1, 1])
+    np.testing.assert_array_equal(host.nuclear_charges, [8.5, 1., 1.])
