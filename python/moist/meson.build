@@ -94,6 +94,7 @@ pytest_args = [
 ]
 pytest_env = ['PYTHONPATH=' + meson.current_build_dir() / '..']
 coupling_env = pytest_env + ['MOIST_REQUIRE_PYSCF=1']
+coupling_suites = ['python', 'pyscf']
 bindings_srcs = [
   tests_dir / 'test_interface.py',
   tests_dir / 'test_configuration.py',
@@ -135,7 +136,7 @@ foreach entry : [
     args: pytest_args + ['-m', entry[1], coupling_src],
     depends: moist_pyext,
     env: coupling_env,
-    suite: 'python',
+    suite: coupling_suites,
     timeout: entry[2],
   )
 endforeach
@@ -161,7 +162,7 @@ foreach entry : [
     args: pytest_args + ['-m', entry[1], gostshyp_src],
     depends: moist_pyext,
     env: coupling_env,
-    suite: 'python',
+    suite: coupling_suites,
     timeout: entry[2],
   )
 endforeach
@@ -173,7 +174,7 @@ test(
   args: pytest_args + [tests_dir / 'test_pyscf_ecp.py'],
   depends: moist_pyext,
   env: coupling_env,
-  suite: 'python',
+  suite: coupling_suites,
   timeout: 300,
 )
 
@@ -184,6 +185,6 @@ test(
   args: pytest_args + [tests_dir / 'test_pyscf_scf.py'],
   depends: moist_pyext,
   env: coupling_env,
-  suite: 'python',
+  suite: coupling_suites,
   timeout: 600,
 )

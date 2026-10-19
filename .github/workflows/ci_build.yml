@@ -258,7 +258,9 @@ jobs:
         run: |
           meson setup build -Dpython=true -Dapi=true -Dpython_version="$(command -v python)" -Dlapack=${{ matrix.lapack }}
           meson compile -C build
-          meson test -C build --suite moist --print-errorlogs
+          meson test -C build --suite moist --no-suite pyscf --print-errorlogs
+          OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+            meson test -C build --suite pyscf --num-processes 2 --print-errorlogs
 
   wheel:
     name: wheel (${{ matrix.platform }}, gnu15, pyscf)
