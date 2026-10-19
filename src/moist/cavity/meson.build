@@ -1,4 +1,5 @@
 subdir('drop')
+subdir('mt')
 
 srcs += files(
   'type.f90',
@@ -8,9 +9,6 @@ srcs += files(
   'bornzeta.f90',
   'iswig.f90',
   'mc.f90',
-  'mt/parameters.f90',
-  'mt/mesh.f90',
-  'mt/patches.f90',
   'mt.f90',
   'drop.f90',
 )

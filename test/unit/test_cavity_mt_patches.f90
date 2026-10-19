@@ -23,7 +23,8 @@ contains
                   new_unittest("centroid_projection", test_centroid_projection), &
                   new_unittest("narrow_neck_unequal_components", test_narrow_neck), &
                   new_unittest("folded_connected_sheet", test_folded_sheet), &
-                  new_unittest("unbalanceable_fallback", test_unbalanceable) &
+                  new_unittest("unbalanceable_fallback", test_unbalanceable), &
+                  new_unittest("lloyd_regular_spacing", test_regular_spacing) &
       ]
    end subroutine collect_cavity_mt_patches
 
@@ -302,6 +303,43 @@ contains
       if (allocated(error)) return
       call verify_on_mesh(error, mesh, patches)
    end subroutine test_unbalanceable
+
+   !> Centroidal relaxation spaces planar representatives nearly evenly
+   subroutine test_regular_spacing(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+      real(wp), allocatable :: nearest(:)
+      real(wp) :: mean
+      integer :: p, q, np
+
+      call make_sheets(mesh, 1, 6.0_wp)
+      call build_mt_patches(mesh, 1.0_wp, 0.1_wp, patches, patch_error)
+      if (allocated(patch_error)) then
+         call test_failed(error, patch_error%message)
+         return
+      end if
+      np = size(patches%area)
+      call check(error, np, 36)
+      if (allocated(error)) return
+      allocate (nearest(np))
+      nearest = huge(1.0_wp)
+      do p = 1, np
+         do q = 1, np
+            if (q == p) cycle
+            nearest(p) = min(nearest(p), norm2(patches%xyz(:, p) - patches%xyz(:, q)))
+         end do
+      end do
+      ! Unit-area cells: 1 on a square lattice; without relaxation 0.84 and 0.63
+      mean = sum(nearest)/real(np, wp)
+      call check(error, mean > 0.875_wp, more="Representatives crowd on a planar sheet")
+      if (allocated(error)) return
+      call check(error, minval(nearest) > 0.69_wp, more="Two representatives nearly coincide")
+      if (allocated(error)) return
+      call verify_on_mesh(error, mesh, patches)
+   end subroutine test_regular_spacing
 
    !> Three long planar lobes of 0.6 bohr^2 on the edges of a tiny hub triangle
    !>

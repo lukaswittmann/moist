@@ -108,7 +108,10 @@ contains
    !>
    !> - Farthest-point seeds and Voronoi weights come from blocks of about four
    !>   piece bounds, whose passes are cheap
-   !> - The weights then warm-start a few passes on aggregates of one piece bound
+   !> - Lloyd sweeps move each seed to its cell centroid and rebalance, which
+   !>   evens out cell shapes and point spacing
+   !> - The weights then warm-start a few passes and sweeps on aggregates of one
+   !>   piece bound
    !> - Transfers of single pieces repair the remaining cells
    !>
    !> Dijkstra trees and connectivity-checked transfers keep cells connected. An
@@ -138,6 +141,8 @@ contains
       integer, parameter :: block_passes = 160, block_patience = 8
       !> Warm-started aggregate passes; diffusion repairs the remaining cells
       integer, parameter :: fine_passes = 12, fine_patience = 4
+      !> Lloyd sweeps on blocks and aggregates, and passes after each sweep
+      integer, parameter :: block_sweeps = 8, fine_sweeps = 2, sweep_passes = 8, sweep_patience = 3
       type(patch_graph_type) :: graph, coarse, blocks
       type(index_heap_type) :: work, farthest
       integer, allocatable :: face_component(:), piece_component(:), component_of_block(:), queue(:), counts(:)
@@ -148,7 +153,7 @@ contains
       logical, allocatable :: exception(:)
       real(wp) :: candidate, threshold, norm, allowance, center, slack
       real(wp) :: edge_a(3), edge_b(3), projected(3)
-      integer :: nf, n, nn, nb, nc, np, nm, phase, c, f, g, p, u, v, j, k, head, tail, stat, iteration, stamp
+      integer :: nf, n, nn, nb, nc, np, nm, phase, c, f, g, p, u, v, j, k, head, tail, stat, iteration, stamp, sweep
       logical :: moved
 
       if (.not. ieee_is_finite(target_area) .or. .not. ieee_is_finite(area_tolerance)) then
@@ -328,6 +333,19 @@ contains
          end do
          call farthest%reset()
       end do
+      centers = target_area
+      where (exception) centers = goal
+      weights = 0.0_wp
+      call balance_weights(blocks, seed_block, goal, centers, area_tolerance, block_passes, block_patience, &
+         & weights, block_labels, distance, error)
+      if (allocated(error)) return
+      do sweep = 1, block_sweeps
+         call relax_seeds(blocks, block_labels, seed_block, moment, mass, closest, moved)
+         if (.not. moved) exit
+         call balance_weights(blocks, seed_block, goal, centers, area_tolerance, sweep_passes, sweep_patience, &
+            & weights, block_labels, distance, error)
+         if (allocated(error)) return
+      end do
       ! Each block seed continues at its aggregate nearest the block centroid
       closest = huge(1.0_wp)
       seeds = 0
@@ -349,15 +367,16 @@ contains
          seeds(p) = u
       end do
       deallocate (anchors)
-      centers = target_area
-      where (exception) centers = goal
-      weights = 0.0_wp
-      call balance_weights(blocks, seed_block, goal, centers, area_tolerance, block_passes, block_patience, &
-         & weights, block_labels, distance, error)
-      if (allocated(error)) return
       call balance_weights(coarse, seeds, goal, centers, area_tolerance, fine_passes, fine_patience, &
          & weights, node_labels, distance, error)
       if (allocated(error)) return
+      do sweep = 1, fine_sweeps
+         call relax_seeds(coarse, node_labels, seeds, moment, mass, closest, moved)
+         if (.not. moved) exit
+         call balance_weights(coarse, seeds, goal, centers, area_tolerance, sweep_passes, sweep_patience, &
+            & weights, node_labels, distance, error)
+         if (allocated(error)) return
+      end do
       ! Connected aggregates expand to connected cells of single pieces
       mass = 0.0_wp
       do u = 1, n
@@ -1085,6 +1104,56 @@ contains
       end do
       weights = best_weights
    end subroutine balance_weights
+
+   !> Move each seed to the node of its cell nearest the cell's area centroid
+   !>
+   !> Seeds stay inside their own cells and therefore distinct.
+   !>
+   !> @param[in] graph Node graph
+   !> @param[in] labels Cell of each node, each containing its seed
+   !> @param[in,out] seeds Source node of each cell
+   !> @param[out] moment Cell centroids (3, ncell)
+   !> @param[out] mass Cell areas
+   !> @param[out] closest Distance of each new seed from its centroid
+   !> @param[out] moved Some seed changed
+   subroutine relax_seeds(graph, labels, seeds, moment, mass, closest, moved)
+      !> Node graph
+      type(patch_graph_type), intent(in) :: graph
+      !> Cell labels
+      integer, intent(in) :: labels(:)
+      !> Source nodes
+      integer, intent(inout) :: seeds(:)
+      !> Cell centroids
+      real(wp), intent(out) :: moment(:, :)
+      !> Cell areas
+      real(wp), intent(out) :: mass(:)
+      !> Centroid distances
+      real(wp), intent(out) :: closest(:)
+      !> Some seed changed
+      logical, intent(out) :: moved
+      real(wp) :: norm
+      integer :: p, u
+      moment = 0.0_wp
+      mass = 0.0_wp
+      do u = 1, size(graph%area)
+         p = labels(u)
+         mass(p) = mass(p) + graph%area(u)
+         moment(:, p) = moment(:, p) + graph%area(u)*graph%xyz(:, u)
+      end do
+      do p = 1, size(seeds)
+         moment(:, p) = moment(:, p)/mass(p)
+         closest(p) = norm2(graph%xyz(:, seeds(p)) - moment(:, p))
+      end do
+      moved = .false.
+      do u = 1, size(graph%area)
+         p = labels(u)
+         norm = norm2(graph%xyz(:, u) - moment(:, p))
+         if (norm >= closest(p)) cycle
+         closest(p) = norm
+         seeds(p) = u
+         moved = .true.
+      end do
+   end subroutine relax_seeds
 
    !> Connected weighted graph Voronoi assignment
    !>

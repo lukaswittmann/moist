@@ -37,7 +37,7 @@ module moist_cavity_type
    private
 
    public :: cavity_type, list_cavity_fields_base, add_volume_origin_gradient
-   public :: update_cavity_base, build_cavity_base, cavity_declare_pass
+   public :: update_cavity_base, build_cavity_base, cavity_declare_pass, clear_cavity_surface_base
    public :: write_cavity_xyz_debug, write_cavity_csv_debug, write_cavity_pqr_debug
 
    !> Abstract base type containing minimal cavity/surface information

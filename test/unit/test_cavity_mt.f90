@@ -32,7 +32,8 @@ contains
                   new_unittest("fully_suppressed", test_fully_suppressed), &
                   new_unittest("frozen_geometry", test_frozen_geometry), &
                   new_unittest("invalid_parameters", test_invalid_parameters), &
-                  new_unittest("sphere_cpcm", test_sphere_cpcm)]
+                  new_unittest("sphere_cpcm", test_sphere_cpcm), &
+                  new_unittest("sliver_widths", test_sliver_widths)]
    end subroutine collect_cavity_mt
 
    !> Build a custom-radius SvdW fixture with an explicit thread count
@@ -80,9 +81,10 @@ contains
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: cav
       type(field_query_type) :: fields
-      real(wp) :: grad(3), xyz(3, 1), radial
+      real(wp) :: grad(3), xyz(3, 1), radial, d
+      real(wp), allocatable :: layer(:)
       type(mctc_error), allocatable :: local_error
-      integer :: i
+      integer :: i, j
 
       xyz = 0.0_wp
       call fixture(error, ctx, cav, xyz, [3.0_wp])
@@ -97,7 +99,23 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(cav%patch_area/cav%param%target_area - 1.0_wp)) <= cav%param%area_tolerance)
       if (allocated(error)) return
-      call check(error, maxval(abs(cav%xi0*sqrt(cav%a) - cav%param%gaussian_scale)) < 1.0e-12_wp)
+      ! The width correction stays small on a well-spaced unswitched surface
+      call check(error, all(abs(cav%xi0*sqrt(cav%a)/cav%param%gaussian_scale - 1.0_wp) < 0.15_wp), &
+                 more="Width correction is unexpectedly large")
+      if (allocated(error)) return
+      ! A uniform layer has the potential 4 pi R everywhere on a sphere
+      allocate (layer(cav%ngrid))
+      do i = 1, cav%ngrid
+         layer(i) = sqrt(2.0_wp/pi)*cav%xi0(i)*cav%a(i)
+         do j = 1, cav%ngrid
+            if (j == i) cycle
+            d = norm2(cav%xyz(:, i) - cav%xyz(:, j))
+            layer(i) = layer(i) + erf(cav%xi0(i)*cav%xi0(j)/sqrt(cav%xi0(i)**2 + cav%xi0(j)**2)*d)/d*cav%a(j)
+         end do
+      end do
+      ! Corrected 0.08%, uncorrected 0.49%
+      call check(error, maxval(abs(layer/(12.0_wp*pi) - 1.0_wp)) < 2.0e-3_wp, &
+                 more="Uniform layer potential varies over the sphere")
       if (allocated(error)) return
       call check(error, all(cav%owner == 1) .and. all(abs(cav%f - 1.0_wp) < epsilon(1.0_wp)))
       if (allocated(error)) return
@@ -291,15 +309,43 @@ contains
             call test_failed(error, local_error%message)
             return
          end if
-         ! Errors with gfortran: 0.14% energy, 0.15% charge, 3.6% density
-         call check(error, abs(energy/reference - 1.0_wp) < 3.e-3_wp, more="MT sphere conductor energy")
+         ! Errors with gfortran: 0.05% energy, 0.015% charge, 0.38% density;
+         ! without the width correction 0.07%, 0.08% and 2.7%
+         call check(error, abs(energy/reference - 1.0_wp) < 1.5e-3_wp, more="MT sphere conductor energy")
          if (allocated(error)) return
-         call check(error, abs(sum(q) + 1.0_wp) < 3.e-3_wp, more="MT induced total charge")
+         call check(error, abs(sum(q) + 1.0_wp) < 5.e-4_wp, more="MT induced total charge")
          if (allocated(error)) return
          density_error = sqrt(sum(cav%a*(q/cav%a - sigma)**2)/sum(cav%a*sigma**2))
-         call check(error, density_error < 0.05_wp, more="MT local charge density")
+         call check(error, density_error < 0.01_wp, more="MT local charge density")
          if (allocated(error)) return
       end do
    end subroutine test_sphere_cpcm
+
+   !> Near-zero-area slivers from a surface through lattice nodes leave the widths finite
+   subroutine test_sliver_widths(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(moist_cavity_mt_parameters_type) :: param
+      real(wp) :: diameter
+      integer :: f, slivers, ids(3)
+
+      param%target_area = 0.4_wp
+      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [3.0_wp], param)
+      if (allocated(error)) return
+      slivers = 0
+      do f = 1, size(cav%mesh%area)
+         ids = cav%mesh%triangles(:, f)
+         diameter = max(norm2(cav%mesh%vertices(:, ids(2)) - cav%mesh%vertices(:, ids(1))), &
+                        norm2(cav%mesh%vertices(:, ids(3)) - cav%mesh%vertices(:, ids(2))), &
+                        norm2(cav%mesh%vertices(:, ids(1)) - cav%mesh%vertices(:, ids(3))))
+         if (cav%mesh%area(f) <= sqrt(epsilon(1.0_wp))*diameter**2) slivers = slivers + 1
+      end do
+      call check(error, slivers > 0, more="Fixture no longer contains a sliver face")
+      if (allocated(error)) return
+      call check(error, all(abs(cav%xi0*sqrt(cav%a)/cav%param%gaussian_scale - 1.0_wp) < 0.15_wp), &
+                 more="Sliver faces distort the width correction")
+   end subroutine test_sliver_widths
 
 end module test_cavity_mt

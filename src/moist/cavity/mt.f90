@@ -5,10 +5,11 @@ module moist_cavity_mt
    use mctc_io_structure, only: structure_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_cavity_type, only: cavity_type, update_cavity_base, build_cavity_base, &
-      & cavity_declare_pass, list_cavity_fields_base
+      & cavity_declare_pass, list_cavity_fields_base, clear_cavity_surface_base
    use moist_cavity_mt_parameters, only: moist_cavity_mt_parameters_type
    use moist_cavity_mt_mesh, only: mt_mesh_type, build_mt_mesh
    use moist_cavity_mt_patches, only: mt_patch_type, build_mt_patches
+   use moist_cavity_mt_widths, only: width_factors
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
    use moist_context, only: moist_context_type
@@ -282,6 +283,8 @@ contains
    !>   with the mesh spacing rather than the patch size
    !> - Normals come from the LSF gradient at each patch point, or from the
    !>   switched mesh normal where that gradient vanishes
+   !> - One Newton step makes the unswitched quadrature exact for a uniform
+   !>   layer; its width factors then multiply the switched widths
    !>
    !> @param[in,out] self Cavity with geometric patches
    !> @param[out] error Evaluation or allocation failure
@@ -292,10 +295,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mt_gradient_slot), allocatable :: slots(:)
       type(moist_cavity_drop_swif_sigmoid_bump_type) :: critical
-      real(wp), allocatable :: gradients(:, :), weights(:), effective(:), face_weight(:)
+      real(wp), allocatable :: gradients(:, :), weights(:), effective(:), face_weight(:), factor(:)
       logical, allocatable :: active(:)
+      !> Width-correction window radius relative to the patch side
+      real(wp), parameter :: window_factor = 4.0_wp
       real(wp) :: grad(3), magnitude, d2, best, origin(3), mean_normal(3)
-      integer :: nf, np, nt, stat, i, j, k, atom, tid
+      integer :: nf, np, nt, stat, i, j, k, atom, tid, limited
 
       nf = size(self%mesh%area)
       np = size(self%patches%area)
@@ -389,6 +394,7 @@ contains
       if (stat == 0) allocate (self%v(self%ngrid), stat=stat)
       if (stat == 0) allocate (self%patch_area(self%ngrid), stat=stat)
       if (stat == 0) allocate (self%critical_weight(self%ngrid), stat=stat)
+      if (stat == 0) allocate (factor(self%ngrid), stat=stat)
       if (stat == 0) allocate (self%patch_index(self%ngrid), stat=stat)
       if (stat == 0) allocate (self%total_area, stat=stat)
       if (stat == 0) allocate (self%total_volume, stat=stat)
@@ -428,6 +434,11 @@ contains
          self%owner(k) = atom
          self%asph(atom) = self%asph(atom) + self%a(k)
       end do
+      call width_factors(self%mesh, self%patches, self%patch_index, self%xyz, self%patch_area, &
+         & self%param%gaussian_scale, window_factor*sqrt(self%param%target_area), nt, factor, limited, error)
+      if (allocated(error)) return
+      if (limited > 0) call warn_limited_widths(self, limited)
+      self%xi0 = factor*self%xi0
       if (.not. all(ieee_is_finite(self%xi0))) then
          call fatal_error(error, "Nonfinite marching tetrahedra Gaussian widths")
          return
@@ -505,6 +516,23 @@ contains
          & trim(adjustl(deviation))//"% > "//trim(adjustl(tolerance))//"%); using the best connected partition found")
    end subroutine warn_unbalanced
 
+   !> Report points whose width correction reached its limit
+   !>
+   !> @param[in] self Cavity with corrected widths
+   !> @param[in] limited Number of limited points
+   subroutine warn_limited_widths(self, limited)
+      !> Cavity with corrected widths
+      class(cavity_type_mt), intent(in) :: self
+      !> Number of limited points
+      integer, intent(in) :: limited
+      character(len=32) :: count_text, total_text
+
+      write (count_text, "(i0)") limited
+      write (total_text, "(i0)") self%ngrid
+      call self%ctx%warning("Marching tetrahedra width correction reached its limit at "//trim(count_text)// &
+         & " of "//trim(total_text)//" points; crowded points remain less accurate")
+   end subroutine warn_limited_widths
+
    !> Release the grid and its retained construction geometry
    !>
    !> @param[in,out] self Cavity instance
@@ -512,7 +540,7 @@ contains
       !> Cavity instance
       class(cavity_type_mt), intent(inout) :: self
 
-      call self%clear_surface()
+      call clear_cavity_surface_base(self)
       call self%mesh%clear()
       call self%patches%clear()
       if (allocated(self%mesh_area)) deallocate (self%mesh_area)
