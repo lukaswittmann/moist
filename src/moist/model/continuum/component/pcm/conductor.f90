@@ -4,6 +4,7 @@ module moist_model_continuum_component_pcm_conductor
    use moist_channels_response, only: parameter_adjoint_response_type
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
+   use moist_output_citations, only: citation_cpcm, citation_cosmo
    use moist_utils_prettyprint, only: prettyprinter
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
@@ -234,6 +235,12 @@ contains
 
       call self%require_context(error)
       if (allocated(error)) return
+      select type (self)
+      type is (model_continuum_component_cpcm)
+         call self%ctx%cite(citation_cpcm)
+      type is (model_continuum_component_cosmo)
+         call self%ctx%cite(citation_cosmo)
+      end select
       self%mol_solu = mol
       self%charges_valid = .false.
       if (allocated(self%phi)) deallocate (self%phi)

@@ -4,6 +4,7 @@ module moist_model_continuum_component_pcm_iefpcm
    use mctc_env, only: wp, error_type, fatal_error
    use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
+   use moist_output_citations, only: citation_iefpcm
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
@@ -86,6 +87,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer :: ngrid
 
+      call self%ctx%cite(citation_iefpcm)
       ngrid = cavity%ngrid
       associate (r => cavity%xyz(:, 1:ngrid), n => cavity%normal0(:, 1:ngrid), &
          & k1 => cavity%k1(1:ngrid), k2 => cavity%k2(1:ngrid), &
