@@ -38,6 +38,7 @@ module moist_model_continuum_component_pcm_solvers
    private
 
    public :: solve_pcm_lu
+   public :: pcm_check_finite
    public :: solve_pcm_cholesky
    public :: solve_pcm_iterative
    public :: solve_pcm_inversion
@@ -48,6 +49,11 @@ module moist_model_continuum_component_pcm_solvers
    public :: pcm_factor_cholesky, pcm_factor_symmetric, pcm_factor_lu
    public :: pcm_factor_complex_symmetric, pcm_factor_complex_lu
    public :: pcm_storage_dense, pcm_storage_matrix_free
+
+   !> Reject non-finite data (NaN or Inf) with a fatal error
+   interface pcm_check_finite
+      module procedure :: check_finite_r1, check_finite_r2, check_finite_c1
+   end interface pcm_check_finite
 
    !> Factorization of a symmetric positive definite operator (potrf, lower)
    integer, parameter :: pcm_factor_cholesky = 1
@@ -720,6 +726,11 @@ contains
       scale = nrm2(f)
       self%solver%nonlinear_iterations = 0
       self%solver%nonlinear_residual = 0.0_wp
+      if (.not. ieee_is_finite(scale)) then
+         call fatal_error(error, here//" the residual at zero is not finite")
+         return
+      end if
+      ! Exact zero forcing: the solution is zero
       if (.not. scale > 0.0_wp) then
          x = 0.0_wp
          return
@@ -728,6 +739,10 @@ contains
       call self%residual(x, f, error)
       if (allocated(error)) return
       norm_f = nrm2(f)
+      if (.not. ieee_is_finite(norm_f)) then
+         call fatal_error(error, here//" the residual at the initial guess is not finite")
+         return
+      end if
       steps = 0
       do while (.not. norm_f <= self%solver%nonlinear_tol*scale)
          if (steps >= self%solver%nonlinear_max_iter) then
@@ -763,6 +778,69 @@ contains
       end do
       call newton_statistics(self%solver, steps, norm_f/scale)
    end subroutine pcm_nonlinear_solve
+
+   !> Reject non-finite real data
+   !>
+   !> @param[in]  v        data to test
+   !> @param[in]  what     name of the data, for the message
+   !> @param[in]  routine  calling routine, for the message
+   !> @param[out] error    allocated if any entry is NaN or Inf
+   subroutine check_finite_r1(v, what, routine, error)
+      !> Data to test
+      real(wp), intent(in) :: v(:)
+      !> Name of the data
+      character(len=*), intent(in) :: what
+      !> Calling routine
+      character(len=*), intent(in) :: routine
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. all(ieee_is_finite(v))) then
+         call fatal_error(error, routine//" "//what//" is not finite")
+      end if
+   end subroutine check_finite_r1
+
+   !> Reject non-finite real data
+   !>
+   !> @param[in]  v        data to test
+   !> @param[in]  what     name of the data, for the message
+   !> @param[in]  routine  calling routine, for the message
+   !> @param[out] error    allocated if any entry is NaN or Inf
+   subroutine check_finite_r2(v, what, routine, error)
+      !> Data to test
+      real(wp), intent(in) :: v(:, :)
+      !> Name of the data
+      character(len=*), intent(in) :: what
+      !> Calling routine
+      character(len=*), intent(in) :: routine
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. all(ieee_is_finite(v))) then
+         call fatal_error(error, routine//" "//what//" is not finite")
+      end if
+   end subroutine check_finite_r2
+
+   !> Reject non-finite complex data
+   !>
+   !> @param[in]  v        data to test
+   !> @param[in]  what     name of the data, for the message
+   !> @param[in]  routine  calling routine, for the message
+   !> @param[out] error    allocated if any entry is NaN or Inf
+   subroutine check_finite_c1(v, what, routine, error)
+      !> Data to test
+      complex(wp), intent(in) :: v(:)
+      !> Name of the data
+      character(len=*), intent(in) :: what
+      !> Calling routine
+      character(len=*), intent(in) :: routine
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. (all(ieee_is_finite(real(v))) .and. all(ieee_is_finite(aimag(v))))) then
+         call fatal_error(error, routine//" "//what//" is not finite")
+      end if
+   end subroutine check_finite_c1
 
    !> Record the statistics of a nonlinear solve
    !>
@@ -801,6 +879,8 @@ contains
 
       iunit = output_unit
       if (present(unit)) iunit = unit
+      call pcm_check_finite(rhs, "right-hand side", "[solve_pcm_lu]", error)
+      if (allocated(error)) return
       n = size(amat, 1)
       ! Copy matrix (LAPACK overwrites input)
       allocate (amat_copy(n, n))
@@ -828,6 +908,10 @@ contains
          call fatal_error(error, "[solve_pcm_lu] LAPACK getrs failed")
          return
       end if
+
+      ! A non-finite matrix shows up in the result
+      call pcm_check_finite(q_mat(:, 1), "solution", "[solve_pcm_lu]", error)
+      if (allocated(error)) return
 
       ! Extract solution from 2D matrix
       q = q_mat(:, 1)
@@ -1337,6 +1421,8 @@ contains
          if (allocated(error)) return
       end if
 
+      call pcm_check_finite(rhs, "right-hand side", here, error)
+      if (allocated(error)) return
       x = rhs
       associate (f => self%factors(op%id))
          select case (f%kind)
@@ -1358,6 +1444,9 @@ contains
             return
          end if
       end associate
+      ! A non-finite operator shows up in the result
+      call pcm_check_finite(x, "solution", here, error)
+      if (allocated(error)) return
       self%n_solves = self%n_solves + size(rhs, 2)
    end subroutine pcm_dense_solve_block
 
@@ -1470,6 +1559,8 @@ contains
          return
       end if
 
+      call pcm_check_finite(rhs, "right-hand side", here, error)
+      if (allocated(error)) return
       x_block(:, 1) = rhs
       associate (f => self%factors(op%id))
          select case (f%kind)
@@ -1489,6 +1580,8 @@ contains
             return
          end if
       end associate
+      call pcm_check_finite(x_block(:, 1), "solution", here, error)
+      if (allocated(error)) return
       x = x_block(:, 1)
       self%n_solves = self%n_solves + 1
    end subroutine pcm_dense_solve_complex_complex

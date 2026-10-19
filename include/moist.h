@@ -133,7 +133,8 @@ typedef struct moist_response_s* moist_response;
 /// ("w_phi", "w_dphi_dr" when computed), "density" ("w_rho", "w_grad_rho", "w_hess_rho"),
 /// "gaussian_amplitude" ("w_overlap", "w_normal_deriv"),
 /// "atomic_multipole_adjoint" ("dg_dq", "dg_dmu", "dg_dtheta"),
-/// "atomic_charge_adjoint" ("dg_dq"), "radial_potential_adjoint" ("dg_dphi").
+/// "atomic_charge_adjoint" ("dg_dq"), "radial_potential_adjoint" ("dg_dphi"),
+/// "parameter_adjoint" (scalars "dg_deps", ...; response phase only, on request).
 /// Names at most MOIST_NAME_MAX characters
 #define MOIST_NAME_MAX 32
 
@@ -351,6 +352,7 @@ typedef struct {
     moist_pcm_storage storage;
     double newton_tol;
     int newton_maxiter;
+    bool parameter_derivatives; /* return the "parameter_adjoint" response item */
 } moist_pcm_options;
 
 moist_API_ENTRY void moist_API_CALL
@@ -1043,6 +1045,14 @@ moist_get_response_item_name(moist_error error, moist_response response,
 ///     the site-resolved radial potential, contracted as
 ///     `F_uv += sum_a sum_i dg_dphi[a][i] dphi_a(r_i)/dP_uv` and with
 ///     dphi_a(r_i)/dR for the gradient
+///   "parameter_adjoint": scalar fields, dE/dp of the physical model parameters
+///     at fixed geometry and traces: "dg_deps", "dg_deps_inf", "dg_dlambda",
+///     "dg_deps_solute" (nonlocal), "dg_dkappa" (LPB), "dg_dalpha", "dg_dbeta",
+///     "dg_dgamma", "dg_dmu", "dg_dphi_static" (SLIC); a parameter the model
+///     lacks is not listed. Present only when the PCM setting
+///     `parameter_derivatives` is true (default false), and only in the response
+///     phase, never in a gradient read; a host that stops on unknown items must
+///     not enable it
 
 /// Number of named arrays of the current response item
 moist_API_ENTRY void moist_API_CALL

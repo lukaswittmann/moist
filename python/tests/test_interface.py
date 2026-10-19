@@ -1285,12 +1285,12 @@ def test_gaussian_moment_width_is_the_listed_input(monkeypatch) -> None:
 
 
 def test_every_response_item_is_public() -> None:
-    """The six item types are exported, so the API reference lists them."""
+    """The item types are exported, so the API reference lists them."""
     from moist.interface import _RESPONSE_ITEMS
 
     assert set(_RESPONSE_ITEMS) == {
         "potential_adjoint", "density", "gaussian_amplitude", "atomic_multipole_adjoint",
-        "atomic_charge_adjoint", "radial_potential_adjoint",
+        "atomic_charge_adjoint", "radial_potential_adjoint", "parameter_adjoint",
     }
     for name, kind in _RESPONSE_ITEMS.items():
         assert kind.name == name

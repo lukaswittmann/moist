@@ -1,7 +1,8 @@
 !> LPB component backed by generated Gaussian and point kernels
 module moist_model_continuum_component_pcm_lpb
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
    use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
@@ -10,10 +11,10 @@ module moist_model_continuum_component_pcm_lpb
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_lpb, only: lpb_complex_state, &
-      & lpb_assemble, lpb_medium, lpb_solve, lpb_weights, lpb_tangent
+      & lpb_assemble, lpb_medium, lpb_solve, lpb_weights, lpb_param_weights, lpb_tangent
    use pcmgen_point_lpb, only: lpb_point_complex_state, &
       & lpb_point_assemble, lpb_point_medium, lpb_point_solve, &
-      & lpb_point_weights, lpb_point_tangent
+      & lpb_point_weights, lpb_point_param_weights, lpb_point_tangent
    implicit none(type, external)
    private
 
@@ -39,6 +40,7 @@ module moist_model_continuum_component_pcm_lpb
       procedure :: assemble_layer => lpb_assemble_layer
       procedure :: solve_layer => lpb_solve_layer
       procedure :: layer_weights => lpb_layer_weights
+      procedure :: get_parameter_adjoint => lpb_get_parameter_adjoint
       procedure :: layer_tangent => lpb_layer_tangent
    end type model_continuum_component_lpb
 
@@ -70,7 +72,7 @@ contains
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "LPB epsilon must be >= 1")
          return
       end if
@@ -150,20 +152,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
-      real(wp) :: w_eps
-      real(wp) :: w_kappa
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
       if (self%smeared) then
          allocate (w_xi(ngrid), w_f(ngrid), source=0.0_wp)
-         call lpb_weights(self%gauss%lpb_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, w_eps, w_kappa, error)
+         call lpb_weights(self%gauss%lpb_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a, w_xi=w_xi, w_f=w_f)
       else
-         call lpb_point_weights(self%point%lpb_point_state, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, w_kappa, error)
+         call lpb_point_weights(self%point%lpb_point_state, w_xyz, w_n, w_k1, w_k2, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a)
@@ -262,5 +262,31 @@ contains
       kt = codata%kb*temperature*codata%NA*1.0e-3_wp/autokj
       kappa = sqrt(8.0_wp*pi*density/(epsilon*kt))
    end function debye_kappa
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> @param[in,out] self  lpb component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine lpb_get_parameter_adjoint(self, item, error)
+      !> Component with current charges
+      class(model_continuum_component_lpb), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_eps, w_kappa
+
+      if (self%smeared) then
+         call lpb_param_weights(self%gauss%lpb_state, w_eps, w_kappa, error)
+      else
+         call lpb_point_param_weights(self%point%lpb_point_state, w_eps, w_kappa, error)
+      end if
+      if (allocated(error)) return
+      allocate (item%dg_deps, source=0.0_wp)
+      if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
+      allocate (item%dg_dkappa, source=w_kappa)
+
+   end subroutine lpb_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_lpb

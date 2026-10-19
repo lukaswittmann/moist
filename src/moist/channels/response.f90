@@ -32,6 +32,7 @@ module moist_channels_response
    public :: potential_adjoint_response_type, density_response_type
    public :: gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type
    public :: atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
+   public :: parameter_adjoint_response_type
    public :: current_response_item, response_accumulate, response_clear
    public :: response_name_len
 
@@ -252,6 +253,49 @@ module moist_channels_response
       procedure, private :: clear => radial_potential_adjoint_clear
    end type radial_potential_adjoint_response_type
 
+   !> Derivatives of the energy with respect to the physical model parameters
+   !>
+   !> Only on explicit request (PCM parameter `parameter_derivatives`) and only in
+   !> `get_response`; default and every gradient read neither carry nor compute them
+   !>
+   !> Each scalar is the total derivative of the model energy at fixed geometry and
+   !> host traces with respect to the constructor parameter of the same name
+   !>
+   !> - a scalar the model does not have is absent, never zero: `dg_dkappa`
+   !>   exists for LPB only, `dg_deps_inf`, `dg_dlambda` and `dg_deps_solute`
+   !>   for the nonlocal model, the SLIC set for SLIC
+   !> - `dg_deps` is zero for an infinite permittivity
+   !> - `dg_dmu` is present for SLIC only when `mu` was given; otherwise
+   !>   `mu = alpha tanh(gamma)` follows `alpha` and `gamma`, and their
+   !>   derivatives include that dependence
+   type, extends(response_item_type) :: parameter_adjoint_response_type
+      !> Derivative with respect to the solvent permittivity
+      real(wp), allocatable :: dg_deps
+      !> Derivative with respect to the high-frequency permittivity (nonlocal)
+      real(wp), allocatable :: dg_deps_inf
+      !> Derivative with respect to the correlation length (nonlocal)
+      real(wp), allocatable :: dg_dlambda
+      !> Derivative with respect to the interior permittivity (nonlocal)
+      real(wp), allocatable :: dg_deps_solute
+      !> Derivative with respect to the inverse Debye length (LPB)
+      real(wp), allocatable :: dg_dkappa
+      !> Derivative with respect to the amplitude of h (SLIC)
+      real(wp), allocatable :: dg_dalpha
+      !> Derivative with respect to the steepness of h (SLIC)
+      real(wp), allocatable :: dg_dbeta
+      !> Derivative with respect to the offset of h (SLIC)
+      real(wp), allocatable :: dg_dgamma
+      !> Derivative with respect to the shift of h (SLIC)
+      real(wp), allocatable :: dg_dmu
+      !> Derivative with respect to the static potential (SLIC)
+      real(wp), allocatable :: dg_dphi_static
+   contains
+      procedure :: name => parameter_adjoint_name
+      procedure :: list_fields => parameter_adjoint_list_fields
+      procedure, private :: add => parameter_adjoint_add
+      procedure, private :: clear => parameter_adjoint_clear
+   end type parameter_adjoint_response_type
+
    !> Placeholder `response%item()` returns outside a `next()` window; no arrays
    type, extends(response_item_type) :: no_response_item_type
    contains
@@ -390,6 +434,25 @@ contains
 
    end subroutine accumulate_tensor3
 
+   !> Accumulate one scalar: copy when absent, add when present
+   !>
+   !> @param[inout] acc   Accumulator, allocated on first use
+   !> @param[in]    add   Scalar to add, absent contributes nothing
+   subroutine accumulate_scalar(acc, add)
+      !> Accumulator
+      real(wp), allocatable, intent(inout) :: acc
+      !> Scalar to add
+      real(wp), allocatable, intent(in) :: add
+
+      if (.not. allocated(add)) return
+      if (.not. allocated(acc)) then
+         acc = add
+         return
+      end if
+      acc = acc + add
+
+   end subroutine accumulate_scalar
+
    !> Report an accumulation with mismatched shapes
    subroutine shape_mismatch(item, array, error)
       !> Item name
@@ -475,6 +538,89 @@ contains
       if (allocated(self%w_dphi_dr)) deallocate (self%w_dphi_dr)
 
    end subroutine potential_adjoint_clear
+
+   !* ============================================================================== *!
+   !*                           Parameter adjoint item                               *!
+   !* ============================================================================== *!
+
+   !> Name of the parameter adjoint item
+   function parameter_adjoint_name(self) result(name)
+      !> Item
+      class(parameter_adjoint_response_type), intent(in) :: self
+      !> Name
+      character(len=response_name_len) :: name
+
+      name = "parameter_adjoint"
+
+   end function parameter_adjoint_name
+
+   !> Declare the parameter derivatives
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine parameter_adjoint_list_fields(self, query)
+      !> Item
+      class(parameter_adjoint_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real_scalar("dg_deps", "dE/d(solvent permittivity)", self%dg_deps)
+      call query%add_real_scalar("dg_deps_inf", "dE/d(high-frequency permittivity)", self%dg_deps_inf)
+      call query%add_real_scalar("dg_dlambda", "dE/d(correlation length), 1/bohr", self%dg_dlambda)
+      call query%add_real_scalar("dg_deps_solute", "dE/d(interior permittivity)", self%dg_deps_solute)
+      call query%add_real_scalar("dg_dkappa", "dE/d(inverse Debye length), bohr", self%dg_dkappa)
+      call query%add_real_scalar("dg_dalpha", "dE/d(SLIC alpha)", self%dg_dalpha)
+      call query%add_real_scalar("dg_dbeta", "dE/d(SLIC beta)", self%dg_dbeta)
+      call query%add_real_scalar("dg_dgamma", "dE/d(SLIC gamma)", self%dg_dgamma)
+      call query%add_real_scalar("dg_dmu", "dE/d(SLIC mu)", self%dg_dmu)
+      call query%add_real_scalar("dg_dphi_static", "dE/d(static potential)", self%dg_dphi_static)
+
+   end subroutine parameter_adjoint_list_fields
+
+   !> Add another parameter adjoint item into this one
+   subroutine parameter_adjoint_add(self, other, error)
+      !> Accumulator
+      class(parameter_adjoint_response_type), intent(inout) :: self
+      !> Item to add
+      class(response_item_type), intent(in) :: other
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (other)
+      type is (parameter_adjoint_response_type)
+         call accumulate_scalar(self%dg_deps, other%dg_deps)
+         call accumulate_scalar(self%dg_deps_inf, other%dg_deps_inf)
+         call accumulate_scalar(self%dg_dlambda, other%dg_dlambda)
+         call accumulate_scalar(self%dg_deps_solute, other%dg_deps_solute)
+         call accumulate_scalar(self%dg_dkappa, other%dg_dkappa)
+         call accumulate_scalar(self%dg_dalpha, other%dg_dalpha)
+         call accumulate_scalar(self%dg_dbeta, other%dg_dbeta)
+         call accumulate_scalar(self%dg_dgamma, other%dg_dgamma)
+         call accumulate_scalar(self%dg_dmu, other%dg_dmu)
+         call accumulate_scalar(self%dg_dphi_static, other%dg_dphi_static)
+      class default
+         call type_mismatch("parameter_adjoint", error)
+      end select
+
+   end subroutine parameter_adjoint_add
+
+   !> Deallocate the parameter derivatives
+   subroutine parameter_adjoint_clear(self)
+      !> Item
+      class(parameter_adjoint_response_type), intent(inout) :: self
+
+      if (allocated(self%dg_deps)) deallocate (self%dg_deps)
+      if (allocated(self%dg_deps_inf)) deallocate (self%dg_deps_inf)
+      if (allocated(self%dg_dlambda)) deallocate (self%dg_dlambda)
+      if (allocated(self%dg_deps_solute)) deallocate (self%dg_deps_solute)
+      if (allocated(self%dg_dkappa)) deallocate (self%dg_dkappa)
+      if (allocated(self%dg_dalpha)) deallocate (self%dg_dalpha)
+      if (allocated(self%dg_dbeta)) deallocate (self%dg_dbeta)
+      if (allocated(self%dg_dgamma)) deallocate (self%dg_dgamma)
+      if (allocated(self%dg_dmu)) deallocate (self%dg_dmu)
+      if (allocated(self%dg_dphi_static)) deallocate (self%dg_dphi_static)
+
+   end subroutine parameter_adjoint_clear
 
    !* ============================================================================== *!
    !*                              Density item                                      *!

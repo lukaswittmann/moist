@@ -1,7 +1,8 @@
 !> SLIC component backed by generated Gaussian and point kernels
 module moist_model_continuum_component_pcm_slic
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
    use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
@@ -12,10 +13,10 @@ module moist_model_continuum_component_pcm_slic
       & layer_configure_cavity
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_slic, only: slic_state, &
-      & slic_assemble, slic_medium, slic_solve, slic_weights, slic_tangent
+      & slic_assemble, slic_medium, slic_solve, slic_weights, slic_param_weights, slic_tangent
    use pcmgen_point_slic, only: slic_point_state, &
       & slic_point_assemble, slic_point_medium, slic_point_solve, &
-      & slic_point_weights, slic_point_tangent
+      & slic_point_weights, slic_point_param_weights, slic_point_tangent
    implicit none(type, external)
    private
 
@@ -47,12 +48,15 @@ module moist_model_continuum_component_pcm_slic
       real(wp) :: mu = 0.0_wp
       !> Static potential offset, hartree per elementary charge
       real(wp) :: phi_static = 0.0_wp
+      !> Whether `mu` was given, else it follows `alpha tanh(gamma)`
+      logical :: mu_given = .false.
    contains
       procedure :: configure_cavity => slic_configure_cavity
       procedure :: print_inputs => slic_print_inputs
       procedure :: assemble_layer => slic_assemble_layer
       procedure :: solve_layer => slic_solve_layer
       procedure :: layer_weights => slic_layer_weights
+      procedure :: get_parameter_adjoint => slic_get_parameter_adjoint
       procedure :: layer_tangent => slic_layer_tangent
    end type model_continuum_component_slic
 
@@ -98,7 +102,7 @@ contains
       real(wp), intent(in), optional :: phi_static
       type(moist_pcm_parameters_type) :: settings
 
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "SLIC epsilon must be >= 1")
          return
       end if
@@ -123,6 +127,7 @@ contains
       self%gamma = gamma
       self%mu = alpha*tanh(gamma)
       if (present(mu)) self%mu = mu
+      self%mu_given = present(mu)
       if (present(phi_static)) self%phi_static = phi_static
       if (.not. ieee_is_finite(self%mu) .or. .not. ieee_is_finite(self%phi_static)) then
          call fatal_error(error, "SLIC mu and static potential must be finite")
@@ -232,20 +237,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
-      real(wp) :: w_eps
-      real(wp) :: w_alpha, w_beta, w_gamma, w_mu
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
       if (self%smeared) then
          allocate (w_xi(ngrid), source=0.0_wp)
-         call slic_weights(self%gauss, w_xyz, w_n, w_k1, w_k2, w_xi, w_a, w_eps, w_alpha, w_beta, w_gamma, w_mu, error)
+         call slic_weights(self%gauss, w_xyz, w_n, w_k1, w_k2, w_xi, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a, w_xi=w_xi)
       else
-         call slic_point_weights(self%point, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, w_alpha, w_beta, w_gamma, w_mu, error)
+         call slic_point_weights(self%point, w_xyz, w_n, w_k1, w_k2, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a)
@@ -327,5 +330,41 @@ contains
             & hvp_k1, hvp_k2, hvp_a, hvp_v, hvp_vn, error)
       end if
    end subroutine slic_layer_tangent
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> @param[in,out] self  slic component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine slic_get_parameter_adjoint(self, item, error)
+      !> Component with current charges
+      class(model_continuum_component_slic), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_eps, w_alpha, w_beta, w_gamma, w_mu
+
+      if (self%smeared) then
+         call slic_param_weights(self%gauss, w_eps, w_alpha, w_beta, w_gamma, w_mu, error)
+      else
+         call slic_point_param_weights(self%point, w_eps, w_alpha, w_beta, w_gamma, w_mu, error)
+      end if
+      if (allocated(error)) return
+      allocate (item%dg_deps, source=0.0_wp)
+      if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
+      allocate (item%dg_dbeta, source=w_beta)
+      allocate (item%dg_dalpha, source=w_alpha)
+      allocate (item%dg_dgamma, source=w_gamma)
+      if (self%mu_given) then
+         allocate (item%dg_dmu, source=w_mu)
+      else
+         ! mu = alpha tanh(gamma) follows alpha and gamma
+         item%dg_dalpha = item%dg_dalpha + w_mu*tanh(self%gamma)
+         item%dg_dgamma = item%dg_dgamma + w_mu*self%alpha/cosh(self%gamma)**2
+      end if
+      allocate (item%dg_dphi_static, source=self%mol_solu%charge)
+
+   end subroutine slic_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_slic

@@ -17,6 +17,7 @@
 !>   x^3 - 2 x + 2, converging from x = -2 and stalling from x = 0 at the
 !>   local minimum of |F| (singular Jacobian, root out of reach), iteration limit
 module test_model_component_pcm_solvers
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, sp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -27,7 +28,7 @@ module test_model_component_pcm_solvers
       & pcm_solver, pcm_dense_solver, pcm_gmres_solver, pcm_block_jacobi, &
       & pcm_factor_cholesky, pcm_factor_symmetric, pcm_factor_lu, &
       & pcm_factor_complex_symmetric, pcm_factor_complex_lu, pcm_storage_dense, &
-      & pcm_storage_matrix_free, pcm_nonlinear_problem
+      & pcm_storage_matrix_free, pcm_nonlinear_problem, solve_pcm_lu
    implicit none(type, external)
    private
 
@@ -75,12 +76,14 @@ module test_model_component_pcm_solvers
       procedure :: solve_block => scaling_test_solver_solve_block
    end type scaling_test_solver
 
-   !> Decoupled cubics F_i(x) = x_i^3 - 2 x_i + 2
+   !> Decoupled cubics F_i(x) = x_i^3 - 2 x_i + offset
    !>
    !> - Root -1.7692923542386314; local minimum of |F| at sqrt(2/3), where
    !>   F = 0.9113 and the Jacobian is singular
    !> - Newton from 0 without a line search cycles between 0 and 1
    type, extends(pcm_nonlinear_problem) :: cubic_test_problem
+      !> Constant term, zero or non-finite for the forcing tests
+      real(wp) :: offset = 2.0_wp
    contains
       !> Residual
       procedure :: residual => cubic_test_problem_residual
@@ -112,6 +115,13 @@ contains
          & new_unittest("dense_several_operators", test_dense_several_operators), &
          & new_unittest("dense_cholesky_failure", test_dense_cholesky_failure), &
          & new_unittest("dense_invalid_calls", test_dense_invalid_calls), &
+         & new_unittest("dense_nonfinite_not_counted", test_dense_nonfinite_not_counted), &
+         & new_unittest("dense_rejects_nan_rhs", test_dense_rejects_nan_rhs, should_fail=.true.), &
+         & new_unittest("dense_rejects_inf_rhs", test_dense_rejects_inf_rhs, should_fail=.true.), &
+         & new_unittest("dense_rejects_nan_operator", test_dense_rejects_nan_operator, should_fail=.true.), &
+         & new_unittest("dense_complex_rejects_nan_rhs", test_dense_complex_rejects_nan_rhs, should_fail=.true.), &
+         & new_unittest("lu_rejects_nan_rhs", test_lu_rejects_nan_rhs, should_fail=.true.), &
+         & new_unittest("lu_rejects_nan_matrix", test_lu_rejects_nan_matrix, should_fail=.true.), &
          & new_unittest("lapack_complex", test_lapack_complex), &
          & new_unittest("complex_operator_apply", test_complex_operator_apply_matches_matrix), &
          & new_unittest("dense_complex_rhs", test_dense_complex_rhs), &
@@ -138,7 +148,10 @@ contains
          & new_unittest("block_jacobi_complex", test_block_jacobi_complex), &
          & new_unittest("nonlinear_converges", test_nonlinear_converges), &
          & new_unittest("nonlinear_stalls", test_nonlinear_stalls), &
-         & new_unittest("nonlinear_max_iter", test_nonlinear_max_iter) &
+         & new_unittest("nonlinear_max_iter", test_nonlinear_max_iter), &
+         & new_unittest("nonlinear_rejects_nan_forcing", test_nonlinear_rejects_nan_forcing, should_fail=.true.), &
+         & new_unittest("nonlinear_rejects_inf_forcing", test_nonlinear_rejects_inf_forcing, should_fail=.true.), &
+         & new_unittest("nonlinear_zero_forcing", test_nonlinear_zero_forcing) &
          & ]
    end subroutine collect_model_component_pcm_solvers
 
@@ -394,8 +407,6 @@ contains
    end subroutine check_both_orientations
 
    !> sytrf/sytrs wrappers on a zero-diagonal symmetric system, both triangles
-   !>
-   !> @param[out] error  test failure
    subroutine test_lapack_sytrf_sytrs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -441,8 +452,6 @@ contains
    end subroutine test_lapack_sytrf_sytrs
 
    !> Single precision sytrf/sytrs wrappers
-   !>
-   !> @param[out] error  test failure
    subroutine test_lapack_sytrf_sytrs_sp(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -465,8 +474,6 @@ contains
    end subroutine test_lapack_sytrf_sytrs_sp
 
    !> The test operator applies its matrix and transpose consistently with assemble
-   !>
-   !> @param[out] error  test failure
    subroutine test_operator_apply_matches_matrix(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -489,8 +496,6 @@ contains
    end subroutine test_operator_apply_matches_matrix
 
    !> Positive definite operator: Cholesky, both orientations
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_cholesky(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -512,8 +517,6 @@ contains
    end subroutine test_dense_cholesky
 
    !> Symmetric indefinite operator: Bunch-Kaufman, both orientations
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_symmetric(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -535,8 +538,6 @@ contains
    end subroutine test_dense_symmetric
 
    !> General operator: LU; the transpose solve differs from the normal one
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_lu(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -569,8 +570,6 @@ contains
    end subroutine test_dense_lu
 
    !> solve_block with several right-hand sides equals repeated solve, all kinds
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_block_equals_single(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -624,8 +623,6 @@ contains
    end subroutine test_dense_block_equals_single
 
    !> Each setup factors anew; solves reuse the factors and factor on first use
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_factor_reuse(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -677,8 +674,6 @@ contains
    end subroutine test_dense_factor_reuse
 
    !> Factors of several operators are kept apart by id
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_several_operators(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -719,8 +714,6 @@ contains
    end subroutine test_dense_several_operators
 
    !> A non-SPD operator declared positive definite fails in Cholesky, no LU fallback
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_cholesky_failure(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -751,8 +744,6 @@ contains
    end subroutine test_dense_cholesky_failure
 
    !> Missing reset, ids outside the reset range and shape mismatches are errors
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_invalid_calls(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -786,6 +777,126 @@ contains
       if (allocated(error)) return
       call check(error, solver%n_solves, 0, "no solve counted")
    end subroutine test_dense_invalid_calls
+
+   !> Dense solve rejects a NaN right-hand side
+   subroutine test_dense_rejects_nan_rhs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(dense_test_operator) :: op
+      type(pcm_dense_solver) :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), x(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      b(2, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_test_operator(op, a, 1, .false., .false.)
+      call solver%reset(1)
+      call solver%solve(op, .false., b(:, 1), x, err)
+      call check_moist_error(error, err)
+   end subroutine test_dense_rejects_nan_rhs
+
+   !> Dense transposed solve rejects an infinite right-hand side
+   subroutine test_dense_rejects_inf_rhs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(dense_test_operator) :: op
+      type(pcm_dense_solver) :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), x(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      b(2, 1) = ieee_value(1.0_wp, ieee_positive_inf)
+      call new_test_operator(op, a, 1, .false., .false.)
+      call solver%reset(1)
+      call solver%solve(op, .true., b(:, 1), x, err)
+      call check_moist_error(error, err)
+   end subroutine test_dense_rejects_inf_rhs
+
+   !> Dense solve rejects a NaN operator with a finite forcing
+   subroutine test_dense_rejects_nan_operator(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(dense_test_operator) :: op
+      type(pcm_dense_solver) :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), x(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      a(1, 2) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_test_operator(op, a, 1, .false., .false.)
+      call solver%reset(1)
+      call solver%solve(op, .false., b(:, 1), x, err)
+      call check_moist_error(error, err)
+   end subroutine test_dense_rejects_nan_operator
+
+   !> Dense complex solve rejects a NaN right-hand side
+   subroutine test_dense_complex_rejects_nan_rhs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(complex_test_operator) :: zop
+      type(pcm_dense_solver) :: solver
+      type(moist_error_type), allocatable :: err
+      complex(wp) :: za(nr, nr), zb(nr), zx(nr)
+      real(wp) :: re(nr, 2)
+
+      call random_complex_matrix(11, .false., za)
+      call new_complex_test_operator(zop, za, 1, .false.)
+      call random_rhs(13, re)
+      zb = cmplx(re(:, 1), re(:, 2), kind=wp)
+      zb(3) = cmplx(1.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), kind=wp)
+      call solver%reset(1)
+      call solver%solve_complex(zop, .false., zb, zx, err)
+      call check_moist_error(error, err)
+   end subroutine test_dense_complex_rejects_nan_rhs
+
+   !> Legacy LU wrapper rejects a NaN right-hand side
+   subroutine test_lu_rejects_nan_rhs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), q(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      b(4, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call solve_pcm_lu(a, b(:, 1), q, err)
+      call check_moist_error(error, err)
+   end subroutine test_lu_rejects_nan_rhs
+
+   !> Legacy LU wrapper rejects a NaN matrix
+   subroutine test_lu_rejects_nan_matrix(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), q(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      a(2, 2) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call solve_pcm_lu(a, b(:, 1), q, err)
+      call check_moist_error(error, err)
+   end subroutine test_lu_rejects_nan_matrix
+
+   !> A rejected non-finite right-hand side is not counted as a solve
+   subroutine test_dense_nonfinite_not_counted(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(dense_test_operator) :: op
+      type(pcm_dense_solver) :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: a(n, n), b(n, 1), x(n)
+
+      call general_matrix(a)
+      call rhs_block(b)
+      b(2, 1) = ieee_value(1.0_wp, ieee_positive_inf)
+      call new_test_operator(op, a, 1, .false., .false.)
+      call solver%reset(1)
+      call solver%solve(op, .true., b(:, 1), x, err)
+      call check(error, solver%n_solves, 0, "no failed solve counted")
+   end subroutine test_dense_nonfinite_not_counted
 
    !> Apply the matrix of a complex test operator or its plain transpose
    !>
@@ -919,9 +1030,7 @@ contains
       !> Error handling
       type(moist_error_type), allocatable, intent(out) :: error
 
-      associate (unused_self => self)
-      end associate
-      f = x**3 - 2.0_wp*x + 2.0_wp
+      f = x**3 - 2.0_wp*x + self%offset
       ! intent(out) already deallocated it; this marks the dummy as defined
       if (allocated(error)) deallocate (error)
    end subroutine cubic_test_problem_residual
@@ -1116,8 +1225,6 @@ contains
    !> - zsytrf/zsytrs on a complex symmetric (non-Hermitian) system with a
    !>   zero diagonal, both triangles and the default
    !> - zgetrs with trans = "t" solves the plain transpose
-   !>
-   !> @param[out] error  test failure
    subroutine test_lapack_complex(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1199,8 +1306,6 @@ contains
    end subroutine test_lapack_complex
 
    !> The complex test operator applies its matrix and plain transpose
-   !>
-   !> @param[out] error  test failure
    subroutine test_complex_operator_apply_matches_matrix(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1223,10 +1328,7 @@ contains
    end subroutine test_complex_operator_apply_matches_matrix
 
    !> Dense solver, real operator, complex right-hand side: all real kinds
-   !>
    !> - The real factors are reused; each complex solve counts two solves
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_complex_rhs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1277,8 +1379,6 @@ contains
    end subroutine test_dense_complex_rhs
 
    !> Complex symmetric operator: zsytrf, both orientations, reuse and reset
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_complex_symmetric(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1330,8 +1430,6 @@ contains
    end subroutine test_dense_complex_symmetric
 
    !> Complex general operator: zgetrf; the transpose is plain, not conjugated
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_complex_lu(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1360,8 +1458,6 @@ contains
    end subroutine test_dense_complex_lu
 
    !> Complex operators: invalid ids, shapes, singular matrices, family clashes
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_complex_invalid_calls(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1446,11 +1542,8 @@ contains
    end subroutine test_dense_complex_invalid_calls
 
    !> Defaults of an extension overriding only solve_block
-   !>
    !> - Real operator, complex right-hand side: parts go through solve_block
    !> - setup_complex does nothing; complex operators are an error
-   !>
-   !> @param[out] error  test failure
    subroutine test_solver_complex_defaults(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1488,11 +1581,8 @@ contains
    end subroutine test_solver_complex_defaults
 
    !> A second setup of the same id (repeated medium phase) factors the new matrix
-   !>
    !> - Solves after the second setup use the new matrix
    !> - A failed setup discards the previous factors
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_setup_replaces(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1545,8 +1635,6 @@ contains
    end subroutine test_dense_setup_replaces
 
    !> A second setup_complex of the same id factors the new complex matrix
-   !>
-   !> @param[out] error  test failure
    subroutine test_dense_setup_complex_replaces(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1758,8 +1846,6 @@ contains
    end subroutine grouped_block_matrix
 
    !> inexact is false for direct solvers and true for GMRES
-   !>
-   !> @param[out] error  test failure
    subroutine test_inexact(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1776,8 +1862,6 @@ contains
    end subroutine test_inexact
 
    !> Matrix-free kernels: never for direct solvers, by explicit storage for GMRES
-   !>
-   !> @param[out] error  test failure
    subroutine test_matrix_free(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1799,8 +1883,6 @@ contains
    end subroutine test_matrix_free
 
    !> Default settings; the default preconditioner is created by the first setup
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_defaults(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1839,11 +1921,8 @@ contains
    end subroutine test_gmres_defaults
 
    !> Real operators: GMRES equals the dense solution in both orientations
-   !>
    !> - Non-symmetric and symmetric operators, three right-hand sides each
    !> - Block size 2, so GMRES iterates
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_real_vs_dense(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1900,8 +1979,6 @@ contains
    end subroutine test_gmres_real_vs_dense
 
    !> Complex operators: complex GMRES equals the dense solution, plain transpose
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_complex_vs_dense(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1949,8 +2026,6 @@ contains
    end subroutine test_gmres_complex_vs_dense
 
    !> Real operator, complex right-hand side through the default solve_complex
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_complex_rhs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1966,8 +2041,6 @@ contains
    end subroutine test_gmres_complex_rhs
 
    !> Warm start: the exact solution needs no iteration, a nearby guess fewer
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_warm_start(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2036,8 +2109,6 @@ contains
    end subroutine test_gmres_warm_start
 
    !> A zero right-hand side gives x = 0 without iterating
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_zero_rhs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2074,8 +2145,6 @@ contains
    end subroutine test_gmres_zero_rhs
 
    !> Non-convergence within max_iter is an error that names the iterations
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_no_convergence(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2113,8 +2182,6 @@ contains
    end subroutine test_gmres_no_convergence
 
    !> A restart shorter than the iterations needed still converges
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_short_restart(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2152,8 +2219,6 @@ contains
    !>
    !> - Block size >= npt: the preconditioner is the exact inverse, so a
    !>   current preconditioner converges in one iteration and a stale one not
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_setup_rebuilds(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2237,8 +2302,6 @@ contains
    end subroutine test_gmres_setup_rebuilds
 
    !> Missing reset, invalid settings and shape mismatches are errors
-   !>
-   !> @param[out] error  test failure
    subroutine test_gmres_invalid_calls(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2293,8 +2356,6 @@ contains
    end subroutine test_gmres_invalid_calls
 
    !> Block size 1 is Jacobi: y = x / diag(op), both orientations
-   !>
-   !> @param[out] error  test failure
    subroutine test_block_jacobi_size_one(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2340,8 +2401,6 @@ contains
    !>   iteration, which also checks the unknowns (a - 1) npoint + idx
    !> - Without points, contiguous ranges mix the groups; GMRES still converges
    !> - Points of the wrong shape and npt not a multiple of npoint are errors
-   !>
-   !> @param[out] error  test failure
    subroutine test_block_jacobi_clusters(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2430,8 +2489,6 @@ contains
    end subroutine test_block_jacobi_clusters
 
    !> Complex block-Jacobi: one block is exact, small blocks converge to the dense solution
-   !>
-   !> @param[out] error  test failure
    subroutine test_block_jacobi_complex(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2476,8 +2533,6 @@ contains
    end subroutine test_block_jacobi_complex
 
    !> Newton converges to the root from x = -2 in a few full steps
-   !>
-   !> @param[out] error  test failure
    subroutine test_nonlinear_converges(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2502,8 +2557,6 @@ contains
    end subroutine test_nonlinear_converges
 
    !> Newton from x = 0 stalls at the local minimum of |F| and reports it at once
-   !>
-   !> @param[out] error  test failure
    subroutine test_nonlinear_stalls(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2532,8 +2585,6 @@ contains
    end subroutine test_nonlinear_stalls
 
    !> Too few Newton steps for the tolerance are an error
-   !>
-   !> @param[out] error  test failure
    subroutine test_nonlinear_max_iter(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2555,4 +2606,57 @@ contains
       if (allocated(error)) return
       call check(error, solver%nonlinear_iterations, 2, "iterations recorded")
    end subroutine test_nonlinear_max_iter
+
+   !> Newton rejects a NaN forcing
+   subroutine test_nonlinear_rejects_nan_forcing(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(2)
+
+      problem%npt = 2
+      problem%solver => solver
+      x = 1.0_wp
+      problem%offset = ieee_value(1.0_wp, ieee_quiet_nan)
+      call problem%solve(x, err)
+      call check_moist_error(error, err)
+   end subroutine test_nonlinear_rejects_nan_forcing
+
+   !> Newton rejects an infinite forcing
+   subroutine test_nonlinear_rejects_inf_forcing(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(2)
+
+      problem%npt = 2
+      problem%solver => solver
+      x = 1.0_wp
+      problem%offset = ieee_value(1.0_wp, ieee_positive_inf)
+      call problem%solve(x, err)
+      call check_moist_error(error, err)
+   end subroutine test_nonlinear_rejects_inf_forcing
+
+   !> Exact zero forcing returns x = 0 without error
+   subroutine test_nonlinear_zero_forcing(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(cubic_test_problem) :: problem
+      type(pcm_dense_solver), target :: solver
+      type(moist_error_type), allocatable :: err
+      real(wp) :: x(2)
+
+      problem%npt = 2
+      problem%solver => solver
+      x = 1.0_wp
+      problem%offset = 0.0_wp
+      call problem%solve(x, err)
+      call check_moist_error(error, err, "zero forcing")
+      if (allocated(error)) return
+      call check(error, all(x == 0.0_wp), "zero forcing gives x = 0")
+   end subroutine test_nonlinear_zero_forcing
 end module test_model_component_pcm_solvers

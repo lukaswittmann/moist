@@ -199,7 +199,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: v(:), q(:), grad_v(:)
-      real(wp) :: energy, grad_feps
+      real(wp) :: energy
       integer :: stat
 
       allocate (q(size(seed)), stat=stat)
@@ -222,7 +222,7 @@ contains
       end select
       call conductor_solve(state, v, energy, q, grad_v, error)
       if (allocated(error)) return
-      call conductor_weights(state, w_xyz, w_xi, w_f, grad_feps, error)
+      call conductor_weights(state, w_xyz, w_xi, w_f, error)
    end subroutine seed_weights
 
    !> Generated surface derivatives of q1^T A q2 at fixed q1 and q2

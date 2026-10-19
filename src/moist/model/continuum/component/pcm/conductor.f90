@@ -1,6 +1,7 @@
 !> Generated conductor kernel adapter for CPCM and COSMO
 module moist_model_continuum_component_pcm_conductor
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_utils_prettyprint, only: prettyprinter
@@ -14,13 +15,13 @@ module moist_model_continuum_component_pcm_conductor
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
-      & pcm_gmres_solver
+      & pcm_gmres_solver, pcm_check_finite
    use pcmgen_gauss_conductor, only: conductor_state, &
-      & conductor_assemble, conductor_medium, conductor_solve, conductor_weights, conductor_tangent
+      & conductor_assemble, conductor_medium, conductor_solve, conductor_weights, conductor_param_weights, conductor_tangent
    use pcmgen_point_conductor, only: conductor_point_state, &
       & conductor_point_assemble, conductor_point_medium, conductor_point_solve, &
-      & conductor_point_weights, conductor_point_tangent
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+      & conductor_point_weights, conductor_point_param_weights, conductor_point_tangent
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
    implicit none(type, external)
    private
 
@@ -41,6 +42,7 @@ module moist_model_continuum_component_pcm_conductor
       procedure :: update => conductor_update
       procedure :: ensure_charges => conductor_ensure_charges
       procedure :: get_surface_weights => conductor_get_surface_weights
+      procedure :: get_parameter_adjoint => conductor_get_parameter_adjoint
       procedure :: get_gradient_surface_weights => conductor_get_gradient_surface_weights
       procedure :: get_host_surface_weights => conductor_get_host_surface_weights
       procedure :: surface_weight_tangent => conductor_surface_weight_tangent
@@ -107,7 +109,7 @@ contains
       type(moist_pcm_parameters_type), intent(in), optional :: param
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "[new_component_cpcm] Dielectric constant must be >= 1")
          return
       end if
@@ -146,7 +148,7 @@ contains
       type(moist_pcm_parameters_type), intent(in), optional :: param
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "[new_component_cosmo] Dielectric constant must be >= 1")
          return
       end if
@@ -186,6 +188,10 @@ contains
       logical :: gaussian, field
 
       gaussian = allocated(cavity%xi0)
+      if (gaussian .and. .not. allocated(cavity%f)) then
+         call fatal_error(error, "Conductor PCM Gaussian surface requires switching factors")
+         if (allocated(error)) return
+      end if
       field = cavity%has_field_dependent_geometry()
       if (gaussian) then
          allocate (gaussian_potential_request_type :: potential)
@@ -236,6 +242,11 @@ contains
          call fatal_error(error, "Conductor PCM requires surface positions")
          return
       end if
+      self%smeared = allocated(cavity%xi0)
+      if (self%smeared .and. .not. allocated(cavity%f)) then
+         call fatal_error(error, "Conductor PCM Gaussian surface requires switching factors")
+         if (allocated(error)) return
+      end if
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM setup", category=cat_setup)
@@ -255,7 +266,6 @@ contains
       solver%nonlinear_tol = self%param%newton_tol
       solver%nonlinear_max_iter = self%param%newton_maxiter
 
-      self%smeared = allocated(cavity%xi0) .and. allocated(cavity%f)
       if (self%smeared) then
          call self%ctx%timer%start("Interaction matrix")
          call conductor_assemble(self%gauss, cavity%xyz, cavity%xi0, cavity%f, error, solver)
@@ -304,6 +314,8 @@ contains
          call fatal_error(error, "Conductor PCM potential size mismatch")
          return
       end if
+      call pcm_check_finite(phi, "host potential", "[conductor_ensure_charges]", error)
+      if (allocated(error)) return
       if (allocated(self%phi)) then
          if (size(self%phi) == size(phi)) then
             if (all(self%phi == phi) .and. self%charges_valid) return
@@ -324,6 +336,9 @@ contains
          return
       end if
       call self%ctx%timer%stop("PCM solve")
+      ! Generated conductor solve has no solver to catch a non-finite result
+      call pcm_check_finite(self%q, "surface charge", "[conductor_ensure_charges]", error)
+      if (allocated(error)) return
       self%charges_valid = .true.
    end subroutine conductor_ensure_charges
 
@@ -335,19 +350,18 @@ contains
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_a(:), w_xi(:), w_f(:)
-      real(wp) :: w_feps
 
       call self%ensure_charges(coupling, cavity, error)
       if (allocated(error)) return
       allocate (w_xyz(3, cavity%ngrid))
       if (self%smeared) then
          allocate (w_xi(cavity%ngrid), w_f(cavity%ngrid))
-         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, w_feps, error)
+         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_xi=w_xi, w_f=w_f)
       else
          allocate (w_a(cavity%ngrid))
-         call conductor_point_weights(self%point, w_xyz, w_a, w_feps, error)
+         call conductor_point_weights(self%point, w_xyz, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_a=w_a)
       end if
@@ -398,8 +412,6 @@ contains
       real(wp), allocatable :: hvp_r(:, :, :), hvp_xi(:, :), hvp_f(:, :), hvp_a(:, :), hvp_v(:, :)
       !> Kernel weights, recomputed because the tangent requires them
       real(wp), allocatable :: w_xyz(:, :), w_xi(:), w_f(:), w_a(:)
-      !> Dielectric-factor weight, unused
-      real(wp) :: w_feps
       !> Number of grid points
       integer :: ngrid
 
@@ -416,7 +428,7 @@ contains
          call pcm_tangent_block(direction%w_f, ngrid, "w_f", df, error)
          if (allocated(error)) return
          allocate (hvp_xi(ngrid, 1), hvp_f(ngrid, 1), w_xi(ngrid), w_f(ngrid))
-         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, w_feps, error)
+         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, error)
          if (allocated(error)) return
          call conductor_tangent(self%gauss, dr, dxi, df, dv, hvp_r, hvp_xi, hvp_f, hvp_v, error)
          if (allocated(error)) return
@@ -426,7 +438,7 @@ contains
          call pcm_tangent_block(direction%w_a, ngrid, "w_a", da, error)
          if (allocated(error)) return
          allocate (hvp_a(ngrid, 1), w_a(ngrid))
-         call conductor_point_weights(self%point, w_xyz, w_a, w_feps, error)
+         call conductor_point_weights(self%point, w_xyz, w_a, error)
          if (allocated(error)) return
          call conductor_point_tangent(self%point, dr, da, dv, hvp_r, hvp_a, hvp_v, error)
          if (allocated(error)) return
@@ -480,5 +492,47 @@ contains
          call acc%add_surface_weights(error, w_xyz=w_xyz)
       end if
    end subroutine conductor_get_host_surface_weights
+
+   !> Derivative of the energy with respect to the solvent permittivity
+   !>
+   !> The kernel differentiates the dielectric factor `feps`; the chain rule of
+   !> the model factor gives `dE/deps`, zero for an infinite permittivity
+   !>
+   !> - CPCM: `d feps/d eps = 1/eps^2`
+   !> - COSMO: `d feps/d eps = 1.5/(eps + 1/2)^2`
+   !>
+   !> @param[in,out] self  conductor component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine conductor_get_parameter_adjoint(self, item, error)
+      !> Conductor component with current charges
+      class(model_continuum_component_pcm_conductor), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_feps, dfeps
+
+      if (self%smeared) then
+         call conductor_param_weights(self%gauss, w_feps, error)
+      else
+         call conductor_point_param_weights(self%point, w_feps, error)
+      end if
+      if (allocated(error)) return
+      dfeps = 0.0_wp
+      if (ieee_is_finite(self%epsilon)) then
+         select type (self)
+         type is (model_continuum_component_cpcm)
+            dfeps = 1.0_wp/self%epsilon**2
+         type is (model_continuum_component_cosmo)
+            dfeps = 1.5_wp/(self%epsilon + 0.5_wp)**2
+         class default
+            call fatal_error(error, "Conductor parameter derivative needs the factor f(eps)")
+            return
+         end select
+      end if
+      allocate (item%dg_deps, source=w_feps*dfeps)
+
+   end subroutine conductor_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_conductor

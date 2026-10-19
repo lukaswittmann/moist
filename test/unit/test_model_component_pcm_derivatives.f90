@@ -10,6 +10,8 @@
 !> - `tangent`: `surface_weight_tangent` against six-point differences of the
 !>   operator weights and trace adjoints at fixed traces; iSwiG seed (k1 = k2)
 !>   and SvdW-DROP seed (k1 /= k2), Gaussian and point surfaces
+!> - `mf_tangent`: the matrix-free GMRES tangent against the dense analytic
+!>   tangent of the same state, the dense one being the one `tangent` validates
 !> - `nuclear_gradient`: `get_gradient` with moving nuclei and fixed electron
 !>   charges against energy differences, the cavity rebuilt at every geometry
 !>
@@ -45,7 +47,7 @@ module test_model_component_pcm_derivatives
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
       & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, new_pcm, make_component, &
       & seed_drop, seed_name, first_seed, new_seed_cavity, fd_cavity, get_seed, nmol, &
-      & mol_label, get_solute, thr_vacuous, stage_energy, answer_sources, host_energy, host_charges
+      & mol_label, get_solute, thr_vacuous, pcm_physics, stage_energy, answer_sources, host_energy, host_charges
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -54,12 +56,15 @@ module test_model_component_pcm_derivatives
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
    use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type, &
       & point_potential_request_type, nuclear_charge_request_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type
+   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
+      & parameter_adjoint_response_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & moist_pcm_parameters_type, solver_type
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, &
       & new_component_cpcm
    use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu, pcm_storage_matrix_free
+   use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, &
+      & new_component_slic
    implicit none(type, external)
    private
 
@@ -105,8 +110,25 @@ module test_model_component_pcm_derivatives
    !>
    !> The SLIC Newton tolerance sets the largest deviation, 9e-10 relative
    real(wp), parameter :: nuc_atol = 1.0e-12_wp, nuc_rtol = 1.0e-8_wp
+   !> Parameter derivatives against six-point energy differences
+   !>
+   !> Absolute part relative to max(1, |E|), relative part of the difference
+   !>
+   !> Measured over every model and parameter, Gaussian and point: at most
+   !> 3.5e-14 absolute and 1.4e-11 relative (SS(V)PE eps), the six-point
+   !> stencil being roundoff-limited; tolerances are about ten times that
+   real(wp), parameter :: param_atol = 1.0e-15_wp, param_rtol = 1.5e-10_wp
    !> Weight differences, per channel relative to its largest entry
    real(wp), parameter :: hess_atol = 3.0e-12_wp, hess_rtol = 1.0e-9_wp
+   !> Matrix-free tangent against the dense analytic tangent, per channel
+   !>
+   !> Absolute part, and relative part of the largest dense entry; the dense
+   !> solves are direct and the GMRES tolerance is 1e-13
+   !>
+   !> Measured over every model, solute, seed, surface and direction: at most
+   !> 4.8e-14 absolute (CPCM dE/dphi) and 1.5e-12 relative to the channel scale
+   !> (entries above 1e-3); tolerances are about ten times that
+   real(wp), parameter :: mf_atol = 5.0e-13_wp, mf_rtol = 1.5e-11_wp
    !> Energy derivative relative to |E| below which an expected-active direction is vacuous
    !>
    !> The difference noise is about 1e-12 |E|
@@ -140,7 +162,8 @@ module test_model_component_pcm_derivatives
 
 contains
 
-   !> Collect the derivative tests, three per model and the fixture and CPCM checks
+   !> Collect the derivative tests: per model surface gradient, tangents, nuclear gradient and
+   !> parameter derivatives; then the fixture and CPCM checks
    !>
    !> @param[out] testsuite Collection of tests
    subroutine collect_model_component_pcm_derivatives(testsuite)
@@ -151,31 +174,84 @@ contains
          & new_unittest("cpcm_surface_gradient", test_cpcm_surface_gradient), &
          & new_unittest("cpcm_iterative_surface_gradient", test_cpcm_iterative_surface_gradient), &
          & new_unittest("cpcm_tangent", test_cpcm_tangent), &
+         & new_unittest("cpcm_mf_tangent", test_cpcm_mf_tangent), &
          & new_unittest("cpcm_nuclear_gradient", test_cpcm_nuclear_gradient), &
+         & new_unittest("cpcm_parameter_derivatives_gaussian", test_cpcm_parameter_derivatives_gaussian), &
+         & new_unittest("cpcm_parameter_derivatives_point", test_cpcm_parameter_derivatives_point), &
+         & new_unittest("cpcm_mf_parameter_derivatives_gaussian", test_cpcm_mf_parameter_derivatives_gaussian), &
+         & new_unittest("cpcm_mf_parameter_derivatives_point", test_cpcm_mf_parameter_derivatives_point), &
          & new_unittest("cosmo_surface_gradient", test_cosmo_surface_gradient), &
          & new_unittest("cosmo_tangent", test_cosmo_tangent), &
+         & new_unittest("cosmo_mf_tangent", test_cosmo_mf_tangent), &
          & new_unittest("cosmo_nuclear_gradient", test_cosmo_nuclear_gradient), &
+         & new_unittest("cosmo_parameter_derivatives_gaussian", test_cosmo_parameter_derivatives_gaussian), &
+         & new_unittest("cosmo_parameter_derivatives_point", test_cosmo_parameter_derivatives_point), &
+         & new_unittest("cosmo_mf_parameter_derivatives_gaussian", test_cosmo_mf_parameter_derivatives_gaussian), &
+         & new_unittest("cosmo_mf_parameter_derivatives_point", test_cosmo_mf_parameter_derivatives_point), &
          & new_unittest("iefpcm_surface_gradient", test_iefpcm_surface_gradient), &
          & new_unittest("iefpcm_tangent", test_iefpcm_tangent), &
+         & new_unittest("iefpcm_mf_tangent", test_iefpcm_mf_tangent), &
          & new_unittest("iefpcm_nuclear_gradient", test_iefpcm_nuclear_gradient), &
+         & new_unittest("iefpcm_parameter_derivatives_gaussian", test_iefpcm_parameter_derivatives_gaussian), &
+         & new_unittest("iefpcm_parameter_derivatives_point", test_iefpcm_parameter_derivatives_point), &
+         & new_unittest("iefpcm_mf_parameter_derivatives_gaussian", test_iefpcm_mf_parameter_derivatives_gaussian), &
+         & new_unittest("iefpcm_mf_parameter_derivatives_point", test_iefpcm_mf_parameter_derivatives_point), &
          & new_unittest("ssvpe_surface_gradient", test_ssvpe_surface_gradient), &
          & new_unittest("ssvpe_tangent", test_ssvpe_tangent), &
+         & new_unittest("ssvpe_mf_tangent", test_ssvpe_mf_tangent), &
          & new_unittest("ssvpe_nuclear_gradient", test_ssvpe_nuclear_gradient), &
+         & new_unittest("ssvpe_parameter_derivatives_gaussian", test_ssvpe_parameter_derivatives_gaussian), &
+         & new_unittest("ssvpe_parameter_derivatives_point", test_ssvpe_parameter_derivatives_point), &
+         & new_unittest("ssvpe_mf_parameter_derivatives_gaussian", test_ssvpe_mf_parameter_derivatives_gaussian), &
+         & new_unittest("ssvpe_mf_parameter_derivatives_point", test_ssvpe_mf_parameter_derivatives_point), &
          & new_unittest("dpcm_surface_gradient", test_dpcm_surface_gradient), &
          & new_unittest("dpcm_tangent", test_dpcm_tangent), &
+         & new_unittest("dpcm_mf_tangent", test_dpcm_mf_tangent), &
          & new_unittest("dpcm_nuclear_gradient", test_dpcm_nuclear_gradient), &
+         & new_unittest("dpcm_parameter_derivatives_gaussian", test_dpcm_parameter_derivatives_gaussian), &
+         & new_unittest("dpcm_parameter_derivatives_point", test_dpcm_parameter_derivatives_point), &
+         & new_unittest("dpcm_mf_parameter_derivatives_gaussian", test_dpcm_mf_parameter_derivatives_gaussian), &
+         & new_unittest("dpcm_mf_parameter_derivatives_point", test_dpcm_mf_parameter_derivatives_point), &
          & new_unittest("dpcm_original_surface_gradient", test_dpcm_original_surface_gradient), &
          & new_unittest("dpcm_original_tangent", test_dpcm_original_tangent), &
+         & new_unittest("dpcm_original_mf_tangent", test_dpcm_original_mf_tangent), &
          & new_unittest("dpcm_original_nuclear_gradient", test_dpcm_original_nuclear_gradient), &
+         & new_unittest("dpcm_original_parameter_derivatives_gaussian", test_dpcm_original_parameter_derivatives_gaussian), &
+         & new_unittest("dpcm_original_parameter_derivatives_point", test_dpcm_original_parameter_derivatives_point), &
+         & new_unittest("dpcm_original_mf_parameter_derivatives_gaussian", test_dpcm_original_mf_parameter_derivatives_gaussian), &
+         & new_unittest("dpcm_original_mf_parameter_derivatives_point", test_dpcm_original_mf_parameter_derivatives_point), &
          & new_unittest("lpb_surface_gradient", test_lpb_surface_gradient), &
          & new_unittest("lpb_tangent", test_lpb_tangent), &
+         & new_unittest("lpb_mf_tangent", test_lpb_mf_tangent), &
          & new_unittest("lpb_nuclear_gradient", test_lpb_nuclear_gradient), &
+         & new_unittest("lpb_parameter_derivatives_gaussian", test_lpb_parameter_derivatives_gaussian), &
+         & new_unittest("lpb_parameter_derivatives_point", test_lpb_parameter_derivatives_point), &
+         & new_unittest("lpb_mf_parameter_derivatives_gaussian", test_lpb_mf_parameter_derivatives_gaussian), &
+         & new_unittest("lpb_mf_parameter_derivatives_point", test_lpb_mf_parameter_derivatives_point), &
          & new_unittest("slic_surface_gradient", test_slic_surface_gradient), &
          & new_unittest("slic_tangent", test_slic_tangent), &
+         & new_unittest("slic_mf_tangent", test_slic_mf_tangent), &
          & new_unittest("slic_nuclear_gradient", test_slic_nuclear_gradient), &
+         & new_unittest("slic_parameter_derivatives_gaussian", test_slic_parameter_derivatives_gaussian), &
+         & new_unittest("slic_parameter_derivatives_point", test_slic_parameter_derivatives_point), &
+         & new_unittest("slic_mf_parameter_derivatives_gaussian", test_slic_mf_parameter_derivatives_gaussian), &
+         & new_unittest("slic_mf_parameter_derivatives_point", test_slic_mf_parameter_derivatives_point), &
+         & new_unittest("slic_default_mu_parameter_derivatives_gaussian", &
+         & test_slic_default_mu_parameter_derivatives_gaussian), &
+         & new_unittest("slic_default_mu_parameter_derivatives_point", &
+         & test_slic_default_mu_parameter_derivatives_point), &
+         & new_unittest("slic_default_mu_mf_parameter_derivatives_gaussian", &
+         & test_slic_default_mu_mf_parameter_derivatives_gaussian), &
+         & new_unittest("slic_default_mu_mf_parameter_derivatives_point", &
+         & test_slic_default_mu_mf_parameter_derivatives_point), &
          & new_unittest("nonlocal_surface_gradient", test_nonlocal_surface_gradient), &
          & new_unittest("nonlocal_tangent", test_nonlocal_tangent), &
+         & new_unittest("nonlocal_mf_tangent", test_nonlocal_mf_tangent), &
          & new_unittest("nonlocal_nuclear_gradient", test_nonlocal_nuclear_gradient), &
+         & new_unittest("nonlocal_parameter_derivatives_gaussian", test_nonlocal_parameter_derivatives_gaussian), &
+         & new_unittest("nonlocal_parameter_derivatives_point", test_nonlocal_parameter_derivatives_point), &
+         & new_unittest("nonlocal_mf_parameter_derivatives_gaussian", test_nonlocal_mf_parameter_derivatives_gaussian), &
+         & new_unittest("nonlocal_mf_parameter_derivatives_point", test_nonlocal_mf_parameter_derivatives_point), &
          & new_unittest("component_paths_gaussian", test_gaussian_component_paths), &
          & new_unittest("component_paths_point", test_point_component_paths), &
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
@@ -212,6 +288,13 @@ contains
       call run_tangent(error, pcm_cpcm)
    end subroutine test_cpcm_tangent
 
+   !> CPCM: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_cpcm_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_cpcm, mf=.true.)
+   end subroutine test_cpcm_mf_tangent
+
    !> CPCM: nuclear gradient
    subroutine test_cpcm_nuclear_gradient(error)
       !> Test failure
@@ -232,6 +315,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_tangent(error, pcm_cosmo)
    end subroutine test_cosmo_tangent
+
+   !> COSMO: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_cosmo_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_cosmo, mf=.true.)
+   end subroutine test_cosmo_mf_tangent
 
    !> COSMO: nuclear gradient
    subroutine test_cosmo_nuclear_gradient(error)
@@ -254,6 +344,13 @@ contains
       call run_tangent(error, pcm_iefpcm)
    end subroutine test_iefpcm_tangent
 
+   !> IEFPCM: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_iefpcm_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_iefpcm, mf=.true.)
+   end subroutine test_iefpcm_mf_tangent
+
    !> IEF-PCM: nuclear gradient
    subroutine test_iefpcm_nuclear_gradient(error)
       !> Test failure
@@ -274,6 +371,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_tangent(error, pcm_ssvpe)
    end subroutine test_ssvpe_tangent
+
+   !> SSVPE: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_ssvpe_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_ssvpe, mf=.true.)
+   end subroutine test_ssvpe_mf_tangent
 
    !> SS(V)PE: nuclear gradient
    subroutine test_ssvpe_nuclear_gradient(error)
@@ -296,6 +400,13 @@ contains
       call run_tangent(error, pcm_dpcm)
    end subroutine test_dpcm_tangent
 
+   !> DPCM: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_dpcm_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_dpcm, mf=.true.)
+   end subroutine test_dpcm_mf_tangent
+
    !> DPCM: nuclear gradient
    subroutine test_dpcm_nuclear_gradient(error)
       !> Test failure
@@ -316,6 +427,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_tangent(error, pcm_dpcm_original)
    end subroutine test_dpcm_original_tangent
+
+   !> DPCM ORIGINAL: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_dpcm_original_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_dpcm_original, mf=.true.)
+   end subroutine test_dpcm_original_mf_tangent
 
    !> Original DPCM: nuclear gradient
    subroutine test_dpcm_original_nuclear_gradient(error)
@@ -338,6 +456,13 @@ contains
       call run_tangent(error, pcm_lpb)
    end subroutine test_lpb_tangent
 
+   !> LPB: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_lpb_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_lpb, mf=.true.)
+   end subroutine test_lpb_mf_tangent
+
    !> LPB: nuclear gradient
    subroutine test_lpb_nuclear_gradient(error)
       !> Test failure
@@ -359,6 +484,13 @@ contains
       call run_tangent(error, pcm_slic)
    end subroutine test_slic_tangent
 
+   !> SLIC: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_slic_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_slic, mf=.true.)
+   end subroutine test_slic_mf_tangent
+
    !> SLIC: nuclear gradient
    subroutine test_slic_nuclear_gradient(error)
       !> Test failure
@@ -379,6 +511,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_tangent(error, pcm_nonlocal)
    end subroutine test_nonlocal_tangent
+
+   !> Nonlocal: surface weight tangent from matrix-free GMRES, against dense
+   subroutine test_nonlocal_mf_tangent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent(error, pcm_nonlocal, mf=.true.)
+   end subroutine test_nonlocal_mf_tangent
 
    !> Nonlocal: nuclear gradient
    subroutine test_nonlocal_nuclear_gradient(error)
@@ -414,21 +553,41 @@ contains
       end do
    end subroutine run_surface_gradient
 
+   !> Matrix-free storage with tight GMRES
+   !>
+   !> Tolerance 1e-13, restart 100; a surface within one 256-point preconditioner
+   !> block converges in few iterations, larger ones need the iteration budget
+   !>
+   !> @param[in,out] pcm Component under test
+   subroutine set_matrix_free(pcm)
+      !> Component under test
+      class(model_continuum_component_pcm), intent(inout) :: pcm
+
+      pcm%param%solver = solver_type%iterative
+      pcm%param%storage = pcm_storage_matrix_free
+      pcm%param%solver_tol = 1.0e-13_wp
+      pcm%param%solver_maxiter = 2000
+      pcm%param%solver_restart = 100
+   end subroutine set_matrix_free
+
    !> Surface weight tangent on both seeds (SLIC: DROP only), Gaussian and point surfaces of every solute
    !> @param[in]  kind  Model identifier
-   subroutine run_tangent(error, kind)
+   !> @param[in]  mf    Tangent from the matrix-free GMRES path (default dense)
+   subroutine run_tangent(error, kind, mf)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
       integer, intent(in) :: kind
+      !> Matrix-free GMRES tangent
+      logical, intent(in), optional :: mf
       !> Solute and seed indices
       integer :: imol, seed
 
       do imol = 1, nmol
          do seed = first_seed(kind), seed_drop
-            call check_tangent(error, kind, imol, seed, .true.)
+            call check_tangent(error, kind, imol, seed, .true., mf)
             if (allocated(error)) return
-            call check_tangent(error, kind, imol, seed, .false.)
+            call check_tangent(error, kind, imol, seed, .false., mf)
             if (allocated(error)) return
          end do
       end do
@@ -499,6 +658,8 @@ contains
       integer :: ich, k, seed
       !> Failure context
       character(len=200) :: context, prefix
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
 
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error)
@@ -545,6 +706,10 @@ contains
          end if
       end do
 
+      ! operators of the unchanged cavity, assembled once for every trace
+      call pcm%update(mol, cavity, err)
+      call check_moist_error(error, err, "update")
+      if (allocated(error)) return
       call host_traces(mol, q, cavity, smeared, phi, dphi_dr)
       call trace_adjoints(pcm, mol, cavity, phi, dphi_dr, w_phi, w_dphi_dr, error)
       if (allocated(error)) return
@@ -602,7 +767,8 @@ contains
    !> @param[in]  imol    Solute index
    !> @param[in]  seed    Seed of the synthetic cavity
    !> @param[in]  smeared Gaussian surface (else point surface)
-   subroutine check_tangent(error, kind, imol, seed, smeared)
+   !> @param[in]  mf      Matrix-free tangent against the dense analytic one (default dense against differences)
+   subroutine check_tangent(error, kind, imol, seed, smeared, mf)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
@@ -613,11 +779,13 @@ contains
       integer, intent(in) :: seed
       !> Gaussian surface
       logical, intent(in) :: smeared
+      !> Matrix-free GMRES tangent
+      logical, intent(in), optional :: mf
 
-      !> Run context borrowed by the component
+      !> Run context borrowed by the components
       type(moist_context_type), target :: ctx
-      !> Component under test
-      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Component under test and the dense component of the stencil
+      class(model_continuum_component_pcm), allocatable :: pcm, ref
       !> Solute
       type(structure_type) :: mol
       !> Synthetic cavity
@@ -632,16 +800,23 @@ contains
       integer :: ich, i
       !> Prefix of the failure context
       character(len=128) :: prefix
+      !> Matrix-free GMRES tangent
+      logical :: matrix_free
 
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error)
       if (allocated(error)) return
+      call new_pcm(kind, ctx, ref, error)
+      if (allocated(error)) return
+      matrix_free = .false.
+      if (present(mf)) matrix_free = mf
+      if (matrix_free) call set_matrix_free(pcm)
       call get_solute(imol, mol)
       call get_seed(seed, smeared, mol, cavity, error)
       if (allocated(error)) return
       h = merge(step_drop, step, seed == seed_drop)
       prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))// &
-         & merge(" Gaussian", " point   ", smeared)
+         & merge(" Gaussian", " point   ", smeared)//merge(" MF", "   ", matrix_free)
       call host_traces(mol, host_charges(mol), cavity, smeared, phi, dphi_dr)
       allocate (vn(cavity%ngrid))
       do i = 1, cavity%ngrid
@@ -655,17 +830,17 @@ contains
          do ich = 1, nchannel
             if (.not. provides(cavity, ich)) cycle
             call channel_direction(cavity, ich, direction)
-            call tangent_case(error, pcm, mol, cavity, phi, vn, direction, zero, zero, h, &
+            call tangent_case(error, pcm, ref, mol, cavity, phi, vn, direction, zero, zero, h, &
                & trim(prefix)//", channel "//trim(channel_name(ich)), "")
             if (allocated(error)) return
          end do
 
          call clear_direction(direction)
-         call tangent_case(error, pcm, mol, cavity, phi, vn, direction, du, zero, h, &
+         call tangent_case(error, pcm, ref, mol, cavity, phi, vn, direction, du, zero, h, &
             & trim(prefix)//", phi", "")
          if (allocated(error)) return
          if (pcm%uses_normal_trace()) then
-            call tangent_case(error, pcm, mol, cavity, phi, vn, direction, zero, dq, h, &
+            call tangent_case(error, pcm, ref, mol, cavity, phi, vn, direction, zero, dq, h, &
                & trim(prefix)//", vn", "")
             if (allocated(error)) return
          end if
@@ -675,14 +850,21 @@ contains
       do ich = 1, nchannel
          if (provides(cavity, ich)) call add_channel_direction(cavity, ich, direction)
       end do
-      call tangent_case(error, pcm, mol, cavity, phi, vn, direction, du, dq, h, &
+      call tangent_case(error, pcm, ref, mol, cavity, phi, vn, direction, du, dq, h, &
          & trim(prefix)//", joint", active_channels(kind, smeared))
    end subroutine check_tangent
 
    !> One direction of the tangent check
    !>
+   !> Dense components are checked against the six-point difference of the
+   !> weights at fixed traces. A matrix-free component is checked against the
+   !> dense analytic tangent of `ref` at the same state, every weight channel
+   !> and adjoint tangent entrywise. A direction without surface motion keeps
+   !> the operators of the reference cavity, the stencil only changes the traces
+   !>
    !> @param[out]   error     Test failure
    !> @param[in,out] pcm      Component under test
+   !> @param[in,out] ref      Dense component, the oracle (stencil or analytic tangent)
    !> @param[in]    mol       Solute
    !> @param[in,out] cavity   Reference cavity
    !> @param[in]    phi       Fixed potential trace (ngrid)
@@ -693,11 +875,13 @@ contains
    !> @param[in]    h         Step of the differences
    !> @param[in]    prefix    Failure context prefix
    !> @param[in]    channels  Channels whose tangent must not vanish (blank for none)
-   subroutine tangent_case(error, pcm, mol, cavity, phi, vn, direction, du, dq, h, prefix, channels)
+   subroutine tangent_case(error, pcm, ref, mol, cavity, phi, vn, direction, du, dq, h, prefix, channels)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Component under test
       class(model_continuum_component_pcm), intent(inout) :: pcm
+      !> Dense component, the oracle
+      class(model_continuum_component_pcm), intent(inout) :: ref
       !> Solute
       type(structure_type), intent(in) :: mol
       !> Reference cavity
@@ -725,17 +909,25 @@ contains
       type(fd_cavity) :: trial
       !> Weights and adjoints at the reference point, adjoint tangents
       real(wp), allocatable :: w_phi(:), w_vn(:), dw_phi(:), dw_vn(:)
-      !> Adjoints on the stencil
-      real(wp), allocatable :: s_phi(:, :), s_vn(:, :)
-      !> Tangent accumulator, reference and stencil weights
-      type(cavity_surface_adjoint_type) :: tangent, acc0, acc(6)
+      !> Adjoints on the stencil, adjoint tangents of the dense oracle
+      real(wp), allocatable :: s_phi(:, :), s_vn(:, :), dense_phi(:), dense_vn(:)
+      !> Tangent accumulator, dense tangent, reference and stencil weights
+      type(cavity_surface_adjoint_type) :: tangent, dense, acc0, acc(6)
       !> Stencil index, channel index and number of grid points
       integer :: k, ich, ngrid
       !> Whether the expected channels must be active
       logical :: active
+      !> The surface moves along the direction
+      logical :: moves
 
       ngrid = cavity%ngrid
       active = len_trim(channels) > 0
+      moves = allocated(direction%w_xyz) .or. allocated(direction%w_n) .or. allocated(direction%w_k1) &
+         & .or. allocated(direction%w_k2) .or. allocated(direction%w_xi) .or. allocated(direction%w_f) &
+         & .or. allocated(direction%w_a)
+      call pcm%update(mol, cavity, err)
+      call check_moist_error(error, err, prefix//": update")
+      if (allocated(error)) return
       call fixed_trace_state(pcm, mol, cavity, phi, vn, acc0, w_phi, w_vn, error)
       if (allocated(error)) return
       call tangent%init(ngrid)
@@ -749,10 +941,40 @@ contains
          & message=prefix//": dw_vn is returned exactly for normal-trace models")
       if (allocated(error)) return
 
+      if (pcm%param%storage == pcm_storage_matrix_free .or. .not. moves) then
+         call ref%update(mol, cavity, err)
+         call check_moist_error(error, err, prefix//": update")
+         if (allocated(error)) return
+      end if
+      if (pcm%param%storage == pcm_storage_matrix_free) then
+         call fixed_trace_state(ref, mol, cavity, phi, vn, acc0, w_phi, w_vn, error)
+         if (allocated(error)) return
+         call dense%init(ngrid)
+         call ref%surface_weight_tangent(cavity, direction, du, dense, dense_phi, err, &
+            & dvn=dq, dw_vn=dense_vn)
+         call check_moist_error(error, err, prefix//": dense tangent")
+         if (allocated(error)) return
+         do ich = 1, size(weight_name)
+            call compare_dense(error, prefix, trim(weight_name(ich)), weights_of(tangent, weight_name(ich)), &
+               & weights_of(dense, weight_name(ich)), active .and. expects(channels, weight_channel(ich)))
+            if (allocated(error)) return
+         end do
+         call compare_dense(error, prefix, "dE/dphi", dw_phi, dense_phi, active)
+         if (allocated(error)) return
+         if (pcm%uses_normal_trace()) call compare_dense(error, prefix, "dE/dvn", dw_vn, dense_vn, active)
+         return
+      end if
+
       allocate (s_phi(ngrid, 6), s_vn(ngrid, 6))
+      trial = cavity
       do k = 1, 6
-         call displace(cavity, direction, fd6_offsets(k)*h, trial)
-         call fixed_trace_state(pcm, mol, trial, phi + fd6_offsets(k)*h*du, &
+         if (moves) then
+            call displace(cavity, direction, fd6_offsets(k)*h, trial)
+            call ref%update(mol, trial, err)
+            call check_moist_error(error, err, prefix//": update")
+            if (allocated(error)) return
+         end if
+         call fixed_trace_state(ref, mol, trial, phi + fd6_offsets(k)*h*du, &
             & vn + fd6_offsets(k)*h*dq, acc(k), w_phi, w_vn, error)
          if (allocated(error)) return
          s_phi(:, k) = w_phi
@@ -771,6 +993,48 @@ contains
          call compare_channel(error, prefix, "dE/dvn", dw_vn, s_vn, h, active)
       end if
    end subroutine tangent_case
+
+   !> Compare a matrix-free tangent entrywise with the dense analytic tangent
+   !>
+   !> Passes when max |mf - dense| <= mf_atol + mf_rtol max |dense| over the
+   !> channel; an active channel must not vanish in either
+   !>
+   !> @param[out] error    Test failure
+   !> @param[in]  prefix   Failure context prefix
+   !> @param[in]  name     Channel name
+   !> @param[in]  analytic Matrix-free tangent
+   !> @param[in]  dense    Dense analytic tangent
+   !> @param[in]  active   The tangent must not vanish
+   subroutine compare_dense(error, prefix, name, analytic, dense, active)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Failure context prefix
+      character(len=*), intent(in) :: prefix
+      !> Channel name
+      character(len=*), intent(in) :: name
+      !> Matrix-free tangent
+      real(wp), intent(in) :: analytic(:)
+      !> Dense analytic tangent
+      real(wp), intent(in) :: dense(:)
+      !> The tangent must not vanish
+      logical, intent(in) :: active
+
+      !> Largest deviation and largest dense entry
+      real(wp) :: dev, scale
+      !> Failure context
+      character(len=200) :: context
+
+      dev = maxval(abs(analytic - dense))
+      scale = maxval(abs(dense))
+      write (context, '(a,", ",a,": max dev ",es10.2," scale ",es10.2)') prefix, name, dev, scale
+      call check(error, dev <= mf_atol + mf_rtol*scale, &
+         & message="matrix-free tangent disagrees with the dense tangent", more=trim(context))
+      if (allocated(error)) return
+      if (active) then
+         call check(error, scale > thr_vacuous .and. maxval(abs(analytic)) > thr_vacuous, &
+            & message="vacuous tangent", more=trim(context))
+      end if
+   end subroutine compare_dense
 
    !> Compare an analytic tangent entrywise with the six-point difference
    !>
@@ -1099,7 +1363,9 @@ contains
 
    !> Energy with the potential and its spatial derivative given directly
    !>
-   !> @param[in,out] pcm     Component under test
+   !> The component stays updated on `cavity`: only the traces change
+   !>
+   !> @param[in,out] pcm     Component under test, updated on `cavity`
    !> @param[in]     mol     Solute
    !> @param[in,out] cavity  Cavity
    !> @param[in]     phi     Potential trace (ngrid)
@@ -1128,7 +1394,7 @@ contains
       type(coupling_type), target :: coupling
 
       energy = 0.0_wp
-      call stage_energy(pcm, mol, cavity, coupling, error)
+      call stage_energy(pcm, mol, cavity, coupling, error, keep=.true.)
       if (allocated(error)) return
       call answer_traces(coupling, phi, dphi_dr)
       call pcm%get_energy(component_view(coupling), cavity, energy, err)
@@ -1137,7 +1403,9 @@ contains
 
    !> Trace adjoints of `get_trace_response` with the traces given directly
    !>
-   !> @param[in,out] pcm       Component under test
+   !> The component stays updated on `cavity`: only the traces change
+   !>
+   !> @param[in,out] pcm       Component under test, updated on `cavity`
    !> @param[in]     mol       Solute
    !> @param[in,out] cavity    Cavity
    !> @param[in]     phi       Potential trace (ngrid)
@@ -1171,7 +1439,7 @@ contains
       type(response_type) :: response
       type(potential_adjoint_response_type), allocatable :: item
 
-      call stage_energy(pcm, mol, cavity, coupling, error)
+      call stage_energy(pcm, mol, cavity, coupling, error, keep=.true.)
       if (allocated(error)) return
       call answer_traces(coupling, phi, dphi_dr)
       call pcm%get_trace_response(component_view(coupling), cavity, response, err)
@@ -1191,7 +1459,9 @@ contains
    !> The spatial derivative is answered as vn n/|n|**2, so n . dphi_dr = vn
    !> holds on displaced (non-unit) normals too
    !>
-   !> @param[in,out] pcm    Component under test
+   !> The component stays updated on `cavity`: only the traces change
+   !>
+   !> @param[in,out] pcm    Component under test, updated on `cavity`
    !> @param[in]     mol    Solute
    !> @param[in,out] cavity Cavity
    !> @param[in]     phi    Potential trace (ngrid)
@@ -1235,7 +1505,7 @@ contains
       do i = 1, cavity%ngrid
          dphi_dr(:, i) = vn(i)*cavity%normal0(:, i)/sum(cavity%normal0(:, i)**2)
       end do
-      call stage_energy(pcm, mol, cavity, coupling, error)
+      call stage_energy(pcm, mol, cavity, coupling, error, keep=.true.)
       if (allocated(error)) return
       call answer_traces(coupling, phi, dphi_dr)
       energy = 0.0_wp
@@ -2033,6 +2303,620 @@ contains
       end subroutine answer_host
 
    end subroutine check_component_path
+
+   !* ================================================================================= *!
+   !*                              Parameter derivatives                                *!
+   !* ================================================================================= *!
+
+   !> CPCM: parameter derivatives on the Gaussian fixture
+   subroutine test_cpcm_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cpcm, .true., .false., error)
+   end subroutine test_cpcm_parameter_derivatives_gaussian
+
+   !> CPCM: parameter derivatives on the point fixture
+   subroutine test_cpcm_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cpcm, .false., .false., error)
+   end subroutine test_cpcm_parameter_derivatives_point
+
+   !> COSMO: parameter derivatives on the Gaussian fixture
+   subroutine test_cosmo_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cosmo, .true., .false., error)
+   end subroutine test_cosmo_parameter_derivatives_gaussian
+
+   !> COSMO: parameter derivatives on the point fixture
+   subroutine test_cosmo_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cosmo, .false., .false., error)
+   end subroutine test_cosmo_parameter_derivatives_point
+
+   !> IEF-PCM: parameter derivatives on the Gaussian fixture
+   subroutine test_iefpcm_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_iefpcm, .true., .false., error)
+   end subroutine test_iefpcm_parameter_derivatives_gaussian
+
+   !> IEF-PCM: parameter derivatives on the point fixture
+   subroutine test_iefpcm_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_iefpcm, .false., .false., error)
+   end subroutine test_iefpcm_parameter_derivatives_point
+
+   !> SS(V)PE: parameter derivatives on the Gaussian fixture
+   subroutine test_ssvpe_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_ssvpe, .true., .false., error)
+   end subroutine test_ssvpe_parameter_derivatives_gaussian
+
+   !> SS(V)PE: parameter derivatives on the point fixture
+   subroutine test_ssvpe_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_ssvpe, .false., .false., error)
+   end subroutine test_ssvpe_parameter_derivatives_point
+
+   !> DPCM: parameter derivatives on the Gaussian fixture
+   subroutine test_dpcm_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm, .true., .false., error)
+   end subroutine test_dpcm_parameter_derivatives_gaussian
+
+   !> DPCM: parameter derivatives on the point fixture
+   subroutine test_dpcm_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm, .false., .false., error)
+   end subroutine test_dpcm_parameter_derivatives_point
+
+   !> DPCM original: parameter derivatives on the Gaussian fixture
+   subroutine test_dpcm_original_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm_original, .true., .false., error)
+   end subroutine test_dpcm_original_parameter_derivatives_gaussian
+
+   !> DPCM original: parameter derivatives on the point fixture
+   subroutine test_dpcm_original_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm_original, .false., .false., error)
+   end subroutine test_dpcm_original_parameter_derivatives_point
+
+   !> LPB: parameter derivatives on the Gaussian fixture
+   subroutine test_lpb_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_lpb, .true., .false., error)
+   end subroutine test_lpb_parameter_derivatives_gaussian
+
+   !> LPB: parameter derivatives on the point fixture
+   subroutine test_lpb_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_lpb, .false., .false., error)
+   end subroutine test_lpb_parameter_derivatives_point
+
+   !> SLIC: parameter derivatives on the Gaussian fixture
+   subroutine test_slic_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .true., .false., error)
+   end subroutine test_slic_parameter_derivatives_gaussian
+
+   !> SLIC: parameter derivatives on the point fixture
+   subroutine test_slic_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .false., .false., error)
+   end subroutine test_slic_parameter_derivatives_point
+
+   !> Nonlocal: parameter derivatives on the Gaussian fixture
+   subroutine test_nonlocal_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_nonlocal, .true., .false., error)
+   end subroutine test_nonlocal_parameter_derivatives_gaussian
+
+   !> Nonlocal: parameter derivatives on the point fixture
+   subroutine test_nonlocal_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_nonlocal, .false., .false., error)
+   end subroutine test_nonlocal_parameter_derivatives_point
+
+   !> SLIC with `mu` left at its default, which follows alpha and gamma, Gaussian fixture
+   subroutine test_slic_default_mu_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .true., .true., error)
+   end subroutine test_slic_default_mu_parameter_derivatives_gaussian
+
+   !> SLIC with `mu` left at its default, which follows alpha and gamma, point fixture
+   subroutine test_slic_default_mu_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .false., .true., error)
+   end subroutine test_slic_default_mu_parameter_derivatives_point
+
+   !> CPCM matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_cpcm_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cpcm, .true., .false., error, mf=.true.)
+   end subroutine test_cpcm_mf_parameter_derivatives_gaussian
+
+   !> CPCM matrix-free parameter derivatives, point fixture
+   subroutine test_cpcm_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cpcm, .false., .false., error, mf=.true.)
+   end subroutine test_cpcm_mf_parameter_derivatives_point
+
+   !> COSMO matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_cosmo_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cosmo, .true., .false., error, mf=.true.)
+   end subroutine test_cosmo_mf_parameter_derivatives_gaussian
+
+   !> COSMO matrix-free parameter derivatives, point fixture
+   subroutine test_cosmo_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_cosmo, .false., .false., error, mf=.true.)
+   end subroutine test_cosmo_mf_parameter_derivatives_point
+
+   !> IEFPCM matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_iefpcm_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_iefpcm, .true., .false., error, mf=.true.)
+   end subroutine test_iefpcm_mf_parameter_derivatives_gaussian
+
+   !> IEFPCM matrix-free parameter derivatives, point fixture
+   subroutine test_iefpcm_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_iefpcm, .false., .false., error, mf=.true.)
+   end subroutine test_iefpcm_mf_parameter_derivatives_point
+
+   !> SSVPE matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_ssvpe_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_ssvpe, .true., .false., error, mf=.true.)
+   end subroutine test_ssvpe_mf_parameter_derivatives_gaussian
+
+   !> SSVPE matrix-free parameter derivatives, point fixture
+   subroutine test_ssvpe_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_ssvpe, .false., .false., error, mf=.true.)
+   end subroutine test_ssvpe_mf_parameter_derivatives_point
+
+   !> DPCM matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_dpcm_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm, .true., .false., error, mf=.true.)
+   end subroutine test_dpcm_mf_parameter_derivatives_gaussian
+
+   !> DPCM matrix-free parameter derivatives, point fixture
+   subroutine test_dpcm_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm, .false., .false., error, mf=.true.)
+   end subroutine test_dpcm_mf_parameter_derivatives_point
+
+   !> DPCM_ORIGINAL matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_dpcm_original_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm_original, .true., .false., error, mf=.true.)
+   end subroutine test_dpcm_original_mf_parameter_derivatives_gaussian
+
+   !> DPCM_ORIGINAL matrix-free parameter derivatives, point fixture
+   subroutine test_dpcm_original_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_dpcm_original, .false., .false., error, mf=.true.)
+   end subroutine test_dpcm_original_mf_parameter_derivatives_point
+
+   !> LPB matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_lpb_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_lpb, .true., .false., error, mf=.true.)
+   end subroutine test_lpb_mf_parameter_derivatives_gaussian
+
+   !> LPB matrix-free parameter derivatives, point fixture
+   subroutine test_lpb_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_lpb, .false., .false., error, mf=.true.)
+   end subroutine test_lpb_mf_parameter_derivatives_point
+
+   !> SLIC matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_slic_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .true., .false., error, mf=.true.)
+   end subroutine test_slic_mf_parameter_derivatives_gaussian
+
+   !> SLIC matrix-free parameter derivatives, point fixture
+   subroutine test_slic_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .false., .false., error, mf=.true.)
+   end subroutine test_slic_mf_parameter_derivatives_point
+
+   !> NONLOCAL matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_nonlocal_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_nonlocal, .true., .false., error, mf=.true.)
+   end subroutine test_nonlocal_mf_parameter_derivatives_gaussian
+
+   !> NONLOCAL matrix-free parameter derivatives, point fixture
+   subroutine test_nonlocal_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_nonlocal, .false., .false., error, mf=.true.)
+   end subroutine test_nonlocal_mf_parameter_derivatives_point
+
+   !> SLIC default `mu` matrix-free parameter derivatives, Gaussian fixture
+   subroutine test_slic_default_mu_mf_parameter_derivatives_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .true., .true., error, mf=.true.)
+   end subroutine test_slic_default_mu_mf_parameter_derivatives_gaussian
+
+   !> SLIC default `mu` matrix-free parameter derivatives, point fixture
+   subroutine test_slic_default_mu_mf_parameter_derivatives_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_parameter_derivatives(pcm_slic, .false., .true., error, mf=.true.)
+   end subroutine test_slic_default_mu_mf_parameter_derivatives_point
+
+   !> Parameter derivatives of the response against energy differences
+   !>
+   !> Six-point central differences of the energy at fixed cavity and host
+   !> potential in every physical parameter the model has; the response item
+   !> holds exactly those parameters and no other
+   !>
+   !> @param[in] kind Component constructor index
+   !> @param[in] gaussian Whether the surface has Gaussian widths
+   !> @param[in] mu_default SLIC only: construct without `mu`
+   !> @param[out] error Test failure
+   !> @param[in] mf Analytic side on matrix-free GMRES storage, energy differences stay dense
+   subroutine check_parameter_derivatives(kind, gaussian, mu_default, error, mf)
+      !> Component constructor index
+      integer, intent(in) :: kind
+      !> Whether the surface has Gaussian widths
+      logical, intent(in) :: gaussian
+      !> SLIC without explicit mu
+      logical, intent(in) :: mu_default
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Matrix-free analytic side
+      logical, intent(in), optional :: mf
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      class(model_continuum_component_pcm), allocatable :: component
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(response_type) :: response
+      type(parameter_adjoint_response_type) :: item
+      type(pcm_physics) :: base, phys
+      real(wp) :: samples(6), analytic, numerical, h, energy0
+      logical :: present_ok, found
+      integer :: ip, offset
+      character(len=:), allocatable :: label
+
+      label = "PCM parameter derivatives"
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      mol%charge = 1.0_wp
+      cavity%ngrid = nfixture
+      cavity%nsph = 1
+      cavity%updated = .true.
+      cavity%built = .true.
+      cavity%xyz = fixture_xyz
+      cavity%normal0 = fixture_normals
+      cavity%a = fixture_areas
+      allocate (cavity%k1(nfixture), source=0.4_wp)
+      allocate (cavity%k2(nfixture), source=0.5_wp)
+      if (gaussian) then
+         cavity%xi0 = fixture_xis
+         cavity%f = fixture_fs
+      end if
+      base%eps_solute = 1.5_wp
+
+      ! Analytic derivatives, requested through the parameter
+      call build(base, .true., component)
+      if (allocated(error)) return
+      if (present(mf)) then
+         if (mf) call set_matrix_free(component)
+      end if
+      label = trim(component%name)//merge(" Gaussian", " point   ", gaussian)// &
+         & merge(" default mu", "           ", mu_default)
+      if (present(mf)) then
+         if (mf) label = label//" matrix-free"
+      end if
+      call component%update(mol, cavity, err)
+      call require_success("update")
+      if (allocated(error)) return
+      call component%prepare_response(cavity, coupling, err)
+      call require_success("prepare response")
+      if (allocated(error)) return
+      call answer_host()
+      if (allocated(error)) return
+      call component%get_response(component_view(coupling), cavity, response, err)
+      call require_success("response")
+      if (allocated(error)) return
+      found = .false.
+      do while (response%next())
+         select type (it => response%item())
+         type is (parameter_adjoint_response_type)
+            item = it
+            found = .true.
+         end select
+      end do
+      call check(error, found, message=label//" parameter item present")
+      if (allocated(error)) return
+      call energy_at(base, energy0)
+      if (allocated(error)) return
+
+      do ip = 1, 10
+         present_ok = applicable(ip)
+         call check(error, item_has(ip), present_ok, message=label//" parameter set: "//pname(ip))
+         if (allocated(error)) return
+         if (.not. present_ok) cycle
+         h = 1.0e-3_wp*max(1.0_wp, abs(value_of(base, ip)))
+         do offset = 1, 6
+            phys = base
+            call shift(phys, ip, h*fd6_offsets(offset))
+            call energy_at(phys, samples(offset))
+            if (allocated(error)) return
+         end do
+         call fd6_scalar(samples(1), samples(2), samples(3), samples(4), samples(5), samples(6), &
+            & h, numerical, error)
+         if (allocated(error)) return
+         analytic = item_value(ip)
+         call check(error, analytic, numerical, thr=param_atol*max(1.0_wp, abs(energy0)) + &
+            & param_rtol*abs(numerical), message=label//" d/d"//pname(ip))
+         if (allocated(error)) return
+      end do
+
+   contains
+
+      !> Parameter names, in the order of the response item
+      function pname(i_) result(name)
+         !> Parameter number
+         integer, intent(in) :: i_
+         character(len=10) :: name
+         character(len=10), parameter :: names(10) = [character(len=10) :: "eps", "eps_inf", &
+            & "lambda", "eps_solute", "kappa", "alpha", "beta", "gamma", "mu", "phi_static"]
+
+         name = names(i_)
+      end function pname
+
+      !> Whether the model has the parameter as an independent constructor argument
+      function applicable(i_) result(yes)
+         !> Parameter number
+         integer, intent(in) :: i_
+         logical :: yes
+
+         select case (kind)
+         case (pcm_lpb)
+            yes = i_ == 1 .or. i_ == 5
+         case (pcm_slic)
+            yes = i_ == 1 .or. (i_ >= 6 .and. i_ <= 8) .or. i_ == 10 .or. (i_ == 9 .and. .not. mu_default)
+         case (pcm_nonlocal)
+            yes = i_ <= 4
+         case default
+            yes = i_ == 1
+         end select
+      end function applicable
+
+      !> Whether the response item carries the parameter
+      function item_has(i_) result(yes)
+         !> Parameter number
+         integer, intent(in) :: i_
+         logical :: yes
+
+         select case (i_)
+         case (1); yes = allocated(item%dg_deps)
+         case (2); yes = allocated(item%dg_deps_inf)
+         case (3); yes = allocated(item%dg_dlambda)
+         case (4); yes = allocated(item%dg_deps_solute)
+         case (5); yes = allocated(item%dg_dkappa)
+         case (6); yes = allocated(item%dg_dalpha)
+         case (7); yes = allocated(item%dg_dbeta)
+         case (8); yes = allocated(item%dg_dgamma)
+         case (9); yes = allocated(item%dg_dmu)
+         case default; yes = allocated(item%dg_dphi_static)
+         end select
+      end function item_has
+
+      !> Value of a parameter in the response item
+      function item_value(i_) result(v)
+         !> Parameter number
+         integer, intent(in) :: i_
+         real(wp) :: v
+
+         select case (i_)
+         case (1); v = item%dg_deps
+         case (2); v = item%dg_deps_inf
+         case (3); v = item%dg_dlambda
+         case (4); v = item%dg_deps_solute
+         case (5); v = item%dg_dkappa
+         case (6); v = item%dg_dalpha
+         case (7); v = item%dg_dbeta
+         case (8); v = item%dg_dgamma
+         case (9); v = item%dg_dmu
+         case default; v = item%dg_dphi_static
+         end select
+      end function item_value
+
+      !> Value of a parameter of the physics record
+      function value_of(ph, i_) result(v)
+         !> Physics
+         type(pcm_physics), intent(in) :: ph
+         !> Parameter number
+         integer, intent(in) :: i_
+         real(wp) :: v
+
+         select case (i_)
+         case (1); v = ph%eps
+         case (2); v = ph%eps_inf
+         case (3); v = ph%lambda
+         case (4); v = ph%eps_solute
+         case (5); v = ph%kappa
+         case (6); v = ph%slic_alpha
+         case (7); v = ph%slic_beta
+         case (8); v = ph%slic_gamma
+         case (9); v = ph%slic_mu
+         case default; v = ph%slic_phi_static
+         end select
+      end function value_of
+
+      !> Shift one parameter of the physics record
+      subroutine shift(ph, i_, d)
+         !> Physics
+         type(pcm_physics), intent(inout) :: ph
+         !> Parameter number
+         integer, intent(in) :: i_
+         !> Shift
+         real(wp), intent(in) :: d
+
+         select case (i_)
+         case (1); ph%eps = ph%eps + d
+         case (2); ph%eps_inf = ph%eps_inf + d
+         case (3); ph%lambda = ph%lambda + d
+         case (4); ph%eps_solute = ph%eps_solute + d
+         case (5); ph%kappa = ph%kappa + d
+         case (6); ph%slic_alpha = ph%slic_alpha + d
+         case (7); ph%slic_beta = ph%slic_beta + d
+         case (8); ph%slic_gamma = ph%slic_gamma + d
+         case (9); ph%slic_mu = ph%slic_mu + d
+         case default; ph%slic_phi_static = ph%slic_phi_static + d
+         end select
+      end subroutine shift
+
+      !> Component for a physics record
+      subroutine build(ph, derivatives, comp)
+         !> Physics
+         type(pcm_physics), intent(in) :: ph
+         !> Request the parameter derivatives
+         logical, intent(in) :: derivatives
+         !> Component
+         class(model_continuum_component_pcm), allocatable, intent(out) :: comp
+         type(moist_pcm_parameters_type) :: param
+
+         if (kind == pcm_slic .and. mu_default) then
+            param%solver = solver_type%dense
+            param%newton_tol = 1.0e-13_wp
+            allocate (model_continuum_component_slic :: comp)
+            select type (comp)
+            type is (model_continuum_component_slic)
+               call new_component_slic(comp, ph%eps, ph%slic_alpha, ph%slic_beta, ph%slic_gamma, &
+                  & err, param, phi_static=ph%slic_phi_static, ctx=ctx)
+            end select
+            call require_success("constructor")
+         else
+            call new_pcm(kind, ctx, comp, error, ph)
+         end if
+         if (allocated(error)) return
+         comp%param%parameter_derivatives = derivatives
+      end subroutine build
+
+      !> Energy of a physics record at the fixed cavity and host potential
+      subroutine energy_at(ph, value)
+         !> Physics
+         type(pcm_physics), intent(in) :: ph
+         !> Energy
+         real(wp), intent(out) :: value
+         class(model_continuum_component_pcm), allocatable :: comp
+
+         value = 0.0_wp
+         call build(ph, .false., comp)
+         if (allocated(error)) return
+         call comp%update(mol, cavity, err)
+         call require_success("update")
+         if (allocated(error)) return
+         call comp%new_coupling(cavity, coupling, err)
+         call require_success("new coupling")
+         if (allocated(error)) return
+         call comp%prepare_energy(cavity, coupling, err)
+         call require_success("prepare energy")
+         if (allocated(error)) return
+         call answer_host()
+         if (allocated(error)) return
+         call comp%get_energy(component_view(coupling), cavity, value, err)
+         call require_success("energy")
+      end subroutine energy_at
+
+      !> Answer a smooth host potential and its first derivatives
+      subroutine answer_host()
+         real(wp) :: phi(nfixture), grad(3, nfixture), width(nfixture)
+         integer :: point
+
+         do point = 1, nfixture
+            phi(point) = (-1.0_wp)**point*0.05_wp*real(point, wp)
+            grad(:, point) = 0.01_wp*real(point, wp)*[1.0_wp, -0.5_wp, 0.7_wp]
+            width(point) = 0.013_wp*real(point, wp)
+         end do
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (gaussian_potential_request_type)
+               call coupling%answer("phi", phi, err)
+               call require_success("submit phi")
+               if (allocated(error)) return
+               call coupling%answer("dphi_dr", grad, err)
+               call require_success("submit dphi_dr")
+               if (allocated(error)) return
+               call coupling%answer("dphi_dxi", width, err)
+               call require_success("submit dphi_dxi")
+               if (allocated(error)) return
+            type is (point_potential_request_type)
+               call coupling%answer("phi", phi, err)
+               call require_success("submit phi")
+               if (allocated(error)) return
+               call coupling%answer("dphi_dr", grad, err)
+               call require_success("submit dphi_dr")
+               if (allocated(error)) return
+            type is (nuclear_charge_request_type)
+               call coupling%answer("z", [1.0_wp], err)
+               call require_success("submit nuclear charge")
+               if (allocated(error)) return
+            end select
+         end do
+      end subroutine answer_host
+
+      !> Turn a library error into a test failure
+      subroutine require_success(stage)
+         !> Stage name
+         character(len=*), intent(in) :: stage
+
+         if (allocated(err)) then
+            call test_failed(error, label//" "//stage//": "//err%message)
+            deallocate (err)
+         end if
+      end subroutine require_success
+
+   end subroutine check_parameter_derivatives
 
    !* ================================================================================= *!
    !*                                 CPCM host features                                *!

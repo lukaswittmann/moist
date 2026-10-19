@@ -3817,10 +3817,10 @@ contains
 
    !> The build projects the structure of `update`, not a later change of it
    !>
-   !> The pseudo atom's surface is centred on its nucleus: built after the
-   !> caller moved its own copy of the atom, the surface stays centred where
+   !> The pseudo atom's surface is centered on its nucleus: built after the
+   !> caller moved its own copy of the atom, the surface stays centered where
    !> the atom was at `update`; negative control: a cavity updated at the moved
-   !> position is centred there
+   !> position is centered there
    subroutine test_build_keeps_structure(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -3830,7 +3830,7 @@ contains
       type(coupling_type), target :: coupling
       type(mctc_error), allocatable :: cavity_error
       !> Centroid of each projected surface
-      real(wp) :: centre(3), centre_moved(3)
+      real(wp) :: center(3), center_moved(3)
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_pseudo_atom_cavity(cavity, mol, ctx, error)
@@ -3854,7 +3854,7 @@ contains
       end if
       call check(error, cavity%is_built() .and. cavity%ngrid > 0, more="the pseudo atom has no surface")
       if (allocated(error)) return
-      centre = sum(cavity%xyz, dim=2)/cavity%ngrid
+      center = sum(cavity%xyz, dim=2)/cavity%ngrid
 
       call update_iso_cavity(control, moved, pseudo_atom_density(), [54.0_wp], cavity_error)
       if (allocated(cavity_error)) then
@@ -3863,11 +3863,11 @@ contains
       end if
       call check(error, control%ngrid > 0, more="the moved pseudo atom has no surface")
       if (allocated(error)) return
-      centre_moved = sum(control%xyz, dim=2)/control%ngrid
-      call check(error, norm2(centre_moved - moved%xyz(:, 1)) < 1.0e-6_wp, &
-                 more="control: the surface is not centred on its atom")
+      center_moved = sum(control%xyz, dim=2)/control%ngrid
+      call check(error, norm2(center_moved - moved%xyz(:, 1)) < 1.0e-6_wp, &
+                 more="control: the surface is not centered on its atom")
       if (allocated(error)) return
-      call check(error, norm2(centre - updated%xyz(:, 1)) < 1.0e-6_wp, &
+      call check(error, norm2(center - updated%xyz(:, 1)) < 1.0e-6_wp, &
                  more="the build projected the structure changed after update")
    end subroutine test_build_keeps_structure
 

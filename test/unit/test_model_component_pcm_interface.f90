@@ -9,6 +9,8 @@
 !> - Solver choice and potential input: every CPCM solver on neutral and
 !>   charged systems, a potential set directly on the request
 module test_model_component_pcm_interface
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf, &
+      & ieee_is_finite
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
@@ -17,8 +19,9 @@ module test_model_component_pcm_interface
    use test_helpers, only: check_moist_error, component_view, build_test_cavity, &
       & fill_point_charge_potential, fill_point_charge_field, set_host_potential, &
       & fill_missing_with_zeros, stage_point_charge_energy
-   use test_model_component_pcm_fixtures, only: npcm, new_pcm, make_component, seed_iswig, &
-      & fd_cavity, get_seed, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
+   use test_model_component_pcm_fixtures, only: npcm, new_pcm, make_component, seed_iswig, seed_drop, &
+      & fd_cavity, get_seed, pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, pcm_lpb, pcm_nonlocal, &
+      & pcm_slic, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
       & answer_sources
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -29,7 +32,8 @@ module test_model_component_pcm_interface
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii, radius_type_static, new_cosmo_radii
    use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
-   use moist_channels_response, only: response_type
+   use moist_channels_response, only: response_type, parameter_adjoint_response_type, &
+      & response_clear
    use moist_model_continuum_type, only: model_continuum_type, new_continuum_model
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & moist_pcm_parameters_type, solver_type
@@ -73,9 +77,12 @@ contains
          & new_unittest("optional_context", test_optional_context), &
          & new_unittest("cavity_requirements", test_cavity_requirements), &
          & new_unittest("automatic_cavity_geometry", test_automatic_cavity_geometry), &
-         & new_unittest("invalid_physical_parameters", test_invalid_parameters), &
          & new_unittest("pcm_rejects_dielectric_below_one", test_pcm_invalid_epsilon), &
+         & new_unittest("debye_kappa_reference", test_debye_kappa), &
+         & new_unittest("slic_default_mu", test_slic_default_mu), &
          & new_unittest("layer_lifecycle_guards", test_layer_lifecycle_guards), &
+         & new_unittest("parameter_derivatives_opt_in", test_parameter_derivatives_opt_in), &
+         & new_unittest("conductor_point_cavity_energy", test_conductor_point_cavity), &
          & new_unittest("cpcm_requires_update", test_cpcm_requires_update, should_fail=.true.), &
          & new_unittest("cpcm_external_potential_requires_input", &
          & test_cpcm_external_potential_requires_input, should_fail=.true.), &
@@ -90,7 +97,80 @@ contains
          & new_unittest("cpcm_lu_energy", test_cpcm_energy_lu), &
          & new_unittest("cpcm_charged_system", test_cpcm_charged), &
          & new_unittest("cpcm_solver_comparison", test_cpcm_solver_comparison), &
-         & new_unittest("cpcm_external_potential", test_cpcm_external_potential) &
+         & new_unittest("cpcm_external_potential", test_cpcm_external_potential), &
+         & new_unittest("cpcm_accepts_infinite_eps", test_cpcm_accepts_infinite_eps), &
+         & new_unittest("lpb_accepts_zero_kappa", test_lpb_accepts_zero_kappa), &
+         & new_unittest("slic_flux_regular", test_slic_flux_regular), &
+         & new_unittest("slic_recovers_after_bad_trace", test_slic_recovers_after_bad_trace), &
+         & new_unittest("lpb_nonfinite_operator", test_lpb_nonfinite_operator, should_fail=.true.), &
+         & new_unittest("iefpcm_rejects_eps_below_one", test_iefpcm_rejects_eps_below_one, should_fail=.true.), &
+         & new_unittest("lpb_rejects_negative_kappa", test_lpb_rejects_negative_kappa, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_zero_lambda", test_nonlocal_rejects_zero_lambda, should_fail=.true.), &
+         & new_unittest("cpcm_rejects_eps_nan", test_cpcm_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("cosmo_rejects_eps_nan", test_cosmo_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("iefpcm_rejects_eps_nan", test_iefpcm_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("ssvpe_rejects_eps_nan", test_ssvpe_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("dpcm_rejects_eps_nan", test_dpcm_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("dpcm_original_rejects_eps_nan", &
+         & test_dpcm_original_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("lpb_rejects_eps_nan", test_lpb_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_eps_nan", test_slic_rejects_eps_nan, should_fail=.true.), &
+         & new_unittest("lpb_rejects_kappa_nan", test_lpb_rejects_kappa_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_alpha_nan", test_slic_rejects_alpha_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_beta_nan", test_slic_rejects_beta_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_gamma_nan", test_slic_rejects_gamma_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_mu_nan", test_slic_rejects_mu_nan, should_fail=.true.), &
+         & new_unittest("slic_rejects_phi_static_nan", test_slic_rejects_phi_static_nan, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_solvent_nan", &
+         & test_nonlocal_rejects_eps_solvent_nan, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_inf_nan", test_nonlocal_rejects_eps_inf_nan, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_lambda_nan", test_nonlocal_rejects_lambda_nan, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_solute_nan", &
+         & test_nonlocal_rejects_eps_solute_nan, should_fail=.true.), &
+         & new_unittest("lpb_rejects_kappa_inf", test_lpb_rejects_kappa_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_alpha_inf", test_slic_rejects_alpha_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_beta_inf", test_slic_rejects_beta_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_gamma_inf", test_slic_rejects_gamma_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_mu_inf", test_slic_rejects_mu_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_phi_static_inf", test_slic_rejects_phi_static_inf, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_solvent_inf", &
+         & test_nonlocal_rejects_eps_solvent_inf, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_inf_inf", test_nonlocal_rejects_eps_inf_inf, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_lambda_inf", test_nonlocal_rejects_lambda_inf, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_eps_solute_inf", &
+         & test_nonlocal_rejects_eps_solute_inf, should_fail=.true.), &
+         & new_unittest("slic_rejects_singular_flux_boundary", &
+         & test_slic_rejects_singular_flux_boundary, should_fail=.true.), &
+         & new_unittest("slic_rejects_singular_flux_negative_alpha", &
+         & test_slic_rejects_singular_flux_negative_alpha, should_fail=.true.), &
+         & new_unittest("slic_rejects_singular_flux_large_alpha", &
+         & test_slic_rejects_singular_flux_large_alpha, should_fail=.true.), &
+         & new_unittest("slic_rejects_singular_flux_conductor", &
+         & test_slic_rejects_singular_flux_conductor, should_fail=.true.), &
+         & new_unittest("cpcm_rejects_gaussian_without_switching_update", &
+         & test_cpcm_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("cosmo_rejects_gaussian_without_switching_update", &
+         & test_cosmo_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("iefpcm_rejects_gaussian_without_switching_update", &
+         & test_iefpcm_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("ssvpe_rejects_gaussian_without_switching_update", &
+         & test_ssvpe_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("lpb_rejects_gaussian_without_switching_update", &
+         & test_lpb_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("nonlocal_rejects_gaussian_without_switching_update", &
+         & test_nonlocal_rejects_gaussian_without_switching_update, should_fail=.true.), &
+         & new_unittest("cpcm_rejects_gaussian_without_switching_coupling", &
+         & test_cpcm_rejects_gaussian_without_switching_coupling, should_fail=.true.), &
+         & new_unittest("cosmo_rejects_gaussian_without_switching_coupling", &
+         & test_cosmo_rejects_gaussian_without_switching_coupling, should_fail=.true.), &
+         & new_unittest("slic_rejects_nan_normal_trace_point", &
+         & test_slic_rejects_nan_normal_trace_point, should_fail=.true.), &
+         & new_unittest("slic_rejects_inf_normal_trace_point", &
+         & test_slic_rejects_inf_normal_trace_point, should_fail=.true.), &
+         & new_unittest("slic_rejects_nan_normal_trace_gaussian", &
+         & test_slic_rejects_nan_normal_trace_gaussian, should_fail=.true.), &
+         & new_unittest("slic_rejects_inf_normal_trace_gaussian", &
+         & test_slic_rejects_inf_normal_trace_gaussian, should_fail=.true.) &
          & ]
    end subroutine collect_model_component_pcm_interface
 
@@ -100,6 +180,7 @@ contains
 
    !> Verify each concrete type copies the shared solver controls
    subroutine test_constructors(error)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
@@ -154,7 +235,6 @@ contains
       if (allocated(error)) return
       call check(error, nonlocal%needs_curvature)
       if (allocated(error)) return
-      call check(error, debye_kappa(78.4_wp, 0.1_wp, 298.15_wp), 0.055_wp, thr=0.01_wp)
       call ctx%delete()
    end subroutine test_constructors
 
@@ -397,26 +477,637 @@ contains
       call check(error,.not. iswig%need_curvature .and. .not. allocated(iswig%k1))
    end subroutine test_automatic_cavity_geometry
 
-   !> Reject nonphysical material values before assembling a cavity
-   subroutine test_invalid_parameters(error)
+   !> IEF-PCM rejects eps < 1
+   subroutine test_iefpcm_rejects_eps_below_one(error)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
-      type(model_continuum_component_iefpcm) :: ief
-      type(model_continuum_component_lpb) :: lpb
-      type(model_continuum_component_nonlocal) :: nonlocal
+      type(model_continuum_component_iefpcm) :: pcm
 
       call new_context(ctx, verbosity=0)
-      call new_component_iefpcm(ief, 0.5_wp, err, ctx=ctx)
-      call check(error, allocated(err))
-      if (allocated(error)) return
-      call new_component_lpb(lpb, 80.0_wp, -1.0_wp, err, ctx=ctx)
-      call check(error, allocated(err))
-      if (allocated(error)) return
-      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 0.0_wp, err, ctx=ctx)
-      call check(error, allocated(err))
+      call new_component_iefpcm(pcm, 0.5_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
       call ctx%delete()
-   end subroutine test_invalid_parameters
+   end subroutine test_iefpcm_rejects_eps_below_one
+
+   !> LPB rejects a negative inverse Debye length
+   subroutine test_lpb_rejects_negative_kappa(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_lpb) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_lpb(pcm, 80.0_wp, -1.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_lpb_rejects_negative_kappa
+
+   !> Nonlocal PCM rejects a zero correlation length
+   subroutine test_nonlocal_rejects_zero_lambda(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 0.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_zero_lambda
+
+   !> CPCM rejects eps = NaN
+   subroutine test_cpcm_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_cpcm) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_cpcm(pcm, ieee_value(1.0_wp, ieee_quiet_nan), error=err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_cpcm_rejects_eps_nan
+
+   !> COSMO rejects eps = NaN
+   subroutine test_cosmo_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_cosmo) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_cosmo(pcm, ieee_value(1.0_wp, ieee_quiet_nan), error=err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_cosmo_rejects_eps_nan
+
+   !> IEF-PCM rejects eps = NaN
+   subroutine test_iefpcm_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_iefpcm) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_iefpcm(pcm, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_iefpcm_rejects_eps_nan
+
+   !> SS(V)PE rejects eps = NaN
+   subroutine test_ssvpe_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_ssvpe) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_ssvpe(pcm, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_ssvpe_rejects_eps_nan
+
+   !> DPCM rejects eps = NaN
+   subroutine test_dpcm_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_dpcm) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_dpcm(pcm, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_dpcm_rejects_eps_nan
+
+   !> DPCM original rejects eps = NaN
+   subroutine test_dpcm_original_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_dpcm_original) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_dpcm_original(pcm, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_dpcm_original_rejects_eps_nan
+
+   !> LPB rejects eps = NaN
+   subroutine test_lpb_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_lpb) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_lpb(pcm, ieee_value(1.0_wp, ieee_quiet_nan), 0.1_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_lpb_rejects_eps_nan
+
+   !> SLIC rejects eps = NaN
+   subroutine test_slic_rejects_eps_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, ieee_value(1.0_wp, ieee_quiet_nan), 0.1_wp, 0.2_wp, 0.3_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_eps_nan
+
+   !> LPB rejects kappa = NaN
+   subroutine test_lpb_rejects_kappa_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_lpb) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_lpb(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_lpb_rejects_kappa_nan
+
+   !> SLIC rejects alpha = NaN
+   subroutine test_slic_rejects_alpha_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), 0.2_wp, 0.3_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_alpha_nan
+
+   !> SLIC rejects beta = NaN
+   subroutine test_slic_rejects_beta_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, ieee_value(1.0_wp, ieee_quiet_nan), 0.3_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_beta_nan
+
+   !> SLIC rejects gamma = NaN
+   subroutine test_slic_rejects_gamma_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_gamma_nan
+
+   !> SLIC rejects mu = NaN
+   subroutine test_slic_rejects_mu_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, 0.3_wp, err, mu=ieee_value(1.0_wp, &
+         & ieee_quiet_nan), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_mu_nan
+
+   !> SLIC rejects phi_static = NaN
+   subroutine test_slic_rejects_phi_static_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, 0.3_wp, err, &
+         & phi_static=ieee_value(1.0_wp, ieee_quiet_nan), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_phi_static_nan
+
+   !> Nonlocal PCM rejects eps_solvent = NaN
+   subroutine test_nonlocal_rejects_eps_solvent_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, ieee_value(1.0_wp, ieee_quiet_nan), 2.0_wp, 1.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_solvent_nan
+
+   !> Nonlocal PCM rejects eps_inf = NaN
+   subroutine test_nonlocal_rejects_eps_inf_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), 1.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_inf_nan
+
+   !> Nonlocal PCM rejects lambda = NaN
+   subroutine test_nonlocal_rejects_lambda_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_lambda_nan
+
+   !> Nonlocal PCM rejects eps_solute = NaN
+   subroutine test_nonlocal_rejects_eps_solute_nan(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, eps_solute=ieee_value(1.0_wp, &
+         & ieee_quiet_nan), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_solute_nan
+
+   !> LPB rejects kappa = +Inf
+   subroutine test_lpb_rejects_kappa_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_lpb) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_lpb(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_positive_inf), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_lpb_rejects_kappa_inf
+
+   !> SLIC rejects alpha = +Inf
+   subroutine test_slic_rejects_alpha_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_positive_inf), 0.2_wp, 0.3_wp, &
+         & err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_alpha_inf
+
+   !> SLIC rejects beta = +Inf
+   subroutine test_slic_rejects_beta_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, ieee_value(1.0_wp, ieee_positive_inf), 0.3_wp, &
+         & err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_beta_inf
+
+   !> SLIC rejects gamma = +Inf
+   subroutine test_slic_rejects_gamma_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, ieee_value(1.0_wp, ieee_positive_inf), &
+         & err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_gamma_inf
+
+   !> SLIC rejects mu = +Inf
+   subroutine test_slic_rejects_mu_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, 0.3_wp, err, mu=ieee_value(1.0_wp, &
+         & ieee_positive_inf), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_mu_inf
+
+   !> SLIC rejects phi_static = +Inf
+   subroutine test_slic_rejects_phi_static_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 0.1_wp, 0.2_wp, 0.3_wp, err, &
+         & phi_static=ieee_value(1.0_wp, ieee_positive_inf), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_phi_static_inf
+
+   !> Nonlocal PCM rejects eps_solvent = +Inf
+   subroutine test_nonlocal_rejects_eps_solvent_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, ieee_value(1.0_wp, ieee_positive_inf), 2.0_wp, 1.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_solvent_inf
+
+   !> Nonlocal PCM rejects eps_inf = +Inf
+   subroutine test_nonlocal_rejects_eps_inf_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, ieee_value(1.0_wp, ieee_positive_inf), 1.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_inf_inf
+
+   !> Nonlocal PCM rejects lambda = +Inf
+   subroutine test_nonlocal_rejects_lambda_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, ieee_value(1.0_wp, ieee_positive_inf), err, ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_lambda_inf
+
+   !> Nonlocal PCM rejects eps_solute = +Inf
+   subroutine test_nonlocal_rejects_eps_solute_inf(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_nonlocal) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, eps_solute=ieee_value(1.0_wp, &
+         & ieee_positive_inf), ctx=ctx)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_nonlocal_rejects_eps_solute_inf
+
+   !> CPCM accepts the conductor limit eps = +Inf
+   subroutine test_cpcm_accepts_infinite_eps(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_cpcm) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_cpcm(pcm, ieee_value(1.0_wp, ieee_positive_inf), error=err, ctx=ctx)
+      call check_moist_error(error, err, "CPCM eps = +Inf")
+      call ctx%delete()
+   end subroutine test_cpcm_accepts_infinite_eps
+
+   !> LPB accepts kappa = 0, the electrolyte-free limit
+   subroutine test_lpb_accepts_zero_kappa(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_lpb) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_lpb(pcm, 80.0_wp, 0.0_wp, err, ctx=ctx)
+      call check_moist_error(error, err, "LPB kappa = 0")
+      call ctx%delete()
+   end subroutine test_lpb_accepts_zero_kappa
+
+   !> Debye inverse screening length against the SI formula and its scalings
+   !>
+   !> Reference from CODATA 2018 SI constants, kappa = sqrt(2 e^2 NA I/(eps eps0 kB T)) in bohr^-1
+   subroutine test_debye_kappa(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> 78.4, 0.1 mol/L, 298.15 K
+      real(wp), parameter :: ref = 0.0550440690847816_wp
+      real(wp), parameter :: tol = 1.0e-9_wp
+      real(wp) :: k0
+
+      k0 = debye_kappa(78.4_wp, 0.1_wp, 298.15_wp)
+      call check(error, abs(k0 - ref)/ref < tol, message="Debye kappa deviates from the SI value")
+      if (allocated(error)) return
+      call check(error, abs(debye_kappa(78.4_wp, 0.4_wp, 298.15_wp)/k0 - 2.0_wp) < 1.0e-12_wp, &
+         & message="Debye kappa is not proportional to sqrt(I)")
+      if (allocated(error)) return
+      call check(error, abs(debye_kappa(4*78.4_wp, 0.1_wp, 298.15_wp)/k0 - 0.5_wp) < 1.0e-12_wp, &
+         & message="Debye kappa is not proportional to 1/sqrt(eps)")
+      if (allocated(error)) return
+      call check(error, abs(debye_kappa(78.4_wp, 0.1_wp, 4*298.15_wp)/k0 - 0.5_wp) < 1.0e-12_wp, &
+         & message="Debye kappa is not proportional to 1/sqrt(T)")
+      if (allocated(error)) return
+      call check(error, debye_kappa(78.4_wp, 0.0_wp, 298.15_wp) == 0.0_wp, &
+         & message="Debye kappa does not vanish without electrolyte")
+   end subroutine test_debye_kappa
+
+
+   !> Omitted SLIC mu makes the perturbation vanish at zero field, h(0) = 0
+   subroutine test_slic_default_mu(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(moist_pcm_parameters_type) :: param
+      type(model_continuum_component_slic) :: omitted, explicit, plain
+      type(structure_type) :: mol
+      type(fd_cavity) :: cavity
+      real(wp), parameter :: alpha = 0.3_wp, beta = -2.0_wp, gamma = -0.4_wp
+      real(wp) :: e_omitted, e_explicit, e_plain
+
+      call new_context(ctx, verbosity=0)
+      param%solver = solver_type%dense
+      call new_component_slic(omitted, 80.0_wp, alpha, beta, gamma, err, param, ctx=ctx)
+      call check_moist_error(error, err, "slic omitted mu")
+      if (allocated(error)) return
+      ! h(E=0) = alpha*tanh(-gamma) + mu
+      call check(error, alpha*tanh(-gamma) + omitted%mu, 0.0_wp, thr=1.0e-15_wp, &
+         & message="SLIC perturbation does not vanish at zero field")
+      if (allocated(error)) return
+      call check(error, omitted%mu /= 0.0_wp, message="SLIC default mu is zero")
+      if (allocated(error)) return
+      call new_component_slic(explicit, 80.0_wp, alpha, beta, gamma, err, param, &
+         & mu=alpha*tanh(gamma), ctx=ctx)
+      call check_moist_error(error, err, "slic explicit mu")
+      if (allocated(error)) return
+      call new_component_slic(plain, 80.0_wp, alpha, beta, gamma, err, param, mu=0.0_wp, ctx=ctx)
+      call check_moist_error(error, err, "slic zero mu")
+      if (allocated(error)) return
+
+      call get_solute(mol_triatomic, mol)
+      call get_seed(seed_drop, .true., mol, cavity, error)
+      if (allocated(error)) return
+      call host_energy(omitted, mol, cavity, mol, host_charges(mol), e_omitted, error)
+      if (allocated(error)) return
+      call host_energy(explicit, mol, cavity, mol, host_charges(mol), e_explicit, error)
+      if (allocated(error)) return
+      call host_energy(plain, mol, cavity, mol, host_charges(mol), e_plain, error)
+      if (allocated(error)) return
+      call check(error, e_omitted, e_explicit, thr=1.0e-10_wp, &
+         & message="SLIC omitted mu differs from alpha*tanh(gamma)")
+      if (allocated(error)) return
+      call check(error, abs(e_omitted - e_plain) > 1.0e-6_wp, &
+         & message="SLIC omitted mu is indistinguishable from mu = 0")
+      call ctx%delete()
+   end subroutine test_slic_default_mu
+
+   !> SLIC rejects the singular flux boundary 2*feps*(mu + |alpha|) = 1
+   subroutine test_slic_rejects_singular_flux_boundary(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 3.0_wp, 0.5_wp, 0.2_wp, 0.3_wp, err, mu=0.5_wp)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_singular_flux_boundary
+
+   !> SLIC rejects a singular flux with alpha < 0
+   subroutine test_slic_rejects_singular_flux_negative_alpha(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 3.0_wp, -0.5_wp, 0.2_wp, 0.3_wp, err, mu=0.51_wp)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_singular_flux_negative_alpha
+
+   !> SLIC rejects alpha = 1 at eps = 80 without a shift, 2*feps > 1
+   subroutine test_slic_rejects_singular_flux_large_alpha(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, 80.0_wp, 1.0_wp, 0.2_wp, 0.3_wp, err, mu=0.0_wp)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_singular_flux_large_alpha
+
+   !> SLIC rejects the singular conductor flux, boundary mu + |alpha| = 1/2
+   subroutine test_slic_rejects_singular_flux_conductor(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: pcm
+
+      call new_context(ctx, verbosity=0)
+      call new_component_slic(pcm, ieee_value(1.0_wp, ieee_positive_inf), 0.2_wp, 0.2_wp, 0.3_wp, &
+         & err, mu=0.3_wp)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine test_slic_rejects_singular_flux_conductor
+
+   !> SLIC flux guard 2*feps*(mu + |alpha|) < 1 accepts regular parameters
+   subroutine test_slic_flux_regular(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_continuum_component_slic) :: slic
+
+      call new_context(ctx, verbosity=0)
+      ! eps = 3: feps = 1/2, boundary at mu + |alpha| = 1
+      call new_component_slic(slic, 3.0_wp, 0.5_wp, 0.2_wp, 0.3_wp, err, mu=0.49_wp, ctx=ctx)
+      call check_moist_error(error, err, "slic below the flux boundary")
+      if (allocated(error)) return
+      call new_component_slic(slic, 3.0_wp, -0.5_wp, 0.2_wp, 0.3_wp, err, mu=0.49_wp, ctx=ctx)
+      call check_moist_error(error, err, "slic below the flux boundary, alpha < 0")
+      if (allocated(error)) return
+      ! a negative shift lowers the flux: 2*(79/81)*(1 - 0.5) < 1
+      call new_component_slic(slic, 80.0_wp, 1.0_wp, 0.2_wp, 0.3_wp, err, mu=-0.5_wp, ctx=ctx)
+      call check_moist_error(error, err, "slic with a negative shift")
+      if (allocated(error)) return
+      ! conductor limit: feps = 1, boundary at mu + |alpha| = 1/2
+      call new_component_slic(slic, ieee_value(1.0_wp, ieee_positive_inf), 0.2_wp, 0.2_wp, 0.3_wp, &
+         & err, mu=0.29_wp, ctx=ctx)
+      call check_moist_error(error, err, "slic conductor below the flux boundary")
+      call ctx%delete()
+   end subroutine test_slic_flux_regular
 
 !> Every PCM flavor must reject a dielectric below one and accept eps = 1
 !> Below eps = 1 the scaling factor f(eps) = (eps-1)/eps turns negative (and
@@ -593,6 +1284,197 @@ contains
 
    end subroutine test_layer_lifecycle_guards
 
+   !> CPCM refuses Gaussian widths without switching factors at `update`
+   subroutine test_cpcm_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_cpcm)
+   end subroutine test_cpcm_rejects_gaussian_without_switching_update
+
+   !> COSMO refuses Gaussian widths without switching factors at `update`
+   subroutine test_cosmo_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_cosmo)
+   end subroutine test_cosmo_rejects_gaussian_without_switching_update
+
+   !> IEF-PCM refuses Gaussian widths without switching factors at `update`
+   subroutine test_iefpcm_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_iefpcm)
+   end subroutine test_iefpcm_rejects_gaussian_without_switching_update
+
+   !> SS(V)PE refuses Gaussian widths without switching factors at `update`
+   subroutine test_ssvpe_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_ssvpe)
+   end subroutine test_ssvpe_rejects_gaussian_without_switching_update
+
+   !> LPB refuses Gaussian widths without switching factors at `update`
+   subroutine test_lpb_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_lpb)
+   end subroutine test_lpb_rejects_gaussian_without_switching_update
+
+   !> Nonlocal PCM refuses Gaussian widths without switching factors at `update`
+   subroutine test_nonlocal_rejects_gaussian_without_switching_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_update(error, pcm_nonlocal)
+   end subroutine test_nonlocal_rejects_gaussian_without_switching_update
+
+   !> CPCM refuses Gaussian widths without switching factors at `declare_coupling`
+   subroutine test_cpcm_rejects_gaussian_without_switching_coupling(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_coupling(error, pcm_cpcm)
+   end subroutine test_cpcm_rejects_gaussian_without_switching_coupling
+
+   !> COSMO refuses Gaussian widths without switching factors at `declare_coupling`
+   subroutine test_cosmo_rejects_gaussian_without_switching_coupling(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call reject_incomplete_coupling(error, pcm_cosmo)
+   end subroutine test_cosmo_rejects_gaussian_without_switching_coupling
+
+   !> Gaussian cavity with widths but without switching factors
+   !>
+   !> @param[out] mol    solute
+   !> @param[out] cavity incomplete cavity
+   subroutine incomplete_gaussian_cavity(mol, cavity)
+      !> Solute
+      type(structure_type), intent(out) :: mol
+      !> Incomplete cavity
+      type(cavity_type_drop), intent(out) :: cavity
+
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      cavity%ngrid = 1
+      cavity%nsph = 1
+      cavity%updated = .true.
+      cavity%built = .true.
+      cavity%xyz = reshape([2.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      cavity%normal0 = reshape([1.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      cavity%a = [1.0_wp]
+      cavity%k1 = [0.4_wp]
+      cavity%k2 = [0.5_wp]
+      cavity%xi0 = [0.7_wp]
+   end subroutine incomplete_gaussian_cavity
+
+   !> Update of one model on the incomplete cavity, the single call under test
+   !>
+   !> A failing setup returns without error and so reports an unexpected pass
+   !>
+   !> @param[out] error test failure
+   !> @param[in]  kind  model identifier
+   subroutine reject_incomplete_update(error, kind)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model identifier
+      integer, intent(in) :: kind
+
+      type(moist_error_type), allocatable :: err, setup
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      class(model_continuum_component_pcm), allocatable :: component
+      type(cavity_type_drop) :: cavity
+
+      call new_context(ctx, verbosity=0)
+      call incomplete_gaussian_cavity(mol, cavity)
+      call make_component(kind, component, setup, ctx)
+      if (allocated(setup)) return
+      call component%update(mol, cavity, err)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine reject_incomplete_update
+
+   !> Coupling declaration of one model on the incomplete cavity, the single call under test
+   !>
+   !> A failing setup returns without error and so reports an unexpected pass
+   !>
+   !> @param[out] error test failure
+   !> @param[in]  kind  model identifier
+   subroutine reject_incomplete_coupling(error, kind)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model identifier
+      integer, intent(in) :: kind
+
+      type(moist_error_type), allocatable :: err, setup
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      class(model_continuum_component_pcm), allocatable :: component
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+
+      call new_context(ctx, verbosity=0)
+      call incomplete_gaussian_cavity(mol, cavity)
+      call make_component(kind, component, setup, ctx)
+      if (allocated(setup)) return
+      call component%new_coupling(cavity, coupling, err)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine reject_incomplete_coupling
+
+   !> Conductor models on a point cavity without widths still update and solve
+   subroutine test_conductor_point_cavity(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      class(model_continuum_component_pcm), allocatable :: component
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: energy
+      integer :: i
+
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      cavity%ngrid = 1
+      cavity%nsph = 1
+      cavity%updated = .true.
+      cavity%built = .true.
+      cavity%xyz = reshape([2.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      cavity%normal0 = reshape([1.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      cavity%a = [1.0_wp]
+      cavity%k1 = [0.4_wp]
+      cavity%k2 = [0.5_wp]
+
+      do i = 1, 2
+         call make_component(i, component, err, ctx)
+         call check(error,.not. allocated(err), "conductor construction")
+         if (allocated(error)) return
+         call component%update(mol, cavity, err)
+         call check(error,.not. allocated(err), "point cavity rejected by update")
+         if (allocated(error)) return
+         call component%new_coupling(cavity, coupling, err)
+         call check(error,.not. allocated(err), "point cavity rejected by new_coupling")
+         if (allocated(error)) return
+         call component%prepare_energy(cavity, coupling, err)
+         call check(error,.not. allocated(err), "point cavity rejected by prepare_energy")
+         if (allocated(error)) return
+         call set_host_potential(coupling, [0.1_wp])
+         energy = 0.0_wp
+         call component%get_energy(component_view(coupling), cavity, energy, err)
+         call check(error,.not. allocated(err), "point cavity energy failed")
+         if (allocated(error)) return
+         call check(error, energy == energy .and. abs(energy) < huge(1.0_wp) .and. energy /= 0.0_wp, &
+            & "point cavity energy is not finite and nonzero")
+         if (allocated(error)) return
+      end do
+   end subroutine test_conductor_point_cavity
+
 !> Test that get_energy() reports an error when update() has not been called
    subroutine test_cpcm_requires_update(error)
 
@@ -695,6 +1577,7 @@ contains
 
 !> Test that invalid solver identifiers are rejected during the solve step
    subroutine test_cpcm_invalid_solver(error)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(model_continuum_component_cpcm) :: pcm_model
@@ -881,6 +1764,96 @@ contains
          deallocate (err)
       end do
    end subroutine test_tangent_requires_solution
+
+   !> The parameter derivatives are in the response only on request
+   !>
+   !> Default off: the response of every model holds the potential adjoint and
+   !> no parameter item; with `parameter_derivatives` the item appears next to it
+   !> in `get_response`, never in a read of the gradient phase
+   subroutine test_parameter_derivatives_opt_in(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the components
+      type(moist_context_type), target :: ctx
+      !> Component under test
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Solute and synthetic cavity
+      type(structure_type) :: mol
+      type(fd_cavity) :: cavity
+      !> Host coupling and response
+      type(coupling_type), target :: coupling
+      type(response_type) :: response
+      real(wp) :: energy
+      integer :: kind, mode, nitem
+      logical :: found
+
+      call new_context(ctx, verbosity=0)
+      call get_solute(mol_triatomic, mol)
+      call get_seed(seed_iswig, .true., mol, cavity, error)
+      if (allocated(error)) return
+      do kind = 1, npcm
+         do mode = 0, 1
+            call new_pcm(kind, ctx, pcm, error)
+            if (allocated(error)) return
+            call check(error, .not. pcm%param%parameter_derivatives, &
+               & message=trim(pcm%name)//": parameter derivatives off by default")
+            if (allocated(error)) return
+            pcm%param%parameter_derivatives = mode == 1
+            call stage_energy(pcm, mol, cavity, coupling, error)
+            if (allocated(error)) return
+            call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+            energy = 0.0_wp
+            call pcm%get_energy(component_view(coupling), cavity, energy, err)
+            call check_moist_error(error, err, trim(pcm%name)//": energy")
+            if (allocated(error)) return
+            call pcm%prepare_response(cavity, coupling, err)
+            call check_moist_error(error, err, trim(pcm%name)//": response staging")
+            if (allocated(error)) return
+            call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+            call response_clear(response)
+            call pcm%get_response(component_view(coupling), cavity, response, err)
+            call check_moist_error(error, err, trim(pcm%name)//": response")
+            if (allocated(error)) return
+            found = .false.
+            nitem = 0
+            do while (response%next())
+               nitem = nitem + 1
+               select type (item => response%item())
+               type is (parameter_adjoint_response_type)
+                  found = .true.
+               end select
+            end do
+            call check(error, found .eqv. (mode == 1), &
+               & message=trim(pcm%name)//": parameter item only on request "//merge("on ", "off", mode == 1))
+            if (allocated(error)) return
+            call check(error, nitem, 1 + mode, &
+               & message=trim(pcm%name)//": response items")
+            if (allocated(error)) return
+            ! gradient phase: the reverse path reads the host part through get_response
+            call pcm%prepare_gradient(cavity, coupling, err)
+            call check_moist_error(error, err, trim(pcm%name)//": gradient staging")
+            if (allocated(error)) return
+            call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+            call response_clear(response)
+            call pcm%get_response(component_view(coupling), cavity, response, err)
+            call check_moist_error(error, err, trim(pcm%name)//": gradient-phase response")
+            if (allocated(error)) return
+            nitem = 0
+            do while (response%next())
+               nitem = nitem + 1
+               select type (item => response%item())
+               type is (parameter_adjoint_response_type)
+                  call check(error, .false., message=trim(pcm%name)//": parameter item in a gradient read")
+                  if (allocated(error)) return
+               end select
+            end do
+            call check(error, nitem, 1, message=trim(pcm%name)//": gradient-phase response items")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_parameter_derivatives_opt_in
 
    !> A failed gradient leaves the caller's accumulator untouched, in every model
    !>
@@ -1643,4 +2616,203 @@ contains
 
    end subroutine test_cpcm_external_potential
 
+
+   !> SLIC reports a NaN normal trace on a point surface instead of a bad energy
+   subroutine test_slic_rejects_nan_normal_trace_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(error_type), allocatable :: setup
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity), target :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: normal(3), energy
+
+      call new_context(ctx, verbosity=0)
+      call stage_poisoned_trace(ctx, .false., ieee_value(1.0_wp, ieee_quiet_nan), mol, cavity, pcm, &
+         & coupling, normal, setup)
+      if (allocated(setup)) return
+      energy = 0.0_wp
+      call pcm%get_energy(component_view(coupling), cavity, energy, err)
+      call check_moist_error(error, err)
+   end subroutine test_slic_rejects_nan_normal_trace_point
+
+   !> SLIC reports a +Inf normal trace on a point surface instead of a bad energy
+   subroutine test_slic_rejects_inf_normal_trace_point(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(error_type), allocatable :: setup
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity), target :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: normal(3), energy
+
+      call new_context(ctx, verbosity=0)
+      call stage_poisoned_trace(ctx, .false., ieee_value(1.0_wp, ieee_positive_inf), mol, cavity, &
+         & pcm, coupling, normal, setup)
+      if (allocated(setup)) return
+      energy = 0.0_wp
+      call pcm%get_energy(component_view(coupling), cavity, energy, err)
+      call check_moist_error(error, err)
+   end subroutine test_slic_rejects_inf_normal_trace_point
+
+   !> SLIC reports a NaN normal trace on a gaussian surface instead of a bad energy
+   subroutine test_slic_rejects_nan_normal_trace_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(error_type), allocatable :: setup
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity), target :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: normal(3), energy
+
+      call new_context(ctx, verbosity=0)
+      call stage_poisoned_trace(ctx, .true., ieee_value(1.0_wp, ieee_quiet_nan), mol, cavity, pcm, &
+         & coupling, normal, setup)
+      if (allocated(setup)) return
+      energy = 0.0_wp
+      call pcm%get_energy(component_view(coupling), cavity, energy, err)
+      call check_moist_error(error, err)
+   end subroutine test_slic_rejects_nan_normal_trace_gaussian
+
+   !> SLIC reports a +Inf normal trace on a gaussian surface instead of a bad energy
+   subroutine test_slic_rejects_inf_normal_trace_gaussian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(error_type), allocatable :: setup
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity), target :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: normal(3), energy
+
+      call new_context(ctx, verbosity=0)
+      call stage_poisoned_trace(ctx, .true., ieee_value(1.0_wp, ieee_positive_inf), mol, cavity, &
+         & pcm, coupling, normal, setup)
+      if (allocated(setup)) return
+      energy = 0.0_wp
+      call pcm%get_energy(component_view(coupling), cavity, energy, err)
+      call check_moist_error(error, err)
+   end subroutine test_slic_rejects_inf_normal_trace_gaussian
+
+   !> Stage SLIC and poison the normal of the first point
+   !>
+   !> The coupling refuses a non-finite host answer, so the trace is poisoned through the
+   !> cavity normal; Newton then sees a non-finite forcing. Setup failures come back in
+   !> `setup`, never in the error of the call under test
+   !>
+   !> @param[in]  ctx      run context borrowed by the component
+   !> @param[in]  gaussian Gaussian instead of point surface
+   !> @param[in]  bad      value written into the normal
+   !> @param[out] mol      solute
+   !> @param[out] cavity   cavity carrying the poisoned normal
+   !> @param[out] pcm      staged component
+   !> @param[out] coupling staged host coupling
+   !> @param[out] normal   original normal of the first point
+   !> @param[out] setup    allocated if the setup failed
+   subroutine stage_poisoned_trace(ctx, gaussian, bad, mol, cavity, pcm, coupling, normal, setup)
+      !> Run context
+      type(moist_context_type), target, intent(in) :: ctx
+      !> Surface kind
+      logical, intent(in) :: gaussian
+      !> Bad value
+      real(wp), intent(in) :: bad
+      !> Solute
+      type(structure_type), intent(out) :: mol
+      !> Cavity
+      type(fd_cavity), target, intent(out) :: cavity
+      !> Component
+      class(model_continuum_component_pcm), allocatable, intent(out) :: pcm
+      !> Coupling
+      type(coupling_type), target, intent(out) :: coupling
+      !> Original normal
+      real(wp), intent(out) :: normal(3)
+      !> Setup failure
+      type(error_type), allocatable, intent(out) :: setup
+
+      call get_solute(mol_triatomic, mol)
+      call get_seed(seed_drop, gaussian, mol, cavity, setup)
+      if (allocated(setup)) return
+      call new_pcm(pcm_slic, ctx, pcm, setup)
+      if (allocated(setup)) return
+      call stage_energy(pcm, mol, cavity, coupling, setup)
+      if (allocated(setup)) return
+      call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+      normal = cavity%normal0(:, 1)
+      cavity%normal0(:, 1) = bad
+   end subroutine stage_poisoned_trace
+
+   !> SLIC recovers from a bad normal trace and keeps no bad energy
+   !>
+   !> The failed energy call leaves the output untouched, and the component solves
+   !> again once the normal is restored; point and Gaussian surfaces
+   subroutine test_slic_recovers_after_bad_trace(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity), target :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: normal(3), energy
+      integer :: ismear
+
+      call new_context(ctx, verbosity=0)
+      do ismear = 1, 2
+         call stage_poisoned_trace(ctx, ismear == 2, ieee_value(1.0_wp, ieee_quiet_nan), mol, &
+            & cavity, pcm, coupling, normal, error)
+         if (allocated(error)) return
+         energy = 0.0_wp
+         call pcm%get_energy(component_view(coupling), cavity, energy, err)
+         call check(error, ieee_is_finite(energy), "SLIC: energy set from a bad trace")
+         if (allocated(error)) return
+         cavity%normal0(:, 1) = normal
+         call host_energy(pcm, mol, cavity, mol, host_charges(mol), energy, error)
+         if (allocated(error)) return
+         call check(error, ieee_is_finite(energy), "SLIC: no recovery")
+         if (allocated(error)) return
+      end do
+      call ctx%delete()
+   end subroutine test_slic_recovers_after_bad_trace
+
+   !> A dense LPB solve of a non-finite operator is an error, never a NaN energy
+   !>
+   !> A non-finite curvature reaches only the operator self term, not the host traces
+   subroutine test_lpb_nonfinite_operator(error)
+      !> Test failure, the library error of the dense solve
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(error_type), allocatable :: setup
+      type(moist_context_type), target :: ctx
+      class(model_continuum_component_pcm), allocatable :: pcm
+      type(structure_type) :: mol
+      type(fd_cavity) :: cavity
+      type(coupling_type), target :: coupling
+      real(wp) :: energy
+
+      call new_context(ctx, verbosity=0)
+      call get_solute(mol_triatomic, mol)
+      call get_seed(seed_drop, .true., mol, cavity, setup)
+      if (allocated(setup)) return
+      cavity%k1(1) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_pcm(pcm_lpb, ctx, pcm, setup)
+      if (allocated(setup)) return
+      call stage_energy(pcm, mol, cavity, coupling, setup)
+      if (allocated(setup)) return
+      call answer_sources(cavity, coupling, mol, host_charges(mol), real(mol%num(mol%id), wp))
+      energy = 0.0_wp
+      call pcm%get_energy(component_view(coupling), cavity, energy, err)
+      call check_moist_error(error, err)
+   end subroutine test_lpb_nonfinite_operator
 end module test_model_component_pcm_interface

@@ -304,6 +304,54 @@ class RadialPotentialAdjointResponse(_ImmutableArrayValue):
     dg_dphi: np.ndarray
 
 
+@dataclass(frozen=True)
+class ParameterAdjointResponse:
+    """Parameter adjoint item of a solvation response.
+
+    Scalar derivatives ``dE/dp`` of the model energy with respect to its
+    physical parameters at fixed geometry and host traces.  Present only when
+    :class:`PCMParameters` has ``parameter_derivatives`` set; an attribute is
+    ``None`` when the model has no such parameter.
+
+    ``dg_deps``
+        solvent permittivity (zero for an infinite permittivity)
+    ``dg_deps_inf``, ``dg_dlambda``, ``dg_deps_solute``
+        high-frequency permittivity, correlation length and interior
+        permittivity (nonlocal)
+    ``dg_dkappa``
+        inverse Debye length (LPB)
+    ``dg_dalpha``, ``dg_dbeta``, ``dg_dgamma``, ``dg_dmu``, ``dg_dphi_static``
+        SLIC parameters; ``dg_dmu`` only when ``mu`` was given
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "parameter_adjoint"
+
+    dg_deps: Optional[float] = None
+    dg_deps_inf: Optional[float] = None
+    dg_dlambda: Optional[float] = None
+    dg_deps_solute: Optional[float] = None
+    dg_dkappa: Optional[float] = None
+    dg_dalpha: Optional[float] = None
+    dg_dbeta: Optional[float] = None
+    dg_dgamma: Optional[float] = None
+    dg_dmu: Optional[float] = None
+    dg_dphi_static: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if value is not None:
+                object.__setattr__(self, field.name, float(value))
+
+    def as_dict(self) -> dict[str, float]:
+        """Return the present derivatives, keyed by attribute name."""
+        return {
+            field.name: getattr(self, field.name)
+            for field in fields(self) if getattr(self, field.name) is not None
+        }
+
+
 #: One item of a solvation response
 _ResponseItem = Union[
     PotentialAdjointResponse,
@@ -312,6 +360,7 @@ _ResponseItem = Union[
     AtomicMultipoleAdjointResponse,
     AtomicChargeAdjointResponse,
     RadialPotentialAdjointResponse,
+    ParameterAdjointResponse,
 ]
 
 
@@ -325,8 +374,10 @@ class Response:
     Iterating a response yields the items the model produced, in native order:
     :class:`PotentialAdjointResponse`, :class:`DensityResponse`,
     :class:`GaussianAmplitudeResponse`, :class:`AtomicMultipoleAdjointResponse`,
-    :class:`AtomicChargeAdjointResponse` and
-    :class:`RadialPotentialAdjointResponse`, each with its native item name as
+    :class:`AtomicChargeAdjointResponse`,
+    :class:`RadialPotentialAdjointResponse` and, when requested through
+    ``PCMParameters.parameter_derivatives``,
+    :class:`ParameterAdjointResponse`, each with its native item name as
     ``name`` and its arrays as attributes.  Select on the item's class,
     contract every item, and raise on one the host does not know: unlike an
     unanswered request, a skipped item fails nowhere.  An item this model, on
@@ -386,6 +437,7 @@ _RESPONSE_ITEMS = {
         AtomicMultipoleAdjointResponse,
         AtomicChargeAdjointResponse,
         RadialPotentialAdjointResponse,
+        ParameterAdjointResponse,
     )
 }
 

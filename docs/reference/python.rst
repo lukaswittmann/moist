@@ -303,15 +303,10 @@ or asymmetric ``dcart``) leave any previous answer intact; native rejections
 earlier submissions and skipping later ones. A ``break`` leaves the pass for the next loop to resume;
 a loop that ran to the end lets the next one start a new pass.
 
-A ``Response`` is a plain value copied out of the native result: iterating it
-yields the items the model produced, in native order, as
-``PotentialAdjointResponse``, ``DensityResponse``,
-``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``,
-``AtomicChargeAdjointResponse`` or ``RadialPotentialAdjointResponse``. Each
-item has the native item name as its ``name`` class attribute and its arrays
-as attributes named as their Fortran components, with the dimensions reversed.
-``AtomicMultipoleAdjointResponse`` arrays the model did not compute are
-``None``. The :doc:`pyscf` module drives these loops for PySCF.
+A ``Response`` is a plain value copied out of the native result: iterating it yields the items the model produced, in native order, as ``PotentialAdjointResponse``, ``DensityResponse``, ``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``, ``AtomicChargeAdjointResponse``, ``RadialPotentialAdjointResponse`` or ``ParameterAdjointResponse``.
+Each item has the native item name as its ``name`` class attribute and its arrays as attributes named as their Fortran components, with the dimensions reversed.
+``AtomicMultipoleAdjointResponse`` arrays the model did not compute are ``None``. ``ParameterAdjointResponse`` holds scalars ``dg_deps``, ... (``dE/dp`` of the model parameters, ``None`` for a parameter the model lacks, ``as_dict()`` for the present ones) and appears only with ``PCMParameters(parameter_derivatives=True)``.
+The :doc:`pyscf` module drives these loops for PySCF.
 
 API
 ---

@@ -73,6 +73,8 @@ module test_model_component_pcm_fixtures
       real(wp) :: eps_inf = 1.8_wp
       !> Correlation length of the nonlocal model, bohr
       real(wp) :: lambda = 3.0_wp
+      !> Relative permittivity inside the cavity of the nonlocal model
+      real(wp) :: eps_solute = 1.0_wp
       !> Inverse Debye length of the LPB model, 1/bohr
       real(wp) :: kappa = 0.3_wp
       !> SLIC h(E_n) = alpha tanh(beta E_n - gamma) + mu, unsaturated at the test fields
@@ -219,7 +221,8 @@ contains
             call new_component_slic(pcm, eps, phys%slic_alpha, phys%slic_beta, phys%slic_gamma, &
                & err, param, mu=phys%slic_mu, phi_static=phys%slic_phi_static, ctx=ctx)
          type is (model_continuum_component_nonlocal)
-            call new_component_nonlocal(pcm, eps, phys%eps_inf, phys%lambda, err, param, ctx=ctx)
+            call new_component_nonlocal(pcm, eps, phys%eps_inf, phys%lambda, err, param, &
+               & eps_solute=phys%eps_solute, ctx=ctx)
          end select
       end associate
       call check_moist_error(error, err, "component setup")
@@ -341,12 +344,16 @@ contains
 
    !> Update the component and stage a new coupling for the energy phase
    !>
+   !> With `keep` the operators of the last update stay, for new host traces on
+   !> an unchanged cavity; only the charge cache sees the change
+   !>
    !> @param[in,out] pcm      Component under test
    !> @param[in]     mol      Solute
    !> @param[in,out] cavity   Cavity, current for `mol`
    !> @param[out]    coupling Coupling staged for the energy phase
    !> @param[out]    error    Test failure
-   subroutine stage_energy(pcm, mol, cavity, coupling, error)
+   !> @param[in]     keep     Skip the update (default update)
+   subroutine stage_energy(pcm, mol, cavity, coupling, error, keep)
       !> Component under test
       class(model_continuum_component_pcm), intent(inout) :: pcm
       !> Solute
@@ -357,13 +364,21 @@ contains
       type(coupling_type), intent(out), target :: coupling
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> Skip the update
+      logical, intent(in), optional :: keep
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
+      !> Update skipped
+      logical :: skip
 
-      call pcm%update(mol, cavity, err)
-      call check_moist_error(error, err, "update")
-      if (allocated(error)) return
+      skip = .false.
+      if (present(keep)) skip = keep
+      if (.not. skip) then
+         call pcm%update(mol, cavity, err)
+         call check_moist_error(error, err, "update")
+         if (allocated(error)) return
+      end if
       call pcm%new_coupling(cavity, coupling, err)
       call check_moist_error(error, err, "coupling setup")
       if (allocated(error)) return

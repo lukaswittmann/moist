@@ -513,7 +513,7 @@ contains
    !*                          Update Cavity (integrate surface)                        *!
    !* ================================================================================= *!
 
-   !> Take a new geometry: radii and sphere centres, then the isosurface
+   !> Take a new geometry: radii and sphere centers, then the isosurface
    !> unless the level set waits for build-phase answers
    !>
    !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3); with no surface
@@ -623,7 +623,7 @@ contains
 
    end subroutine declare_coupling_mc
 
-   !> Integrate the isosurface of the stored structure, radii and sphere centres
+   !> Integrate the isosurface of the stored structure, radii and sphere centers
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling

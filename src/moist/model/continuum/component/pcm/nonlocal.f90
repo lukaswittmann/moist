@@ -2,6 +2,7 @@
 module moist_model_continuum_component_pcm_nonlocal
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
    use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
@@ -10,10 +11,10 @@ module moist_model_continuum_component_pcm_nonlocal
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_nonlocal, only: nonlocal_pcm_state, &
-      & nonlocal_pcm_assemble, nonlocal_pcm_medium, nonlocal_pcm_solve, nonlocal_pcm_weights, nonlocal_pcm_tangent
+      & nonlocal_pcm_assemble, nonlocal_pcm_medium, nonlocal_pcm_solve, nonlocal_pcm_weights, nonlocal_pcm_param_weights, nonlocal_pcm_tangent
    use pcmgen_point_nonlocal, only: nonlocal_pcm_point_state, &
       & nonlocal_pcm_point_assemble, nonlocal_pcm_point_medium, nonlocal_pcm_point_solve, &
-      & nonlocal_pcm_point_weights, nonlocal_pcm_point_tangent
+      & nonlocal_pcm_point_weights, nonlocal_pcm_point_param_weights, nonlocal_pcm_point_tangent
    implicit none(type, external)
    private
 
@@ -24,7 +25,9 @@ module moist_model_continuum_component_pcm_nonlocal
    !> - Physical inputs: eps_solvent, eps_inf, lambda and optional eps_solute
    !> - Cavity positions, normals, principal curvatures and grid point areas
    !> - Gaussian charge widths and switching factors when available
-   !> - Host potential and its outward normal derivative at the surface points
+   !> - Host potential and its outward normal derivative at the surface points, ordinary unscaled values
+   !> - Energy is the physical reaction energy for interior permittivity eps_solute (classical solutes;
+   !>   1 for QM densities)
    !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(pcm_layer_base) :: model_continuum_component_nonlocal
       !> High-frequency solvent relative permittivity, dimensionless
@@ -46,6 +49,7 @@ module moist_model_continuum_component_pcm_nonlocal
       procedure :: assemble_layer => nonlocal_assemble_layer
       procedure :: solve_layer => nonlocal_solve_layer
       procedure :: layer_weights => nonlocal_layer_weights
+      procedure :: get_parameter_adjoint => nonlocal_get_parameter_adjoint
       procedure :: layer_tangent => nonlocal_layer_tangent
    end type model_continuum_component_nonlocal
 
@@ -179,21 +183,18 @@ contains
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:), w_xi(:), w_f(:), w_a(:)
-      real(wp) :: w_eps, w_eps_inf, w_lambda, w_eps_solute
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
       if (self%smeared) then
          allocate (w_xi(ngrid), w_f(ngrid))
-         call nonlocal_pcm_weights(self%gauss, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, w_eps, &
-            & w_eps_inf, w_lambda, w_eps_solute, error)
+         call nonlocal_pcm_weights(self%gauss, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, w_k2=w_k2, &
             & w_xi=w_xi, w_f=w_f, w_a=w_a)
       else
-         call nonlocal_pcm_point_weights(self%point, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, &
-            & w_eps_inf, w_lambda, w_eps_solute, error)
+         call nonlocal_pcm_point_weights(self%point, w_xyz, w_n, w_k1, w_k2, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, w_k2=w_k2, w_a=w_a)
       end if
@@ -274,5 +275,33 @@ contains
             & hvp_k1, hvp_k2, hvp_a, hvp_v, hvp_vn, error)
       end if
    end subroutine nonlocal_layer_tangent
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> @param[in,out] self  nonlocal component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine nonlocal_get_parameter_adjoint(self, item, error)
+      !> Component with current charges
+      class(model_continuum_component_nonlocal), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_eps, w_eps_inf, w_lam, w_eps_solute
+
+      if (self%smeared) then
+         call nonlocal_pcm_param_weights(self%gauss, w_eps, w_eps_inf, w_lam, w_eps_solute, error)
+      else
+         call nonlocal_pcm_point_param_weights(self%point, w_eps, w_eps_inf, w_lam, w_eps_solute, error)
+      end if
+      if (allocated(error)) return
+      allocate (item%dg_deps, source=0.0_wp)
+      if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
+      allocate (item%dg_deps_inf, source=w_eps_inf)
+      allocate (item%dg_dlambda, source=w_lam)
+      allocate (item%dg_deps_solute, source=w_eps_solute)
+
+   end subroutine nonlocal_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_nonlocal

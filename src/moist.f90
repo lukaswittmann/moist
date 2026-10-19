@@ -35,7 +35,7 @@ module moist
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type, &
       & atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type, &
-      & radial_potential_adjoint_response_type
+      & radial_potential_adjoint_response_type, parameter_adjoint_response_type
    use moist_channels_fields, only: field_query_type, field_info_type, &
       & field_real, field_int, field_bool, field_max_rank
    implicit none(type, external)
@@ -73,7 +73,7 @@ module moist
    public :: response_type, response_item_type
    public :: potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type
    public :: atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type
-   public :: radial_potential_adjoint_response_type
+   public :: radial_potential_adjoint_response_type, parameter_adjoint_response_type
    public :: field_query_type, field_info_type, field_real, field_int, field_bool, field_max_rank
 
 end module moist

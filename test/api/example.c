@@ -1294,7 +1294,7 @@ int test_isodensity_internal_cavity(void)
             printf("  FAIL: a refused reader wrote its outputs\n");
             failures++;
         }
-        /* The spheres stay readable: radii and centres, no surface */
+        /* The spheres stay readable: radii and centers, no surface */
         moist_get_cavity_field_count(probe, cav, &nfield);
         if (moist_check_error(probe) || nfield != 3) {
             printf("  FAIL: an unbuilt cavity lists %d fields, expected nsph, radii, sphxyz\n", nfield);

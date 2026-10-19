@@ -1,17 +1,21 @@
 !> Energies of the PCM components against analytic results and other codes
 !>
-!> - `born`: ion of either sign at the center of a spherical cavity against the
-!>   analytic energy of every model
+!> - `born`: ion of either sign at the center of a spherical cavity, Gaussian and
+!>   point surface, against the analytic energy of every model
 !> - `reference`: point charges in spheres against exact series, other codes and
 !>   the literature; rows without a reference value skip and print the moist
 !>   energy (see `reference_table`)
 !> - `switched_off_point`: a point switched off on the surface drops out of
 !>   the energy of every model, so a cavity may drop it without a jump
+!> - `conductor_limit`: eps = +Infinity on Gaussian and point spheres against the
+!>   analytic f = 1 limit and a very large finite eps; IEF-PCM and COSMO equal
+!>   CPCM there on a molecular surface
 !> - CPCM identities exact at any discretization: rigid translation, linearity
 !>   in f(eps)
 !> - Generated Gaussian IEF-PCM and SS(V)PE kernels against PySCF on an
 !>   identical surface
 module test_model_component_pcm_references
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, ieee_is_finite
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
    use mctc_io_convert, only: aatoau
@@ -24,7 +28,7 @@ module test_model_component_pcm_references
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
       & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, pcm_physics, new_pcm, &
       & seed_drop, first_seed, host_energy, fd_cavity, get_seed, nmol, mol_label, get_solute, &
-      & host_charges
+      & host_charges, thr_vacuous
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
@@ -59,11 +63,23 @@ module test_model_component_pcm_references
    !> from both Born limits and Lambda = 3.8 bohr is resolved by the grid
    real(wp), parameter :: born_lambda = 25.0_wp
 
+   !> Very large finite epsilon compared with the conductor limit
+   real(wp), parameter :: eps_large = 1.0e12_wp
+   !> Relative agreement of eps = +Infinity with `eps_large`
+   real(wp), parameter :: thr_large = 1.0e-10_wp
+   !> Relative agreement of IEF-PCM and COSMO with CPCM at eps = +Infinity, measured 3e-16
+   real(wp), parameter :: thr_conductor_identity = 1.0e-13_wp
+
    !> Factors that switch a surface point off in `check_switched_off_point`
    !>
    !> The decay is checked on the last two, where the leading order dominates: a
    !> point surface has terms in s^(1/2) and s that can cancel near s = 1e-4
    real(wp), parameter :: switch_off(3) = [1.0e-4_wp, 1.0e-8_wp, 1.0e-12_wp]
+   !> Relative tolerances of the strong-screening checks, twice the measured deviations
+   !>
+   !> LPB at kappa = 40 and 100: 4.7e-5 and 2.6e-5 (Debye-Hueckel); nonlocal at
+   !> lambda = 1e-2 and 1e-4 bohr: 2.0e-4 and 3.4e-6 (dense and iterative alike)
+   real(wp), parameter :: lpb_strong_tolerance = 1.0e-4_wp, nonlocal_strong_tolerance = 5.0e-4_wp
    !> Roundoff floor of the energy gap of a switched-off point, Eh
    real(wp), parameter :: thr_gap = 1.0e-12_wp
 
@@ -304,6 +320,19 @@ contains
          & new_unittest("nonlocal_born", test_nonlocal_born), &
          & new_unittest("nonlocal_reference", test_nonlocal_reference), &
          & new_unittest("nonlocal_switched_off_point", test_nonlocal_switched_off_point), &
+         & new_unittest("cpcm_conductor_limit", test_cpcm_conductor_limit), &
+         & new_unittest("cosmo_conductor_limit", test_cosmo_conductor_limit), &
+         & new_unittest("iefpcm_conductor_limit", test_iefpcm_conductor_limit), &
+         & new_unittest("ssvpe_conductor_limit", test_ssvpe_conductor_limit), &
+         & new_unittest("dpcm_conductor_limit", test_dpcm_conductor_limit), &
+         & new_unittest("dpcm_original_conductor_limit", test_dpcm_original_conductor_limit), &
+         & new_unittest("lpb_conductor_limit", test_lpb_conductor_limit), &
+         & new_unittest("slic_conductor_limit", test_slic_conductor_limit), &
+         & new_unittest("iefpcm_equals_cpcm_conductor", test_iefpcm_equals_cpcm_conductor), &
+         & new_unittest("cosmo_equals_cpcm_conductor", test_cosmo_equals_cpcm_conductor), &
+         & new_unittest("nonlocal_interior_permittivity", test_nonlocal_interior_permittivity), &
+         & new_unittest("lpb_strong_screening", test_lpb_strong_screening), &
+         & new_unittest("nonlocal_strong_screening", test_nonlocal_strong_screening), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
          & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
          & new_unittest("layer_kernels_vs_pyscf", test_layer_goldens) &
@@ -558,6 +587,86 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call check_switched_off_point(error, pcm_nonlocal)
    end subroutine test_nonlocal_switched_off_point
+
+   !> CPCM: conductor limit
+   subroutine test_cpcm_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_cpcm)
+   end subroutine test_cpcm_conductor_limit
+
+   !> COSMO: conductor limit
+   subroutine test_cosmo_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_cosmo)
+   end subroutine test_cosmo_conductor_limit
+
+   !> IEFPCM: conductor limit
+   subroutine test_iefpcm_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_iefpcm)
+   end subroutine test_iefpcm_conductor_limit
+
+   !> SSVPE: conductor limit
+   subroutine test_ssvpe_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_ssvpe)
+   end subroutine test_ssvpe_conductor_limit
+
+   !> DPCM: conductor limit
+   subroutine test_dpcm_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_dpcm)
+   end subroutine test_dpcm_conductor_limit
+
+   !> DPCM_ORIGINAL: conductor limit
+   subroutine test_dpcm_original_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_dpcm_original)
+   end subroutine test_dpcm_original_conductor_limit
+
+   !> LPB: conductor limit
+   subroutine test_lpb_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_lpb)
+   end subroutine test_lpb_conductor_limit
+
+   !> SLIC: conductor limit
+   subroutine test_slic_conductor_limit(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_limit(error, pcm_slic)
+   end subroutine test_slic_conductor_limit
+
+   !> IEF-PCM equals CPCM at eps = +Infinity
+   subroutine test_iefpcm_equals_cpcm_conductor(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_identity(error, pcm_iefpcm)
+   end subroutine test_iefpcm_equals_cpcm_conductor
+
+   !> COSMO equals CPCM at eps = +Infinity
+   subroutine test_cosmo_equals_cpcm_conductor(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      call check_conductor_identity(error, pcm_cosmo)
+   end subroutine test_cosmo_equals_cpcm_conductor
 
    !* ================================================================================= *!
    !*                                   CPCM identities                                 *!
@@ -847,7 +956,11 @@ contains
    !> The host potential is that of the central charge, Gaussian-probed on the
    !> iSwiG surface (SLIC: SvdW-DROP, see `first_seed`); the even models give
    !> the same energy for both signs, SLIC solvates the anion more strongly for
-   !> beta < 0
+   !> beta < 0. The Gaussian surface runs the default parameters, the same
+   !> sphere stripped of its Gaussian fields (point surface, point branch of
+   !> component and host) every case of `born_cases`: dielectric values,
+   !> screening and correlation lengths. Finite differences cannot see a
+   !> point branch with the wrong dielectric, only these references do
    !> @param[in]  kind  Model identifier
    subroutine check_born(error, kind)
       !> Test failure
@@ -865,20 +978,147 @@ contains
       type(structure_type) :: mol
       !> Spherical cavity
       class(cavity_type), allocatable :: cavity
-      !> Physical parameters, nonlocal correlation length of the Born check
-      type(pcm_physics) :: physics
+      !> Physical parameters of every case
+      type(pcm_physics), allocatable :: cases(:)
       !> Charge, energy, reference and relative deviation per sign
       real(wp) :: charge, energy(2), reference, deviation
-      !> Sign index
-      integer :: isign
+      !> Surface, case and sign indices
+      integer :: isurf, icase, ncase, isign
+      !> Gaussian surface (else point surface)
+      logical :: smeared
       !> Failure context
-      character(len=160) :: context
+      character(len=200) :: context
 
-      physics%lambda = born_lambda
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_sphere_cavity(kind, [born_radius], born_nleb, ctx, cavity, error)
+      if (allocated(error)) return
+      cases = born_cases(kind)
+
+      do isurf = 1, 2
+         smeared = isurf == 1
+         call new_pcm(kind, ctx, pcm, error, cases(1))
+         if (allocated(error)) return
+         call pcm%configure_cavity(cavity, err)
+         call check_moist_error(error, err, "cavity configuration")
+         if (allocated(error)) return
+         call cavity%update(mol, error=err)
+         call check_moist_error(error, err, "cavity update")
+         if (allocated(error)) return
+         if (.not. smeared) then
+            if (allocated(cavity%xi0)) deallocate (cavity%xi0)
+            if (allocated(cavity%f)) deallocate (cavity%f)
+         end if
+         ncase = merge(1, size(cases), smeared)
+         do icase = 1, ncase
+            call new_pcm(kind, ctx, pcm, error, cases(icase))
+            if (allocated(error)) return
+            do isign = 1, 2
+               charge = merge(1.0_wp, -1.0_wp, isign == 1)
+               mol%charge = charge
+               call host_energy(pcm, mol, cavity, mol, [charge], energy(isign), error)
+               if (allocated(error)) return
+               reference = born_reference(kind, cases(icase), charge, born_radius)
+               deviation = abs(energy(isign) - reference)/abs(reference)
+               write (context, '(a,", ",a," surface, eps ",f6.1,", kappa ",f4.2,", lambda ",f5.1, &
+                  & ", charge ",f4.1,": energy ",es16.8," reference ",es16.8,", rel. dev ",es9.2)') &
+                  & trim(pcm%name), trim(merge("Gaussian", "point   ", smeared)), cases(icase)%eps, &
+                  & cases(icase)%kappa, cases(icase)%lambda, charge, energy(isign), reference, deviation
+               call check(error, deviation <= born_tolerance(kind, smeared), &
+                  & message="Born energy deviates from the analytic result", more=trim(context))
+               if (allocated(error)) return
+            end do
+            if (kind == pcm_slic) then
+               call check(error, energy(2) < energy(1), &
+                  & message="SLIC must solvate the anion more strongly for beta < 0", &
+                  & more=trim(context))
+            else
+               call check(error, abs(energy(2) - energy(1)) <= 1.0e-12_wp*abs(energy(1)), &
+                  & message=trim(pcm%name)//": Born energy is not even in the charge", &
+                  & more=trim(context))
+            end if
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_born
+
+   !> Parameter sets of the Born check, the first one the Gaussian default
+   !>
+   !> - All models: eps = 78.4 and 2
+   !> - LPB: also kappa = 0 (pure dielectric limit) at both eps, and eps = 1
+   !>   with kappa > 0 (screening alone)
+   !> - Nonlocal: also a second correlation length at eps = 78.4
+   !> @param[in] kind Model identifier
+   function born_cases(kind) result(cases)
+      !> Model identifier
+      integer, intent(in) :: kind
+      !> Parameter sets
+      type(pcm_physics), allocatable :: cases(:)
+
+      type(pcm_physics) :: base
+
+      base%lambda = born_lambda
+      cases = [base, base]
+      cases(2)%eps = 2.0_wp
+      select case (kind)
+      case (pcm_lpb)
+         cases = [cases, base, base, base]
+         cases(3)%kappa = 0.0_wp
+         cases(4)%kappa = 0.0_wp
+         cases(4)%eps = 2.0_wp
+         cases(5)%eps = 1.0_wp
+      case (pcm_nonlocal)
+         cases = [cases, base]
+         cases(3)%lambda = 5.0_wp
+      end select
+   end function born_cases
+
+   !> Energy of a central charge in the Born sphere, Gaussian or point surface
+   !>
+   !> The point surface is the Gaussian one without its widths: the same 302
+   !> Lebedev points and areas, collocated with point charges
+   !>
+   !> @param[in]  kind          Model identifier
+   !> @param[in]  physics       Physical parameters
+   !> @param[in]  point_surface Point instead of Gaussian surface charges
+   !> @param[in]  solver        Linear solver of the component
+   !> @param[in]  charge        Central charge, e
+   !> @param[out] energy        Polarization energy, hartree
+   !> @param[out] error         Test failure
+   subroutine central_charge_energy(kind, physics, point_surface, solver, charge, energy, error)
+      !> Model identifier
+      integer, intent(in) :: kind
+      !> Physical parameters
+      type(pcm_physics), intent(in) :: physics
+      !> Point instead of Gaussian surface charges
+      logical, intent(in) :: point_surface
+      !> Linear solver of the component
+      integer, intent(in) :: solver
+      !> Central charge
+      real(wp), intent(in) :: charge
+      !> Polarization energy
+      real(wp), intent(out) :: energy
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the cavity and the component
+      type(moist_context_type), target :: ctx
+      !> Component under test
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Single-sphere solute
+      type(structure_type) :: mol
+      !> Spherical cavity
+      class(cavity_type), allocatable :: cavity
+
+      energy = 0.0_wp
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error, physics)
       if (allocated(error)) return
+      pcm%param%solver = solver
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      mol%charge = charge
       call new_sphere_cavity(kind, [born_radius], born_nleb, ctx, cavity, error)
       if (allocated(error)) return
       call pcm%configure_cavity(cavity, err)
@@ -887,28 +1127,144 @@ contains
       call cavity%update(mol, error=err)
       call check_moist_error(error, err, "cavity update")
       if (allocated(error)) return
+      if (point_surface) deallocate (cavity%xi0)
+      call host_energy(pcm, mol, cavity, mol, [charge], energy, error)
+   end subroutine central_charge_energy
 
-      do isign = 1, 2
-         charge = merge(1.0_wp, -1.0_wp, isign == 1)
-         mol%charge = charge
-         call host_energy(pcm, mol, cavity, mol, [charge], energy(isign), error)
-         if (allocated(error)) return
-         reference = born_reference(kind, physics, charge, born_radius)
-         deviation = abs(energy(isign) - reference)/abs(reference)
-         write (context, '(a,": charge ",f4.1," energy ",es16.8," reference ",es16.8, &
-            & ", rel. dev ",es9.2)') trim(pcm%name), charge, energy(isign), reference, deviation
-         call check(error, deviation <= born_tolerance(kind), &
-            & message="Born energy deviates from the analytic result", more=trim(context))
-         if (allocated(error)) return
+   !> Nonlocal: interior permittivity, local limit and full nonlocal energy
+   !>
+   !> The host supplies the potentials of the charge in vacuum; the energy is the
+   !> physical reaction energy for eps_solute = eta, on Gaussian and point
+   !> surfaces: the local limit eps = eps_inf = 80 and the full nonlocal energy at
+   !> lambda = 25 bohr, deviations in units of Q**2/(2 R) (tolerances at `interior_tolerance`)
+   subroutine test_nonlocal_interior_permittivity(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp) :: energy, reference, deviation
+      real(wp), parameter :: eta(2) = [2.0_wp, 4.0_wp]
+      integer :: ieta, isurf, icase
+      character(len=160) :: context
+
+      do ieta = 1, size(eta)
+         do isurf = 1, 2
+            do icase = 1, 2
+               physics = pcm_physics(eps_solute=eta(ieta), lambda=born_lambda)
+               ! local limit eps = eps_inf: Q**2/(2 R) (1/eps - 1/eta) whatever lambda
+               if (icase == 1) physics = pcm_physics(eps=80.0_wp, eps_inf=80.0_wp, lambda=3.0_wp, &
+                  & eps_solute=eta(ieta))
+               call central_charge_energy(pcm_nonlocal, physics, isurf == 2, solver_type%dense, &
+                  & 1.0_wp, energy, error)
+               if (allocated(error)) return
+               reference = born_reference(pcm_nonlocal, physics, 1.0_wp, born_radius)
+               ! relative to the Born scale Q**2/(2 R): at eta = 4 the full energy is
+               ! 3e-3 Eh after a cancellation of 0.25 against 0.26 (in units of Q**2/R)
+               deviation = abs(energy - reference)*2.0_wp*born_radius
+               write (context, '("eta ",f4.1,1x,a,1x,a,", energy ",es16.8,", reference ",es16.8, &
+                  & ", dev/(Q^2/2R) ",es9.2)') eta(ieta), merge("point   ", "Gaussian", isurf == 2), &
+                  & merge("local limit  ", "full nonlocal", icase == 1), energy, reference, deviation
+               call check(error, deviation <= interior_tolerance(isurf == 2, icase == 1), &
+                  & message="Nonlocal energy deviates from the interior-permittivity result", &
+                  & more=trim(context))
+               if (allocated(error)) return
+            end do
+         end do
       end do
-      if (kind == pcm_slic) then
-         call check(error, energy(2) < energy(1), &
-            & message="SLIC must solvate the anion more strongly for beta < 0")
+   end subroutine test_nonlocal_interior_permittivity
+
+   !> Tolerance of the interior-permittivity check in units of Q**2/(2 R)
+   !>
+   !> Twice the measured deviations of the 302-point sphere at eta = 2 and 4:
+   !> - Gaussian: 4.8e-7 in the local limit, 1.3e-4 full nonlocal (the
+   !>   discretization error of the eta = 1 check, the same at every eta)
+   !> - point: 3.8e-4 and 2.2e-3
+   !>
+   !> @param[in] point_surface Point instead of Gaussian surface charges
+   !> @param[in] local_limit   Local limit eps = eps_inf
+   pure function interior_tolerance(point_surface, local_limit) result(tol)
+      !> Point instead of Gaussian surface charges
+      logical, intent(in) :: point_surface
+      !> Local limit eps = eps_inf
+      logical, intent(in) :: local_limit
+      !> Tolerance
+      real(wp) :: tol
+
+      if (point_surface) then
+         tol = merge(1.0e-3_wp, 5.0e-3_wp, local_limit)
       else
-         call check(error, abs(energy(2) - energy(1)) <= 1.0e-12_wp*abs(energy(1)), &
-            & message=trim(pcm%name)//": Born energy is not even in the charge")
+         tol = merge(1.0e-6_wp, 3.0e-4_wp, local_limit)
       end if
-   end subroutine check_born
+   end function interior_tolerance
+
+   !> LPB at inverse Debye lengths of 40 and 100 per bohr stays finite and Debye-Hueckel
+   !>
+   !> The exponentials of the smeared screened Coulomb kernel overflow at
+   !> beta**2 = (kappa/(2 z))**2 > 700 unless evaluated as exp(-x**2) erfcx(beta - x)
+   subroutine test_lpb_strong_screening(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp) :: energy, reference, deviation
+      real(wp), parameter :: kappa(2) = [40.0_wp, 100.0_wp]
+      integer :: ikappa, isolver
+      character(len=160) :: context
+
+      do ikappa = 1, size(kappa)
+         do isolver = solver_type%dense, solver_type%iterative
+            physics%kappa = kappa(ikappa)
+            call central_charge_energy(pcm_lpb, physics, .false., isolver, 1.0_wp, energy, error)
+            if (allocated(error)) return
+            reference = born_reference(pcm_lpb, physics, 1.0_wp, born_radius)
+            deviation = abs(energy - reference)/abs(reference)
+            write (context, '("kappa ",f6.1," solver ",i1," energy ",es16.8," reference ",es16.8, &
+               & ", rel. dev ",es9.2)') kappa(ikappa), isolver, energy, reference, deviation
+            call check(error, ieee_is_finite(energy), message="LPB energy is not finite", &
+               & more=trim(context))
+            if (allocated(error)) return
+            call check(error, deviation <= lpb_strong_tolerance, &
+               & message="LPB energy deviates from Debye-Hueckel", more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_lpb_strong_screening
+
+   !> Nonlocal at correlation lengths of 0.01 and 1e-4 bohr stays finite
+   !>
+   !> The reference is the exact monopole energy of `born_reference`; its values
+   !> for R = 4 bohr, eps = 78.4, eps_inf = 1.8 are pinned to the audit values
+   subroutine test_nonlocal_strong_screening(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp) :: energy, reference, deviation
+      real(wp), parameter :: lambda(2) = [1.0e-2_wp, 1.0e-4_wp]
+      real(wp), parameter :: audit(2) = [-0.12337991988706842_wp, -0.12340535522496877_wp]
+      integer :: ilambda, isolver
+      character(len=160) :: context
+
+      do ilambda = 1, size(lambda)
+         physics%lambda = lambda(ilambda)
+         reference = born_reference(pcm_nonlocal, physics, 1.0_wp, born_radius)
+         call check(error, reference, audit(ilambda), thr=1.0e-13_wp)
+         if (allocated(error)) return
+         do isolver = solver_type%dense, solver_type%iterative
+            call central_charge_energy(pcm_nonlocal, physics, .false., isolver, 1.0_wp, energy, error)
+            if (allocated(error)) return
+            deviation = abs(energy - reference)/abs(reference)
+            write (context, '("lambda ",es8.1," solver ",i1," energy ",es16.8," reference ",es16.8, &
+               & ", rel. dev ",es9.2)') lambda(ilambda), isolver, energy, reference, deviation
+            call check(error, ieee_is_finite(energy), message="Nonlocal energy is not finite", &
+               & more=trim(context))
+            if (allocated(error)) return
+            call check(error, deviation <= nonlocal_strong_tolerance, &
+               & message="Nonlocal energy deviates from the monopole result", more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_nonlocal_strong_screening
 
    !> Analytic energy of a central charge in a sphere
    !>
@@ -918,8 +1274,11 @@ contains
    !> - SLIC: feps = (eps - 1)/(eps - (eps - 1) h(q/R**2))
    !> - Nonlocal: exact monopole solution of the local reformulation with
    !>   Hildebrandt's approximate interface conditions (Bardhan, Knepley,
-   !>   Brune, arXiv:1208.3866, eqs. 21-26), solute permittivity 1,
-   !>   feps = 1 - 1/eps - (1/eps_inf - 1/eps)/(1 + nu), nu = sqrt(eps/eps_inf) R/lambda
+   !>   Brune, arXiv:1208.3866, eqs. 21-26) for interior permittivity eta,
+   !>   feps = 1/eta - 1/eps - (1/eps_inf - 1/eps)/(1 + nu), nu = sqrt(eps/eps_inf) R/lambda;
+   !>   the exterior sees only the displacement flux of the charge, so eta enters
+   !>   through the interior potential 1/(eta r) alone (checked numerically
+   !>   against the generated system at eta = 1, 2, 4 on 110 to 600 points)
    !> - The factor sinh(nu) exp(-nu)/nu in place of 1/(1 + nu) is not the
    !>   implemented model: it shares both lambda limits but differs by 5 % at nu ~ 1
    !>
@@ -944,25 +1303,38 @@ contains
       associate (eps => physics%eps)
          select case (kind)
          case (pcm_cosmo)
-            feps = (eps - 1.0_wp)/(eps + 0.5_wp)
+            feps = merge((eps - 1.0_wp)/(eps + 0.5_wp), 1.0_wp, ieee_is_finite(eps))
          case (pcm_lpb)
             feps = 1.0_wp - 1.0_wp/(eps*(1.0_wp + physics%kappa*radius))
          case (pcm_slic)
             h = physics%slic_alpha*tanh(physics%slic_beta*charge/radius**2 - physics%slic_gamma) &
                & + physics%slic_mu
-            feps = (eps - 1.0_wp)/(eps - (eps - 1.0_wp)*h)
+            if (ieee_is_finite(eps)) then
+               feps = (eps - 1.0_wp)/(eps - (eps - 1.0_wp)*h)
+            else
+               feps = 1.0_wp/(1.0_wp - h)
+            end if
          case (pcm_nonlocal)
             nu = sqrt(eps/physics%eps_inf)*radius/physics%lambda
-            feps = 1.0_wp - 1.0_wp/eps - (1.0_wp/physics%eps_inf - 1.0_wp/eps)/(1.0_wp + nu)
+            feps = 1.0_wp/physics%eps_solute - 1.0_wp/eps &
+               & - (1.0_wp/physics%eps_inf - 1.0_wp/eps)/(1.0_wp + nu)
          case default
-            feps = (eps - 1.0_wp)/eps
+            feps = merge((eps - 1.0_wp)/eps, 1.0_wp, ieee_is_finite(eps))
          end select
       end associate
       energy = -0.5_wp*feps*charge**2/radius
    end function born_reference
 
-   !> Relative tolerance of the Born check on the 302-point Gaussian sphere
+   !> Relative tolerance of the Born check on the 302-point sphere
    !>
+   !> Point surface, all models and parameter sets of `born_cases`: 1 %, the
+   !> discretization error of the point quadrature (the self terms) measured
+   !> as 0.2 % for C-PCM, COSMO, IEF-PCM, SS(V)PE, 0.1 % DPCM, 0.13 % SLIC,
+   !> 0.2-0.45 % LPB (largest at eps = 1, kappa = 0.3), 0.15-0.5 % nonlocal
+   !> (largest at lambda = 5 bohr). A point branch with the wrong dielectric
+   !> is off by tens of percent at eps = 2
+   !>
+   !> Gaussian surface:
    !> Measured deviations on 110, 302 and 1202 points:
    !> - C-PCM and COSMO: 2e-13, 1e-13 and 3e-14; the Born-fitted zeta
    !>   (bornzeta.f90) makes the conductor sphere exact, so this guards the
@@ -974,13 +1346,20 @@ contains
    !>   0.1 %; the sinh form of the reference is 5 % away and fails
    !> - SLIC on the SvdW-DROP sphere: 5.6e-7, 5.7e-8 and 1.8e-7
    !>
-   !> @param[in] kind Model identifier
-   pure function born_tolerance(kind) result(tol)
+   !> @param[in] kind    Model identifier
+   !> @param[in] smeared Gaussian surface (else point surface)
+   pure function born_tolerance(kind, smeared) result(tol)
       !> Model identifier
       integer, intent(in) :: kind
+      !> Gaussian surface (else point surface)
+      logical, intent(in) :: smeared
       !> Relative tolerance
       real(wp) :: tol
 
+      if (.not. smeared) then
+         tol = 1.0e-2_wp
+         return
+      end if
       select case (kind)
       case (pcm_cpcm, pcm_cosmo)
          tol = 1.0e-11_wp
@@ -992,6 +1371,210 @@ contains
          tol = 1.0e-6_wp
       end select
    end function born_tolerance
+
+   !* ================================================================================= *!
+   !*                                  Conductor limit                                  *!
+   !* ================================================================================= *!
+
+   !> Energy of a unit charge at the center of the Born sphere
+   !>
+   !> @param[in]  kind    Model identifier
+   !> @param[in]  physics Physical parameters
+   !> @param[in]  smeared Gaussian surface (else point surface: widths and switching factors dropped)
+   !> @param[out] energy  Polarization energy, hartree
+   !> @param[out] error   Test failure
+   subroutine sphere_energy(kind, physics, smeared, energy, error)
+      !> Model identifier
+      integer, intent(in) :: kind
+      !> Physical parameters
+      type(pcm_physics), intent(in) :: physics
+      !> Gaussian surface
+      logical, intent(in) :: smeared
+      !> Polarization energy
+      real(wp), intent(out) :: energy
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the cavity and the component
+      type(moist_context_type), target :: ctx
+      !> Component under test
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Single-sphere solute
+      type(structure_type) :: mol
+      !> Spherical cavity
+      class(cavity_type), allocatable :: cavity
+
+      energy = 0.0_wp
+      call new_context(ctx, verbosity=0)
+      call new_pcm(kind, ctx, pcm, error, physics)
+      if (allocated(error)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), charge=1.0_wp)
+      call new_sphere_cavity(kind, [born_radius], born_nleb, ctx, cavity, error)
+      if (allocated(error)) return
+      call pcm%configure_cavity(cavity, err)
+      call check_moist_error(error, err, "cavity configuration")
+      if (allocated(error)) return
+      call cavity%update(mol, error=err)
+      call check_moist_error(error, err, "cavity update")
+      if (allocated(error)) return
+      if (.not. smeared) then
+         if (allocated(cavity%xi0)) deallocate (cavity%xi0)
+         if (allocated(cavity%f)) deallocate (cavity%f)
+      end if
+      call host_energy(pcm, mol, cavity, mol, [1.0_wp], energy, error)
+   end subroutine sphere_energy
+
+   !> Relative tolerance of the conductor-limit Born check
+   !>
+   !> Measured deviations on the 302-point sphere at eps = +Infinity:
+   !> - Gaussian: C-PCM, COSMO, IEF-PCM and LPB 1e-13, SS(V)PE 3e-10, DPCM
+   !>   (both forms) 5e-8, SLIC 6e-8 against its own limit 1/(1 - h)
+   !> - Point: C-PCM, COSMO, IEF-PCM, SS(V)PE and LPB 2.0e-3, DPCM 1.0e-3,
+   !>   SLIC 1.1e-3, the point quadrature error of the sphere
+   !>
+   !> @param[in] kind    Model identifier
+   !> @param[in] smeared Gaussian surface
+   pure function conductor_tolerance(kind, smeared) result(tol)
+      !> Model identifier
+      integer, intent(in) :: kind
+      !> Gaussian surface
+      logical, intent(in) :: smeared
+      !> Relative tolerance
+      real(wp) :: tol
+
+      select case (kind)
+      case (pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_lpb)
+         tol = merge(1.0e-11_wp, 3.0e-3_wp, smeared)
+      case (pcm_ssvpe)
+         tol = merge(1.0e-8_wp, 3.0e-3_wp, smeared)
+      case default
+         ! DPCM, both forms, and SLIC
+         tol = merge(1.0e-6_wp, 1.5e-3_wp, smeared)
+      end select
+   end function conductor_tolerance
+
+   !> Conductor limit eps = +Infinity of a central charge in a sphere
+   !>
+   !> - The energy is finite and equals the analytic f = 1 limit -q**2/(2R),
+   !>   never an inf/inf evaluation (SLIC: the limit of its own factor)
+   !> - It agrees with a very large finite eps, which catches a special case
+   !>   that differs from the continuous limit (f = 0.99, an eps fallback, a
+   !>   NaN from (eps - 1)/(eps + 1))
+   !>
+   !> @param[out] error Test failure
+   !> @param[in]  kind  Model identifier
+   subroutine check_conductor_limit(error, kind)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model identifier
+      integer, intent(in) :: kind
+
+      !> Physical parameters at infinite and at very large epsilon
+      type(pcm_physics) :: inf_physics, big_physics
+      !> Energy at infinite epsilon, at very large epsilon, analytic limit
+      real(wp) :: energy, energy_big, reference, deviation, gap
+      !> Surface index
+      integer :: isurf
+      !> Gaussian surface (else point surface)
+      logical :: smeared
+      !> Failure context
+      character(len=200) :: context
+
+      inf_physics%eps = ieee_value(0.0_wp, ieee_positive_inf)
+      big_physics%eps = eps_large
+      reference = born_reference(kind, inf_physics, 1.0_wp, born_radius)
+      do isurf = 1, 2
+         smeared = isurf == 1
+         call sphere_energy(kind, inf_physics, smeared, energy, error)
+         if (allocated(error)) return
+         call sphere_energy(kind, big_physics, smeared, energy_big, error)
+         if (allocated(error)) return
+         deviation = abs(energy - reference)/abs(reference)
+         gap = abs(energy - energy_big)/abs(energy_big)
+         write (context, '(a," surface: energy ",es16.8," reference ",es16.8, &
+            & ", rel. dev ",es9.2,", vs eps = 1e12 ",es9.2)') &
+            & trim(merge("Gaussian", "point   ", smeared)), energy, reference, deviation, gap
+         call check(error, ieee_is_finite(energy), &
+            & message="energy at infinite epsilon is not finite", more=trim(context))
+         if (allocated(error)) return
+         call check(error, deviation <= conductor_tolerance(kind, smeared), &
+            & message="energy at infinite epsilon deviates from the conductor limit", &
+            & more=trim(context))
+         if (allocated(error)) return
+         call check(error, gap <= thr_large, &
+            & message="energy at infinite epsilon differs from that at very large epsilon", &
+            & more=trim(context))
+         if (allocated(error)) return
+      end do
+   end subroutine check_conductor_limit
+
+   !> A conductor-limit model equals CPCM at eps = +Infinity on the same molecular surface
+   !>
+   !> - Both solve the conductor boundary condition S q = -phi: IEF-PCM through
+   !>   (2 pi - D A) (S q + phi) = 0, COSMO with f = 1 at its conductor limit
+   !> - The identity holds on Gaussian and point surfaces to roundoff, on
+   !>   asymmetric solutes without symmetry
+   !>
+   !> @param[out] error Test failure
+   !> @param[in]  kind  Model identifier, IEF-PCM or COSMO
+   subroutine check_conductor_identity(error, kind)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model identifier
+      integer, intent(in) :: kind
+
+      !> Run context borrowed by the components
+      type(moist_context_type), target :: ctx
+      !> Components under test
+      class(model_continuum_component_pcm), allocatable :: pcm, ref
+      !> Solute
+      type(structure_type) :: mol
+      !> Synthetic cavity
+      type(fd_cavity) :: cavity
+      !> Host charges
+      real(wp), allocatable :: q(:)
+      !> Physical parameters
+      type(pcm_physics) :: physics
+      !> Energies of the model and of CPCM
+      real(wp) :: energy, energy_cpcm
+      !> Solute and surface indices
+      integer :: imol, isurf
+      !> Gaussian surface (else point surface)
+      logical :: smeared
+      !> Failure context
+      character(len=200) :: context
+
+      physics%eps = ieee_value(0.0_wp, ieee_positive_inf)
+      call new_context(ctx, verbosity=0)
+      do imol = 1, nmol
+         call get_solute(imol, mol)
+         q = host_charges(mol)
+         do isurf = 1, 2
+            smeared = isurf == 1
+            call get_seed(first_seed(kind), smeared, mol, cavity, error)
+            if (allocated(error)) return
+            call new_pcm(kind, ctx, pcm, error, physics)
+            if (allocated(error)) return
+            call host_energy(pcm, mol, cavity, mol, q, energy, error)
+            if (allocated(error)) return
+            call new_pcm(pcm_cpcm, ctx, ref, error, physics)
+            if (allocated(error)) return
+            call host_energy(ref, mol, cavity, mol, q, energy_cpcm, error)
+            if (allocated(error)) return
+            write (context, '(a,", ",a," surface: ",a," ",es22.14," CPCM ",es22.14," rel. dev ",es9.2)') &
+               & trim(mol_label(imol)), trim(merge("Gaussian", "point   ", smeared)), &
+               & trim(pcm%name), energy, energy_cpcm, abs(energy - energy_cpcm)/abs(energy_cpcm)
+            call check(error, abs(energy_cpcm) > thr_vacuous, &
+               & message="vacuous conductor energy", more=trim(context))
+            if (allocated(error)) return
+            call check(error, abs(energy - energy_cpcm) <= thr_conductor_identity*abs(energy_cpcm), &
+               & message="energy at infinite epsilon differs from CPCM", more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_conductor_identity
 
    !* ================================================================================= *!
    !*                                 Reference energies                                *!

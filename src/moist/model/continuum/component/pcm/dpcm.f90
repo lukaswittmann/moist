@@ -1,7 +1,8 @@
 !> DPCM component backed by generated Gaussian and point kernels
 module moist_model_continuum_component_pcm_dpcm
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -9,10 +10,10 @@ module moist_model_continuum_component_pcm_dpcm
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_dpcm, only: dpcm_complex_state, &
-      & dpcm_assemble, dpcm_medium, dpcm_solve, dpcm_weights, dpcm_tangent
+      & dpcm_assemble, dpcm_medium, dpcm_solve, dpcm_weights, dpcm_param_weights, dpcm_tangent
    use pcmgen_point_dpcm, only: dpcm_point_complex_state, &
       & dpcm_point_assemble, dpcm_point_medium, dpcm_point_solve, &
-      & dpcm_point_weights, dpcm_point_tangent
+      & dpcm_point_weights, dpcm_point_param_weights, dpcm_point_tangent
    implicit none(type, external)
    private
 
@@ -34,6 +35,7 @@ module moist_model_continuum_component_pcm_dpcm
       procedure :: assemble_layer => dpcm_assemble_layer
       procedure :: solve_layer => dpcm_solve_layer
       procedure :: layer_weights => dpcm_layer_weights
+      procedure :: get_parameter_adjoint => dpcm_get_parameter_adjoint
       procedure :: layer_tangent => dpcm_layer_tangent
    end type model_continuum_component_dpcm
 
@@ -61,7 +63,7 @@ contains
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "DPCM epsilon must be >= 1")
          return
       end if
@@ -125,19 +127,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
-      real(wp) :: w_eps
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
       if (self%smeared) then
          allocate (w_xi(ngrid), source=0.0_wp)
-         call dpcm_weights(self%gauss%dpcm_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_a, w_eps, error)
+         call dpcm_weights(self%gauss%dpcm_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a, w_xi=w_xi)
       else
-         call dpcm_point_weights(self%point%dpcm_point_state, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, error)
+         call dpcm_point_weights(self%point%dpcm_point_state, w_xyz, w_n, w_k1, w_k2, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a)
@@ -219,5 +220,30 @@ contains
             & hvp_r, hvp_n, hvp_k1, hvp_k2, hvp_a, hvp_v, hvp_vn, error)
       end if
    end subroutine dpcm_layer_tangent
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> @param[in,out] self  dpcm component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine dpcm_get_parameter_adjoint(self, item, error)
+      !> Component with current charges
+      class(model_continuum_component_dpcm), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_eps
+
+      if (self%smeared) then
+         call dpcm_param_weights(self%gauss%dpcm_state, w_eps, error)
+      else
+         call dpcm_point_param_weights(self%point%dpcm_point_state, w_eps, error)
+      end if
+      if (allocated(error)) return
+      allocate (item%dg_deps, source=0.0_wp)
+      if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
+
+   end subroutine dpcm_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_dpcm

@@ -4099,8 +4099,6 @@ contains
    end subroutine check_c_descriptor
 
    !> PCM spatial weights are absent until produced and use the declared C shape
-   !>
-   !> @param[out] error Failed field contract
    subroutine test_pcm_spatial_fields(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

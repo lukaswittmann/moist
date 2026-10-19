@@ -168,7 +168,11 @@ class IsodensityParameters(_Parameters):
 
 @dataclass(frozen=True, kw_only=True)
 class PCMParameters(_Parameters):
-    """Numerical settings shared by all PCM components."""
+    """Numerical settings shared by all PCM components.
+
+    ``parameter_derivatives`` adds the :class:`~moist.ParameterAdjointResponse`
+    item (dE/dp of the physical model parameters) to the response.
+    """
 
     _kind = "pcm"
     solver: PCMSolver = _native_default("pcm", "solver")
@@ -178,6 +182,7 @@ class PCMParameters(_Parameters):
     storage: PCMStorage = _native_default("pcm", "storage")
     newton_tol: float = _native_default("pcm", "newton_tol")
     newton_maxiter: int = _native_default("pcm", "newton_maxiter")
+    parameter_derivatives: bool = _native_default("pcm", "parameter_derivatives")
 
     def __post_init__(self):
         value = self.solver

@@ -4,7 +4,8 @@
 !> potential twice: through the potential's own sources at fixed surface, and
 !> through the surface positions `r_i(R)`. Both routes are weighted by the
 !> potential adjoint `w_phi_i = dE/dphi_i`, which is the surface charge `q_i`
-!> of a stationary PCM and the symmetrized adjoint of a non-symmetric one. The
+!> only for stationary potential-only models and the symmetrized adjoint of a
+!> non-symmetric one; normal-trace models add the `dE/dvn` channel. The
 !> host owns the potential, so the second route is the host total
 !> `w_xyz_i = dE_host/dr_i = w_phi_i grad phi(r_i)` (nuclear plus electronic);
 !> MOIST forms only the first, the nuclear charges moving under the fixed

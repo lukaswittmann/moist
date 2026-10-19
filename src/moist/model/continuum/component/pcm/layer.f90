@@ -11,7 +11,7 @@ module moist_model_continuum_component_pcm_layer
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
       & pcm_tangent_block, pcm_tangent_require
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
-      & pcm_gmres_solver, pcm_block_jacobi
+      & pcm_gmres_solver, pcm_block_jacobi, pcm_check_finite
    implicit none(type, external)
    private
 
@@ -340,6 +340,12 @@ contains
          call self%normal_trace(coupling, cavity, vn, error)
          if (allocated(error)) return
       end if
+      call pcm_check_finite(phi, "host potential", "[layer_ensure_charges]", error)
+      if (allocated(error)) return
+      if (self%uses_normal_trace()) then
+         call pcm_check_finite(vn, "host normal trace", "[layer_ensure_charges]", error)
+         if (allocated(error)) return
+      end if
       same = .false.
       if (allocated(self%phi) .and. self%charges_valid) then
          if (size(self%phi) == size(phi)) then
@@ -363,6 +369,15 @@ contains
       self%charges_valid = .false.
       call self%solve_layer(error)
       if (allocated(error)) return
+      ! Last guard for results the solvers did not see; charges stay invalid on failure
+      call pcm_check_finite(self%q, "surface charge", "[layer_ensure_charges]", error)
+      if (allocated(error)) return
+      call pcm_check_finite(self%qsym, "potential adjoint", "[layer_ensure_charges]", error)
+      if (allocated(error)) return
+      if (allocated(self%qn)) then
+         call pcm_check_finite(self%qn, "normal-trace adjoint", "[layer_ensure_charges]", error)
+         if (allocated(error)) return
+      end if
       self%charges_valid = .true.
    end subroutine layer_ensure_charges
 

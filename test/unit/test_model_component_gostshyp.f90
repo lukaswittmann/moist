@@ -508,8 +508,6 @@ contains
    !> correctness. All four channels stay enabled -- the area reaches the energy
    !> twice over, explicitly and through the Gaussian width, and the harness
    !> folds `w_a` into both scalar channels
-   !>
-   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_surface_weights(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error
@@ -517,8 +515,6 @@ contains
    end subroutine test_gostshyp_surface_weights
 
    !> Geometry derivatives inside the band, including the normalization route
-   !>
-   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_regularized_weights(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error
@@ -539,8 +535,6 @@ contains
    !>
    !> The switched-off point is requested at zero width; the derivatives of the
    !> two inside include the area route through the switch
-   !>
-   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_switched_weights(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error
@@ -1197,8 +1191,6 @@ contains
    end subroutine test_gostshyp_nonfinite
 
    !> Invalid host data must leave every caller accumulator unchanged
-   !>
-   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_failed_evaluation(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error
@@ -1291,8 +1283,6 @@ contains
    end subroutine test_gostshyp_failed_evaluation
 
    !> Exact reciprocal, inner derivatives, zero and negative-branch suppression
-   !>
-   !> @param[out] error Test diagnostic
    subroutine test_gostshyp_branches(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error

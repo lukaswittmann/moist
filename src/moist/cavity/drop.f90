@@ -733,7 +733,7 @@ contains
    !*                          Update Cavity (construct cavity)                         *!
    !* ================================================================================= *!
 
-   !> Take a new geometry: radii and sphere centres, then the surface unless
+   !> Take a new geometry: radii and sphere centers, then the surface unless
    !> the level set waits for build-phase answers
    !>
    !> @param[inout] self     Cavity instance
@@ -826,7 +826,7 @@ contains
 
    end subroutine build_cavity_drop
 
-   !> Project the surface of the stored structure, radii and sphere centres
+   !> Project the surface of the stored structure, radii and sphere centers
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling

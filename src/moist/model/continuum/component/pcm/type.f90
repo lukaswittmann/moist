@@ -10,7 +10,7 @@ module moist_model_continuum_component_pcm_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      & response_accumulate
+      & parameter_adjoint_response_type, response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & gaussian_potential_request_type, nuclear_charge_request_type, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, coupling_register, request_require
@@ -65,6 +65,8 @@ module moist_model_continuum_component_pcm_type
       real(wp) :: newton_tol = 1.0e-10_wp
       !> Maximum Newton steps
       integer :: newton_maxiter = 50
+      !> Add the parameter derivatives of the energy to `get_response`, never to gradient reads
+      logical :: parameter_derivatives = .false.
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
@@ -133,7 +135,10 @@ module moist_model_continuum_component_pcm_type
       !> Compute PCM reaction potential
       procedure :: get_response => pcm_component_get_response
 
-      !> Compute the potential adjoint `dE/dphi` (the surface charges for a stationary PCM)
+      !> Derivatives of the energy with respect to the physical parameters
+      procedure :: get_parameter_adjoint => pcm_component_get_parameter_adjoint
+
+      !> Compute the potential adjoint `dE/dphi` and, for normal-trace models, `dE/dvn`
       procedure :: get_trace_response => pcm_component_get_trace_response
 
       !> Compute PCM gradient with respect to nuclear coordinates
@@ -265,6 +270,7 @@ contains
       self%storage = defaults%storage
       self%newton_tol = defaults%newton_tol
       self%newton_maxiter = defaults%newton_maxiter
+      self%parameter_derivatives = defaults%parameter_derivatives
    end subroutine init_parameter_defaults
 
    !> Declare parameter fields for JSON input, output, and printing
@@ -280,6 +286,7 @@ contains
       call self%register_int_scalar("storage", self%storage, level=2)
       call self%register_real_scalar("newton_tol", self%newton_tol)
       call self%register_int_scalar("newton_maxiter", self%newton_maxiter)
+      call self%register_logical("parameter_derivatives", self%parameter_derivatives)
    end subroutine register_parameter_entries
 
    !> Linear solver settings of the component
@@ -335,9 +342,11 @@ contains
    !>
    !> Every chain-rule contraction through the host potential (Fock weights,
    !> the direct nuclear term, the surface-position and width weights) uses
-   !> this vector, never the charges themselves. For a stationary PCM (CPCM,
-   !> COSMO) it is the surface charge `q`; a non-symmetric response matrix
-   !> (IEF-PCM, SS(V)PE) overrides it with the symmetrized adjoint
+   !> this vector, never the charges themselves. It equals the surface charge
+   !> `q` only for stationary potential-only models (CPCM, COSMO); IEF-PCM and
+   !> SS(V)PE return the symmetrized adjoint, and models that also consume the
+   !> normal trace (DPCM, DPCM-original, LPB, SLIC, nonlocal) return their own
+   !> `dE/dphi`, with `dE/dvn` carried separately by `normal_trace_adjoint`
    !>
    !> @param[in]  self  PCM component with current surface charges
    !> @param[out] w_phi Potential adjoint (ngrid)
@@ -409,10 +418,12 @@ contains
 
    !> Compute the PCM potential adjoint
    !>
-   !>    dE/dphi_i = q_i
-   !> by stationarity, returned as the `potential_adjoint_response_type` item; the
-   !> host contracts it with its own potential integrals to build the Fock
-   !> contribution F_uv += sum_i q_i V_uv(r_i)
+   !> Returns the `potential_adjoint_response_type` item with `w_phi = dE/dphi`
+   !> and, for models that consume the normal trace `vn`, the normal-trace
+   !> adjoint `dE/dvn` as `w_dphi_dr`; the host contracts `w_phi` with its own
+   !> potential integrals, `F_uv += sum_i w_phi_i V_uv(r_i)`, and `w_dphi_dr`
+   !> with their position derivatives. `w_phi` equals the surface charge `q`
+   !> only for stationary potential-only models (CPCM, COSMO)
    !>
    !> @param[in,out] self PCM component instance
    !> @param[in] coupling Wavefunction data
@@ -431,10 +442,21 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      !> Parameter derivative item of this component
+      type(parameter_adjoint_response_type) :: pitem
+
       call self%require_context(error)
       if (allocated(error)) return
 
       call self%get_trace_response(coupling, cavity, response, error)
+      if (allocated(error)) return
+      ! Parameter item on the response phase only; the reverse gradient path
+      ! reuses this routine and must neither carry nor compute it
+      if (self%param%parameter_derivatives .and. coupling%phase == moist_phase_response) then
+         call self%get_parameter_adjoint(pitem, error)
+         if (allocated(error)) return
+         call response_accumulate(response, pitem, error)
+      end if
 
    end subroutine pcm_component_get_response
 
@@ -485,6 +507,27 @@ contains
       call response_accumulate(response, item, error)
 
    end subroutine pcm_component_get_trace_response
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> Overridden by concrete models; runs only when the parameter
+   !> `parameter_derivatives` is set and only in `get_response` (response phase), on the
+   !> solution of the current traces
+   !>
+   !> @param[in,out] self  PCM component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error error handling
+   subroutine pcm_component_get_parameter_adjoint(self, item, error)
+      !> PCM component instance
+      class(model_continuum_component_pcm), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "Parameter derivatives are not available for "//trim(self%name))
+
+   end subroutine pcm_component_get_parameter_adjoint
 
    !> Contract the reverse cavity adjoint and fixed-surface nuclear terms
    !>
@@ -725,9 +768,10 @@ contains
    !> Nuclear gradient of the PCM electrostatics at fixed surface
    !>
    !> The solute nuclei move under the fixed surface, weighted by the potential
-   !> adjoint (the surface charges of a stationary PCM); this term does
-   !> not reach the energy through any cavity surface quantity, so it stays
-   !> with the component instead of going through the cavity contraction
+   !> adjoint `w_phi` (equal to `q` only for stationary potential-only models);
+   !> this term does not reach the energy through any cavity surface quantity,
+   !> so it stays with the component instead of going through the cavity
+   !> contraction
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data

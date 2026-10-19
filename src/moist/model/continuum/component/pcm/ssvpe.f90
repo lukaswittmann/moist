@@ -1,7 +1,8 @@
 !> SS(V)PE component backed by generated Gaussian and point kernels
 module moist_model_continuum_component_pcm_ssvpe
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_response, only: parameter_adjoint_response_type
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -9,10 +10,10 @@ module moist_model_continuum_component_pcm_ssvpe
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver
    use pcmgen_gauss_ssvpe, only: ssvpe_complex_state, &
-      & ssvpe_assemble, ssvpe_medium, ssvpe_solve, ssvpe_weights, ssvpe_tangent
+      & ssvpe_assemble, ssvpe_medium, ssvpe_solve, ssvpe_weights, ssvpe_param_weights, ssvpe_tangent
    use pcmgen_point_ssvpe, only: ssvpe_point_complex_state, &
       & ssvpe_point_assemble, ssvpe_point_medium, ssvpe_point_solve, &
-      & ssvpe_point_weights, ssvpe_point_tangent
+      & ssvpe_point_weights, ssvpe_point_param_weights, ssvpe_point_tangent
    implicit none(type, external)
    private
 
@@ -34,6 +35,7 @@ module moist_model_continuum_component_pcm_ssvpe
       procedure :: assemble_layer => ssvpe_assemble_layer
       procedure :: solve_layer => ssvpe_solve_layer
       procedure :: layer_weights => ssvpe_layer_weights
+      procedure :: get_parameter_adjoint => ssvpe_get_parameter_adjoint
       procedure :: layer_tangent => ssvpe_layer_tangent
    end type model_continuum_component_ssvpe
 
@@ -61,7 +63,7 @@ contains
       type(moist_pcm_parameters_type), intent(in), optional :: param
       type(moist_pcm_parameters_type) :: settings
 
-      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
          call fatal_error(error, "SS(V)PE epsilon must be >= 1")
          return
       end if
@@ -121,19 +123,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)
-      real(wp) :: w_eps
       integer :: ngrid
 
       ngrid = cavity%ngrid
       allocate (w_xyz(3, ngrid), w_n(3, ngrid), w_k1(ngrid), w_k2(ngrid), w_a(ngrid))
       if (self%smeared) then
          allocate (w_xi(ngrid), w_f(ngrid), source=0.0_wp)
-         call ssvpe_weights(self%gauss%ssvpe_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, w_eps, error)
+         call ssvpe_weights(self%gauss%ssvpe_state, w_xyz, w_n, w_k1, w_k2, w_xi, w_f, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a, w_xi=w_xi, w_f=w_f)
       else
-         call ssvpe_point_weights(self%point%ssvpe_point_state, w_xyz, w_n, w_k1, w_k2, w_a, w_eps, error)
+         call ssvpe_point_weights(self%point%ssvpe_point_state, w_xyz, w_n, w_k1, w_k2, w_a, error)
          if (allocated(error)) return
          call acc%add_surface_weights(error, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, &
             & w_k2=w_k2, w_a=w_a)
@@ -215,5 +216,30 @@ contains
             & hvp_k1, hvp_k2, hvp_a, hvp_v, error)
       end if
    end subroutine ssvpe_layer_tangent
+
+   !> Derivatives of the energy with respect to the physical parameters
+   !>
+   !> @param[in,out] self  ssvpe component with current charges
+   !> @param[out]    item  parameter derivatives
+   !> @param[out]    error allocated on failure
+   subroutine ssvpe_get_parameter_adjoint(self, item, error)
+      !> Component with current charges
+      class(model_continuum_component_ssvpe), intent(inout) :: self
+      !> Parameter derivatives
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: w_eps
+
+      if (self%smeared) then
+         call ssvpe_param_weights(self%gauss%ssvpe_state, w_eps, error)
+      else
+         call ssvpe_point_param_weights(self%point%ssvpe_point_state, w_eps, error)
+      end if
+      if (allocated(error)) return
+      allocate (item%dg_deps, source=0.0_wp)
+      if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
+
+   end subroutine ssvpe_get_parameter_adjoint
 
 end module moist_model_continuum_component_pcm_ssvpe

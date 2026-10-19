@@ -26,8 +26,6 @@ contains
    !>
    !> Varying widths exposes shared character-result length temporaries;
    !> inspect the row before file I/O to isolate formatting and concatenation
-   !>
-   !> @param[out] error Error handle
    subroutine test_independent_rows(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
