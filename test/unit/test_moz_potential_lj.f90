@@ -43,6 +43,7 @@ contains
          & new_unittest("gaff-dmso", check_gaff_dmso), &
          & new_unittest("gaff-pyridine", check_gaff_pyridine), &
          & new_unittest("gaff-chloroform", check_gaff_chloroform), &
+         & new_unittest("gaff-heteroatom-types", check_gaff_heteroatom_types), &
          & new_unittest("gaff-element-uncovered", check_gaff_element_uncovered), &
          & new_unittest("gaff-water-fragment-uncovered", check_gaff_water_fragment), &
          & new_unittest("potential-fallback", check_potential_fallback), &
@@ -57,8 +58,6 @@ contains
    end subroutine collect_moz_potential_lj
 
    !> Read solvent geometry in bohr
-   !>
-   !> @param[out] error  test error
    !> @param[in]  name   solvent alias
    !> @param[out] mol    solvent geometry, bohr
    subroutine solvent_mol(error, name, mol)
@@ -127,8 +126,6 @@ contains
    end subroutine reference_gaff
 
    !> Build a GAFF term and compare types and parameters with the dev reference
-   !>
-   !> @param[out] error  test error
    !> @param[in]  mol    structure
    !> @param[in]  types  expected type label per atom
    subroutine check_gaff(error, mol, types)
@@ -164,8 +161,6 @@ contains
    end subroutine check_gaff
 
    !> Check uncovered GAFF water placeholders, including pure water
-   !>
-   !> @param[out] error  test error
    subroutine check_gaff_water(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -188,8 +183,6 @@ contains
    end subroutine check_gaff_water
 
    !> Check legacy water-model values and atom ordering
-   !>
-   !> @param[out] error  test error
    subroutine check_spce_water(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -243,8 +236,6 @@ contains
    end subroutine check_spce_water
 
    !> Check invalid solvent selection and clearing of built water data
-   !>
-   !> @param[out] error  test error
    subroutine check_spce_invalid_solvent(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -323,8 +314,6 @@ contains
    end subroutine check_uncovered
 
    !> Check explicit water-model selection after GAFF in a potential
-   !>
-   !> @param[out] error  test error
    subroutine check_potential_water_model(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -428,6 +417,154 @@ contains
          & "cl/GAFF"])
    end subroutine check_gaff_chloroform
 
+   !> Compare GAFF types with expected labels on a geometry in Angstrom
+   !> @param[in]  num    atomic numbers
+   !> @param[in]  xyz    coordinates, Angstrom (nat, 3)
+   !> @param[in]  types  expected two-character GAFF types; "*" skips an atom
+   subroutine check_gaff_labels(error, num, xyz, types)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Atomic numbers
+      integer, intent(in) :: num(:)
+      !> Coordinates, Angstrom
+      real(wp), intent(in) :: xyz(:, :)
+      !> Expected types
+      character(len=2), intent(in) :: types(:)
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol
+      type(lj_typed_type) :: gaff
+      character(len=64) :: label
+      integer :: iat
+      call new(mol, num, transpose(xyz)*aatoau)
+      gaff = lj_gaff
+      call gaff%update(mol, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      do iat = 1, mol%nat
+         if (types(iat) == "* ") cycle
+         write (label, "(a, i0, a)") "GAFF type of atom ", iat, " differs from the GAFF2 definition"
+         call check(error, trim(gaff%atomtype(iat)), trim(types(iat))//"/GAFF", trim(label))
+         if (allocated(error)) return
+      end do
+   end subroutine check_gaff_labels
+
+   !> Check GAFF types of species that reach the heteroatom and hydrogen rules
+   !>
+   !> - Expected types follow the GAFF2 definitions (gaff2.dat, antechamber ATOMTYPE_GFF.DEF): n3/hn amine, sh/hs
+   !>   thiol, p3/hp phosphine, p5/o/oh/ho phosphate, s6 sulfone, ss thioether, os ether, c1/c2 sp and sp2 carbon,
+   !>   n2 diazene, na pyrrole and pyrazole, p2 phosphaalkene, f/cl/br/i halogens, s thione sulfur
+   !> - Hydrogens on carbon next to O, S or sp2 carbon are skipped: GAFF2 types them h1 or h2 and ha, which the
+   !>   moist typing does not distinguish
+   subroutine check_gaff_heteroatom_types(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      ! ammonia
+      call check_gaff_labels(error, [7, 1, 1, 1], reshape([&
+         & 0.0000_wp, 0.9383_wp, -0.4692_wp, -0.4692_wp, 0.0000_wp, 0.0000_wp, 0.8126_wp, -0.8126_wp, &
+         & 0.0000_wp, -0.3791_wp, -0.3791_wp, -0.3791_wp], [4, 3]), &
+         & [character(len=2) :: "n3", "hn", "hn", "hn"])
+      if (allocated(error)) return
+      ! hydrogen sulfide
+      call check_gaff_labels(error, [16, 1, 1], reshape([&
+         & 0.0000_wp, 0.9618_wp, -0.9618_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, -0.9272_wp, -0.9272_wp], [3, 3]), &
+         & [character(len=2) :: "sh", "hs", "hs"])
+      if (allocated(error)) return
+      ! phosphine
+      call check_gaff_labels(error, [15, 1, 1, 1], reshape([&
+         & 0.0000_wp, 1.2763_wp, -0.6381_wp, -0.6381_wp, 0.0000_wp, 0.0000_wp, 1.1053_wp, -1.1053_wp, &
+         & 0.0000_wp, -0.6225_wp, -0.6225_wp, -0.6225_wp], [4, 3]), &
+         & [character(len=2) :: "p3", "hp", "hp", "hp"])
+      if (allocated(error)) return
+      ! bromochlorofluoroiodomethane
+      call check_gaff_labels(error, [6, 9, 17, 35, 53], reshape([&
+         & 0.0000_wp, 0.7794_wp, 1.0277_wp, -1.1201_wp, -1.2355_wp, 0.0000_wp, 0.7794_wp, -1.0277_wp, &
+         & 1.1201_wp, -1.2355_wp, 0.0000_wp, 0.7794_wp, -1.0277_wp, -1.1201_wp, 1.2355_wp], [5, 3]), &
+         & [character(len=2) :: "c3", "f", "cl", "br", "i"])
+      if (allocated(error)) return
+      ! carbon dioxide
+      call check_gaff_labels(error, [6, 8, 8], reshape([&
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 1.1600_wp, -1.1600_wp], [3, 3]), &
+         & [character(len=2) :: "c1", "o", "o"])
+      if (allocated(error)) return
+      ! carbon disulfide
+      call check_gaff_labels(error, [6, 16, 16], reshape([&
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 1.5600_wp, -1.5600_wp], [3, 3]), &
+         & [character(len=2) :: "c1", "s", "s"])
+      if (allocated(error)) return
+      ! ethylene
+      call check_gaff_labels(error, [6, 6, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, 0.0000_wp, 0.9300_wp, -0.9300_wp, 0.9300_wp, -0.9300_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, &
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.6650_wp, -0.6650_wp, 1.2300_wp, 1.2300_wp, -1.2300_wp, -1.2300_wp], &
+         & [6, 3]), &
+         & [character(len=2) :: "c2", "c2", "*", "*", "*", "*"])
+      if (allocated(error)) return
+      ! diazene
+      call check_gaff_labels(error, [7, 7, 1, 1], reshape([&
+         & 0.0000_wp, 0.0000_wp, 0.9900_wp, -0.9900_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.6250_wp, &
+         & -0.6250_wp, 1.0000_wp, -1.0000_wp], [4, 3]), &
+         & [character(len=2) :: "n2", "n2", "hn", "hn"])
+      if (allocated(error)) return
+      ! hydrazine
+      call check_gaff_labels(error, [7, 7, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, 0.0000_wp, 0.8500_wp, -0.8500_wp, 0.8500_wp, -0.8500_wp, 0.0000_wp, 0.0000_wp, 0.5000_wp, &
+         & 0.5000_wp, -0.5000_wp, -0.5000_wp, 0.7200_wp, -0.7200_wp, 1.0000_wp, 1.0000_wp, -1.0000_wp, &
+         & -1.0000_wp], [6, 3]), &
+         & [character(len=2) :: "n3", "n3", "hn", "hn", "hn", "hn"])
+      if (allocated(error)) return
+      ! dimethyl ether
+      call check_gaff_labels(error, [8, 6, 6, 1, 1, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, 1.1669_wp, -1.1669_wp, 1.7655_wp, 0.8914_wp, 1.7472_wp, -1.0576_wp, -1.3223_wp, &
+         & -2.0242_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, -0.8802_wp, -0.0188_wp, 0.8991_wp, 0.7219_wp, &
+         & -0.9941_wp, 0.2723_wp, 0.0000_wp, -0.7915_wp, -0.7915_wp, -0.5572_wp, -1.8460_wp, -0.5842_wp, &
+         & -1.6009_wp, -1.2106_wp, -0.1759_wp], [9, 3]), &
+         & [character(len=2) :: "os", "c3", "c3", "*", "*", "*", "*", "*", "*"])
+      if (allocated(error)) return
+      ! dimethyl sulfide
+      call check_gaff_labels(error, [16, 6, 6, 1, 1, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, 1.3763_wp, -1.3763_wp, 2.0057_wp, 0.9861_wp, 1.9673_wp, -1.1388_wp, -1.5419_wp, &
+         & -2.2784_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, -0.8722_wp, -0.0341_wp, 0.9064_wp, 0.6548_wp, &
+         & -1.0131_wp, 0.3583_wp, 0.0000_wp, -1.1755_wp, -1.1755_wp, -0.9989_wp, -2.1927_wp, -1.0439_wp, &
+         & -2.0139_wp, -1.5420_wp, -0.6796_wp], [9, 3]), &
+         & [character(len=2) :: "ss", "c3", "c3", "*", "*", "*", "*", "*", "*"])
+      if (allocated(error)) return
+      ! dimethyl sulfone
+      call check_gaff_labels(error, [16, 6, 6, 8, 8, 1, 1, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, 1.3852_wp, -1.3852_wp, 0.0000_wp, 0.0000_wp, 2.0051_wp, 1.0307_wp, 1.9743_wp, -1.1895_wp, &
+         & -1.5446_wp, -2.2759_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 1.2494_wp, -1.2494_wp, -0.8751_wp, &
+         & -0.0286_wp, 0.9038_wp, 0.6782_wp, -1.0075_wp, 0.3293_wp, 0.0000_wp, -1.1019_wp, -1.1019_wp, &
+         & 0.7359_wp, 0.7359_wp, -0.9071_wp, -2.1322_wp, -0.9459_wp, -1.9324_wp, -1.4860_wp, -0.5667_wp], [11, 3]), &
+         & [character(len=2) :: "s6", "c3", "c3", "o", "o", "*", "*", "*", "*", "*", "*"])
+      if (allocated(error)) return
+      ! phosphoric acid
+      call check_gaff_labels(error, [15, 8, 8, 8, 8, 1, 1, 1], reshape([&
+         & 0.0000_wp, 0.0000_wp, 1.4847_wp, -0.7424_wp, -0.7424_wp, 2.2698_wp, -1.6000_wp, -0.6698_wp, &
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp, 1.2858_wp, -1.2858_wp, 0.5371_wp, 1.6971_wp, -2.2342_wp, 0.0000_wp, &
+         & 1.4800_wp, -0.5404_wp, -0.5404_wp, -0.5404_wp, -0.7306_wp, -0.7306_wp, -0.7306_wp], [8, 3]), &
+         & [character(len=2) :: "p5", "o", "oh", "oh", "oh", "ho", "ho", "ho"])
+      if (allocated(error)) return
+      ! pyrrole: ring nitrogen with three neighbours is na
+      call check_gaff_labels(error, [7, 6, 6, 6, 6, 1, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, -1.1164_wp, -0.6900_wp, 0.6900_wp, 1.1164_wp, 0.0000_wp, -2.1436_wp, -1.3248_wp, 1.3248_wp, &
+         & 2.1436_wp, 1.1739_wp, 0.3628_wp, -0.9497_wp, -0.9497_wp, 0.3628_wp, 2.1839_wp, 0.6965_wp, -1.8234_wp, &
+         & -1.8234_wp, 0.6965_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, &
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp], [10, 3]), &
+         & [character(len=2) :: "na", "*", "*", "*", "*", "hn", "*", "*", "*", "*"])
+      if (allocated(error)) return
+      ! pyrazole: the substituted ring nitrogen next to another nitrogen is na without help from an aromatic carbon
+      call check_gaff_labels(error, [7, 7, 6, 6, 6, 1, 1, 1, 1], reshape([&
+         & 0.0000_wp, -1.1164_wp, -0.6900_wp, 0.6900_wp, 1.1164_wp, 0.0000_wp, -1.3248_wp, 1.3248_wp, 2.1436_wp, &
+         & 1.1739_wp, 0.3628_wp, -0.9497_wp, -0.9497_wp, 0.3628_wp, 2.1839_wp, -1.8234_wp, -1.8234_wp, 0.6965_wp, &
+         & 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp], [9, 3]), &
+         & [character(len=2) :: "na", "*", "*", "*", "*", "hn", "*", "*", "*"])
+      if (allocated(error)) return
+      ! phosphaethene: two-coordinate phosphorus is p2
+      call check_gaff_labels(error, [6, 15, 1, 1, 1], reshape([&
+         & 0.0000_wp, 1.6700_wp, -0.5500_wp, -0.5500_wp, 1.8431_wp, 0.0000_wp, 0.0000_wp, 0.9400_wp, -0.9400_wp, &
+         & 1.4094_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp, 0.0000_wp], [5, 3]), &
+         & [character(len=2) :: "c2", "p2", "*", "*", "hp"])
+      if (allocated(error)) return
+   end subroutine check_gaff_heteroatom_types
+
    !> Check UFF fallback for elements without GAFF rules
    !>
    !> - UFF rows only for atoms left uncovered by GAFF
@@ -492,8 +629,6 @@ contains
    end subroutine check_gaff_element_uncovered
 
    !> Print the built site table to a scratch unit and check rows
-   !>
-   !> @param[out] error  test error
    !> @param[in]  pot    updated potential of methane carbon and hydrogen, argon and iron
    !> @param[in]  mol    its structure
    subroutine check_site_table(error, pot, mol)
@@ -568,8 +703,6 @@ contains
    end subroutine check_gaff_water_fragment
 
    !> Build methanol plus rutherfordium without a GAFF2 row
-   !>
-   !> @param[out] error  test error
    !> @param[out] mol    structure, rutherfordium last
    subroutine methanol_with_rf(error, mol)
       !> Test error

@@ -7,15 +7,19 @@
 !> - Hessian: fixed position, weight and phase-reference adjoints, see `check_grid_hessian_fd`
 !> - Partition schemes besides the default Becke on a small molecule, and the
 !>   Gaussian width term for tiny retained weights
+!> - Dense volume Hessian of the base grid against its Hessian-vector columns
+!>   and the accepted paths of the shared adjoint validation
+!> - Error paths (`should_fail`): every malformed adjoint, accumulator or direction of the
+!>   shared adjoint validation fails through its own named error
 module test_math_grid_3d_derivatives
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use mctc_env, only: wp
-   use mctc_env_error, only: mctc_error => error_type
+   use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use test_helpers, only: get_qc_handymod_recipe, check_moist_error
-   use moist_math_grid_3d_base, only: moist_math_grid_3d_type
+   use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid, &
       & new_cartesian_gaussian_grid
@@ -60,6 +64,20 @@ module test_math_grid_3d_derivatives
    integer, parameter :: MOLECULAR_DEGREE = 5
    real(wp), parameter :: MOLECULAR_RMAX = 5.0_wp
 
+   !> Minimal grid whose Hessian-vector product is a fixed matrix, for the base assembly
+   type, extends(moist_math_grid_3d_type) :: linear_response_grid_type
+      !> Product matrix acting on the flattened nuclear direction (3*natom, 3*natom)
+      real(wp) :: matrix(6, 6) = 0.0_wp
+   contains
+      procedure :: update => linear_update
+      procedure :: validate => linear_validate
+      procedure :: kpoint => linear_kpoint
+      procedure :: get_kref => linear_get_kref
+      procedure :: new_trafo => linear_new_trafo
+      procedure :: destroy => linear_destroy
+      procedure :: get_volume_hessian_vector => linear_hessian_vector
+   end type linear_response_grid_type
+
 contains
 
    !> Collect the finite-difference derivative tests
@@ -77,7 +95,23 @@ contains
                   new_unittest("but14diol_1", test_but14diol_1), &
                   new_unittest("il16_008", test_il16_008), &
                   new_unittest("partition_schemes", test_partition_schemes), &
-                  new_unittest("gaussian_tiny_weights", test_gaussian_tiny_weights) &
+                  new_unittest("gaussian_tiny_weights", test_gaussian_tiny_weights), &
+                  new_unittest("volume_hessian_columns", test_volume_hessian_columns), &
+                  new_unittest("refused_calls_keep_accumulators", test_refused_calls_keep_accumulators), &
+                  new_unittest("width_gradient_accepted", test_width_gradient_accepted), &
+                  new_unittest("bad_volume_adjoint_unbuilt", test_volume_adjoint_unbuilt_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_adjoint_uninitialized", test_volume_adjoint_uninitialized_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_adjoint_size", test_volume_adjoint_size_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_adjoint_nonfinite", test_volume_adjoint_nonfinite_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_width_adjoint", test_volume_width_adjoint_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_gradient_shape", test_volume_gradient_shape_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_hvp_accumulator_shape", test_volume_hvp_accumulator_shape_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_hvp_direction_shape", test_volume_hvp_direction_shape_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_direction_nonfinite", test_volume_direction_nonfinite_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_hessian_shape", test_volume_hessian_shape_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_hvp_width_curvature", test_volume_hvp_width_curvature_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_hessian_curvature", test_volume_hessian_curvature_fails, should_fail=.true.), &
+                  new_unittest("bad_volume_phase_reference", test_volume_phase_reference_fails, should_fail=.true.) &
                   ]
    end subroutine collect_math_grid_3d_derivatives
 
@@ -218,6 +252,595 @@ contains
       if (allocated(error)) return
       call check(error, all(ieee_is_finite(gradient)), "width adjoint gave a non-finite gradient")
    end subroutine test_gaussian_tiny_weights
+
+   !> Dense volume Hessian against the column-wise Hessian-vector products
+   !>
+   !> - Column (c, a) is the product with the unit direction on component c of atom a
+   !> - Every 3D grid; the molecular Hessian kernel sums differently from the directional one,
+   !>   so the curvature thresholds apply
+   !> - The shared base assembly on a linear-response grid whose product is a fixed
+   !>   nonsymmetric matrix: exact column layout, added to a nonzero accumulator
+   subroutine test_volume_hessian_columns(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(linear_response_grid_type) :: linear
+      type(structure_type) :: mol
+      type(volume_adjoint_type) :: acc
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: dense(:, :, :, :), column(:, :), direction(:, :)
+      real(wp) :: expected(3, 2)
+      integer :: kind, i, a, c
+
+      call new(mol, [8, 1, 6], reshape([-0.6_wp, -0.2_wp, 0.1_wp, 0.7_wp, 0.3_wp, -0.25_wp, &
+         & 0.1_wp, 1.2_wp, 0.4_wp], [3, 3]))
+      allocate (dense(3, 3, 3, 3), column(3, 3), direction(3, 3))
+      do kind = 1, 4
+         call make_grid(kind, mol, grid, error)
+         if (allocated(error)) return
+         call acc%init(grid%ngrid)
+         acc%w_xyz = 0.3_wp
+         do i = 1, grid%ngrid
+            acc%w_w(i) = cos(0.2_wp*real(i, wp))
+         end do
+         if (grid%npts_k > 0) acc%w_kref = [0.3_wp, -0.7_wp, 0.45_wp]
+         dense = 0.0_wp
+         call grid%get_volume_hessian(acc, dense, merr)
+         call check_moist_error(error, merr, "dense volume Hessian")
+         if (allocated(error)) return
+         do a = 1, 3
+            do c = 1, 3
+               direction = 0.0_wp
+               direction(c, a) = 1.0_wp
+               column = 0.0_wp
+               call grid%get_volume_hessian_vector(acc, direction, column, merr)
+               call check_moist_error(error, merr, "Hessian-vector column")
+               if (allocated(error)) return
+               call check(error, maxval(abs(dense(:, :, c, a) - column)) &
+                  & < CURVATURE_ABS_THR + CURVATURE_REL_THR*maxval(abs(column)), &
+                  & "dense volume Hessian column differs from the Hessian-vector product")
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+
+      linear%natom = 2
+      linear%ngrid = 1
+      linear%matrix = reshape([(sin(real(i, wp)), i=1, 36)], [6, 6])
+      call acc%init(1)
+      deallocate (dense)
+      allocate (dense(3, 2, 3, 2))
+      dense = 0.25_wp
+      call linear%get_volume_hessian(acc, dense, merr)
+      call check_moist_error(error, merr, "base dense volume Hessian")
+      if (allocated(error)) return
+      do a = 1, 2
+         do c = 1, 3
+            expected = reshape(linear%matrix(:, c + 3*(a - 1)), [3, 2])
+            call check(error, maxval(abs(dense(:, :, c, a) - 0.25_wp - expected)) < IDENTITY_ABS_THR, &
+               & "base dense volume Hessian column differs from the matrix column")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_volume_hessian_columns
+
+   !> Unused geometry update of the linear-response grid
+   !>
+   !> @param[in,out] self   grid
+   !> @param[in]     mol    geometry
+   !> @param[out]    error  never set
+   subroutine linear_update(self, mol, error)
+      !> Grid
+      class(linear_response_grid_type), intent(inout) :: self
+      !> Geometry
+      type(structure_type), intent(in) :: mol
+      !> Error handling
+      type(mctc_error), allocatable, intent(out) :: error
+
+      call fatal_error(error, "linear-response grid has no geometry update")
+   end subroutine linear_update
+
+   !> Configuration check of the linear-response grid
+   !>
+   !> @param[in]  self   grid
+   !> @param[out] error  never set
+   subroutine linear_validate(self, error)
+      !> Grid
+      class(linear_response_grid_type), intent(in) :: self
+      !> Error handling
+      type(mctc_error), allocatable, intent(out) :: error
+
+      if (self%natom < 0) call fatal_error(error, "negative atom count")
+   end subroutine linear_validate
+
+   !> Reciprocal point of the linear-response grid
+   !>
+   !> @param[in] self  grid
+   !> @param[in] j     point index
+   pure function linear_kpoint(self, j) result(k)
+      !> Grid
+      class(linear_response_grid_type), intent(in) :: self
+      !> Point index
+      integer, intent(in) :: j
+      !> Reciprocal point
+      real(wp) :: k(3)
+
+      k = real(j + self%natom, wp)
+   end function linear_kpoint
+
+   !> Phase reference of the linear-response grid
+   !>
+   !> @param[in] self  grid
+   pure function linear_get_kref(self) result(kref)
+      !> Grid
+      class(linear_response_grid_type), intent(in) :: self
+      !> Phase reference
+      real(wp) :: kref(3)
+
+      kref = real(self%natom, wp)
+   end function linear_get_kref
+
+   !> Transform factory of the linear-response grid
+   !>
+   !> @param[in]  self   grid
+   !> @param[out] trafo  never allocated
+   !> @param[out] error  always set
+   subroutine linear_new_trafo(self, trafo, error)
+      !> Grid
+      class(linear_response_grid_type), intent(in), target :: self
+      !> Transform engine
+      class(moist_math_grid_3d_trafo_type), allocatable, intent(out) :: trafo
+      !> Error handling
+      type(mctc_error), allocatable, intent(out) :: error
+
+      call fatal_error(error, "linear-response grid has no transform")
+   end subroutine linear_new_trafo
+
+   !> Release of the linear-response grid
+   !>
+   !> @param[in,out] self  grid
+   subroutine linear_destroy(self)
+      !> Grid
+      class(linear_response_grid_type), intent(inout) :: self
+
+      self%natom = 0
+      self%ngrid = 0
+   end subroutine linear_destroy
+
+   !> Fixed-matrix Hessian-vector product of the linear-response grid
+   !>
+   !> @param[in]     self            grid
+   !> @param[in]     acc             fixed volume adjoints
+   !> @param[in]     direction       nuclear direction (3, natom)
+   !> @param[in,out] hessian_vector  accumulator (3, natom)
+   !> @param[out]    error           shape errors from the shared validation
+   subroutine linear_hessian_vector(self, acc, direction, hessian_vector, error)
+      !> Grid
+      class(linear_response_grid_type), intent(in) :: self
+      !> Fixed volume adjoints
+      type(volume_adjoint_type), intent(in) :: acc
+      !> Nuclear direction
+      real(wp), intent(in) :: direction(:, :)
+      !> Nuclear Hessian-vector accumulator
+      real(wp), intent(inout) :: hessian_vector(:, :)
+      !> Error handling
+      type(mctc_error), allocatable, intent(out) :: error
+
+      integer :: n
+
+      call self%check_volume_adjoint(acc, error, vector=hessian_vector, direction=direction)
+      if (allocated(error)) return
+      n = 3*self%natom
+      hessian_vector = hessian_vector + reshape(matmul(self%matrix(:n, :n), reshape(direction, [n])), [3, self%natom])
+   end subroutine linear_hessian_vector
+
+   !> Refused adjoint contractions leave their accumulators untouched
+   !>
+   !> - Non-finite adjoint, width adjoint on a point grid, non-finite direction
+   subroutine test_refused_calls_keep_accumulators(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      real(wp) :: nan, gradient(3, 3), hvp(3, 3), direction(3, 3)
+
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      call get_refusal_molecule(mol)
+      direction = 0.1_wp
+      gradient = 0.25_wp
+      hvp = 0.25_wp
+      call make_grid(3, mol, grid, error)
+      if (allocated(error)) return
+      call acc%init(grid%ngrid)
+      acc%w_xyz(2, 1) = nan
+      call grid%get_volume_gradient(acc, gradient, merr)
+      call check(error, allocated(merr), "a non-finite adjoint must be refused")
+      if (allocated(error)) return
+      acc%w_xyz(2, 1) = 0.0_wp
+      acc%w_xi(2) = 0.5_wp
+      call grid%get_volume_gradient(acc, gradient, merr)
+      call check(error, allocated(merr), "a width adjoint on a point grid must be refused")
+      if (allocated(error)) return
+      acc%w_xi = 0.0_wp
+      direction(2, 3) = nan
+      call grid%get_volume_hessian_vector(acc, direction, hvp, merr)
+      call check(error, allocated(merr), "a non-finite direction must be refused")
+      if (allocated(error)) return
+      call check(error, all(gradient == 0.25_wp) .and. all(hvp == 0.25_wp), &
+         & "a refused contraction changed its accumulator")
+   end subroutine test_refused_calls_keep_accumulators
+
+   !> A Gaussian grid accepts the width gradient and its refused curvature leaves accumulators untouched
+   subroutine test_width_gradient_accepted(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      real(wp) :: gradient(3, 3), hvp(3, 3), hessian(3, 3, 3, 3), direction(3, 3)
+
+      call get_refusal_molecule(mol)
+      direction = 0.1_wp
+      gradient = 0.25_wp
+      hvp = 0.25_wp
+      hessian = 0.25_wp
+      call make_grid(4, mol, grid, error)
+      if (allocated(error)) return
+      call acc%init(grid%ngrid)
+      acc%w_xi = 0.5_wp
+      call grid%get_volume_gradient(acc, gradient, merr)
+      call check_moist_error(error, merr, "width gradient")
+      if (allocated(error)) return
+      call grid%get_volume_hessian_vector(acc, direction, hvp, merr)
+      call check(error, allocated(merr), "width curvature must be refused in the Hessian-vector product")
+      if (allocated(error)) return
+      call grid%get_volume_hessian(acc, hessian, merr)
+      call check(error, allocated(merr), "width curvature must be refused in the dense Hessian")
+      if (allocated(error)) return
+      call check(error, all(hvp == 0.25_wp) .and. all(hessian == 0.25_wp), &
+         & "a refused curvature contraction changed its accumulator")
+   end subroutine test_width_gradient_accepted
+
+   !> A molecular point grid without reciprocal points refuses a phase-reference adjoint
+   subroutine test_volume_phase_reference_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_3d_molecular_type) :: real_space
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(structure_type) :: mol
+      type(volume_adjoint_type) :: acc
+      type(mctc_error), allocatable :: merr
+      real(wp) :: gradient(3, 3)
+
+      call get_refusal_molecule(mol)
+      call get_qc_handymod_recipe(recipe, merr, nrad=MOLECULAR_NRAD, degree=MOLECULAR_DEGREE, rmax=MOLECULAR_RMAX)
+      if (.not. allocated(merr)) call new_molecular_point_grid(real_space, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call real_space%update(mol, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      if (real_space%npts_k /= 0) return
+      call acc%init(real_space%ngrid)
+      acc%w_kref = [0.0_wp, 0.1_wp, 0.0_wp]
+      gradient = 0.25_wp
+      call real_space%get_volume_gradient(acc, gradient, merr)
+      call expect_error(error, merr, "no phase-reference channel")
+   end subroutine test_volume_phase_reference_fails
+
+   !> A grid that was never updated refuses the adjoint check
+   subroutine test_volume_adjoint_unbuilt_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      type(moist_math_grid_3d_cartesian_type) :: unbuilt
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      call unbuilt%check_volume_adjoint(acc, merr)
+      call expect_error(error, merr, "update the grid successfully first")
+   end subroutine test_volume_adjoint_unbuilt_fails
+
+   !> An uninitialized accumulator is refused
+   subroutine test_volume_adjoint_uninitialized_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      type(volume_adjoint_type) :: bare
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      call grid%check_volume_adjoint(bare, merr)
+      call expect_error(error, merr, "accumulator is not initialized")
+   end subroutine test_volume_adjoint_uninitialized_fails
+
+   !> An accumulator sized for another grid is refused
+   subroutine test_volume_adjoint_size_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      type(volume_adjoint_type) :: bare
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      call bare%init(grid%ngrid + 1)
+      call grid%check_volume_adjoint(bare, merr)
+      call expect_error(error, merr, "grid size mismatch")
+   end subroutine test_volume_adjoint_size_fails
+
+   !> A non-finite adjoint is refused
+   subroutine test_volume_adjoint_nonfinite_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: nan, gradient(3, 3)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      gradient = 0.25_wp
+      acc%w_xyz(2, 1) = nan
+      call grid%get_volume_gradient(acc, gradient, merr)
+      call expect_error(error, merr, "adjoints must be finite")
+   end subroutine test_volume_adjoint_nonfinite_fails
+
+   !> A width adjoint on a grid without a Gaussian-width channel is refused
+   subroutine test_volume_width_adjoint_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: gradient(3, 3)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      gradient = 0.25_wp
+      acc%w_xi(2) = 0.5_wp
+      call grid%get_volume_gradient(acc, gradient, merr)
+      call expect_error(error, merr, "no Gaussian-width channel")
+   end subroutine test_volume_width_adjoint_fails
+
+   !> A mis-shaped nuclear gradient accumulator is refused
+   subroutine test_volume_gradient_shape_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: wrong(3, 4)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      wrong = 0.25_wp
+      call grid%get_volume_gradient(acc, wrong, merr)
+      call expect_error(error, merr, "nuclear accumulator shape mismatch")
+   end subroutine test_volume_gradient_shape_fails
+
+   !> A mis-shaped Hessian-vector accumulator is refused
+   subroutine test_volume_hvp_accumulator_shape_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: wrong(3, 4), direction(3, 3)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      wrong = 0.25_wp
+      direction = 0.1_wp
+      call grid%get_volume_hessian_vector(acc, direction, wrong, merr)
+      call expect_error(error, merr, "nuclear accumulator shape mismatch")
+   end subroutine test_volume_hvp_accumulator_shape_fails
+
+   !> A mis-shaped nuclear direction is refused
+   subroutine test_volume_hvp_direction_shape_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: wrong(3, 4), hvp(3, 3)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      wrong = 0.1_wp
+      hvp = 0.25_wp
+      call grid%get_volume_hessian_vector(acc, wrong, hvp, merr)
+      call expect_error(error, merr, "nuclear-direction shape mismatch")
+   end subroutine test_volume_hvp_direction_shape_fails
+
+   !> A non-finite nuclear direction is refused
+   subroutine test_volume_direction_nonfinite_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: nan, direction(3, 3), hvp(3, 3)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      direction = 0.1_wp
+      hvp = 0.25_wp
+      direction(2, 3) = nan
+      call grid%get_volume_hessian_vector(acc, direction, hvp, merr)
+      call expect_error(error, merr, "nuclear direction must be finite")
+   end subroutine test_volume_direction_nonfinite_fails
+
+   !> A mis-shaped nuclear Hessian is refused
+   subroutine test_volume_hessian_shape_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: wrong_hessian(3, 4, 3, 4)
+
+      call get_refusal_grid(3, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      wrong_hessian = 0.25_wp
+      call grid%get_volume_hessian(acc, wrong_hessian, merr)
+      call expect_error(error, merr, "nuclear-Hessian shape mismatch")
+   end subroutine test_volume_hessian_shape_fails
+
+   !> Width curvature is refused in the Hessian-vector product for Gaussian widths that follow the geometry
+   subroutine test_volume_hvp_width_curvature_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: direction(3, 3), hvp(3, 3)
+
+      call get_refusal_grid(4, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      acc%w_xi = 0.5_wp
+      direction = 0.1_wp
+      hvp = 0.25_wp
+      call grid%get_volume_hessian_vector(acc, direction, hvp, merr)
+      call expect_error(error, merr, "Gaussian-width curvature is unsupported")
+   end subroutine test_volume_hvp_width_curvature_fails
+
+   !> Width curvature is refused in the dense Hessian for Gaussian widths that follow the geometry
+   subroutine test_volume_hessian_curvature_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(volume_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      logical :: ok
+      real(wp) :: hessian(3, 3, 3, 3)
+
+      call get_refusal_grid(4, grid, acc, mol, ok)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (.not. ok) return
+      acc%w_xi = 0.5_wp
+      hessian = 0.25_wp
+      call grid%get_volume_hessian(acc, hessian, merr)
+      call expect_error(error, merr, "Gaussian-width curvature is unsupported")
+   end subroutine test_volume_hessian_curvature_fails
+
+   !> Molecule shared by the volume-adjoint refusal tests
+   !>
+   !> @param[out] mol  three-atom structure
+   subroutine get_refusal_molecule(mol)
+      !> Structure
+      type(structure_type), intent(out) :: mol
+
+      call new(mol, [8, 1, 6], reshape([-0.6_wp, -0.2_wp, 0.1_wp, 0.7_wp, 0.3_wp, -0.25_wp, &
+         & 0.1_wp, 1.2_wp, 0.4_wp], [3, 3]))
+   end subroutine get_refusal_molecule
+
+   !> Updated 3D grid and a matching adjoint accumulator for the refusal tests
+   !>
+   !> @param[in]  kind  grid kind of `make_grid`
+   !> @param[out] grid  updated grid
+   !> @param[out] acc   zeroed accumulator sized for the grid
+   !> @param[out] mol   structure of the grid
+   !> @param[out] ok    false when the setup failed
+   subroutine get_refusal_grid(kind, grid, acc, mol, ok)
+      !> Grid kind
+      integer, intent(in) :: kind
+      !> Updated grid
+      class(moist_math_grid_3d_type), allocatable, intent(out) :: grid
+      !> Accumulator
+      type(volume_adjoint_type), intent(out) :: acc
+      !> Structure
+      type(structure_type), intent(out) :: mol
+      !> Setup succeeded
+      logical, intent(out) :: ok
+
+      type(error_type), allocatable :: setup_error
+
+      call get_refusal_molecule(mol)
+      call make_grid(kind, mol, grid, setup_error)
+      ok = .not. allocated(setup_error)
+      if (ok) call acc%init(grid%ngrid)
+   end subroutine get_refusal_grid
+
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
 
    !> Gradient and Hessian finite differences of `mol` on every 3D grid
    !>

@@ -28,6 +28,7 @@ program tester
    use test_math_cell_grid, only: collect_math_cell_grid
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
+   use test_math_packed_sym, only: collect_math_packed_sym
    use test_math_grid_radial_rule, only: collect_math_grid_radial_rule
    use test_math_grid_radial, only: collect_math_grid_radial
    use test_math_grid_radial_trafo, only: collect_math_grid_radial_trafo
@@ -60,6 +61,8 @@ program tester
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
    use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
+   use test_cavity_drop_projector, only: collect_cavity_drop_projector
+   use test_cavity_drop_properties, only: collect_cavity_drop_properties
    use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
@@ -98,6 +101,7 @@ program tester
       & new_testsuite("math_solvers", collect_math_solvers), &
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
+      & new_testsuite("math_packed_sym", collect_math_packed_sym), &
       & new_testsuite("math_grid_radial_rule", collect_math_grid_radial_rule), &
       & new_testsuite("math_grid_radial", collect_math_grid_radial), &
       & new_testsuite("math_grid_radial_trafo", collect_math_grid_radial_trafo), &
@@ -131,7 +135,9 @@ program tester
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
+      & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
+      & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
       & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &

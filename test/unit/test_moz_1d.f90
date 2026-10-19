@@ -209,8 +209,6 @@ contains
    end subroutine check_monopole_phases
 
    !> Check the published radial grid and monopole requirements
-   !>
-   !> @param[out] error  test error
    subroutine check_radial_fields(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error

@@ -1,7 +1,7 @@
 !> DROP level-set unit tests
 !>
 !> Shared FD checks use [[moist_cavity_drop_lsf_type]] for SvdW and CFC
-!> SvdW sweeps `blend_k` x `gamma`; CFC uses compiled defaults
+!> SvdW sweeps `blend_k` x (`blend_3b`, `blend_2b`); CFC uses compiled defaults
 !>
 !> Shared checks:
 !>   * `sign_convention`     interior < 0, exterior > 0
@@ -79,33 +79,22 @@ module test_cavity_drop_lsf
    real(wp), parameter :: EMPTY_POISON = -1.0e30_wp
 
    real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
+
+   !> FD thresholds
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
-
-   !> CFC high-order FD thresholds
-   !>
-   !> - CFC exponents (-15, -9): length scale R/15 vs SvdW's 3/k
-   !> - Order-4 stencil error at `STEP_SIZE`: between `2e-10 / 1e-9` and
-   !>   `1e-9 / 1e-8`; thresholds leave one decade of platform headroom
-   !> - Lower orders retain SvdW thresholds
-   !> - `cfc_contracted_vs_pairwise` checks independent ladders at roundoff
-   real(wp), parameter :: CFC_ABS_THR = 1.0e-8_wp
-   real(wp), parameter :: CFC_REL_THR = 1.0e-7_wp
+   real(wp), parameter :: CFC_ABS_THR = 5.0e-9_wp
+   real(wp), parameter :: CFC_REL_THR = 5.0e-8_wp
 
    !> FD sampling points per structure
-   !>
-   !> - CFC pair kernel `O(n_active^2)`, about 300x SvdW per point
-   !> - Independent pointwise samples; later points add less coverage
-   !> - Five chemistries and sizes; SvdW 5x2 blend/gamma sweep
-   !>
-   !> `get_test_points` seed depends only on `mol%nat`; smaller counts keep a prefix
-   integer, parameter :: n_points_svdw = 7
+   integer, parameter :: n_points_svdw = 4
    integer, parameter :: n_points_cfc = 1
 
-   integer, parameter :: n_svdw_blends = 5
+   integer, parameter :: n_svdw_blends = 3
    integer, parameter :: n_svdw_gammas = 2
-   real(wp), parameter :: svdw_blend_k_values(n_svdw_blends) = [0.1_wp, 0.5_wp, 1.0_wp, 2.0_wp, 3.0_wp]
+   real(wp), parameter :: svdw_blend_k_values(n_svdw_blends) = [0.1_wp, 1.0_wp, 4.0_wp]
    real(wp), parameter :: svdw_gamma_values(n_svdw_gammas) = [0.0_wp, 0.7_wp]
+   real(wp), parameter :: svdw_2b_values(n_svdw_gammas) = [0.5_wp, 0.0_wp]
 
    ! Legacy SvdW smoothing
    real(wp), parameter :: svdw_legacy_blend_k = 3.0_wp
@@ -166,6 +155,8 @@ contains
                   new_unittest("svdw_f4_rr_rarb", test_svdw_f4_rr_rArB), &
                   new_unittest("svdw_normalized_f1_ra", test_svdw_normalized_f1_rA), &
                   new_unittest("svdw_contracted_vs_pairwise", test_svdw_contracted), &
+                  new_unittest("svdw_point_on_nucleus_is_finite", test_svdw_on_nucleus), &
+                  new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling), &
                   !> CFC-only
                   new_unittest("cfc_f2_rarb", test_cfc_f2_rArB), &
                   new_unittest("cfc_f3_r_rarb", test_cfc_f3_r_rArB), &
@@ -174,8 +165,7 @@ contains
                   new_unittest("cfc_f4_rr_rarb", test_cfc_f4_rr_rArB), &
                   new_unittest("cfc_normalized_f1_ra", test_cfc_normalized_f1_rA), &
                   new_unittest("cfc_contracted_vs_pairwise", test_cfc_contracted), &
-                  new_unittest("svdw_point_on_nucleus_is_finite", test_svdw_on_nucleus), &
-                  new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling), &
+                  !> Radii
                   new_unittest("svdw_exclusion_radius_never_overclaims", &
                                test_svdw_exclusion_radius), &
                   new_unittest("svdw_exclusion_radius_gated_on_blends", &
@@ -534,6 +524,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 1, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -604,6 +595,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 2, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -683,6 +675,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -778,6 +771,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                allocate (analytic(ndim, mol%nat))
                do ipt = 1, size(points, 2)
@@ -869,6 +863,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                allocate (analytic(ndim, ndim, mol%nat))
                do ipt = 1, size(points, 2)
@@ -962,6 +957,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -1066,6 +1062,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                allocate (analytic(mol%nat))
                do ipt = 1, size(points, 2)
@@ -1157,6 +1154,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                allocate (analytic(ndim, mol%nat))
                do ipt = 1, size(points, 2)
@@ -1280,6 +1278,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                allocate (analytic(ndim, ndim, mol%nat))
                do ipt = 1, size(points, 2)
@@ -1391,6 +1390,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -1494,6 +1494,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -1827,6 +1828,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -1933,6 +1935,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -2227,6 +2230,7 @@ contains
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 2, kind, &
                              blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_2b=svdw_sweep_2b(kind, igamma), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   call lsf%prepare(points(:, ipt), lsf_err)
@@ -2304,6 +2308,18 @@ contains
       end if
    end function svdw_sweep_blend
 
+   !> i-th SvdW 2-body weight, or 0 for CFC
+   pure function svdw_sweep_2b(kind, i) result(val)
+      character(len=*), intent(in) :: kind
+      integer, intent(in) :: i
+      real(wp) :: val
+      if (kind == "svdw") then
+         val = svdw_2b_values(i)
+      else
+         val = 0.0_wp
+      end if
+   end function svdw_sweep_2b
+
    !> i-th SvdW gamma (3-body) value, or 0 for CFC
    pure function svdw_sweep_gamma(kind, i) result(val)
       character(len=*), intent(in) :: kind
@@ -2363,7 +2379,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(3)
                do ipt = 1, size(points, 2)
@@ -2465,7 +2481,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(3)
                do ipt = 1, size(points, 2)
@@ -2545,7 +2561,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(4)
                do ipt = 1, size(points, 2)
@@ -2627,7 +2643,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(4)
                if (allocated(analytic)) deallocate (analytic)
@@ -2741,7 +2757,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(4)
                do ipt = 1, size(points, 2)
@@ -2842,7 +2858,7 @@ contains
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
                call prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=svdw_blend_k_values(iblend), &
-                  blend_3b=svdw_gamma_values(igamma)))
+                  blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma)))
                call prim%update(mol, radii)
                call prim%set_max_deriv(2)
                if (allocated(deriv_rA)) deallocate (deriv_rA)

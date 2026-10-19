@@ -765,9 +765,7 @@ contains
    !> Runs full DROP cavity update and gradient computation for polyalanine
    !> chains of increasing size. Reads per-component wall times from the
    !> internal timer and fits t(N) = A * N^X via grid search to
-   !> determine the formal scaling exponent of each component
-   !>
-   !> @param[out] error  Test error (set on failure)
+   !> determine the formal scaling exponent of each component 
    subroutine test_timing_drop_scaling(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol

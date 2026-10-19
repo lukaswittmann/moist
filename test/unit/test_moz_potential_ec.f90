@@ -3,7 +3,7 @@ module test_moz_potential_ec
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
-   use testdrive, only: unittest_type, new_unittest, error_type, check
+   use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_request_type, &
       & coupling_begin_registration, coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate, &
       & coupling_make_view, coupling_close_view, moist_phase_energy, moist_phase_response, moist_phase_gradient
@@ -33,6 +33,10 @@ contains
          & new_unittest("long_range_and_restraints", check_restraints), &
          & new_unittest("fit_adjoint_fd", check_adjoint), &
          & new_unittest("active_constraint_adjoint_fd", check_active_adjoint), &
+         & new_unittest("bounds_and_release_fit", check_bounds_fit), &
+         & new_unittest("bound_and_kink_adjoint_fd", check_bound_adjoint), &
+         & new_unittest("bad_upper_bounds", check_bad_upper_bounds, should_fail=.true.), &
+         & new_unittest("bad_inverted_bounds", check_bad_inverted_bounds, should_fail=.true.), &
          & new_unittest("guards_and_single_atom", check_guards), &
          & new_unittest("stale_fit_and_phase_guards", check_stale_guards), &
          & new_unittest("ng_tables_and_adjoint", check_tables)]
@@ -162,8 +166,6 @@ contains
    end subroutine answer
 
    !> Check phase requirements and refreshed fitted charges
-   !>
-   !> @param[out] error  test error
    subroutine check_requirements(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -287,8 +289,6 @@ contains
    end subroutine charge_field
 
    !> Check distant-sample priority, reference restraint and element penalty thresholds
-   !>
-   !> @param[out] error  test error
    subroutine check_restraints(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -381,8 +381,6 @@ contains
    end subroutine functional
 
    !> Check the smooth-fit adjoints
-   !>
-   !> @param[out] error  test error
    subroutine check_adjoint(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -391,14 +389,11 @@ contains
    end subroutine check_adjoint
 
    !> Check penalty-kink and hard-bound adjoints
-   !>
-   !> @param[out] error  test error
    subroutine check_active_adjoint(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
-      ! TODO: cover lower-bound hits, negative penalty kinks, constraint release and the all-fixed
-      ! multiplier branch of solve_fit; mutants of each survive the suite
+      ! Lower bounds, negative kinks, releases and the all-fixed branch: check_bound_adjoint, check_bounds_fit
       ec%charge_penalty = 0.0_wp
       ec%upper_bounds = [0.03_wp, 10.0_wp, 10.0_wp]
       call adjoint_case(error, ec, 1)
@@ -409,18 +404,234 @@ contains
       call adjoint_case(error, ec, 2)
    end subroutine check_active_adjoint
 
-   !> Compare potential, nuclear, grid-position and volume-weight derivatives with finite differences
+   !> Fit with active hard bounds, fixed charges and released starting constraints
    !>
-   !> @param[out] error  test error
+   !> - Charges respect the bounds and sum exactly to the total charge
+   !> - The generating charges violate the bound, so an unbounded fit leaves it
+   subroutine check_bounds_fit(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid
+      type(ec_charges_type) :: ec, bounded
+      real(wp), allocatable :: phi(:), free(:), q(:)
+      call fixture(mol, grid)
+      call charge_field(mol, grid, [2.0_wp, -1.0_wp, -0.5_wp], phi)
+      ec%charge_penalty = 0.0_wp
+      call fit_values(ec, mol, grid, phi, free, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, free(2) < -0.25_wp .and. free(1) > 0.5_wp, more="control fit does not violate the bounds")
+      if (allocated(error)) return
+      ! Lower bound of the second charge alone
+      bounded = ec
+      bounded%lower_bounds = [-10.0_wp, -0.2_wp, -10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, q(2), -0.2_wp, more="lower bound not active", thr=1.0e-9_wp)
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken by a lower bound", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      ! Lower and upper bounds pin two charges; the third follows from the total charge
+      bounded%lower_bounds = [-10.0_wp, -0.05_wp, -10.0_wp]
+      bounded%upper_bounds = [0.4_wp, 10.0_wp, 10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_close(error, q, [0.4_wp, -0.05_wp, mol%charge - 0.35_wp], 1.0e-9_wp, "two pinned charges")
+      if (allocated(error)) return
+      ! Bounds summing to the total charge leave a single feasible point
+      bounded = ec
+      bounded%lower_bounds = [0.375_wp, 0.0625_wp, 0.0625_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_close(error, q, bounded%lower_bounds, 1.0e-12_wp, "single feasible point")
+      if (allocated(error)) return
+      ! Equal bounds fix one charge
+      bounded = ec
+      bounded%lower_bounds = [0.25_wp, -10.0_wp, -10.0_wp]
+      bounded%upper_bounds = [0.25_wp, 10.0_wp, 10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, q(1), 0.25_wp, more="equal bounds did not fix the charge", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken by a fixed charge", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      ! A reference below the bound starts the charge on it; the data release it again
+      bounded = ec
+      bounded%restraint_strength = 1.0e-4_wp
+      bounded%reference_charges = [1.2_wp, -1.5_wp, 0.8_wp]
+      bounded%lower_bounds = [-10.0_wp, -1.2_wp, -10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, q(2) > -1.1_wp, more="starting constraint was not released")
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken after a release", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      ! References above the upper bounds start two charges on them; the data release them again
+      bounded = ec
+      bounded%restraint_strength = 1.0e-4_wp
+      bounded%reference_charges = [3.5_wp, 0.5_wp, -3.5_wp]
+      bounded%charge_thresholds = [1.0_wp, 0.3_wp, 10.0_wp]
+      bounded%upper_bounds = [2.5_wp, -0.5_wp, 10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, q(1) < 2.4_wp .and. q(2) < -0.6_wp, more="starting upper constraints were not released")
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken after an upper release", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      ! Every charge starts on a bound and the point is not optimal: all-fixed multiplier check releases two
+      bounded = ec
+      bounded%restraint_strength = 1.0e-4_wp
+      bounded%reference_charges = [-3.0_wp, 3.0_wp, 3.0_wp]
+      bounded%upper_bounds = [10.0_wp, 0.125_wp, 0.3125_wp]
+      bounded%lower_bounds = [0.0625_wp, -10.0_wp, -10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(q <= bounded%upper_bounds + 1.0e-12_wp) .and. all(q >= bounded%lower_bounds - 1.0e-12_wp), &
+         & more="bounds violated after releasing the fixed face")
+      if (allocated(error)) return
+      call check(error, q(1) > 0.1_wp, more="all-fixed start was not released")
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken after the all-fixed release", thr=1.0e-12_wp)
+      if (allocated(error)) return
+      ! Two excess-charge thresholds: one pinned at its kink, the other region released
+      bounded = ec
+      bounded%charge_penalty = 10.0_wp
+      bounded%charge_thresholds = [0.03_wp, 0.1_wp, 10.0_wp]
+      call fit_values(bounded, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, q(1), 0.03_wp, more="positive penalty kink not active", thr=1.0e-9_wp)
+      if (allocated(error)) return
+      call check(error, sum(q), mol%charge, more="total charge broken at a penalty kink", thr=1.0e-12_wp)
+      if (allocated(error)) return
+   end subroutine check_bounds_fit
+
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(moist_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> Upper bounds that sum below the total charge are refused when the term is updated
+   subroutine check_bad_upper_bounds(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid
+      type(ec_charges_type) :: ec
+      call fixture(mol, grid)
+      ec%charge_penalty = 0.0_wp
+      ec%upper_bounds = [0.1_wp, 0.1_wp, 0.1_wp]
+      call ec%update(mol, err)
+      call expect_error(error, err, "incompatible with the total charge")
+   end subroutine check_bad_upper_bounds
+
+   !> A lower bound above its upper bound is refused when the term is updated
+   subroutine check_bad_inverted_bounds(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid
+      type(ec_charges_type) :: ec
+      call fixture(mol, grid)
+      ec%charge_penalty = 0.0_wp
+      ec%lower_bounds = [0.2_wp, -10.0_wp, -10.0_wp]
+      ec%upper_bounds = [0.1_wp, 10.0_wp, 10.0_wp]
+      call ec%update(mol, err)
+      call expect_error(error, err, "invalid thresholds or bounds")
+   end subroutine check_bad_inverted_bounds
+
+   !> Compare derivatives of fits with lower bounds, fixed charges, negative kinks and released constraints
+   subroutine check_bound_adjoint(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(ec_charges_type) :: ec
+      ec%charge_penalty = 0.0_wp
+      ec%lower_bounds = [-10.0_wp, -0.2_wp, -10.0_wp]
+      call adjoint_case(error, ec, 1, 2, -0.2_wp)
+      if (allocated(error)) return
+      deallocate (ec%lower_bounds)
+      ec%lower_bounds = [0.25_wp, -10.0_wp, -10.0_wp]
+      ec%upper_bounds = [0.25_wp, 10.0_wp, 10.0_wp]
+      call adjoint_case(error, ec, 1, 1, 0.25_wp)
+      if (allocated(error)) return
+      deallocate (ec%lower_bounds, ec%upper_bounds)
+      ec%lower_bounds = [0.375_wp, 0.0625_wp, 0.0625_wp]
+      call adjoint_case(error, ec, 1, 1, 0.375_wp)
+      if (allocated(error)) return
+      deallocate (ec%lower_bounds)
+      ec%restraint_strength = 1.0e-4_wp
+      ec%reference_charges = [1.2_wp, -1.5_wp, 0.8_wp]
+      ec%lower_bounds = [-10.0_wp, -1.2_wp, -10.0_wp]
+      call adjoint_case(error, ec, 1, 0)
+      if (allocated(error)) return
+      deallocate (ec%reference_charges, ec%lower_bounds)
+      ec%reference_charges = [3.5_wp, 0.5_wp, -3.5_wp]
+      ec%charge_thresholds = [1.0_wp, 0.3_wp, 10.0_wp]
+      ec%upper_bounds = [2.5_wp, -0.5_wp, 10.0_wp]
+      call adjoint_case(error, ec, 1, 0)
+      if (allocated(error)) return
+      deallocate (ec%reference_charges, ec%charge_thresholds, ec%upper_bounds)
+      ec%reference_charges = [-3.0_wp, 3.0_wp, 3.0_wp]
+      ec%upper_bounds = [10.0_wp, 0.125_wp, 0.3125_wp]
+      ec%lower_bounds = [0.0625_wp, -10.0_wp, -10.0_wp]
+      call adjoint_case(error, ec, 1, 0)
+      if (allocated(error)) return
+      deallocate (ec%reference_charges, ec%upper_bounds, ec%lower_bounds)
+      ec%restraint_strength = 0.01_wp
+      ec%charge_penalty = 10.0_wp
+      ec%charge_thresholds = [10.0_wp, 0.3_wp, 10.0_wp]
+      call adjoint_case(error, ec, 2, 2, -0.3_wp)
+      if (allocated(error)) return
+      ! Two kinks: the positive pin must survive the release of the other penalty region
+      deallocate (ec%charge_thresholds)
+      ec%charge_thresholds = [0.03_wp, 0.1_wp, 10.0_wp]
+      call adjoint_case(error, ec, 2, 1, 0.03_wp)
+   end subroutine check_bound_adjoint
+
+   !> Compare potential, nuclear, grid-position and volume-weight derivatives with finite differences
    !> @param[in]  config configured term
-   !> @param[in]  mode   0 smooth, 1 hard bound, 2 penalty kink
-   subroutine adjoint_case(error, config, mode)
+   !> @param[in]  mode   0 smooth, otherwise a constrained fit with the pinned charge checked
+   !> @param[in]  pin    optional pinned atom; zero skips the pinned-charge check
+   !> @param[in]  pinned optional pinned charge
+   subroutine adjoint_case(error, config, mode, pin, pinned)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       !> Configured term
       type(ec_charges_type), intent(in) :: config
       !> Fit mode
       integer, intent(in) :: mode
+      !> Atom whose charge the active constraint pins; first atom by default
+      integer, intent(in), optional :: pin
+      !> Pinned charge value; 0.03 by default
+      real(wp), intent(in), optional :: pinned
       type(moist_error), allocatable :: err
       type(structure_type) :: mol, displaced
       type(moist_math_grid_3d_cartesian_type) :: grid, moved
@@ -435,7 +646,12 @@ contains
       !> Stencil step; four-point central differences
       real(wp), parameter :: h = 1.0e-4_wp
       character(len=80) :: label
-      integer :: i, j, kind, s
+      integer :: i, j, kind, s, atom
+      real(wp) :: expected
+      atom = 1
+      expected = 0.03_wp
+      if (present(pin)) atom = pin
+      if (present(pinned)) expected = pinned
       call fixture(mol, grid)
       call host_field(grid, phi, dphi)
       if (mode /= 0) call charge_field(mol, grid, [2.0_wp, -1.0_wp, -0.5_wp], phi)
@@ -452,8 +668,8 @@ contains
       call coupling_close_view(coupling)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      if (mode /= 0) then
-         call check(error, abs(q(1) - 0.03_wp) < 1.0e-9_wp, more="active constraint was not exercised")
+      if (mode /= 0 .and. atom > 0) then
+         call check(error, abs(q(atom) - expected) < 1.0e-9_wp, more="active constraint was not exercised")
          if (allocated(error)) return
       end if
       call check(error, response%next())
@@ -514,8 +730,6 @@ contains
    end subroutine adjoint_case
 
    !> Check invalid fits, radial refusal and the one-atom charge constraint
-   !>
-   !> @param[out] error  test error
    subroutine check_guards(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -632,8 +846,6 @@ contains
    !>   grid-point positions and volume weights at probe points, and the host potential
    !> - Potential adjoint: one `potential_adjoint` item, kernel field adjoint plus fit part
    !> - Probe derivatives well above the tolerance, so the comparison discriminates
-   !>
-   !> @param[out] error  test error
    subroutine check_tables(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -775,8 +987,6 @@ contains
    !> - Declaration, field and adjoint on a grid other than the grid of the update: refusal, no rebuild
    !> - Grid adjoint in the response phase: `dphi_dr` missing, refusal instead of zeros
    !> - Nonfinite fit setting: refusal at `update`
-   !>
-   !> @param[out] error  test error
    subroutine check_stale_guards(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error

@@ -3,6 +3,9 @@
 !>   - DST-IV: Gaussian against its closed-form transform, round trips
 !>   - General quadrature: convergence in the node count for r, k <= 10,
 !>     sinc(0) = 1, agreement with DST-IV on a uniform pair
+!>   - DST-IV factory: the unmodified uniform pair builds
+!>   - Error paths (`should_fail`): each refused grid pair fails through its own named
+!>     error (tags, sizes, nodes, spacings)
 !>   - Both: adjoint dot products, batched against scalar, batch widths
 !>     changing on one instance; one trafo per thread is tested in
 !>     `math_grid_3d_threaded`, outside test-drive's team
@@ -20,7 +23,8 @@ module test_math_grid_radial_trafo
       & moist_math_grid_radial_recipe_type, new_radial_grid, new_uniform_radial_pair, &
       & transform_quadrature, transform_dst4
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, &
-      & moist_math_grid_radial_trafo_quadrature_type, new_quadrature_trafo, new_radial_trafo
+      & moist_math_grid_radial_trafo_quadrature_type, new_quadrature_trafo, new_radial_trafo, &
+      & moist_math_grid_radial_trafo_dst4_type, new_dst4_trafo
    implicit none(type, external)
    private
 
@@ -46,7 +50,19 @@ contains
          new_unittest("quadrature_matches_dst4_on_uniform_pair", test_quadrature_vs_dst4), &
          new_unittest("adjoint_dot_product", test_adjoint), &
          new_unittest("batched_matches_scalar", test_batched), &
-         new_unittest("batched_width_change", test_batched_width_change) &
+         new_unittest("batched_width_change", test_batched_width_change), &
+         new_unittest("dst4_accepts_valid_pair", test_dst4_valid), &
+         new_unittest("dst4_tags_quadrature", test_dst4_tags_quadrature_fails, should_fail=.true.), &
+         new_unittest("dst4_tag_mixed_k", test_dst4_tag_mixed_k_fails, should_fail=.true.), &
+         new_unittest("dst4_tag_mixed_r", test_dst4_tag_mixed_r_fails, should_fail=.true.), &
+         new_unittest("dst4_tag_unset", test_dst4_tag_unset_fails, should_fail=.true.), &
+         new_unittest("dst4_npts_differ", test_dst4_npts_differ_fails, should_fail=.true.), &
+         new_unittest("dst4_no_nodes", test_dst4_no_nodes_fails, should_fail=.true.), &
+         new_unittest("dst4_nodes_unallocated", test_dst4_nodes_unallocated_fails, should_fail=.true.), &
+         new_unittest("dst4_nodes_size", test_dst4_nodes_size_fails, should_fail=.true.), &
+         new_unittest("dst4_dr_zero", test_dst4_dr_zero_fails, should_fail=.true.), &
+         new_unittest("dst4_dr_negative", test_dst4_dr_negative_fails, should_fail=.true.), &
+         new_unittest("dst4_k_spacing", test_dst4_k_spacing_fails, should_fail=.true.) &
          ]
    end subroutine collect_math_grid_radial_trafo
 
@@ -785,5 +801,252 @@ contains
          deallocate (trafo)
       end do
    end subroutine test_batched_width_change
+
+   !> The unmodified uniform DST-IV pair builds and records sizes and spacings, the positive control of the refusals
+   subroutine test_dst4_valid(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call new_dst4_trafo(trafo, rgrid, kgrid, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, trafo%nr == 32 .and. trafo%nk == 32 .and. trafo%dr == rgrid%spacing &
+         & .and. trafo%dk == kgrid%spacing, "DST-IV trafo must record sizes and spacings of the pair")
+   end subroutine test_dst4_valid
+
+   !> Two quadrature grids are refused
+   subroutine test_dst4_tags_quadrature_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      call make_cheb_pair(bad_r, bad_k, 32, 1.2_wp, 32, 1.5_wp, merr)
+      if (allocated(merr)) return
+      call new_dst4_trafo(trafo, bad_r, bad_k, merr)
+      call expect_error(error, merr, "both grids must be tagged transform_dst4")
+   end subroutine test_dst4_tags_quadrature_fails
+
+   !> A quadrature k grid beside a DST-IV r grid is refused
+   subroutine test_dst4_tag_mixed_k_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      call make_cheb_pair(bad_r, bad_k, 32, 1.2_wp, 32, 1.5_wp, merr)
+      if (allocated(merr)) return
+      call new_dst4_trafo(trafo, rgrid, bad_k, merr)
+      call expect_error(error, merr, "both grids must be tagged transform_dst4")
+   end subroutine test_dst4_tag_mixed_k_fails
+
+   !> A quadrature r grid beside a DST-IV k grid is refused
+   subroutine test_dst4_tag_mixed_r_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      call make_cheb_pair(bad_r, bad_k, 32, 1.2_wp, 32, 1.5_wp, merr)
+      if (allocated(merr)) return
+      call new_dst4_trafo(trafo, bad_r, kgrid, merr)
+      call expect_error(error, merr, "both grids must be tagged transform_dst4")
+   end subroutine test_dst4_tag_mixed_r_fails
+
+   !> An unset transform tag is refused
+   subroutine test_dst4_tag_unset_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_r = rgrid
+      bad_r%transform = 0
+      call new_dst4_trafo(trafo, bad_r, kgrid, merr)
+      call expect_error(error, merr, "both grids must be tagged transform_dst4")
+   end subroutine test_dst4_tag_unset_fails
+
+   !> Unequal node counts are refused
+   subroutine test_dst4_npts_differ_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, other_r, other_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      call new_uniform_radial_pair(other_r, other_k, 24, 0.1_wp, merr)
+      if (allocated(merr)) return
+      call new_dst4_trafo(trafo, rgrid, other_k, merr)
+      call expect_error(error, merr, "r and k grids differ in npts")
+   end subroutine test_dst4_npts_differ_fails
+
+   !> Grids without nodes are refused
+   subroutine test_dst4_no_nodes_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_r = rgrid
+      bad_k = kgrid
+      bad_r%npts = 0
+      bad_k%npts = 0
+      call new_dst4_trafo(trafo, bad_r, bad_k, merr)
+      call expect_error(error, merr, "grids have no nodes")
+   end subroutine test_dst4_no_nodes_fails
+
+   !> Unallocated nodes are refused
+   subroutine test_dst4_nodes_unallocated_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_k = kgrid
+      deallocate (bad_k%r)
+      call new_dst4_trafo(trafo, rgrid, bad_k, merr)
+      call expect_error(error, merr, "grid nodes are not allocated")
+   end subroutine test_dst4_nodes_unallocated_fails
+
+   !> Node arrays not matching npts are refused
+   subroutine test_dst4_nodes_size_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: nodes(:)
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_r = rgrid
+      nodes = bad_r%r(1:31)
+      call move_alloc(nodes, bad_r%r)
+      call new_dst4_trafo(trafo, bad_r, kgrid, merr)
+      call expect_error(error, merr, "node arrays do not match npts")
+   end subroutine test_dst4_nodes_size_fails
+
+   !> A zero r spacing is refused
+   subroutine test_dst4_dr_zero_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_r = rgrid
+      bad_r%spacing = 0.0_wp
+      call new_dst4_trafo(trafo, bad_r, kgrid, merr)
+      call expect_error(error, merr, "no positive finite spacing")
+   end subroutine test_dst4_dr_zero_fails
+
+   !> A negative r spacing is refused
+   subroutine test_dst4_dr_negative_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_r
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_r = rgrid
+      bad_r%spacing = -rgrid%spacing
+      call new_dst4_trafo(trafo, bad_r, kgrid, merr)
+      call expect_error(error, merr, "no positive finite spacing")
+   end subroutine test_dst4_dr_negative_fails
+
+   !> A k spacing off pi/(npts*dr) is refused
+   subroutine test_dst4_k_spacing_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad_k
+      type(moist_math_grid_radial_trafo_dst4_type) :: trafo
+      type(mctc_error), allocatable :: merr
+
+      call new_uniform_radial_pair(rgrid, kgrid, 32, 0.1_wp, merr)
+      ! a failed setup returns cleanly, so the should_fail test is reported as failed
+      if (allocated(merr)) return
+      bad_k = kgrid
+      bad_k%spacing = kgrid%spacing*(1.0_wp + 1.0e-12_wp)
+      call new_dst4_trafo(trafo, rgrid, bad_k, merr)
+      call expect_error(error, merr, "k spacing does not match")
+   end subroutine test_dst4_k_spacing_fails
+
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
 
 end module test_math_grid_radial_trafo

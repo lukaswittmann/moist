@@ -299,7 +299,7 @@ if(MOIST_TESTS)
     api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
-    math_solvers math_sorters math_trig
+    math_solvers math_sorters math_trig math_packed_sym
     math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
@@ -311,7 +311,8 @@ if(MOIST_TESTS)
     math_grid_3d_invariance
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
+    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_cpcm
+    cavity_drop_properties
     cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
@@ -323,7 +324,21 @@ if(MOIST_TESTS)
   set(moist_test_selected_utils_prettylistprint_threaded independent_rows)
   set(moist_test_selected_math_grid_3d_derivatives
     single_atom dimer amino20x4_gly_xab mb16_43_01 but14diol_1 il16_008
-    partition_schemes gaussian_tiny_weights)
+    partition_schemes gaussian_tiny_weights volume_hessian_columns
+    refused_calls_keep_accumulators width_gradient_accepted
+    bad_volume_adjoint_unbuilt
+    bad_volume_adjoint_uninitialized
+    bad_volume_adjoint_size
+    bad_volume_adjoint_nonfinite
+    bad_volume_width_adjoint
+    bad_volume_gradient_shape
+    bad_volume_hvp_accumulator_shape
+    bad_volume_hvp_direction_shape
+    bad_volume_direction_nonfinite
+    bad_volume_hessian_shape
+    bad_volume_hvp_width_curvature
+    bad_volume_hessian_curvature
+    bad_volume_phase_reference)
   set(moist_test_selected_math_grid_3d_integration
     single_atom asymmetric_trimer partition_integrals multicenter_integrals
     rotational_convergence integrate_constant_is_box_volume gaussian_width_law)

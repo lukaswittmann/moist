@@ -473,8 +473,6 @@ contains
    !> Check monopole declarations per phase and solvent-side refusal
    !>
    !> - Own charge request on radial and volume grids
-   !>
-   !> @param[out] error  test error
    subroutine check_monopole_requests(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -616,8 +614,6 @@ contains
    !>
    !> - Same nuclear and grid gradients as fixed charges
    !> - Charge adjoint against central differences
-   !>
-   !> @param[out] error  test error
    subroutine check_monopole_adjoint(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error

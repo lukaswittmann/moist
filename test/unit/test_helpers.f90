@@ -11,6 +11,8 @@
 !>   * `get_test_cavity_iswig(mol, cavity, error, ...)` - ready-to-use iSwiG surface
 !>   * `build_test_cavity(mol, nleb, ctx, ...)` - iSwiG surface on a caller-owned
 !>                                         context and COSMO radii
+!>   * `build_test_cavity_drop(mol, nleb, ctx, ...)` - DROP surface on a caller-owned
+!>                                         context, radius model and level set
 !>   * `fill_point_charge_potential(cavity, coupling, qat, mol)` - analytic point-charge
 !>                                         potential trace answered on the coupling
 !>   * `set_host_potential(coupling, phi)` - answer the potential request directly
@@ -70,6 +72,9 @@ module test_helpers
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_model_continuum, only: model_continuum_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
+   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
                           radius_type_static, new_cosmo_radii
@@ -107,6 +112,7 @@ module test_helpers
    public :: get_test_points
    public :: get_test_cavity_iswig
    public :: build_test_cavity
+   public :: build_test_cavity_drop
    public :: fill_point_charge_potential
    public :: fill_point_charge_field
    public :: set_host_potential
@@ -439,6 +445,61 @@ contains
       call cavity%update(mol, error=error)
 
    end subroutine build_test_cavity
+
+   !> Build a DROP test cavity for a given molecule, radius model, level set and
+   !> Lebedev grid size
+   !>
+   !> Like `build_test_cavity`, the run context is created and owned by the
+   !> caller so that it outlives the cavity borrowing it; the radius model and
+   !> the level set are copied by the cavity, and `nleb` overrides the Lebedev
+   !> size of `param`
+   !>
+   !> @param[in]  mol          Molecular structure
+   !> @param[in]  nleb         Lebedev grid size
+   !> @param[in]  ctx          Run context owned by the caller, borrowed by the cavity
+   !> @param[in]  radius_model Radius model
+   !> @param[in]  lsf_model    Level set function
+   !> @param[out] cavity       Constructed cavity
+   !> @param[out] error        Error handling
+   !> @param[in]  param        DROP settings, compiled defaults if omitted
+   subroutine build_test_cavity_drop(mol, nleb, ctx, radius_model, lsf_model, cavity, error, param)
+
+      !> Molecular structure
+      type(structure_type), intent(in) :: mol
+
+      !> Lebedev grid size
+      integer, intent(in) :: nleb
+
+      !> Run context owned by the caller, borrowed by the cavity
+      type(moist_context_type), intent(in), target :: ctx
+
+      !> Radius model
+      class(radius_type), intent(in) :: radius_model
+
+      !> Level set function
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
+
+      !> Constructed cavity
+      type(cavity_type_drop), intent(out) :: cavity
+
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      !> DROP settings, compiled defaults if omitted
+      type(moist_cavity_drop_parameters_type), intent(in), optional :: param
+
+      type(moist_cavity_drop_parameters_type) :: drop_param
+
+      call drop_param%init_defaults()
+      if (present(param)) drop_param = param
+      drop_param%num_leb = nleb
+      call new_cavity_drop(cavity, radius_model=radius_model, lsf_model=lsf_model, error=error, &
+         param=drop_param, ctx=ctx)
+      if (allocated(error)) return
+
+      call cavity%update(mol, error=error)
+
+   end subroutine build_test_cavity_drop
 
    !* ----------------------------- Point-charge coupling ----------------------------- *!
 

@@ -2,17 +2,22 @@
 module test_parameters
    use, intrinsic :: iso_c_binding, only: c_null_funptr, c_null_ptr
    use mctc_env, only: wp, moist_error => error_type
-   use testdrive, only: unittest_type, new_unittest, error_type, check
+   use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_model_parameters, only: moist_model_parameters_type
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
       moist_cavity_numsa_parameters_type, moist_cavity_marchingcubes_parameters_type, &
       moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
       moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
+   use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
+   use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
@@ -149,6 +154,271 @@ contains
       call ctx%delete()
    end subroutine test_print_levels
 
+   !> Level 3 adds the detailed settings of every cavity, level set and component
+   !>
+   !> Each detailed entry is also required to be absent at level 2, so the
+   !> check fails if the level gate stops working in either direction
+   subroutine test_print_detailed(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Run context borrowed by every part
+      type(moist_context_type), target :: ctx
+      !> DROP settings reaching the conditional octree and switching rows
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Level sets
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw
+      type(moist_cavity_drop_lsf_cfc_type) :: cfc
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho
+      !> Cavities
+      type(cavity_type_drop) :: drop
+      type(cavity_type_iswig) :: iswig
+      type(cavity_type_numsa) :: numsa
+      !> Components
+      type(model_continuum_component_cpcm) :: pcm
+      type(model_continuum_component_gostshyp) :: gostshyp
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call param%new(proj_level=9, wleb_prune_level=2, error=err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+
+      call svdw%new()
+      call new_cavity_drop(drop, default_cpcm_radii(), svdw, err, param, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(drop, [character(len=32) :: "Projection tol.", "Wleb switch from", "xi_born", &
+         "Octree seed size", "Softmax scale", "Cell grid fraction", "Surface normals"], error)
+      if (allocated(error)) return
+
+      call cfc%new()
+      call new_cavity_drop(drop, default_cpcm_radii(), cfc, err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(drop, [character(len=32) :: "Projection tol."], error, &
+         normal=[character(len=32) :: "Atomic exponent (a1)"])
+      if (allocated(error)) return
+
+      call rho%new(c_null_funptr, c_null_ptr, moist_cavity_drop_lsf_isodensity_param_type(log_grad_out=6.0_wp))
+      call new_cavity_drop(drop, default_cpcm_radii(), rho, err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(drop, [character(len=32) :: "ECP core fill radius (of R_A)", &
+         "Exclusion |grad ln rho| (out)", "Exclusion radius cap"], error, &
+         normal=[character(len=32) :: "Isovalue (rho_iso)", "ECP core fill"])
+      if (allocated(error)) return
+
+      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(iswig, [character(len=32) :: "cut_a", "cut_f"], error)
+      if (allocated(error)) return
+
+      call new_cavity_numsa(numsa, default_cpcm_radii(), err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(numsa, [character(len=32) :: "offset", "smoothing", "tolsesp"], error, &
+         normal=[character(len=32) :: "probe"])
+      if (allocated(error)) return
+
+      call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_component(pcm, [character(len=32) :: "solver_maxiter"], error, &
+         normal=[character(len=32) :: "solver_tol"])
+      if (allocated(error)) return
+
+      call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_component(gostshyp, [character(len=32) :: "regularization_start", "regularization_end", &
+         "suppress_negative_amplitudes"], error, normal=[character(len=32) :: "Pressure"])
+      call ctx%delete()
+
+   contains
+
+      !> Print a cavity at levels 2 and 3 and compare the detailed entries
+      !>
+      !> @param[in] cavity Constructed cavity
+      !> @param[in] detailed Entries printed only from level 3
+      !> @param[out] error Test failure
+      !> @param[in] normal Entries printed at both levels
+      subroutine require_cavity(cavity, detailed, error, normal)
+         !> Constructed cavity
+         class(cavity_type), intent(in) :: cavity
+         !> Entries printed only from level 3
+         character(len=*), intent(in) :: detailed(:)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> Entries printed at both levels
+         character(len=*), intent(in), optional :: normal(:)
+         !> Printed lines per level
+         character(len=128) :: lines2(128), lines3(128)
+         !> Line count and scratch unit
+         integer :: nline, unit
+
+         open (newunit=unit, status="scratch", action="readwrite")
+         call cavity%print_parameters(unit, level=2)
+         call read_printout(unit, lines2, nline)
+         close (unit)
+         open (newunit=unit, status="scratch", action="readwrite")
+         call cavity%print_parameters(unit, level=3)
+         call read_printout(unit, lines3, nline)
+         close (unit)
+         call compare_levels(lines2, lines3, detailed, error, normal)
+      end subroutine require_cavity
+
+      !> Print a component at levels 2 and 3 and compare the detailed entries
+      !>
+      !> @param[in] component Constructed component
+      !> @param[in] detailed Entries printed only from level 3
+      !> @param[out] error Test failure
+      !> @param[in] normal Entries printed at both levels
+      subroutine require_component(component, detailed, error, normal)
+         !> Constructed component
+         class(model_continuum_component_type), intent(in) :: component
+         !> Entries printed only from level 3
+         character(len=*), intent(in) :: detailed(:)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> Entries printed at both levels
+         character(len=*), intent(in), optional :: normal(:)
+         !> Printed lines per level
+         character(len=128) :: lines2(64), lines3(64)
+         !> Line count and scratch unit
+         integer :: nline, unit
+
+         open (newunit=unit, status="scratch", action="readwrite")
+         call component%print_parameters(unit, level=2)
+         call read_printout(unit, lines2, nline)
+         close (unit)
+         open (newunit=unit, status="scratch", action="readwrite")
+         call component%print_parameters(unit, level=3)
+         call read_printout(unit, lines3, nline)
+         close (unit)
+         call compare_levels(lines2, lines3, detailed, error, normal)
+      end subroutine require_component
+
+      !> Detailed entries appear only at level 3, normal entries at both
+      !>
+      !> @param[in] lines2 Level-2 printout
+      !> @param[in] lines3 Level-3 printout
+      !> @param[in] detailed Entries printed only from level 3
+      !> @param[out] error Test failure
+      !> @param[in] normal Entries printed at both levels
+      subroutine compare_levels(lines2, lines3, detailed, error, normal)
+         !> Level-2 printout
+         character(len=*), intent(in) :: lines2(:)
+         !> Level-3 printout
+         character(len=*), intent(in) :: lines3(:)
+         !> Entries printed only from level 3
+         character(len=*), intent(in) :: detailed(:)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> Entries printed at both levels
+         character(len=*), intent(in), optional :: normal(:)
+         !> Entry index
+         integer :: i
+
+         do i = 1, size(detailed)
+            call check(error, printed_entry(lines3, trim(detailed(i)), ""), &
+               more="level 3 omits "//trim(detailed(i)))
+            if (allocated(error)) return
+            call check(error, .not. printed_entry(lines2, trim(detailed(i)), ""), &
+               more="level 2 prints "//trim(detailed(i)))
+            if (allocated(error)) return
+         end do
+         if (.not. present(normal)) return
+         do i = 1, size(normal)
+            call check(error, printed_entry(lines2, trim(normal(i)), "") .and. &
+               printed_entry(lines3, trim(normal(i)), ""), more="a level omits "//trim(normal(i)))
+            if (allocated(error)) return
+         end do
+      end subroutine compare_levels
+
+   end subroutine test_print_detailed
+
+   !> DROP settings load from TOML and JSON with their derived values recomputed
+   !>
+   !> References for the derived values come from the in-memory constructor,
+   !> not from restated formulas
+   subroutine test_drop_load_file(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Loaded settings and the constructor reference
+      type(moist_cavity_drop_parameters_type) :: loaded, reference
+      !> Owned I/O state
+      integer :: unit, stat, close_stat
+      !> Owned files
+      character(len=*), parameter :: toml_path = "moist-test-parameters-drop-load.toml"
+      character(len=*), parameter :: json_path = "moist-test-parameters-drop-load.json"
+
+      call reference%new(nleb=110, tolerance=3.0e-8_wp, proj_level=9, wleb_prune_level=3, error=err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+
+      open (newunit=unit, file=toml_path, status="replace", action="write", iostat=stat)
+      call check(error, stat, 0)
+      if (allocated(error)) return
+      write (unit, "(a)", iostat=stat) "tolerance = 3e-8", "[grid]", "num_leb = 110", &
+         "[projection]", "level = 9", "[switching]", "wleb_prune_level = 3"
+      close (unit, iostat=close_stat)
+      call check(error, stat == 0 .and. close_stat == 0)
+      if (allocated(error)) return
+      call loaded%load_file(toml_path, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call same_settings(loaded, reference, error)
+      if (allocated(error)) return
+
+      ! A written file loads back to the same settings
+      call loaded%write_file(json_path, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call loaded%init_defaults()
+      call loaded%load_file(json_path, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call same_settings(loaded, reference, error)
+      if (allocated(error)) return
+
+      open (newunit=unit, file=toml_path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
+      call check(error, stat, 0)
+      if (allocated(error)) return
+      open (newunit=unit, file=json_path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
+      call check(error, stat, 0)
+
+   contains
+
+      !> Compare the read and the derived settings with the reference
+      !>
+      !> @param[in] loaded Settings read from a file
+      !> @param[in] reference Settings from the constructor
+      !> @param[out] error Test failure
+      subroutine same_settings(loaded, reference, error)
+         !> Settings read from a file
+         type(moist_cavity_drop_parameters_type), intent(in) :: loaded
+         !> Settings from the constructor
+         type(moist_cavity_drop_parameters_type), intent(in) :: reference
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+
+         call check(error, loaded%num_leb == reference%num_leb .and. loaded%proj_level == reference%proj_level &
+            .and. loaded%wleb_prune_level == reference%wleb_prune_level)
+         if (allocated(error)) return
+         call check(error, maxval(abs([loaded%tolerance, loaded%proj_tol, loaded%iswig_xi_born, &
+            loaded%wleb_prune_from, loaded%wleb_prune_to, loaded%wleb_cut, loaded%branch_dphi_max] - &
+            [reference%tolerance, reference%proj_tol, reference%iswig_xi_born, reference%wleb_prune_from, &
+            reference%wleb_prune_to, reference%wleb_cut, reference%branch_dphi_max])), 0.0_wp, thr=1.0e-14_wp)
+      end subroutine same_settings
+
+   end subroutine test_drop_load_file
+
    !> Check vector values and escaped fixed-length strings survive serialization
    subroutine test_vector_and_string(error)
       type(error_type), allocatable, intent(out) :: error
@@ -253,6 +523,63 @@ contains
 
    end subroutine test_invalid_fields
 
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(moist_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> A grid without a fitted Born zeta is refused at load
+   subroutine test_bad_drop_load_unfitted_grid(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      type(moist_cavity_drop_parameters_type) :: loaded
+      integer :: unit, stat, close_stat
+      character(len=*), parameter :: toml_path = "moist-test-parameters-drop-unfitted.toml"
+
+      open (newunit=unit, file=toml_path, status="replace", action="write", iostat=stat)
+      ! Setup failures return cleanly, so the test is reported as failed
+      if (stat /= 0) return
+      write (unit, "(a)", iostat=stat) "[grid]", "num_leb = 1"
+      close (unit, iostat=close_stat)
+      if (stat /= 0 .or. close_stat /= 0) return
+      call loaded%load_file(toml_path, err)
+      open (newunit=unit, file=toml_path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
+      call expect_error(error, err, "No fitted DROP Born zeta")
+   end subroutine test_bad_drop_load_unfitted_grid
+
+   !> A missing parameter file is an error, not a silent default
+   subroutine test_bad_drop_load_missing_file(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      type(moist_cavity_drop_parameters_type) :: loaded
+      character(len=*), parameter :: toml_path = "moist-test-parameters-drop-missing.toml"
+
+      call loaded%load_file(toml_path, err)
+      call expect_error(error, err, "Cannot read parameter file")
+   end subroutine test_bad_drop_load_missing_file
+
    !> Collect parameter API regressions
    !>
    !> @param[out] testsuite Tests to run
@@ -263,6 +590,10 @@ contains
          new_unittest("copies-and-errors", test_copies_and_errors), &
          new_unittest("vector-and-string", test_vector_and_string), &
          new_unittest("print-levels", test_print_levels), &
+         new_unittest("print-detailed", test_print_detailed), &
+         new_unittest("drop-load-file", test_drop_load_file), &
+         new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
+         new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
          new_unittest("invalid-fields", test_invalid_fields), &
          new_unittest("file-formats", test_file_formats), &
          new_unittest("drop-contracts", test_drop_contracts), &

@@ -36,7 +36,7 @@ module test_cavity_drop_isodensity
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: fd4_scalar, fd4_offsets, get_test_points, center_at_origin, rel_deviation
+   use test_helpers, only: fd4_scalar, fd4_offsets, fd6_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
@@ -180,6 +180,9 @@ contains
                   new_unittest("gto_screened_paths", test_gto_screened_paths), &
                   new_unittest("gto_spherical_rejects_cartesian", test_gto_spherical_rejects_cartesian), &
                   new_unittest("gto_spherical_residual_tolerance", test_gto_spherical_tolerance), &
+                  new_unittest("gto_highl_value_reference", test_gto_highl_value_reference), &
+                  new_unittest("gto_highl_derivatives_fd", test_gto_highl_derivatives_fd), &
+                  new_unittest("gto_highl_spherical_matches_cartesian", test_gto_highl_spherical_matches_cartesian), &
                   new_unittest("internal_vs_callback", test_internal_vs_callback), &
                   new_unittest("max_deriv_gating_internal", test_max_deriv_internal), &
                   new_unittest("max_deriv_gating_callback", test_max_deriv_callback), &
@@ -1056,6 +1059,302 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_gto_spherical_tolerance
+
+   !> Independent number of ways to choose k of n
+   pure function binomial(n, k) result(b)
+      !> Set size
+      integer, intent(in) :: n
+      !> Chosen count
+      integer, intent(in) :: k
+      real(wp) :: b
+
+      integer :: i
+
+      b = 0.0_wp
+      if (k < 0 .or. k > n) return
+      b = 1.0_wp
+      do i = 1, k
+         b = b*real(n - k + i, wp)/real(i, wp)
+      end do
+   end function binomial
+
+   !> Position of the monomial x^lx y^ly z^(l-lx-ly) in the host component order of a shell
+   pure function monomial_position(l, lx, ly) result(pos)
+      !> Shell angular momentum
+      integer, intent(in) :: l
+      !> Power of x
+      integer, intent(in) :: lx
+      !> Power of y
+      integer, intent(in) :: ly
+      integer :: pos
+
+      integer :: ix, iy
+
+      pos = 0
+      do ix = l, 0, -1
+         do iy = l - ix, 0, -1
+            pos = pos + 1
+            if (ix == lx .and. iy == ly) return
+         end do
+      end do
+      pos = -1
+   end function monomial_position
+
+   !> Real solid harmonics of one shell as monomial coefficients
+   !>
+   !> Closed form of Helgaker, Jorgensen, Olsen (eq. 6.4.47) without normalization,
+   !> column m + l + 1 holds S_lm; the columns span the harmonic polynomials of degree l
+   !>
+   !> @param[in] l Shell angular momentum
+   !> @returns     Coefficients, shape (ncart(l), 2l+1)
+   function solid_harmonics(l) result(s)
+      !> Shell angular momentum
+      integer, intent(in) :: l
+      real(wp) :: s(moist_iso_gto_ncart(l), 2*l + 1)
+
+      integer :: m, am, t, u, w, wmin, pos
+      real(wp) :: c
+
+      s = 0.0_wp
+      do m = -l, l
+         am = abs(m)
+         wmin = merge(1, 0, m < 0)
+         do t = 0, (l - am)/2
+            do u = 0, t
+               do w = wmin, am, 2
+                  c = real((-1)**(t + (w - wmin)/2), wp)*0.25_wp**t*binomial(l, t) &
+                      *binomial(l - t, am + t)*binomial(t, u)*binomial(am, w)
+                  pos = monomial_position(l, 2*t + am - 2*u - w, 2*u + w)
+                  s(pos, m + l + 1) = s(pos, m + l + 1) + c
+               end do
+            end do
+         end do
+      end do
+   end function solid_harmonics
+
+   !> Hand-made two-centre basis with a shell of every angular momentum up to the supported maximum
+   !>
+   !> - the density is built over the real solid harmonics, so it lies in the spherical subspace
+   !>   and runs in either representation
+   !>
+   !> @param[out] gto       Configured basis + density
+   !> @param[in]  basis     Density representation
+   !> @param[out] error     Set if the evaluator rejects the basis
+   !> @param[out] dcart_out Optional host cartesian density matrix
+   subroutine build_highl_gto(gto, basis, error, dcart_out)
+      !> Configured basis + density
+      type(moist_iso_gto_type), intent(out) :: gto
+      !> Density representation
+      integer, intent(in) :: basis
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      !> Host cartesian density matrix
+      real(wp), allocatable, optional, intent(out) :: dcart_out(:, :)
+
+      integer, parameter :: nsh = 11
+      integer, parameter :: sh_atom(nsh) = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+      integer, parameter :: sh_l(nsh) = [0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4]
+      integer, parameter :: sh_nprim(nsh) = [2, 1, 2, 1, 2, 1, 1, 2, 1, 2, 1]
+      real(wp), parameter :: exps(16) = [3.1_wp, 0.8_wp, 1.3_wp, 2.0_wp, 0.6_wp, 0.9_wp, 1.4_wp, 0.5_wp, &
+                                         0.8_wp, 0.7_wp, 1.0_wp, 0.45_wp, 0.6_wp, 1.5_wp, 0.4_wp, 1.1_wp]
+      real(wp), parameter :: coeffs(16) = [0.4_wp, 0.7_wp, 1.0_wp, 0.5_wp, 0.6_wp, 0.9_wp, 0.3_wp, 0.8_wp, &
+                                           1.0_wp, 0.9_wp, 0.6_wp, 0.5_wp, 1.0_wp, 0.7_wp, 0.4_wp, 0.8_wp]
+      type(mctc_error), allocatable :: merr
+      type(structure_type) :: mol
+      real(wp), allocatable :: u(:, :), dsph(:, :), dcart(:, :)
+      integer :: s, l, nc, ns, roff, coff, ncart, nsph, i, j
+
+      ncart = sum([(moist_iso_gto_ncart(sh_l(s)), s=1, nsh)])
+      nsph = sum([(merge(moist_iso_gto_ncart(sh_l(s)), 2*sh_l(s) + 1, sh_l(s) < 2), s=1, nsh)])
+
+      allocate (u(ncart, nsph), source=0.0_wp)
+      roff = 0
+      coff = 0
+      do s = 1, nsh
+         l = sh_l(s)
+         nc = moist_iso_gto_ncart(l)
+         if (l < 2) then
+            ns = nc
+            do i = 1, nc
+               u(roff + i, coff + i) = 1.0_wp
+            end do
+         else
+            ns = 2*l + 1
+            u(roff + 1:roff + nc, coff + 1:coff + ns) = solid_harmonics(l)
+         end if
+         roff = roff + nc
+         coff = coff + ns
+      end do
+
+      allocate (dsph(nsph, nsph))
+      do j = 1, nsph
+         do i = 1, nsph
+            dsph(i, j) = 0.2_wp*cos(0.37_wp*real(i - j, wp))/(1.0_wp + 0.04_wp*real(i + j, wp)) &
+                         + merge(0.1_wp, 0.0_wp, i == j)
+         end do
+      end do
+      dcart = matmul(u, matmul(dsph, transpose(u)))
+
+      call new(mol, [6, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.1_wp, -0.4_wp, 0.7_wp], [3, 2]))
+      call gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, merr, basis=basis)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call gto%refresh_centers(mol)
+      call check_cart_layout(gto, error)
+      if (allocated(error)) return
+      call check(error, gto%ncart, ncart, more="hand-made basis cartesian count")
+      if (allocated(error)) return
+      call gto%set_density(dcart, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      if (present(dcart_out)) call move_alloc(dcart, dcart_out)
+   end subroutine build_highl_gto
+
+   !> Fixed evaluation points around the two centres of the hand-made basis
+   pure function highl_points() result(pts)
+      real(wp) :: pts(3, 5)
+
+      pts = reshape([0.30_wp, -0.20_wp, 0.50_wp, &
+                     1.40_wp, 0.60_wp, -0.30_wp, &
+                     -0.80_wp, 1.10_wp, 1.50_wp, &
+                     0.70_wp, 0.20_wp, 0.90_wp, &
+                     1.90_wp, -1.20_wp, 0.40_wp], [3, 5])
+   end function highl_points
+
+   !> Density of s to the highest supported angular momentum against the direct monomial sum,
+   !> in both density representations
+   subroutine test_gto_highl_value_reference(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: gto
+      real(wp), allocatable :: dcart(:, :)
+      real(wp) :: rho, drho(3), d2rho(3, 3), d3rho(3, 3, 3), pts(3, 5)
+      integer :: ibasis, ip
+      integer, parameter :: bases(2) = [moist_iso_basis%cartesian, moist_iso_basis%spherical]
+
+      pts = highl_points()
+      do ibasis = 1, size(bases)
+         call build_highl_gto(gto, bases(ibasis), error, dcart)
+         if (allocated(error)) return
+         call check(error, maxval(gto%sh_l), 8, more="hand-made basis reaches the highest supported l")
+         if (allocated(error)) return
+         do ip = 1, size(pts, 2)
+            call eval_at(gto, pts(:, ip), 1, rho, drho, d2rho, d3rho)
+            call check(error, rho, rho_reference(gto, dcart, pts(:, ip)), thr_abs=1.0e-12_wp, thr_rel=1.0e-11_wp, &
+                       more="high-l density value")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_gto_highl_value_reference
+
+   !> Every derivative order of the high-l density against a 6-point central FD of the previous
+   !> order, in both density representations
+   !>
+   !> - the 6-point stencil keeps the truncation of the stiff high-l polynomials below the
+   !>   tolerance at the same step as the 4-point one
+   subroutine test_gto_highl_derivatives_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: gto
+      real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3), d4(3, 3, 3, 3), pts(3, 5)
+      real(wp) :: r(-3:3), g(3, -3:3), h(3, 3, -3:3), t(3, 3, 3, -3:3)
+      real(wp) :: pp(3), fd
+      !> Step of the 6-point stencil, below the shared one to keep the stiff high-l truncation small
+      real(wp), parameter :: HL_STEP = 7.0e-4_wp
+      !> Relative tolerance; the round-off floor 4 eps max|G|/h of the differenced order sits above the
+      !> element size here (observed max 3e-10)
+      real(wp), parameter :: HL_REL_THR = 3.0e-9_wp
+      integer :: ibasis, ip, ax, ix, jx, kx, k
+      integer, parameter :: bases(2) = [moist_iso_basis%cartesian, moist_iso_basis%spherical]
+
+      pts = highl_points()
+      do ibasis = 1, size(bases)
+         call build_highl_gto(gto, bases(ibasis), error)
+         if (allocated(error)) return
+         do ip = 1, size(pts, 2)
+            call eval_at(gto, pts(:, ip), 4, rho, drho, d2, d3, d4)
+            do ax = 1, ndim
+               do k = -3, 3
+                  if (k == 0) cycle
+                  pp = pts(:, ip)
+                  pp(ax) = pp(ax) + k*HL_STEP
+                  call eval_at(gto, pp, 3, r(k), g(:, k), h(:, :, k), t(:, :, :, k))
+               end do
+               call fd6_scalar(r(3), r(2), r(1), r(-1), r(-2), r(-3), HL_STEP, fd, error)
+               if (allocated(error)) return
+               call check(error, drho(ax), fd, thr_abs=ABS_THR, thr_rel=HL_REL_THR, more="high-l gradient")
+               if (allocated(error)) return
+               do ix = 1, ndim
+                  call fd6_scalar(g(ix, 3), g(ix, 2), g(ix, 1), g(ix, -1), g(ix, -2), g(ix, -3), &
+                                  HL_STEP, fd, error)
+                  if (allocated(error)) return
+                  call check(error, d2(ax, ix), fd, thr_abs=ABS_THR, thr_rel=HL_REL_THR, more="high-l Hessian")
+                  if (allocated(error)) return
+                  do jx = 1, ndim
+                     call fd6_scalar(h(ix, jx, 3), h(ix, jx, 2), h(ix, jx, 1), h(ix, jx, -1), h(ix, jx, -2), &
+                                     h(ix, jx, -3), HL_STEP, fd, error)
+                     if (allocated(error)) return
+                     call check(error, d3(ax, ix, jx), fd, thr_abs=ABS_THR, thr_rel=HL_REL_THR, &
+                                more="high-l third derivative")
+                     if (allocated(error)) return
+                     do kx = 1, ndim
+                        call fd6_scalar(t(ix, jx, kx, 3), t(ix, jx, kx, 2), t(ix, jx, kx, 1), t(ix, jx, kx, -1), &
+                                        t(ix, jx, kx, -2), t(ix, jx, kx, -3), HL_STEP, fd, error)
+                        if (allocated(error)) return
+                        call check(error, d4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=HL_REL_THR, &
+                                   more="high-l fourth derivative")
+                        if (allocated(error)) return
+                     end do
+                  end do
+               end do
+            end do
+         end do
+      end do
+   end subroutine test_gto_highl_derivatives_fd
+
+   !> The spherical representation of a spherical-subspace density reproduces the cartesian
+   !> representation of the same host density at every derivative order
+   !>
+   !> - the two contract the density over different function sets, the spherical one after the
+   !>   per-shell fold, so agreement is to round-off
+   subroutine test_gto_highl_spherical_matches_cartesian(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: cart, sph
+      real(wp) :: rc, gc(3), hc(3, 3), tc(3, 3, 3), qc(3, 3, 3, 3)
+      real(wp) :: rs, gs(3), hs(3, 3), ts(3, 3, 3), qs(3, 3, 3, 3), pts(3, 5)
+      integer :: ip
+
+      call build_highl_gto(cart, moist_iso_basis%cartesian, error)
+      if (allocated(error)) return
+      call build_highl_gto(sph, moist_iso_basis%spherical, error)
+      if (allocated(error)) return
+      call check(error, sph%nfun < cart%nfun, "spherical representation contracts fewer functions")
+      if (allocated(error)) return
+
+      pts = highl_points()
+      do ip = 1, size(pts, 2)
+         call eval_at(cart, pts(:, ip), 4, rc, gc, hc, tc, qc)
+         call eval_at(sph, pts(:, ip), 4, rs, gs, hs, ts, qs)
+         call check(error, rs, rc, thr_abs=1.0e-12_wp, thr_rel=1.0e-11_wp, more="value")
+         if (allocated(error)) return
+         call check(error, maxval(abs(gs - gc)) <= 1.0e-11_wp*max(1.0_wp, maxval(abs(gc))), "gradient")
+         if (allocated(error)) return
+         call check(error, maxval(abs(hs - hc)) <= 1.0e-11_wp*max(1.0_wp, maxval(abs(hc))), "Hessian")
+         if (allocated(error)) return
+         call check(error, maxval(abs(ts - tc)) <= 1.0e-11_wp*max(1.0_wp, maxval(abs(tc))), "third")
+         if (allocated(error)) return
+         call check(error, maxval(abs(qs - qc)) <= 1.0e-11_wp*max(1.0_wp, maxval(abs(qc))), "fourth")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gto_highl_spherical_matches_cartesian
 
    !> Build two translated molecular copies with a block-diagonal density
    subroutine build_density_pair(base_gto, base_dcart, center_mol, gap, pair_gto, pair_mol, error)

@@ -22,6 +22,8 @@
 !>
 !> - Switch values, first and second derivatives against finite differences
 !> - Owner gradients (nuclear and point) against finite differences
+!> - Owner Hessian-vector products (nuclear and point) against finite differences
+!>   of the owner gradient along the same displacement
 !> - Partition-unity gradients and Hessian-vector products cancel at the
 !>   tiny-tail scale
 !>
@@ -60,6 +62,8 @@ module test_math_grid_3d_partition
    integer, parameter :: cell_ssf = 4
    !> C-infinity power-Voronoi partition
    integer, parameter :: cell_power = 6
+   !> Hessian-vector finite-difference threshold, relative to max(1, largest element)
+   real(wp), parameter :: hvp_fd_thr = 1.0e-9_wp
    !> Number of structures drawn from `get_test_structures`
    integer, parameter :: nmol = 5
    !> Random box points per structure, on top of the atom-centered points
@@ -95,7 +99,8 @@ contains
                   new_unittest("switch_jets", test_switch_jets), &
                   new_unittest("partition_finite_difference", test_partition_fd), &
                   new_unittest("gradient_tails", test_gradient_tails), &
-                  new_unittest("hessian_vector_tails", test_hessian_vector_tails) &
+                  new_unittest("hessian_vector_tails", test_hessian_vector_tails), &
+                  new_unittest("hessian_vector_fd", test_hessian_vector_fd) &
                   ]
    end subroutine collect_math_grid_3d_partition
 
@@ -1204,6 +1209,77 @@ contains
          end do
       end do
    end subroutine test_hessian_vector_tails
+
+   !> Owner Hessian-vector products against finite differences of the owner gradient
+   !>
+   !> - Displacement: nuclei along `direction`, every point along the common `point_direction`
+   !> - Four-point stencil of `owner_gradient` at `+-h`, `+-2h`, nuclear and point channels
+   !> - Becke k = 3 and 5, SSF and power Voronoi; k = 1 is not twice differentiable at a nucleus
+   subroutine test_hessian_vector_fd(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: merr
+      class(moist_math_grid_3d_partition_type), allocatable :: partition
+      real(wp) :: points(3, 4), xyz(3, 3), moved_points(3, 4), seed(4), direction(3, 3), point_direction(3)
+      real(wp) :: hvp(3, 3), point_hvp(3, 4), gradient(3, 3, 4), point_gradient(3, 4, 4)
+      real(wp) :: fd(3, 3), point_fd(3, 4), scale, point_scale
+      real(wp), parameter :: h = 1.0e-4_wp
+      integer, parameter :: offsets(4) = [-2, -1, 1, 2], numbers(3) = [8, 1, 6]
+      integer :: scheme, variant, owner, k, nvariant
+
+      call make_molecule(mol)
+      points(:, 1) = [0.1_wp, 0.4_wp, 0.3_wp]
+      points(:, 2) = mol%xyz(:, 2) + [0.2_wp, -0.1_wp, 0.15_wp]
+      points(:, 3) = [1.6_wp, 0.9_wp, 0.2_wp]
+      points(:, 4) = [-1.2_wp, -0.4_wp, -0.3_wp]
+      seed = [0.3_wp, -0.2_wp, 0.7_wp, -0.4_wp]
+      direction = reshape([0.3_wp, -0.5_wp, 0.2_wp, 0.1_wp, 0.4_wp, -0.3_wp, -0.2_wp, 0.25_wp, 0.6_wp], [3, 3])
+      point_direction = [0.15_wp, -0.35_wp, 0.25_wp]
+      do scheme = partition_becke, partition_pvoronoi
+         nvariant = merge(2, 1, scheme == partition_becke)
+         do variant = 1, nvariant
+            if (allocated(partition)) deallocate (partition)
+            select case (scheme)
+            case (partition_becke)
+               allocate (partition, source=becke_partition_type(k=2*variant + 1))
+            case (partition_ssf)
+               allocate (partition, source=ssf_partition_type(a=0.53_wp))
+            case default
+               allocate (partition, source=pvoronoi_partition_type(width=2.3_wp, radii=[1.0_wp, 0.7_wp, 1.3_wp]))
+            end select
+            do owner = 1, 3
+               hvp = 0.0_wp
+               call partition%owner_hessian_vector(owner, points, mol%xyz, numbers, seed, direction, &
+                  & point_direction, hvp, point_hvp, merr)
+               call check_moist_error(error, merr, "partition Hessian-vector product")
+               if (allocated(error)) return
+               do k = 1, 4
+                  xyz = mol%xyz + real(offsets(k), wp)*h*direction
+                  moved_points = points + real(offsets(k), wp)*h*spread(point_direction, 2, 4)
+                  gradient(:, :, k) = 0.0_wp
+                  call partition%owner_gradient(owner, moved_points, xyz, numbers, seed, gradient(:, :, k), &
+                     & point_gradient(:, :, k), merr)
+                  call check_moist_error(error, merr, "displaced partition gradient")
+                  if (allocated(error)) return
+               end do
+               fd = (gradient(:, :, 1) - 8.0_wp*gradient(:, :, 2) + 8.0_wp*gradient(:, :, 3) - gradient(:, :, 4)) &
+                  & /(12.0_wp*h)
+               point_fd = (point_gradient(:, :, 1) - 8.0_wp*point_gradient(:, :, 2) + 8.0_wp*point_gradient(:, :, 3) &
+                  & - point_gradient(:, :, 4))/(12.0_wp*h)
+               scale = max(1.0_wp, maxval(abs(fd)))
+               point_scale = max(1.0_wp, maxval(abs(point_fd)))
+               call check(error, maxval(abs(hvp - fd)) < hvp_fd_thr*scale, &
+                  & "nuclear Hessian-vector product against finite differences")
+               if (allocated(error)) return
+               call check(error, maxval(abs(point_hvp - point_fd)) < hvp_fd_thr*point_scale, &
+                  & "point Hessian-vector product against finite differences")
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+   end subroutine test_hessian_vector_fd
 
    !* ------------------------------------ Helpers ------------------------------------ *!
 

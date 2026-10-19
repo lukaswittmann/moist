@@ -2,15 +2,20 @@
 !>
 !>   - Mappings: analytic mapped integrals (polynomials, Gaussians,
 !>     exponentials), element-dependent scales, Mura-Knowles nodes
+!>   - Mappings: valid HandyMod and Knowles parameters accepted, dr weights against
+!>     central differences of the mapping's own r(x)
 !>   - Radial recipe: lower and upper cutoffs, volume integrals, element
 !>     dependence
 !>   - Uniform radial pair: r- and k-grid volume integrals
+!>   - Error paths (`should_fail`): every invalid HandyMod and Knowles parameter fails
+!>     through its own named error
 module test_math_grid_radial
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, ieee_positive_inf
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use test_helpers, only: check_moist_error
    use moist_data_atomicrad, only: covalent_rad
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type, &
       & moist_math_grid_radial_rule_chebyshev2_type, new_chebyshev2_rule, &
@@ -50,6 +55,30 @@ contains
          new_unittest("handymod_finite_integrals", test_handymod_integrals), &
          new_unittest("knowles_mapped_integrals", test_knowles_integrals), &
          new_unittest("knowles_mura_knowles_nodes", test_knowles_mura_knowles), &
+         new_unittest("handymod_accepts_valid", test_handymod_valid), &
+         new_unittest("knowles_accepts_valid", test_knowles_valid), &
+         new_unittest("handymod_rmin_nan", test_handymod_rmin_nan_fails, should_fail=.true.), &
+         new_unittest("handymod_rmax_inf", test_handymod_rmax_inf_fails, should_fail=.true.), &
+         new_unittest("handymod_m_nan", test_handymod_m_nan_fails, should_fail=.true.), &
+         new_unittest("handymod_m_zero", test_handymod_m_zero_fails, should_fail=.true.), &
+         new_unittest("handymod_m_negative", test_handymod_m_negative_fails, should_fail=.true.), &
+         new_unittest("handymod_m_overflow", test_handymod_m_overflow_fails, should_fail=.true.), &
+         new_unittest("handymod_rmin_negative", test_handymod_rmin_negative_fails, should_fail=.true.), &
+         new_unittest("handymod_rmax_equals_rmin", test_handymod_rmax_equals_rmin_fails, should_fail=.true.), &
+         new_unittest("handymod_rmax_below_rmin", test_handymod_rmax_below_rmin_fails, should_fail=.true.), &
+         new_unittest("handymod_span_at_bound", test_handymod_span_at_bound_fails, should_fail=.true.), &
+         new_unittest("handymod_span_below_bound", test_handymod_span_below_bound_fails, should_fail=.true.), &
+         new_unittest("knowles_k_nan", test_knowles_k_nan_fails, should_fail=.true.), &
+         new_unittest("knowles_k_zero", test_knowles_k_zero_fails, should_fail=.true.), &
+         new_unittest("knowles_k_negative", test_knowles_k_negative_fails, should_fail=.true.), &
+         new_unittest("knowles_no_scale", test_knowles_no_scale_fails, should_fail=.true.), &
+         new_unittest("knowles_both_scales", test_knowles_both_scales_fails, should_fail=.true.), &
+         new_unittest("knowles_scale_inf", test_knowles_scale_inf_fails, should_fail=.true.), &
+         new_unittest("knowles_scale_zero", test_knowles_scale_zero_fails, should_fail=.true.), &
+         new_unittest("knowles_table_empty", test_knowles_table_empty_fails, should_fail=.true.), &
+         new_unittest("knowles_table_nan", test_knowles_table_nan_fails, should_fail=.true.), &
+         new_unittest("knowles_table_zero", test_knowles_table_zero_fails, should_fail=.true.), &
+         new_unittest("mapping_jacobian_fd", test_mapping_jacobian), &
          new_unittest("recipe_cutoffs", test_recipe_cutoffs), &
          new_unittest("recipe_volume_integrals", test_recipe_integrals), &
          new_unittest("recipe_element_dependence", test_recipe_element), &
@@ -719,5 +748,424 @@ contains
       ref = 8.0_wp*pi**3
       call check(error, abs(res - ref) <= 1.0e-13_wp*ref, "Uniform pair: k-grid transform volume integral")
    end subroutine test_uniform_pair
+
+   !* ------------------------------ Refusals and Jacobians --------------------------- *!
+
+   !> A valid HandyMod mapping is accepted and stores its parameters
+   subroutine test_handymod_valid(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 1.0_wp, 4.5_wp, 2.0_wp, merr)
+      call check_moist_error(error, merr, "valid HandyMod parameters")
+      if (allocated(error)) return
+      call check(error, hm%rmin == 1.0_wp .and. hm%rmax == 4.5_wp .and. hm%m == 2.0_wp, &
+         & "HandyMod mapping must store its parameters")
+   end subroutine test_handymod_valid
+
+   !> A valid Knowles element table is accepted; an element beyond it has no finite radius
+   subroutine test_knowles_valid(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr, element_scale=[1.0_wp, 2.0_wp])
+      call check_moist_error(error, merr, "valid Knowles element table")
+      if (allocated(error)) return
+      call check(error, ieee_is_finite(kn%map(2, 0.3_wp)) .and. .not. ieee_is_finite(kn%map(3, 0.3_wp)), &
+         & "Knowles element beyond the table must have no finite radius")
+      if (allocated(error)) return
+      call check(error, kn%map(2, 0.3_wp) == 2.0_wp*kn%map(1, 0.3_wp), "Knowles radius must scale with the table entry")
+   end subroutine test_knowles_valid
+
+   !> Non-finite rmin is refused
+   subroutine test_handymod_rmin_nan_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+      real(wp) :: nan
+
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_handymod_mapping(hm, nan, 5.0_wp, 1.0_wp, merr)
+      call expect_error(error, merr, "radial bounds must be finite")
+   end subroutine test_handymod_rmin_nan_fails
+
+   !> Non-finite rmax is refused
+   subroutine test_handymod_rmax_inf_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+      real(wp) :: inf
+
+      inf = ieee_value(1.0_wp, ieee_positive_inf)
+      call new_handymod_mapping(hm, 0.0_wp, inf, 1.0_wp, merr)
+      call expect_error(error, merr, "radial bounds must be finite")
+   end subroutine test_handymod_rmax_inf_fails
+
+   !> Non-finite m is refused
+   subroutine test_handymod_m_nan_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+      real(wp) :: nan
+
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_handymod_mapping(hm, 0.0_wp, 5.0_wp, nan, merr)
+      call expect_error(error, merr, "m must be finite")
+   end subroutine test_handymod_m_nan_fails
+
+   !> Zero m is refused
+   subroutine test_handymod_m_zero_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 0.0_wp, 5.0_wp, 0.0_wp, merr)
+      call expect_error(error, merr, "m must be > 0")
+   end subroutine test_handymod_m_zero_fails
+
+   !> Negative m is refused
+   subroutine test_handymod_m_negative_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 0.0_wp, 5.0_wp, -1.0_wp, merr)
+      call expect_error(error, merr, "m must be > 0")
+   end subroutine test_handymod_m_negative_fails
+
+   !> An m with overflowing 2^m is refused
+   subroutine test_handymod_m_overflow_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 0.0_wp, 5.0_wp, real(maxexponent(1.0_wp), wp), merr)
+      call expect_error(error, merr, "2^m overflows")
+   end subroutine test_handymod_m_overflow_fails
+
+   !> Negative rmin is refused
+   subroutine test_handymod_rmin_negative_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, -0.5_wp, 5.0_wp, 1.0_wp, merr)
+      call expect_error(error, merr, "rmin must be >= 0")
+   end subroutine test_handymod_rmin_negative_fails
+
+   !> rmax equal to rmin is refused
+   subroutine test_handymod_rmax_equals_rmin_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 3.0_wp, 3.0_wp, 1.0_wp, merr)
+      call expect_error(error, merr, "rmax must be greater than rmin")
+   end subroutine test_handymod_rmax_equals_rmin_fails
+
+   !> rmax below rmin is refused
+   subroutine test_handymod_rmax_below_rmin_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 3.0_wp, 2.0_wp, 1.0_wp, merr)
+      call expect_error(error, merr, "rmax must be greater than rmin")
+   end subroutine test_handymod_rmax_below_rmin_fails
+
+   !> rmax - rmin equal to 2^m - 1 is refused (d = 3 = 2^2 - 1)
+   subroutine test_handymod_span_at_bound_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 1.0_wp, 4.0_wp, 2.0_wp, merr)
+      call expect_error(error, merr, "must be greater than 2^m - 1")
+   end subroutine test_handymod_span_at_bound_fails
+
+   !> rmax - rmin below 2^m - 1 is refused
+   subroutine test_handymod_span_below_bound_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(mctc_error), allocatable :: merr
+
+      call new_handymod_mapping(hm, 0.0_wp, 2.0_wp, 2.0_wp, merr)
+      call expect_error(error, merr, "must be greater than 2^m - 1")
+   end subroutine test_handymod_span_below_bound_fails
+
+   !> Non-finite k is refused
+   subroutine test_knowles_k_nan_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+      real(wp) :: nan
+
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_knowles_mapping(kn, nan, merr, scale=1.0_wp)
+      call expect_error(error, merr, "k must be finite")
+   end subroutine test_knowles_k_nan_fails
+
+   !> Zero k is refused
+   subroutine test_knowles_k_zero_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 0.0_wp, merr, scale=1.0_wp)
+      call expect_error(error, merr, "k must be > 0")
+   end subroutine test_knowles_k_zero_fails
+
+   !> Negative k is refused
+   subroutine test_knowles_k_negative_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, -3.0_wp, merr, scale=1.0_wp)
+      call expect_error(error, merr, "k must be > 0")
+   end subroutine test_knowles_k_negative_fails
+
+   !> Neither scale nor element_scale is refused
+   subroutine test_knowles_no_scale_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr)
+      call expect_error(error, merr, "exactly one of scale and element_scale")
+   end subroutine test_knowles_no_scale_fails
+
+   !> Both scale and element_scale are refused
+   subroutine test_knowles_both_scales_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=1.0_wp, element_scale=[1.0_wp, 2.0_wp])
+      call expect_error(error, merr, "exactly one of scale and element_scale")
+   end subroutine test_knowles_both_scales_fails
+
+   !> Non-finite scale is refused
+   subroutine test_knowles_scale_inf_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+      real(wp) :: inf
+
+      inf = ieee_value(1.0_wp, ieee_positive_inf)
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=inf)
+      call expect_error(error, merr, "scale must be finite")
+   end subroutine test_knowles_scale_inf_fails
+
+   !> Zero scale is refused
+   subroutine test_knowles_scale_zero_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=0.0_wp)
+      call expect_error(error, merr, "scale must be > 0")
+   end subroutine test_knowles_scale_zero_fails
+
+   !> An empty element table is refused
+   subroutine test_knowles_table_empty_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr, element_scale=[real(wp) ::])
+      call expect_error(error, merr, "element table is empty")
+   end subroutine test_knowles_table_empty_fails
+
+   !> A non-finite element scale is refused
+   subroutine test_knowles_table_nan_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+      real(wp) :: nan
+
+      nan = ieee_value(1.0_wp, ieee_quiet_nan)
+      call new_knowles_mapping(kn, 3.0_wp, merr, element_scale=[1.0_wp, nan])
+      call expect_error(error, merr, "element scales must be finite")
+   end subroutine test_knowles_table_nan_fails
+
+   !> A zero element scale is refused
+   subroutine test_knowles_table_zero_fails(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+
+      call new_knowles_mapping(kn, 3.0_wp, merr, element_scale=[1.0_wp, 0.0_wp])
+      call expect_error(error, merr, "element scales must be > 0")
+   end subroutine test_knowles_table_zero_fails
+
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> Mapped radii and dr weights of one mapping against its own forward map
+   !>
+   !> - Radii equal `map(z, x)`
+   !> - With unit dx weights the dr weight is dr/dx, compared with a six-point
+   !>   central difference of `map(z, x)` (h = 5e-3, nodes at least 0.4 from the endpoints)
+   !>
+   !> @param[out] error    test failure
+   !> @param[in]  mapping  radial mapping under test
+   !> @param[in]  z        atomic number
+   !> @param[in]  label    failure context
+   subroutine check_mapping_jacobian(error, mapping, z, label)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Mapping under test
+      class(moist_math_grid_radial_mapping_type), intent(in) :: mapping
+      !> Atomic number
+      integer, intent(in) :: z
+      !> Failure context
+      character(len=*), intent(in) :: label
+
+      real(wp), parameter :: x_ref(7) = [-0.6_wp, -0.35_wp, -0.1_wp, 0.0_wp, 0.2_wp, 0.45_wp, 0.6_wp]
+      real(wp), parameter :: h = 5.0e-3_wp
+      real(wp), parameter :: fd_rel_thr = 1.0e-8_wp
+      real(wp) :: w_ref(7), fd, f(-3:3)
+      real(wp), allocatable :: r(:), w(:), w_unit(:)
+      type(mctc_error), allocatable :: merr
+      integer :: i, k
+
+      w_ref = 1.0_wp
+      call mapping%transform(z, x_ref, w_ref, r, w, merr)
+      call check_moist_error(error, merr, label)
+      if (allocated(error)) return
+      do i = 1, size(x_ref)
+         call check(error, abs(r(i) - mapping%map(z, x_ref(i))) <= 1.0e-13_wp*max(1.0_wp, abs(r(i))), &
+            & label//": transformed radius differs from the forward map")
+         if (allocated(error)) return
+         do k = -3, 3
+            f(k) = mapping%map(z, x_ref(i) + real(k, wp)*h)
+         end do
+         fd = (45.0_wp*(f(1) - f(-1)) - 9.0_wp*(f(2) - f(-2)) + (f(3) - f(-3)))/(60.0_wp*h)
+         call check(error, abs(w(i) - fd) <= fd_rel_thr*abs(fd), &
+            & label//": dr weight differs from the finite difference of the forward map")
+         if (allocated(error)) return
+      end do
+      ! The reference weight scales the result linearly
+      w_unit = w
+      call mapping%transform(z, x_ref, 2.0_wp*w_ref, r, w, merr)
+      call check_moist_error(error, merr, label)
+      if (allocated(error)) return
+      call check(error, all(abs(w - 2.0_wp*w_unit) <= 1.0e-15_wp*abs(w)), &
+         & label//": dr weight must be linear in the dx weight")
+   end subroutine check_mapping_jacobian
+
+   !> Jacobian of every mapping against central differences of its forward map
+   subroutine test_mapping_jacobian(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_linear_type) :: lin
+      type(moist_math_grid_radial_mapping_becke_type) :: becke, becke_z
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn, kn_z
+      type(mctc_error), allocatable :: merr
+      real(wp), parameter :: ms(4) = [0.5_wp, 1.0_wp, 2.0_wp, 3.0_wp]
+      integer :: i
+
+      call new_linear_mapping(lin, 0.3_wp, 4.1_wp, merr)
+      call check_moist_error(error, merr, "linear mapping")
+      if (allocated(error)) return
+      call check_mapping_jacobian(error, lin, 1, "Linear mapping")
+      if (allocated(error)) return
+      call new_becke_mapping(becke, merr, scale=1.3_wp)
+      call check_moist_error(error, merr, "Becke mapping")
+      if (allocated(error)) return
+      call check_mapping_jacobian(error, becke, 1, "Becke mapping")
+      if (allocated(error)) return
+      call new_becke_mapping(becke_z, merr, radius_factor=0.5_wp)
+      call check_moist_error(error, merr, "Becke element mapping")
+      if (allocated(error)) return
+      call check_mapping_jacobian(error, becke_z, 8, "Becke element mapping")
+      if (allocated(error)) return
+      do i = 1, size(ms)
+         call new_handymod_mapping(hm, 0.2_wp, 12.0_wp, ms(i), merr)
+         call check_moist_error(error, merr, "HandyMod mapping")
+         if (allocated(error)) return
+         call check_mapping_jacobian(error, hm, 1, "HandyMod mapping")
+         if (allocated(error)) return
+      end do
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=2.5_wp)
+      call check_moist_error(error, merr, "Knowles mapping")
+      if (allocated(error)) return
+      call check_mapping_jacobian(error, kn, 1, "Knowles mapping")
+      if (allocated(error)) return
+      call new_knowles_mapping(kn_z, 1.5_wp, merr, element_scale=[1.1_wp, 2.2_wp, 3.3_wp])
+      call check_moist_error(error, merr, "Knowles element mapping")
+      if (allocated(error)) return
+      call check_mapping_jacobian(error, kn_z, 2, "Knowles element mapping")
+   end subroutine test_mapping_jacobian
 
 end module test_math_grid_radial
