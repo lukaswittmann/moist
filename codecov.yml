@@ -9,6 +9,10 @@ coverage:
       default:
         informational: true
 
+parsers:
+  cobertura:
+    partials_as_hits: true
+
 # Merge the two coverage legs
 #   fortran   the Fortran unit tests and the C API example
 #   coupling  the Python bindings and the PySCF coupling tests
@@ -31,13 +35,13 @@ ignore:
   - "config"
   - "build"
 
-  # Interface wrappers around the external BLAS/LAPACK
+  # BLAS/LAPACK wrappers
   - "src/moist/math/blas"
   - "src/moist/math/blas.f90"
   - "src/moist/math/lapack"
   - "src/moist/math/lapack.f90"
 
-  # Included external projects as subprojects; upstream owns the tests
+  # Included external projects as subprojects
   - "src/moist/math/linalg/lsmr/"
   - "src/moist/math/linalg/lsqr/"
   - "src/moist/math/linalg/lusol/"
@@ -46,15 +50,15 @@ ignore:
   - "src/moist/math/solver/newton/"
   - "src/moist/math/solver/slsqp/"
 
-  # Vendored FFT backends; mirrors the gcovr exclusion in ci_cov.yml
+  # FFT backends
   - "src/moist/math/fft/ducc0/"
   - "src/moist/math/fft/finufft/"
   - "src/moist/math/fft/xsimd/"
 
-  # Hard-coded quadrature tables
+  # Quadrature tables
   - "src/moist/math/grid/angular/lebedev.f90"
 
-  # Static parameter tables
+  # Parameter tables
   - "src/moist/data"
 
   # Presentation-only output
