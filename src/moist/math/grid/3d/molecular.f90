@@ -14,6 +14,8 @@ module moist_math_grid_3d_molecular
       & default_molecular_recipe
    use moist_math_grid_atomic_grid, only: moist_math_grid_atomic_type, new_atomic_grid
    use moist_math_grid_3d_kernel_base, only: moist_math_grid_3d_partition_type
+   use moist_math_grid_3d_kernel_fourier, only: fourier_derivative_mode, fourier_measure_adjoint, &
+      & fourier_position_adjoint
    use moist_math_grid_3d_kernel_becke, only: becke_partition_type, default_stiffness
    use moist_math_grid_3d_kernel_ssf, only: ssf_partition_type
    use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type, default_power_width
@@ -269,9 +271,15 @@ module moist_math_grid_3d_molecular
       real(c_double), allocatable, private :: xk(:), yk(:), zk(:)
       !> Real-space strength/result scratch, shape (ngrid, ntrans), reused every call
       complex(c_double_complex), allocatable, private :: cj(:, :)
+      !> Reciprocal scratch allocated only for geometry pullbacks, reused by both routes
+      complex(wp), allocatable, private :: geometry_work(:, :)
    contains
       procedure :: fft_r2k => molecular_trafo_fft_r2k
       procedure :: fft_k2r => molecular_trafo_fft_k2r
+      procedure :: fft_r2k_adj => molecular_trafo_fft_r2k_adj
+      procedure :: fft_k2r_adj => molecular_trafo_fft_k2r_adj
+      procedure :: accumulate_r2k_geometry => molecular_trafo_r2k_geometry
+      procedure :: accumulate_k2r_geometry => molecular_trafo_k2r_geometry
       procedure :: prepare => molecular_trafo_prepare
       procedure :: destroy => molecular_trafo_destroy
       !> Copy binding and settings, never plans
@@ -993,7 +1001,7 @@ contains
    !> - Atom order, then radial-shell order, then angular-table order
    !> - Point coordinates `r*u + R_A` per component
    !> - Weight: local `r^2 dr dOmega` times owner partition weight
-   !> - Prune `|w| < 1e-14` and bare weight below positive threshold
+   !> - Prune by the configured volume-weight and optional bare partition-weight thresholds
    !>
    !> @param[in,out] self   Configured grid with a requested geometry; caches local grids
    !> @param[in,out] grid   Candidate receiving points, weights, and per-atom results
@@ -1969,6 +1977,7 @@ contains
       if (allocated(self%yk)) deallocate (self%yk)
       if (allocated(self%zk)) deallocate (self%zk)
       if (allocated(self%cj)) deallocate (self%cj)
+      if (allocated(self%geometry_work)) deallocate (self%geometry_work)
       self%ntrans = 0
       self%is_type12 = .false.
    end subroutine molecular_trafo_free_plans
@@ -2066,8 +2075,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: it, nv, ier
-      external :: finufft_execute
+      integer :: it, nv
 
       call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
@@ -2076,11 +2084,7 @@ contains
       do it = 1, nv
          self%cj(:, it) = self%grid%w*f_r(:, it)
       end do
-      call finufft_execute(self%plan_r2k, self%cj, f_k, ier)
-      if (ier /= 0) then
-         call fatal_error(error, "molecular trafo: FINUFFT execute (forward) failed")
-         return
-      end if
+      call molecular_execute_forward(self, f_k, error)
    end subroutine molecular_trafo_fft_r2k
 
    !> Backward NUFFT of all `nv` sites, reciprocal-space to real-space
@@ -2103,30 +2107,237 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: it, nv, ier
+      integer :: it, nv
       real(wp) :: scale
-      external :: finufft_execute
 
       call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
       nv = size(f_k, 2)
-      ! FINUFFT `execute(plan, cj, fk)` argument roles depend on type
-      ! Type 2: cj output, fk mode input; type 3: cj source, fk target
-      ! Both paths store real-space values in `self%cj`
-      if (self%is_type12) then
-         call finufft_execute(self%plan_k2r, self%cj, f_k, ier)
-      else
-         call finufft_execute(self%plan_k2r, f_k, self%cj, ier)
-      end if
-      if (ier /= 0) then
-         call fatal_error(error, "molecular trafo: FINUFFT execute (backward) failed")
-         return
-      end if
+      call molecular_execute_backward(self, f_k, error)
+      if (allocated(error)) return
       scale = (self%grid%dkx*self%grid%dky*self%grid%dkz)/two_pi_cubed
       do it = 1, nv
          f_r(:, it) = scale*real(self%cj(:, it), wp)
       end do
    end subroutine molecular_trafo_fft_k2r
+
+   !> Transpose of the quadrature-weighted forward NUFFT
+   !>
+   !> - Backward sum without its reciprocal-space normalization
+   !> - Then multiplied by the real-space weights
+   !> - No division by weights
+   !>
+   !> @param[in,out] self Trafo instance
+   !> @param[in,out] f_k Complex output seed (npts_k, nv); scratch
+   !> @param[out] f_r Real input sensitivity (ngrid, nv)
+   !> @param[out] error Invalid state or shapes, or transform failure
+   subroutine molecular_trafo_fft_r2k_adj(self, f_k, f_r, error)
+      !> Trafo instance
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Complex output seed (npts_k, nv); scratch
+      complex(wp), intent(inout), contiguous, target :: f_k(:, :)
+      !> Real input sensitivity (ngrid, nv)
+      real(wp), intent(out), contiguous, target :: f_r(:, :)
+      !> Invalid state or shapes, or transform failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: it
+
+      call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
+      call molecular_execute_backward(self, f_k, error)
+      if (allocated(error)) return
+      do it = 1, size(f_r, 2)
+         f_r(:, it) = self%grid%w*real(self%cj(:, it), wp)
+      end do
+   end subroutine molecular_trafo_fft_r2k_adj
+
+   !> Transpose of the normalized backward NUFFT
+   !>
+   !> - Forward plan with unweighted real strengths
+   !> - Backward normalization applies here; real-space quadrature does not
+   !>
+   !> @param[in,out] self Trafo instance
+   !> @param[in,out] f_r Real output seed (ngrid, nv)
+   !> @param[out] f_k Complex input sensitivity (npts_k, nv)
+   !> @param[out] error Invalid state or shapes, or transform failure
+   subroutine molecular_trafo_fft_k2r_adj(self, f_r, f_k, error)
+      !> Trafo instance
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Real output seed (ngrid, nv)
+      real(wp), intent(inout), contiguous, target :: f_r(:, :)
+      !> Complex input sensitivity (npts_k, nv)
+      complex(wp), intent(out), contiguous, target :: f_k(:, :)
+      !> Invalid state or shapes, or transform failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: it
+      real(wp) :: scale
+
+      call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
+      if (allocated(error)) return
+      scale = (self%grid%dkx*self%grid%dky*self%grid%dkz)/two_pi_cubed
+      do it = 1, size(f_r, 2)
+         self%cj(:, it) = scale*f_r(:, it)
+      end do
+      call molecular_execute_forward(self, f_k, error)
+   end subroutine molecular_trafo_fft_k2r_adj
+
+   !> Geometry pullback of F_k = sum_j w_j*f_j*exp(-i*k*(r_j-kref))
+   !>
+   !> - Backward sums of seed and i*k*seed supply weight and position derivatives
+   !> - Zero or negative quadrature weights never require division
+   !>
+   !> @param[in,out] self Prepared trafo instance
+   !> @param[in] f_r Primal real field (ngrid, nv), held fixed
+   !> @param[in] w_k Complex output seed (npts_k, nv), held fixed
+   !> @param[in,out] acc Shared volume sensitivities
+   !> @param[out] error Invalid state, shapes or transform failure
+   subroutine molecular_trafo_r2k_geometry(self, f_r, w_k, acc, error)
+      !> Prepared transform engine
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Primal real field, held fixed
+      real(wp), intent(in) :: f_r(:, :)
+      !> Complex output seed, held fixed
+      complex(wp), intent(in) :: w_k(:, :)
+      !> Shared volume sensitivities
+      type(volume_adjoint_type), intent(inout) :: acc
+      !> Invalid state, shapes or transform failure
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: k(3), contribution, reference
+      integer :: axis, ik, i, nt
+
+      call molecular_trafo_check_ready(self, shape(f_r), shape(w_k), error)
+      if (allocated(error)) return
+      call self%grid%check_volume_adjoint(acc, error)
+      if (allocated(error)) return
+      nt = self%grid%team_size()
+      if (.not. allocated(self%geometry_work)) allocate (self%geometry_work, mold=w_k)
+      self%geometry_work = w_k
+      call molecular_execute_backward(self, self%geometry_work, error)
+      if (allocated(error)) return
+      !$omp parallel do schedule(static) num_threads(nt)
+      do i = 1, self%grid%ngrid
+         acc%w_w(i) = acc%w_w(i) + sum(fourier_measure_adjoint(f_r(i, :), self%cj(i, :)))
+      end do
+      !$omp end parallel do
+      do axis = 1, 3
+         !$omp parallel do schedule(static) num_threads(nt) private(k)
+         do ik = 1, size(w_k, 1)
+            k = self%grid%kpoint(ik)
+            self%geometry_work(ik, :) = fourier_derivative_mode(k(axis), w_k(ik, :))
+         end do
+         !$omp end parallel do
+         call molecular_execute_backward(self, self%geometry_work, error)
+         if (allocated(error)) return
+         reference = 0.0_wp
+         !$omp parallel do schedule(static) num_threads(nt) private(contribution) reduction(+:reference)
+         do i = 1, self%grid%ngrid
+            contribution = sum(fourier_position_adjoint(self%grid%w(i)*f_r(i, :), self%cj(i, :)))
+            acc%w_xyz(axis, i) = acc%w_xyz(axis, i) + contribution
+            reference = reference - contribution
+         end do
+         !$omp end parallel do
+         acc%w_kref(axis) = acc%w_kref(axis) + reference
+      end do
+      call self%grid%check_volume_adjoint(acc, error)
+   end subroutine molecular_trafo_r2k_geometry
+
+   !> Geometry pullback of f_j = norm*Re(sum_k F_k*exp(+i*k*(r_j-kref)))
+   !>
+   !> - Fixed reciprocal lattice fixes norm
+   !> - Quadrature weights do not enter
+   !>
+   !> @param[in,out] self Prepared trafo instance
+   !> @param[in] f_k Primal complex field (npts_k, nv), held fixed
+   !> @param[in] w_r Real output seed (ngrid, nv), held fixed
+   !> @param[in,out] acc Shared volume sensitivities
+   !> @param[out] error Invalid state, shapes or transform failure
+   subroutine molecular_trafo_k2r_geometry(self, f_k, w_r, acc, error)
+      !> Prepared transform engine
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Primal complex field, held fixed
+      complex(wp), intent(in) :: f_k(:, :)
+      !> Real output seed, held fixed
+      real(wp), intent(in) :: w_r(:, :)
+      !> Shared volume sensitivities
+      type(volume_adjoint_type), intent(inout) :: acc
+      !> Invalid state, shapes or transform failure
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: k(3), scale, contribution, reference
+      integer :: axis, ik, i, nt
+
+      call molecular_trafo_check_ready(self, shape(w_r), shape(f_k), error)
+      if (allocated(error)) return
+      call self%grid%check_volume_adjoint(acc, error)
+      if (allocated(error)) return
+      nt = self%grid%team_size()
+      if (.not. allocated(self%geometry_work)) allocate (self%geometry_work, mold=f_k)
+      scale = (self%grid%dkx*self%grid%dky*self%grid%dkz)/two_pi_cubed
+      do axis = 1, 3
+         !$omp parallel do schedule(static) num_threads(nt) private(k)
+         do ik = 1, size(f_k, 1)
+            k = self%grid%kpoint(ik)
+            self%geometry_work(ik, :) = fourier_derivative_mode(k(axis), f_k(ik, :))
+         end do
+         !$omp end parallel do
+         call molecular_execute_backward(self, self%geometry_work, error)
+         if (allocated(error)) return
+         reference = 0.0_wp
+         !$omp parallel do schedule(static) num_threads(nt) private(contribution) reduction(+:reference)
+         do i = 1, self%grid%ngrid
+            contribution = sum(fourier_position_adjoint(scale*w_r(i, :), self%cj(i, :)))
+            acc%w_xyz(axis, i) = acc%w_xyz(axis, i) + contribution
+            reference = reference - contribution
+         end do
+         !$omp end parallel do
+         acc%w_kref(axis) = acc%w_kref(axis) + reference
+      end do
+      call self%grid%check_volume_adjoint(acc, error)
+   end subroutine molecular_trafo_k2r_geometry
+
+   !> Unweighted Fourier sums shared by the forward transforms and adjoints
+   !>
+   !> @param[in,out] self Trafo instance, strengths read from its cj buffer
+   !> @param[out] f_k Reciprocal-space result (npts_k, nv)
+   !> @param[out] error FINUFFT failure
+   subroutine molecular_execute_forward(self, f_k, error)
+      !> Trafo instance, strengths read from its cj buffer
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Reciprocal-space result (npts_k, nv)
+      complex(wp), intent(out), contiguous, target :: f_k(:, :)
+      !> FINUFFT failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ier
+      external :: finufft_execute
+
+      call finufft_execute(self%plan_r2k, self%cj, f_k, ier)
+      if (ier /= 0) call fatal_error(error, "molecular trafo: FINUFFT execute (forward) failed")
+   end subroutine molecular_execute_forward
+
+   !> Unweighted backward Fourier sums into the cj buffer
+   !>
+   !> - Type 2: mode input fk, point output cj
+   !> - Type 3 reverses the argument roles
+   !>
+   !> @param[in,out] self Trafo instance, result stored in its cj buffer
+   !> @param[in,out] f_k Reciprocal-space input (npts_k, nv)
+   !> @param[out] error FINUFFT failure
+   subroutine molecular_execute_backward(self, f_k, error)
+      !> Trafo instance, result stored in its cj buffer
+      class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
+      !> Reciprocal-space input (npts_k, nv)
+      complex(wp), intent(inout), contiguous, target :: f_k(:, :)
+      !> FINUFFT failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: ier
+      external :: finufft_execute
+
+      if (self%is_type12) then
+         call finufft_execute(self%plan_k2r, self%cj, f_k, ier)
+      else
+         call finufft_execute(self%plan_k2r, f_k, self%cj, ier)
+      end if
+      if (ier /= 0) call fatal_error(error, "molecular trafo: FINUFFT execute (backward) failed")
+   end subroutine molecular_execute_backward
 
    !> Guard - trafo prepared, bound to its geometry, block shapes match
    !>

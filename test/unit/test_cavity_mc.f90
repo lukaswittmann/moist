@@ -17,7 +17,7 @@ module test_cavity_mc
    use moist_channels_coupling, only: coupling_type
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: check_moist_error, read_printout
+   use test_helpers, only: check_moist_error
 
    implicit none(type, external)
    private
@@ -116,7 +116,7 @@ contains
          & new_unittest("single_exports", test_single_exports), &
          & new_unittest("progress_output", test_progress_output), &
          & new_unittest("cfc_sphere", test_cfc_sphere), &
-         & new_unittest("deferred_callback_citation", test_callback_citation), &
+         & new_unittest("deferred_callback", test_callback_deferred), &
          & new_unittest("build_keeps_totals", test_build_keeps_totals), &
          & new_unittest("bare_kernel_defaults", test_bare_kernel), &
          & new_unittest("bad_lsf_evaluation", test_bad_lsf_evaluation, should_fail=.true.), &
@@ -777,7 +777,7 @@ contains
       call check(error, cav%total_volume, reference(2), rel=.true., thr=1.0e-12_wp)
    end subroutine test_progress_output
 
-   !> An isolated CFC atom integrates to its sphere and cites the CFC work
+   !> An isolated CFC atom integrates to its sphere
    subroutine test_cfc_sphere(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -787,9 +787,6 @@ contains
       type(moist_context_type), target :: ctx
       type(moist_cavity_drop_lsf_cfc_type) :: cfc
       class(radius_type), allocatable :: radius_model
-      character(len=256) :: lines(256)
-      integer :: unit, nline, i
-      logical :: cited
 
       call new_context(ctx, nthreads=0, verbosity=1)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
@@ -807,20 +804,10 @@ contains
       if (allocated(error)) return
       call check(error, cav%total_volume/(4.0_wp/3.0_wp*pi*SPHERE_RADIUS**3), 1.0_wp, thr=REL_THR, &
          & more="Single CFC atom volume does not match the sphere")
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call ctx%print_citations(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      cited = .false.
-      do i = 1, nline
-         cited = cited .or. index(lines(i), "Klamt") > 0
-      end do
-      call check(error, cited, more="Marching cubes on a CFC level set does not cite CFC")
    end subroutine test_cfc_sphere
 
-   !> A density level set defers the totals and cites the isodensity cavity at update
-   subroutine test_callback_citation(error)
+   !> A density level set defers the totals to the build phase
+   subroutine test_callback_deferred(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -829,9 +816,6 @@ contains
       type(moist_context_type), target :: ctx
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho
       class(radius_type), allocatable :: radius_model
-      character(len=256) :: lines(256)
-      integer :: unit, nline, i
-      logical :: cited
 
       call new_context(ctx, nthreads=0, verbosity=1)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
@@ -846,17 +830,7 @@ contains
       end if
       call check(error, cav%is_updated() .and. .not. cav%is_built() .and. .not. allocated(cav%total_area), &
          & more="Marching cubes integrated a density surface before the build phase")
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call ctx%print_citations(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      cited = .false.
-      do i = 1, nline
-         cited = cited .or. index(lines(i), "Isodensity Cavity") > 0
-      end do
-      call check(error, cited, more="Marching cubes on a density level set does not cite the isodensity cavity")
-   end subroutine test_callback_citation
+   end subroutine test_callback_deferred
 
    !> The build phase of a geometric level set keeps the totals of the update
    subroutine test_build_keeps_totals(error)

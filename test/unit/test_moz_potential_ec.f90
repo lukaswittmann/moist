@@ -19,8 +19,6 @@ module test_moz_potential_ec
    private
    public :: collect_moz_potential_ec
 
-   ! TODO: this should be covered better by tests.
-
 contains
 
    !> Register EC tests

@@ -3,12 +3,13 @@
 !> - Ordinary suites run inside test-drive's `!$omp parallel` region, which
 !>   forces nthreads = 1 in the Cartesian FFT
 !> - Each test here is invoked directly (`<suite> <test>`), outside any team
-!> - Companion of `math_grid_3d` (batched FFT) and `math_grid_nufft` (NUFFT)
+!> - Companion of `math_grid_3d_fft` (FFT) and `math_grid_3d_nufft` (NUFFT)
 !> - NUFFT: type 1/2 and type 3, both directions, one column and a batch,
 !>   against the analytic Gaussian FT, a direct inverse sum and a serial run
 !> - Radial transforms: one trafo per thread, cloned from a shared template
 !> - Molecular partition kernels: weights, gradient and curvature of every
 !>   scheme with one and two workers, and called from an enclosing team
+!> - Compensated field quadrature: thread-count agreement, cancellation and stored volume weights
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
 !$    & omp_get_max_active_levels
@@ -36,6 +37,7 @@ module test_math_grid_3d_threaded
       & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, default_nufft_tol, &
       & partition_becke, partition_pvoronoi
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+   use moist_math_grid_3d_kernel_integration, only: merge_compensated_sums
    use test_helpers, only: get_cartesian_gaussian_grid, get_uniform_recipe, get_qc_handymod_recipe, &
       & check_moist_error
    use, intrinsic :: iso_c_binding, only: c_int
@@ -51,7 +53,7 @@ module test_math_grid_3d_threaded
    !> - FINUFFT sorts multithreaded only when `10*M` exceeds the fine grid `N`
    !> - Water at (nrad, nang, rmax, dr) = (40, 194, 6, 0.7): M = 18932 points,
    !>   type-1 fine grid 60 x 48 x 48 = 138240; 10*M = 189320 > N
-   !> - Single-threaded sorting for the `math_grid_nufft` probe grid (50, 110, 16, 0.7)
+   !> - Single-threaded sorting for the `math_grid_3d_nufft` probe grid (50, 110, 16, 0.7)
    integer, parameter :: nufft_nrad = 40
    !> Raw Lebedev point count per shell of the threaded NUFFT grid
    integer, parameter :: nufft_nang = 194
@@ -96,7 +98,8 @@ contains
                   new_unittest("molecular_nufft_type12_threaded", test_nufft_type12_threaded), &
                   new_unittest("molecular_nufft_type3_threaded", test_nufft_type3_threaded), &
                   new_unittest("radial_trafo_one_per_thread", test_radial_trafo_per_thread), &
-                  new_unittest("partition_grid_threaded", test_partition_grid_threaded) &
+                  new_unittest("partition_grid_threaded", test_partition_grid_threaded), &
+                  new_unittest("compensated_integration", test_compensated_integration) &
                   ]
    end subroutine collect_math_grid_3d_threaded
 
@@ -135,6 +138,124 @@ contains
 
 !$    call omp_set_num_threads(min(4, max_threads))
    end subroutine enter_threaded
+
+   !> Strong cancellation, variable weights, strided fields and enclosing teams
+   subroutine test_compensated_integration(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(moist_math_grid_3d_molecular_type) :: weighted
+      type(mctc_error), allocatable :: merr
+      type(grid_call_type) :: nested_calls(4)
+      integer, parameter :: workers(3) = [1, 2, 4]
+      real(wp), allocatable :: f(:), partial(:, :)
+      real(wp) :: cart_reference, weighted_reference, cart_result, weighted_result, nested(4)
+      integer :: n, i, nt, max_threads, first, last, nb, kind
+      logical :: in_parallel
+
+      max_threads = 1
+      in_parallel = .false.
+!$    max_threads = omp_get_max_threads()
+!$    in_parallel = omp_in_parallel()
+      call check(error, .not. in_parallel, more="quadrature check needs a selected test outside the suite team")
+      if (allocated(error)) return
+
+      ! Unequal dimensions leave a partial block at the end; weights are exact dyadic fractions.
+      call get_cartesian_gaussian_grid(cart, 55, 33, 41, 0.5_wp, error=merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      n = cart%ngrid
+      weighted%ngrid = n
+      allocate (weighted%w(n), f(2*n), source=0.0_wp)
+      do i = 1, n
+         f(2*i - 1) = 1.0_wp
+         weighted%w(i) = real(mod(i, 7) + 1, wp)/4.0_wp
+      end do
+      f(1) = 1.0e16_wp
+      f(2*n - 1) = -1.0e16_wp
+      weighted%w(1) = 2.0_wp
+      weighted%w(n) = 2.0_wp
+      cart_reference = real(n - 2, wp)*0.5_wp**3
+      weighted_reference = sum(weighted%w(2:n - 1))
+      do nt = 1, size(workers)
+         cart%nthreads = min(workers(nt), max_threads)
+         weighted%nthreads = cart%nthreads
+         call cart%integrate_field(f(1:2*n:2), cart_result, merr)
+         if (.not. allocated(merr)) call weighted%integrate_field(f(1:2*n:2), weighted_result, merr)
+         call check_moist_error(error, merr)
+         if (allocated(error)) return
+         call check(error, cart_result == cart_reference, more="Cartesian compensated sum lost small terms")
+         if (allocated(error)) return
+         call check(error, weighted_result == weighted_reference, more="weighted sum lost terms or ignored stored weights")
+         if (allocated(error)) return
+      end do
+
+      ! Stored weights also govern Cartesian quadrature
+      cart%w = weighted%w
+      cart_reference = weighted_reference
+      call cart%integrate_field(f(1:2*n:2), cart_result, merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      call check(error, cart_result == cart_reference, more="Cartesian quadrature ignored stored weights")
+      if (allocated(error)) return
+
+      ! Bounded, strided slices retain absolute weight indices and both compensated components
+      nb = 1 + (n - 1)/4093
+      allocate (partial(2, nb))
+      do kind = 1, 2
+         do i = 1, nb
+            first = 1 + (i - 1)*4093
+            last = min(first + 4092, n)
+            if (kind == 1) then
+               call cart%integrate_field_block(f(2*first - 1:2*last - 1:2), first, partial(:, i), merr)
+            else
+               call weighted%integrate_field_block(f(2*first - 1:2*last - 1:2), first, partial(:, i), merr)
+            end if
+            call check_moist_error(error, merr)
+            if (allocated(error)) return
+         end do
+         call check(error, merge_compensated_sums(partial) == merge(cart_reference, weighted_reference, kind == 1), &
+            & more="bounded field quadrature lost cancellation terms or custom weights")
+         if (allocated(error)) return
+      end do
+      call weighted%integrate_field_block(f(:2), 0, partial(:, 1), merr)
+      call check(error, allocated(merr), more="field block accepted index zero")
+      if (allocated(error)) return
+      call cart%integrate_field_block(f(:2), n, partial(:, 1), merr)
+      call check(error, allocated(merr), more="field block accepted values beyond the grid")
+      if (allocated(error)) return
+      deallocate (merr)
+
+      !$omp parallel do schedule(static) num_threads(min(4, max_threads))
+      do i = 1, size(nested)
+         call weighted%integrate_field(f(1:2*n:2), nested(i), nested_calls(i)%error)
+      end do
+      !$omp end parallel do
+      do i = 1, size(nested)
+         call check_moist_error(error, nested_calls(i)%error)
+         if (allocated(error)) return
+      end do
+      call check(error, all(nested == weighted_reference), more="enclosing teams changed compensated quadrature")
+      if (allocated(error)) return
+
+      ! Keep the small serial and empty-field contracts, and reject wrong field lengths.
+      weighted%w = weighted%w(:3)
+      weighted%ngrid = 3
+      call weighted%integrate_field([1.0_wp, -1.0_wp, 0.25_wp], weighted_result, merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      call check(error, weighted_result, weighted%w(1) - weighted%w(2) + 0.25_wp*weighted%w(3), &
+         & thr=1.0e-14_wp, more="small field quadrature changed")
+      if (allocated(error)) return
+      call weighted%integrate_field(f(:2), weighted_result, merr)
+      call check(error, allocated(merr), more="weighted field quadrature accepted the wrong length")
+      if (allocated(error)) return
+      deallocate (merr)
+      weighted%ngrid = 0
+      call weighted%integrate_field(f(:0), weighted_result, merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      call check(error, weighted_result == 0.0_wp, more="empty field integral is not zero")
+   end subroutine test_compensated_integration
 
    !> Outside any enclosing OpenMP team, a multi-site batch transforms both ways
    !>
@@ -492,7 +613,7 @@ contains
    !> Largest `|F(k) - F_exact(k)| / F_exact(0)` inside the ball `|k| <= pi/dr`
    !>
    !> - `F_exact(k) = (pi/a)^(3/2) exp(-k^2/(4a)) exp(-i k.(c - kref))`, the
-   !>   convention of `test_forward_analytic` in the `math_grid_nufft` suite
+   !>   convention of `test_forward_analytic` in the `math_grid_3d_nufft` suite
    !> - Only the inscribed ball is resolved by the grid spacing
    !> - Non-finite deviation returns `huge(1.0_wp)`
    !>
