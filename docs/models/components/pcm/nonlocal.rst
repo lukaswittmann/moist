@@ -1,7 +1,7 @@
 Nonlocal electrostatics
 =======================
 
-This model :cite:p:`hildebrandt2004nonlocal` solves a three-field nonlocal dielectric boundary system.
+This model :cite:p:`hildebrandt2004nonlocal,hildebrandt2007nonlocal` solves a three-field nonlocal dielectric boundary system, similar to that in NESSie :cite:p:`kemmer2018nessie`.
 It uses the solvent permittivity ``eps_solvent``, the high-frequency permittivity ``eps_inf``, and the positive correlation length ``lambda`` in bohr.
 Fortran optionally accepts the solute permittivity ``eps_solute``; C and Python take it explicitly.
 The host supplies the ordinary electrostatic potential and outward normal derivative of its solute at the surface points.

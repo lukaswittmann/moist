@@ -31,7 +31,7 @@ module moist_cavity_mc
    use moist_cavity_drop_lsf_isodensity, only: &
       moist_cavity_drop_lsf_isodensity_internal_type, &
       moist_cavity_drop_lsf_isodensity_callback_type
-   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc
+   use moist_output_citations, only: citation
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
       & coupling_close_view
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
@@ -484,14 +484,14 @@ contains
       class(cavity_type_mc), intent(inout) :: self
 
       if (.not. associated(self%ctx)) return
-      call self%ctx%cite(citation_drop)
+      call self%ctx%cite(citation%drop)
       select type (m => self%lsf_model)
       type is (moist_cavity_drop_lsf_cfc_type)
-         call self%ctx%cite(citation_cfc)
+         call self%ctx%cite(citation%cfc)
       type is (moist_cavity_drop_lsf_isodensity_internal_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       type is (moist_cavity_drop_lsf_isodensity_callback_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       end select
 
    end subroutine cite_cavity_mc

@@ -5,7 +5,7 @@ module moist_cavity_drop
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc
+   use moist_output_citations, only: citation
    use moist_math_lapack, only: getrf, getrs
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
@@ -629,14 +629,14 @@ contains
       class(cavity_type_drop), intent(inout) :: self
 
       if (.not. associated(self%ctx)) return
-      call self%ctx%cite(citation_drop)
+      call self%ctx%cite(citation%drop)
       select type (m => self%lsf_model)
       type is (moist_cavity_drop_lsf_cfc_type)
-         call self%ctx%cite(citation_cfc)
+         call self%ctx%cite(citation%cfc)
       type is (moist_cavity_drop_lsf_isodensity_internal_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       type is (moist_cavity_drop_lsf_isodensity_callback_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       end select
 
    end subroutine cite_cavity_drop

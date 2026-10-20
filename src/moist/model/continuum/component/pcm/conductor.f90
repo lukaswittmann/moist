@@ -4,7 +4,7 @@ module moist_model_continuum_component_pcm_conductor
    use moist_channels_response, only: parameter_adjoint_response_type
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_output_citations, only: citation_cpcm, citation_cosmo
+   use moist_output_citations, only: citation
    use moist_utils_prettyprint, only: prettyprinter
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
@@ -237,9 +237,9 @@ contains
       if (allocated(error)) return
       select type (self)
       type is (model_continuum_component_cpcm)
-         call self%ctx%cite(citation_cpcm)
+         call self%ctx%cite(citation%cpcm)
       type is (model_continuum_component_cosmo)
-         call self%ctx%cite(citation_cosmo)
+         call self%ctx%cite(citation%cosmo)
       end select
       self%mol_solu = mol
       self%charges_valid = .false.
@@ -254,11 +254,13 @@ contains
          call fatal_error(error, "Conductor PCM Gaussian surface requires switching factors")
          if (allocated(error)) return
       end if
+      if (self%smeared) call self%ctx%cite(citation%iswig)
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM setup", category=cat_setup)
 
       if (self%param%solver == solver_type%iterative) then
+         call self%ctx%cite(citation%gmres)
          allocate (pcm_gmres_solver :: solver)
          select type (solver)
          type is (pcm_gmres_solver)

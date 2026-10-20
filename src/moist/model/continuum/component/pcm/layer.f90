@@ -3,6 +3,7 @@ module moist_model_continuum_component_pcm_layer
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
+   use moist_output_citations, only: citation
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & coupling_request_type, point_potential_request_type, gaussian_potential_request_type, &
@@ -285,6 +286,7 @@ contains
          end if
       end if
       if (self%param%solver == solver_type%iterative) then
+         call self%ctx%cite(citation%gmres)
          allocate (pcm_gmres_solver :: solver)
          select type (solver)
          type is (pcm_gmres_solver)
@@ -311,6 +313,7 @@ contains
             return
          end if
       end if
+      if (self%smeared) call self%ctx%cite(citation%iswig)
       call self%assemble_layer(cavity, solver, error)
       if (allocated(error)) return
       allocate (self%q(n), self%qsym(n), source=0.0_wp)

@@ -36,7 +36,7 @@ context or inherits the model's context. Standalone evaluation requires
 an explicit context.
 
 ``solver`` chooses ``iterative`` (default) or ``dense``. The iterative solver
-is restarted GMRES with block-Jacobi preconditioning. ``solver_tol`` defaults
+is restarted GMRES :cite:p:`saad1986gmres` with block-Jacobi preconditioning. ``solver_tol`` defaults
 to ``1e-8``, ``solver_maxiter`` to ``1000``, and ``solver_restart`` to ``100``.
 ``storage`` chooses ``dense`` (default) or ``matrix_free`` for the operator.
 ``newton_tol`` (``1e-10``) and ``newton_maxiter`` (``50``) control nonlinear

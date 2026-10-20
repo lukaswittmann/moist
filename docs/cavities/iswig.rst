@@ -1,7 +1,7 @@
 iSwiG Cavity
 ============
 
-iSwiG is the switching Gaussian surface-discretization approach :cite:p:`lange2010swig` for van der Waals type cavitites.
+iSwiG is the switching Gaussian surface-discretization approach :cite:p:`lange2010swig` for van der Waals type cavitites. This approach is the generalization of :cite:t:`york1999gaussian`.
 Each atomic sphere is discretized using Lebedev quadrature grids.
 Every grid point is assigned a smooth weight given by a product of error-function switches from the neighbouring spheres, so buried points fade out continuously.
 Points whose switching value (or area) falls below a cutoff are removed.
