@@ -211,16 +211,16 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("svdw_Ar", test_svdw_ar), &
-                  new_unittest("svdw_O2", test_svdw_o2), &
-                  new_unittest("svdw_CH4", test_svdw_ch4), &
-                  new_unittest("svdw_THR_xab", test_svdw_thr_xab), &
+                  new_unittest("svdw_ar", test_svdw_ar), &
+                  new_unittest("svdw_o2", test_svdw_o2), &
+                  new_unittest("svdw_ch4", test_svdw_ch4), &
+                  new_unittest("svdw_thr_xab", test_svdw_thr_xab), &
                   new_unittest("svdw_16", test_svdw_16), &
                   new_unittest("svdw_30", test_svdw_30), &
-                  new_unittest("cfc_Ar", test_cfc_ar), &
-                  new_unittest("cfc_O2", test_cfc_o2), &
-                  new_unittest("cfc_CH4", test_cfc_ch4), &
-                  new_unittest("cfc_THR_xab", test_cfc_thr_xab), &
+                  new_unittest("cfc_ar", test_cfc_ar), &
+                  new_unittest("cfc_o2", test_cfc_o2), &
+                  new_unittest("cfc_ch4", test_cfc_ch4), &
+                  new_unittest("cfc_thr_xab", test_cfc_thr_xab), &
                   new_unittest("cfc_16", test_cfc_16), &
                   new_unittest("cfc_30", test_cfc_30) &
                   ]

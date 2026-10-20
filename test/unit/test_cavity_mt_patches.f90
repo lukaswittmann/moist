@@ -1,9 +1,11 @@
 !> Area conservation and intrinsic separation of planar integration patches
 module test_cavity_mt_patches
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, mctc_error => error_type
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type, build_mt_patches
+   use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
    public :: collect_cavity_mt_patches
@@ -24,7 +26,18 @@ contains
                   new_unittest("narrow_neck_unequal_components", test_narrow_neck), &
                   new_unittest("folded_connected_sheet", test_folded_sheet), &
                   new_unittest("unbalanceable_fallback", test_unbalanceable), &
-                  new_unittest("lloyd_regular_spacing", test_regular_spacing) &
+                  new_unittest("lloyd_regular_spacing", test_regular_spacing), &
+                  new_unittest("unresolved_shared_edge", test_unresolved_edge), &
+                  new_unittest("bad_nan_target", test_bad_nan_target, should_fail=.true.), &
+                  new_unittest("bad_subdivision_underflow", test_bad_underflow, should_fail=.true.), &
+                  new_unittest("bad_missing_mesh", test_bad_missing_mesh, should_fail=.true.), &
+                  new_unittest("bad_empty_mesh", test_bad_empty_mesh, should_fail=.true.), &
+                  new_unittest("bad_zero_area_face", test_bad_zero_area, should_fail=.true.), &
+                  new_unittest("bad_component_patch_count", test_bad_patch_count, should_fail=.true.), &
+                  new_unittest("bad_total_patch_count", test_bad_total_count, should_fail=.true.), &
+                  new_unittest("bad_face_subdivision", test_bad_face_subdivision, should_fail=.true.), &
+                  new_unittest("bad_graph_size", test_bad_graph_size, should_fail=.true.), &
+                  new_unittest("bad_one_sided_adjacency", test_bad_adjacency, should_fail=.true.) &
       ]
    end subroutine collect_cavity_mt_patches
 
@@ -340,6 +353,180 @@ contains
       if (allocated(error)) return
       call verify_on_mesh(error, mesh, patches)
    end subroutine test_regular_spacing
+
+   !> A shared edge below the subdivision coordinate resolution still joins its faces
+   !>
+   !> Far from the origin, the subdivided edge of one unit in the last place
+   !> rounds to a zero-length crossing segment
+   subroutine test_unresolved_edge(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+      real(wp), parameter :: offset = 1048576.0_wp, length = 1.0e4_wp
+      real(wp) :: ulp
+
+      ulp = spacing(offset)
+      allocate (mesh%vertices(3, 4), mesh%triangles(3, 2), mesh%neighbors(3, 2), &
+                mesh%area(2), mesh%centroid(3, 2), mesh%normal(3, 2))
+      mesh%vertices(:, 1) = [0.0_wp, 0.0_wp, offset]
+      mesh%vertices(:, 2) = [0.0_wp, 0.0_wp, offset + ulp]
+      mesh%vertices(:, 3) = [length, 0.0_wp, offset]
+      mesh%vertices(:, 4) = [-length, 0.0_wp, offset]
+      mesh%triangles(:, 1) = [1, 2, 3]
+      mesh%triangles(:, 2) = [2, 1, 4]
+      mesh%neighbors = 0
+      mesh%neighbors(3, :) = [2, 1]
+      call face_geometry(mesh)
+      ! Four subdivisions per edge; the crossing at a quarter rounds onto its start
+      call build_mt_patches(mesh, 1.0e-5_wp, 0.1_wp, patches, patch_error)
+      if (allocated(patch_error)) then
+         call test_failed(error, patch_error%message)
+         return
+      end if
+      call check(error, size(patches%area) == 1 .and. all(patches%area_exception))
+      if (allocated(error)) return
+      call check(error, abs(sum(patches%area)/sum(mesh%area) - 1.0_wp) < 1.e-12_wp)
+      if (allocated(error)) return
+      call verify_members(error, mesh, patches)
+   end subroutine test_unresolved_edge
+
+   !> Reject a nonfinite target area
+   subroutine test_bad_nan_target(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call make_sheets(mesh, 1, 1.0_wp)
+      call build_mt_patches(mesh, ieee_value(1.0_wp, ieee_quiet_nan), 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_nan_target
+
+   !> Reject a target area whose subdivision bound underflows
+   subroutine test_bad_underflow(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call make_sheets(mesh, 1, 1.0_wp)
+      ! Smallest subnormal target
+      call build_mt_patches(mesh, tiny(1.0_wp)*epsilon(1.0_wp), 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_underflow
+
+   !> Reject a mesh without geometry
+   subroutine test_bad_missing_mesh(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call build_mt_patches(mesh, 1.0_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_missing_mesh
+
+   !> Reject a mesh without triangles
+   subroutine test_bad_empty_mesh(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      allocate (mesh%vertices(3, 0), mesh%triangles(3, 0), mesh%neighbors(3, 0), mesh%area(0), &
+                mesh%centroid(3, 0), mesh%normal(3, 0))
+      call build_mt_patches(mesh, 1.0_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_empty_mesh
+
+   !> Reject a zero-area face
+   subroutine test_bad_zero_area(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call make_sheets(mesh, 1, 1.0_wp)
+      mesh%area(1) = 0.0_wp
+      call build_mt_patches(mesh, 1.0_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_zero_area
+
+   !> Reject more patches in one component than an integer holds
+   subroutine test_bad_patch_count(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call make_sheets(mesh, 1, 1.0_wp)
+      call build_mt_patches(mesh, 1.0e-12_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_patch_count
+
+   !> Reject components whose patch counts overflow only in total
+   subroutine test_bad_total_count(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      ! 1.5e9 patches per unit sheet
+      call make_sheets(mesh, 2, 1.0_wp)
+      call build_mt_patches(mesh, 1.0_wp/1.5e9_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_total_count
+
+   !> Reject a face subdivided into more pieces than the graph can index
+   subroutine test_bad_face_subdivision(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      ! About 7e4 divisions per edge of a half-unit face
+      call make_sheets(mesh, 1, 1.0_wp)
+      call build_mt_patches(mesh, 1.0e-8_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_face_subdivision
+
+   !> Reject faces whose pieces overflow the graph only in total
+   subroutine test_bad_graph_size(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      ! 1.5e4 divisions per edge: 2.25e8 pieces per face, 4.5e8 in total
+      call make_sheets(mesh, 1, 1.0_wp)
+      call build_mt_patches(mesh, 0.5_wp/(0.01_wp*1.5e4_wp**2), 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_graph_size
+
+   !> Reject one-sided face adjacency
+   subroutine test_bad_adjacency(error)
+      !> Failure state
+      type(error_type), allocatable, intent(out) :: error
+      type(mt_mesh_type) :: mesh
+      type(mt_patch_type) :: patches
+      type(mctc_error), allocatable :: patch_error
+
+      call make_sheets(mesh, 1, 1.0_wp)
+      mesh%neighbors(3, 2) = 0
+      call build_mt_patches(mesh, 0.25_wp, 0.1_wp, patches, patch_error)
+      call check_moist_error(error, patch_error)
+   end subroutine test_bad_adjacency
 
    !> Three long planar lobes of 0.6 bohr^2 on the edges of a tiny hub triangle
    !>

@@ -18,7 +18,7 @@ module test_channels
       & potential_adjoint_response_type, density_response_type, &
       & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
-      & current_response_item, response_accumulate, response_clear
+      & parameter_adjoint_response_type, current_response_item, response_accumulate, response_clear
    use moist_channels_fields, only: field_query_type, field_real, field_int, field_bool, field_max_rank
    use test_helpers, only: check_moist_error
    implicit none(type, external)
@@ -27,6 +27,34 @@ module test_channels
 
    !> Diagnostic of an answer or query outside a `next()` window
    character(len=*), parameter :: no_current = "No current coupling request - call next() first"
+
+   !> Host extension of the potential adjoint item
+   type, extends(potential_adjoint_response_type) :: host_potential_adjoint_type
+   end type host_potential_adjoint_type
+
+   !> Host extension of the parameter adjoint item
+   type, extends(parameter_adjoint_response_type) :: host_parameter_adjoint_type
+   end type host_parameter_adjoint_type
+
+   !> Host extension of the density item
+   type, extends(density_response_type) :: host_density_type
+   end type host_density_type
+
+   !> Host extension of the Gaussian amplitude item
+   type, extends(gaussian_amplitude_response_type) :: host_gaussian_amplitude_type
+   end type host_gaussian_amplitude_type
+
+   !> Host extension of the atomic multipole adjoint item
+   type, extends(atomic_multipole_adjoint_response_type) :: host_multipole_adjoint_type
+   end type host_multipole_adjoint_type
+
+   !> Host extension of the atomic charge adjoint item
+   type, extends(atomic_charge_adjoint_response_type) :: host_charge_adjoint_type
+   end type host_charge_adjoint_type
+
+   !> Host extension of the radial potential adjoint item
+   type, extends(radial_potential_adjoint_response_type) :: host_radial_adjoint_type
+   end type host_radial_adjoint_type
 
 contains
 
@@ -79,6 +107,21 @@ contains
          new_unittest("response_density_every_rank", test_response_density_ranks), &
          new_unittest("response_add_rejects_vector_shape", test_response_vector_shape), &
          new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add), &
+         new_unittest("response_parameter_adjoint", test_response_parameter_adjoint), &
+         new_unittest("response_potential_adjoint_extension_refused", test_response_potential_adjoint_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_parameter_adjoint_extension_refused", test_response_parameter_adjoint_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_density_extension_refused", test_response_density_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_gaussian_amplitude_extension_refused", test_response_gaussian_amplitude_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_multipole_adjoint_extension_refused", test_response_multipole_adjoint_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_charge_adjoint_extension_refused", test_response_charge_adjoint_extension, &
+            & should_fail=.true.), &
+         new_unittest("response_radial_adjoint_extension_refused", test_response_radial_adjoint_extension, &
+            & should_fail=.true.), &
          new_unittest("atom_extent_register_answer_read", test_atom_extent_round_trip), &
          new_unittest("atom_extent_rejects_grid_shape", test_atom_extent_rejection), &
          new_unittest("mixed_grid_and_atom_pass", test_mixed_extents), &
@@ -1673,6 +1716,194 @@ contains
       call check(error, index(err%message, "placeholder response item 'no_current_item'") > 0 &
          & .and. index(err%message, "cannot accumulate 'no_current_item'") > 0)
    end subroutine test_response_placeholder_add
+
+   !> Parameter derivatives merge into one item: a scalar both items carry
+   !> sums, one carried by a single item is copied once, every other one stays
+   !> absent and undeclared, and a cleared response starts the sums afresh
+   subroutine test_response_parameter_adjoint(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> LPB-like, nonlocal-like and empty parameter items
+      type(parameter_adjoint_response_type) :: screened, nonlocal, empty
+      !> Field walker
+      type(field_query_type) :: query
+
+      screened%dg_deps = 1.0_wp
+      screened%dg_dkappa = 2.0_wp
+      nonlocal%dg_deps = 0.5_wp
+      nonlocal%dg_dlambda = 3.0_wp
+      ! The empty item is stored first, so every later scalar is copied in
+      call response_accumulate(response, empty, err)
+      if (.not. allocated(err)) call response_accumulate(response, screened, err)
+      if (.not. allocated(err)) call response_accumulate(response, nonlocal, err)
+      if (.not. allocated(err)) call response_accumulate(response, empty, err)
+      call check_moist_error(error, err, "parameter accumulate")
+      if (allocated(error)) return
+      call check(error, walk_names(response), "parameter_adjoint,", more="parameter items were not merged")
+      if (allocated(error)) return
+
+      call check(error, response%next())
+      if (allocated(error)) return
+      select type (item => response%item())
+      type is (parameter_adjoint_response_type)
+         call check(error, allocated(item%dg_deps) .and. allocated(item%dg_dkappa) &
+            & .and. allocated(item%dg_dlambda), more="a carried derivative is absent")
+         if (allocated(error)) return
+         call check(error, item%dg_deps == 1.5_wp .and. item%dg_dkappa == 2.0_wp &
+            & .and. item%dg_dlambda == 3.0_wp, more="eps summed, kappa and lambda copied once")
+         if (allocated(error)) return
+         call check(error,.not. (allocated(item%dg_deps_inf) .or. allocated(item%dg_deps_solute) &
+            & .or. allocated(item%dg_dalpha) .or. allocated(item%dg_dbeta) .or. allocated(item%dg_dgamma) &
+            & .or. allocated(item%dg_dmu) .or. allocated(item%dg_dphi_static)), &
+            & more="a derivative no item carried is present")
+         if (allocated(error)) return
+         call list_item(item, query)
+         call check_listing(error, query, "parameter_adjoint", 3)
+         if (allocated(error)) return
+         call check_declared(error, query, 1, "dg_deps", [integer ::])
+         if (allocated(error)) return
+         call check_declared(error, query, 2, "dg_dlambda", [integer ::])
+         if (allocated(error)) return
+         call check_declared(error, query, 3, "dg_dkappa", [integer ::])
+         if (allocated(error)) return
+         call check_item_fetch(error, item, "dg_deps", [integer ::], [1.5_wp])
+         if (allocated(error)) return
+         call check_item_absent(error, item, "dg_dalpha")
+      class default
+         call test_failed(error, "the stored item is not the parameter adjoint")
+      end select
+      if (allocated(error)) return
+
+      call response_clear(response)
+      call response_accumulate(response, nonlocal, err)
+      call check_moist_error(error, err, "parameter accumulate after clear")
+      if (allocated(error)) return
+      call check(error, response%next())
+      if (allocated(error)) return
+      select type (item => response%item())
+      type is (parameter_adjoint_response_type)
+         call check(error, item%dg_deps == 0.5_wp .and. .not. allocated(item%dg_dkappa), &
+            & more="a sum leaked across the clear")
+      class default
+         call test_failed(error, "the stored item is not the parameter adjoint")
+      end select
+   end subroutine test_response_parameter_adjoint
+
+   !> A repeated host extension of the potential adjoint is refused, never merged
+   !> as its parent type
+   subroutine test_response_potential_adjoint_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_potential_adjoint_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_potential_adjoint_extension
+
+   !> A repeated host extension of the parameter adjoint is refused, never merged
+   !> as its parent type
+   subroutine test_response_parameter_adjoint_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_parameter_adjoint_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_parameter_adjoint_extension
+
+   !> A repeated host extension of the density item is refused, never merged
+   !> as its parent type
+   subroutine test_response_density_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_density_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_density_extension
+
+   !> A repeated host extension of the Gaussian amplitude item is refused, never merged
+   !> as its parent type
+   subroutine test_response_gaussian_amplitude_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_gaussian_amplitude_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_gaussian_amplitude_extension
+
+   !> A repeated host extension of the atomic multipole adjoint is refused, never merged
+   !> as its parent type
+   subroutine test_response_multipole_adjoint_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_multipole_adjoint_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_multipole_adjoint_extension
+
+   !> A repeated host extension of the atomic charge adjoint is refused, never merged
+   !> as its parent type
+   subroutine test_response_charge_adjoint_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_charge_adjoint_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_charge_adjoint_extension
+
+   !> A repeated host extension of the radial potential adjoint is refused, never merged
+   !> as its parent type
+   subroutine test_response_radial_adjoint_extension(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Extended item
+      type(host_radial_adjoint_type) :: item
+      call response_accumulate(response, item, err)
+      if (.not. allocated(err)) call response_accumulate(response, item, err)
+      call check_moist_error(error, err)
+   end subroutine test_response_radial_adjoint_extension
 
    !* ================================================================================= *!
    !*                                   Model registry                                  *!

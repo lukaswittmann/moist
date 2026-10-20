@@ -282,6 +282,20 @@ def test_unsupported_operations_are_explicit(mol, monkeypatch):
             getattr(mf, name)()
 
 
+@pytest.mark.parametrize("components", [[], [object()]], ids=("empty", "foreign"))
+def test_attach_rejects_invalid_components(mol, components):
+    with pytest.raises(TypeError, match="components must"):
+        attach(mol.RHF(), components=components)
+
+
+def test_state_energy_and_fock_follow_the_last_evaluation(mol):
+    mf = attach(mol.RHF())
+    assert mf.with_moist.e is None and mf.with_moist.v is None
+    result = mf.with_moist.evaluate(mf.get_init_guess())
+    assert mf.with_moist.e == result.energy
+    assert mf.with_moist.v is result.fock
+
+
 def test_explicit_molecule_does_not_poison_default_evaluation(mol):
     mf = attach(mol.RHF())
     dm = mf.get_init_guess()

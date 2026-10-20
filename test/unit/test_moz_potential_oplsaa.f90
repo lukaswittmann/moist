@@ -27,13 +27,13 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("methanol-types", check_methanol_types), &
-         & new_unittest("argon-alone-uncovered", check_argon_alone), &
-         & new_unittest("argon-beside-methanol", check_argon_beside_methanol), &
-         & new_unittest("invalid-valence", check_invalid_valence), &
-         & new_unittest("aromatic-rings", check_aromatic_rings), &
-         & new_unittest("small-molecules", check_small_molecules), &
-         & new_unittest("charged-species", check_charged_species), &
+         & new_unittest("methanol_types", check_methanol_types), &
+         & new_unittest("argon_alone_uncovered", check_argon_alone), &
+         & new_unittest("argon_beside_methanol", check_argon_beside_methanol), &
+         & new_unittest("invalid_valence", check_invalid_valence), &
+         & new_unittest("aromatic_rings", check_aromatic_rings), &
+         & new_unittest("small_molecules", check_small_molecules), &
+         & new_unittest("charged_species", check_charged_species), &
          & new_unittest("bad_no_bonds", check_bad_no_bonds, should_fail=.true.), &
          & new_unittest("bad_bond_shape", check_bad_bond_shape, should_fail=.true.), &
          & new_unittest("bad_missing_hydrogen", check_bad_missing_hydrogen, should_fail=.true.), &

@@ -34,28 +34,28 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("gaff-water", check_gaff_water), &
-         & new_unittest("spce-water", check_spce_water), &
-         & new_unittest("spce-invalid-solvent", check_spce_invalid_solvent), &
-         & new_unittest("potential-water-model", check_potential_water_model), &
-         & new_unittest("gaff-methanol", check_gaff_methanol), &
-         & new_unittest("gaff-benzene", check_gaff_benzene), &
-         & new_unittest("gaff-acetonitrile", check_gaff_acetonitrile), &
-         & new_unittest("gaff-dmso", check_gaff_dmso), &
-         & new_unittest("gaff-pyridine", check_gaff_pyridine), &
-         & new_unittest("gaff-chloroform", check_gaff_chloroform), &
-         & new_unittest("gaff-heteroatom-types", check_gaff_heteroatom_types), &
-         & new_unittest("gaff-element-uncovered", check_gaff_element_uncovered), &
-         & new_unittest("gaff-water-fragment-uncovered", check_gaff_water_fragment), &
-         & new_unittest("potential-fallback", check_potential_fallback), &
-         & new_unittest("potential-gaff-alone-uncovered", check_potential_uncovered), &
-         & new_unittest("custom-wrong-size", check_custom_wrong_size), &
-         & new_unittest("potential-mixing", check_potential_mixing), &
-         & new_unittest("epsilon-zero", check_epsilon_zero), &
-         & new_unittest("mixing-rules", check_mixing_rules), &
-         & new_unittest("inactive-site-mixing", check_inactive_site_mixing), &
-         & new_unittest("element-tables", check_element_tables), &
-         & new_unittest("element-fallback", check_element_fallback)]
+         & new_unittest("gaff_water", check_gaff_water), &
+         & new_unittest("spce_water", check_spce_water), &
+         & new_unittest("spce_invalid_solvent", check_spce_invalid_solvent), &
+         & new_unittest("potential_water_model", check_potential_water_model), &
+         & new_unittest("gaff_methanol", check_gaff_methanol), &
+         & new_unittest("gaff_benzene", check_gaff_benzene), &
+         & new_unittest("gaff_acetonitrile", check_gaff_acetonitrile), &
+         & new_unittest("gaff_dmso", check_gaff_dmso), &
+         & new_unittest("gaff_pyridine", check_gaff_pyridine), &
+         & new_unittest("gaff_chloroform", check_gaff_chloroform), &
+         & new_unittest("gaff_heteroatom_types", check_gaff_heteroatom_types), &
+         & new_unittest("gaff_element_uncovered", check_gaff_element_uncovered), &
+         & new_unittest("gaff_water_fragment_uncovered", check_gaff_water_fragment), &
+         & new_unittest("potential_fallback", check_potential_fallback), &
+         & new_unittest("potential_gaff_alone_uncovered", check_potential_uncovered), &
+         & new_unittest("custom_wrong_size", check_custom_wrong_size), &
+         & new_unittest("potential_mixing", check_potential_mixing), &
+         & new_unittest("epsilon_zero", check_epsilon_zero), &
+         & new_unittest("mixing_rules", check_mixing_rules), &
+         & new_unittest("inactive_site_mixing", check_inactive_site_mixing), &
+         & new_unittest("element_tables", check_element_tables), &
+         & new_unittest("element_fallback", check_element_fallback)]
    end subroutine collect_moz_potential_lj
 
    !> Read solvent geometry in bohr

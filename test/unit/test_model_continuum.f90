@@ -17,9 +17,11 @@ module test_model_continuum
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_fields, only: field_query_type, field_real
    use moist_channels_coupling, only: coupling_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type
+   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
+      & parameter_adjoint_response_type
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_type, only: autogpa
@@ -66,7 +68,8 @@ contains
          & new_unittest("continuum_model_guards", test_continuum_model_guards), &
          & new_unittest("continuum_model_reconstructed_cavity_context", &
          &              test_continuum_model_reconstructed_cavity_context), &
-         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies) &
+         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies), &
+         & new_unittest("continuum_model_parameter_derivatives_merge", test_continuum_model_parameter_derivatives) &
          & ]
 
    end subroutine collect_model_continuum
@@ -1105,6 +1108,137 @@ contains
       end subroutine read_all
 
    end subroutine test_continuum_model_component_energies
+
+   !> Parameter derivatives of two PCM components merge into one model item
+   subroutine test_continuum_model_parameter_derivatives(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Parameter items of the CPCM, LPB and combined models
+      type(parameter_adjoint_response_type) :: cpcm, lpb, both
+      !> Parameter items in one response pass
+      integer :: nitem
+
+      call model_parameter_adjoint(error, .true., .false., cpcm, nitem)
+      if (allocated(error)) return
+      call model_parameter_adjoint(error, .false., .true., lpb, nitem)
+      if (allocated(error)) return
+      call model_parameter_adjoint(error, .true., .true., both, nitem)
+      if (allocated(error)) return
+      call check(error, nitem, 1, "the components' parameter items were not merged")
+      if (allocated(error)) return
+
+      call check(error, allocated(cpcm%dg_deps) .and. .not. allocated(cpcm%dg_dkappa) &
+         & .and. allocated(lpb%dg_deps) .and. allocated(lpb%dg_dkappa), &
+         & more="single-component parameter sets")
+      if (allocated(error)) return
+      call check(error, cpcm%dg_deps /= 0.0_wp .and. lpb%dg_deps /= 0.0_wp, &
+         & more="a single-component permittivity derivative vanishes")
+      if (allocated(error)) return
+      call check(error, allocated(both%dg_deps) .and. allocated(both%dg_dkappa), &
+         & more="the merged item lost a parameter")
+      if (allocated(error)) return
+      call check(error, both%dg_deps, cpcm%dg_deps + lpb%dg_deps, thr=1.0e-10_wp, rel=.true., &
+         & message="merged permittivity derivative is not the sum of the components")
+      if (allocated(error)) return
+      call check(error, both%dg_dkappa, lpb%dg_dkappa, thr=1.0e-10_wp, rel=.true., &
+         & message="merged kappa derivative is not that of LPB")
+      if (allocated(error)) return
+      call check(error,.not. (allocated(both%dg_deps_inf) .or. allocated(both%dg_dlambda) &
+         & .or. allocated(both%dg_deps_solute) .or. allocated(both%dg_dalpha) .or. allocated(both%dg_dbeta) &
+         & .or. allocated(both%dg_dgamma) .or. allocated(both%dg_dmu) .or. allocated(both%dg_dphi_static)), &
+         & more="the merged item carries a parameter neither component has")
+
+   end subroutine test_continuum_model_parameter_derivatives
+
+   !> Parameter item of one response pass of a CPCM and/or LPB model
+   !>
+   !> @param[out] error      Test failure
+   !> @param[in]  with_cpcm  Add a CPCM component
+   !> @param[in]  with_lpb   Add an LPB component
+   !> @param[out] item       Last parameter item of the pass
+   !> @param[out] nitem      Number of parameter items in the pass
+   subroutine model_parameter_adjoint(error, with_cpcm, with_lpb, item, nitem)
+
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Add a CPCM component
+      logical, intent(in) :: with_cpcm
+      !> Add an LPB component
+      logical, intent(in) :: with_lpb
+      !> Last parameter item of the pass
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Number of parameter items in the pass
+      integer, intent(out) :: nitem
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context owned here and borrowed by the cavity, model and components
+      type(moist_context_type), target :: ctx
+      !> Molecular structure
+      type(structure_type) :: mol
+      !> Model under test
+      type(model_continuum_type), target :: model
+      !> CPCM template
+      type(model_continuum_component_cpcm) :: cpcm
+      !> LPB template
+      type(model_continuum_component_lpb) :: lpb
+      !> Cavity template copied into the model
+      type(cavity_type_iswig) :: cavity
+      !> Radius model storage
+      type(radius_type_static) :: radius_model
+      !> Coupling minted by the model
+      type(coupling_type), pointer :: coupling
+      !> Response of the model
+      type(response_type) :: response
+      !> Dense solver with parameter derivatives
+      type(moist_pcm_parameters_type) :: param
+
+      real(wp), parameter :: epsilon = 32.0_wp
+      real(wp), parameter :: kappa = 0.2_wp
+      real(wp), parameter :: qat_vals(*) = [&
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
+
+      nitem = 0
+      param = moist_pcm_parameters_type(solver=solver_type%dense, parameter_derivatives=.true.)
+      call new_context(ctx, nthreads=0)
+      call get_structure(mol, "MB16-43", "01")
+      call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
+      if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
+      if (with_cpcm .and. .not. allocated(err)) then
+         call new_component_cpcm(cpcm, epsilon=epsilon, error=err, param=param, ctx=ctx)
+         if (.not. allocated(err)) call model%add_component(cpcm, err)
+      end if
+      if (with_lpb .and. .not. allocated(err)) then
+         call new_component_lpb(lpb, epsilon, kappa, err, param, ctx=ctx)
+         if (.not. allocated(err)) call model%add_component(lpb, err)
+      end if
+      if (.not. allocated(err)) call model%update(mol, err)
+      if (allocated(err)) then
+         call test_failed(error, "Model setup failed: "//err%message)
+         return
+      end if
+
+      call stage_model_point_charge_energy(error, model, qat_vals, mol, coupling)
+      if (allocated(error)) return
+      call model%prepare_response(coupling, err)
+      if (.not. allocated(err)) call model%get_response(coupling, response, err)
+      if (allocated(err)) then
+         call test_failed(error, "Model response failed: "//err%message)
+         return
+      end if
+      do while (response%next())
+         select type (found => response%item())
+         type is (parameter_adjoint_response_type)
+            item = found
+            nitem = nitem + 1
+         end select
+      end do
+      call model%release_coupling(coupling)
+
+   end subroutine model_parameter_adjoint
 
    !> Assemble an updated continuum model from CPCM and an optional PV component
    !>

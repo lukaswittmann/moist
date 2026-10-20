@@ -1,17 +1,23 @@
 !> Tests for the marching-cubes cavity
 module test_cavity_mc
+   use, intrinsic :: iso_c_binding, only: c_null_funptr, c_null_ptr
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
-   use moist_cavity_mc, only: moist_cavity_mc_parameters_type
+   use moist_cavity_mc, only: moist_cavity_mc_parameters_type, integrate_surface_mc
    use mctc_env, only: wp
-   use mctc_env_error, only: mctc_error => error_type
+   use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io_constants, only: pi
+   use mctc_io_convert, only: autoaa
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use moist_cavity, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
+   use moist_channels_coupling, only: coupling_type
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: check_moist_error, read_printout
 
    implicit none(type, external)
    private
@@ -82,6 +88,12 @@ module test_cavity_mc
    !> Relative tolerance of the shifted/unshifted area and volume ratios
    real(wp), parameter :: TRANSLATION_REL_THR = 1.0e-11_wp
 
+   !> SvdW level set whose evaluation always fails
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: failing_lsf_type
+   contains
+      procedure :: prepare => failing_prepare
+   end type failing_lsf_type
+
 contains
 
    !> Collect all exported unit tests
@@ -100,6 +112,14 @@ contains
          & new_unittest("no_gradient", test_gradient_unavailable), &
          & new_unittest("rejects_optional_geometry", test_rejects_optional_geometry), &
          & new_unittest("rejects_bad_spacing", test_rejects_bad_spacing), &
+         & new_unittest("mesh_export", test_mesh_export), &
+         & new_unittest("single_exports", test_single_exports), &
+         & new_unittest("progress_output", test_progress_output), &
+         & new_unittest("cfc_sphere", test_cfc_sphere), &
+         & new_unittest("deferred_callback_citation", test_callback_citation), &
+         & new_unittest("build_keeps_totals", test_build_keeps_totals), &
+         & new_unittest("bare_kernel_defaults", test_bare_kernel), &
+         & new_unittest("bad_lsf_evaluation", test_bad_lsf_evaluation, should_fail=.true.), &
          & new_unittest(case_to_string(cases(1)), test_case_001), &
          & new_unittest(case_to_string(cases(2)), test_case_002), &
          & new_unittest(case_to_string(cases(3)), test_case_003), &
@@ -585,6 +605,373 @@ contains
          & more="A negative marching-cubes spacing must be rejected")
 
    end subroutine test_rejects_bad_spacing
+
+   !> Exported OBJ and PQR meshes hold exactly the integrated triangles
+   subroutine test_mesh_export(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Owned export paths
+      character(len=*), parameter :: obj_path = "moist-test-cavity-mc-export.obj", &
+         & pqr_path = "moist-test-cavity-mc-export.pqr"
+      type(structure_type) :: mol
+      type(cavity_type_mc), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      character(len=128) :: line
+      real(wp) :: vertex(3, 3), obj_area, header_count
+      integer :: unit, stat, nv, nf, nrecord
+      real(wp) :: xyz(3, 1)
+
+      xyz = 0.0_wp
+      ! Over 10000 triangles, beyond the initial shared buffer
+      call build_custom_cavity(error, ctx, mol, cav, [4.0_wp], xyz, spacing=0.15_wp)
+      if (allocated(error)) return
+      cav%param%obj_file = obj_path
+      cav%param%pqr_file = pqr_path
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      nv = 0
+      nf = 0
+      obj_area = 0.0_wp
+      header_count = 0.0_wp
+      open (newunit=unit, file=obj_path, status="old", action="read", iostat=stat)
+      call check(error, stat, 0, more="OBJ file was not written")
+      if (allocated(error)) return
+      do
+         read (unit, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         select case (line(1:2))
+         case ("v ")
+            nv = nv + 1
+            read (line(2:), *) vertex(:, mod(nv - 1, 3) + 1)
+            if (mod(nv, 3) == 0) obj_area = obj_area + 0.5_wp*norm2(cross(vertex(:, 2) - vertex(:, 1), &
+               & vertex(:, 3) - vertex(:, 1)))
+         case ("f ")
+            nf = nf + 1
+         case ("# ")
+            if (index(line, "triangles") > 0) read (line(2:), *) header_count
+         case default
+            continue
+         end select
+      end do
+      close (unit, status="delete")
+      nrecord = 0
+      open (newunit=unit, file=pqr_path, status="old", action="read", iostat=stat)
+      call check(error, stat, 0, more="PQR file was not written")
+      if (allocated(error)) return
+      do
+         read (unit, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (line(1:6) == "HETATM") nrecord = nrecord + 1
+      end do
+      close (unit, status="delete")
+
+      call check(error, nf > 10000, more="Export fixture does not exceed the initial triangle buffer")
+      if (allocated(error)) return
+      call check(error, nv == 3*nf .and. nrecord == nf .and. nint(header_count) == nf, &
+         & more="OBJ vertices, faces and PQR records disagree")
+      if (allocated(error)) return
+      call check(error, obj_area/autoaa**2, cav%total_area, rel=.true., thr=1.0e-8_wp, &
+         & more="Exported triangles do not carry the integrated area")
+   end subroutine test_mesh_export
+
+   !> Single exports write only their own file; unopenable paths keep the totals
+   subroutine test_single_exports(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Owned export paths
+      character(len=*), parameter :: obj_path = "moist-test-cavity-mc-single.obj", &
+         & pqr_path = "moist-test-cavity-mc-single.pqr", &
+         & missing_path = "moist-test-cavity-mc-missing-directory/mesh.obj", &
+         & missing_pqr = "moist-test-cavity-mc-missing-directory/mesh.pqr"
+      type(structure_type) :: mol
+      type(cavity_type_mc), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      real(wp) :: xyz(3, 1), reference
+      logical :: obj_exists, pqr_exists
+      integer :: unit, stat
+
+      xyz = 0.0_wp
+      call build_custom_cavity(error, ctx, mol, cav, [2.0_wp], xyz, spacing=0.4_wp)
+      if (allocated(error)) return
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      reference = cav%total_area
+
+      cav%param%obj_file = obj_path
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      inquire (file=obj_path, exist=obj_exists)
+      inquire (file=pqr_path, exist=pqr_exists)
+      open (newunit=unit, file=obj_path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete")
+      call check(error, obj_exists .and. .not. pqr_exists, more="OBJ-only export wrote the wrong files")
+      if (allocated(error)) return
+
+      deallocate (cav%param%obj_file)
+      cav%param%pqr_file = pqr_path
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      inquire (file=obj_path, exist=obj_exists)
+      inquire (file=pqr_path, exist=pqr_exists)
+      open (newunit=unit, file=pqr_path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete")
+      call check(error, pqr_exists .and. .not. obj_exists, more="PQR-only export wrote the wrong files")
+      if (allocated(error)) return
+
+      cav%param%pqr_file = missing_pqr
+      cav%param%obj_file = missing_path
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      inquire (file=missing_path, exist=obj_exists)
+      inquire (file=missing_pqr, exist=pqr_exists)
+      call check(error,.not. (obj_exists .or. pqr_exists), more="Export into a missing directory created a file")
+      if (allocated(error)) return
+      call check(error, cav%total_area, reference, thr=0.0_wp, more="Mesh export changed the integrated area")
+   end subroutine test_single_exports
+
+   !> Solver-summary verbosity prints progress without changing the totals
+   subroutine test_progress_output(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      real(wp) :: xyz(3, 1), reference(2)
+
+      xyz = 0.0_wp
+      call build_custom_cavity(error, ctx, mol, cav, [2.0_wp], xyz, spacing=0.4_wp)
+      if (allocated(error)) return
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      reference = [cav%total_area, cav%total_volume]
+      call new_context(ctx, nthreads=1, verbosity=4)
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cav%total_area, reference(1), rel=.true., thr=1.0e-12_wp)
+      if (allocated(error)) return
+      call check(error, cav%total_volume, reference(2), rel=.true., thr=1.0e-12_wp)
+   end subroutine test_progress_output
+
+   !> An isolated CFC atom integrates to its sphere and cites the CFC work
+   subroutine test_cfc_sphere(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc) :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      type(moist_cavity_drop_lsf_cfc_type) :: cfc
+      class(radius_type), allocatable :: radius_model
+      character(len=256) :: lines(256)
+      integer :: unit, nline, i
+      logical :: cited
+
+      call new_context(ctx, nthreads=0, verbosity=1)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_radii_custom_atoms([SPHERE_RADIUS], radius_model, cavity_error)
+      call cfc%new()
+      if (.not. allocated(cavity_error)) call new_cavity_mc(cav, radius_model, cfc, cavity_error, &
+         & moist_cavity_mc_parameters_type(spacing=MC_SPACING), ctx)
+      if (.not. allocated(cavity_error)) call cav%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cav%total_area/(4.0_wp*pi*SPHERE_RADIUS**2), 1.0_wp, thr=REL_THR, &
+         & more="Single CFC atom area does not match the sphere")
+      if (allocated(error)) return
+      call check(error, cav%total_volume/(4.0_wp/3.0_wp*pi*SPHERE_RADIUS**3), 1.0_wp, thr=REL_THR, &
+         & more="Single CFC atom volume does not match the sphere")
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call ctx%print_citations(unit)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      cited = .false.
+      do i = 1, nline
+         cited = cited .or. index(lines(i), "Klamt") > 0
+      end do
+      call check(error, cited, more="Marching cubes on a CFC level set does not cite CFC")
+   end subroutine test_cfc_sphere
+
+   !> A density level set defers the totals and cites the isodensity cavity at update
+   subroutine test_callback_citation(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc) :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho
+      class(radius_type), allocatable :: radius_model
+      character(len=256) :: lines(256)
+      integer :: unit, nline, i
+      logical :: cited
+
+      call new_context(ctx, nthreads=0, verbosity=1)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_radii_custom_atoms([SPHERE_RADIUS], radius_model, cavity_error)
+      ! The host callback is never evaluated before the build phase
+      call rho%new(c_null_funptr, c_null_ptr)
+      if (.not. allocated(cavity_error)) call new_cavity_mc(cav, radius_model, rho, cavity_error, ctx=ctx)
+      if (.not. allocated(cavity_error)) call cav%update(mol, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cav%is_updated() .and. .not. cav%is_built() .and. .not. allocated(cav%total_area), &
+         & more="Marching cubes integrated a density surface before the build phase")
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call ctx%print_citations(unit)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      cited = .false.
+      do i = 1, nline
+         cited = cited .or. index(lines(i), "Isodensity Cavity") > 0
+      end do
+      call check(error, cited, more="Marching cubes on a density level set does not cite the isodensity cavity")
+   end subroutine test_callback_citation
+
+   !> The build phase of a geometric level set keeps the totals of the update
+   subroutine test_build_keeps_totals(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc), allocatable, target :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      type(coupling_type), pointer :: coupling
+      real(wp) :: xyz(3, 1), reference(2)
+
+      xyz = 0.0_wp
+      call build_custom_cavity(error, ctx, mol, cav, [2.0_wp], xyz, spacing=0.4_wp)
+      if (allocated(error)) return
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      reference = [cav%total_area, cav%total_volume]
+      call cav%new_coupling(coupling, cavity_error)
+      if (.not. allocated(cavity_error)) then
+         call cav%prepare_build(coupling, cavity_error)
+         if (.not. allocated(cavity_error)) call cav%build(coupling, cavity_error)
+         call cav%release_coupling(coupling)
+      end if
+      call check_moist_error(error, cavity_error, "build")
+      if (allocated(error)) return
+      call check(error, cav%is_built(), more="Build of a geometric level set left no surface")
+      if (allocated(error)) return
+      call check(error, cav%total_area, reference(1), thr=0.0_wp)
+      if (allocated(error)) return
+      call check(error, cav%total_volume, reference(2), thr=0.0_wp)
+   end subroutine test_build_keeps_totals
+
+   !> The bare kernel with its defaults matches the cavity at the default spacing
+   subroutine test_bare_kernel(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      real(wp) :: xyz(3, 1), area, volume
+
+      xyz = 0.0_wp
+      call build_custom_cavity(error, ctx, mol, cav, [2.0_wp], xyz, spacing=DEFAULT_SPACING)
+      if (allocated(error)) return
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call lsf%new()
+      call lsf%update(mol, [2.0_wp])
+      call integrate_surface_mc(lsf, xyz, area, volume, cavity_error)
+      call check_moist_error(error, cavity_error, "bare kernel")
+      if (allocated(error)) return
+      call check(error, area, cav%total_area, rel=.true., thr=1.0e-12_wp)
+      if (allocated(error)) return
+      call check(error, volume, cav%total_volume, rel=.true., thr=1.0e-12_wp)
+   end subroutine test_bare_kernel
+
+   !> Propagate a level-set evaluation failure from the vertex grid
+   subroutine test_bad_lsf_evaluation(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_mc) :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+      type(failing_lsf_type) :: lsf
+      class(radius_type), allocatable :: radius_model
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_radii_custom_atoms([SPHERE_RADIUS], radius_model, cavity_error)
+      call lsf%new()
+      if (.not. allocated(cavity_error)) call new_cavity_mc(cav, radius_model, lsf, cavity_error, ctx=ctx)
+      if (.not. allocated(cavity_error)) call cav%update(mol, cavity_error)
+      call check_moist_error(error, cavity_error)
+   end subroutine test_bad_lsf_evaluation
+
+   !> Reject every evaluation point
+   !>
+   !> @param[in,out] self Level set
+   !> @param[in] point Evaluation point (3), bohr
+   !> @param[out] error Injected failure
+   subroutine failing_prepare(self, point, error)
+      !> Level set
+      class(failing_lsf_type), intent(inout) :: self
+      !> Evaluation point
+      real(wp), intent(in) :: point(3)
+      !> Injected failure
+      type(mctc_error), allocatable, intent(out) :: error
+
+      call fatal_error(error, "Injected level-set failure")
+   end subroutine failing_prepare
+
+   !> Three-dimensional vector product
+   !>
+   !> @param[in] a First vector
+   !> @param[in] b Second vector
+   pure function cross(a, b) result(c)
+      !> First vector
+      real(wp), intent(in) :: a(3)
+      !> Second vector
+      real(wp), intent(in) :: b(3)
+      !> Vector product
+      real(wp) :: c(3)
+
+      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+   end function cross
 
    !> Integrate one molecular case and compare against its fine-grid reference
    !>

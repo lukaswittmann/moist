@@ -7,11 +7,14 @@ module test_parameters
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
                     moist_cavity_numsa_parameters_type, moist_cavity_mc_parameters_type, &
                     moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
-                    moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
+                    moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type, &
+                    moist_cavity_mt_parameters_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
+   use moist_cavity_mt, only: cavity_type_mt, new_cavity_mt
+   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
@@ -294,6 +297,8 @@ contains
       type(cavity_type_drop) :: drop
       type(cavity_type_iswig) :: iswig
       type(cavity_type_numsa) :: numsa
+      type(cavity_type_mt) :: mt
+      type(cavity_type_mc) :: mc
       !> Components
       type(model_continuum_component_cpcm) :: pcm
       type(model_continuum_component_gostshyp) :: gostshyp
@@ -339,6 +344,22 @@ contains
       if (allocated(error)) return
       call require_cavity(numsa, [character(len=32) :: "offset", "smoothing", "tolsesp"], error, &
          normal=[character(len=32) :: "probe"])
+      if (allocated(error)) return
+
+      call new_cavity_mt(mt, default_cpcm_radii(), svdw, err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(mt, [character(len=32) :: "area_tolerance", "w_0ls_from", "w_0ls_to", "w_0ls_p", &
+         "w_0ls_a", "weight_cutoff"], error, normal=[character(len=32) :: "spacing", "target_area", "gaussian_scale"])
+      if (allocated(error)) return
+
+      ! Unset export paths print nothing
+      call new_cavity_mc(mc, default_cpcm_radii(), svdw, err, &
+         moist_cavity_mc_parameters_type(obj_file="mesh.obj", pqr_file="mesh.pqr"), ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(mc, [character(len=32) :: "obj_file", "pqr_file"], error, &
+         normal=[character(len=32) :: "spacing"])
       if (allocated(error)) return
 
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
@@ -705,21 +726,21 @@ contains
    subroutine collect_parameters(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("constructors", test_constructors), &
-         new_unittest("file-roundtrip", test_roundtrip), &
-         new_unittest("copies-and-errors", test_copies_and_errors), &
-         new_unittest("vector-and-string", test_vector_and_string), &
-         new_unittest("print-levels", test_print_levels), &
-         new_unittest("print-detailed", test_print_detailed), &
-         new_unittest("drop-load-file", test_drop_load_file), &
+         new_unittest("file_roundtrip", test_roundtrip), &
+         new_unittest("copies_and_errors", test_copies_and_errors), &
+         new_unittest("vector_and_string", test_vector_and_string), &
+         new_unittest("print_levels", test_print_levels), &
+         new_unittest("print_detailed", test_print_detailed), &
+         new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
-         new_unittest("pcm-physical-inputs", test_pcm_physical_inputs), &
-         new_unittest("invalid-fields", test_invalid_fields), &
-         new_unittest("file-formats", test_file_formats), &
-         new_unittest("drop-contracts", test_drop_contracts), &
-         new_unittest("configuration-fields", test_configuration_fields), &
-         new_unittest("parameter-validation", test_parameter_validation), &
-         new_unittest("optional-overrides", test_optional_overrides)]
+         new_unittest("pcm_physical_inputs", test_pcm_physical_inputs), &
+         new_unittest("invalid_fields", test_invalid_fields), &
+         new_unittest("file_formats", test_file_formats), &
+         new_unittest("drop_contracts", test_drop_contracts), &
+         new_unittest("configuration_fields", test_configuration_fields), &
+         new_unittest("parameter_validation", test_parameter_validation), &
+         new_unittest("optional_overrides", test_optional_overrides)]
    end subroutine collect_parameters
 
    !> Check copied settings, derived values, and resetting to defaults
@@ -1195,6 +1216,7 @@ contains
       type(moist_cavity_iswig_parameters_type) :: iswig
       type(moist_cavity_numsa_parameters_type) :: numsa
       type(moist_cavity_mc_parameters_type) :: mc
+      type(moist_cavity_mt_parameters_type) :: mt
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
@@ -1252,6 +1274,14 @@ contains
       call check(error, allocated(mc%obj_file) .and. allocated(mc%pqr_file))
       if (allocated(error)) return
       call check(error, mc%obj_file == "one.obj" .and. mc%pqr_file == "two.pqr")
+      if (allocated(error)) return
+      call configured(mt, '{"spacing":0.3,"target_area":0.5,"area_tolerance":0.2,"gaussian_scale":4.5,'// &
+                      '"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,"weight_cutoff":1e-6}', error)
+      if (allocated(error)) return
+      call check(error, maxval(abs([mt%spacing, mt%target_area, mt%area_tolerance, mt%gaussian_scale, &
+                                    mt%w_0ls_from, mt%w_0ls_to, mt%w_0ls_p, mt%w_0ls_a, mt%weight_cutoff] - &
+                                   [0.3_wp, 0.5_wp, 0.2_wp, 4.5_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 1.0e-6_wp])), &
+                 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call configured(svdw, '{"blend_k":7,"blend_1b":0.6,"blend_2b":0.4,"blend_3b":2}', error)
       if (allocated(error)) return
@@ -1391,6 +1421,7 @@ contains
       !> Parameter classes with numerical validation
       type(moist_cavity_drop_parameters_type) :: drop
       type(moist_cavity_mc_parameters_type) :: mc
+      type(moist_cavity_mt_parameters_type) :: mt
       type(moist_pcm_parameters_type) :: pcm
       !> Invalid solver cases
       integer :: invalid
@@ -1421,6 +1452,8 @@ contains
       call read_bad(drop, '{"tolerance":0.0}', error)
       if (allocated(error)) return
       call read_bad(mc, '{"spacing":0.0}', error)
+      if (allocated(error)) return
+      call read_bad(mt, '{"area_tolerance":1.5}', error)
       if (allocated(error)) return
       call read_bad(pcm, '{"solver":0}', error)
 

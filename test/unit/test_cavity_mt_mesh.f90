@@ -8,6 +8,7 @@ module test_cavity_mt_mesh
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_mt_mesh, only: mt_mesh_type, build_mt_mesh
+   use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
    public :: collect_cavity_mt_mesh
@@ -34,14 +35,20 @@ contains
       !> Exported tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-                  new_unittest("sphere-convergence", test_sphere_convergence), &
-                  new_unittest("disconnected-components", test_disconnected), &
-                  new_unittest("exact-grid-zero", test_exact_zero), &
-                  new_unittest("enclosed-void", test_void), &
-                  new_unittest("thread-determinism", test_threads), &
-                  new_unittest("exterior-bound-expansion", test_bounds), &
-                  new_unittest("disconnected-cfc-underflow", test_cfc_underflow), &
-                  new_unittest("invalid-input-and-evaluation", test_errors)]
+                  new_unittest("sphere_convergence", test_sphere_convergence), &
+                  new_unittest("disconnected_components", test_disconnected), &
+                  new_unittest("exact_grid_zero", test_exact_zero), &
+                  new_unittest("enclosed_void", test_void), &
+                  new_unittest("thread_determinism", test_threads), &
+                  new_unittest("exterior_bound_expansion", test_bounds), &
+                  new_unittest("disconnected_cfc_underflow", test_cfc_underflow), &
+                  new_unittest("invalid_input_and_evaluation", test_errors), &
+                  new_unittest("default_thread_count", test_default_threads), &
+                  new_unittest("bad_no_atoms", test_bad_no_atoms, should_fail=.true.), &
+                  new_unittest("bad_unresolved_surface", test_bad_unresolved, should_fail=.true.), &
+                  new_unittest("bad_nonfinite_coordinates", test_bad_coordinates, should_fail=.true.), &
+                  new_unittest("bad_radii_count", test_bad_radii_count, should_fail=.true.), &
+                  new_unittest("bad_zero_radius", test_bad_radius, should_fail=.true.)]
    end subroutine collect_cavity_mt_mesh
 
    !> Verify decreasing planar area and volume errors under lattice refinement
@@ -258,7 +265,104 @@ contains
       call check(error, allocated(mesh_error), "LSF failure must propagate")
    end subroutine test_errors
 
-   !> Check reciprocal adjacency, positive areas and connected components
+   !> The default sampling team gives the serial mesh
+   subroutine test_default_threads(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: serial, team
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz(:, 1) = [1.0_wp, 2.0_wp, -3.0_wp]
+      call init_analytic(lsf, xyz, [1.0_wp])
+      call build_mt_mesh(lsf, xyz, 0.25_wp, serial, mesh_error, nthreads=1)
+      call require_mesh(mesh_error, error)
+      if (allocated(error)) return
+      call build_mt_mesh(lsf, xyz, 0.25_wp, team, mesh_error)
+      call require_mesh(mesh_error, error)
+      if (allocated(error)) return
+      call check(error, size(serial%triangles, 2) == size(team%triangles, 2) .and. &
+                 size(serial%vertices, 2) == size(team%vertices, 2), "default team changes the mesh size")
+      if (allocated(error)) return
+      call check(error, all(serial%triangles == team%triangles), "default team changes the topology")
+      if (allocated(error)) return
+      call check(error, maxval(abs(serial%vertices - team%vertices)), 0.0_wp, thr=0.0_wp)
+   end subroutine test_default_threads
+
+   !> Reject an empty coordinate set
+   subroutine test_bad_no_atoms(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: mesh
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz = 0.0_wp
+      call init_analytic(lsf, xyz, [1.0_wp])
+      call build_mt_mesh(lsf, xyz(:, 1:0), 0.25_wp, mesh, mesh_error, nthreads=1)
+      call check_moist_error(error, mesh_error)
+   end subroutine test_bad_no_atoms
+
+   !> Reject a sphere that falls between all lattice nodes
+   subroutine test_bad_unresolved(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: mesh
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz = 0.0_wp
+      ! The nearest lattice node lies 0.035 bohr from the center
+      call init_analytic(lsf, xyz, [0.01_wp])
+      call build_mt_mesh(lsf, xyz, 0.5_wp, mesh, mesh_error, nthreads=1)
+      call check_moist_error(error, mesh_error)
+   end subroutine test_bad_unresolved
+
+   !> Reject nonfinite atomic coordinates
+   subroutine test_bad_coordinates(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: mesh
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz = 0.0_wp
+      call init_analytic(lsf, xyz, [1.0_wp])
+      xyz(2, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
+      call build_mt_mesh(lsf, xyz, 0.25_wp, mesh, mesh_error, nthreads=1)
+      call check_moist_error(error, mesh_error)
+   end subroutine test_bad_coordinates
+
+   !> Reject coordinates of more atoms than the level set was updated for
+   subroutine test_bad_radii_count(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: mesh
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 2)
+      xyz = 0.0_wp
+      xyz(1, 2) = 3.0_wp
+      call init_analytic(lsf, xyz(:, 1:1), [1.0_wp])
+      call build_mt_mesh(lsf, xyz, 0.25_wp, mesh, mesh_error, nthreads=1)
+      call check_moist_error(error, mesh_error)
+   end subroutine test_bad_radii_count
+
+   !> Reject a level set updated with a zero radius
+   subroutine test_bad_radius(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: mesh
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz = 0.0_wp
+      call init_analytic(lsf, xyz, [0.0_wp])
+      call build_mt_mesh(lsf, xyz, 0.25_wp, mesh, mesh_error, nthreads=1)
+      call check_moist_error(error, mesh_error)
+   end subroutine test_bad_radius
+
+   !> Check adjacency, face areas, components and the genus-zero Euler characteristic
    !>
    !> @param[in] mesh Surface geometry
    !> @param[in] expected Expected boundary components
@@ -314,6 +418,9 @@ contains
          end do
       end do
       call check(error, components, expected, "wrong boundary component count")
+      if (allocated(error)) return
+      ! Closed meshes have E = 3F/2, so V - F/2 = 2 per sphere
+      call check(error, size(mesh%vertices, 2) - size(mesh%area)/2, 2*expected, "Euler characteristic")
    end subroutine check_closed
 
    !> Bind an analytic fixture through the production LSF update API

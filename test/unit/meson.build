@@ -82,6 +82,7 @@ tests = [
   'model_component_pcm_references',
   'model_component_pcm_regression',
   'model_component_pcm_vacuum',
+  'model_component_pcm_kernel_variants',
   'model_component_gostshyp',
   'model_component_pv',
   'model_continuum',
