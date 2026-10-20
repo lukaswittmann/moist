@@ -8,10 +8,10 @@ module moist_version
    public :: get_moist_version
 
    !> String representation of the moist version
-   character(len=*), parameter :: moist_version_string = "1.0.0-alpha.1"
+   character(len=*), parameter :: moist_version_string = "1.1.0-alpha.1"
 
    !> Numeric representation of the moist version
-   integer, parameter :: moist_version_compact(3) = [1, 0, 0]
+   integer, parameter :: moist_version_compact(3) = [1, 1, 0]
 
 contains
 
