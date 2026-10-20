@@ -65,6 +65,9 @@ The public 3D constructors, re-exported by ``moist_math_grid``, are:
 Constructors configure the grid; call ``grid%update(mol, error)`` before using its points, weights, or transforms.
 Changed settings require a new ``update`` call and ``destroy`` releases geometry while retaining the configuration.
 
+``grid%w(i)`` is the final volume integration weight at point ``i``, in bohr cubed.
+Integration, Fourier transforms, and model responses use this same array directly.
+
 Cartesian grids default to 128 points per axis and a spacing of 0.6 bohr, with weights ``dr**3``.
 The periodic box follows the nuclear centroid; every nucleus must remain at least ``margin`` (default 10 bohr) from its faces.
 Molecular grids accept atomic recipes, partition settings, pruning thresholds, and reciprocal-grid settings.

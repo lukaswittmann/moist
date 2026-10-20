@@ -24,7 +24,7 @@
 !>   request carries as an input (`nbasis, nbasis`)
 !> - the build phase carries what the host pushes before the domain is built
 !>   (density matrix, nuclear charges); its answers survive the energy staging
-!>   and stay until the next `prepare_build` clears the coupling
+!>   and stay until the owner invalidates them, e.g. on update or `prepare_build`
 module moist_channels_coupling
    use, intrinsic :: iso_fortran_env, only: int64
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -213,8 +213,8 @@ module moist_channels_coupling
    !>
    !> Outputs: q(natom), mu(3, natom), theta(3, 3, natom)
    !>
-   !> - used by the 3D MOZ "multipoles" source, which requires all three
-   !>   outputs; its `q` are also the long-range tail charges
+   !> - interface for host point multipoles; the current MOZ multipole term
+   !>   is a stub that refuses update before declaring requests
    !> - every output runs over the solute atoms, not the grid
    type, extends(coupling_request_type) :: atomic_multipole_request_type
    contains
@@ -226,8 +226,8 @@ module moist_channels_coupling
    !>
    !> Output: q(natom), point monopoles without a width
    !>
-   !> - used by the MOZ "qat" source and as the long-range (Ng split) tail
-   !>   charges of EC
+   !> - used by MOZ monopole terms for the full point-charge field and Ng tails
+   !> - EC terms instead fit tail charges from the host point-potential request
    !> - runs over the solute atoms, not the grid
    type, extends(coupling_request_type) :: atomic_charge_request_type
    contains
@@ -1773,12 +1773,12 @@ contains
       call self%store(i, j, reshape(values, [size(values)]), error, shape(values))
    end subroutine coupling_answer_3
 
-   !> Answer one output of the current request from a flat C-order buffer
+   !> Answer one output from a flat C buffer in Fortran array-element order
    !>
-   !> - `values` holds rows * n numbers in the declared (rows, n) order, with n
-   !>   the point count, the atom count or ngrid * natom (points fastest) of
-   !>   the coupling by the output's extent kind; the caller's buffer is
-   !>   trusted to be that long, as a pointer cannot say otherwise
+   !> - `values` holds rows * n numbers, components (rows) varying fastest
+   !> - n by the output's extent kind: point count, atom count or
+   !>   ngrid * natom (points fastest) of the coupling
+   !> - the caller's buffer is trusted to be that long, as a pointer cannot say otherwise
    !> - nothing is read when the snapshot did not give that count
    !> - assumed size on purpose: the rows of an output are private here, so
    !>   the C layer cannot build the (rows, n) view itself

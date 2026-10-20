@@ -1,0 +1,38 @@
+# moist model rism3d examples/rism/water.xyz -p examples/rism/run3d-molecular.toml
+closure = "KH"
+correction = "PC+"
+
+[system]
+solvent = "water"
+charge = 0.0
+
+[potential]
+lj = "cspce"
+charges = "cspce"
+
+[grid]
+kind = "molecular"
+nrad = 50
+angular_degree = 17
+rmax = 10.0  # bohr
+becke_k = 3
+dr = 0.6  # bohr
+kbuffer = 2.0  # bohr
+nufft_tolerance = 1e-10
+
+[convergence]
+tolerance = 1e-7
+
+[solver]
+name = "JFNK"
+
+[solvent]
+theory = "RISM"
+closure = "KH"
+
+[solvent.convergence]
+tolerance = 1e-11
+
+[solvent.potential]
+lj = "cspce"
+charges = "cspce"

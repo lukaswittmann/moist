@@ -40,7 +40,7 @@ module test_model_continuum
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: build_test_cavity, stage_model_point_charge_energy, &
       & fill_missing_with_zeros, fill_point_charge_field, copy_potential_adjoint, &
-      & fill_point_charge_potential, read_printout, printed_entry
+      & fill_point_charge_potential
 
    implicit none(type, external)
    private

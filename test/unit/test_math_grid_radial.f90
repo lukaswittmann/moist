@@ -81,6 +81,7 @@ contains
          new_unittest("mapping_jacobian_fd", test_mapping_jacobian), &
          new_unittest("recipe_cutoffs", test_recipe_cutoffs), &
          new_unittest("recipe_volume_integrals", test_recipe_integrals), &
+         new_unittest("compensated_integrals", test_compensated_integrals), &
          new_unittest("recipe_element_dependence", test_recipe_element), &
          new_unittest("uniform_pair_contract", test_uniform_pair) &
          ]
@@ -111,6 +112,24 @@ contains
 
       val = 1.0_wp + 0.0_wp*r
    end function one_radial
+
+   !> Large cancelling values around a small middle contribution
+   !>
+   !> @param[in] r  radius (bohr)
+   pure function cancelling_radial(r) result(val)
+      !> Radius (bohr)
+      real(wp), intent(in) :: r
+      !> Sample value
+      real(wp) :: val
+
+      if (r < 1.5_wp) then
+         val = scale(1.0_wp, 54)
+      else if (r > 3.0_wp) then
+         val = -scale(1.0_wp, 54)
+      else
+         val = 1.0_wp
+      end if
+   end function cancelling_radial
 
    !> Antiderivative of r^2 exp(-r): -exp(-r)*(r^2 + 2r + 2)
    !>
@@ -673,6 +692,40 @@ contains
       ref = 4.0_wp*pi*125.0_wp/3.0_wp
       call check(error, abs(res - ref) <= 1.0e-13_wp*ref, "Gauss-Legendre + HandyMod: ball volume")
    end subroutine test_recipe_integrals
+
+   !> Retain a small volume contribution between cancelling large terms
+   !>
+   !> @param[out] error  test failure
+   subroutine test_compensated_integrals(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_math_grid_radial_type) :: grid
+      type(mctc_error), allocatable :: merr
+      real(wp) :: values(3), field_res, analytic_res
+      integer :: order, i
+
+      grid%npts = 3
+      do order = 1, 2
+         grid%r = [1.0_wp, 2.0_wp, 4.0_wp]
+         if (order == 2) grid%r = grid%r(3:1:-1)
+         grid%w = 1.0_wp/(4.0_wp*pi*grid%r**2)
+         do i = 1, grid%npts
+            values(i) = cancelling_radial(grid%r(i))
+         end do
+         call grid%integrate_field(values, field_res, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         call grid%integrate(cancelling_radial, analytic_res)
+         call check(error, abs(field_res - 1.0_wp) <= two_ulp, &
+            & "Radial field integral lost the small contribution during cancellation")
+         if (allocated(error)) return
+         call check(error, abs(analytic_res - 1.0_wp) <= two_ulp, &
+            & "Radial analytic integral lost the small contribution during cancellation")
+         if (allocated(error)) return
+      end do
+   end subroutine test_compensated_integrals
 
    !> One recipe gives element-scaled grids; a copied recipe is independent
    subroutine test_recipe_element(error)

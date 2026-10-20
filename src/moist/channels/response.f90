@@ -13,7 +13,7 @@
 !> - every item also declares its arrays through `list_fields`, so they can be
 !>   listed and read by name without selecting on the type
 !>
-!> Within one model call the items are accumulators over components
+!> Within one model call the items accumulate over components or potential terms
 !>
 !> - `response_accumulate` finds the item of the same dynamic type and adds to
 !>   it, or appends a copy when there is none yet
@@ -118,7 +118,7 @@ module moist_channels_response
    !*                              Concrete items                                    *!
    !* ============================================================================== *!
 
-   !> Weights conjugate to the host potential on the cavity grid, `dE/dphi_i`
+   !> Weights conjugate to the host potential on the evaluation grid, `dE/dphi_i`
    !>
    !> The host contracts them with its own potential integrals,
    !> `F_uv += sum_i w_phi(i) V_uv(r_i)`, and with their basis-center
@@ -127,6 +127,7 @@ module moist_channels_response
    !> - for a stationary PCM (CPCM, COSMO) the weights are the induced surface
    !>   charges `q_i`; for a non-symmetric response matrix (IEF-PCM, SS(V)PE)
    !>   they are the symmetrized adjoint, which is not the apparent charge
+   !> - MOZ EC terms include the direct field and fitted-tail-charge adjoints here
    !> - any component whose energy depends on the potential accumulates here,
    !>   so the sum is the adjoint of the model energy, never a charge of one
    !>   component

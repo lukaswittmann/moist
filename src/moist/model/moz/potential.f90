@@ -3,8 +3,8 @@
 !> Owned by the solvent (`solvent%potential`) and by the 1D and 3D models
 !> (`model%potential`); one type serves both sides:
 !>
-!>    call solvent%potential%add(lj_spce, error)
-!>    call solvent%potential%add(coulomb_spce, error)
+!>    call solvent%potential%add(lj_cspce, error)
+!>    call solvent%potential%add(coulomb_cspce, error)
 !>    call model%potential%add(lj_gaff, error)
 !>    call model%potential%add(lj_uff, error)
 !>
@@ -27,14 +27,15 @@
 !> - Re-exports every term type and preset
 !>   - Typed Lennard-Jones: `lj_gaff`, `lj_oplsaa`
 !>   - Element Lennard-Jones: `lj_uff`, `lj_dreiding`, `lj_tm`
-!>   - Water-site Lennard-Jones: `lj_spce`
-!>   - Solvent charges: `coulomb_<model>_<environment>`, `coulomb_spce`
+!>   - Water-site Lennard-Jones: `lj_spce`, `lj_cspce`
+!>   - Solvent charges: `coulomb_<model>_<environment>`, `coulomb_spce`, `coulomb_cspce`
 !>   - Table charge models: hirshfeld, resp, mbis, chelpg
 !>   - Table environments: gas, solvent, conductor
 !>   - Solvent multipoles: `multipoles_mbis_<environment>`, stub for 6D MOZ
 !>   - User-data constructors: `new_fixed_charges`, `new_custom_lj`
 !>   - Solute electrostatics: `monopole_type`, `multipole_type`, `ec_charges_type`
 module moist_model_moz_potential
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, error_type
    use mctc_io, only: structure_type
    use moist_channels_coupling, only: coupling_type
@@ -47,7 +48,7 @@ module moist_model_moz_potential
    use moist_model_moz_potential_lj_base, only: lj_12_6_type, lj_mixing_lorentz_berthelot, lj_mixing_geometric
    use moist_model_moz_potential_lj_typed, only: lj_typed_type, lj_gaff, lj_oplsaa
    use moist_model_moz_potential_lj_element, only: lj_element_type, lj_uff, lj_dreiding, lj_tm
-   use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce
+   use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce, lj_cspce
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
@@ -56,7 +57,8 @@ module moist_model_moz_potential
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_model_charges_type, &
       & solvent_multipoles_type, coulomb_hirshfeld_gas, coulomb_hirshfeld_solvent, coulomb_hirshfeld_conductor, &
       & coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor, coulomb_mbis_gas, coulomb_mbis_solvent, &
-      & coulomb_mbis_conductor, coulomb_chelpg_gas, coulomb_chelpg_solvent, coulomb_chelpg_conductor, coulomb_spce, &
+      & coulomb_mbis_conductor, coulomb_chelpg_gas, coulomb_chelpg_solvent, coulomb_chelpg_conductor, &
+      & coulomb_spce, coulomb_cspce, &
       & multipoles_mbis_gas, multipoles_mbis_solvent, multipoles_mbis_conductor
    implicit none(type, external)
    private
@@ -65,7 +67,7 @@ module moist_model_moz_potential
    public :: potential_term_type, potential_sites_type
    public :: lj_mixing_lorentz_berthelot, lj_mixing_geometric
    public :: lj_typed_type, lj_element_type, lj_solvent_type, custom_lj_type, new_custom_lj
-   public :: lj_gaff, lj_oplsaa, lj_uff, lj_dreiding, lj_tm, lj_spce
+   public :: lj_gaff, lj_oplsaa, lj_uff, lj_dreiding, lj_tm, lj_spce, lj_cspce
    public :: fixed_charges_type, new_fixed_charges
    public :: monopole_type, multipole_type, ec_charges_type
    public :: solvent_charges_type, solvent_model_charges_type, solvent_multipoles_type
@@ -73,7 +75,7 @@ module moist_model_moz_potential
    public :: coulomb_resp_gas, coulomb_resp_solvent, coulomb_resp_conductor
    public :: coulomb_mbis_gas, coulomb_mbis_solvent, coulomb_mbis_conductor
    public :: coulomb_chelpg_gas, coulomb_chelpg_solvent, coulomb_chelpg_conductor
-   public :: coulomb_spce
+   public :: coulomb_spce, coulomb_cspce
    public :: multipoles_mbis_gas, multipoles_mbis_solvent, multipoles_mbis_conductor
 
    !> One owned term
@@ -103,6 +105,8 @@ module moist_model_moz_potential
       real(wp) :: split_alpha = 1.0_wp
       !> Lennard-Jones mixing rule
       integer :: mixing_rule = lj_mixing_lorentz_berthelot
+      !> Stamp of the latest change to terms, update or settings; 0 before any change
+      integer(int64) :: generation_stamp = 0_int64
    contains
       !> Append a copy of a term; drops the updated state
       procedure :: add => potential_add
@@ -137,6 +141,8 @@ module moist_model_moz_potential
       procedure :: natom => potential_natom
       !> Whether the potential is updated
       procedure :: is_updated => potential_is_updated
+      !> Change stamp of terms, update or settings; derived results compare it
+      procedure :: generation => potential_generation
       !> Resolved per-atom data of the latest update
       procedure :: sites => potential_sites
       !> Print the per-atom site parameters as a table
@@ -398,6 +404,23 @@ module moist_model_moz_potential
          logical :: updated
       end function potential_is_updated
 
+      !> Stamp of the latest change to terms, update or settings
+      !>
+      !> - A fresh stamp on add, every update and set_ng_split or set_mixing,
+      !>   drawn from one increasing sequence shared by all potentials
+      !> - Equal stamps mean the same change history: a copy keeps the stamp of
+      !>   its source, a separately built or changed potential never matches
+      !> - Results derived from the potential record it and compare later
+      !>
+      !> @param[in] self  potential
+      pure module function potential_generation(self) result(generation)
+         implicit none(type, external)
+         !> Potential
+         class(moz_potential_type), intent(in) :: self
+         !> Change stamp; 0 before any change
+         integer(int64) :: generation
+      end function potential_generation
+
       !> Resolve the merged LJ data and tail charges of the latest update
       !>
       !> - Charge per atom from its owning term
@@ -541,15 +564,16 @@ module moist_model_moz_potential
       !> - `solvent` required: there are no 3D VV tables
       !> - Mixing rule and Ng split of this potential
       !>
-      !> @param[in]     self      updated solute potential
-      !> @param[in]     grid      volume grid with reciprocal points
-      !> @param[out]    u_sr      short-range potential, Hartree (ngrid, nv)
-      !> @param[out]    ur_lr     long-range real-space potential, Hartree (ngrid, nv)
-      !> @param[out]    uk_lr     long-range reciprocal potential, Hartree bohr^3 (npts_k, nv)
-      !> @param[out]    error     no solvent, not updated, host data on the solvent, coupling, category or input failure
-      !> @param[in]     solvent   updated solvent potential; optional only for the generic, required here
-      !> @param[in,out] coupling  optional coupling of the model; host-data term i reads scope i
-      module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling)
+      !> @param[in]     self       updated solute potential
+      !> @param[in]     grid       volume grid with reciprocal points
+      !> @param[out]    u_sr       short-range potential, Hartree (ngrid, nv)
+      !> @param[out]    ur_lr      long-range real-space potential, Hartree (ngrid, nv)
+      !> @param[out]    uk_lr      long-range reciprocal potential, Hartree bohr^3 (npts_k, nv)
+      !> @param[out]    error      no solvent, not updated, host data on the solvent, coupling, category or input failure
+      !> @param[in]     solvent    updated solvent potential; optional only for the generic, required here
+      !> @param[in,out] coupling   optional coupling of the model; host-data term i reads scope i
+      !> @param[out]    net_charge  optional sum of the resolved solute tail charges, e
+      module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge)
          implicit none(type, external)
          !> Updated solute potential
          class(moz_potential_type), intent(in) :: self
@@ -567,6 +591,8 @@ module moist_model_moz_potential
          class(moz_potential_type), intent(in), optional :: solvent
          !> Optional coupling of the model
          class(coupling_type), intent(inout), target, optional :: coupling
+         !> Net solute tail charge, from the same resolved data as the potential tables
+         real(wp), intent(out), optional :: net_charge
       end subroutine potential_compute_3d
 
       !> Reverse mode of the 1D UV tables

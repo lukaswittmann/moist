@@ -177,7 +177,7 @@ contains
    !>
    !> - Composite operator `g_j = (dkx*dky*dkz/(2*pi)^3) * sum_k sum_i w_i f_i exp(i k.(r_j - r_i))`
    !> - At `j = i` the k sum is `nkx*nky*nkz`
-   !> - Hence `g_i = w_i/dr^3 * f_i`, no other point contributes
+   !> - Hence `g_i = w_i/dr^3 * f_i`; the impulse input has zero strength at other points
    subroutine test_roundtrip_diagonal(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -257,7 +257,7 @@ contains
       end if
       ! Phase against mg%kref (point(1) directly, solute centroid after a domain update)
       call max_ft_error(fk(:, 1), mg%npts_k, mg%get_kref(), cen, mg, emax)
-      ! Quadrature-limited: 3.0e-4 at (50, 110), 2.7e-7 from Lebedev order 302
+      ! Quadrature-limited: 3.0e-4 at (50, 110), 2.7e-7 with the 302-point Lebedev rule
       call check(error, emax <= 1.0e-3_wp, &
                  "molecular forward NUFFT disagrees with the analytic Gaussian FT")
       call trafo%destroy()

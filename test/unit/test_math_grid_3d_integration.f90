@@ -311,6 +311,15 @@ contains
       end if
       call check(error, abs(res - 10.625_wp) < 1.0e-12_wp, &
          & "Cartesian field integral must use the cell volume")
+      if (allocated(error)) return
+      grid%w = 2.0_wp*grid%w
+      call g%integrate(one, res)
+      call check(error, abs(res - 16.0_wp) < 1.0e-12_wp, more="sampled integral ignored stored weights")
+      if (allocated(error)) return
+      call g%integrate_field(1.0_wp + grid%xyz(1, :)**2, res, merr)
+      call check_moist_error(error, merr)
+      if (allocated(error)) return
+      call check(error, abs(res - 21.25_wp) < 1.0e-12_wp, more="field integral ignored stored weights")
       call grid%destroy()
    end subroutine test_integrate_const
 

@@ -6,6 +6,7 @@ program tester
    use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
    use test_parameters, only: collect_parameters
+   use test_rism_input, only: collect_rism_input
    use test_api, only: collect_api
    use test_utils_timer, only: collect_utils_timer
    use test_utils_context, only: collect_utils_context
@@ -21,6 +22,18 @@ program tester
    use test_moz_potential_lj, only: collect_moz_potential_lj
    use test_moz_potential_oplsaa, only: collect_moz_potential_oplsaa
    use test_moz_solvent, only: collect_moz_solvent
+   use test_moz_solvent_vv, only: collect_moz_solvent_vv
+   use test_moz_response, only: collect_moz_response
+   use test_moz_drism, only: collect_moz_drism
+   use test_moz_1d_uv, only: collect_moz_1d_uv
+   use test_moz_1d_gradient, only: collect_moz_1d_gradient
+   use test_moz_3d_uv, only: collect_moz_3d_uv
+   use test_moz_3d_response, only: collect_moz_3d_response
+   use test_moz_closure, only: collect_moz_closure
+   use test_moz_closure_kernel, only: collect_moz_closure_kernel
+   use test_moz_solver, only: collect_moz_solver
+   use test_moz_1d_preconditioner, only: collect_moz_1d_preconditioner
+   use test_moz_thermodynamics, only: collect_moz_thermodynamics
    use test_radii, only: collect_radii
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
@@ -40,6 +53,7 @@ program tester
    use test_math_fft_threads, only: collect_math_fft_threads
    use test_finufft, only: collect_finufft
    use test_math_grid_3d_fft, only: collect_math_grid_3d_fft
+   use test_math_grid_3d_transform_adjoint, only: collect_math_grid_3d_transform_adjoint
    use test_math_grid_3d_nufft, only: collect_math_grid_3d_nufft
    use test_math_grid_3d_threaded, only: collect_math_grid_3d_threaded
    use test_math_grid_3d_partition, only: collect_math_grid_3d_partition
@@ -96,6 +110,7 @@ program tester
 
    testsuites = [ &
       & new_testsuite("parameters", collect_parameters), &
+      & new_testsuite("rism_input", collect_rism_input), &
       & new_testsuite("api", collect_api), &
       & new_testsuite("utils_timer", collect_utils_timer), &
       & new_testsuite("utils_context", collect_utils_context), &
@@ -123,6 +138,7 @@ program tester
       & new_testsuite("math_fft_threads", collect_math_fft_threads), &
       & new_testsuite("finufft", collect_finufft), &
       & new_testsuite("math_grid_3d_fft", collect_math_grid_3d_fft), &
+      & new_testsuite("math_grid_3d_transform_adjoint", collect_math_grid_3d_transform_adjoint), &
       & new_testsuite("math_grid_3d_nufft", collect_math_grid_3d_nufft), &
       & new_testsuite("math_grid_3d_threaded", collect_math_grid_3d_threaded), &
       & new_testsuite("math_grid_3d_partition", collect_math_grid_3d_partition), &
@@ -138,6 +154,18 @@ program tester
       & new_testsuite("moz_potential_lj", collect_moz_potential_lj), &
       & new_testsuite("moz_potential_oplsaa", collect_moz_potential_oplsaa), &
       & new_testsuite("moz_solvent", collect_moz_solvent), &
+      & new_testsuite("moz_solvent_vv", collect_moz_solvent_vv), &
+      & new_testsuite("moz_response", collect_moz_response), &
+      & new_testsuite("moz_drism", collect_moz_drism), &
+      & new_testsuite("moz_1d_uv", collect_moz_1d_uv), &
+      & new_testsuite("moz_1d_gradient", collect_moz_1d_gradient), &
+      & new_testsuite("moz_3d_uv", collect_moz_3d_uv), &
+      & new_testsuite("moz_3d_response", collect_moz_3d_response), &
+      & new_testsuite("moz_closure", collect_moz_closure), &
+      & new_testsuite("moz_closure_kernel", collect_moz_closure_kernel), &
+      & new_testsuite("moz_solver", collect_moz_solver), &
+      & new_testsuite("moz_1d_preconditioner", collect_moz_1d_preconditioner), &
+      & new_testsuite("moz_thermodynamics", collect_moz_thermodynamics), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
