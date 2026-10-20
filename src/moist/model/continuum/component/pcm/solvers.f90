@@ -105,8 +105,8 @@ module moist_model_continuum_component_pcm_solvers
    contains
       !> Apply the operator or its transpose to a vector
       procedure(apply_iface), deferred :: apply
-      !> Form the dense operator matrix
-      procedure(assemble_iface), deferred :: assemble
+      !> Form the dense operator matrix; by default column by column from apply
+      procedure :: assemble => pcm_operator_assemble
       !> Form the operator of a sub-surface (near-field block)
       procedure(assemble_block_iface), deferred :: assemble_block
    end type pcm_operator
@@ -140,22 +140,6 @@ module moist_model_continuum_component_pcm_solvers
          !> Result vector
          real(wp), contiguous, intent(out) :: y(:)
       end subroutine apply_iface
-
-      !> Form the dense operator matrix
-      !>
-      !> @param[in]  self   operator
-      !> @param[out] a      matrix of shape (npt, npt)
-      !> @param[out] error  allocated if workspace allocation failed
-      subroutine assemble_iface(self, a, error)
-         import :: pcm_operator, wp, error_type
-         implicit none(type, external)
-         !> Operator
-         class(pcm_operator), intent(in) :: self
-         !> Dense operator matrix
-         real(wp), contiguous, intent(out) :: a(:, :)
-         !> Error handling
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine assemble_iface
 
       !> Form the operator of the sub-surface of the points idx
       !>
@@ -202,8 +186,8 @@ module moist_model_continuum_component_pcm_solvers
    contains
       !> Apply the operator or its transpose to a vector
       procedure(complex_apply_iface), deferred :: apply
-      !> Form the dense operator matrix
-      procedure(complex_assemble_iface), deferred :: assemble
+      !> Form the dense operator matrix; by default column by column from apply
+      procedure :: assemble => pcm_complex_operator_assemble
       !> Form the operator of a sub-surface (near-field block)
       procedure(complex_assemble_block_iface), deferred :: assemble_block
    end type pcm_complex_operator
@@ -228,22 +212,6 @@ module moist_model_continuum_component_pcm_solvers
          !> Result vector
          complex(wp), contiguous, intent(out) :: y(:)
       end subroutine complex_apply_iface
-
-      !> Form the dense complex operator matrix
-      !>
-      !> @param[in]  self   operator
-      !> @param[out] a      matrix of shape (npt, npt)
-      !> @param[out] error  allocated if workspace allocation failed
-      subroutine complex_assemble_iface(self, a, error)
-         import :: pcm_complex_operator, wp, error_type
-         implicit none(type, external)
-         !> Operator
-         class(pcm_complex_operator), intent(in) :: self
-         !> Dense operator matrix
-         complex(wp), contiguous, intent(out) :: a(:, :)
-         !> Error handling
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine complex_assemble_iface
 
       !> Form the complex operator of the sub-surface of the points idx
       !>
@@ -1093,6 +1061,68 @@ contains
 
       a = self%a(idx, idx)
    end subroutine pcm_matrix_assemble_block
+
+   !> Form the dense operator matrix column by column from apply
+   !>
+   !> - Default for operators without a dense form of their own, such as the
+   !>   matrix-free storage of the generated kernels: npt applications
+   !>
+   !> @param[in]  self   operator
+   !> @param[out] a      matrix of shape (npt, npt)
+   !> @param[out] error  allocated on a wrong shape of a
+   subroutine pcm_operator_assemble(self, a, error)
+      !> Operator
+      class(pcm_operator), intent(in) :: self
+      !> Dense operator matrix
+      real(wp), contiguous, intent(out) :: a(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: e(self%npt)
+      integer :: j
+
+      if (any(shape(a) /= [self%npt, self%npt])) then
+         call fatal_error(error, "[pcm_operator_assemble] a: wrong shape")
+         return
+      end if
+      e = 0.0_wp
+      do j = 1, self%npt
+         e(j) = 1.0_wp
+         call self%apply(.false., e, a(:, j))
+         e(j) = 0.0_wp
+      end do
+   end subroutine pcm_operator_assemble
+
+   !> Form the dense complex operator matrix column by column from apply
+   !>
+   !> - Default for operators without a dense form of their own, such as the
+   !>   matrix-free storage of the generated kernels: npt applications
+   !>
+   !> @param[in]  self   operator
+   !> @param[out] a      matrix of shape (npt, npt)
+   !> @param[out] error  allocated on a wrong shape of a
+   subroutine pcm_complex_operator_assemble(self, a, error)
+      !> Operator
+      class(pcm_complex_operator), intent(in) :: self
+      !> Dense operator matrix
+      complex(wp), contiguous, intent(out) :: a(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      complex(wp) :: e(self%npt)
+      integer :: j
+
+      if (any(shape(a) /= [self%npt, self%npt])) then
+         call fatal_error(error, "[pcm_complex_operator_assemble] a: wrong shape")
+         return
+      end if
+      e = (0.0_wp, 0.0_wp)
+      do j = 1, self%npt
+         e(j) = (1.0_wp, 0.0_wp)
+         call self%apply(.false., e, a(:, j))
+         e(j) = (0.0_wp, 0.0_wp)
+      end do
+   end subroutine pcm_complex_operator_assemble
 
    !> Default reset: the solver keeps no per-operator state
    !>

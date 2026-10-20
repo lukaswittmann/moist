@@ -1,7 +1,7 @@
 !> Cavity contracts and electrostatic accuracy of the MT surface quadrature
 module test_cavity_mt
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-   use mctc_env, only: wp, mctc_error => error_type
+   use mctc_env, only: wp, mctc_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
@@ -32,6 +32,28 @@ module test_cavity_mt
       procedure :: f012_r => constant_gradient_f012_r
    end type constant_gradient_lsf_type
 
+   !> SvdW level set that rejects every converged surface point
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: rejecting_lsf_type
+   contains
+      procedure :: check_surface => rejecting_check_surface
+   end type rejecting_lsf_type
+
+   !> SvdW level set whose gradient evaluations change after a set number
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: counting_lsf_type
+      !> Gradient evaluations since the derivative order was set
+      integer :: calls = 0
+      !> Gradient evaluations that behave like the parent
+      integer :: intact = huge(1)
+      !> Whether later evaluations fail instead of losing the gradient
+      logical :: fail_late = .false.
+      !> Whether the current derivative order includes the gradient
+      logical :: gradients = .false.
+   contains
+      procedure :: set_max_deriv => counting_set_max_deriv
+      procedure :: prepare => counting_prepare
+      procedure :: f012_r => counting_f012_r
+   end type counting_lsf_type
+
 contains
 
    !> Collect cavity and CPCM checks
@@ -53,6 +75,10 @@ contains
                   new_unittest("thread_determinism", test_threads), &
                   new_unittest("deferred_build", test_deferred_build), &
                   new_unittest("build_keeps_surface", test_build_keeps_surface), &
+                  new_unittest("repeated_update", test_repeated_update), &
+                  new_unittest("reconstruct_updated", test_reconstruct_updated), &
+                  new_unittest("unconstructed_coupling", test_unconstructed_coupling), &
+                  new_unittest("mean_normal_fallback", test_mean_normal_fallback), &
                   new_unittest("bad_update_without_context", test_bad_update_without_context, should_fail=.true.), &
                   new_unittest("bad_update_without_lsf", test_bad_update_without_lsf, should_fail=.true.), &
                   new_unittest("bad_update_no_atoms", test_bad_update_no_atoms, should_fail=.true.), &
@@ -66,7 +92,19 @@ contains
                   new_unittest("bad_critical_bump", test_bad_critical_bump, should_fail=.true.), &
                   new_unittest("bad_weight_cutoff", test_bad_weight_cutoff, should_fail=.true.), &
                   new_unittest("bad_nan_gradient", test_bad_nan_gradient, should_fail=.true.), &
-                  new_unittest("bad_overflow_gradient", test_bad_overflow_gradient, should_fail=.true.)]
+                  new_unittest("bad_overflow_gradient", test_bad_overflow_gradient, should_fail=.true.), &
+                  new_unittest("bad_update_without_radius_model", test_bad_update_without_radius_model, &
+                  & should_fail=.true.), &
+                  new_unittest("bad_update_radius_count", test_bad_update_radius_count, should_fail=.true.), &
+                  new_unittest("bad_unresolved_surface", test_bad_unresolved_surface, should_fail=.true.), &
+                  new_unittest("bad_rejected_surface", test_bad_rejected_surface, should_fail=.true.), &
+                  new_unittest("bad_patch_evaluation", test_bad_patch_evaluation, should_fail=.true.), &
+                  new_unittest("bad_tiny_gaussian_scale", test_bad_tiny_gaussian_scale, should_fail=.true.), &
+                  new_unittest("bad_huge_gaussian_scale", test_bad_huge_gaussian_scale, should_fail=.true.), &
+                  new_unittest("bad_build_before_update", test_bad_build_before_update, should_fail=.true.), &
+                  new_unittest("bad_build_area_tolerance", test_bad_build_area_tolerance, should_fail=.true.), &
+                  new_unittest("bad_build_nuclear_charge", test_bad_build_nuclear_charge, should_fail=.true.), &
+                  new_unittest("bad_build_core_fill", test_bad_build_core_fill, should_fail=.true.)]
    end subroutine collect_cavity_mt
 
    !> Build a custom-radius SvdW fixture with an explicit thread count
@@ -551,19 +589,24 @@ contains
       end do
    end subroutine zero_radius
 
-   !> Run the build phase with a unit s density and Z = 1
+   !> Run the build phase with a unit s density
    !>
    !> @param[in,out] cav Updated deferring cavity
    !> @param[out] err Staging, answer or build failure
-   subroutine build_with_density(cav, err)
+   !> @param[in] z Optional nuclear charge, default 1
+   subroutine build_with_density(cav, err, z)
       !> Updated deferring cavity
       class(cavity_type), intent(inout), target :: cav
       !> Staging, answer or build failure
       type(mctc_error), allocatable, intent(out) :: err
+      !> Optional nuclear charge
+      real(wp), intent(in), optional :: z
       type(coupling_type), pointer :: coupling
-      real(wp) :: dcart(1, 1)
+      real(wp) :: dcart(1, 1), charge
 
       dcart = 1.0_wp
+      charge = 1.0_wp
+      if (present(z)) charge = z
       call cav%new_coupling(coupling, err)
       if (allocated(err)) return
       call cav%prepare_build(coupling, err)
@@ -573,7 +616,7 @@ contains
             type is (density_matrix_request_type)
                call coupling%answer("dcart", dcart, err)
             type is (nuclear_charge_request_type)
-               call coupling%answer("z", [1.0_wp], err)
+               call coupling%answer("z", [charge], err)
             end select
             if (allocated(err)) exit
          end do
@@ -607,6 +650,140 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(cav%a - area)), 0.0_wp, thr=0.0_wp)
    end subroutine test_build_keeps_surface
+
+   !> A second update replaces the surface of the first
+   subroutine test_repeated_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(mctc_error), allocatable :: err
+      real(wp) :: area, radial
+      integer :: i
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) call cav%update(mol, err)
+      call check_moist_error(error, err, "first update")
+      if (allocated(error)) return
+      area = cav%mesh_area
+      mol%xyz(1, 1) = 0.5_wp
+      call cav%update(mol, err)
+      call check_moist_error(error, err, "second update")
+      if (allocated(error)) return
+      call check(error, cav%is_built() .and. cav%ngrid > 0 .and. size(cav%patch_area) == cav%ngrid, &
+         & more="Second update left no consistent surface")
+      if (allocated(error)) return
+      ! The mesh lattice follows the atom, so the shifted sphere keeps its area
+      call check(error, cav%mesh_area, area, rel=.true., thr=1.0e-10_wp)
+      if (allocated(error)) return
+      do i = 1, cav%ngrid
+         radial = norm2(cav%xyz(:, i) - mol%xyz(:, 1))
+         call check(error, radial <= 3.0_wp + 1.0e-12_wp .and. radial > 2.9_wp, more="Point off the shifted sphere")
+         if (allocated(error)) return
+      end do
+   end subroutine test_repeated_update
+
+   !> Construction resets an updated cavity to its new settings
+   subroutine test_reconstruct_updated(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(moist_cavity_mt_parameters_type) :: param
+      class(radius_type), allocatable :: radius_model
+      type(mctc_error), allocatable :: err
+      integer :: coarse
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) call cav%update(mol, err)
+      call check_moist_error(error, err, "first update")
+      if (allocated(error)) return
+      coarse = cav%ngrid
+      param = coarse_parameters()
+      param%target_area = 0.5_wp*param%target_area
+      call new_radii_custom_atoms([3.0_wp], radius_model, err)
+      if (.not. allocated(err)) call new_cavity_mt(cav, radius_model, lsf, err, param, ctx)
+      call check_moist_error(error, err, "construction")
+      if (allocated(error)) return
+      call check(error,.not. (cav%is_updated() .or. cav%is_built() .or. allocated(cav%mol) &
+         & .or. allocated(cav%radii) .or. allocated(cav%sphxyz) .or. allocated(cav%mesh_area)), &
+         & more="Construction kept the previous structure")
+      if (allocated(error)) return
+      call check(error, cav%ngrid == 0 .and. cav%nsph == 0, more="Construction kept the previous counts")
+      if (allocated(error)) return
+      call cav%update(mol, err)
+      call check_moist_error(error, err, "second update")
+      if (allocated(error)) return
+      call check(error, real(cav%ngrid, wp)/real(coarse, wp), 2.0_wp, thr=0.05_wp, &
+         & more="Halved target area did not double the points")
+   end subroutine test_reconstruct_updated
+
+   !> A cavity without a level set neither defers its build nor declares host requests
+   subroutine test_unconstructed_coupling(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(cavity_type_mt), target :: cav
+      type(coupling_type), pointer :: coupling
+      type(mctc_error), allocatable :: err
+
+      call check(error,.not. cav%defers_build(), more="Unconstructed cavity defers its build")
+      if (allocated(error)) return
+      call cav%new_coupling(coupling, err)
+      call check_moist_error(error, err)
+      if (.not. allocated(err)) call cav%release_coupling(coupling)
+   end subroutine test_unconstructed_coupling
+
+   !> Patch points without an LSF gradient take the switched mean mesh normal
+   subroutine test_mean_normal_fallback(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx, flat_ctx
+      type(cavity_type_mt) :: cav, flat
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(counting_lsf_type) :: counting
+      type(mctc_error), allocatable :: err
+      real(wp) :: normal(3)
+      integer :: i, j, p
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) call cav%update(mol, err)
+      call check_moist_error(error, err, "reference")
+      if (allocated(error)) return
+      ! Every face carries its full area, so the mean normal is unweighted
+      call check(error, all(abs(cav%critical_weight - 1.0_wp) < 1.0e-12_wp), more="Reference sphere is switched")
+      if (allocated(error)) return
+      ! Face centroids keep the gradient, every patch point loses it
+      call counting%new()
+      counting%intact = size(cav%mesh%area)
+      call new_sphere_cavity(flat_ctx, flat, mol, counting, err, coarse_parameters())
+      if (.not. allocated(err)) call flat%update(mol, err)
+      call check_moist_error(error, err, "flat")
+      if (allocated(error)) return
+      call check(error, flat%ngrid, cav%ngrid)
+      if (allocated(error)) return
+      call check(error, maxval(abs(flat%a - cav%a)), 0.0_wp, thr=0.0_wp)
+      if (allocated(error)) return
+      do i = 1, flat%ngrid
+         p = flat%patch_index(i)
+         normal = 0.0_wp
+         do j = flat%patches%member_offset(p), flat%patches%member_offset(p + 1) - 1
+            normal = normal + flat%patches%member_area(j)*flat%mesh%normal(:, flat%patches%member_face(j))
+         end do
+         call check(error, maxval(abs(flat%normal0(:, i) - normal/norm2(normal))) < 1.0e-12_wp, &
+            & more="Fallback normal is not the mean mesh normal")
+         if (allocated(error)) return
+      end do
+      ! The planar mean stays close to the analytic normal
+      call check(error, maxval(abs(flat%normal0 - cav%normal0)) < 0.1_wp, more="Fallback normal far from the LSF normal")
+   end subroutine test_mean_normal_fallback
 
    !> Reject an update of a cavity constructed without a run context
    subroutine test_bad_update_without_context(error)
@@ -855,6 +1032,195 @@ contains
       call check_moist_error(error, err)
    end subroutine test_bad_overflow_gradient
 
+   !> Reject an update after the radius model was removed from a constructed cavity
+   subroutine test_bad_update_without_radius_model(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(mctc_error), allocatable :: err
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err)
+      if (.not. allocated(err)) then
+         deallocate (cav%radius_model)
+         call cav%update(mol, err)
+      end if
+      call check_moist_error(error, err)
+   end subroutine test_bad_update_without_radius_model
+
+   !> Reject a structure whose atom count differs from the custom radii
+   subroutine test_bad_update_radius_count(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(structure_type) :: mol, pair
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(mctc_error), allocatable :: err
+      real(wp) :: xyz(3, 2)
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) then
+         xyz = 0.0_wp
+         xyz(1, 2) = 2.0_wp
+         call new(pair, [1, 1], xyz)
+         call cav%update(pair, err)
+      end if
+      call check_moist_error(error, err)
+   end subroutine test_bad_update_radius_count
+
+   !> Reject a sphere that falls between the lattice nodes
+   subroutine test_bad_unresolved_surface(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+
+      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [0.05_wp], coarse_parameters())
+   end subroutine test_bad_unresolved_surface
+
+   !> Reject a surface that the level set refuses
+   subroutine test_bad_rejected_surface(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(rejecting_lsf_type) :: lsf
+      type(mctc_error), allocatable :: err
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) call cav%update(mol, err)
+      call check_moist_error(error, err)
+   end subroutine test_bad_rejected_surface
+
+   !> Reject a level set that fails at patch points but not at face centroids
+   subroutine test_bad_patch_evaluation(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx, failing_ctx
+      type(cavity_type_mt) :: cav, failing
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(counting_lsf_type) :: counting
+      type(mctc_error), allocatable :: err
+
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
+      if (.not. allocated(err)) call cav%update(mol, err)
+      if (.not. allocated(err)) then
+         call counting%new()
+         counting%intact = size(cav%mesh%area)
+         counting%fail_late = .true.
+         call new_sphere_cavity(failing_ctx, failing, mol, counting, err, coarse_parameters())
+      end if
+      if (.not. allocated(err)) call failing%update(mol, err)
+      call check_moist_error(error, err)
+   end subroutine test_bad_patch_evaluation
+
+   !> Reject Gaussian widths whose pair exponents underflow in the width correction
+   subroutine test_bad_tiny_gaussian_scale(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(moist_cavity_mt_parameters_type) :: param
+
+      param = coarse_parameters()
+      param%gaussian_scale = 1.0e-170_wp
+      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [3.0_wp], param)
+   end subroutine test_bad_tiny_gaussian_scale
+
+   !> Reject the overflowing width of a single point, which has no pair terms
+   subroutine test_bad_huge_gaussian_scale(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt) :: cav
+      type(moist_cavity_mt_parameters_type) :: param
+
+      ! One patch below one bohr**2
+      param%spacing = 0.05_wp
+      param%target_area = 1.0_wp
+      param%gaussian_scale = huge(1.0_wp)
+      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [0.25_wp], param)
+   end subroutine test_bad_huge_gaussian_scale
+
+   !> Reject a build before the first update
+   subroutine test_bad_build_before_update(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt), target :: cav
+      type(structure_type) :: mol
+      type(coupling_type), pointer :: coupling
+      type(mctc_error), allocatable :: err
+
+      call new_density_cavity(ctx, cav, mol, err)
+      if (.not. allocated(err)) then
+         call cav%new_coupling(coupling, err)
+         if (.not. allocated(err)) then
+            call cav%build(coupling, err)
+            call cav%release_coupling(coupling)
+         end if
+      end if
+      call check_moist_error(error, err)
+   end subroutine test_bad_build_before_update
+
+   !> Settings changed after a deferred update are validated again on build
+   subroutine test_bad_build_area_tolerance(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt), target :: cav
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: err
+
+      call new_density_cavity(ctx, cav, mol, err)
+      if (.not. allocated(err)) call cav%update(mol, err)
+      if (.not. allocated(err)) then
+         cav%param%area_tolerance = 1.0_wp
+         call build_with_density(cav, err)
+      end if
+      call check_moist_error(error, err)
+   end subroutine test_bad_build_area_tolerance
+
+   !> Reject a host nuclear charge above the atomic number
+   subroutine test_bad_build_nuclear_charge(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt), target :: cav
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: err
+
+      call new_density_cavity(ctx, cav, mol, err)
+      if (.not. allocated(err)) call cav%update(mol, err)
+      if (.not. allocated(err)) call build_with_density(cav, err, z=2.0_wp)
+      call check_moist_error(error, err)
+   end subroutine test_bad_build_nuclear_charge
+
+   !> Reject a density surface inside the core fill of an ECP nucleus
+   subroutine test_bad_build_core_fill(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(cavity_type_mt), target :: cav
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: err
+
+      call new_density_cavity(ctx, cav, mol, err)
+      if (.not. allocated(err)) call cav%update(mol, err)
+      ! The fill ball of 2 bohr encloses the zero set at 1.73 bohr
+      if (.not. allocated(err)) call build_with_density(cav, err, z=0.5_wp)
+      call check_moist_error(error, err)
+   end subroutine test_bad_build_core_fill
+
    !> Coarse settings for cavities that fail after meshing
    function coarse_parameters() result(param)
       !> Coarse mesh and patch settings
@@ -894,6 +1260,37 @@ contains
       call new_cavity_mt(cav, radius_model, lsf, err, param, ctx)
    end subroutine new_sphere_cavity
 
+   !> Construct the deferring isodensity cavity of a unit s density without updating it
+   !>
+   !> @param[in,out] ctx Borrowed run context
+   !> @param[out] cav Constructed cavity
+   !> @param[out] mol Single hydrogen atom at the origin
+   !> @param[out] err Construction failure
+   subroutine new_density_cavity(ctx, cav, mol, err)
+      !> Borrowed run context
+      type(moist_context_type), intent(inout), target :: ctx
+      !> Constructed cavity
+      type(cavity_type_mt), intent(out) :: cav
+      !> Single hydrogen atom at the origin
+      type(structure_type), intent(out) :: mol
+      !> Construction failure
+      type(mctc_error), allocatable, intent(out) :: err
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_mt_parameters_type) :: param
+      class(radius_type), allocatable :: radius_model
+
+      call new_context(ctx, verbosity=0, nthreads=1)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      ! Density exp(-r**2), zero set at 1.73 bohr inside the largest core fill of 2 bohr
+      call lsf%new(sh_atom=[1], sh_l=[0], sh_nprim=[1], exps=[0.5_wp], coeffs=[1.0_wp], error=err, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.05_wp, scale=30.0_wp))
+      if (.not. allocated(err)) call new_radii_custom_atoms([4.0_wp], radius_model, err)
+      if (allocated(err)) return
+      param%spacing = 0.3_wp
+      param%target_area = 1.0_wp
+      call new_cavity_mt(cav, radius_model, lsf, err, param, ctx)
+   end subroutine new_density_cavity
+
    !> Parent value and Hessian with a constant spatial gradient
    !>
    !> @param[in] self Level set
@@ -913,5 +1310,83 @@ contains
       call self%moist_cavity_drop_lsf_svdw_type%f012_r(lsf0, lsf1_r, lsf2_rr)
       if (present(lsf1_r)) lsf1_r = self%gradient
    end subroutine constant_gradient_f012_r
+
+   !> Reject every converged surface point
+   !>
+   !> @param[in] self Level set
+   !> @param[in] xyz Cavity points, bohr (3, n)
+   !> @param[in] projected Whether each point is a converged surface projection (n)
+   !> @param[out] error Rejection of the surface
+   subroutine rejecting_check_surface(self, xyz, projected, error)
+      !> Level set
+      class(rejecting_lsf_type), intent(in) :: self
+      !> Cavity points
+      real(wp), intent(in) :: xyz(:, :)
+      !> Whether each point is a converged surface projection
+      logical, intent(in) :: projected(:)
+      !> Rejection of the surface
+      type(mctc_error), allocatable, intent(out) :: error
+
+      if (size(xyz, 2) == size(projected) .and. any(projected)) then
+         call fatal_error(error, trim(self%name)//" rejects the surface")
+      end if
+   end subroutine rejecting_check_surface
+
+   !> Restart the count with every new derivative order
+   !>
+   !> @param[in,out] self Level set
+   !> @param[in] n Highest derivative order
+   subroutine counting_set_max_deriv(self, n)
+      !> Level set
+      class(counting_lsf_type), intent(inout) :: self
+      !> Highest derivative order
+      integer, intent(in) :: n
+
+      self%calls = 0
+      self%gradients = n >= 1
+      call self%moist_cavity_drop_lsf_svdw_type%set_max_deriv(n)
+   end subroutine counting_set_max_deriv
+
+   !> Count gradient evaluations; past the intact ones, optionally fail
+   !>
+   !> @param[in,out] self Level set
+   !> @param[in] point Evaluation point, bohr
+   !> @param[out] error Evaluation failure
+   subroutine counting_prepare(self, point, error)
+      !> Level set
+      class(counting_lsf_type), intent(inout) :: self
+      !> Evaluation point
+      real(wp), intent(in) :: point(3)
+      !> Evaluation failure
+      type(mctc_error), allocatable, intent(out) :: error
+
+      if (self%gradients) self%calls = self%calls + 1
+      if (self%fail_late .and. self%calls > self%intact) then
+         call fatal_error(error, "Level set evaluation failed")
+         return
+      end if
+      call self%moist_cavity_drop_lsf_svdw_type%prepare(point, error)
+   end subroutine counting_prepare
+
+   !> Parent value and Hessian; the gradient vanishes past the intact evaluations
+   !>
+   !> @param[in] self Level set
+   !> @param[out] lsf0 Level-set value
+   !> @param[out] lsf1_r Spatial gradient (3)
+   !> @param[out] lsf2_rr Spatial Hessian (3, 3)
+   subroutine counting_f012_r(self, lsf0, lsf1_r, lsf2_rr)
+      !> Level set
+      class(counting_lsf_type), intent(in) :: self
+      !> Level-set value
+      real(wp), intent(out), optional :: lsf0
+      !> Spatial gradient
+      real(wp), intent(out), optional :: lsf1_r(:)
+      !> Spatial Hessian
+      real(wp), intent(out), optional :: lsf2_rr(:, :)
+
+      call self%moist_cavity_drop_lsf_svdw_type%f012_r(lsf0, lsf1_r, lsf2_rr)
+      if (.not. present(lsf1_r)) return
+      if (self%calls > self%intact) lsf1_r = 0.0_wp
+   end subroutine counting_f012_r
 
 end module test_cavity_mt

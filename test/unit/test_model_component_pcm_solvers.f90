@@ -10,6 +10,8 @@
 !> - sytrf/sytrs wrappers of moist_math_lapack on a symmetric indefinite system
 !> - Complex getrf/getrs/sytrf/sytrs wrappers (plain transpose, complex symmetric)
 !> - setup of an id that holds factors (repeated medium phase) factors anew
+!> - Default assemble of pcm_operator and pcm_complex_operator: the matrix from
+!>   its applications (all dense solves of the test operators), wrong shape
 !> - solve_complex: real operators with complex right-hand sides (dense, GMRES
 !>   and the pcm_solver default), complex operators through zsytrf/zgetrf and
 !>   complex GMRES, the default of a non-overriding extension
@@ -43,28 +45,24 @@ module test_model_component_pcm_solvers
    !> Relative residual threshold for single precision
    real(sp), parameter :: thr_sp = 1.0e-5_sp
 
-   !> Operator backed by a dense matrix
+   !> Operator backed by a dense matrix; the default assemble forms it from apply
    type, extends(pcm_operator) :: dense_test_operator
       !> Operator matrix, (npt, npt)
       real(wp), allocatable :: mat(:, :)
    contains
       !> Apply the matrix or its transpose
       procedure :: apply => test_operator_apply
-      !> Copy the matrix
-      procedure :: assemble => test_operator_assemble
       !> Principal submatrix of the points idx
       procedure :: assemble_block => test_operator_assemble_block
    end type dense_test_operator
 
-   !> Complex operator backed by a dense matrix
+   !> Complex operator backed by a dense matrix; the default assemble forms it from apply
    type, extends(pcm_complex_operator) :: complex_test_operator
       !> Operator matrix, (npt, npt)
       complex(wp), allocatable :: mat(:, :)
    contains
       !> Apply the matrix or its plain transpose
       procedure :: apply => complex_test_operator_apply
-      !> Copy the matrix
-      procedure :: assemble => complex_test_operator_assemble
       !> Principal submatrix of the points idx
       procedure :: assemble_block => complex_test_operator_assemble_block
    end type complex_test_operator
@@ -107,6 +105,8 @@ contains
          & new_unittest("lapack_sytrf_sytrs", test_lapack_sytrf_sytrs), &
          & new_unittest("lapack_sytrf_sytrs_sp", test_lapack_sytrf_sytrs_sp), &
          & new_unittest("operator_apply", test_operator_apply_matches_matrix), &
+         & new_unittest("operator_assemble_wrong_shape", test_operator_assemble_wrong_shape, &
+         & should_fail=.true.), &
          & new_unittest("dense_cholesky", test_dense_cholesky), &
          & new_unittest("dense_symmetric", test_dense_symmetric), &
          & new_unittest("dense_lu", test_dense_lu), &
@@ -124,6 +124,8 @@ contains
          & new_unittest("lu_rejects_nan_matrix", test_lu_rejects_nan_matrix, should_fail=.true.), &
          & new_unittest("lapack_complex", test_lapack_complex), &
          & new_unittest("complex_operator_apply", test_complex_operator_apply_matches_matrix), &
+         & new_unittest("complex_operator_assemble_wrong_shape", &
+         & test_complex_operator_assemble_wrong_shape, should_fail=.true.), &
          & new_unittest("dense_complex_rhs", test_dense_complex_rhs), &
          & new_unittest("dense_complex_symmetric", test_dense_complex_symmetric), &
          & new_unittest("dense_complex_lu", test_dense_complex_lu), &
@@ -177,24 +179,6 @@ contains
          y = matmul(self%mat, x)
       end if
    end subroutine test_operator_apply
-
-   !> Copy the matrix of a test operator
-   !>
-   !> @param[in]  self   operator
-   !> @param[out] a      matrix of shape (npt, npt)
-   !> @param[out] error  never allocated
-   subroutine test_operator_assemble(self, a, error)
-      !> Operator
-      class(dense_test_operator), intent(in) :: self
-      !> Dense operator matrix
-      real(wp), contiguous, intent(out) :: a(:, :)
-      !> Error handling
-      type(moist_error_type), allocatable, intent(out) :: error
-
-      a = self%mat
-      ! intent(out) already deallocated it; this marks the dummy as defined
-      if (allocated(error)) deallocate (error)
-   end subroutine test_operator_assemble
 
    !> Principal submatrix of a test operator on the points idx
    !>
@@ -487,6 +471,8 @@ contains
       call op%assemble(a, err)
       call check_moist_error(error, err, "assemble")
       if (allocated(error)) return
+      call check(error, maxval(abs(a - g)) < thr, "default assemble")
+      if (allocated(error)) return
       call rhs_block(b)
       call op%apply(.false., b(:, 1), y)
       call check(error, maxval(abs(y - matmul(a, b(:, 1)))) < thr, "apply")
@@ -494,6 +480,21 @@ contains
       call op%apply(.true., b(:, 1), y)
       call check(error, maxval(abs(y - matmul(transpose(a), b(:, 1)))) < thr, "apply transpose")
    end subroutine test_operator_apply_matches_matrix
+
+   !> The default assemble rejects a matrix of the wrong shape
+   subroutine test_operator_assemble_wrong_shape(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(dense_test_operator) :: op
+      type(moist_error_type), allocatable :: err
+      real(wp) :: g(n, n), a(n, n - 1)
+
+      call general_matrix(g)
+      call new_test_operator(op, g, 1, .false., .false.)
+      call op%assemble(a, err)
+      call check_moist_error(error, err, "assemble")
+   end subroutine test_operator_assemble_wrong_shape
 
    !> Positive definite operator: Cholesky, both orientations
    subroutine test_dense_cholesky(error)
@@ -921,24 +922,6 @@ contains
       end if
    end subroutine complex_test_operator_apply
 
-   !> Copy the matrix of a complex test operator
-   !>
-   !> @param[in]  self   operator
-   !> @param[out] a      matrix of shape (npt, npt)
-   !> @param[out] error  never allocated
-   subroutine complex_test_operator_assemble(self, a, error)
-      !> Operator
-      class(complex_test_operator), intent(in) :: self
-      !> Dense operator matrix
-      complex(wp), contiguous, intent(out) :: a(:, :)
-      !> Error handling
-      type(moist_error_type), allocatable, intent(out) :: error
-
-      a = self%mat
-      ! intent(out) already deallocated it; this marks the dummy as defined
-      if (allocated(error)) deallocate (error)
-   end subroutine complex_test_operator_assemble
-
    !> Principal submatrix of a complex test operator on the points idx
    !>
    !> @param[in]  self   operator
@@ -1319,6 +1302,8 @@ contains
       call op%assemble(a, err)
       call check_moist_error(error, err, "assemble")
       if (allocated(error)) return
+      call check(error, maxval(abs(a - g)) < thr, "default assemble")
+      if (allocated(error)) return
       call complex_rhs(b)
       call op%apply(.false., b, y)
       call check(error, maxval(abs(y - matmul(a, b))) < thr, "apply")
@@ -1326,6 +1311,21 @@ contains
       call op%apply(.true., b, y)
       call check(error, maxval(abs(y - matmul(transpose(a), b))) < thr, "apply transpose")
    end subroutine test_complex_operator_apply_matches_matrix
+
+   !> The default complex assemble rejects a matrix of the wrong shape
+   subroutine test_complex_operator_assemble_wrong_shape(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(complex_test_operator) :: op
+      type(moist_error_type), allocatable :: err
+      complex(wp) :: g(n, n), a(n, n - 1)
+
+      call complex_general_matrix(g)
+      call new_complex_test_operator(op, g, 1, .false.)
+      call op%assemble(a, err)
+      call check_moist_error(error, err, "assemble")
+   end subroutine test_complex_operator_assemble_wrong_shape
 
    !> Dense solver, real operator, complex right-hand side: all real kinds
    !> - The real factors are reused; each complex solve counts two solves
