@@ -4567,7 +4567,7 @@ int test_v1_contract(void)
     moist_get_banner(NULL, moist_banner_full, buffer, sizeof buffer, &length);
     if (buffer[0] != '\0' || buffer[1] != 'X') goto cleanup;
     moist_get_version_string(error, buffer, sizeof buffer, &length);
-    if (strcmp(buffer, "1.0.0-alpha.1")) goto cleanup;
+    if (strcmp(buffer, "1.1.0-alpha.1")) goto cleanup;
     moist_get_version_string(error, buffer, 1, &length);
     if (buffer[0] != '\0') goto cleanup;
 
