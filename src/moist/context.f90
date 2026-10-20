@@ -45,7 +45,7 @@ module moist_context
 
    !> Shared run context: owned at the top level, borrowed by every model/cavity
    type :: moist_context_type
-      !> Output unit for informational messages (errors and warnings go to error_unit)
+      !> Output unit for informational messages and warnings
       integer :: unit = output_unit
       !> Output unit for debug dumps; defaults to `unit` (a separate `debugfile`
       !> splits the two streams)
@@ -57,6 +57,8 @@ module moist_context
       logical :: debug = .false.
       !> Detailed-profiling flag, independent of the verbosity
       logical :: do_profile = .false.
+      !> Whether warnings are also copied to stderr
+      logical :: warnings_to_stderr = .false.
       !> OpenMP thread count, fixed by `new_context`; 0 only before construction
       integer, private :: nthreads = 0
       !> Run start timestamp, formatted `YYYY-MM-DD HH:MM:SS`
@@ -97,7 +99,7 @@ module moist_context
       procedure :: message_flush => context_message_flush
       !> Write a debug message to the debug unit when debug is enabled
       procedure :: debug_message => context_debug_message
-      !> Write a warning to stderr, copied into the log when it is a file
+      !> Write a warning to the output unit, optionally copied to stderr
       procedure :: warning => context_warning
       !> OpenMP thread count fixed at construction
       procedure :: get_num_threads => context_get_num_threads
@@ -139,7 +141,9 @@ contains
    !> @param[in]  do_profile detailed-profiling flag (default .false.)
    !> @param[in]  logfile    path of a main output file for the context to own
    !> @param[in]  debugfile  path of a separate debug output file to own
-   subroutine new_context(self, nthreads, verbosity, debug, unit, do_profile, logfile, debugfile)
+   !> @param[in]  warnings_to_stderr  also copy warnings to stderr (default .false.)
+   subroutine new_context(self, nthreads, verbosity, debug, unit, do_profile, logfile, debugfile, &
+      & warnings_to_stderr)
       !> Context to initialize
       type(moist_context_type), intent(out) :: self
       !> OpenMP thread count; absent or <= 0 takes the current OpenMP setting
@@ -156,6 +160,8 @@ contains
       character(*), intent(in), optional :: logfile
       !> Path of a separate debug output file to open and own
       character(*), intent(in), optional :: debugfile
+      !> Whether warnings are also copied to stderr
+      logical, intent(in), optional :: warnings_to_stderr
 
       !> Values used to format the start timestamp
       character(8) :: date
@@ -168,6 +174,7 @@ contains
       if (self%debug) self%level = max(self%level, 6)
       if (present(unit)) self%unit = unit
       if (present(do_profile)) self%do_profile = do_profile
+      if (present(warnings_to_stderr)) self%warnings_to_stderr = warnings_to_stderr
 
       !> Thread count, resolved once; the OpenMP runtime itself is never changed
       self%nthreads = resolve_num_threads(nthreads)
@@ -532,12 +539,13 @@ contains
 
    end subroutine context_debug_message
 
-   !> Write a warning to stderr, copied into the log when it is a file
+   !> Write a warning to the output unit, optionally copied to stderr
    !>
-   !> Not gated by verbosity; a terminal run shows the warning once on stderr,
-   !> an owned logfile or a host-supplied unit receives a second copy in place
+   !> Not gated by verbosity; the warning lands in place among the messages
+   !> (stdout, an owned logfile or a host-supplied unit), and with
+   !> `warnings_to_stderr` a second copy goes to stderr
    !>
-   !> Both writes flush inside the same critical as `message`, so the warning
+   !> Every write flushes inside the same critical as `message`, so the warning
    !> lands before a later crash
    !>
    !> @param[in]  msg  warning text, without the `[Warning]` prefix
@@ -548,11 +556,11 @@ contains
       character(len=*), intent(in) :: msg
 
       !$omp critical(moist_context_io)
-      write (error_unit, '("[Warning]", 1x, a)') msg
-      flush (error_unit)
-      if (self%unit /= output_unit .and. self%unit /= error_unit) then
-         write (self%unit, '("[Warning]", 1x, a)') msg
-         flush (self%unit)
+      write (self%unit, '("[Warning]", 1x, a)') msg
+      flush (self%unit)
+      if (self%warnings_to_stderr .and. self%unit /= error_unit) then
+         write (error_unit, '("[Warning]", 1x, a)') msg
+         flush (error_unit)
       end if
       !$omp end critical(moist_context_io)
 

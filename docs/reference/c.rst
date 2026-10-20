@@ -16,7 +16,7 @@ options with the caller's ``sizeof`` before assigning fields:
 .. code-block:: c
 
    moist_error error = moist_new_error();
-   moist_context context = moist_new_context(error, 4, 2, false);  /* nthreads, verbosity, debug */
+   moist_context context = moist_new_context(error, 4, 2, false, false);  /* nthreads, verbosity, debug, warnings_to_stderr */
    moist_drop_options options;
    moist_init_drop_options(error, &options, sizeof options);
    /* Check moist_check_error(error) after each fallible call. */
@@ -79,10 +79,10 @@ header and initialize the complete options struct; the old PCM layout is
 rejected. The inversion, LU, and Cholesky selectors are replaced by ``dense``,
 which chooses the factorization required by the generated operator.
 
-``moist_new_context(error, nthreads, verbosity, debug)`` creates the :ref:`run context <api-context>`.
-C has no optional arguments; ``0, 2, false`` gives the library defaults: the calling thread's ``omp_get_max_threads()``, the normal printout (:ref:`levels <verbosity>`) and no debug stream.
+``moist_new_context(error, nthreads, verbosity, debug, warnings_to_stderr)`` creates the :ref:`run context <api-context>`.
+C has no optional arguments; ``0, 2, false, false`` gives the library defaults: the calling thread's ``omp_get_max_threads()``, the normal printout (:ref:`levels <verbosity>`), no debug stream and warnings on standard output only.
 A negative thread count is an error.
-``verbosity`` and ``debug`` are the only logging settings; the options structs carry none.
+``verbosity``, ``debug`` and ``warnings_to_stderr`` are the only logging settings; the options structs carry none.
 ``moist_print_context_timer(error, context)`` prints the timings recorded on a context on the process standard output;
 ``moist_print_context_timer_simple`` prints the compact form.
 ``moist_start_context_timer(error, context, name)`` and ``moist_stop_context_timer`` time host work under the report's ``Host`` node; :ref:`api-context` gives the naming rule, the cleanup on failure paths and a C++ scope guard.

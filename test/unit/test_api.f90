@@ -2004,11 +2004,11 @@ contains
 
       call new_context(probe, nthreads=0, verbosity=0)
       baseline = probe%get_num_threads()
-      context = new_context_api(c_loc(err), -1_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(c_loc(err), -1_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       call check(error,.not. c_associated(context) .and. allocated(err%ptr), "negative thread count is refused")
       if (allocated(error)) return
       deallocate (err%ptr)
-      context = new_context_api(c_loc(err), 0_c_int, 2_c_int, .true._c_bool)
+      context = new_context_api(c_loc(err), 0_c_int, 2_c_int, .true._c_bool, .false._c_bool)
       call check(error, c_associated(context), "context constructor succeeds")
       if (allocated(error)) return
       call c_f_pointer(context, shared)
@@ -2026,7 +2026,7 @@ contains
             vmodel = c_null_ptr
             component = c_null_ptr
             checks: block
-               context = new_context_api(c_loc(err), requests(irequest), 0_c_int, .false._c_bool)
+               context = new_context_api(c_loc(err), requests(irequest), 0_c_int, .false._c_bool, .false._c_bool)
                call check(error, c_associated(context), "context constructor succeeds")
                if (allocated(error)) exit checks
                call c_f_pointer(context, shared)
@@ -2107,8 +2107,8 @@ contains
       first = c_null_ptr
       borrowed = c_null_ptr
       second = c_null_ptr
-      context = new_context_api(c_loc(err), 0_c_int, 4_c_int, .true._c_bool)
-      other_context = new_context_api(c_loc(err), 0_c_int, 1_c_int, .false._c_bool)
+      context = new_context_api(c_loc(err), 0_c_int, 4_c_int, .true._c_bool, .false._c_bool)
+      other_context = new_context_api(c_loc(err), 0_c_int, 1_c_int, .false._c_bool, .false._c_bool)
       checks: block
          call check(error, c_associated(context) .and. c_associated(other_context), &
             & "context constructors succeed")
@@ -2162,7 +2162,7 @@ contains
       !> C handles
       type(c_ptr) :: context, cavity, handle
 
-      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
       call check(error, c_associated(cavity), "cavity setup succeeds")
       if (.not. allocated(error)) then
@@ -2200,8 +2200,8 @@ contains
       owned = c_null_ptr
       vmodel = c_null_ptr
       borrowed = c_null_ptr
-      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
-      own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
+      own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, positions)
       checks: block
          call c_f_pointer(context, shared)
@@ -3774,7 +3774,7 @@ contains
 
       ! Without a context of its own the cavity follows each model's verbosity
       viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr, c_null_ptr)
-      context = new_context_api(verror, 0_c_int, 1_c_int, .false._c_bool)
+      context = new_context_api(verror, 0_c_int, 1_c_int, .false._c_bool, .false._c_bool)
       vmodel = moist_new_model(verror, context, viswig)
       call delete_context_api(context)
       vsilent = model_on_context(verror, viswig)
@@ -3783,7 +3783,7 @@ contains
       vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpcm)
       if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vpv)
-      context = new_context_api(verror, 0_c_int, 3_c_int, .false._c_bool)
+      context = new_context_api(verror, 0_c_int, 3_c_int, .false._c_bool, .false._c_bool)
       vdetailed = moist_new_model(verror, context, viswig)
       call delete_context_api(context)
       if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vdetailed, vpcm)
@@ -4759,7 +4759,7 @@ contains
       type(c_ptr) :: cavity
       !> Context handle, released once the cavity retains it
       type(c_ptr) :: context
-      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       cavity = moist_new_drop_cavity(verror, context, lsf, radii, options)
       call delete_context_api(context)
    end function drop_on_context
@@ -4780,7 +4780,7 @@ contains
       type(c_ptr) :: cavity
       !> Context handle, released once the cavity retains it
       type(c_ptr) :: context
-      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       cavity = moist_new_iswig_cavity(verror, context, radii, options)
       call delete_context_api(context)
    end function iswig_on_context
@@ -4798,7 +4798,7 @@ contains
       type(c_ptr) :: model
       !> Context handle, released once the model retains it
       type(c_ptr) :: context
-      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool, .false._c_bool)
       model = moist_new_model(verror, context, cavity)
       call delete_context_api(context)
    end function model_on_context

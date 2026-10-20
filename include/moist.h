@@ -198,13 +198,14 @@ typedef struct moist_lsf_s* moist_lsf;
 /// calling thread's omp_get_max_threads at construction, negative is an error.
 /// The count sizes MOIST's own OpenMP regions; the host's OpenMP runtime and
 /// the BLAS/LAPACK threading are left alone. verbosity (0 silent ... 6 debug,
-/// 2 is the library default; levels in the API reference) and debug are the
-/// only logging settings; debug raises the verbosity to 6. Every model
-/// constructor requires a context, a cavity or component constructor takes one
-/// optionally; each retains it
+/// 2 is the library default; levels in the API reference), debug and
+/// warnings_to_stderr are the only logging settings; debug raises the
+/// verbosity to 6. Warnings print to standard output, warnings_to_stderr also
+/// copies them to standard error. Every model constructor requires a context,
+/// a cavity or component constructor takes one optionally; each retains it
 moist_API_ENTRY moist_context moist_API_CALL
 moist_new_context(moist_error error, int nthreads, int verbosity,
-                  bool debug) moist_API_SUFFIX__V_1_0;
+                  bool debug, bool warnings_to_stderr) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL
 moist_delete_context(moist_context *context) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL

@@ -230,13 +230,16 @@ def _options(kind, **values):
     return options
 
 
-def new_context(nthreads=0, verbosity=0, debug=False):
+def new_context(nthreads=0, verbosity=0, debug=False, warnings_to_stderr=False):
     for name, value in (("nthreads", nthreads), ("verbosity", verbosity)):
         if isinstance(value, bool) or not isinstance(value, int):
             raise TypeError(f"{name} must be an int")
-    if not isinstance(debug, bool):
-        raise TypeError("debug must be a bool")
-    return ContextHandle.with_gc(error_check(lib.moist_new_context)(nthreads, verbosity, debug))
+    for name, value in (("debug", debug), ("warnings_to_stderr", warnings_to_stderr)):
+        if not isinstance(value, bool):
+            raise TypeError(f"{name} must be a bool")
+    return ContextHandle.with_gc(
+        error_check(lib.moist_new_context)(nthreads, verbosity, debug, warnings_to_stderr)
+    )
 
 
 def get_context_num_threads(context):

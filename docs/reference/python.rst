@@ -42,11 +42,11 @@ the surface independently. ``PCMParameters`` applies to every PCM model.
 ``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
 negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
-``Context(nthreads=0, verbosity=2, debug=False)`` creates the
+``Context(nthreads=0, verbosity=2, debug=False, warnings_to_stderr=False)`` creates the
 :ref:`run context <api-context>`. The defaults take the calling thread's OpenMP
 setting (``OMP_NUM_THREADS`` unless the host changed it), print the normal
-output (:ref:`levels <verbosity>`) and leave the debug stream off; a negative thread
-count raises. Everything built on a context retains it.
+output (:ref:`levels <verbosity>`), leave the debug stream off and print warnings
+on standard output only; a negative thread count raises. Everything built on a context retains it.
 ``context.print_timer()`` prints the recorded timings on the process standard
 output; ``context.print_timer(simple=True)`` prints the compact form.
 ``with context.timer(name):`` times host work under the report's ``Host`` node

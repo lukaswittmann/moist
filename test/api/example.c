@@ -3858,7 +3858,7 @@ int test_coupling_protocol_gostshyp(void)
         char head[16];
         moist_get_model_parameters_text(error, model, NULL, 0, &length);
         REQUIRE(!moist_check_error(error) && length == 0);
-        shown_context = moist_new_context(error, 0, 2, false);
+        shown_context = moist_new_context(error, 0, 2, false, false);
         shown = moist_new_model(error, shown_context, cav);
         moist_add_model_component(error, shown, pcm);
         moist_add_model_component(error, shown, gostshyp);
@@ -4117,7 +4117,7 @@ cleanup:
 static int runtime_threads(moist_error error)
 {
     int count = 0;
-    moist_context probe = moist_new_context(error, 0, 0, false);
+    moist_context probe = moist_new_context(error, 0, 0, false, false);
     if (!probe || moist_check_error(error)) return -1;
     moist_get_context_num_threads(error, probe, &count);
     moist_delete(probe);
@@ -4135,16 +4135,16 @@ int test_context(void)
     moist_structure mol = NULL;
     moist_lsf lsf = NULL;
     int baseline = 0, pinned = 0, count = 123, failed = 1;
-    if (moist_new_context(NULL, 0, 0, false)) goto cleanup;
-    if (moist_new_context(error, -1, 0, false) || !moist_check_error(error)) goto cleanup;
+    if (moist_new_context(NULL, 0, 0, false, false)) goto cleanup;
+    if (moist_new_context(error, -1, 0, false, false) || !moist_check_error(error)) goto cleanup;
     baseline = runtime_threads(error);
     if (baseline < 1) goto cleanup;
     pinned = baseline + 1;
     /* An explicit count is fixed per context and leaves this thread's OpenMP
      * runtime untouched */
-    context = moist_new_context(error, pinned, 2, true);
+    context = moist_new_context(error, pinned, 2, true, false);
     if (!context || moist_check_error(error) || runtime_threads(error) != baseline) goto cleanup;
-    other = moist_new_context(error, pinned + 1, 0, false);
+    other = moist_new_context(error, pinned + 1, 0, false, false);
     if (!other || moist_check_error(error) || runtime_threads(error) != baseline) goto cleanup;
     moist_get_context_num_threads(error, context, &count);
     if (moist_check_error(error) || count != pinned) goto cleanup;
@@ -4156,7 +4156,7 @@ int test_context(void)
     count = 123;
     moist_get_context_num_threads(error, NULL, &count);
     if (!moist_check_error(error) || count != 123) goto cleanup;
-    context = moist_new_context(error, 0, 0, false);
+    context = moist_new_context(error, 0, 0, false, false);
     if (!context || moist_check_error(error)) goto cleanup;
     moist_get_context_num_threads(error, context, NULL);
     if (!moist_check_error(error)) goto cleanup;
@@ -4201,7 +4201,7 @@ int test_context(void)
     mol = make_h2o(error);
     if (!lsf || !mol || moist_check_error(error)) goto cleanup;
     for (int kind = 0; kind < 2; ++kind) {
-        context = moist_new_context(error, pinned, 0, false);
+        context = moist_new_context(error, pinned, 0, false, false);
         if (!context || moist_check_error(error)) goto cleanup;
         moist_get_context_num_threads(error, context, &count);
         if (moist_check_error(error) || count != pinned) goto cleanup;
@@ -4279,7 +4279,7 @@ done:
 int test_host_timers(void)
 {
     moist_error error = moist_new_error();
-    moist_context context = moist_new_context(error, 0, 0, false);
+    moist_context context = moist_new_context(error, 0, 0, false, false);
     char name[64] = {0};
     int failed = 1;
     if (!context || moist_check_error(error)) goto cleanup;
@@ -4805,7 +4805,7 @@ int main(void)
     size_t nfailed = 0;
     moist_error error = moist_new_error();
 
-    fixture_context = moist_new_context(error, 0, 0, false);
+    fixture_context = moist_new_context(error, 0, 0, false, false);
     if (!fixture_context || moist_check_error(error)) {
         show_error(error);
         moist_delete_error(&error);

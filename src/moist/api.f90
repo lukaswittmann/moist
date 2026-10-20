@@ -658,7 +658,9 @@ contains
    !> @param[in] nthreads  OpenMP thread count, fixed for the context's lifetime
    !> @param[in] verbosity output level
    !> @param[in] debug     diagnostic flag
-   function new_context_api(verror, nthreads, verbosity, debug) result(handle) bind(C, name=namespace//"new_context")
+   !> @param[in] warnings_to_stderr  also copy warnings to stderr
+   function new_context_api(verror, nthreads, verbosity, debug, warnings_to_stderr) result(handle) &
+      & bind(C, name=namespace//"new_context")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> OpenMP thread count; 0 takes the calling thread's current OpenMP setting
@@ -667,6 +669,8 @@ contains
       integer(c_int), value, intent(in) :: verbosity
       !> Diagnostic flag
       logical(c_bool), value, intent(in) :: debug
+      !> Whether warnings are also copied to stderr
+      logical(c_bool), value, intent(in) :: warnings_to_stderr
       !> Owning context handle; NULL on failure
       type(c_ptr) :: handle
       !> Decoded diagnostic handle
@@ -689,7 +693,8 @@ contains
          call api_error(error%ptr, "new_context", "Cannot allocate context")
          return
       end if
-      call new_context(context%ctx, nthreads=int(nthreads), verbosity=int(verbosity), debug=logical(debug))
+      call new_context(context%ctx, nthreads=int(nthreads), verbosity=int(verbosity), debug=logical(debug), &
+         & warnings_to_stderr=logical(warnings_to_stderr))
       handle = c_loc(context)
    end function new_context_api
 

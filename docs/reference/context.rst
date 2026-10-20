@@ -42,7 +42,7 @@ Level 2 suits a production calculation.
 It shows what is needed to report and reproduce a result, such as the radii, the solvent potential of a MOZ model or the PCM solver, and leaves out numerical internals such as the DROP switching parameters.
 
 Messages go to standard output; a Fortran host can redirect them to a unit or a file.
-Warnings go to standard error at every verbosity, including 0.
+Warnings go to the same output as the messages at every verbosity, including 0; ``warnings_to_stderr`` also copies them to standard error.
 The ``debug`` flag raises the verbosity to 6 and enables an additional debug stream; verbosity 6 alone does not enable it.
 Fine-grained profiling timers are a separate switch, independent of the verbosity (Fortran ``do_profile``, the command line's ``--profile``).
 The command-line program defaults to verbosity 4.
@@ -77,7 +77,7 @@ MOIST prints its settings and timings only when the host asks:
 
       .. code-block:: c
 
-         moist_context context = moist_new_context(error, 0, 2, false);  /* nthreads, verbosity, debug */
+         moist_context context = moist_new_context(error, 0, 2, false, false);  /* nthreads, verbosity, debug, warnings_to_stderr */
          /* ... construct the model on context; keep this handle to print the timings ... */
          size_t length;
          moist_get_model_parameters_text(error, model, NULL, 0, &length);
