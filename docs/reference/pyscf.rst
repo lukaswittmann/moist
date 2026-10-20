@@ -75,8 +75,15 @@ required cavity-response terms. The default ``rho_iso`` is ``1e-3``
 electrons/bohr**3, as in C and Fortran. Radius models can be selected with
 ``radii=...`` on either cavity configuration.
 
-CPCM, COSMO, PV and :doc:`GOSTSHYP </models/components/gostshyp>` components
-share the selected cavity. For example:
+For PCM variants that use the potential's normal derivative, the PySCF host
+also supplies the spatial Hessian and, with Gaussian probes, the mixed spatial
+and width derivative. It contracts ``w_dphi_dr`` into the Fock matrix and
+nuclear gradient. The normal derivative uses the same Gaussian potential as
+``phi``; no separate host-defined normal-potential request is needed.
+
+All :doc:`PCM variants </models/components/pcm/index>`, PV and
+:doc:`GOSTSHYP </models/components/gostshyp>` components share the selected
+cavity. For example:
 
 .. code-block:: python
 

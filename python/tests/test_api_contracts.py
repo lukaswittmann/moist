@@ -86,6 +86,8 @@ def test_model_accumulators():
 
 def test_cyclic_garbage_deletes_coupling_before_model(monkeypatch):
     """Deleting a coupling reaches into its model, whatever order GC finds them in."""
+    # Drain unrelated exception-traceback cycles before observing finalizers.
+    gc.collect()
     order = []
     for kind in (library.ModelHandle, library.CouplingHandle):
         delete = kind._delete
@@ -238,93 +240,13 @@ def test_diagnostic_contractions_match_explicit_anchor_tensors():
     cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
     structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
     cavity.update(structure)
-    cavity.assemble_amat()
     cavity.compute_cavity_gradient()
     anchor = cavity.get_anchor_gradient()
-    q = np.linspace(.1, .2, cavity.ngrid) * cavity.get("f")
-    gradient = cavity.contract_amat_nuclear_gradient(q, q)
-    # A finite-difference contraction independently pins nuclear-axis ordering.
-    h = FD_POSITION_STEP
-    point_ids = cavity.get("numbering")
-    matrices = []
-    for shift in (-2*h, -h, h, 2*h):
-        xyz = structure.positions
-        xyz[1, 2] += shift
-        moved = moist.CavityDROP(parameters=moist.DROPParameters(
-            nleb=26, tolerance=FD_PROJECTION_TOL), context=CONTEXT)
-        moved.update(moist.Structure(structure.numbers, xyz))
-        matrix, _ = moved.assemble_amat()
-        # Tighter projection can recover extra points. Keep the original
-        # point IDs and fixed charges; extra points have zero charge.
-        moved_ids = moved.get("numbering")
-        assert len(np.unique(point_ids)) == len(point_ids)
-        assert len(np.unique(moved_ids)) == len(moved_ids)
-        assert np.all(np.isin(point_ids, moved_ids))
-        indices = np.array([np.flatnonzero(moved_ids == point)[0] for point in point_ids])
-        np.testing.assert_array_equal(moved_ids[indices], point_ids)
-        matrices.append(matrix[np.ix_(indices, indices)])
-    delta = 8 * (matrices[2] - matrices[1]) - (matrices[3] - matrices[0])
-    reference = np.einsum("i,ij,j->", q, delta, q) / (12*h)
-    _assert_fd_close(gradient[1, 2], reference)
     weights = np.arange(cavity.ngrid * 3).reshape(-1, 3) * .001
     actual = cavity.contract_pcm_nuclear_gradient(np.zeros(cavity.ngrid), weights,
                                                   np.ones(2))
     expected = np.einsum("iAkj,ij->Ak", anchor.xyz1_rA, weights)
     np.testing.assert_allclose(actual, expected, atol=1e-12)
-
-
-def _gaussian_amat(xi, f, xyz):
-    """Gaussian PCM interaction matrix written out from its closed form."""
-    d = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=-1)
-    p = np.outer(xi, xi) / np.sqrt(xi[:, None]**2 + xi[None, :]**2)
-    np.fill_diagonal(d, 1.)
-    matrix = np.vectorize(math.erf)(p * d) / d
-    np.fill_diagonal(matrix, np.sqrt(2/np.pi) * xi / f)
-    return matrix
-
-
-def test_amat_surface_weights_are_the_surface_derivatives_of_q1_a_q2():
-    """The three weight channels are d(q1^T A q2) by xi, f and each point position."""
-    cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
-    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]]))
-    xi, f, xyz = cavity.get("xi0"), cavity.get("f"), cavity.get("xyz")
-    # The written-out matrix has to be the one moist assembles, or the
-    # differences below would test the transcription instead of moist.
-    matrix, _ = cavity.assemble_amat()
-    np.testing.assert_allclose(_gaussian_amat(xi, f, xyz), matrix, rtol=1e-12, atol=1e-14)
-    ngrid = cavity.ngrid
-    # Distinct vectors, so the q1_i q2_j + q1_j q2_i symmetrisation is exercised
-    q1 = np.linspace(.1, .2, ngrid) * f
-    q2 = np.cos(np.arange(ngrid)) * f
-    w_xi, w_f, w_xyz = cavity.contract_amat_surface_weights(q1, q2)
-    assert w_xi.shape == w_f.shape == (ngrid,)
-    assert w_xyz.shape == (ngrid, 3)
-
-    def slope(channel, i, k=None):
-        """Fourth-order central difference in one surface variable."""
-        surface = {"xi": xi, "f": f, "xyz": xyz}
-        h = (FD_POSITION_STEP if k is not None else
-             FD_SURFACE_RELATIVE_STEP * surface[channel][i])
-        moved = []
-        for step in (-2*h, -h, h, 2*h):
-            values = surface[channel].copy()
-            values[i if k is None else (i, k)] += step
-            moved.append(_gaussian_amat(**{**surface, channel: values}))
-        # Differencing the matrices first cancels the untouched entries
-        # exactly; a switching factor near zero makes A_ii large enough that
-        # differencing two full energies would lose the step to round-off
-        delta = 8 * (moved[2] - moved[1]) - (moved[3] - moved[0])
-        return np.einsum("i,ij,j->", q1, delta, q2) / (12*h)
-
-    ref_xi = np.array([slope("xi", i) for i in range(ngrid)])
-    ref_f = np.array([slope("f", i) for i in range(ngrid)])
-    ref_xyz = np.array([[slope("xyz", i, k) for k in range(3)] for i in range(ngrid)])
-    for actual, reference in ((w_xi, ref_xi), (w_f, ref_f), (w_xyz, ref_xyz)):
-        _assert_fd_close(actual, reference)
-    # A depends on point differences only, so a rigid shift of the surface is free
-    np.testing.assert_allclose(w_xyz.sum(axis=0), 0., atol=1e-10 * np.abs(w_xyz).max())
-    with pytest.raises(ValueError, match="ngrid"):
-        cavity.contract_amat_surface_weights(q1[:-1], q2)
 
 
 @pytest.mark.parametrize("kind", ["energy", "gradient"])
@@ -398,3 +320,94 @@ def test_banner_style_reaches_native_entry(style, native_style, monkeypatch):
     assert moist.get_banner(style) == "banner text"
     assert calls == [(library.lib.moist_get_banner,
                       (getattr(library.lib, native_style),))]
+
+
+def test_mt_c_options_and_constructor():
+    """NULL defaults, copied LSF handles and size validation follow the C ABI."""
+    ffi, lib = library.ffi, library.lib
+    options = library._options("mt")
+    assert options.struct_size == ffi.sizeof("moist_mt_options")
+    lsf = library.error_check(lib.moist_new_svdw_lsf)(ffi.NULL)
+    try:
+        for settings in (ffi.NULL, options):
+            handle = library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, lsf, ffi.NULL, settings,
+            )
+            cavity = library.CavityHandle.with_gc(handle)
+            assert cavity.handle != ffi.NULL
+        options.struct_size = ffi.sizeof("size_t")
+        with pytest.raises(RuntimeError):
+            library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, lsf, ffi.NULL, options,
+            )
+        with pytest.raises(RuntimeError, match="LSF handle is required"):
+            library.error_check(lib.moist_new_mt_cavity)(
+                ffi.NULL, ffi.NULL, ffi.NULL, ffi.NULL,
+            )
+    finally:
+        lib.moist_delete_lsf(ffi.new("moist_lsf *", lsf))
+
+
+def test_mt_model_copy_pv_and_gradient_refusal():
+    cavity = moist.CavityMT(
+        parameters=moist.MTParameters(spacing=0.4, target_area=1.5),
+    )
+    pressure = 1.e-4
+    model = moist.SolvationModel(CONTEXT, cavity, [moist.ModelComponentPV(pressure)])
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    assert type(model.cavity.snapshot()) is moist.CavitySnapshot
+    assert _energy(model) == pytest.approx(pressure * model.cavity.volume)
+    with pytest.raises(RuntimeError):
+        library.compute_cavity_gradient(model.cavity._handle)
+    # A failed gradient request leaves the frozen surface usable.
+    assert _energy(model) == pytest.approx(pressure * model.cavity.volume)
+
+
+def test_mt_cpcm_internal_isodensity_has_only_frozen_potential_response(build_with):
+    """A density-built MT surface gives CPCM energy and its fixed-geometry adjoint."""
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                               exponents=[.5], coefficients=[1.])
+    cavity = moist.CavityMT(
+        lsf=moist.Isodensity(parameters=moist.IsodensityParameters(core_fill=False)),
+        parameters=moist.MTParameters(spacing=0.4, target_area=1.5), basis=basis,
+    )
+    pressure = 1.e-4
+    # The finite-difference check below is tighter than the default solver tolerance
+    solver = moist.PCMParameters(solver_tol=1.e-13)
+    model = moist.SolvationModel(
+        CONTEXT, cavity,
+        [moist.ModelComponentCPCM(32., parameters=solver), moist.ModelComponentPV(pressure)],
+    )
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    coupling = build_with(model, dcart=np.ones((1, 1)))
+    surface = model.cavity.snapshot()
+    phi = 1. / np.linalg.norm(surface.xyz, axis=1)
+
+    def energy(potential):
+        model.prepare_energy(coupling)
+        for request in coupling:
+            assert isinstance(request, moist.GaussianPotentialRequest)
+            assert request.missing == {"phi"}
+            coupling.answer(phi=potential)
+        result = np.array(0.)
+        model.get_energy(coupling, result)
+        return float(result)
+
+    actual = energy(phi)
+    assert np.isfinite(actual)
+    assert actual - pressure * surface.volume < 0.
+    assert actual == pytest.approx(sum(item.energy for item in model.components))
+    model.prepare_response(coupling)
+    assert list(coupling) == []
+    (response,) = model.get_response(coupling)
+    assert isinstance(response, moist.PotentialAdjointResponse)
+    assert response.w_phi.shape == (surface.ngrid,)
+    assert np.all(np.isfinite(response.w_phi))
+    assert np.linalg.norm(response.w_phi) > 0.
+    # A density-defined surface still has no density geometry response in MT.
+    assert model.cavity.density_dependent
+    direction = np.linspace(-0.5, 0.7, surface.ngrid)
+    step = 1.e-4
+    difference = (energy(phi + step * direction) - energy(phi - step * direction)) / (2. * step)
+    assert difference == pytest.approx(np.dot(response.w_phi, direction), rel=1.e-8, abs=1.e-10)
+    np.testing.assert_array_equal(model.cavity.snapshot().xyz, surface.xyz)

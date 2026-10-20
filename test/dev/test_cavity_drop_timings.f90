@@ -13,7 +13,7 @@ module test_cavity_drop_timings
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_radii, only: default_cpcm_radii
    use moist_radii_static, only: radius_type_static
-   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_mc, only: integrate_surface_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -1117,7 +1117,7 @@ contains
          mc_times(istruct) = 0.0_wp
          do iter = 1, n_iter
             call cpu_time(t0)
-            call integrate_surface_marching_cubes(lsf, mol%xyz, area, volume, mc_error, &
+            call integrate_surface_mc(lsf, mol%xyz, area, volume, mc_error, &
                                                   target_spacing=mc_spacing)
             if (allocated(mc_error)) then
                call test_failed(error, mc_error%message)

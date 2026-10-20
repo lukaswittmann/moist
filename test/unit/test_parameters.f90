@@ -5,20 +5,29 @@ module test_parameters
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_model_parameters, only: moist_model_parameters_type
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
-      moist_cavity_numsa_parameters_type, moist_cavity_marchingcubes_parameters_type, &
-      moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
-      moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type
+                    moist_cavity_numsa_parameters_type, moist_cavity_mc_parameters_type, &
+                    moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
+                    moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type, &
+                    moist_cavity_mt_parameters_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
+   use moist_cavity_mt, only: cavity_type_mt, new_cavity_mt
+   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
    use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_iefpcm, only: model_continuum_component_iefpcm, new_component_iefpcm
+   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
+   use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, new_component_slic
+   use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -40,6 +49,101 @@ module test_parameters
    end type vector_parameters_type
 
 contains
+
+   !> Check model-specific physical inputs before the first update
+   subroutine test_pcm_physical_inputs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Construction error
+      type(moist_error), allocatable :: err
+      !> Components under test
+      type(model_continuum_component_lpb) :: lpb
+      type(model_continuum_component_slic) :: slic
+      type(model_continuum_component_nonlocal) :: nonlocal
+      type(model_continuum_component_cpcm) :: cpcm
+      type(model_continuum_component_cosmo) :: cosmo
+      type(model_continuum_component_iefpcm) :: iefpcm
+      !> Captured parameter output
+      character(len=160) :: lines(80)
+      !> Scratch unit and line count
+      integer :: unit, nline
+
+      call new_component_lpb(lpb, 80.0_wp, 0.125_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call lpb%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Kappa", "0.125000 bohr^-1"), "LPB screening input missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "LPB prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_slic(slic, 80.0_wp, 0.125_wp, 0.25_wp, 0.5_wp, err, &
+         & mu=0.0625_wp, phi_static=1.25_wp)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call slic%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Alpha", "0.125000") .and. &
+         & printed_entry(lines, "Beta", "0.250000 a.u.^-1") .and. &
+         & printed_entry(lines, "Gamma", "0.500000") .and. &
+         & printed_entry(lines, "Mu", "0.062500") .and. &
+         & printed_entry(lines, "Static potential", "1.250000 Eh/e"), "SLIC physical inputs missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "SLIC prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 10.0_wp, err, eps_solute=1.5_wp)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call nonlocal%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & printed_entry(lines, "Epsilon (high-frequency)", "2.000000") .and. &
+         & printed_entry(lines, "Epsilon (solute)", "1.500000") .and. &
+         & printed_entry(lines, "Correlation length", "10.000000 bohr"), "Nonlocal physical inputs missing")
+      if (allocated(error)) return
+      call check(error,.not. printed_entry(lines, "f(eps)", ""), "Nonlocal prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_iefpcm(iefpcm, 80.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call iefpcm%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
+         & .not. printed_entry(lines, "f(eps)", ""), "Layer PCM prints an internal factor")
+      if (allocated(error)) return
+
+      call new_component_cpcm(cpcm, 2.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call cpcm%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "f(eps)", "0.500000"), "CPCM scaling factor missing")
+      if (allocated(error)) return
+
+      call new_component_cosmo(cosmo, 2.0_wp, err)
+      call check(error,.not. allocated(err))
+      if (allocated(error)) return
+      open (newunit=unit, status="scratch", action="readwrite")
+      call cosmo%print_parameters(unit, level=2)
+      call read_printout(unit, lines, nline)
+      close (unit)
+      call check(error, printed_entry(lines, "f(eps)", "0.400000"), "COSMO scaling factor missing")
+   end subroutine test_pcm_physical_inputs
 
    !> Reset the helper parameter values
    !>
@@ -85,6 +189,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(vector_parameters_type) :: vector
       type(moist_gostshyp_parameters_type) :: gostshyp
+      type(moist_pcm_parameters_type) :: pcm
       character(len=128) :: lines(64)
       integer :: nline, unit
       type(moist_error), allocatable :: err
@@ -110,6 +215,23 @@ contains
       if (allocated(error)) return
       call capture_table(gostshyp, lines, nline, level=3)
       call check(error, printed_entry(lines, "regularization_start", ""), "level 3 lists the detailed fields")
+      if (allocated(error)) return
+
+      call check(error, pcm%solver, solver_type%iterative, "default iterative solver")
+      if (allocated(error)) return
+      call check(error, pcm%storage, pcm_storage_dense, "default dense storage")
+      if (allocated(error)) return
+      call capture_table(pcm, lines, nline, level=2)
+      call check(error, nline, 2, "normal PCM settings contain only solver and storage")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", ""))
+      if (allocated(error)) return
+      call capture_table(pcm, lines, nline, level=3)
+      call check(error, nline, 8, "detailed PCM settings include all solver controls")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "solver_tol", "") .and. &
+         & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
+         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", ""))
       if (allocated(error)) return
 
       ! Nothing prints at verbosity 0
@@ -175,6 +297,8 @@ contains
       type(cavity_type_drop) :: drop
       type(cavity_type_iswig) :: iswig
       type(cavity_type_numsa) :: numsa
+      type(cavity_type_mt) :: mt
+      type(cavity_type_mc) :: mc
       !> Components
       type(model_continuum_component_cpcm) :: pcm
       type(model_continuum_component_gostshyp) :: gostshyp
@@ -222,11 +346,27 @@ contains
          normal=[character(len=32) :: "probe"])
       if (allocated(error)) return
 
+      call new_cavity_mt(mt, default_cpcm_radii(), svdw, err, ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(mt, [character(len=32) :: "area_tolerance", "w_0ls_from", "w_0ls_to", "w_0ls_p", &
+         "w_0ls_a", "weight_cutoff"], error, normal=[character(len=32) :: "spacing", "target_area", "gaussian_scale"])
+      if (allocated(error)) return
+
+      ! Unset export paths print nothing
+      call new_cavity_mc(mc, default_cpcm_radii(), svdw, err, &
+         moist_cavity_mc_parameters_type(obj_file="mesh.obj", pqr_file="mesh.pqr"), ctx=ctx)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call require_cavity(mc, [character(len=32) :: "obj_file", "pqr_file"], error, &
+         normal=[character(len=32) :: "spacing"])
+      if (allocated(error)) return
+
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_component(pcm, [character(len=32) :: "solver_maxiter"], error, &
-         normal=[character(len=32) :: "solver_tol"])
+      call require_component(pcm, [character(len=32) :: "solver_tol", "solver_maxiter"], error, &
+         normal=[character(len=32) :: "storage"])
       if (allocated(error)) return
 
       call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)
@@ -430,19 +570,19 @@ contains
       !> Independent vector input
       character(len=*), parameter :: path = "moist-test-parameters-vector-input.json"
 
-      open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+      open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, "(a)", iostat=stat) '{"weights":[0.3,-5.0],"label":"input"}'
-      close(unit, iostat=close_stat)
+      write (unit, "(a)", iostat=stat) '{"weights":[0.3,-5.0],"label":"input"}'
+      close (unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
       call param%read_file(path, err)
-      open(newunit=unit, file=path, status="old", iostat=stat)
-      if (stat == 0) close(unit, status="delete", iostat=stat)
+      open (newunit=unit, file=path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, maxval(abs(param%weights - [0.3_wp, -5.0_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
@@ -477,10 +617,10 @@ contains
       call read_invalid(drop, '{"grid": 110}', "Invalid parameter group: grid.", error)
       if (allocated(error)) return
       call read_invalid(vector, '{"weights": [1.0, 2.0, 3.0]}', &
-         "Invalid parameter vector: weights", error)
+                        "Invalid parameter vector: weights", error)
       if (allocated(error)) return
       call read_invalid(label, '{"label": "seventeen letters!"}', &
-         "Parameter string is too long: label", error)
+                        "Parameter string is too long: label", error)
 
    contains
 
@@ -504,16 +644,16 @@ contains
          !> File unit and I/O status
          integer :: unit, stat
 
-         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, "(a)", iostat=stat) text
-         close(unit)
+         write (unit, "(a)", iostat=stat) text
+         close (unit)
          call check(error, stat, 0)
          if (allocated(error)) return
          call param%read_file(path, err)
-         open(newunit=unit, file=path, status="old", iostat=stat)
-         if (stat == 0) close(unit, status="delete", iostat=stat)
+         open (newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close (unit, status="delete", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
          call check(error, allocated(err), more="accepted "//text)
@@ -586,20 +726,21 @@ contains
    subroutine collect_parameters(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("constructors", test_constructors), &
-         new_unittest("file-roundtrip", test_roundtrip), &
-         new_unittest("copies-and-errors", test_copies_and_errors), &
-         new_unittest("vector-and-string", test_vector_and_string), &
-         new_unittest("print-levels", test_print_levels), &
-         new_unittest("print-detailed", test_print_detailed), &
-         new_unittest("drop-load-file", test_drop_load_file), &
+         new_unittest("file_roundtrip", test_roundtrip), &
+         new_unittest("copies_and_errors", test_copies_and_errors), &
+         new_unittest("vector_and_string", test_vector_and_string), &
+         new_unittest("print_levels", test_print_levels), &
+         new_unittest("print_detailed", test_print_detailed), &
+         new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
-         new_unittest("invalid-fields", test_invalid_fields), &
-         new_unittest("file-formats", test_file_formats), &
-         new_unittest("drop-contracts", test_drop_contracts), &
-         new_unittest("configuration-fields", test_configuration_fields), &
-         new_unittest("parameter-validation", test_parameter_validation), &
-         new_unittest("optional-overrides", test_optional_overrides)]
+         new_unittest("pcm_physical_inputs", test_pcm_physical_inputs), &
+         new_unittest("invalid_fields", test_invalid_fields), &
+         new_unittest("file_formats", test_file_formats), &
+         new_unittest("drop_contracts", test_drop_contracts), &
+         new_unittest("configuration_fields", test_configuration_fields), &
+         new_unittest("parameter_validation", test_parameter_validation), &
+         new_unittest("optional_overrides", test_optional_overrides)]
    end subroutine collect_parameters
 
    !> Check copied settings, derived values, and resetting to defaults
@@ -626,32 +767,32 @@ contains
       param%proj_tol = -1.0_wp
       param%do_fine = .true.
       call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, param, ctx=ctx)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, drop%param%proj_tol, param%tolerance)
       if (allocated(error)) return
       call check(error, param%proj_tol, -1.0_wp)
       if (allocated(error)) return
       call check(error, drop%param%do_grid_density .and. drop%param%do_curvature .and. &
-         drop%param%do_normal .and. drop%param%do_r_iI .and. drop%param%do_rho, &
-         more="do_fine did not switch every optional property on")
+                 drop%param%do_normal .and. drop%param%do_r_iI .and. drop%param%do_rho, &
+                 more="do_fine did not switch every optional property on")
       if (allocated(error)) return
-      call check(error, .not. param%do_curvature, more="constructor changed the caller's settings")
+      call check(error,.not. param%do_curvature, more="constructor changed the caller's settings")
       if (allocated(error)) return
       call check(error, drop%lsf_model%screening_threshold, 1.0e-9_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
       call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, ctx=ctx)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, drop%param%num_leb, 194)
       if (allocated(error)) return
-      call check(error, .not. (drop%param%do_grid_density .or. drop%param%do_curvature .or. &
-         drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho), &
-         more="default DROP settings switch an optional property on")
+      call check(error,.not. (drop%param%do_grid_density .or. drop%param%do_curvature .or. &
+                              drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho), &
+                 more="default DROP settings switch an optional property on")
       if (allocated(error)) return
       call new_cavity_iswig(iswig, default_cpcm_radii(), err, &
-         moist_cavity_iswig_parameters_type(num_leb=194, cut_a=0.3_wp, cut_f=0.2_wp), ctx=ctx)
-      call check(error, .not. allocated(err))
+                            moist_cavity_iswig_parameters_type(num_leb=194, cut_a=0.3_wp, cut_f=0.2_wp), ctx=ctx)
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, iswig%param%num_leb, 194)
       if (allocated(error)) return
@@ -660,7 +801,7 @@ contains
       call check(error, iswig%param%cut_f, 0.2_wp)
       if (allocated(error)) return
       call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, iswig%param%num_leb, 110)
       if (allocated(error)) return
@@ -670,12 +811,13 @@ contains
       call check(error, lsf%param%blend_k, 5.5_wp)
       if (allocated(error)) return
       call rho%new(c_null_funptr, c_null_ptr, &
-         moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.004_wp, exclusion_cap=4.0_wp))
+                   moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.004_wp, exclusion_cap=4.0_wp))
       call check(error, rho%param%exclusion_cap, 4.0_wp)
       if (allocated(error)) return
       call new_component_cpcm(pcm, 80.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-8_wp, solver_maxiter=71), ctx=ctx)
-      call check(error, .not. allocated(err))
+         & param=moist_pcm_parameters_type(solver=solver_type%iterative, &
+         & solver_tol=1.0e-8_wp, solver_maxiter=71), ctx=ctx)
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, pcm%param%solver, solver_type%iterative)
       if (allocated(error)) return
@@ -684,9 +826,9 @@ contains
       call check(error, pcm%param%solver_maxiter, 71)
       if (allocated(error)) return
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
-      call check(error, pcm%param%solver, solver_type%cholesky)
+      call check(error, pcm%param%solver, solver_type%iterative)
       if (allocated(error)) return
       param%num_leb = 1
       call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, param, ctx=ctx)
@@ -700,7 +842,7 @@ contains
       type(moist_cavity_drop_parameters_type) :: drop
       type(moist_cavity_iswig_parameters_type) :: iswig
       type(moist_cavity_numsa_parameters_type) :: numsa
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
@@ -739,7 +881,7 @@ contains
       if (allocated(error)) return
       call check(error, mc%obj_file == 'path with "quotes" and \slash/mesh.obj')
       if (allocated(error)) return
-      call check(error, .not. allocated(mc%pqr_file))
+      call check(error,.not. allocated(mc%pqr_file))
       if (allocated(error)) return
       svdw%blend_k = 6.0_wp
       call roundtrip(svdw, stem, error)
@@ -757,7 +899,7 @@ contains
       if (allocated(error)) return
       call check(error, rho%exclusion_cap, 3.0_wp)
       if (allocated(error)) return
-      pcm%solver = solver_type%lu
+      pcm%solver = solver_type%dense
       pcm%solver_maxiter = 42
       call roundtrip(pcm, stem, error)
       if (allocated(error)) return
@@ -781,7 +923,7 @@ contains
       if (allocated(error)) return
       call check(error, gostshyp%regularization_end, 1.0e-10_wp, thr=1.0e-22_wp)
       if (allocated(error)) return
-      call check(error, .not. gostshyp%suppress_negative_amplitudes)
+      call check(error,.not. gostshyp%suppress_negative_amplitudes)
    end subroutine test_roundtrip
 
    !> Exercise the abstract file/printing interface without knowing the concrete type
@@ -808,25 +950,25 @@ contains
       end if
       do i = first, last
          call param%write_file(stem//extensions(i), err)
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
          call param%init_defaults()
          call param%read_file(stem//extensions(i), err)
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
-         open(newunit=unit, status="scratch", action="readwrite", iostat=stat)
+         open (newunit=unit, status="scratch", action="readwrite", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
          call param%print_parameters(err, unit)
-         close(unit, iostat=stat)
-         call check(error, .not. allocated(err))
+         close (unit, iostat=stat)
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
          call check(error, stat, 0)
          if (allocated(error)) return
-         open(newunit=unit, file=stem//extensions(i), status="old", iostat=stat)
+         open (newunit=unit, file=stem//extensions(i), status="old", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         close(unit, status="delete", iostat=stat)
+         close (unit, status="delete", iostat=stat)
          call check(error, stat, 0)
       end do
    end subroutine roundtrip
@@ -839,21 +981,22 @@ contains
       type(moist_cavity_iswig_parameters_type) :: iswig
       integer :: unit, stat, close_stat, i
       character(len=40), parameter :: bad_paths(3) = [character(len=40) :: &
-         "moist-test-parameters-formats.txt", "moist-test-parameters-formats", "directory.json/no-extension"]
+         & "moist-test-parameters-formats.txt", "moist-test-parameters-formats", &
+         & "directory.json/no-extension"]
       logical :: exists
       !> Uppercase extension; must not match another test's file on case-insensitive systems
       character(len=*), parameter :: toml_file = "moist-test-parameters-formats.TOML"
 
-      open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
+      open (newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, "(a)", iostat=stat) "# Independently authored TOML", &
+      write (unit, "(a)", iostat=stat) "# Independently authored TOML", &
          "tolerance = 2e-8", "[grid]", "num_leb = 110"
-      close(unit, iostat=close_stat)
+      close (unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
       call param%read_file(toml_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, param%num_leb, 110)
       if (allocated(error)) return
@@ -863,25 +1006,25 @@ contains
       if (allocated(error)) return
       ! Uppercase output extensions select TOML too
       call param%write_file(toml_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call param%read_file(toml_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
-      open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
+      open (newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, "(a)", iostat=stat) "num_leb = ["
-      close(unit, iostat=close_stat)
+      write (unit, "(a)", iostat=stat) "num_leb = ["
+      close (unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
       call iswig%read_file(toml_file, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      open(newunit=unit, file=toml_file, status="old", iostat=stat)
+      open (newunit=unit, file=toml_file, status="old", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      close(unit, status="delete", iostat=stat)
+      close (unit, status="delete", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
       call iswig%read_file(toml_file, err)
@@ -891,8 +1034,8 @@ contains
          call iswig%write_file(trim(bad_paths(i)), err)
          call check(error, allocated(err))
          if (allocated(error)) return
-         inquire(file=trim(bad_paths(i)), exist=exists)
-         call check(error, .not. exists)
+         inquire (file=trim(bad_paths(i)), exist=exists)
+         call check(error,.not. exists)
          if (allocated(error)) return
          call iswig%read_file(trim(bad_paths(i)), err)
          call check(error, allocated(err))
@@ -909,46 +1052,46 @@ contains
       integer :: unit, stat
       integer :: i
       character(len=32), parameter :: invalid(3) = [character(len=32) :: &
-         "[]", "{broken", '{"num_leb": "bad"}']
+                                                    "[]", "{broken", '{"num_leb": "bad"}']
 
       source%tolerance = 1.0e-8_wp
       call source%write_file(parameter_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       copied = source
       copied%tolerance = 1.0e-6_wp
       call copied%write_file(parameter_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call copied%read_file(parameter_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, copied%tolerance, 1.0e-6_wp)
       if (allocated(error)) return
       call check(error, source%tolerance, 1.0e-8_wp)
       if (allocated(error)) return
       do i = 1, size(invalid)
-         open(newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
+         open (newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, "(a)", iostat=stat) trim(invalid(i))
-         close(unit)
+         write (unit, "(a)", iostat=stat) trim(invalid(i))
+         close (unit)
          call check(error, stat, 0)
          if (allocated(error)) return
          call iswig%read_file(parameter_file, err)
          call check(error, allocated(err))
          if (allocated(error)) return
       end do
-      open(newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
+      open (newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, "(a)", iostat=stat) '{"num_leb": 194}'
-      close(unit)
+      write (unit, "(a)", iostat=stat) '{"num_leb": 194}'
+      close (unit)
       call check(error, stat, 0)
       if (allocated(error)) return
       iswig%cut_f = 0.5_wp
       call iswig%read_file(parameter_file, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, iswig%num_leb, 194)
       if (allocated(error)) return
@@ -957,10 +1100,10 @@ contains
       call iswig%write_file("missing-moist-parameter-directory/config.json", err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      open(newunit=unit, file=parameter_file, status="old", iostat=stat)
+      open (newunit=unit, file=parameter_file, status="old", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      close(unit, status="delete", iostat=stat)
+      close (unit, status="delete", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
       call iswig%read_file(parameter_file, err)
@@ -981,8 +1124,8 @@ contains
       real(wp) :: lower
 
       call param%new(nleb=110, tolerance=2.0e-7_wp, proj_maxiter=81, proj_level=9, &
-         branch_weight_s=0.03_wp, rho_grid_h=0.75_wp, wleb_prune_level=0, error=err)
-      call check(error, .not. allocated(err))
+                     branch_weight_s=0.03_wp, rho_grid_h=0.75_wp, wleb_prune_level=0, error=err)
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, param%num_leb == 110 .and. param%proj_maxiter == 81 .and. param%proj_level == 9)
       if (allocated(error)) return
@@ -1008,17 +1151,17 @@ contains
       param%branch_weight_floor = 0.25_wp
       param%phi_alpha = 3.0_wp
       call param%compute_derived(err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, exp(-param%branch_dphi_max/0.03_wp), 0.25_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       ! Quadratic objective excess equals the admissible objective bound
       call check(error, 1.5_wp*(param%rho_max_from(2.0_wp)**2 - 4.0_wp), &
-         param%branch_dphi_max, thr=1.0e-14_wp)
+                 param%branch_dphi_max, thr=1.0e-14_wp)
       if (allocated(error)) return
       do level = 0, 6
          call param%new(wleb_prune_level=level, error=err)
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
          if (level == 0) then
             call check(error, param%wleb_prune_from == 0.0_wp .and. param%wleb_prune_to == 0.0_wp)
@@ -1072,56 +1215,57 @@ contains
       type(moist_cavity_drop_parameters_type) :: drop
       type(moist_cavity_iswig_parameters_type) :: iswig
       type(moist_cavity_numsa_parameters_type) :: numsa
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
+      type(moist_cavity_mt_parameters_type) :: mt
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
       type(moist_pcm_parameters_type) :: pcm
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
-         '"projection":{"maxiter":72,"level":9,'// &
-         '"octree":{"seed_size":0.7,"max_boxes":123,"max_survivors":43,"max_depth":8,"seed_mode":2}},'// &
-         '"screening":{"cell_grid_full_scan_below":19,"cell_grid_fraction":0.4},'// &
-         '"switching":{"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,'// &
-         '"w_0tra_from":0.15,"w_0tra_to":0.4,"wleb_prune_level":2},'// &
-         '"density":{"rho_grid_h":0.8},"branching":{"softmax_scale":0.04,"weight_floor":0.2}}', error)
+                      '"projection":{"maxiter":72,"level":9,'// &
+                      '"octree":{"seed_size":0.7,"max_boxes":123,"max_survivors":43,"max_depth":8,"seed_mode":2}},'// &
+                      '"screening":{"cell_grid_full_scan_below":19,"cell_grid_fraction":0.4},'// &
+                      '"switching":{"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,'// &
+                      '"w_0tra_from":0.15,"w_0tra_to":0.4,"wleb_prune_level":2},'// &
+                      '"density":{"rho_grid_h":0.8},"branching":{"softmax_scale":0.04,"weight_floor":0.2}}', error)
       if (allocated(error)) return
       call check(error, drop%num_leb == 110 .and. drop%do_fine .and. &
-         drop%proj_maxiter == 72 .and. drop%proj_level == 9 .and. &
-         drop%octree_max_boxes == 123 .and. drop%octree_max_survivors == 43 .and. &
-         drop%octree_max_depth == 8 .and. drop%octree_seed_mode == 2 .and. &
-         drop%cell_grid_full_scan_below == 19 .and. drop%wleb_prune_level == 2)
+                 drop%proj_maxiter == 72 .and. drop%proj_level == 9 .and. &
+                 drop%octree_max_boxes == 123 .and. drop%octree_max_survivors == 43 .and. &
+                 drop%octree_max_depth == 8 .and. drop%octree_seed_mode == 2 .and. &
+                 drop%cell_grid_full_scan_below == 19 .and. drop%wleb_prune_level == 2)
       if (allocated(error)) return
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%octree_seed_size, &
-         drop%cell_grid_fraction, drop%w_0ls_from, drop%w_0ls_to, drop%w_0ls_p, drop%w_0ls_a, &
-         drop%w_0tra_from, drop%w_0tra_to, drop%rho_grid_h, drop%branch_weight_s, &
-         drop%branch_weight_floor] - &
-         [2.0e-7_wp, 2.0_wp, 0.7_wp, 0.4_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 0.15_wp, 0.4_wp, &
-          0.8_wp, 0.04_wp, 0.2_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                    drop%cell_grid_fraction, drop%w_0ls_from, drop%w_0ls_to, drop%w_0ls_p, drop%w_0ls_a, &
+                                    drop%w_0tra_from, drop%w_0tra_to, drop%rho_grid_h, drop%branch_weight_s, &
+                                    drop%branch_weight_floor] - &
+                                   [2.0e-7_wp, 2.0_wp, 0.7_wp, 0.4_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 0.15_wp, 0.4_wp, &
+                                    0.8_wp, 0.04_wp, 0.2_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
-         drop%do_r_iI .and. drop%do_rho, more="do_fine from a file did not switch every property on")
+                 drop%do_r_iI .and. drop%do_rho, more="do_fine from a file did not switch every property on")
       if (allocated(error)) return
       ! A single property flag stays single
       call configured(drop, '{"do_curvature":true}', error)
       if (allocated(error)) return
       call check(error, drop%do_curvature .and. .not. (drop%do_fine .or. drop%do_grid_density .or. &
-         drop%do_normal .or. drop%do_r_iI .or. drop%do_rho), &
-         more="do_curvature from a file switched other properties")
+                                                       drop%do_normal .or. drop%do_r_iI .or. drop%do_rho), &
+                 more="do_curvature from a file switched other properties")
       if (allocated(error)) return
       call configured(iswig, '{"num_leb":194,"cut_a":0.3,"cut_f":0.4}', error)
       if (allocated(error)) return
       call check(error, iswig%num_leb, 194)
       if (allocated(error)) return
       call check(error, maxval(abs([iswig%cut_a, iswig%cut_f] - [0.3_wp, 0.4_wp])), &
-         0.0_wp, thr=1.0e-14_wp)
+                 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call configured(numsa, '{"num_leb":194,"probe":0.8,"offset":1.1,"smoothing":0.4,"tolsesp":0.02}', error)
       if (allocated(error)) return
       call check(error, numsa%num_leb, 194)
       if (allocated(error)) return
       call check(error, maxval(abs([numsa%probe, numsa%offset, numsa%smoothing, numsa%tolsesp] - &
-         [0.8_wp, 1.1_wp, 0.4_wp, 0.02_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                   [0.8_wp, 1.1_wp, 0.4_wp, 0.02_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call configured(mc, '{"spacing":0.3,"obj_file":"one.obj","pqr_file":"two.pqr"}', error)
       if (allocated(error)) return
@@ -1131,15 +1275,23 @@ contains
       if (allocated(error)) return
       call check(error, mc%obj_file == "one.obj" .and. mc%pqr_file == "two.pqr")
       if (allocated(error)) return
+      call configured(mt, '{"spacing":0.3,"target_area":0.5,"area_tolerance":0.2,"gaussian_scale":4.5,'// &
+                      '"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,"weight_cutoff":1e-6}', error)
+      if (allocated(error)) return
+      call check(error, maxval(abs([mt%spacing, mt%target_area, mt%area_tolerance, mt%gaussian_scale, &
+                                    mt%w_0ls_from, mt%w_0ls_to, mt%w_0ls_p, mt%w_0ls_a, mt%weight_cutoff] - &
+                                   [0.3_wp, 0.5_wp, 0.2_wp, 4.5_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 1.0e-6_wp])), &
+                 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
       call configured(svdw, '{"blend_k":7,"blend_1b":0.6,"blend_2b":0.4,"blend_3b":2}', error)
       if (allocated(error)) return
       call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b] - &
-         [7.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                   [7.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call configured(cfc, '{"a1":-12,"a2":-7,"c":3,"m":6}', error)
       if (allocated(error)) return
       call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c] - [-12.0_wp, -7.0_wp, 3.0_wp])), &
-         0.0_wp, thr=1.0e-14_wp)
+                 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, cfc%m, 6)
       if (allocated(error)) return
@@ -1153,7 +1305,7 @@ contains
       if (allocated(error)) return
       call configured(pcm, '{"solver":2,"solver_tol":0.00002,"solver_maxiter":71}', error)
       if (allocated(error)) return
-      call check(error, pcm%solver == solver_type%lu .and. pcm%solver_maxiter == 71)
+      call check(error, pcm%solver == solver_type%iterative .and. pcm%solver_maxiter == 71)
       if (allocated(error)) return
       call check(error, pcm%solver_tol, 2.0e-5_wp, thr=1.0e-14_wp)
 
@@ -1178,19 +1330,19 @@ contains
          !> Fixture path
          character(len=*), parameter :: path = "moist-test-parameters-field-fixture.json"
 
-         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, "(a)", iostat=stat) document
-         close(unit, iostat=close_stat)
+         write (unit, "(a)", iostat=stat) document
+         close (unit, iostat=close_stat)
          call check(error, stat == 0 .and. close_stat == 0)
          if (allocated(error)) return
          call param%read_file(path, err)
-         open(newunit=unit, file=path, status="old", iostat=stat)
-         if (stat == 0) close(unit, status="delete", iostat=stat)
+         open (newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close (unit, status="delete", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
          call roundtrip(param, "moist-test-parameters-all-fields", error)
          if (allocated(error)) return
@@ -1215,45 +1367,45 @@ contains
          !> Serialized lines; no copied field/default tables
          character(len=4096) :: reset_line, fresh_line
 
-         allocate(reset, source=param)
-         allocate(fresh, mold=param)
+         allocate (reset, source=param)
+         allocate (fresh, mold=param)
          call reset%init_defaults()
          call reset%validate(err)
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
          call fresh%validate(err)
-         call check(error, .not. allocated(err))
+         call check(error,.not. allocated(err))
          if (allocated(error)) return
-         open(newunit=reset_unit, status="scratch", action="readwrite", iostat=reset_stat)
+         open (newunit=reset_unit, status="scratch", action="readwrite", iostat=reset_stat)
          call check(error, reset_stat, 0)
          if (allocated(error)) return
-         open(newunit=fresh_unit, status="scratch", action="readwrite", iostat=fresh_stat)
-         if (fresh_stat /= 0) close(reset_unit)
+         open (newunit=fresh_unit, status="scratch", action="readwrite", iostat=fresh_stat)
+         if (fresh_stat /= 0) close (reset_unit)
          call check(error, fresh_stat, 0)
          if (allocated(error)) return
          ! Leave through the block so both scratch units are closed on failure
          compare: block
             call reset%print_parameters(err, reset_unit)
-            call check(error, .not. allocated(err))
+            call check(error,.not. allocated(err))
             if (allocated(error)) exit compare
             call fresh%print_parameters(err, fresh_unit)
-            call check(error, .not. allocated(err))
+            call check(error,.not. allocated(err))
             if (allocated(error)) exit compare
-            rewind(reset_unit)
-            rewind(fresh_unit)
+            rewind (reset_unit)
+            rewind (fresh_unit)
             do
-               read(reset_unit, "(a)", iostat=reset_stat) reset_line
-               read(fresh_unit, "(a)", iostat=fresh_stat) fresh_line
+               read (reset_unit, "(a)", iostat=reset_stat) reset_line
+               read (fresh_unit, "(a)", iostat=fresh_stat) fresh_line
                if (reset_stat < 0 .and. fresh_stat < 0) exit
                call check(error, reset_stat == 0 .and. fresh_stat == 0)
                if (allocated(error)) exit compare
                call check(error, trim(reset_line) == trim(fresh_line), &
-                  more="default reset retained a configured field")
+                          more="default reset retained a configured field")
                if (allocated(error)) exit compare
             end do
          end block compare
-         close(reset_unit, iostat=reset_stat)
-         close(fresh_unit, iostat=fresh_stat)
+         close (reset_unit, iostat=reset_stat)
+         close (fresh_unit, iostat=fresh_stat)
          if (allocated(error)) return
          call check(error, reset_stat == 0 .and. fresh_stat == 0)
       end subroutine check_reset
@@ -1268,7 +1420,8 @@ contains
       type(moist_error), allocatable :: err
       !> Parameter classes with numerical validation
       type(moist_cavity_drop_parameters_type) :: drop
-      type(moist_cavity_marchingcubes_parameters_type) :: mc
+      type(moist_cavity_mc_parameters_type) :: mc
+      type(moist_cavity_mt_parameters_type) :: mt
       type(moist_pcm_parameters_type) :: pcm
       !> Invalid solver cases
       integer :: invalid
@@ -1281,7 +1434,7 @@ contains
          call pcm%init_defaults()
          select case (invalid)
          case (1)
-            pcm%solver = solver_type%inversion - 1
+            pcm%solver = solver_type%dense - 1
          case (2)
             pcm%solver = solver_type%iterative + 1
          case (3)
@@ -1299,6 +1452,8 @@ contains
       call read_bad(drop, '{"tolerance":0.0}', error)
       if (allocated(error)) return
       call read_bad(mc, '{"spacing":0.0}', error)
+      if (allocated(error)) return
+      call read_bad(mt, '{"area_tolerance":1.5}', error)
       if (allocated(error)) return
       call read_bad(pcm, '{"solver":0}', error)
 
@@ -1321,16 +1476,16 @@ contains
          !> Owned file
          character(len=*), parameter :: path = "moist-test-parameters-validation.json"
 
-         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, "(a)", iostat=stat) document
-         close(unit, iostat=close_stat)
+         write (unit, "(a)", iostat=stat) document
+         close (unit, iostat=close_stat)
          call check(error, stat == 0 .and. close_stat == 0)
          if (allocated(error)) return
          call param%read_file(path, err)
-         open(newunit=unit, file=path, status="old", iostat=stat)
-         if (stat == 0) close(unit, status="delete", iostat=stat)
+         open (newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close (unit, status="delete", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
          call check(error, allocated(err))
@@ -1350,12 +1505,12 @@ contains
       call svdw%new(blend_k=7.0_wp, blend_1b=0.6_wp, blend_2b=0.4_wp, blend_3b=2.0_wp)
       call svdw%new(blend_k=8.0_wp)
       call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b] - &
-         [8.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                   [8.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call cfc%new(a1=-12.0_wp, a2=-7.0_wp, c=3.0_wp, m=6)
       call cfc%new(a1=-11.0_wp)
       call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c] - [-11.0_wp, -7.0_wp, 3.0_wp])), &
-         0.0_wp, thr=1.0e-14_wp)
+                 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, cfc%m, 6)
       if (allocated(error)) return

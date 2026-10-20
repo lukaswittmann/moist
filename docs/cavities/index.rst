@@ -96,4 +96,5 @@ Available Cavities
    drop
    iswig
    numsa
-   marchingcubes
+   mc
+   mt

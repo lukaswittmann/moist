@@ -10,7 +10,7 @@ module moist_model_continuum_component_gostshyp
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_model_parameters, only: moist_model_parameters_type
-   use moist_output_citations, only: citation_gostshyp
+   use moist_output_citations, only: citation
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
@@ -143,7 +143,7 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
-      call self%ctx%cite(citation_gostshyp)
+      call self%ctx%cite(citation%gostshyp)
 
       self%mol_solu = mol
       if (.not. allocated(cavity%a) .or. .not. allocated(cavity%xyz) .or. &

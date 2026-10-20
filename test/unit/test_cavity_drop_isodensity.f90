@@ -40,8 +40,8 @@ module test_cavity_drop_isodensity
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
-      & nuclear_charge_request_type, gaussian_potential_request_type, coupling_view_type, &
-      & coupling_make_view, coupling_close_view
+      & nuclear_charge_request_type, gaussian_potential_request_type, point_potential_request_type, &
+      & coupling_view_type, coupling_make_view, coupling_close_view
    use moist_channels_fields, only: field_query_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_work_type, &
@@ -52,11 +52,11 @@ module test_cavity_drop_isodensity
       moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
+   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
    use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
    implicit none(type, external)
    private
@@ -210,7 +210,7 @@ contains
                   new_unittest("build_invalidates_the_other_couplings", test_build_invalidates_others), &
                   new_unittest("rebuild_follows_the_density", test_rebuild_follows_density), &
                   new_unittest("core_fill_refuses_charges_out_of_range", test_core_fill_charge_range), &
-                  new_unittest("marchingcubes_follows_the_density", test_marchingcubes_follows_density), &
+                  new_unittest("mc_follows_the_density", test_mc_follows_density), &
                   new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives), &
                   new_unittest("bad_gradient_after_update", test_gradient_after_update_fails, should_fail=.true.), &
                   new_unittest("bad_gradient_after_prepare_build", test_gradient_after_staging_fails, &
@@ -3632,6 +3632,12 @@ contains
          type is (gaussian_potential_request_type)
             nvisit = nvisit + 1
             call coupling%answer("phi", phi, err)
+         type is (point_potential_request_type)
+            call check(error, refused .and. .not. cavity%is_built(), &
+               & more="a built Gaussian cavity declared a point potential")
+            if (allocated(error)) return
+            nvisit = nvisit + 1
+            call coupling%answer("phi", phi, err)
          end select
          if (allocated(err)) exit
       end do
@@ -3811,10 +3817,10 @@ contains
 
    !> The build projects the structure of `update`, not a later change of it
    !>
-   !> The pseudo atom's surface is centred on its nucleus: built after the
-   !> caller moved its own copy of the atom, the surface stays centred where
+   !> The pseudo atom's surface is centered on its nucleus: built after the
+   !> caller moved its own copy of the atom, the surface stays centered where
    !> the atom was at `update`; negative control: a cavity updated at the moved
-   !> position is centred there
+   !> position is centered there
    subroutine test_build_keeps_structure(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -3824,7 +3830,7 @@ contains
       type(coupling_type), target :: coupling
       type(mctc_error), allocatable :: cavity_error
       !> Centroid of each projected surface
-      real(wp) :: centre(3), centre_moved(3)
+      real(wp) :: center(3), center_moved(3)
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_pseudo_atom_cavity(cavity, mol, ctx, error)
@@ -3848,7 +3854,7 @@ contains
       end if
       call check(error, cavity%is_built() .and. cavity%ngrid > 0, more="the pseudo atom has no surface")
       if (allocated(error)) return
-      centre = sum(cavity%xyz, dim=2)/cavity%ngrid
+      center = sum(cavity%xyz, dim=2)/cavity%ngrid
 
       call update_iso_cavity(control, moved, pseudo_atom_density(), [54.0_wp], cavity_error)
       if (allocated(cavity_error)) then
@@ -3857,11 +3863,11 @@ contains
       end if
       call check(error, control%ngrid > 0, more="the moved pseudo atom has no surface")
       if (allocated(error)) return
-      centre_moved = sum(control%xyz, dim=2)/control%ngrid
-      call check(error, norm2(centre_moved - moved%xyz(:, 1)) < 1.0e-6_wp, &
-                 more="control: the surface is not centred on its atom")
+      center_moved = sum(control%xyz, dim=2)/control%ngrid
+      call check(error, norm2(center_moved - moved%xyz(:, 1)) < 1.0e-6_wp, &
+                 more="control: the surface is not centered on its atom")
       if (allocated(error)) return
-      call check(error, norm2(centre - updated%xyz(:, 1)) < 1.0e-6_wp, &
+      call check(error, norm2(center - updated%xyz(:, 1)) < 1.0e-6_wp, &
                  more="the build projected the structure changed after update")
    end subroutine test_build_keeps_structure
 
@@ -4254,13 +4260,13 @@ contains
    !> `update` leaves no surface; each build integrates the density of its own
    !> answers: twice the density matrix changes the area at a fixed structure,
    !> the same density matrix again reproduces the first
-   subroutine test_marchingcubes_follows_density(error)
+   subroutine test_mc_follows_density(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
       type(structure_type) :: mol
       type(moist_context_type), target :: ctx
-      type(cavity_type_marchingcubes) :: cavity
+      type(cavity_type_mc) :: cavity
       class(radius_type), allocatable :: radii
       type(coupling_type), target :: coupling
       type(mctc_error), allocatable :: cavity_error
@@ -4278,7 +4284,7 @@ contains
       end if
       call build_pseudo_atom_lsf(lsf, 54, 54, .false., mol, error, rho_iso=0.4_wp)
       if (allocated(error)) return
-      call new_cavity_marchingcubes(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, ctx=ctx)
+      call new_cavity_mc(cavity, radius_model=radii, lsf_model=lsf, error=cavity_error, ctx=ctx)
       if (.not. allocated(cavity_error)) call cavity%update(mol, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, "marching-cubes update failed: "//cavity_error%message)
@@ -4289,8 +4295,9 @@ contains
       if (allocated(error)) return
       do ibuild = 1, 3
          call cavity%prepare_build(coupling, cavity_error)
-         if (.not. allocated(cavity_error)) &
-            & call answer_density(coupling, scaling(ibuild)*pseudo_atom_density(), cavity_error)
+         if (.not. allocated(cavity_error)) then
+            call answer_density(coupling, scaling(ibuild)*pseudo_atom_density(), cavity_error)
+         end if
          if (.not. allocated(cavity_error)) call cavity%build(coupling, cavity_error)
          if (allocated(cavity_error)) then
             call test_failed(error, "marching-cubes build failed: "//cavity_error%message)
@@ -4307,7 +4314,7 @@ contains
       if (allocated(error)) return
       call check(error, area(3), area(1), thr=1.0e-10_wp*area(1), &
                  more="the same density integrated a different area")
-   end subroutine test_marchingcubes_follows_density
+   end subroutine test_mc_follows_density
 
    !> A rebuild drops the nuclear derivatives of the previous surface
    !>

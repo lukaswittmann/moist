@@ -24,10 +24,11 @@ testdrive_dep = dependency(
 test_env = environment()
 test_env.set('MOIST_SOURCE_ROOT', meson.project_source_root())
 
-# Increase ifx default OMP_STACKSIZE to avoid SIGSEGV for some tests
-test_env.set('OMP_STACKSIZE', '128M')
-# Serial test for intel25
+# Serial BLAS: suites run their tests in an OpenMP parallel; meson runs suites
+# concurrently, so threaded BLAS (MKL on intel25, pthreaded OpenBLAS on the
+# conda, ilp64 and MSYS2 legs) oversubscribes
 test_env.set('MKL_NUM_THREADS', '1')
+test_env.set('OPENBLAS_NUM_THREADS', '1')
 
 subdir('unit')
 

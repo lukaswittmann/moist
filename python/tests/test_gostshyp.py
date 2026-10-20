@@ -182,10 +182,13 @@ CASES = [
 #: The case used by tests that pin a convention once rather than sweeping.
 PRIMARY_CASE = CASES[0]
 
-#: Reference values
+#: Reference values. The energies are the pre-port values (0.1340185971628404
+#: and 0.15034462492176853, matched to 1e-9) re-pinned on 2026-10-15 for the
+#: shared full-precision Born zeta table, which moves the DROP areas and these
+#: energies by 4-5e-6 relative
 GOLDEN = {
-    ("water", "sto-3g"): {"energy": 0.1340185971628404, "ngrid": 71},
-    ("water", "def2-svp"): {"energy": 0.15034462492176853, "ngrid": 71},
+    ("water", "sto-3g"): {"energy": 0.1340191762261821, "ngrid": 71},
+    ("water", "def2-svp"): {"energy": 0.15034536228273612, "ngrid": 71},
 }
 
 #: The golden values are a different platform's arithmetic away from exact,

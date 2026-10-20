@@ -4,7 +4,8 @@ module moist
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
-   use moist_cavity_marchingcubes, only: moist_cavity_marchingcubes_parameters_type
+   use moist_cavity_mc, only: moist_cavity_mc_parameters_type, cavity_type_mc, new_cavity_mc
+   use moist_cavity_mt, only: moist_cavity_mt_parameters_type, cavity_type_mt, new_cavity_mt
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
@@ -16,6 +17,8 @@ module moist
    use moist_version, only: get_moist_version
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
+   use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
+      & get_solvent_descriptors_by_id
    use moist_build_info, only: git_commit, build_host
 
    use moist_model, only: solvation_model_type, model_continuum_type, new_continuum_model, &
@@ -32,7 +35,7 @@ module moist
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type, &
       & atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type, &
-      & radial_potential_adjoint_response_type
+      & radial_potential_adjoint_response_type, parameter_adjoint_response_type
    use moist_channels_fields, only: field_query_type, field_info_type, &
       & field_real, field_int, field_bool, field_max_rank
    implicit none(type, external)
@@ -42,7 +45,9 @@ module moist
    public :: moist_cavity_drop_parameters_type
    public :: moist_cavity_iswig_parameters_type
    public :: moist_cavity_numsa_parameters_type
-   public :: moist_cavity_marchingcubes_parameters_type
+   public :: moist_cavity_mc_parameters_type
+   public :: moist_cavity_mt_parameters_type, cavity_type_mt, new_cavity_mt
+   public :: cavity_type_mc, new_cavity_mc
    public :: moist_pcm_parameters_type, moist_gostshyp_parameters_type
    public :: moist_cavity_drop_lsf_svdw_param_type
    public :: moist_cavity_drop_lsf_cfc_param_type
@@ -52,6 +57,7 @@ module moist
    public :: get_moist_version
    public :: cavity_type_drop, new_cavity_drop
    public :: radius_type, new_radii
+   public :: solvent_descriptors_type, get_solvent_descriptors, get_solvent_descriptors_by_id
    public :: git_commit, build_host
    public :: solvation_model_type, model_continuum_type, new_continuum_model, &
       & model_moz_1d_type, new_moz_1d_model, model_moz_3d_type, new_moz_3d_model
@@ -67,7 +73,7 @@ module moist
    public :: response_type, response_item_type
    public :: potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type
    public :: atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type
-   public :: radial_potential_adjoint_response_type
+   public :: radial_potential_adjoint_response_type, parameter_adjoint_response_type
    public :: field_query_type, field_info_type, field_real, field_int, field_bool, field_max_rank
 
 end module moist

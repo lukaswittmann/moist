@@ -56,19 +56,27 @@ program tester
    use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
    use test_cavity_numsa, only: collect_cavity_numsa
    use test_cavity_surface_adjoint, only: collect_cavity_surface_adjoint
-   use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
+   use test_cavity_mc, only: collect_cavity_mc
+   use test_cavity_mt_mesh, only: collect_cavity_mt_mesh
+   use test_cavity_mt_patches, only: collect_cavity_mt_patches
+   use test_cavity_mt, only: collect_cavity_mt
    use test_math_solvers, only: collect_math_solvers
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
    use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_cavity_drop_projector, only: collect_cavity_drop_projector
    use test_cavity_drop_properties, only: collect_cavity_drop_properties
-   use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
    use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
    use test_model_component_pcm_electrostatics, only: collect_model_component_pcm_electrostatics
-   use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
+   use test_model_component_pcm_solvers, only: collect_model_component_pcm_solvers
+   use test_model_component_pcm_interface, only: collect_model_component_pcm_interface
+   use test_model_component_pcm_derivatives, only: collect_model_component_pcm_derivatives
+   use test_model_component_pcm_references, only: collect_model_component_pcm_references
+   use test_model_component_pcm_regression, only: collect_model_component_pcm_regression
+   use test_model_component_pcm_vacuum, only: collect_model_component_pcm_vacuum
+   use test_model_component_pcm_kernel_variants, only: collect_model_component_pcm_kernel_variants
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_continuum, only: collect_model_continuum
@@ -140,18 +148,25 @@ program tester
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
-      & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &
+      & new_testsuite("cavity_mc", collect_cavity_mc), &
+      & new_testsuite("cavity_mt_mesh", collect_cavity_mt_mesh), &
+      & new_testsuite("cavity_mt_patches", collect_cavity_mt_patches), &
+      & new_testsuite("cavity_mt", collect_cavity_mt), &
       & new_testsuite("cavity_reference", collect_cavity_reference), &
       & new_testsuite("cavity_surface_adjoint", collect_cavity_surface_adjoint), &
-      & new_testsuite("model_component_pcm_amat", collect_model_component_pcm_amat), &
       & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
-      & new_testsuite("model_component_pcm_amat_assembly", &
-         collect_model_component_pcm_amat_assembly), &
-      & new_testsuite("model_component_pcm_amat_adjoint", &
-         collect_model_component_pcm_amat_adjoint), &
+      & new_testsuite("model_component_pcm_amat_assembly", collect_model_component_pcm_amat_assembly), &
+      & new_testsuite("model_component_pcm_amat_adjoint", collect_model_component_pcm_amat_adjoint), &
       & new_testsuite("model_component_pcm_electrostatics", &
          collect_model_component_pcm_electrostatics), &
-      & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
+      & new_testsuite("model_component_pcm_solvers", collect_model_component_pcm_solvers), &
+      & new_testsuite("model_component_pcm_interface", collect_model_component_pcm_interface), &
+      & new_testsuite("model_component_pcm_derivatives", collect_model_component_pcm_derivatives), &
+      & new_testsuite("model_component_pcm_references", collect_model_component_pcm_references), &
+      & new_testsuite("model_component_pcm_regression", collect_model_component_pcm_regression), &
+      & new_testsuite("model_component_pcm_vacuum", collect_model_component_pcm_vacuum), &
+      & new_testsuite("model_component_pcm_kernel_variants", &
+         collect_model_component_pcm_kernel_variants), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_continuum", collect_model_continuum), &

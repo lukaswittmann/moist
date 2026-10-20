@@ -2,13 +2,11 @@
 module test_model_component_pcm_amat_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_boys, only: boys_x_far, boys_x_taylor, boys012
-   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_width2, &
-      pcm_amat_far_value, pcm_amat_far_grad, pcm_amat_far_hess, &
-      pcm_amat_far_value_row, pcm_amat_far_grad_row, &
-      pcm_amat_near_value, pcm_amat_near_grad, pcm_amat_near_hess, &
-      pcm_amat_diag_value, pcm_amat_diag_grad, pcm_amat_diag_hess
+   use mctc_env_error, only: moist_error => error_type
+   use test_pcm_conductor_probe, only: probe_conductor_matrix, probe_conductor_bilinear_weights, &
+      & probe_conductor_fixed_seed_tangent
    use test_helpers, only: fd4_scalar, fd4_offsets
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
 
@@ -17,32 +15,32 @@ module test_model_component_pcm_amat_kernel
    !> Sample points (xi_i, xi_j, r2)
    integer, parameter :: npts = 10
    real(wp), parameter :: pts(3, npts) = reshape([ &
-                          3.0_wp, 4.0_wp, 1.7361111111111111e-4_wp, &
-                          3.0_wp, 4.0_wp, 1.0e-2_wp, &
-                          3.0_wp, 4.0_wp, 8.6805555555555556e-2_wp, &
-                          3.0_wp, 4.0_wp, 0.2_wp, &
-                          3.0_wp, 4.0_wp, 1.0_wp, &
-                          3.0_wp, 4.0_wp, 13.0_wp, &
-                          3.0_wp, 4.0_wp, 14.0625_wp, &
-                          3.0_wp, 4.0_wp, 40.0_wp, &
-                          1.5_wp, 12.0_wp, 0.3_wp, &
-                          9.0_wp, 11.0_wp, 2.5_wp], [3, npts])
+                                                 3.0_wp, 4.0_wp, 1.7361111111111111e-4_wp, &
+                                                 3.0_wp, 4.0_wp, 1.0e-2_wp, &
+                                                 3.0_wp, 4.0_wp, 8.6805555555555556e-2_wp, &
+                                                 3.0_wp, 4.0_wp, 0.2_wp, &
+                                                 3.0_wp, 4.0_wp, 1.0_wp, &
+                                                 3.0_wp, 4.0_wp, 13.0_wp, &
+                                                 3.0_wp, 4.0_wp, 14.0625_wp, &
+                                                 3.0_wp, 4.0_wp, 40.0_wp, &
+                                                 1.5_wp, 12.0_wp, 0.3_wp, &
+                                                 9.0_wp, 11.0_wp, 2.5_wp], [3, npts])
 
    !> Extreme sample points used for the value and symmetry checks only
    integer, parameter :: nextreme = 4
    real(wp), parameter :: extreme_pts(3, nextreme) = reshape([ &
-                          3.0_wp, 4.0_wp, 1.0e-11_wp, &
-                          3.0_wp, 4.0_wp, 1.0e-6_wp, &
-                          0.5_wp, 0.5_wp, 1.0e-8_wp, &
-                          3.0_wp, 4.0_wp, 1.0e6_wp], [3, nextreme])
+                                                             3.0_wp, 4.0_wp, 1.0e-11_wp, &
+                                                             3.0_wp, 4.0_wp, 1.0e-6_wp, &
+                                                             0.5_wp, 0.5_wp, 1.0e-8_wp, &
+                                                             3.0_wp, 4.0_wp, 1.0e6_wp], [3, nextreme])
 
    !> Diagonal sample points (xi, f)
    integer, parameter :: ndiag = 4
    real(wp), parameter :: diag_pts(2, ndiag) = reshape([ &
-                          3.0_wp, 1.0_wp, &
-                          7.5_wp, 0.35_wp, &
-                          0.8_wp, 0.02_wp, &
-                          12.0_wp, 0.99_wp], [2, ndiag])
+                                                       3.0_wp, 1.0_wp, &
+                                                       7.5_wp, 0.35_wp, &
+                                                       0.8_wp, 0.02_wp, &
+                                                       12.0_wp, 0.99_wp], [2, ndiag])
 
    !> Finite-difference steps
    real(wp), parameter :: xi_step = 1.0e-3_wp
@@ -69,17 +67,15 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("near_value_vs_erf", test_near_value_vs_erf), &
-         new_unittest("boys_vs_reference", test_boys_vs_reference), &
-         new_unittest("width_derivatives_fd", test_width_derivatives_fd), &
-         new_unittest("near_grad_fd", test_near_grad_fd), &
-         new_unittest("near_hess_fd", test_near_hess_fd), &
-         new_unittest("near_exchange_symmetry", test_near_exchange_symmetry), &
-         new_unittest("far_is_coulomb", test_far_is_coulomb), &
-         new_unittest("far_matches_near_at_seam", test_far_matches_near_at_seam), &
-         new_unittest("far_row_matches_scalar", test_far_row_matches_scalar), &
-         new_unittest("diag_derivatives_fd", test_diag_derivatives_fd) &
-         ]
+                  new_unittest("near_value_vs_erf", test_near_value_vs_erf), &
+                  new_unittest("boys_vs_reference", test_boys_vs_reference), &
+                  new_unittest("near_grad_fd", test_near_grad_fd), &
+                  new_unittest("near_hess_fd", test_near_hess_fd), &
+                  new_unittest("near_exchange_symmetry", test_near_exchange_symmetry), &
+                  new_unittest("far_is_coulomb", test_far_is_coulomb), &
+                  new_unittest("far_matches_near_at_seam", test_far_matches_near_at_seam), &
+                  new_unittest("diag_derivatives_fd", test_diag_derivatives_fd) &
+                  ]
 
    end subroutine collect_model_component_pcm_amat_kernel
 
@@ -135,7 +131,8 @@ contains
       real(wp) :: a, a_ref
 
       do i = 1, npts
-         call pcm_amat_near_value(pts(1, i), pts(2, i), pts(3, i), a)
+         call probe_pair_value(pts(1, i), pts(2, i), pts(3, i), a, error)
+         if (allocated(error)) return
          a_ref = reference_value(pts(1, i), pts(2, i), pts(3, i))
          call check(error, a, a_ref, thr=exact_thr*max(1.0_wp, abs(a_ref)), &
                     more="generated kernel value deviates from erf(p*r)/r")
@@ -143,8 +140,8 @@ contains
       end do
 
       do i = 1, nextreme
-         call pcm_amat_near_value(extreme_pts(1, i), extreme_pts(2, i), &
-                                  extreme_pts(3, i), a)
+         call probe_pair_value(extreme_pts(1, i), extreme_pts(2, i), extreme_pts(3, i), a, error)
+         if (allocated(error)) return
          a_ref = reference_value(extreme_pts(1, i), extreme_pts(2, i), &
                                  extreme_pts(3, i))
          call check(error, a, a_ref, thr=exact_thr*max(1.0_wp, abs(a_ref)), &
@@ -202,7 +199,7 @@ contains
       x = boys_x_taylor
       call boys012(x*(1.0_wp - epsilon(1.0_wp)), f0, f1, f2, ex)
       call boys012(x*(1.0_wp + 8.0_wp*epsilon(1.0_wp)), f0_ref, f1_ref, &
-                            f2_ref, ex)
+                   f2_ref, ex)
       call check(error, f0, f0_ref, thr=1.0e-15_wp, &
                  more="Boys F0 is discontinuous at the Taylor crossover")
       if (allocated(error)) return
@@ -213,67 +210,6 @@ contains
                  more="Boys F2 is discontinuous at the Taylor crossover")
 
    end subroutine test_boys_vs_reference
-
-   !> Width-map derivatives against 4-point central finite differences
-   subroutine test_width_derivatives_fd(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Sample-point and stencil indices
-      integer :: i, k
-      !> Widths of the sample pair
-      real(wp) :: xi_i, xi_j
-      !> Analytic width and its derivatives
-      real(wp) :: p, p_i, p_j, p_ii, p_ij, p_jj
-      !> Stencil buffers for the value and the first derivatives
-      real(wp) :: vals(4), di(4), dj(4)
-      !> Finite-difference derivative
-      real(wp) :: fd
-      !> Unused stencil outputs
-      real(wp) :: dummy(3)
-
-      do i = 1, npts
-         xi_i = pts(1, i)
-         xi_j = pts(2, i)
-         call pcm_amat_width2(xi_i, xi_j, p, p_i, p_j, p_ii, p_ij, p_jj)
-
-         do k = 1, 4
-            call pcm_amat_width2(xi_i + fd4_offsets(k)*xi_step, xi_j, vals(k), &
-                                 di(k), dj(k), dummy(1), dummy(2), dummy(3))
-         end do
-         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
-         if (allocated(error)) return
-         call check(error, p_i, fd, thr=grad_atol + grad_rtol*abs(fd), &
-                    more="dp/dxi_i vs FD")
-         if (allocated(error)) return
-         call fd4_scalar(di(1), di(2), di(3), di(4), xi_step, fd, error)
-         if (allocated(error)) return
-         call check(error, p_ii, fd, thr=hess_atol + hess_rtol*abs(fd), &
-                    more="d2p/dxi_i**2 vs FD")
-         if (allocated(error)) return
-         call fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step, fd, error)
-         if (allocated(error)) return
-         call check(error, p_ij, fd, thr=hess_atol + hess_rtol*abs(fd), &
-                    more="d2p/dxi_i dxi_j vs FD")
-         if (allocated(error)) return
-
-         do k = 1, 4
-            call pcm_amat_width2(xi_i, xi_j + fd4_offsets(k)*xi_step, vals(k), &
-                                 di(k), dj(k), dummy(1), dummy(2), dummy(3))
-         end do
-         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
-         if (allocated(error)) return
-         call check(error, p_j, fd, thr=grad_atol + grad_rtol*abs(fd), &
-                    more="dp/dxi_j vs FD")
-         if (allocated(error)) return
-         call fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step, fd, error)
-         if (allocated(error)) return
-         call check(error, p_jj, fd, thr=hess_atol + hess_rtol*abs(fd), &
-                    more="d2p/dxi_j**2 vs FD")
-         if (allocated(error)) return
-      end do
-
-   end subroutine test_width_derivatives_fd
 
    !> First derivatives of the full kernel against finite differences
    subroutine test_near_grad_fd(error)
@@ -295,7 +231,8 @@ contains
          xi_i = pts(1, i)
          xi_j = pts(2, i)
          r2 = pts(3, i)
-         call pcm_amat_near_grad(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2)
+         call probe_pair_grad(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2, error)
+         if (allocated(error)) return
 
          do k = 1, 4
             vals(k) = reference_value(xi_i + fd4_offsets(k)*xi_step, xi_j, r2)
@@ -351,12 +288,12 @@ contains
          xi_i = pts(1, i)
          xi_j = pts(2, i)
          r2 = pts(3, i)
-         call pcm_amat_near_hess(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2, &
-                                 a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2)
+         call probe_pair_hess(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2, a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2, error)
+         if (allocated(error)) return
 
          do k = 1, 4
-            call pcm_amat_near_grad(xi_i + fd4_offsets(k)*xi_step, xi_j, r2, dummy, &
-                                    gi(k), gj(k), gr(k))
+            call probe_pair_grad(xi_i + fd4_offsets(k)*xi_step, xi_j, r2, dummy, gi(k), gj(k), gr(k), error)
+            if (allocated(error)) return
          end do
          call fd4_scalar(gi(1), gi(2), gi(3), gi(4), xi_step, fd, error)
          if (allocated(error)) return
@@ -375,8 +312,8 @@ contains
          if (allocated(error)) return
 
          do k = 1, 4
-            call pcm_amat_near_grad(xi_i, xi_j + fd4_offsets(k)*xi_step, r2, dummy, &
-                                    gi(k), gj(k), gr(k))
+            call probe_pair_grad(xi_i, xi_j + fd4_offsets(k)*xi_step, r2, dummy, gi(k), gj(k), gr(k), error)
+            if (allocated(error)) return
          end do
          call fd4_scalar(gj(1), gj(2), gj(3), gj(4), xi_step, fd, error)
          if (allocated(error)) return
@@ -391,8 +328,8 @@ contains
 
          step = r2_rel_step*r2
          do k = 1, 4
-            call pcm_amat_near_grad(xi_i, xi_j, r2 + fd4_offsets(k)*step, dummy, &
-                                    gi(k), gj(k), gr(k))
+            call probe_pair_grad(xi_i, xi_j, r2 + fd4_offsets(k)*step, dummy, gi(k), gj(k), gr(k), error)
+            if (allocated(error)) return
          end do
          call fd4_scalar(gr(1), gr(2), gr(3), gr(4), step, fd, error)
          if (allocated(error)) return
@@ -415,10 +352,12 @@ contains
       real(wp) :: b, b_i, b_j, b_r2, b_ii, b_ij, b_jj, b_ir2, b_jr2, b_r2r2
 
       do i = 1, npts
-         call pcm_amat_near_hess(pts(1, i), pts(2, i), pts(3, i), a, a_i, a_j, &
-                                 a_r2, a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2)
-         call pcm_amat_near_hess(pts(2, i), pts(1, i), pts(3, i), b, b_i, b_j, &
-                                 b_r2, b_ii, b_ij, b_jj, b_ir2, b_jr2, b_r2r2)
+         call probe_pair_hess(pts(1, i), pts(2, i), pts(3, i), a, a_i, a_j, a_r2, a_ii, a_ij, a_jj, a_ir2, a_jr2, &
+            & a_r2r2, error)
+         if (allocated(error)) return
+         call probe_pair_hess(pts(2, i), pts(1, i), pts(3, i), b, b_i, b_j, b_r2, b_ii, b_ij, b_jj, b_ir2, b_jr2, &
+            & b_r2r2, error)
+         if (allocated(error)) return
 
          call check(error, a, b, thr=exact_thr*max(1.0_wp, abs(a)), &
                     more="kernel value is not symmetric under i <-> j")
@@ -463,18 +402,11 @@ contains
          ! p**2 = xi**2/2, so x = p**2*r2; pick r2 from the requested x
          r2 = factors(i)*boys_x_far*2.0_wp/(xi*xi)
 
-         call pcm_amat_far_hess(r2, a_far, a_r2_far, a_r2r2_far)
-         call pcm_amat_near_hess(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2, &
-                                 a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2)
-
-         ! The saturated routine is literally 1/sqrt(r2), so this is bitwise
-         call check(error, a_far, 1.0_wp/sqrt(r2), thr=0.0_wp, &
-                    more="saturated value is not exactly 1/r")
+         call coulomb_reference(r2, a_far, a_r2_far, a_r2r2_far)
+         call probe_pair_hess(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2, a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2, error)
          if (allocated(error)) return
 
-         ! The full kernel reaches the same number through pref*p*F0 with
-         ! F0 = sqrt(pi/4x); algebraically identical, so only the rounding of
-         ! the different groupings may differ (a few ULP)
+         ! Compare the generated full kernel to the analytic Coulomb limit
          call check(error, a, a_far, thr=ulp_thr*abs(a_far), &
                     more="full kernel does not reduce to 1/r past the cutoff")
          if (allocated(error)) return
@@ -516,8 +448,9 @@ contains
 
       ! Step just below the cutoff so the erf/exp branch is taken
       r2 = (1.0_wp - 1.0e-12_wp)*boys_x_far*2.0_wp/(xi*xi)
-      call pcm_amat_far_grad(r2, a_far, a_r2_far)
-      call pcm_amat_near_grad(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2)
+      call coulomb_reference(r2, a_far, a_r2_far)
+      call probe_pair_grad(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2, error)
+      if (allocated(error)) return
 
       call check(error, a, a_far, thr=ulp_thr*abs(a_far), &
                  more="value is discontinuous across the saturation cutoff")
@@ -529,44 +462,6 @@ contains
                  more="width channels are not negligible at the cutoff")
 
    end subroutine test_far_matches_near_at_seam
-
-   !> The row-batched saturated kernels match their scalar counterparts
-   subroutine test_far_row_matches_scalar(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Batch index and length
-      integer :: k
-      integer, parameter :: n = 7
-      !> Batched inputs and outputs
-      real(wp) :: r2(n), a(n), a_r2(n)
-      !> Scalar reference outputs
-      real(wp) :: a_ref, a_r2_ref
-
-      do k = 1, n
-         r2(k) = 0.25_wp*real(k, wp)**2
-      end do
-
-      call pcm_amat_far_value_row(n, r2, a)
-      do k = 1, n
-         call pcm_amat_far_value(r2(k), a_ref)
-         call check(error, a(k), a_ref, thr=0.0_wp, &
-                    more="row-batched saturated value differs from the scalar form")
-         if (allocated(error)) return
-      end do
-
-      call pcm_amat_far_grad_row(n, r2, a, a_r2)
-      do k = 1, n
-         call pcm_amat_far_grad(r2(k), a_ref, a_r2_ref)
-         call check(error, a(k), a_ref, thr=0.0_wp, &
-                    more="row-batched saturated value differs from the scalar form")
-         if (allocated(error)) return
-         call check(error, a_r2(k), a_r2_ref, thr=0.0_wp, &
-                    more="row-batched saturated dA/dr2 differs from the scalar form")
-         if (allocated(error)) return
-      end do
-
-   end subroutine test_far_row_matches_scalar
 
    !> Diagonal self-interaction derivatives against finite differences
    subroutine test_diag_derivatives_fd(error)
@@ -591,7 +486,8 @@ contains
          f = diag_pts(2, i)
          step_xi = 1.0e-4_wp*xi
          step_f = 1.0e-4_wp*f
-         call pcm_amat_diag_hess(xi, f, a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f)
+         call probe_diag_hess(xi, f, a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f, error)
+         if (allocated(error)) return
 
          call check(error, a, sqrt(2.0_wp/(4.0_wp*atan(1.0_wp)))*xi/f, &
                     thr=exact_thr*max(1.0_wp, abs(a)), &
@@ -599,7 +495,8 @@ contains
          if (allocated(error)) return
 
          do k = 1, 4
-            call pcm_amat_diag_grad(xi + fd4_offsets(k)*step_xi, f, vals(k), gxi(k), gf(k))
+            call probe_diag_grad(xi + fd4_offsets(k)*step_xi, f, vals(k), gxi(k), gf(k), error)
+            if (allocated(error)) return
          end do
          call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_xi, fd, error)
          if (allocated(error)) return
@@ -618,7 +515,8 @@ contains
          if (allocated(error)) return
 
          do k = 1, 4
-            call pcm_amat_diag_grad(xi, f + fd4_offsets(k)*step_f, vals(k), gxi(k), gf(k))
+            call probe_diag_grad(xi, f + fd4_offsets(k)*step_f, vals(k), gxi(k), gf(k), error)
+            if (allocated(error)) return
          end do
          call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_f, fd, error)
          if (allocated(error)) return
@@ -631,12 +529,312 @@ contains
                     more="d2A_ii/df**2 vs FD")
          if (allocated(error)) return
 
-         call pcm_amat_diag_value(xi, f, dummy)
+         call probe_diag_value(xi, f, dummy, error)
+         if (allocated(error)) return
          call check(error, dummy, a, thr=ulp_thr*abs(a), &
                     more="diagonal value routine disagrees with the Hessian routine")
          if (allocated(error)) return
       end do
 
    end subroutine test_diag_derivatives_fd
+
+   !> Read a two-point entry through the generated operator
+   !>
+   !> @param[in] xi_i First Gaussian width, bohr^-1
+   !> @param[in] xi_j Second Gaussian width, bohr^-1
+   !> @param[in] r2 Squared separation, bohr^2
+   !> @param[out] a Matrix entry
+   !> @param[out] error Test failure
+   subroutine probe_pair_value(xi_i, xi_j, r2, a, error)
+      !> First Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_i
+      !> Second Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_j
+      !> Squared separation, bohr^2
+      real(wp), intent(in) :: r2
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 2), matrix(2, 2)
+
+      xyz = 0.0_wp
+      xyz(1:2, 2) = sqrt(0.5_wp*r2)
+      call probe_conductor_matrix([xi_i, xi_j], [1.0_wp, 1.0_wp], xyz, matrix, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a = matrix(1, 2)
+
+   end subroutine probe_pair_value
+
+   !> Read generated pair derivatives in width and squared-distance coordinates
+   !>
+   !> @param[in] xi_i First Gaussian width, bohr^-1
+   !> @param[in] xi_j Second Gaussian width, bohr^-1
+   !> @param[in] r2 Squared separation, bohr^2
+   !> @param[out] a Matrix entry
+   !> @param[out] a_i First width derivative
+   !> @param[out] a_j Second width derivative
+   !> @param[out] a_r2 Squared-separation derivative
+   !> @param[out] error Test failure
+   subroutine probe_pair_grad(xi_i, xi_j, r2, a, a_i, a_j, a_r2, error)
+      !> First Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_i
+      !> Second Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_j
+      !> Squared separation, bohr^2
+      real(wp), intent(in) :: r2
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> First width derivative
+      real(wp), intent(out) :: a_i
+      !> Second width derivative
+      real(wp), intent(out) :: a_j
+      !> Squared-separation derivative
+      real(wp), intent(out) :: a_r2
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 2)
+      real(wp) :: w_xi(2), w_f(2), w_r(3, 2)
+
+      xyz = 0.0_wp
+      xyz(1:2, 2) = sqrt(0.5_wp*r2)
+      call probe_pair_value(xi_i, xi_j, r2, a, error)
+      if (allocated(error)) return
+      call probe_conductor_bilinear_weights([xi_i, xi_j], [1.0_wp, 1.0_wp], xyz, &
+         & [1.0_wp, 0.0_wp], [0.0_wp, 1.0_wp], w_xi, w_f, w_r, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a_i = w_xi(1)
+      a_j = w_xi(2)
+      a_r2 = w_r(1, 2)/(2.0_wp*xyz(1, 2))
+
+   end subroutine probe_pair_grad
+
+   !> Read generated pair Hessians without subtracting diagonal terms
+   !>
+   !> With f = 1, diagonal terms are linear in xi and independent of position.
+   !> Their Hessians vanish, so seed = [1, 1] isolates the pair Hessian directly.
+   !> For A(r2), the Cartesian cross derivative A_xy = 4*x*y*A_r2r2 avoids
+   !> cancellation between radial terms near coincident points.
+   !>
+   !> @param[in] xi_i First Gaussian width, bohr^-1
+   !> @param[in] xi_j Second Gaussian width, bohr^-1
+   !> @param[in] r2 Squared separation, bohr^2
+   !> @param[out] a Matrix entry
+   !> @param[out] a_i First width derivative
+   !> @param[out] a_j Second width derivative
+   !> @param[out] a_r2 Squared-separation derivative
+   !> @param[out] a_ii First width Hessian entry
+   !> @param[out] a_ij Mixed width Hessian entry
+   !> @param[out] a_jj Second width Hessian entry
+   !> @param[out] a_ir2 First width/separation Hessian entry
+   !> @param[out] a_jr2 Second width/separation Hessian entry
+   !> @param[out] a_r2r2 Squared-separation Hessian entry
+   !> @param[out] error Test failure
+   subroutine probe_pair_hess(xi_i, xi_j, r2, a, a_i, a_j, a_r2, a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2, error)
+      !> First Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_i
+      !> Second Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi_j
+      !> Squared separation, bohr^2
+      real(wp), intent(in) :: r2
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> First width derivative
+      real(wp), intent(out) :: a_i
+      !> Second width derivative
+      real(wp), intent(out) :: a_j
+      !> Squared-separation derivative
+      real(wp), intent(out) :: a_r2
+      !> First width Hessian entry
+      real(wp), intent(out) :: a_ii
+      !> Mixed width Hessian entry
+      real(wp), intent(out) :: a_ij
+      !> Second width Hessian entry
+      real(wp), intent(out) :: a_jj
+      !> First width/separation Hessian entry
+      real(wp), intent(out) :: a_ir2
+      !> Second width/separation Hessian entry
+      real(wp), intent(out) :: a_jr2
+      !> Squared-separation Hessian entry
+      real(wp), intent(out) :: a_r2r2
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 2)
+      real(wp) :: dr(3, 2, 3), dxi(2, 3), df(2, 3)
+      real(wp) :: h_r(3, 2, 3), h_xi(2, 3), h_f(2, 3)
+
+      xyz = 0.0_wp
+      xyz(1:2, 2) = sqrt(0.5_wp*r2)
+      call probe_pair_grad(xi_i, xi_j, r2, a, a_i, a_j, a_r2, error)
+      if (allocated(error)) return
+      dr = 0.0_wp
+      dxi = 0.0_wp
+      df = 0.0_wp
+      dxi(1, 1) = 1.0_wp
+      dxi(2, 2) = 1.0_wp
+      dr(1, 2, 3) = 1.0_wp
+      call probe_conductor_fixed_seed_tangent([xi_i, xi_j], [1.0_wp, 1.0_wp], xyz, &
+         & [1.0_wp, 1.0_wp], dr, dxi, df, h_r, h_xi, h_f, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a_ii = h_xi(1, 1)
+      a_ij = h_xi(1, 2)
+      a_jj = h_xi(2, 2)
+      a_ir2 = h_xi(1, 3)/(2.0_wp*xyz(1, 2))
+      a_jr2 = h_xi(2, 3)/(2.0_wp*xyz(1, 2))
+      a_r2r2 = h_r(2, 2, 3)/(4.0_wp*xyz(1, 2)*xyz(2, 2))
+
+   end subroutine probe_pair_hess
+
+   !> Read a diagonal entry through the generated operator
+   !>
+   !> @param[in] xi Gaussian width, bohr^-1
+   !> @param[in] f Switching factor
+   !> @param[out] a Matrix entry
+   !> @param[out] error Test failure
+   subroutine probe_diag_value(xi, f, a, error)
+      !> Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi
+      !> Switching factor
+      real(wp), intent(in) :: f
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 1), matrix(1, 1)
+
+      xyz = 0.0_wp
+      call probe_conductor_matrix([xi], [f], xyz, matrix, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a = matrix(1, 1)
+
+   end subroutine probe_diag_value
+
+   !> Read generated diagonal width and switching derivatives
+   !>
+   !> @param[in] xi Gaussian width, bohr^-1
+   !> @param[in] f Switching factor
+   !> @param[out] a Matrix entry
+   !> @param[out] a_xi Width derivative
+   !> @param[out] a_f Switching derivative
+   !> @param[out] error Test failure
+   subroutine probe_diag_grad(xi, f, a, a_xi, a_f, error)
+      !> Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi
+      !> Switching factor
+      real(wp), intent(in) :: f
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> Width derivative
+      real(wp), intent(out) :: a_xi
+      !> Switching derivative
+      real(wp), intent(out) :: a_f
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 1)
+      real(wp) :: w_xi(1), w_f(1), w_r(3, 1)
+
+      xyz = 0.0_wp
+      call probe_diag_value(xi, f, a, error)
+      if (allocated(error)) return
+      call probe_conductor_bilinear_weights([xi], [f], xyz, [1.0_wp], [1.0_wp], w_xi, w_f, w_r, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a_xi = w_xi(1)
+      a_f = w_f(1)
+
+   end subroutine probe_diag_grad
+
+   !> Read generated diagonal Hessians at a fixed unit seed
+   !>
+   !> @param[in] xi Gaussian width, bohr^-1
+   !> @param[in] f Switching factor
+   !> @param[out] a Matrix entry
+   !> @param[out] a_xi Width derivative
+   !> @param[out] a_f Switching derivative
+   !> @param[out] a_xi_xi Width Hessian entry
+   !> @param[out] a_xi_f Mixed width/switching Hessian entry
+   !> @param[out] a_f_f Switching Hessian entry
+   !> @param[out] error Test failure
+   subroutine probe_diag_hess(xi, f, a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f, error)
+      !> Gaussian width, bohr^-1
+      real(wp), intent(in) :: xi
+      !> Switching factor
+      real(wp), intent(in) :: f
+      !> Matrix entry
+      real(wp), intent(out) :: a
+      !> Width derivative
+      real(wp), intent(out) :: a_xi
+      !> Switching derivative
+      real(wp), intent(out) :: a_f
+      !> Width Hessian entry
+      real(wp), intent(out) :: a_xi_xi
+      !> Mixed width/switching Hessian entry
+      real(wp), intent(out) :: a_xi_f
+      !> Switching Hessian entry
+      real(wp), intent(out) :: a_f_f
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      real(wp) :: xyz(3, 1)
+      real(wp) :: dr(3, 1, 2), dxi(1, 2), df(1, 2)
+      real(wp) :: h_r(3, 1, 2), h_xi(1, 2), h_f(1, 2)
+
+      xyz = 0.0_wp
+      call probe_diag_grad(xi, f, a, a_xi, a_f, error)
+      if (allocated(error)) return
+      dr = 0.0_wp
+      dxi(1, :) = [1.0_wp, 0.0_wp]
+      df(1, :) = [0.0_wp, 1.0_wp]
+      call probe_conductor_fixed_seed_tangent([xi], [f], xyz, [1.0_wp], dr, dxi, df, h_r, h_xi, h_f, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      a_xi_xi = 2.0_wp*h_xi(1, 1)
+      a_xi_f = 2.0_wp*h_xi(1, 2)
+      a_f_f = 2.0_wp*h_f(1, 2)
+
+   end subroutine probe_diag_hess
+
+   !> Analytic Coulomb limit and squared-separation derivatives
+   !>
+   !> @param[in] r2 Positive squared separation
+   !> @param[out] a Coulomb value
+   !> @param[out] a_r First squared-separation derivative
+   !> @param[out] a_rr Second squared-separation derivative
+   subroutine coulomb_reference(r2, a, a_r, a_rr)
+      !> Positive squared separation
+      real(wp), intent(in) :: r2
+      !> Coulomb value
+      real(wp), intent(out) :: a
+      !> First squared-separation derivative
+      real(wp), intent(out) :: a_r
+      !> Second squared-separation derivative
+      real(wp), intent(out), optional :: a_rr
+
+      a = 1.0_wp/sqrt(r2)
+      a_r = -0.5_wp*a/r2
+      if (present(a_rr)) a_rr = 0.75_wp*a/r2**2
+
+   end subroutine coulomb_reference
 
 end module test_model_component_pcm_amat_kernel

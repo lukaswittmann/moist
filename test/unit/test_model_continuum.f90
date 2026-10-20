@@ -17,9 +17,11 @@ module test_model_continuum
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_fields, only: field_query_type, field_real
    use moist_channels_coupling, only: coupling_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type
+   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
+      & parameter_adjoint_response_type
    use moist_model_continuum_component_pcm_type, only: solver_type
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_type, only: autogpa
@@ -28,7 +30,7 @@ module test_model_continuum
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
+   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
@@ -66,7 +68,8 @@ contains
          & new_unittest("continuum_model_guards", test_continuum_model_guards), &
          & new_unittest("continuum_model_reconstructed_cavity_context", &
          &              test_continuum_model_reconstructed_cavity_context), &
-         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies) &
+         & new_unittest("continuum_model_component_energies", test_continuum_model_component_energies), &
+         & new_unittest("continuum_model_parameter_derivatives_merge", test_continuum_model_parameter_derivatives) &
          & ]
 
    end subroutine collect_model_continuum
@@ -114,7 +117,7 @@ contains
          return
       end if
 
-      call check(error, .not. model%is_updated(), more="new model must start invalid")
+      call check(error,.not. model%is_updated(), more="new model must start invalid")
       if (allocated(error)) return
 
       ! An accessor must refuse to run before the first update
@@ -127,7 +130,7 @@ contains
       if (allocated(err)) deallocate (err)
 
       call new_component_cpcm(pcm_component, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Continuum-model CPCM construction failed: "//err%message)
          return
@@ -160,7 +163,7 @@ contains
 
       ! Procedural reference on an independently updated cavity
       call new_component_cpcm(pcm_reference, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Reference CPCM construction failed: "//err%message)
          return
@@ -184,10 +187,10 @@ contains
 
       energy = 3.0_wp
       call model%get_energy(coupling, energy, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call model%get_energy(coupling, energy, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, energy, 3.0_wp + 2.0_wp*reference_energy, thr=thr2, &
                  message="Repeated energy getters must accumulate")
@@ -215,7 +218,7 @@ contains
 
       ! Repeated response calls replace the host adjoint rather than doubling it
       call model%get_response(coupling, response, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call copy_potential_adjoint(response, charge)
       call check(error, maxval(abs(charge%w_phi - pcm_reference%q)), 0.0_wp, thr=thr2, &
@@ -223,20 +226,20 @@ contains
       if (allocated(error)) return
 
       call model%prepare_gradient(coupling, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call fill_point_charge_field(model%cavity, coupling, qat_vals, mol)
       allocate (gradient(3, mol%nat), reference_gradient(3, mol%nat), source=0.0_wp)
-      call pcm_reference%get_gradient(component_view(coupling), cavity, response, reference_gradient, err)
-      call check(error, .not. allocated(err))
+      call pcm_reference%get_forward_gradient(component_view(coupling), cavity, response, reference_gradient, err)
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call model%get_gradient(coupling, response, gradient, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, maxval(abs(gradient - reference_gradient)), 0.0_wp, thr=thr2, &
          & message="model gradient differs from independent forward component")
       if (allocated(error)) return
-      call check(error, .not. allocated(model%cavity%xyz1_rA), &
+      call check(error,.not. allocated(model%cavity%xyz1_rA), &
          & more="reverse model gradient built a surface nuclear Jacobian")
       if (allocated(error)) return
       call copy_potential_adjoint(response, charge)
@@ -249,7 +252,7 @@ contains
       call model%use_forward_gradient(.true.)
       gradient = 0.0_wp
       call model%get_gradient(coupling, response, gradient, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       ! The reverse path matches to 6e-17 as well; only the Jacobian tells the paths apart
       call check(error, allocated(model%cavity%xyz1_rA), &
@@ -273,7 +276,7 @@ contains
       call check(error, allocated(err), &
          & more="continuum-model update without a cavity was not rejected")
       if (allocated(error)) return
-      call check(error, .not. model%is_updated(), &
+      call check(error,.not. model%is_updated(), &
          & more="failed continuum-model update left the model marked usable")
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
@@ -323,7 +326,7 @@ contains
          return
       end if
       call new_component_cpcm(pcm_component, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -482,10 +485,10 @@ contains
       if (allocated(error)) return
       gradient_zero = 3.0_wp
       call model_pcm%get_gradient(coupling_pcm, response, gradient_zero, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call model_pcm%get_gradient(coupling_pcm, response, gradient_zero, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, maxval(abs(gradient_zero - 3.0_wp - 2.0_wp*gradient_pcm)), &
                  0.0_wp, thr=thr2, message="Repeated gradient getters must accumulate")
@@ -563,7 +566,7 @@ contains
       call check(error, model_a%force_forward_gradient)
       if (allocated(error)) return
       call model_a%use_forward_gradient(.false.)
-      call check(error, .not. model_a%force_forward_gradient)
+      call check(error,.not. model_a%force_forward_gradient)
       if (allocated(error)) return
 
       allocate (gradient(3, mol%nat), source=0.0_wp)
@@ -607,9 +610,9 @@ contains
          return
       end if
       call model_a%prepare_gradient(coupling, err)
-      call check(error, .not. allocated(err))
+      call check(error,.not. allocated(err))
       if (allocated(error)) return
-      call model_a%get_gradient(coupling, response, gradient(:, :mol%nat-1), err)
+      call model_a%get_gradient(coupling, response, gradient(:, :mol%nat - 1), err)
       call expect_error("shape mismatch", "gradient shape")
       if (allocated(error)) return
       call model_a%invalidate()
@@ -712,7 +715,7 @@ contains
       type(cavity_type_drop) :: drop
       type(cavity_type_iswig) :: iswig
       type(cavity_type_numsa) :: numsa
-      type(cavity_type_marchingcubes) :: mc
+      type(cavity_type_mc) :: mc
       !> Cavity kind
       integer :: icase
 
@@ -735,8 +738,8 @@ contains
             if (.not. allocated(err)) call new_cavity_numsa(numsa, radius_model, err)
             if (.not. allocated(err)) call check_model_context(numsa, "NUMSA")
          case (4)
-            call new_cavity_marchingcubes(mc, radius_model, svdw, err, ctx=first)
-            if (.not. allocated(err)) call new_cavity_marchingcubes(mc, radius_model, svdw, err)
+            call new_cavity_mc(mc, radius_model, svdw, err, ctx=first)
+            if (.not. allocated(err)) call new_cavity_mc(mc, radius_model, svdw, err)
             if (.not. allocated(err)) call check_model_context(mc, "marching cubes")
          case default
             error stop "test_model_continuum: unhandled case in reconstructed_cavity_context"
@@ -758,7 +761,7 @@ contains
          !> Model with the other context
          type(model_continuum_type) :: model
 
-         call check(error, .not. associated(cavity%ctx), &
+         call check(error,.not. associated(cavity%ctx), &
             & more=label//" kept the previous context through reconstruction")
          if (allocated(error)) return
          call new_continuum_model(model, other, cavity, err)
@@ -830,9 +833,9 @@ contains
          return
       end if
       call new_component_cpcm(pcm_high, epsilon=32.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (.not. allocated(err)) call new_component_cpcm(pcm_low, epsilon=4.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                                                        param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       call new_component_pv(pv_finite, pressure)
       call new_component_pv(pv_zero, 0.0_wp)
       if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
@@ -866,13 +869,13 @@ contains
          if (allocated(error)) return
       end do
       call model%component_name(0, name)
-      call check(error, .not. allocated(name), more="named a component below the list")
+      call check(error,.not. allocated(name), more="named a component below the list")
       if (allocated(error)) return
       call model%component_name(5, name)
-      call check(error, .not. allocated(name), more="named a component past the list")
+      call check(error,.not. allocated(name), more="named a component past the list")
       if (allocated(error)) return
       call model%component_description(5, description)
-      call check(error, .not. allocated(description), more="described a component past the list")
+      call check(error,.not. allocated(description), more="described a component past the list")
       if (allocated(error)) return
       call check_unavailable("before update")
       if (allocated(error)) return
@@ -976,7 +979,7 @@ contains
       if (allocated(error)) return
       do i = 2, 4
          call read_energy(i, found, value)
-         call check(error, .not. found, more="failing or later component still lists an energy")
+         call check(error,.not. found, more="failing or later component still lists an energy")
          if (allocated(error)) return
       end do
 
@@ -1105,6 +1108,137 @@ contains
       end subroutine read_all
 
    end subroutine test_continuum_model_component_energies
+
+   !> Parameter derivatives of two PCM components merge into one model item
+   subroutine test_continuum_model_parameter_derivatives(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Parameter items of the CPCM, LPB and combined models
+      type(parameter_adjoint_response_type) :: cpcm, lpb, both
+      !> Parameter items in one response pass
+      integer :: nitem
+
+      call model_parameter_adjoint(error, .true., .false., cpcm, nitem)
+      if (allocated(error)) return
+      call model_parameter_adjoint(error, .false., .true., lpb, nitem)
+      if (allocated(error)) return
+      call model_parameter_adjoint(error, .true., .true., both, nitem)
+      if (allocated(error)) return
+      call check(error, nitem, 1, "the components' parameter items were not merged")
+      if (allocated(error)) return
+
+      call check(error, allocated(cpcm%dg_deps) .and. .not. allocated(cpcm%dg_dkappa) &
+         & .and. allocated(lpb%dg_deps) .and. allocated(lpb%dg_dkappa), &
+         & more="single-component parameter sets")
+      if (allocated(error)) return
+      call check(error, cpcm%dg_deps /= 0.0_wp .and. lpb%dg_deps /= 0.0_wp, &
+         & more="a single-component permittivity derivative vanishes")
+      if (allocated(error)) return
+      call check(error, allocated(both%dg_deps) .and. allocated(both%dg_dkappa), &
+         & more="the merged item lost a parameter")
+      if (allocated(error)) return
+      call check(error, both%dg_deps, cpcm%dg_deps + lpb%dg_deps, thr=1.0e-10_wp, rel=.true., &
+         & message="merged permittivity derivative is not the sum of the components")
+      if (allocated(error)) return
+      call check(error, both%dg_dkappa, lpb%dg_dkappa, thr=1.0e-10_wp, rel=.true., &
+         & message="merged kappa derivative is not that of LPB")
+      if (allocated(error)) return
+      call check(error,.not. (allocated(both%dg_deps_inf) .or. allocated(both%dg_dlambda) &
+         & .or. allocated(both%dg_deps_solute) .or. allocated(both%dg_dalpha) .or. allocated(both%dg_dbeta) &
+         & .or. allocated(both%dg_dgamma) .or. allocated(both%dg_dmu) .or. allocated(both%dg_dphi_static)), &
+         & more="the merged item carries a parameter neither component has")
+
+   end subroutine test_continuum_model_parameter_derivatives
+
+   !> Parameter item of one response pass of a CPCM and/or LPB model
+   !>
+   !> @param[out] error      Test failure
+   !> @param[in]  with_cpcm  Add a CPCM component
+   !> @param[in]  with_lpb   Add an LPB component
+   !> @param[out] item       Last parameter item of the pass
+   !> @param[out] nitem      Number of parameter items in the pass
+   subroutine model_parameter_adjoint(error, with_cpcm, with_lpb, item, nitem)
+
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Add a CPCM component
+      logical, intent(in) :: with_cpcm
+      !> Add an LPB component
+      logical, intent(in) :: with_lpb
+      !> Last parameter item of the pass
+      type(parameter_adjoint_response_type), intent(out) :: item
+      !> Number of parameter items in the pass
+      integer, intent(out) :: nitem
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context owned here and borrowed by the cavity, model and components
+      type(moist_context_type), target :: ctx
+      !> Molecular structure
+      type(structure_type) :: mol
+      !> Model under test
+      type(model_continuum_type), target :: model
+      !> CPCM template
+      type(model_continuum_component_cpcm) :: cpcm
+      !> LPB template
+      type(model_continuum_component_lpb) :: lpb
+      !> Cavity template copied into the model
+      type(cavity_type_iswig) :: cavity
+      !> Radius model storage
+      type(radius_type_static) :: radius_model
+      !> Coupling minted by the model
+      type(coupling_type), pointer :: coupling
+      !> Response of the model
+      type(response_type) :: response
+      !> Dense solver with parameter derivatives
+      type(moist_pcm_parameters_type) :: param
+
+      real(wp), parameter :: epsilon = 32.0_wp
+      real(wp), parameter :: kappa = 0.2_wp
+      real(wp), parameter :: qat_vals(*) = [&
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
+
+      nitem = 0
+      param = moist_pcm_parameters_type(solver=solver_type%dense, parameter_derivatives=.true.)
+      call new_context(ctx, nthreads=0)
+      call get_structure(mol, "MB16-43", "01")
+      call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
+      if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
+      if (with_cpcm .and. .not. allocated(err)) then
+         call new_component_cpcm(cpcm, epsilon=epsilon, error=err, param=param, ctx=ctx)
+         if (.not. allocated(err)) call model%add_component(cpcm, err)
+      end if
+      if (with_lpb .and. .not. allocated(err)) then
+         call new_component_lpb(lpb, epsilon, kappa, err, param, ctx=ctx)
+         if (.not. allocated(err)) call model%add_component(lpb, err)
+      end if
+      if (.not. allocated(err)) call model%update(mol, err)
+      if (allocated(err)) then
+         call test_failed(error, "Model setup failed: "//err%message)
+         return
+      end if
+
+      call stage_model_point_charge_energy(error, model, qat_vals, mol, coupling)
+      if (allocated(error)) return
+      call model%prepare_response(coupling, err)
+      if (.not. allocated(err)) call model%get_response(coupling, response, err)
+      if (allocated(err)) then
+         call test_failed(error, "Model response failed: "//err%message)
+         return
+      end if
+      do while (response%next())
+         select type (found => response%item())
+         type is (parameter_adjoint_response_type)
+            item = found
+            nitem = nitem + 1
+         end select
+      end do
+      call model%release_coupling(coupling)
+
+   end subroutine model_parameter_adjoint
 
    !> Assemble an updated continuum model from CPCM and an optional PV component
    !>

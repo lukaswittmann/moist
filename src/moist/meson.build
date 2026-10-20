@@ -1,5 +1,6 @@
 subdir('data')
 subdir('radii')
+subdir('solvent')
 subdir('model')
 subdir('math')
 subdir('cavity')
@@ -13,6 +14,7 @@ srcs += files(
   'cavity.f90',
   'data.f90',
   'radii.f90',
+  'solvent.f90',
   'model.f90',
   'output.f90',
   'version.f90',

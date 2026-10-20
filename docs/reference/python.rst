@@ -29,7 +29,7 @@ pressure, separate from numerical settings:
    )
    model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
-           78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
+           78.4, parameters=PCMParameters(solver=PCMSolver.DENSE),
        ),
    ])
 
@@ -38,7 +38,7 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``lsf=CFC()`` or ``lsf=Isodensity(...)`` and all DROP level sets share
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
-the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
+the surface independently. ``PCMParameters`` applies to every PCM model.
 ``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
 negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
@@ -57,6 +57,19 @@ are the unpaired form.
 Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
 raises.
 ``cavity.context``, ``component.context`` and ``model.context`` expose the contexts; ``context.nthreads`` reports its thread count. The context alone sets verbosity and debug output.
+
+PCM choices are ``ModelComponentCPCM``, ``ModelComponentCOSMO``,
+``ModelComponentIEFPCM``, ``ModelComponentSSVPE``, ``ModelComponentDPCM``,
+``ModelComponentDPCMOriginal``, ``ModelComponentLPB``, ``ModelComponentSLIC``
+and ``ModelComponentNonlocal``. The first six take ``epsilon``. LPB also takes
+``kappa`` in bohr⁻¹. SLIC takes ``epsilon, alpha, beta, gamma, mu,
+phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda_, eps_solute``.
+All accept keyword-only ``parameters=PCMParameters(...)`` and optional
+``context=...``. Its controls are
+``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,
+``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.DENSE``
+(default) or ``MATRIX_FREE``), ``newton_tol`` and
+``newton_maxiter``. See :doc:`/models/components/pcm/index` for defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
@@ -126,7 +139,7 @@ Array and accumulator contracts
 
 Python uses C-contiguous row-major arrays, with reversed native Fortran dimensions.
 Positions and nuclear gradients have shape ``(natoms,3)``; grid vectors have shape
-``(ngrid,3)``. Hessian weights have shape ``(ngrid,3,3)`` with indices
+``(ngrid,3)``. Potential second derivatives and Hessian weights have shape ``(ngrid,3,3)`` with indices
 ``[point,b,a]`` corresponding to native ``(a,b,point)``. These weights need not be
 symmetric. Full diagnostic derivative tensors follow the same exact reversal.
 
@@ -159,10 +172,10 @@ for custom radii; they need ``update`` and are ready before a deferred build.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
-its :doc:`fields`. ``Structure(numbers, positions)`` stores elements and
-geometry, copying input arrays. Call ``update`` to change the geometry.
-Supply nuclear charges through the ``nuclear_charges`` request
-(:ref:`coupling-requests`).
+its :doc:`fields`. ``Structure(numbers, positions, charge=0.0)`` stores
+elements, geometry and the net charge (read by SLIC's static term), copying
+input arrays. Call ``update`` to change the geometry. Supply nuclear charges
+through the ``nuclear_charges`` request (:ref:`coupling-requests`).
 
 Internal Gaussian density
 -------------------------
@@ -193,6 +206,14 @@ derivative contractions.
 ``get_version_string()`` returns the linked library's full release string;
 ``get_banner(style)`` returns its banner without printing (``full``, ``short``,
 ``ascii`` or ``build``).
+
+Solvents
+--------
+
+``get_solvent_descriptors(name)`` and ``get_solvent_descriptors_by_id(id)``
+return a frozen ``SolventDescriptors`` (:ref:`api-solvents`); an unknown
+solvent raises ``RuntimeError``. ``text()`` returns the printout and
+``print(file=None)`` prints it.
 
 .. _coupling-python:
 
@@ -249,7 +270,7 @@ Grid inputs are read from ``model.cavity``.
 
    model.prepare_response(coupling)
    for request in coupling:
-       ...  # walk again: a density-dependent cavity also needs dphi_dr, dphi_dxi
+       ...  # walk again and answer the requested raw potential derivatives
    response = model.get_response(coupling)
    for item in response:
        if isinstance(item, PotentialAdjointResponse):
@@ -282,15 +303,10 @@ or asymmetric ``dcart``) leave any previous answer intact; native rejections
 earlier submissions and skipping later ones. A ``break`` leaves the pass for the next loop to resume;
 a loop that ran to the end lets the next one start a new pass.
 
-A ``Response`` is a plain value copied out of the native result: iterating it
-yields the items the model produced, in native order, as
-``PotentialAdjointResponse``, ``DensityResponse``,
-``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``,
-``AtomicChargeAdjointResponse`` or ``RadialPotentialAdjointResponse``. Each
-item has the native item name as its ``name`` class attribute and its arrays
-as attributes named as their Fortran components, with the dimensions reversed.
-``AtomicMultipoleAdjointResponse`` arrays the model did not compute are
-``None``. The :doc:`pyscf` module drives these loops for PySCF.
+A ``Response`` is a plain value copied out of the native result: iterating it yields the items the model produced, in native order, as ``PotentialAdjointResponse``, ``DensityResponse``, ``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``, ``AtomicChargeAdjointResponse``, ``RadialPotentialAdjointResponse`` or ``ParameterAdjointResponse``.
+Each item has the native item name as its ``name`` class attribute and its arrays as attributes named as their Fortran components, with the dimensions reversed.
+``AtomicMultipoleAdjointResponse`` arrays the model did not compute are ``None``. ``ParameterAdjointResponse`` holds scalars ``dg_deps``, ... (``dE/dp`` of the model parameters, ``None`` for a parameter the model lacks, ``as_dict()`` for the present ones) and appears only with ``PCMParameters(parameter_derivatives=True)``.
+The :doc:`pyscf` module drives these loops for PySCF.
 
 API
 ---

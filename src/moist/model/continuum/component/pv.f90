@@ -2,7 +2,7 @@
 module moist_model_continuum_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_output_citations, only: citation_pv
+   use moist_output_citations, only: citation
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
@@ -86,7 +86,7 @@ contains
       call self%require_context(error)
       if (allocated(error)) return
 
-      call self%ctx%cite(citation_pv)
+      call self%ctx%cite(citation%pv)
 
       self%mol_solu = mol
       if (.not. allocated(cavity%total_volume)) then

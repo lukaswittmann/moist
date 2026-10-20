@@ -11,13 +11,13 @@ module test_cavity_drop_cpcm
    use moist_radii, only: default_cpcm_radii
    use mstore, only: get_structure
    use moist_math_lapack, only: getrf, getri
-   use moist_model_continuum_component_pcm_amat, only: &
-      & assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
-      & pcm_amat_nuclear_gradient
+   use test_pcm_conductor_probe, only: &
+      & probe_conductor_matrix_gradient, probe_conductor_bilinear_weights, &
+      & probe_conductor_nuclear_gradient
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fd6_scalar, fd6_offsets
+   use test_helpers, only: fd6_scalar, fd6_offsets, fill_legacy_radii
    use, intrinsic :: iso_fortran_env, only: error_unit
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
@@ -119,14 +119,14 @@ contains
 
       allocate (cavity)
       call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74), ctx=ctx)
+                           error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74), ctx=ctx)
       call check(error, allocated(cavity_error), "DROP was constructed with the 74-point Lebedev rule")
       if (allocated(error)) return
       deallocate (cavity, cavity_error)
 
       allocate (cavity)
       call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
+                           error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -143,7 +143,7 @@ contains
 
    !> Test the contracted A-matrix gradient against the explicit tensor
    !> contraction of the dense derivative built by
-   !> `assemble_pcm_amat_with_gradient`
+   !> `probe_conductor_matrix_gradient`
    subroutine test_contract_amat1_q1q2_rA(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -167,8 +167,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
+                              error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, &
+                                                                                          tolerance=PROJ_TOL, &
+                                                                         proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -194,7 +195,7 @@ contains
       nsph = cavity%nsph
 
       allocate (Amat0(ngrid, ngrid), Amat1_rA(3, nsph, ngrid, ngrid))
-      call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
+      call probe_conductor_matrix_gradient(cavity%xi0, cavity%f, cavity%xyz, &
                                            cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
                                            Amat0, Amat1_rA, cavity_error)
       if (allocated(cavity_error)) then
@@ -231,14 +232,14 @@ contains
       if (allocated(error)) return
 
       allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
-      call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, q1, q2, &
-                                    w_xi, w_f, w_xyz, cavity_error)
+      call probe_conductor_bilinear_weights(cavity%xi0, cavity%f, cavity%xyz, q1, q2, &
+                                            w_xi, w_f, w_xyz, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
-      call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
-                                     w_xi, w_f, w_xyz, grad_ctr, cavity_error)
+      call probe_conductor_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
+                                            w_xi, w_f, w_xyz, grad_ctr, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -284,8 +285,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=3), ctx=ctx)
+                              error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, &
+                                                                                          tolerance=PROJ_TOL, &
+                                                     proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=3), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -588,10 +590,11 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
-            blend_3b=gamma))
+                                                                            blend_3b=gamma))
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
+                              error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, &
+                                                                                          tolerance=PROJ_TOL, &
+                                                                         proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       end block
       if (.not. allocated(cavity_error)) call cavity%update(mol, error=cavity_error)
       if (.not. allocated(cavity_error)) call cavity%get_gradient(cavity_error)
@@ -614,11 +617,11 @@ contains
       end do
 
       allocate (Amat0(ngrid, ngrid), Amat1_rA(ndim, mol%nat, ngrid, ngrid))
-      call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
+      call probe_conductor_matrix_gradient(cavity%xi0, cavity%f, cavity%xyz, &
                                            cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
                                            Amat0, Amat1_rA, cavity_error)
       if (allocated(cavity_error)) then
-         call test_failed(error, "assemble_pcm_amat_with_gradient failed: "//cavity_error%message)
+         call test_failed(error, "probe_conductor_matrix_gradient failed: "//cavity_error%message)
          return
       end if
 

@@ -32,7 +32,7 @@ MOIST aims at reusable solvation models and infrastructure;  contributions shoul
 - Use 3-space indentation and match the style of the surrounding code; [`fprettify`](https://github.com/fortran-lang/fprettify) `-i 3` is a good start for new files, but do not run it over existing files, as it would also reformat unrelated lines.
 - Use `ford`-compatible comment style (config in `ford.md`, docmark `!>`):
   - One-line summary above every module, type, and procedure; an empty `!>` line, then one `@param[in|inout|out]` line per dummy argument.
-  - A `!>` comment above every dummy declaration and type component.
+  - A `!>` comment above every dummy declaration and type component, except the `error` dummy of a test procedure whose only argument it is.
   - Dimensions should be indicated by e.g. `(nat, 3, 3)`.
   - Give units if appropriate.
 - Use good-practice docstring formatting:
@@ -47,6 +47,7 @@ MOIST aims at reusable solvation models and infrastructure;  contributions shoul
 - One suite per file (module): `test/unit/test_<id>.f90` defines module `test_<id>` with `collect_<id>`. Register new suites in `test/unit/meson.build` (`tests` list), `test/unit/main.F90`, and `CMakeLists.txt` (`moist_test_suites`).
 - Run with `meson test -C build --print-errorlogs`. Suites run their tests in parallel, so avoid `save`d state in test helpers.
 - Every new feature or bug fix comes with a test.
+- Expected failures (rejected input, guarded misuse): one test per failing case, registered with `new_unittest(..., should_fail=.true.)`, which returns the library error as its test failure.
 
 ### Documentation
 

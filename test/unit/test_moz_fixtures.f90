@@ -11,7 +11,7 @@ module test_moz_fixtures
    use moist_channels_coupling, only: coupling_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
-   use moist_data_solvents, only: solvation_system_type, new_solvation_system
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
    use moist_model_moz_potential_lj_base, only: new_lj_12_6
@@ -36,14 +36,14 @@ contains
 
    !> Construct table water system
    !>
-   !> @param[out] system  water solvation system, structure in bohr
+   !> @param[out] system  water solvent system, structure in bohr
    !> @param[out] err     table failure
    subroutine new_water_system(system, err)
-      !> Water solvation system
-      type(solvation_system_type), intent(out) :: system
+      !> Water solvent system
+      type(solvent_system_type), intent(out) :: system
       !> Table failure
       type(moist_error), allocatable, intent(out) :: err
-      call new_solvation_system(system, water_id, error=err)
+      call new_solvent_system(system, water_id, error=err)
    end subroutine new_water_system
 
    !> Updated table water solvent with custom LJ and fixed charges
@@ -61,7 +61,7 @@ contains
       type(moist_error), allocatable, intent(out) :: err
       !> Optional Lennard-Jones mixing rule
       integer, intent(in), optional :: mixing
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(custom_lj_type) :: lj
       type(fixed_charges_type) :: charges
       call new_water_system(system, err)

@@ -43,10 +43,12 @@ from moist.interface import (
     GaussianMomentRequest,
     GaussianPotentialRequest,
     ModelComponentCOSMO,
+    ModelComponentDPCM,
     NuclearChargesRequest,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
+    ModelComponentSLIC,
     Response,
     SolvationModel,
 )
@@ -54,7 +56,7 @@ from moist.pyscf import (
     CFC, DROP, ISwiG, Isodensity, SvdW,
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
-from moist.parameters import DROPParameters, ISwiGParameters
+from moist.parameters import DROPParameters, ISwiGParameters, PCMParameters
 from moist import Context
 
 #: Run context shared by every cavity and model in this module
@@ -68,6 +70,9 @@ PRESSURE = 1.0e10 / 2.9421015697e13
 NLEB = 50
 #: Cavity projection tolerance
 PROJ_TOL = 1e-13
+#: Dense PCM solves: the difference and PySCF checks are tighter than the
+#: iterative solver tolerance
+DENSE = PCMParameters(solver="dense")
 
 #: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
@@ -150,9 +155,11 @@ PRIMARY_CASE = CASES[0]
 #: component (``pv``), the surface charges are zero and the whole Fock matrix
 #: is the level-set contraction.
 COMPONENTS = {
-    "cpcm": lambda: [ModelComponentCPCM(EPSILON)],
+    "cpcm": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE)],
     "pv": lambda: [ModelComponentPV(PRESSURE)],
-    "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON), ModelComponentPV(PRESSURE)],
+    "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE), ModelComponentPV(PRESSURE)],
+    # Reads the normal trace: d2phi_dr2, d2phi_dr_dxi and w_dphi_dr on a moving surface
+    "dpcm": lambda: [ModelComponentDPCM(EPSILON, parameters=DENSE)],
 }
 
 
@@ -565,6 +572,31 @@ def test_l1_gradient_matches_fd(system, basis, components):
 
 
 @pytest.mark.conventions
+def test_l1_normal_trace_fock_and_gradient_match_fd():
+    """DPCM on the isodensity cavity: the curvature requests and ``w_dphi_dr``.
+
+    A normal-trace layer on a moving surface asks for ``d2phi_dr2`` and
+    ``d2phi_dr_dxi`` in the response phase and hands back ``w_dphi_dr``,
+    which the gradient contracts through ``_gradient_dphi_dr``.
+    """
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    solvation = solve(mol, dm=dm, isodensity=True, components="dpcm")
+    (potential,) = [item for item in solvation.response if item.name == "potential_adjoint"]
+    assert potential.w_dphi_dr is not None
+
+    direction = next(iter(symmetric_directions(dm.shape[0], 1)))
+    numerical = fd_density(mol, dm, direction, isodensity=True, components="dpcm")
+    analytic = float(np.einsum("uv,uv->", solvation.fock, direction))
+    assert deviation(analytic, numerical) <= 1.0
+
+    index = sampled_coordinates(mol.natm)[2]
+    gradient = solvation.gradient(dm)
+    numerical = fd_position(mol, mol.atom_coords(), dm, index, isodensity=True, components="dpcm")
+    assert deviation(gradient.flatten(order="C")[index], numerical) <= 1.0
+
+
+@pytest.mark.conventions
 def test_the_driver_stops_on_an_item_it_cannot_contract():
     """An item the driver does not know raises instead of dropping its term.
 
@@ -584,6 +616,54 @@ def test_the_driver_stops_on_an_item_it_cannot_contract():
     solvation._response = response
     with pytest.raises(NotImplementedError, match="Unsupported response item 'unknown'"):
         solvation.gradient_channels(dm)
+
+
+@pytest.mark.parametrize("with_spatial_weights", [False, True])
+def test_optional_potential_spatial_contractions(with_spatial_weights):
+    """Only declared spatial weights contribute to the Fock and nuclear gradient."""
+    from types import SimpleNamespace
+    from moist.interface import PotentialAdjointResponse
+
+    calls = []
+
+    def spatial_fock(coords, xi, weights):
+        calls.append("fock")
+        np.testing.assert_array_equal(weights, np.ones((2, 3)))
+        return np.full((2, 2), 3.0)
+
+    def spatial_gradient(coords, weights, xi):
+        calls.append("gradient")
+        np.testing.assert_array_equal(weights, np.ones((2, 3)))
+        return np.full((2, 3), 5.0)
+
+    solvation = object.__new__(PySCFSolvation)
+    solvation.context = CONTEXT
+    solvation.mol = SimpleNamespace(nao=2, natm=2)
+    solvation.model = SimpleNamespace(
+        cavity=SimpleNamespace(xyz=np.zeros((2, 3))),
+        prepare_gradient=lambda coupling: None,
+        get_gradient=lambda coupling, gradient: None,
+    )
+    solvation.host = SimpleNamespace(
+        fock_potential=lambda *args: np.full((2, 2), 2.0),
+        fock_potential_gradient=spatial_fock,
+        _gradient_phi=lambda *args, **kwargs: np.full((2, 3), 4.0),
+        _gradient_dphi_dr=spatial_gradient,
+    )
+    weights = np.ones((2, 3)) if with_spatial_weights else None
+    solvation._response = Response([PotentialAdjointResponse(np.ones(2), weights)])
+    solvation._result = object()
+    solvation._xi = None
+    solvation._dm = np.eye(2)
+    solvation.coupling = None
+    solvation.evaluate = lambda dm: None
+    solvation._answer_requests = lambda phase: None
+    np.testing.assert_array_equal(solvation._fock(solvation.response),
+                                  np.full((2, 2), 5.0 if with_spatial_weights else 2.0))
+    channels = solvation.gradient_channels(solvation._dm)
+    np.testing.assert_array_equal(channels["potential"],
+                                  np.full((2, 3), 9.0 if with_spatial_weights else 4.0))
+    assert calls == (["fock", "gradient"] if with_spatial_weights else [])
 
 
 @pytest.mark.conventions
@@ -881,6 +961,117 @@ def test_gaussian_raw_derivatives(cart):
         numerical = (host.surface_potential(coords + shift, xi)
                      - host.surface_potential(coords - shift, xi)) / (2 * step)
         np.testing.assert_allclose(spatial[axis], numerical, atol=1e-8, rtol=1e-8)
+        numerical_hessian = (host.surface_potential_gradient(coords + shift, xi)
+                             - host.surface_potential_gradient(coords - shift, xi)) / (2 * step)
+        np.testing.assert_allclose(host.surface_potential_hessian(coords, xi)[:, :, axis],
+                                   numerical_hessian, atol=2e-7, rtol=2e-7)
+    numerical_mixed = (host.surface_potential_gradient(coords, xi + step)
+                       - host.surface_potential_gradient(coords, xi - step)) / (2 * step)
+    np.testing.assert_allclose(host._d2phi_dr_dxi(coords, xi), numerical_mixed,
+                               atol=2e-7, rtol=2e-7)
+    weights = np.array([[0.3, -0.2, 0.1], [0.1, 0.4, -0.3], [-0.2, 0.1, 0.5]])
+    direction = np.eye(mol.nao_nr())
+    original_dm = host.dm.copy()
+    host.dm = original_dm + step * direction
+    plus = np.einsum("ik,ik", weights, host.surface_potential_gradient(coords, xi))
+    host.dm = original_dm - step * direction
+    minus = np.einsum("ik,ik", weights, host.surface_potential_gradient(coords, xi))
+    host.dm = original_dm
+    analytic = np.einsum("uv,uv", host.fock_potential_gradient(coords, xi, weights), direction)
+    np.testing.assert_allclose(analytic, (plus - minus) / (2 * step), atol=1e-8, rtol=1e-8)
+    positions = mol.atom_coords()
+    shifted = positions.copy()
+    shifted[0, 0] += step
+    plus_mol = mol.set_geom_(shifted, unit="Bohr", inplace=False)
+    shifted[0, 0] -= 2 * step
+    minus_mol = mol.set_geom_(shifted, unit="Bohr", inplace=False)
+    plus_host = make_host(plus_mol, dm=original_dm)
+    minus_host = make_host(minus_mol, dm=original_dm)
+    plus = np.einsum("ik,ki", weights, plus_host._grad_phi_elec(coords, xi))
+    minus = np.einsum("ik,ki", weights, minus_host._grad_phi_elec(coords, xi))
+    np.testing.assert_allclose(host._gradient_dphi_dr(coords, weights, xi)[0, 0],
+                               (plus - minus) / (2 * step), atol=1e-8, rtol=1e-8)
+
+
+#: Point-surface using water
+POINT_COORDS = np.array([[0.0, 0.0, 2.6], [2.8, 0.5, -1.2], [-2.4, -2.0, 0.6], [0.3, 2.7, -0.9]])
+#: Gaussian inverse widths approaching the point limit
+POINT_LIMIT_XI = (8.0, 16.0)
+
+
+def observed_order(coarse, fine) -> float:
+    """Convergence order of a difference from ``xi`` to ``2 xi``, in powers of ``1/xi``."""
+    return float(np.log2(np.abs(coarse).max() / np.abs(fine).max()))
+
+
+@pytest.mark.host
+def test_point_potential_is_the_narrow_gaussian_limit():
+    """The point potential and its raw derivatives are the limit of the Gaussian ones.
+
+    Smearing a probe charge over a normalized Gaussian of exponent ``xi**2``
+    averages ``phi`` over a variance of ``1/(2 xi**2)`` per axis, so away
+    from the nuclei the Gaussian value exceeds the point value by
+    ``pi rho / xi**2 + O(xi**-4)``, with ``rho`` the electron density and its
+    derivatives for ``dphi_dr`` and ``d2phi_dr2``. The point ``d2phi_dr2``
+    differences ``_grad_phi_elec`` internally, so this also checks its step.
+    """
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = make_host(mol, dm=dm)
+    coords = POINT_COORDS
+    density = [host.density(point, 2) for point in coords]
+    outputs = {
+        "phi": (host.surface_potential, np.array([d[0] for d in density])),
+        "dphi_dr": (host.surface_potential_gradient, np.array([d[1] for d in density])),
+        "d2phi_dr2": (host.surface_potential_hessian, np.array([d[2] for d in density])),
+    }
+    for name, (evaluate, rho) in outputs.items():
+        point = evaluate(coords)
+        assert np.all(np.isfinite(point)), name
+        differences, remainders = [], []
+        for xi in POINT_LIMIT_XI:
+            difference = evaluate(coords, np.full(len(coords), xi)) - point
+            differences.append(difference)
+            remainders.append(difference - np.pi * rho / xi**2)
+        # Measured: 2.01 and 4.01 for every output
+        assert abs(observed_order(*differences) - 2.0) < 0.1, name
+        assert abs(observed_order(*remainders) - 4.0) < 0.2, name
+        assert np.abs(remainders[-1]).max() < 1e-2 * np.abs(differences[-1]).max(), name
+
+
+@pytest.mark.host
+def test_point_potential_nuclear_gradient_matches_fd():
+    """``_gradient_phi`` without widths: ``q . phi_elec`` displaced with the nuclei at fixed P.
+
+    The Gaussian contraction approaches it at second order in ``1/xi``.
+    """
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = make_host(mol, dm=dm)
+    coords = POINT_COORDS
+    q = np.array([0.3, -0.7, 0.5, 0.2])
+    analytic = host._gradient_phi(coords, q)
+
+    def electronic(positions):
+        moved = make_host(mol.set_geom_(positions, unit="Bohr", inplace=False), dm=dm)
+        distance = np.linalg.norm(coords[:, None, :] - positions[None, :, :], axis=2)
+        return q @ (moved.surface_potential(coords) - distance**-1.0 @ mol.atom_charges())
+
+    step = 1e-4
+    positions = mol.atom_coords()
+    numerical = np.empty_like(analytic)
+    for index in range(positions.size):
+        shifted = positions.copy()
+        shifted.flat[index] += step
+        plus = electronic(shifted)
+        shifted.flat[index] -= 2 * step
+        numerical.flat[index] = (plus - electronic(shifted)) / (2 * step)
+    assert np.abs(analytic).max() > 0.1
+    # Measured: 6e-10
+    np.testing.assert_allclose(analytic, numerical, atol=1e-8, rtol=1e-8)
+
+    differences = [host._gradient_phi(coords, q, xi=np.full(len(coords), xi)) - analytic
+                   for xi in POINT_LIMIT_XI]
+    # Measured: 2.01
+    assert abs(observed_order(*differences) - 2.0) < 0.1
 
 
 @pytest.mark.conventions
@@ -891,17 +1082,16 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=50))
-    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)], context=CONTEXT)
+    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0, parameters=DENSE)],
+                               context=CONTEXT)
     result = solvation.evaluate(dm)
     host, model = solvation.host, solvation.model
     coords = model.cavity.xyz
-    native_matrix, xi = library.assemble_drop_amat(model.cavity._handle)
-    _, switch = library.get_cavity_gaussian(model.cavity._handle)
+    xi, switch = library.get_cavity_gaussian(model.cavity._handle)
     reference = pcm.PCM(mol)
     reference.surface = dict(grid_coords=coords, charge_exp=xi, switch_fun=switch,
                              norm_vec=np.zeros_like(coords), R_vdw=np.ones(len(xi)))
     _, matrix = pcm.get_D_S(reference.surface, with_D=False)
-    np.testing.assert_allclose(native_matrix, matrix, atol=1e-12, rtol=1e-12)
     auxiliary = gto.fakemol_for_charges(coords, expnt=xi**2)
     nuclei = gto.fakemol_for_charges(mol.atom_coords())
     reference.v_grids_n = mol.atom_charges() @ gto.mole.intor_cross(
@@ -918,6 +1108,7 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 def test_point_gaussian_mismatch_decreases_with_grid_order():
     """The operator difference is bounded and decreases with discretization error."""
     from moist import library
+    from pyscf.solvent import pcm
 
     mol, dm = molecule("water", "def2-svp"), reference_density("water", "def2-svp")
     differences = []
@@ -925,7 +1116,11 @@ def test_point_gaussian_mismatch_decreases_with_grid_order():
         cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=nleb))
         solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)], context=CONTEXT)
         result = solvation.evaluate(dm)
-        matrix, _ = library.assemble_drop_amat(solvation.model.cavity._handle)
+        xi, switch = library.get_cavity_gaussian(solvation.model.cavity._handle)
+        surface = dict(grid_coords=solvation.model.cavity.xyz, charge_exp=xi,
+                       switch_fun=switch, norm_vec=np.zeros((len(xi), 3)),
+                       R_vdw=np.ones(len(xi)))
+        _, matrix = pcm.get_D_S(surface, with_D=False)
         point_phi = solvation.host.surface_potential(solvation.model.cavity.xyz)
         q = -(1.0 - 1.0 / 78.3553) * np.linalg.solve(matrix, point_phi)
         point_energy = 0.5 * q @ point_phi
@@ -934,6 +1129,60 @@ def test_point_gaussian_mismatch_decreases_with_grid_order():
     assert differences[1] < 0.05  # kcal/mol, default 194-point grid
     # Broad bound on inverse-grid-order convergence.
     assert 3.0 < differences[0] / differences[2] < 40.0
+
+
+@pytest.mark.host
+def test_the_host_requires_a_density():
+    """Every density-dependent host quantity refuses to run before ``host.dm`` is set."""
+    host = PySCFHost(molecule(*PRIMARY_CASE))
+    with pytest.raises(RuntimeError, match="set host.dm"):
+        host.surface_potential(POINT_COORDS)
+
+
+@pytest.mark.conventions
+def test_the_host_answers_no_surface_request_in_the_build_path():
+    """``answer_build`` raises on a potential request instead of skipping it."""
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = solve(mol, dm=dm, isodensity=False)
+    coupling = solvation.model.new_coupling()
+    solvation.model.prepare_energy(coupling)
+    request = next(iter(coupling))
+    assert isinstance(request, GaussianPotentialRequest)
+    with pytest.raises(NotImplementedError, match="gaussian_potential.*without a surface"):
+        solvation.host.answer_build(coupling, request)
+
+
+@pytest.mark.conventions
+@pytest.mark.parametrize(
+    "cavity,components,message",
+    [
+        ("drop", COMPONENTS["cpcm"], "cavity must"),
+        (cavity_config(False), lambda: [], "components must"),
+        (cavity_config(False), lambda: [object()], "components must"),
+    ],
+    ids=("cavity", "empty-components", "foreign-component"),
+)
+def test_the_driver_rejects_invalid_configurations(cavity, components, message):
+    with pytest.raises(TypeError, match=message):
+        PySCFSolvation(molecule(*PRIMARY_CASE), cavity, components(), context=CONTEXT)
+
+
+@pytest.mark.conventions
+@pytest.mark.parametrize(
+    "corrupt,error,message",
+    [
+        (lambda dm: dm[:-1], ValueError, "Expected density shape"),
+        (lambda dm: dm.astype(np.complex128), NotImplementedError, "real density"),
+        (lambda dm: np.where(np.eye(len(dm)) > 0, np.nan, dm), ValueError, "finite"),
+    ],
+    ids=("shape", "complex", "nonfinite"),
+)
+def test_the_driver_rejects_invalid_densities(corrupt, error, message):
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(mol, cavity_config(False), COMPONENTS["cpcm"](), context=CONTEXT)
+    with pytest.raises(error, match=message):
+        solvation.evaluate(corrupt(dm))
+    assert solvation.result is None
 
 
 @pytest.mark.host
@@ -958,6 +1207,27 @@ def test_host_separates_elements_from_ecp_charges(monkeypatch):
     assert host.nuclear_charges[0] == 53 - mol.atom_nelec_core(0) < 53
     host.dm = np.zeros((mol.nao, mol.nao))
     assert host.cartesian_density().shape == (host.basis.ncart, host.basis.ncart)
+
+
+@pytest.mark.conventions
+def test_slic_static_term_reads_the_molecular_charge():
+    """``phi_static * Q`` reaches the SLIC energy with ``Q = mol.charge``.
+
+    The static term is a constant, so raising ``phi_static`` by 0.1 Eh/e
+    shifts the energy by exactly ``0.1 * mol.charge``.
+    """
+    mol = molecule("fluoroacetate", "def2-svp")
+    dm = reference_density("fluoroacetate", "def2-svp")
+    assert mol.charge == -1
+    assert PySCFHost(mol).structure().charge == mol.charge
+    energies = []
+    for phi_static in (0.0, 0.1):
+        # Water-like parameters, mu = -alpha tanh(-gamma)
+        slic = ModelComponentSLIC(EPSILON, 0.5, -2.0, -0.5, -0.5 * np.tanh(0.5), phi_static,
+                                  parameters=DENSE)
+        solvation = PySCFSolvation(mol, cavity_config(False), [slic], context=CONTEXT)
+        energies.append(solvation.evaluate(dm).energy)
+    assert energies[1] - energies[0] == pytest.approx(0.1 * mol.charge, rel=0.0, abs=1e-12)
 
 
 def _energy(model, coupling):

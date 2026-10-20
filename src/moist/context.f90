@@ -33,7 +33,7 @@ module moist_context
    use mctc_env, only: error_type, fatal_error
    use moist_utils_timer, only: timer_type, timer_name_len => name_len, cat_host
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use moist_output_citations, only: citation_label_len, citation_moist, print_citations
+   use moist_output_citations, only: citation, print_citations
 !$ use omp_lib, only: omp_get_max_threads
    implicit none(type, external)
    private
@@ -56,10 +56,6 @@ module moist_context
       !> Debug flag; enables the debug stream and raises the verbosity to 6
       logical :: debug = .false.
       !> Detailed-profiling flag, independent of the verbosity
-      !>
-      !> - when set, fine-grained (per-part) timers are recorded on top of the
-      !>   coarse module timings, e.g. the individual gradient sub-steps in
-      !>   the DROP hot loop
       logical :: do_profile = .false.
       !> OpenMP thread count, fixed by `new_context`; 0 only before construction
       integer, private :: nthreads = 0
@@ -83,7 +79,7 @@ module moist_context
       !> Number of open host timer nodes, `Host` included
       integer, private :: nhost = 0
       !> Citation labels recorded by `cite`, in first-use order
-      character(len=citation_label_len), allocatable, private :: cited(:)
+      integer, allocatable, private :: cited(:)
       !> Number of recorded citation labels
       integer, private :: ncited = 0
    contains
@@ -205,7 +201,7 @@ contains
       end if
 
       ! Cite moist package
-      call self%cite(citation_moist)
+      call self%cite(citation%moist)
 
       ! The timer report follows the verbosity: silent at 0, deeper from 1 on
       call self%timer%new(verbose=self%level > 1, unit=self%unit, &
@@ -647,9 +643,9 @@ contains
       !> Context instance
       class(moist_context_type), intent(inout) :: self
       !> Registry label
-      character(len=*), intent(in) :: label
+      integer, intent(in) :: label
       !> Grown label list
-      character(len=citation_label_len), allocatable :: cited(:)
+      integer, allocatable :: cited(:)
 
       if (self%ncited > 0) then
          if (any(self%cited(:self%ncited) == label)) return
@@ -685,7 +681,7 @@ contains
       if (allocated(self%cited)) then
          call print_citations(iu, self%cited(:self%ncited))
       else
-         call print_citations(iu, [character(len=citation_label_len) ::])
+         call print_citations(iu, [integer ::])
       end if
 
    end subroutine context_print_citations

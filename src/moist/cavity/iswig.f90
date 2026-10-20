@@ -1,5 +1,5 @@
 module moist_cavity_iswig
-   use moist_output_citations, only: citation_iswig, citation_iswig_adaptive
+   use moist_output_citations, only: citation
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -12,6 +12,7 @@ module moist_cavity_iswig
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient, &
       & update_cavity_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_bornzeta, only: born_zeta_nleb, get_born_zeta
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_channels_fields, only: field_query_type
@@ -57,8 +58,12 @@ module moist_cavity_iswig
       real(wp) :: cached_swx = 0.0_wp
       real(wp), allocatable :: ang_grid(:, :) ! (3, num_leb)
       real(wp), allocatable :: ang_weight(:)  ! (num_leb), solid-angle weights summing to 4*pi
+      !> Whether the next update should expose principal curvatures
+      logical :: need_curvature = .false.
 
    contains
+      !> Request surface geometry for the next update
+      procedure :: configure => configure_cavity_iswig
       procedure :: update => update_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
       !> Contract surface-observable adjoints into the nuclear gradient
@@ -71,6 +76,25 @@ module moist_cavity_iswig
    end type cavity_type_iswig
 
 contains
+
+   !> Enable optional surface geometry for the next update
+   !>
+   !> @param[in,out] self iSwiG cavity
+   !> @param[in] normal Request normals, which iSwiG already stores
+   !> @param[in] curvature Request principal curvatures
+   !> @param[out] error Configuration error
+   subroutine configure_cavity_iswig(self, normal, curvature, error)
+      !> iSwiG cavity
+      class(cavity_type_iswig), intent(inout) :: self
+      !> Request normals, which iSwiG already stores
+      logical, intent(in), optional :: normal
+      !> Request principal curvatures
+      logical, intent(in), optional :: curvature
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+
+      if (present(curvature)) self%need_curvature = self%need_curvature .or. curvature
+   end subroutine configure_cavity_iswig
 
    !> Restore compiled parameter defaults
    !>
@@ -143,8 +167,8 @@ contains
       if (present(ctx)) self%ctx => ctx
       self%label = "vdW iSwiG"
       self%param = settings
-      if (allocated(self%radius_model)) deallocate(self%radius_model)
-      allocate(self%radius_model, source=radius_model)
+      if (allocated(self%radius_model)) deallocate (self%radius_model)
+      allocate (self%radius_model, source=radius_model)
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
       self%updated = .false.
@@ -204,8 +228,8 @@ contains
       if (allocated(error)) return
       call self%require_context(error)
       if (allocated(error)) return
-      call self%ctx%cite(citation_iswig)
-      call self%ctx%cite(citation_iswig_adaptive)
+      call self%ctx%cite(citation%iswig)
+      call self%ctx%cite(citation%iswig_adaptive)
 
       !> Set number of spheres
       self%nsph = mol%nat
@@ -218,6 +242,8 @@ contains
       if (allocated(self%f1_rA)) deallocate (self%f1_rA)
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
       if (allocated(self%v1_rA)) deallocate (self%v1_rA)
+      if (allocated(self%k1)) deallocate (self%k1)
+      if (allocated(self%k2)) deallocate (self%k2)
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
@@ -270,6 +296,11 @@ contains
       if (allocated(error)) return
       self%updated = .true.
       self%built = .true.
+
+      if (self%need_curvature) then
+         self%k1 = 1.0_wp/self%radii(self%owner)
+         self%k2 = self%k1
+      end if
 
    end subroutine update_cavity_iswig
 
@@ -496,7 +527,7 @@ contains
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
    !>
-   !> - Sizes without a fitted swig_xi value are errors here, checked first
+   !> - Sizes without a fitted zeta (bornzeta.f90) are errors here, checked first
    !> - None of the fitted sizes has negative weights; the generator would
    !>   refuse such a rule
    !>
@@ -508,36 +539,27 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: isize
+      !> Born-fitted Gaussian width scale of this Lebedev size
+      real(wp) :: zeta
 
-      !> iSwiG-supported Lebedev orders (indexing into swig_xi_tab)
-      integer :: iswig_order
+      !> Whether this Lebedev size has a fitted zeta
+      logical :: found
 
       !> Angular quadrature filling the cache, solid-angle weights summing to 4*pi
       type(moist_math_grid_angular_type) :: leb
 
       !> Error message buffer
-      character(len=256) :: msg
-
-      ! Precompute constant swig_xi value for this Lebedev order
-      real(wp), parameter :: swig_xi_tab(11) = [ &
-                             4.865_wp, 4.855_wp, 4.893_wp, 4.901_wp, 4.903_wp, &
-                             4.905_wp, 4.906_wp, 4.905_wp, 4.899_wp, 4.907_wp, 4.907_wp]
-      integer, parameter :: iswig_grid_sizes(11) = [ &
-                            14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202]
+      character(len=512) :: msg
 
       if (self%cached_num_leb == self%param%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
          return
       end if
 
-      !> Check if the self%param%num_leb is available for iswig (xi)
-      iswig_order = -1
-      do isize = 1, size(iswig_grid_sizes)
-         if (self%param%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
-      end do
-      if (iswig_order < 0) then
+      ! Gaussian width scale shared with DROP
+      call get_born_zeta(self%param%num_leb, zeta, found)
+      if (.not. found) then
          write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%param%num_leb, &
-            & "; supported sizes: ", iswig_grid_sizes
+            & "; supported sizes: ", born_zeta_nleb
          call fatal_error(error, trim(msg))
          return
       end if
@@ -547,7 +569,7 @@ contains
       if (allocated(error)) return
 
       self%cached_num_leb = self%param%num_leb
-      self%cached_swx = swig_xi_tab(iswig_order)
+      self%cached_swx = zeta
 
       ! Cache nodes and weights in the plain arrays the integrators consume
       call move_alloc(leb%points, self%ang_grid)

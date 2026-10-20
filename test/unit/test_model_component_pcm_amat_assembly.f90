@@ -4,10 +4,12 @@ module test_model_component_pcm_amat_assembly
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
+   use test_pcm_conductor_probe, only: probe_conductor_matrix
    use test_helpers, only: get_test_structures, center_at_origin, &
                            get_test_cavity_iswig, rel_deviation
-   use test_model_component_pcm_amat, only: count_branches, nmol, nleb_survey
+   use test_pcm_conductor_probe, only: count_branches, nmol, nleb_survey
+   use pcmgen_gauss_conductor, only: conductor_state, conductor_assemble, conductor_medium, &
+                                     conductor_solve
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -115,7 +117,7 @@ contains
       type(moist_error_type), allocatable :: err
       !> Structure and matrix indices, grid size
       integer :: imol, i, j, ngrid
-      !> Largest relative deviation and largest asymmetry
+      !> Largest relative deviation and entry-scaled asymmetry
       real(wp) :: dev, asym
       !> Failure context
       character(len=128) :: context
@@ -132,7 +134,7 @@ contains
 
          ngrid = cavity%ngrid
          allocate (amat(ngrid, ngrid))
-         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+         call probe_conductor_matrix(cavity%xi0, cavity%f, cavity%xyz, amat, err)
          if (allocated(err)) then
             call test_failed(error, "assembly failed: "//err%message)
             return
@@ -144,17 +146,18 @@ contains
          call check(error, dev, 0.0_wp, thr=ref_thr, more=trim(context))
          if (allocated(error)) return
 
-         ! The lower triangle is written by the blocked mirror rather than by
-         ! the kernel, so an indexing slip there shows up only as asymmetry
+         ! Generated kernels evaluate both triangles independently; scale by
+         ! each pair, so large diagonal entries cannot hide off-diagonal errors
          asym = 0.0_wp
          do j = 1, ngrid
             do i = j + 1, ngrid
-               asym = max(asym, abs(amat(i, j) - amat(j, i)))
+               asym = max(asym, abs(amat(i, j) - amat(j, i)) &
+                  & /max(tiny(1.0_wp), abs(amat(i, j)), abs(amat(j, i))))
             end do
          end do
          write (context, "(a,i0,a)") "structure ", imol, &
-            ": mirrored triangle does not match the assembled one"
-         call check(error, asym, 0.0_wp, thr=0.0_wp, more=trim(context))
+            ": independently assembled triangles differ beyond roundoff"
+         call check(error, asym, 0.0_wp, thr=8.0_wp*epsilon(1.0_wp), more=trim(context))
          if (allocated(error)) return
 
          deallocate (amat)
@@ -235,7 +238,7 @@ contains
 
       ngrid = cavity%ngrid
       allocate (amat(ngrid, ngrid))
-      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, err)
+      call probe_conductor_matrix(cavity%xi0, cavity%f, cavity%xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "assembly failed: "//err%message)
          return
@@ -248,26 +251,34 @@ contains
    end subroutine test_assembly_dense_grid
 
    !> Coincident grid points stay finite and hit the Gaussian overlap limit
+   !>
+   !> Unequal widths on the coincident pair, so a kernel that reads one width
+   !> twice misses the limit; the generated solve on the same surface must give
+   !> finite charges and energy
    subroutine test_coincident_grid_points(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
+      !> Generated conductor state of the solve
+      type(conductor_state) :: state
       !> Synthetic surface with a duplicated point
       real(wp) :: xi(4), f(4), xyz(3, 4), amat(4, 4)
       !> Pair width, expected limit and matrix indices
       real(wp) :: p, limit
       integer :: i, j
+      !> Surface potential, solved charges, potential adjoint and energy
+      real(wp) :: v(4), q(4), grad_v(4), energy
 
-      xi = [1.5_wp, 1.5_wp, 2.0_wp, 0.9_wp]
+      xi = [1.5_wp, 1.1_wp, 2.0_wp, 0.9_wp]
       f = [0.8_wp, 0.8_wp, 0.95_wp, 0.6_wp]
       xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       xyz(:, 2) = [0.0_wp, 0.0_wp, 0.0_wp]
       xyz(:, 3) = [1.7_wp, -0.4_wp, 0.9_wp]
       xyz(:, 4) = [-3.1_wp, 2.2_wp, -1.4_wp]
 
-      call assemble_pcm_amat(xi, f, xyz, amat, err)
+      call probe_conductor_matrix(xi, f, xyz, amat, err)
       if (allocated(err)) then
          call test_failed(error, "assembly failed: "//err%message)
          return
@@ -288,6 +299,32 @@ contains
       limit = 2.0_wp*p/sqrt(4.0_wp*atan(1.0_wp))
       call check(error, amat(1, 2), limit, thr=ref_thr*limit, &
                  more="coincident pair does not reach the Gaussian overlap limit")
+      if (allocated(error)) return
+      call check(error, amat(2, 1), limit, thr=ref_thr*limit, &
+                 more="matrix is not symmetric at coincident grid points")
+      if (allocated(error)) return
+
+      v = [-0.31_wp, 0.22_wp, -0.17_wp, 0.41_wp]
+      call conductor_assemble(state, xyz, xi, f, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor assembly failed: "//err%message)
+         return
+      end if
+      call conductor_medium(state, 0.9_wp, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor medium failed: "//err%message)
+         return
+      end if
+      call conductor_solve(state, v, energy, q, grad_v, err)
+      if (allocated(err)) then
+         call test_failed(error, "generated conductor solve failed: "//err%message)
+         return
+      end if
+      call check(error, all(q == q) .and. all(abs(q) < huge(1.0_wp)), &
+                 more="coincident grid points produced non-finite surface charges")
+      if (allocated(error)) return
+      call check(error, energy == energy .and. abs(energy) < huge(1.0_wp), &
+                 more="coincident grid points produced a non-finite energy")
 
    end subroutine test_coincident_grid_points
 

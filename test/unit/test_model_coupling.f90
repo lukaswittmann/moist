@@ -9,7 +9,7 @@ module test_model_coupling
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
-   use mctc_env, only: wp
+   use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
@@ -26,7 +26,7 @@ module test_model_coupling
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_pcm_type, only: solver_type
-   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
       & model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
@@ -69,7 +69,38 @@ module test_model_coupling
    integer, parameter :: drop_proj_level = 2
    integer, parameter :: drop_prune_level = 4
 
+   !> Test component that fails after the cavity surface is built
+   type, extends(model_continuum_component_pv) :: failing_update_component
+   contains
+      !> Report failure after the cavity projection
+      procedure :: update => fail_component_update
+   end type failing_update_component
+
 contains
+
+   !> Inject a component update failure after the cavity projection
+   !>
+   !> @param[in,out] self   test component
+   !> @param[in]     mol    current molecular structure
+   !> @param[in,out] cavity projected cavity
+   !> @param[out]    error  deliberate update failure
+   subroutine fail_component_update(self, mol, cavity, error)
+      !> Test component
+      class(failing_update_component), intent(inout) :: self
+      !> Current molecular structure
+      type(structure_type), intent(in) :: mol
+      !> Projected cavity
+      class(cavity_type), intent(inout) :: cavity
+      !> Deliberate update failure
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      if (.not. cavity%is_built()) then
+         call fatal_error(error, "Test component update ran before the surface was built")
+         return
+      end if
+      call fatal_error(error, "Deliberate test component update failure")
+   end subroutine fail_component_update
+
    subroutine collect_model_coupling(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
@@ -92,7 +123,7 @@ contains
    end subroutine collect_model_coupling
 
    subroutine test_invalidation(error)
-            type(error_type), allocatable, intent(out) :: error
+      type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
       type(structure_type) :: mol
@@ -126,7 +157,7 @@ contains
       call model%get_energy(second, energy, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      call check(error, .not. first%next(), more="an invalidated coupling was walked")
+      call check(error,.not. first%next(), more="an invalidated coupling was walked")
       if (allocated(error)) return
       call model%prepare_response(second, err)
       if (failed(error, err, "response directly after update")) return
@@ -136,7 +167,7 @@ contains
          call check(error, item%is_missing("phi"))
       end associate
       if (allocated(error)) return
-      call check(error, .not. second%next(), more="the potential is the only request")
+      call check(error,.not. second%next(), more="the potential is the only request")
    end subroutine test_invalidation
 
    subroutine test_model_copy(error)
@@ -160,12 +191,12 @@ contains
       call original%new_coupling(coupling, err)
       call original%prepare_energy(coupling, err)
       call fill_point_charge_potential(cav, coupling, qat_vals, mol)
-      allocate(copied, source=original)
+      allocate (copied, source=original)
       energy = 0.0_wp
       call copied%get_energy(coupling, energy, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      deallocate(copied)
+      deallocate (copied)
       call original%get_energy(coupling, energy, err)
       if (failed(error, err, "original survives destroying its copy")) return
       call original%update(mol, err)
@@ -194,8 +225,8 @@ contains
       if (allocated(error)) return
       call new_component_cpcm(pcm1, epsilon=2.0_wp, error=err, ctx=ctx)
       call new_component_cpcm(pcm2, epsilon=30.0_wp, error=err, ctx=ctx)
-      allocate(gradients(3, mol%nat, 4), source=0.0_wp)
-      allocate(repeated_gradient(3, mol%nat), source=0.0_wp)
+      allocate (gradients(3, mol%nat, 4), source=0.0_wp)
+      allocate (repeated_gradient(3, mol%nat), source=0.0_wp)
       energies = 0.0_wp
       do k = 1, 4
          call new_continuum_model(model, ctx, cavity, err)
@@ -219,7 +250,7 @@ contains
          if (allocated(error)) return
          call model%prepare_gradient(coupling, err)
          call fill_point_charge_field(cav, coupling, qat_vals, mol)
-         call model%get_gradient(coupling, response, gradients(:,:,k), err)
+         call model%get_gradient(coupling, response, gradients(:, :, k), err)
          if (failed(error, err, "two PCM gradient")) return
          repeated_gradient = gradients(:, :, k)
          call model%get_gradient(coupling, response, repeated_gradient, err)
@@ -230,11 +261,11 @@ contains
       end do
       call check(error, energies(1), energies(2), thr=thr)
       if (allocated(error)) return
-      call check(error, energies(1), energies(3)+energies(4), thr=thr)
+      call check(error, energies(1), energies(3) + energies(4), thr=thr)
       if (allocated(error)) return
-      call check(error, maxval(abs(gradients(:,:,1)-gradients(:,:,2))) < 1.0e-12_wp)
+      call check(error, maxval(abs(gradients(:, :, 1) - gradients(:, :, 2))) < 1.0e-12_wp)
       if (allocated(error)) return
-      call check(error, maxval(abs(gradients(:,:,1)-gradients(:,:,3)-gradients(:,:,4))) < 1.0e-12_wp)
+      call check(error, maxval(abs(gradients(:, :, 1) - gradients(:, :, 3) - gradients(:, :, 4))) < 1.0e-12_wp)
    end subroutine test_order
 
    subroutine test_moments(error)
@@ -266,7 +297,7 @@ contains
       type is (gaussian_moment_request_type)
          call check(error, item%is_missing("gt") .and. item%is_missing("pt"))
          if (allocated(error)) return
-         call check(error, .not. item%is_missing("mt") .and. .not. item%is_missing("rt"), &
+         call check(error,.not. item%is_missing("mt") .and. .not. item%is_missing("rt"), &
             & more="a fixed cavity needs no higher moments for the energy")
          if (allocated(error)) return
          call check(error, size(item%width), cav%ngrid)
@@ -285,7 +316,7 @@ contains
          call test_failed(error, "unexpected request "//item%name())
       end select
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="GOSTSHYP declares one request")
+      call check(error,.not. coupling%next(), more="GOSTSHYP declares one request")
       if (allocated(error)) return
       call model%prepare_response(coupling, err)
       if (failed(error, err, "moment response staging")) return
@@ -294,10 +325,10 @@ contains
       associate (item => coupling%request())
          call check(error, item%is_missing("gt") .and. item%is_missing("pt"))
          if (allocated(error)) return
-         call check(error, .not. item%is_missing("mt") .and. .not. item%is_missing("rt"))
+         call check(error,.not. item%is_missing("mt") .and. .not. item%is_missing("rt"))
       end associate
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
       if (allocated(error)) return
       call model%prepare_gradient(coupling, err)
       if (failed(error, err, "moment gradient staging")) return
@@ -308,7 +339,7 @@ contains
             & item%is_missing("mt") .and. item%is_missing("rt"))
       end associate
       if (allocated(error)) return
-      call check(error, .not. coupling%next())
+      call check(error,.not. coupling%next())
       if (allocated(error)) return
       call new_continuum_model(model, ctx, cavity, err)
       call new_component_gostshyp(component, 0.0_wp)
@@ -364,7 +395,7 @@ contains
       call model%new_coupling(coupling, err)
       call model%prepare_energy(coupling, err)
       if (failed(error, err, "PV staging")) return
-      call check(error, .not. coupling%next(), more="PV asked the host for something")
+      call check(error,.not. coupling%next(), more="PV asked the host for something")
       if (allocated(error)) return
       energy = 0.0_wp
       call model%get_energy(coupling, energy, err)
@@ -449,11 +480,11 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=drop_blend_k, &
-            blend_3b=drop_blend_3b))
+                                                                            blend_3b=drop_blend_3b))
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=err, param=moist_cavity_drop_parameters_type(num_leb=nleb_drop, tolerance=drop_proj_tol, &
-            proj_maxiter=drop_proj_maxiter, proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, &
-            do_fine=.true.), ctx=ctx)
+            & error=err, param=moist_cavity_drop_parameters_type( &
+            & num_leb=nleb_drop, tolerance=drop_proj_tol, proj_maxiter=drop_proj_maxiter, &
+            & proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, do_fine=.true.), ctx=ctx)
       end block
       if (failed(error, err, "DROP setup")) return
 
@@ -497,7 +528,7 @@ contains
          if (failed(error, err, "adding PV")) return
       end if
       call new_component_cpcm(cpcm, epsilon=eps_model, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+                              param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (failed(error, err, "CPCM setup")) return
       call model%add_component(cpcm, err)
       if (failed(error, err, "adding CPCM")) return
@@ -734,7 +765,7 @@ contains
       call check(error, coupling%next())
       if (allocated(error)) return
       associate (item => coupling%request())
-         call check(error, .not. item%is_missing("phi"))
+         call check(error,.not. item%is_missing("phi"))
          if (allocated(error)) return
          call check(error, item%is_missing("dphi_dr") .and. item%is_missing("dphi_dxi"))
       end associate
@@ -757,7 +788,7 @@ contains
       end associate
       if (allocated(error)) return
       call model%release_coupling(coupling)
-      call check(error, .not. associated(coupling))
+      call check(error,.not. associated(coupling))
    end subroutine test_phase_reuse
 
    !> A model update ends every walk; answering is refused until the next staging
@@ -798,7 +829,7 @@ contains
       if (allocated(error)) return
       call check(error, err%message, "No current coupling request - call next() first")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="an invalidated coupling was walked")
+      call check(error,.not. coupling%next(), more="an invalidated coupling was walked")
       if (allocated(error)) return
       energy = 0.0_wp
       call model%get_energy(coupling, energy, err)
@@ -1257,10 +1288,9 @@ contains
 
    !> A component that fails to update in the build leaves the model unbuilt
    !>
-   !> The CPCM component carries a 1x1 external matrix, the pseudo atom's
-   !> surface more points, so the component update in `build` fails after the
-   !> cavity projected; the model stays unbuilt and the energy is refused.
-   !> Negative control: the same model without an external matrix builds and
+   !> A test component fails after the pseudo atom's cavity projected and
+   !> CPCM updated; the model stays unbuilt and the energy is refused
+   !> Negative control: the same model without the failing component builds and
    !> evaluates
    subroutine test_component_failure_drops_surface(error)
       !> Test failure
@@ -1274,13 +1304,14 @@ contains
       class(radius_type), allocatable :: radii
       type(model_continuum_component_cpcm) :: cpcm
       type(model_continuum_type), target :: model, control
+      type(failing_update_component) :: failing_component
       type(coupling_type), pointer :: coupling
       class(cavity_type), pointer :: cav
       real(wp) :: energy
 
       call new_context(ctx, nthreads=0, verbosity=0)
 
-      ! Control: no external matrix
+      ! Control: no failing component
       call pseudo_atom_model(control, ctx, mol, error)
       if (allocated(error)) return
       call control%update(mol, err)
@@ -1308,10 +1339,11 @@ contains
       if (failed(error, err, "cavity setup")) return
       call new_continuum_model(model, ctx, cavity, err)
       if (failed(error, err, "model setup")) return
-      call new_component_cpcm(cpcm, epsilon=eps_model, external_matrix=reshape([1.0_wp], [1, 1]), &
-         error=err, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      call new_component_cpcm(cpcm, epsilon=eps_model, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%dense), ctx=ctx)
       if (.not. allocated(err)) call model%add_component(cpcm, err)
-      if (failed(error, err, "CPCM with an external matrix")) return
+      if (.not. allocated(err)) call model%add_component(failing_component, err)
+      if (failed(error, err, "CPCM and failing component")) return
 
       call model%update(mol, err)
       if (.not. allocated(err)) call model%new_coupling(coupling, err)
@@ -1319,9 +1351,9 @@ contains
       if (.not. allocated(err)) call answer_pseudo_atom_build(coupling, err)
       if (failed(error, err, "build staging")) return
       call model%build(coupling, err)
-      call check(error, allocated(err), more="a build with a mis-sized external matrix succeeded")
+      call check(error, allocated(err), more="a build with a failing component succeeded")
       if (allocated(error)) return
-      call check(error, index(err%message, "External PCM matrix dimension mismatch") > 0, more=err%message)
+      call check(error, index(err%message, "Deliberate test component update failure") > 0, more=err%message)
       if (allocated(error)) return
       err%stat = 0
       deallocate (err)

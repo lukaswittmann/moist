@@ -5,7 +5,7 @@ module moist_cavity_drop
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use moist_output_citations, only: citation_drop, citation_isodensity, citation_cfc
+   use moist_output_citations, only: citation
    use moist_math_lapack, only: getrf, getrs
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
@@ -115,10 +115,6 @@ module moist_cavity_drop
       !> Surface normal gradient at grid points (3, nsph, 3, ngrid)
       real(wp), allocatable :: normal1_rA(:, :, :, :)
 
-      !> First principal curvature
-      real(wp), allocatable :: k1(:)
-      !> Second principal curvature
-      real(wp), allocatable :: k2(:)
       !> Mean curvature
       real(wp), allocatable :: KM(:)
       !> Gaussian curvature
@@ -213,6 +209,8 @@ module moist_cavity_drop
       real(wp), allocatable :: anchor_xi0(:)
 
    contains
+      !> Enable optional geometry required by model components
+      procedure :: configure => configure_cavity_drop
       !> Build the cavity for a new geometry
       procedure :: update => update_cavity_drop
       !> Whether the level set requires build-phase answers before the projection
@@ -511,6 +509,26 @@ module moist_cavity_drop
 
 contains
 
+   !> Enable optional geometry requested by a model component
+   !>
+   !> @param[in,out] self DROP cavity
+   !> @param[in] normal Request normals
+   !> @param[in] curvature Request principal curvatures
+   !> @param[out] error Configuration error
+   subroutine configure_cavity_drop(self, normal, curvature, error)
+      !> DROP cavity
+      class(cavity_type_drop), intent(inout) :: self
+      !> Request normals
+      logical, intent(in), optional :: normal
+      !> Request principal curvatures
+      logical, intent(in), optional :: curvature
+      !> Configuration error
+      type(error_type), allocatable, intent(out) :: error
+
+      if (present(normal)) self%param%do_normal = self%param%do_normal .or. normal
+      if (present(curvature)) self%param%do_curvature = self%param%do_curvature .or. curvature
+   end subroutine configure_cavity_drop
+
    !> The DROP surface geometry depends on the host field
    !>
    !> `get_surface_response_drop` maps the accumulated surface weights to a
@@ -611,14 +629,14 @@ contains
       class(cavity_type_drop), intent(inout) :: self
 
       if (.not. associated(self%ctx)) return
-      call self%ctx%cite(citation_drop)
+      call self%ctx%cite(citation%drop)
       select type (m => self%lsf_model)
       type is (moist_cavity_drop_lsf_cfc_type)
-         call self%ctx%cite(citation_cfc)
+         call self%ctx%cite(citation%cfc)
       type is (moist_cavity_drop_lsf_isodensity_internal_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       type is (moist_cavity_drop_lsf_isodensity_callback_type)
-         call self%ctx%cite(citation_isodensity)
+         call self%ctx%cite(citation%isodensity)
       end select
 
    end subroutine cite_cavity_drop
@@ -715,7 +733,7 @@ contains
    !*                          Update Cavity (construct cavity)                         *!
    !* ================================================================================= *!
 
-   !> Take a new geometry: radii and sphere centres, then the surface unless
+   !> Take a new geometry: radii and sphere centers, then the surface unless
    !> the level set waits for build-phase answers
    !>
    !> @param[inout] self     Cavity instance
@@ -734,6 +752,10 @@ contains
 
       !> Set number of spheres
       self%nsph = mol%nat
+      if (allocated(self%k1)) deallocate (self%k1)
+      if (allocated(self%k2)) deallocate (self%k2)
+      if (allocated(self%KM)) deallocate (self%KM)
+      if (allocated(self%KG)) deallocate (self%KG)
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
@@ -804,7 +826,7 @@ contains
 
    end subroutine build_cavity_drop
 
-   !> Project the surface of the stored structure, radii and sphere centres
+   !> Project the surface of the stored structure, radii and sphere centers
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling
@@ -1267,8 +1289,6 @@ contains
       call query%add_real("anchor_xi0", "Gaussian width at the anchor point (ngrid)", self%anchor_xi0)
 
       !> Diagnostics, present only when the matching property was requested
-      call query%add_real("k1", "First principal curvature (ngrid)", self%k1)
-      call query%add_real("k2", "Second principal curvature (ngrid)", self%k2)
       call query%add_real("KM", "Mean curvature (ngrid)", self%KM)
       call query%add_real("KG", "Gaussian curvature (ngrid)", self%KG)
       call query%add_real("rho_grid", "Local grid point density (ngrid)", self%rho_grid)

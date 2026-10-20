@@ -58,6 +58,7 @@ pysrcs = [
   'parameters.py',
   'pyscf.py',
   'radii.py',
+  'solvent.py',
 ]
 
 if install
@@ -100,6 +101,8 @@ bindings_srcs = [
   tests_dir / 'test_configuration.py',
   tests_dir / 'test_api_contracts.py',
   tests_dir / 'test_library.py',
+  tests_dir / 'test_solvent.py',
+  tests_dir / 'test_parameter_adjoint.py',
 ]
 coupling_src = tests_dir / 'test_pyscf.py'
 

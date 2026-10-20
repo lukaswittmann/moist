@@ -16,7 +16,7 @@ CONTEXT = moist.Context()
 
 
 @pytest.mark.parametrize("kind", [
-    moist.DROPParameters, moist.ISwiGParameters, moist.SvdWParameters,
+    moist.DROPParameters, moist.ISwiGParameters, moist.MTParameters, moist.SvdWParameters,
     moist.CFCParameters, moist.IsodensityParameters, moist.PCMParameters, moist.GOSTSHYPParameters,
 ])
 def test_parameters_cover_native_options_and_defaults(kind):
@@ -48,7 +48,7 @@ def test_parameter_types_and_nonfinite_values():
         moist.DROPParameters(nleb=26.5)
     with pytest.raises(ValueError, match="finite"):
         moist.DROPParameters(tolerance=float("nan"))
-    assert moist.PCMParameters(solver="lu").solver is moist.PCMSolver.LU
+    assert moist.PCMParameters(solver="dense").solver is moist.PCMSolver.DENSE
     with pytest.raises(ValueError):
         moist.PCMParameters(solver=2.5)
     with pytest.raises(ValueError, match="finite"):
@@ -242,16 +242,49 @@ def test_model_requires_context(make):
         make()
 
 
+@pytest.mark.parametrize("component_type, physical", [
+    (moist.ModelComponentCPCM, (32.0,)),
+    (moist.ModelComponentCOSMO, (32.0,)),
+    (moist.ModelComponentIEFPCM, (32.0,)),
+    (moist.ModelComponentSSVPE, (32.0,)),
+    (moist.ModelComponentDPCM, (32.0,)),
+    (moist.ModelComponentDPCMOriginal, (32.0,)),
+    (moist.ModelComponentLPB, (32.0, 0.1)),
+    (moist.ModelComponentSLIC, (32.0, 0.1, 0.2, 0.3, 0.0, 0.0)),
+    (moist.ModelComponentNonlocal, (32.0, 2.0, 1.0, 1.0)),
+])
+def test_pcm_optional_context_and_lifetime(component_type, physical):
+    component = component_type(*physical)
+    assert component.context is None
+    with pytest.raises(TypeError, match="context must be a Context"):
+        component_type(*physical, context=object())
+
+    context = moist.Context(nthreads=1)
+    owner = weakref.ref(context._as_handle())
+    component = component_type(*physical, context=context)
+    assert component.context is context
+    handle = component._as_handle()
+    del component, context
+    gc.collect()
+    assert owner() is not None
+    del handle
+    gc.collect()
+    assert owner() is None
+
+
 @pytest.mark.parametrize("component", [moist.ModelComponentCPCM, moist.ModelComponentCOSMO])
 def test_pcm_iterative_controls_round_trip(component):
     defaults = moist.PCMParameters()
     assert defaults.solver_tol > 0.0 and defaults.solver_maxiter >= 1
+    assert defaults.solver is moist.PCMSolver.ITERATIVE
+    assert defaults.storage is moist.PCMStorage.DENSE
     parameters = moist.PCMParameters(
-        solver="iterative", solver_tol=1e-8, solver_maxiter=200)
+        solver="iterative", solver_tol=1e-8, solver_maxiter=200, storage="matrix_free")
     term = component(32, parameters=parameters)
     assert term.parameters.solver is moist.PCMSolver.ITERATIVE
     assert term.parameters.solver_tol == 1e-8
     assert term.parameters.solver_maxiter == 200
+    assert term.parameters.storage is moist.PCMStorage.MATRIX_FREE
     with pytest.raises(RuntimeError):
         component(32, parameters=moist.PCMParameters(solver_maxiter=0))
 
@@ -618,3 +651,104 @@ def test_gostshyp_registered_parameter_printout():
     assert float(rows["regularization_start"][0][-1]) == 1e-12
     assert float(rows["regularization_end"][0][-1]) == 1e-10
     assert rows["suppress_negative_amplitudes"][0][-1] == "F"
+
+
+@pytest.mark.parametrize("lsf", [moist.SvdW(), moist.CFC()])
+def test_mt_configuration_and_snapshot(lsf):
+    """Both geometric LSFs expose ordinary snapshots and independent mesh diagnostics."""
+    settings = moist.MTParameters(spacing=0.4, target_area=1.5)
+    recipe = moist.MT(lsf=lsf, parameters=settings,
+                      radii=moist.CustomRadii([2.5]))
+    assert pickle.loads(pickle.dumps(recipe)) == recipe
+    cavity = recipe.build(context=CONTEXT)
+    with pytest.raises(RuntimeError, match="updated"):
+        cavity.snapshot()
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    snapshot = cavity.snapshot()
+    assert type(snapshot) is moist.CavitySnapshot
+    assert snapshot.ngrid > 0
+    assert snapshot.area > 0 and snapshot.volume > 0
+    assert snapshot.xyz.shape == (snapshot.ngrid, 3)
+    assert snapshot.normal0.shape == (snapshot.ngrid, 3)
+    np.testing.assert_allclose(np.linalg.norm(snapshot.normal0, axis=1), 1.)
+    np.testing.assert_array_equal(snapshot.f, 1.)
+    np.testing.assert_array_equal(snapshot.owner, 0)
+    np.testing.assert_allclose(snapshot.asph, [snapshot.area])
+    assert np.all(snapshot.a > 0) and np.all(snapshot.xi0 > 0)
+    assert float(cavity.get("mesh_area")) > 0
+    assert float(cavity.get("mesh_volume")) > 0
+    assert cavity.get("patch_area").shape == (snapshot.ngrid,)
+    assert not snapshot.xyz.flags.writeable
+    # A second independent native instance shares settings but no live state.
+    other = recipe.build(context=CONTEXT)
+    other.update(moist.Structure([1], [[3., 0., 0.]]))
+    np.testing.assert_array_equal(cavity.snapshot().xyz, snapshot.xyz)
+    old_xyz = snapshot.xyz.copy()
+    cavity.update(moist.Structure([1], [[1., 0., 0.]]))
+    assert cavity.snapshot() is not snapshot
+    np.testing.assert_array_equal(snapshot.xyz, old_xyz)
+
+
+@pytest.mark.parametrize("values", [
+    {"spacing": 0.}, {"target_area": -1.}, {"gaussian_scale": 0.},
+    {"area_tolerance": -0.1}, {"w_0ls_from": 0.8, "w_0ls_to": 0.2},
+    {"w_0ls_p": 0.}, {"w_0ls_a": 0.}, {"weight_cutoff": -1.},
+])
+def test_mt_invalid_parameters(values):
+    """Scientific constraints are checked by the native constructor."""
+    with pytest.raises(RuntimeError):
+        moist.CavityMT(
+            parameters=moist.MTParameters(**values), context=CONTEXT,
+        )
+
+
+def test_mt_parameter_types():
+    with pytest.raises(ValueError, match="finite"):
+        moist.MTParameters(spacing=float("nan"))
+    with pytest.raises(TypeError):
+        moist.CavityMT(parameters=moist.DROPParameters())
+    with pytest.raises(TypeError, match="LSF"):
+        moist.MT(lsf="svdw")
+
+
+def test_mt_callback_build_and_failure(gaussian_density, build_with):
+    settings = moist.MTParameters(spacing=0.4, target_area=1.5)
+    lsf = moist.Isodensity()
+    cavity = moist.MT(lsf=lsf, parameters=settings).build(
+        source=gaussian_density, context=CONTEXT,
+    )
+    assert cavity.density_dependent
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    with pytest.raises(RuntimeError, match="not built"):
+        cavity.snapshot()
+    build_with(cavity, z=[1.])
+    assert cavity.snapshot().ngrid > 0
+    cavity.prepare_build(cavity.new_coupling())
+    with pytest.raises(RuntimeError, match="not built"):
+        cavity.snapshot()
+
+    def broken(point, order):
+        raise ValueError("MT callback failed")
+
+    broken_cavity = moist.MT(lsf=lsf, parameters=settings).build(
+        source=broken, context=CONTEXT,
+    )
+    broken_cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    with pytest.raises(ValueError, match="MT callback failed"):
+        build_with(broken_cavity, z=[1.])
+
+
+def test_mt_internal_isodensity_layout_and_build(build_with):
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                                exponents=[1.], coefficients=[1.])
+    cavity = moist.CavityMT(
+        lsf=moist.Isodensity(parameters=moist.IsodensityParameters(core_fill=False)),
+        parameters=moist.MTParameters(spacing=0.4, target_area=1.5),
+        basis=basis, context=CONTEXT,
+    )
+    offsets, powers = cavity.isodensity_layout()
+    np.testing.assert_array_equal(offsets, [0, 1])
+    np.testing.assert_array_equal(powers, [[0, 0, 0]])
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    build_with(cavity, dcart=np.array([[1.]]))
+    assert cavity.snapshot().ngrid > 0

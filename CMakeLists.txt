@@ -195,6 +195,10 @@ configure_file(
 )
 list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 
+# src/moist/data at -O0
+file(GLOB moist_data_srcs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/data/*.f90")
+set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
   VERSION "${PROJECT_VERSION}"
@@ -222,7 +226,7 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals)
+  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
   target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
@@ -313,10 +317,14 @@ if(MOIST_TESTS)
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_cpcm
     cavity_drop_properties
-    cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
-    model_component_pcm_amat model_component_pcm_amat_kernel
+    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
+    cavity_mt_mesh cavity_mt_patches cavity_mt
+    model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
-    model_component_pcm_electrostatics model_component_pcm_cpcm
+    model_component_pcm_electrostatics model_component_pcm_solvers
+    model_component_pcm_interface model_component_pcm_derivatives
+    model_component_pcm_references model_component_pcm_regression
+    model_component_pcm_vacuum model_component_pcm_kernel_variants
     model_component_gostshyp model_component_pv
     model_continuum channels model_coupling
   )
@@ -351,8 +359,10 @@ if(MOIST_TESTS)
   set(moist_test_srcs
     "${_unit}/main.F90"
     "${_unit}/test_helpers.f90"
+    "${_unit}/test_pcm_conductor_probe.f90"
     "${_unit}/test_moz_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"
+    "${_unit}/test_model_component_pcm_fixtures.f90"
   )
   foreach(suite IN LISTS moist_test_suites)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
@@ -393,9 +403,12 @@ if(MOIST_TESTS)
       add_test(NAME ${suite} COMMAND moist-tester ${suite})
       set(runs ${suite})
     endif()
+    # Serial BLAS: suites run their tests in an OpenMP parallel; meson runs suites
+    # concurrently, so threaded BLAS (MKL on intel25, pthreaded OpenBLAS on the
+    # conda, ilp64 and MSYS2 legs) oversubscribes
     set_tests_properties(${runs} PROPERTIES
-      ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
-      TIMEOUT 360
+      ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR};MKL_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1"
+      TIMEOUT 420
     )
   endforeach()
 endif()

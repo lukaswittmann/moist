@@ -25,6 +25,7 @@ elif fc_id == 'intel'
     '-traceback',
     '-fp-model=precise',
     '-fpscomp', 'logicals',
+    '-qno-openmp-simd',
     language: 'fortran',
   )
   # Intel traceback support at runtime requires libunwind to be linked.

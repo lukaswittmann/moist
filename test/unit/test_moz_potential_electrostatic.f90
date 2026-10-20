@@ -28,9 +28,9 @@ module test_moz_potential_electrostatic
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_multipoles_type, &
       & solvent_model_charges_type, coulomb_resp_solvent, coulomb_spce, multipoles_mbis_gas
-   use moist_data_solvents, only: get_solvent_charges
+   use moist_data_solvents, only: get_solvent_charges, get_solvent_id
    use test_moz_fixtures, only: water_id, new_water_system
-   use moist_data_solvents, only: solvation_system_type, new_solvation_system, get_solvent_id
+   use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use test_helpers, only: check_moist_error
    use test_moz_potential_kernel, only: make_potential, make_solute, make_solvent, make_grid, &
       & check_close, sigma_u, eps_u, q_u, sigma_v, eps_v, q_v, weights_3d, eval_functional, lb, weights_1d, &
@@ -299,7 +299,7 @@ contains
       type(solvent_charges_type) :: term, unset
       type(solvent_multipoles_type) :: multipoles
       type(structure_type) :: mol, fragment
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(coupling_view_type) :: unbound
       real(wp), allocatable :: tail(:), reference(:)
 
@@ -370,7 +370,7 @@ contains
       type(moist_error), allocatable :: err
       type(solvent_model_charges_type) :: spce, unknown
       type(solvent_charges_type) :: resp
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(structure_type) :: mol, fragment
       type(coupling_view_type) :: unbound
       real(wp), allocatable :: tail(:), reference(:)
@@ -423,7 +423,7 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
-      type(solvation_system_type) :: system
+      type(solvent_system_type) :: system
       type(moz_potential_type) :: pot, partial
       type(potential_sites_type) :: sites
       type(fixed_charges_type) :: first, rest
@@ -433,7 +433,7 @@ contains
 
       ! Methanol: no SPC/E charges, full RESP table coverage
       call get_solvent_id("methanol", id, err)
-      if (.not. allocated(err)) call new_solvation_system(system, id, error=err)
+      if (.not. allocated(err)) call new_solvent_system(system, id, error=err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       mol = system%solv_mol

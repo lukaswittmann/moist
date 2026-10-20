@@ -20,11 +20,11 @@ import numpy as np
 from . import library
 from .library import FieldInfo
 from .context import Context, _context_handle, _resolve_context
-from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
+from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet, MT
 from .radii import Radii
 from .density import GaussianBasis
 from .parameters import (
-    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
+    DROPParameters, ISwiGParameters, MTParameters, PCMParameters, PCMSolver, GOSTSHYPParameters, _resolve,
 )
 
 
@@ -177,12 +177,17 @@ class PotentialAdjointResponse(_ImmutableArrayValue):
         stationary PCM (CPCM, COSMO) they are the induced surface charges
         ``q_i``; for a non-symmetric response matrix (IEF-PCM, SS(V)PE) they
         are the symmetrized adjoint, which is not the apparent charge.
+    ``w_dphi_dr``
+        ``(ngrid, 3)`` weights conjugate to the raw spatial derivative of the
+        same potential. Components using normal derivatives populate them;
+        absent weights are ``None``.
     """
 
     #: Native item name
     name: ClassVar[str] = "potential_adjoint"
 
     w_phi: np.ndarray
+    w_dphi_dr: Optional[np.ndarray] = None
 
 
 @dataclass(frozen=True)
@@ -299,6 +304,54 @@ class RadialPotentialAdjointResponse(_ImmutableArrayValue):
     dg_dphi: np.ndarray
 
 
+@dataclass(frozen=True)
+class ParameterAdjointResponse:
+    """Parameter adjoint item of a solvation response.
+
+    Scalar derivatives ``dE/dp`` of the model energy with respect to its
+    physical parameters at fixed geometry and host traces.  Present only when
+    :class:`PCMParameters` has ``parameter_derivatives`` set; an attribute is
+    ``None`` when the model has no such parameter.
+
+    ``dg_deps``
+        solvent permittivity (zero for an infinite permittivity)
+    ``dg_deps_inf``, ``dg_dlambda``, ``dg_deps_solute``
+        high-frequency permittivity, correlation length and interior
+        permittivity (nonlocal)
+    ``dg_dkappa``
+        inverse Debye length (LPB)
+    ``dg_dalpha``, ``dg_dbeta``, ``dg_dgamma``, ``dg_dmu``, ``dg_dphi_static``
+        SLIC parameters; ``dg_dmu`` only when ``mu`` was given
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "parameter_adjoint"
+
+    dg_deps: Optional[float] = None
+    dg_deps_inf: Optional[float] = None
+    dg_dlambda: Optional[float] = None
+    dg_deps_solute: Optional[float] = None
+    dg_dkappa: Optional[float] = None
+    dg_dalpha: Optional[float] = None
+    dg_dbeta: Optional[float] = None
+    dg_dgamma: Optional[float] = None
+    dg_dmu: Optional[float] = None
+    dg_dphi_static: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if value is not None:
+                object.__setattr__(self, field.name, float(value))
+
+    def as_dict(self) -> dict[str, float]:
+        """Return the present derivatives, keyed by attribute name."""
+        return {
+            field.name: getattr(self, field.name)
+            for field in fields(self) if getattr(self, field.name) is not None
+        }
+
+
 #: One item of a solvation response
 _ResponseItem = Union[
     PotentialAdjointResponse,
@@ -307,6 +360,7 @@ _ResponseItem = Union[
     AtomicMultipoleAdjointResponse,
     AtomicChargeAdjointResponse,
     RadialPotentialAdjointResponse,
+    ParameterAdjointResponse,
 ]
 
 
@@ -320,8 +374,10 @@ class Response:
     Iterating a response yields the items the model produced, in native order:
     :class:`PotentialAdjointResponse`, :class:`DensityResponse`,
     :class:`GaussianAmplitudeResponse`, :class:`AtomicMultipoleAdjointResponse`,
-    :class:`AtomicChargeAdjointResponse` and
-    :class:`RadialPotentialAdjointResponse`, each with its native item name as
+    :class:`AtomicChargeAdjointResponse`,
+    :class:`RadialPotentialAdjointResponse` and, when requested through
+    ``PCMParameters.parameter_derivatives``,
+    :class:`ParameterAdjointResponse`, each with its native item name as
     ``name`` and its arrays as attributes.  Select on the item's class,
     contract every item, and raise on one the host does not know: unlike an
     unanswered request, a skipped item fails nowhere.  An item this model, on
@@ -381,6 +437,7 @@ _RESPONSE_ITEMS = {
         AtomicMultipoleAdjointResponse,
         AtomicChargeAdjointResponse,
         RadialPotentialAdjointResponse,
+        ParameterAdjointResponse,
     )
 }
 
@@ -435,8 +492,9 @@ class Structure:
     NumPy shape ``(natoms, 3)``; the wrapper converts that row-major memory to
     the native Fortran ``(3, natoms)`` view without an intermediate transpose.
 
-    ``numbers`` identify the elements.  The structure holds element numbers
-    and geometry only: the nuclear charges of the host Hamiltonian reach moist
+    ``numbers`` identify the elements.  The structure holds element numbers,
+    geometry and the net ``charge`` in elementary charges, which SLIC reads for
+    its static term.  The nuclear charges of the host Hamiltonian reach moist
     through the ``nuclear_charges`` coupling request.
     """
 
@@ -446,6 +504,8 @@ class Structure:
         positions: np.ndarray,
         lattice: Optional[np.ndarray] = None,
         periodic: Optional[np.ndarray] = None,
+        *,
+        charge: float = 0.0,
     ) -> None:
         _numbers = np.asarray(numbers)
         if _numbers.ndim != 1:
@@ -466,7 +526,12 @@ class Structure:
             if _periodic.shape != (3,):
                 raise ValueError("periodic must have shape (3,)")
 
+        _charge = float(charge)
+        if not np.isfinite(_charge):
+            raise ValueError("charge must be finite")
+
         self._natoms = natoms
+        self._charge = _charge
         self._numbers = np.array(_numbers, dtype=np.int32, order="C", copy=True)
         self._positions = _positions
         self._lattice = _lattice
@@ -479,6 +544,7 @@ class Structure:
             self._positions,
             self._lattice,
             self._periodic,
+            self._charge,
         )
 
     @staticmethod
@@ -504,6 +570,7 @@ class Structure:
             and np.array_equal(self._positions, other._positions)
             and self._optional_array_equal(self._lattice, other._lattice)
             and self._optional_array_equal(self._periodic, other._periodic)
+            and self._charge == other._charge
         )
 
     @staticmethod
@@ -536,6 +603,11 @@ class Structure:
     @property
     def periodic(self) -> Optional[np.ndarray]:
         return None if self._periodic is None else self._periodic.copy()
+
+    @property
+    def charge(self) -> float:
+        """Net charge in elementary charges."""
+        return self._charge
 
     def _as_handle(self) -> library.StructureHandle:
         return self._handle
@@ -882,10 +954,6 @@ class _CavityDROPBase(Cavity):
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         return _CavityDROPBorrowed(handle, self)
 
-    def assemble_amat(self) -> tuple[np.ndarray, np.ndarray]:
-        self._require_updated()
-        return library.assemble_drop_amat(self._handle)
-
     def get_gaussian(self) -> tuple[np.ndarray, np.ndarray]:
         """Return Gaussian widths and switching factors without assembling A."""
         self._require_updated()
@@ -895,11 +963,6 @@ class _CavityDROPBase(Cavity):
         """Build diagnostic forward derivatives; model gradients do not need this."""
         self._require_updated()
         library.compute_cavity_gradient(self._handle)
-
-    def contract_amat_nuclear_gradient(self, q1, q2):
-        """Return a diagnostic forward A-matrix contraction, shape (natoms,3)."""
-        self._require_updated()
-        return library.contract_amat_nuclear_gradient(self._handle, q1, q2)
 
     def contract_pcm_nuclear_gradient(self, w_phi, w_xyz, charges):
         """Return a diagnostic forward PCM contraction, shape (natoms,3).
@@ -926,14 +989,6 @@ class _CavityDROPBase(Cavity):
         """Return the anchor-channel nuclear derivatives in native grid order."""
         self._require_updated()
         return AnchorGradient(**library.get_anchor_gradient(self._handle))
-
-    def contract_amat_surface_weights(
-        self,
-        q1: np.ndarray,
-        q2: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        self._require_updated()
-        return library.contract_amat1_q1q2_surface_weights(self._handle, q1, q2)
 
     def contract_surface_lsf_weights(
         self,
@@ -1013,6 +1068,53 @@ class CavityDROP(_CavityDROPBase):
         state = getattr(self._handle, "callback_state", None)
         if state is not None:
             state.raise_if_failed()
+
+
+class CavityMT(_CavityGenericBase):
+    """Frozen marching-tetrahedra surface with near equal-area planar patches.
+
+    Supports SvdW, CFC and callback/internal isodensity level sets. Rebuild
+    after geometry or density changes; nuclear and density geometry response
+    are unavailable. Mesh diagnostics are accessible through ``get``.
+    """
+
+    def __init__(self, *, lsf: LevelSet | None = None,
+                 parameters: MTParameters | None = None,
+                 radii: Radii | None = None, source=None, pass_order=None,
+                 basis: GaussianBasis | None = None, context: Context | None = None) -> None:
+        self._context = _resolve_context(context, optional=True)
+        self._configuration = MT(
+            lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
+        )
+        super().__init__(self.lsf._new_cavity(
+            self.parameters, self.radius_model._as_handle(), source, pass_order, basis,
+            context=_context_handle(context),
+        ))
+
+    @property
+    def lsf(self):
+        return self.configuration.lsf
+
+    @property
+    def density_dependent(self):
+        return self.lsf.density_dependent
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _CavityMTBorrowed(handle, self)
+
+    _before_native_update = CavityDROP._before_native_update
+    _raise_callback_failure = CavityDROP._raise_callback_failure
+    isodensity_layout = _CavityDROPBase.isodensity_layout
+
+
+class _CavityMTBorrowed(_CavityGenericBorrowed):
+    """Generic snapshot and LSF layout of a model-owned frozen surface."""
+
+    @property
+    def lsf(self):
+        return self.configuration.lsf
+
+    isodensity_layout = _CavityDROPBase.isodensity_layout
 
 
 #: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:
@@ -1106,16 +1208,17 @@ class CouplingRequest:
 
 
 class PointPotentialRequest(CouplingRequest):
-    """Point potential and its raw spatial derivative on the grid."""
+    """Point potential, its raw spatial derivative and Hessian on the grid."""
     name = "point_potential"
-    _outputs = {"phi": (), "dphi_dr": (3,)}
+    _outputs = {"phi": (), "dphi_dr": (3,), "d2phi_dr2": (3, 3)}
     __slots__ = ()
 
 
 class GaussianPotentialRequest(CouplingRequest):
-    """Gaussian potential, its spatial derivative and its inverse-length derivative."""
+    """Gaussian potential and its raw spatial and inverse-width derivatives."""
     name = "gaussian_potential"
-    _outputs = {"phi": (), "dphi_dr": (3,), "dphi_dxi": ()}
+    _outputs = {"phi": (), "dphi_dr": (3,), "dphi_dxi": (),
+                "d2phi_dr2": (3, 3), "d2phi_dr_dxi": (3,)}
     __slots__ = ()
 
 
@@ -1351,12 +1454,12 @@ class SolvationModelComponent:
 class _ModelComponentPCMBase(SolvationModelComponent):
     """PCM physical input and immutable numerical parameters."""
 
-    def __init__(self, epsilon, constructor, parameters, context) -> None:
+    def __init__(self, epsilon, constructor, parameters, *physical, context=None) -> None:
         context = _resolve_context(context, optional=True)
         self._parameters = _resolve(PCMParameters, parameters)
         self._epsilon = float(epsilon)
-        super().__init__(constructor(self._epsilon, self.parameters, context=_context_handle(context)),
-                         context)
+        super().__init__(constructor(self._epsilon, *physical, self.parameters,
+                                     context=_context_handle(context)), context)
 
     @property
     def parameters(self) -> PCMParameters:
@@ -1376,7 +1479,7 @@ class ModelComponentCPCM(_ModelComponentPCMBase):
 
     def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
                  context: Context | None = None) -> None:
-        super().__init__(epsilon, library.new_cpcm_component, parameters, context)
+        super().__init__(epsilon, library.new_cpcm_component, parameters, context=context)
 
 
 class ModelComponentCOSMO(_ModelComponentPCMBase):
@@ -1384,7 +1487,80 @@ class ModelComponentCOSMO(_ModelComponentPCMBase):
 
     def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
                  context: Context | None = None) -> None:
-        super().__init__(epsilon, library.new_cosmo_component, parameters, context)
+        super().__init__(epsilon, library.new_cosmo_component, parameters, context=context)
+
+
+class ModelComponentIEFPCM(_ModelComponentPCMBase):
+    """Integral-equation PCM component."""
+
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_iefpcm_component, parameters, context=context)
+
+
+class ModelComponentSSVPE(_ModelComponentPCMBase):
+    """Surface and simulation of volume polarization component."""
+
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_ssvpe_component, parameters, context=context)
+
+
+class ModelComponentDPCM(_ModelComponentPCMBase):
+    """Dielectric PCM component."""
+
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_dpcm_component, parameters, context=context)
+
+
+class ModelComponentDPCMOriginal(_ModelComponentPCMBase):
+    """Dielectric PCM component in the published Miertus-Scrocco-Tomasi form."""
+
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_dpcm_original_component, parameters, context=context)
+
+
+class ModelComponentLPB(_ModelComponentPCMBase):
+    """Linearized Poisson-Boltzmann component with inverse Debye length in bohr^-1."""
+
+    def __init__(self, epsilon: float, kappa: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        self.kappa = float(kappa)
+        super().__init__(epsilon, library.new_lpb_component, parameters, self.kappa, context=context)
+
+
+class ModelComponentSLIC(_ModelComponentPCMBase):
+    """Solvation-layer interface condition component.
+
+    ``phi_static`` (hartree per elementary charge) adds ``phi_static * Q``,
+    with ``Q`` the ``charge`` of the :class:`Structure`.
+    """
+
+    def __init__(self, epsilon: float, alpha: float, beta: float, gamma: float,
+                 mu: float, phi_static: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        self.alpha = float(alpha)
+        self.beta = float(beta)
+        self.gamma = float(gamma)
+        self.mu = float(mu)
+        self.phi_static = float(phi_static)
+        super().__init__(epsilon, library.new_slic_component, parameters,
+                         self.alpha, self.beta, self.gamma, self.mu, self.phi_static, context=context)
+
+
+class ModelComponentNonlocal(_ModelComponentPCMBase):
+    """Nonlocal PCM component with dielectric contrast and correlation length."""
+
+    def __init__(self, eps_solvent: float, eps_inf: float, lambda_: float,
+                 eps_solute: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        self.eps_inf = float(eps_inf)
+        self.lambda_ = float(lambda_)
+        self.eps_solute = float(eps_solute)
+        super().__init__(eps_solvent, library.new_nonlocal_component, parameters,
+                         self.eps_inf, self.lambda_, self.eps_solute, context=context)
 
 
 class ModelComponentPV(SolvationModelComponent):

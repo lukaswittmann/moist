@@ -124,7 +124,7 @@ contains
 
       self%radius_dependent = .false.
 
-      self%param = moist_cavity_drop_lsf_isodensity_param_type()
+      call self%param%init_defaults()
       if (present(param)) self%param = param
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error, basis=self%param%basis)
       if (allocated(error)) return

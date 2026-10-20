@@ -4,6 +4,7 @@ module moist_cavity_drop_parameters
    use moist_model_parameters, only: moist_model_parameters_type
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_cavity_bornzeta, only: get_born_zeta
 
    implicit none(type, external)
 
@@ -12,24 +13,6 @@ module moist_cavity_drop_parameters
 
    public :: moist_cavity_drop_parameters_type
    private
-
-   !> Lebedev grid sizes with available Born zeta values
-   integer, parameter :: iswig_xi_born_nleb(29) = [ &
-                         6, 14, 26, 38, 50, 86, 110, 146, &
-                         170, 194, 302, 350, 434, 590, 770, 974, &
-                         1202, 1454, 1730, 2030, 2354, 2702, 3074, 3470, &
-                         3890, 4334, 4802, 5294, 5810]
-
-   !> Fitted Born zeta values matching `iswig_xi_born_nleb`
-   real(wp), parameter :: iswig_xi_born_zeta(29) = [ &
-                          4.845184_wp, 4.864049_wp, 4.854249_wp, 4.900523_wp, &
-                          4.891966_wp, 4.896867_wp, 4.900490_wp, 4.897689_wp, &
-                          4.906299_wp, 4.902816_wp, 4.904427_wp, 4.868267_wp, &
-                          4.905109_wp, 4.905704_wp, 4.906018_wp, 4.906299_wp, &
-                          4.906493_wp, 4.906667_wp, 4.906807_wp, 4.906894_wp, &
-                          4.906981_wp, 4.907088_wp, 4.907121_wp, 4.907175_wp, &
-                          4.907208_wp, 4.907262_wp, 4.906948_wp, 4.907088_wp, &
-                          4.907402_wp]
 
    !> Parameter container for DROP
    !> Extends the base parameter type with DROP-specific settings for
@@ -507,16 +490,10 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: igrid
+      logical :: found
 
-      do igrid = 1, size(iswig_xi_born_nleb)
-         if (self%num_leb == iswig_xi_born_nleb(igrid)) then
-            self%iswig_xi_born = iswig_xi_born_zeta(igrid)
-            return
-         end if
-      end do
-
-      call fatal_error(error, "No fitted DROP Born zeta parameter for Lebedev grid")
+      call get_born_zeta(self%num_leb, self%iswig_xi_born, found)
+      if (.not. found) call fatal_error(error, "No fitted DROP Born zeta parameter for Lebedev grid")
    end subroutine select_born_zeta
 
    !> Return a human-readable label for the current projection level

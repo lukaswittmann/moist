@@ -84,7 +84,7 @@ module test_helpers
       & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view, &
       & coupling_check_mandatory
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      density_response_type, gaussian_amplitude_response_type
+                                      density_response_type, gaussian_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_gaussian_grid
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num, lebedev_degree_table
@@ -115,6 +115,7 @@ module test_helpers
    public :: build_test_cavity_drop
    public :: fill_point_charge_potential
    public :: fill_point_charge_field
+   public :: point_charge_potential, point_charge_field
    public :: set_host_potential
    public :: fill_missing_with_zeros
    public :: stage_point_charge_energy
@@ -189,7 +190,6 @@ contains
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call grid%update(mol, error)
    end subroutine get_cartesian_gaussian_grid
-
 
    !* ------------------------ Structure and sampling fixtures ------------------------ *!
 
@@ -439,7 +439,7 @@ contains
 
       call new_cosmo_radii(radius_model)
       call new_cavity_iswig(cavity, radius_model=radius_model, error=error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=nleb), ctx=ctx)
+                            param=moist_cavity_iswig_parameters_type(num_leb=nleb), ctx=ctx)
       if (allocated(error)) return
 
       call cavity%update(mol, error=error)
@@ -575,10 +575,14 @@ contains
          do j = 1, mol%nat
             r_vec(:) = cavity%xyz(:, i) - mol%xyz(:, j)
             r_dist = sqrt(sum(r_vec**2))
-            if (r_dist < min_dist) cycle
             if (gaussian) then
+               if (r_dist < min_dist) then
+                  phi(i) = phi(i) + qat(j)*2.0_wp*xi0(i)/sqrt(acos(-1.0_wp))
+                  cycle
+               end if
                phi(i) = phi(i) + qat(j)*erf(xi0(i)*r_dist)/r_dist
             else
+               if (r_dist < min_dist) cycle
                phi(i) = phi(i) + qat(j)/r_dist
             end if
          end do
@@ -596,7 +600,17 @@ contains
    !>
    !> screened by `erf(x) - 2 x exp(-x^2)/sqrt(pi)`, `x = xi_i |r_i - R_j|`,
    !> for a Gaussian request, and then also the width derivative
-   !> `dphi_dxi(i) = sum_j qat_j 2 exp(-x^2)/sqrt(pi)`. The surface charge
+   !> `dphi_dxi(i) = sum_j qat_j 2 exp(-x^2)/sqrt(pi)`. The Hessian and
+   !> Gaussian mixed derivative are also answered:
+   !>
+   !>    d2phi_dr2 = q [(3 S/r^5 - 4 xi^3 exp(-x^2)/(sqrt(pi) r^2)) dd^T
+   !>                  - S I/r^3]
+   !>    d2phi_dr_dxi = -4 q xi^2 exp(-x^2) d/sqrt(pi)
+   !>
+   !> where `d = r - R` and `S = erf(x) - 2 x exp(-x^2)/sqrt(pi)`.
+   !> At exact coincidence the Gaussian Hessian is
+   !> `-4 q xi^3 I/(3 sqrt(pi))`; the bare singular term is skipped.
+   !> The surface charge
    !> is not folded in: the component contracts the raw derivatives itself,
    !> and the FD gradient tests pin the result. Sign: `grad_r (1/|r - R|) =
    !> -(r - R)/|r - R|^3`, so the gradient points from the grid point towards
@@ -626,17 +640,20 @@ contains
       type(structure_type), intent(in) :: mol
 
       !> Raw derivatives on the grid
-      real(wp), allocatable :: w_xyz(:, :), w_xi(:)
+      real(wp), allocatable :: w_xyz(:, :), w_xi(:), h_xyz(:, :, :), h_xi(:, :)
 
       do while (coupling%next())
          select type (request => coupling%request())
          type is (gaussian_potential_request_type)
-            call point_charge_field(cavity, qat, mol, .true., w_xyz, w_xi)
+            call point_charge_field(cavity, qat, mol, .true., w_xyz, w_xi, h_xyz, h_xi)
             call submit(coupling, "dphi_dr", w_xyz)
             call submit(coupling, "dphi_dxi", w_xi)
+            call submit(coupling, "d2phi_dr2", h_xyz)
+            call submit(coupling, "d2phi_dr_dxi", h_xi)
          type is (point_potential_request_type)
-            call point_charge_field(cavity, qat, mol, .false., w_xyz, w_xi)
+            call point_charge_field(cavity, qat, mol, .false., w_xyz, w_xi, h_xyz, h_xi)
             call submit(coupling, "dphi_dr", w_xyz)
+            call submit(coupling, "d2phi_dr2", h_xyz)
          type is (nuclear_charge_request_type)
             call submit(coupling, "z", qat)
          end select
@@ -652,38 +669,68 @@ contains
    !> @param[in]  gaussian Whether to screen with the cavity's `xi0`
    !> @param[out] w_xyz    dphi/dr (3, ngrid)
    !> @param[out] w_xi     dphi/dxi (ngrid), zero for the bare potential
-   subroutine point_charge_field(cavity, qat, mol, gaussian, w_xyz, w_xi)
+   !> @param[out] h_xyz    d2phi/dr2 (3, 3, ngrid)
+   !> @param[out] h_xi     d2phi/dr dxi (3, ngrid), zero for bare potential
+   subroutine point_charge_field(cavity, qat, mol, gaussian, w_xyz, w_xi, h_xyz, h_xi)
       class(cavity_type), intent(in) :: cavity
       real(wp), intent(in) :: qat(:)
       type(structure_type), intent(in) :: mol
       logical, intent(in) :: gaussian
       real(wp), allocatable, intent(out) :: w_xyz(:, :), w_xi(:)
+      real(wp), allocatable, intent(out) :: h_xyz(:, :, :), h_xi(:, :)
       !> Grid point and atom indices
       integer :: i, j
       !> Separation vector, its length, and the potential gradient
-      real(wp) :: r_vec(3), r_dist, grad_phi(3), x, screening
+      real(wp) :: r_vec(3), r_dist, x, screening, decay, width, invr3, invr5
+      integer :: axis
       !> Gaussian widths of the cavity, read by name
       real(wp), allocatable :: xi0(:)
       !> Separation below which the singular self-term is skipped
       real(wp), parameter :: min_dist = 1.0e-10_wp
 
       if (gaussian) xi0 = cavity_xi0(cavity)
-      allocate (w_xyz(3, cavity%ngrid), w_xi(cavity%ngrid), source=0.0_wp)
+      allocate (w_xyz(3, cavity%ngrid), w_xi(cavity%ngrid), &
+                h_xyz(3, 3, cavity%ngrid), h_xi(3, cavity%ngrid))
+      w_xyz = 0.0_wp
+      w_xi = 0.0_wp
+      h_xyz = 0.0_wp
+      h_xi = 0.0_wp
       do i = 1, cavity%ngrid
-         grad_phi(:) = 0.0_wp
          do j = 1, mol%nat
             r_vec(:) = cavity%xyz(:, i) - mol%xyz(:, j)
             r_dist = sqrt(sum(r_vec**2))
-            if (r_dist < min_dist) cycle
-            screening = 1.0_wp
-            if (gaussian) then
-               x = xi0(i)*r_dist
-               screening = erf(x) - 2.0_wp*x*exp(-x*x)/sqrt(acos(-1.0_wp))
-               w_xi(i) = w_xi(i) + qat(j)*2.0_wp*exp(-x*x)/sqrt(acos(-1.0_wp))
+            if (r_dist < min_dist) then
+               if (gaussian) then
+                  width = xi0(i)
+                  w_xi(i) = w_xi(i) + 2.0_wp*qat(j)/sqrt(acos(-1.0_wp))
+                  do axis = 1, 3
+                     h_xyz(axis, axis, i) = h_xyz(axis, axis, i) &
+                                            - 4.0_wp*qat(j)*width**3/(3.0_wp*sqrt(acos(-1.0_wp)))
+                  end do
+               end if
+               cycle
             end if
-            grad_phi(:) = grad_phi(:) - qat(j)*screening*r_vec(:)/(r_dist*r_dist*r_dist)
+            screening = 1.0_wp
+            decay = 0.0_wp
+            width = 0.0_wp
+            if (gaussian) then
+               width = xi0(i)
+               x = width*r_dist
+               decay = exp(-x*x)/sqrt(acos(-1.0_wp))
+               screening = erf(x) - 2.0_wp*x*decay
+               w_xi(i) = w_xi(i) + qat(j)*2.0_wp*decay
+               h_xi(:, i) = h_xi(:, i) - 4.0_wp*qat(j)*width**2*decay*r_vec
+            end if
+            invr3 = 1.0_wp/r_dist**3
+            invr5 = invr3/r_dist**2
+            w_xyz(:, i) = w_xyz(:, i) - qat(j)*screening*invr3*r_vec
+            do axis = 1, 3
+               h_xyz(:, axis, i) = h_xyz(:, axis, i) + qat(j)* &
+                                   (3.0_wp*screening*invr5 - 4.0_wp*width**3*decay/r_dist**2)* &
+                                   r_vec*r_vec(axis)
+               h_xyz(axis, axis, i) = h_xyz(axis, axis, i) - qat(j)*screening*invr3
+            end do
          end do
-         w_xyz(:, i) = grad_phi(:)
       end do
    end subroutine point_charge_field
 
@@ -747,8 +794,11 @@ contains
          type is (gaussian_potential_request_type)
             call submit(coupling, "dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid))
             call submit(coupling, "dphi_dxi", spread(0.0_wp, 1, cavity%ngrid))
+            call submit(coupling, "d2phi_dr2", spread(spread(spread(0.0_wp, 1, 3), 2, 3), 3, cavity%ngrid))
+            call submit(coupling, "d2phi_dr_dxi", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid))
          type is (point_potential_request_type)
             call submit(coupling, "dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid))
+            call submit(coupling, "d2phi_dr2", spread(spread(spread(0.0_wp, 1, 3), 2, 3), 3, cavity%ngrid))
          end select
       end do
    end subroutine fill_missing_with_zeros
@@ -756,7 +806,8 @@ contains
    !> Build a bare component's coupling and answer its energy phase with the
    !> point-charge potential of `qat`
    !>
-   !> `new_coupling`, `prepare_energy` and `fill_point_charge_potential` in
+   !> `new_coupling`, `prepare_energy` and both point-charge raw potential
+   !> and derivative answers in
    !> one call. A later SCF iteration, or a cavity rebuilt in place, is staged
    !> by calling `prepare_energy` and `fill_point_charge_potential` again on
    !> the same coupling (the coupling is created once per component and
@@ -802,6 +853,7 @@ contains
          return
       end if
       call fill_point_charge_potential(cavity, coupling, qat, mol)
+      call fill_point_charge_field(cavity, coupling, qat, mol)
 
    end subroutine stage_point_charge_energy
 
@@ -851,6 +903,7 @@ contains
       end if
       model_cavity => model%cavity
       call fill_point_charge_potential(model_cavity, coupling, qat, mol)
+      call fill_point_charge_field(model_cavity, coupling, qat, mol)
 
    end subroutine stage_model_point_charge_energy
 
