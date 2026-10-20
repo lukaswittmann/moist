@@ -133,8 +133,6 @@ subroutine get_arguments(config, error)
    integer :: verbose_count, quiet_count
    logical :: show_citation, show_license
 
-   config = run_config()
-
    call moist_header(output_unit)
    call moist_build_header(output_unit)
 

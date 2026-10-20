@@ -133,9 +133,6 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: ${{ matrix.leg.name == 'coupling' && 'build/meson-logs/coverage.xml,build/meson-logs/python-coverage.xml' || 'build/meson-logs/coverage.xml' }}
-          # gcovr already applies the source filters; upload only its reports.
-          disable_search: true
-          plugins: noop
           flags: ${{ matrix.leg.name }}
           disable_search: true
           plugins: noop
