@@ -31,7 +31,8 @@ Supported solvers
    the history, then a constrained residual Gram solve combines stored
    iterates and residuals. A singular history uses Picard mixing; excessive
    residual growth clears the history. An optional step limit bounds the
-   update relative to the fixed-point residual. ``MDIIS`` is an alias.
+   update relative to the fixed-point residual. ``MDIIS`` and ``ANDERSON`` are
+   aliases.
 
 ``JFNK``
    Newton-Krylov iteration with restarted GMRES for ``J*delta = R`` and an
@@ -40,7 +41,8 @@ Supported solvers
    ``true`` (default) uses exact matrix-free products from the evaluator and
    fails the step when the evaluator provides none or refuses the
    linearization; ``false`` uses finite differences. The 1D, 3D and VV
-   evaluators provide exact products.
+   evaluators provide exact products. ``NEWTON`` and ``NEWTON-KRYLOV`` are
+   aliases.
 
    Exact Newton is JFNK with ``use_exact_jvp = true``, a tight fixed forcing term
    (``eta0 = eta_min = eta_max``, e.g. ``1e-8``) and ``alpha_max = 1``. Every

@@ -21,7 +21,8 @@ module test_moz_drism
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use test_helpers, only: check_moist_error
-   use test_moz_fixtures, only: new_cspce_water_solvent
+   use moist_solvent_system, only: solvent_system_type
+   use test_moz_fixtures, only: new_cspce_water_solvent, new_water_system
    implicit none(type, external)
    private
    public :: collect_moz_drism
@@ -65,7 +66,6 @@ contains
       call check(error, params%same_state(copy), more="XRISM alias changes the RISM state")
       if (allocated(error)) return
       params%theory = "DRISM"
-      params%drism_dielectric = 10.0_wp
       params%drism_smear = 0.75_wp
       call params%write_file(path, err)
       if (.not. allocated(err)) call copy%read_file(path, err, strict=.true.)
@@ -90,10 +90,12 @@ contains
       call check(error, allocated(err), more="unknown theory was accepted")
       if (allocated(error)) return
       deallocate(err)
-      copy = params
-      copy%drism_dielectric = ieee_value(0.0_wp, ieee_quiet_nan)
-      call copy%validate(err)
-      call check(error, allocated(err), more="NaN dielectric was accepted")
+      call new_bulk_theory(theory, "DRISM", xyz, q, rho, beta, ieee_value(0.0_wp, ieee_quiet_nan), smear, err)
+      call check(error, allocated(err) .and. .not. allocated(theory), more="NaN dielectric was accepted")
+      if (allocated(error)) return
+      deallocate(err)
+      call new_bulk_theory(theory, "DRISM", xyz, q, rho, beta, 0.0_wp, smear, err)
+      call check(error, allocated(err) .and. .not. allocated(theory), more="dielectric below 1 was accepted")
       if (allocated(error)) return
       deallocate(err)
       call new_bulk_theory(theory, "DRISM", xyz, [0.0_wp, 0.0_wp, 0.0_wp], rho, beta, 10.0_wp, smear, err)
@@ -333,13 +335,14 @@ contains
       call check(error, all(p(2, :, :) == before(2, :, :)))
    end subroutine charge_moment
 
-   !> Real water solves; theory, dielectric, smear, tolerance and table identity affect reuse
+   !> Real water solves; theory, smear, tolerance and table identity affect reuse
    subroutine bulk_state(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(solvent_vv_type) :: solvent
-      type(solvent_vv_parameters_type) :: params, changed, accepted
+      type(solvent_vv_parameters_type) :: params, changed
+      type(solvent_system_type) :: system
       type(structure_type) :: mol
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(uv3d_susceptibility_type) :: response
@@ -369,18 +372,11 @@ contains
       if (allocated(error)) return
       call check(error, solvent%is_solved(params) .and. solvent%theory_name() == "DRISM")
       if (allocated(error)) return
-      accepted = solvent%settings()
-      call check(error, .not. allocated(params%drism_dielectric) .and. allocated(accepted%drism_dielectric), &
-         & more="unset DRISM dielectric was not resolved from the solvent table")
+      call new_water_system(system, err)
+      call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, screening, 1.0_wp - 1.0_wp/accepted%drism_dielectric, thr=2.0e-13_wp)
-      if (allocated(error)) return
-      changed = params
-      changed%drism_dielectric = accepted%drism_dielectric
-      call check(error, solvent%is_solved(changed), more="explicit table dielectric discarded the default solve")
-      if (allocated(error)) return
-      changed%drism_dielectric = accepted%drism_dielectric + 1.0_wp
-      call check(error, .not. solvent%is_solved(changed), more="changed dielectric reused the old bulk solution")
+      call check(error, screening, 1.0_wp - 1.0_wp/system%solvent%epsilon, thr=2.0e-13_wp, &
+         & more="DRISM did not take the solvent-system dielectric")
       if (allocated(error)) return
       call check(error, .not. response%matches(grid, solvent, "oz"), more="RISM table survived a DRISM bulk solve")
       if (allocated(error)) return

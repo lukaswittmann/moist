@@ -11,6 +11,7 @@ module test_moz_closure
       & moist_model_moz_closure_pse_type, new_closure
    use moist_model_moz_closure_kernel, only: closure_hnc_c, closure_kh_c, &
       & closure_pse2_c, closure_pse3_c, closure_pse4_c
+   use moist_context, only: moist_context_type, new_context
    implicit none(type, external)
    private
    public :: collect_moz_closure
@@ -90,6 +91,7 @@ contains
          type(error_slot_type) :: errors(2)
          class(moist_model_moz_closure_type), allocatable :: closure
          type(moist_error), allocatable :: err
+         type(moist_context_type) :: serial
          ! Eight sites make one energy block reach the closure threading threshold.
          integer, parameter :: npts = 8192, npair = 8
          real(wp), allocatable :: h(:, :), c(:, :), reference(:, :), phi(:, :, :)
@@ -105,8 +107,9 @@ contains
          end do
          expect_active = .false.
 !$       expect_active = omp_get_thread_limit() >= 2
+         call new_context(serial, nthreads=1, verbosity=0)
          do kind = 1, size(names)
-            call new_closure(closure, names(kind), err, nthreads=1)
+            call new_closure(closure, names(kind), err, serial)
             if (.not. allocated(err)) call closure%free_energy_integrands(h, c, reference, err)
             call check(error, .not. allocated(err), "Serial nested-team reference: "//trim(names(kind)))
             if (allocated(error)) return
@@ -271,6 +274,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       class(moist_model_moz_closure_type), allocatable :: closure
       type(moist_error), allocatable :: err
+      type(moist_context_type) :: ctx1, ctx3
       !> Above the parallel threshold, with both branches and a deep hard core
       integer, parameter :: npts = 40000, npair = 2
       real(wp), allocatable :: u(:, :), t(:, :), c(:, :), dc(:, :), fc(:, :), fdc(:, :)
@@ -306,18 +310,16 @@ contains
       call check(error, allocated(err), "Derivative shape mismatch")
       if (allocated(error)) return
 
-      call new_closure(closure, "PSE3", err, nthreads=-1)
-      call check(error, allocated(err) .and. .not. allocated(closure), "Negative closure thread count")
-      if (allocated(error)) return
-
       ! An explicit context thread count gives the same values as one thread
-      call new_closure(closure, "PSE3", err, nthreads=1)
+      call new_context(ctx1, nthreads=1, verbosity=0)
+      call new_closure(closure, "PSE3", err, ctx1)
       call check(error, closure%team_size(size(t)) == 1 .and. closure%team_size(10) == 1)
       if (allocated(error)) return
       call closure%apply_and_derivative(u, t, 1.5_wp, 0.7_wp, c, dc, err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call new_closure(closure, "PSE3", err, nthreads=3)
+      call new_context(ctx3, nthreads=3, verbosity=0)
+      call new_closure(closure, "PSE3", err, ctx3)
       call check(error, closure%nthreads == 3 .and. closure%team_size(size(t)) == 3 &
          & .and. closure%team_size(10) == 1, "Closure team size")
       if (allocated(error)) return

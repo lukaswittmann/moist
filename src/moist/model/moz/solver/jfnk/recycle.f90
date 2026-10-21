@@ -2,8 +2,7 @@
 submodule(moist_model_moz_solver_jfnk) moist_model_moz_solver_jfnk_recycle
    use moist_math_blas, only: gemm_rows_tn, gemm_rows_nn
    use moist_math_lapack_kinds, only: lapack_ik
-   use moist_math_lapack_potrf, only: wrap_potrf
-   use moist_math_lapack_ggev, only: dggev
+   use moist_math_lapack, only: potrf, lapack_ggev
    use moist_model_moz_solver_jfnk_kernels, only: blocked_dot, reduction_block_size
    implicit none(type, external)
 
@@ -53,7 +52,7 @@ contains
       allocate (g(kr, kr), rinv(kr, kr))
       do pass = 1, 2
          call gram_basis(self%workspace%ws_c, kr, self%workspace%ws_c, kr, g, self%team_size())
-         call wrap_potrf(g, info, "U")
+         call potrf(g, info, "U")
          if (info == 0) then
             do i = 1, kr
                g(i + 1:kr, i) = 0.0_wp
@@ -123,7 +122,7 @@ contains
       beig = matmul(transpose(gbar), wtv)
       lwork = 16*p + 16
       allocate (alphar(p), alphai(p), betav(p), vr(p, p), vl(1, 1), work(lwork), source=0.0_wp)
-      call dggev("N", "V", int(p, lapack_ik), aeig, int(p, lapack_ik), beig, int(p, lapack_ik), &
+      call lapack_ggev("N", "V", int(p, lapack_ik), aeig, int(p, lapack_ik), beig, int(p, lapack_ik), &
                  alphar, alphai, betav, vl, 1_lapack_ik, vr, int(p, lapack_ik), work, &
                  int(lwork, lapack_ik), lapack_info)
       if (lapack_info /= 0) return

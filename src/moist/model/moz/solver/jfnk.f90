@@ -5,6 +5,7 @@ module moist_model_moz_solver_jfnk
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_output_citations, only: citation
    use moist_model_moz_solver_core_base, only: moist_model_moz_solver_type, moist_model_moz_solver_statistics_type
    use moist_model_moz_solver_core_checks, only: finite_positive, finite_nonnegative, unit_fraction, step_fraction
    use moist_model_moz_solver_core_printer, only: moist_model_moz_solver_printer_type
@@ -947,6 +948,8 @@ contains
       character(len=16) :: requested, used
 
       self%ctx => ctx
+      call self%ctx%cite(citation%jfnk)
+      call self%ctx%cite(citation%gmres)
       if (present(parameters)) self%params = parameters
 
       ! Recycling leaves at least one Arnoldi step per cycle and per capped solve

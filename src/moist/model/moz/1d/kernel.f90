@@ -14,8 +14,7 @@ module moist_model_moz_1d_kernel
    use mctc_env, only: wp
    use moist_model_moz_response_kernel, only: uv_response_rhs, uv_response_sr, uv_response_lr
    use moist_math_packed_sym, only: packed_index_lut
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    implicit none(type, external)
    private
 
@@ -250,9 +249,9 @@ contains
             coeff(m, :) = coeff(m, :) + xpow(m)*moment
          end do
       end do
-      call wrap_getrf(amat, ipiv, info)
+      call getrf(amat, ipiv, info)
       if (info /= 0) return
-      call wrap_getrs(amat, coeff, ipiv, info)
+      call getrs(amat, coeff, ipiv, info)
       if (info /= 0) return
 
       do j = 1, nlow

@@ -31,7 +31,6 @@ theory = "DRISM"
 closure = "KH"
 
 [solvent.drism]
-# dielectric = 78.355  # optional; default: the solvent's tabulated value
 smear = 0.6682  # bohr
 
 [solvent.convergence]

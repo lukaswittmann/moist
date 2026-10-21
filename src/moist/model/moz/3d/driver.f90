@@ -169,7 +169,7 @@ contains
          call fatal_error(error, "3D UV potential tables must have shape (ngrid, nv)")
          return
       end if
-      call new_closure(self%closure, params%closure, error, ctx%get_num_threads())
+      call new_closure(self%closure, params%closure, error, self%ctx)
       if (allocated(error)) return
       self%adjoint = params%solver%jfnk%adjoint
       call new_solver(self%solver, ctx, error, params%solver)

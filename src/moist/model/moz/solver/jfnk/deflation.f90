@@ -6,8 +6,7 @@
 module moist_model_moz_solver_jfnk_deflation
    use mctc_env, only: wp
    use moist_context, only: resolve_num_threads
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    implicit none(type, external)
    private
 
@@ -121,7 +120,7 @@ contains
       self%active = .false.
       if (.not. allocated(self%coarse)) return
       if (.not. all(abs(self%coarse) <= huge(1.0_wp))) return
-      call wrap_getrf(self%coarse, self%ipiv, info)
+      call getrf(self%coarse, self%ipiv, info)
       self%active = info == 0 .and. all(abs(self%coarse) <= huge(1.0_wp))
    end subroutine deflation_factorize
 
@@ -157,7 +156,7 @@ contains
       end do
       !$omp end parallel do
       ! Caller supplies active factors and matching shapes; getrs only reports illegal arguments
-      call wrap_getrs(self%coarse, y, self%ipiv, info)
+      call getrs(self%coarse, y, self%ipiv, info)
    end subroutine deflation_coordinates
 
    !> Add a coarse-space vector: x := x + alpha Z y

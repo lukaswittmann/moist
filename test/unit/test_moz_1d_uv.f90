@@ -27,6 +27,7 @@ module test_moz_1d_uv
       & custom_lj_type, new_custom_lj, fixed_charges_type, new_fixed_charges, moz_potential_type
    use moist_solvent_system, only: solvent_system_type
    use mctc_io_convert, only: aatoau, autokcal
+   use mctc_io_codata2018, only: Boltzmann_constant, atomic_unit_of_energy
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, response_item_type, atomic_charge_adjoint_response_type
    use mctc_io, only: structure_type, new
@@ -788,6 +789,10 @@ contains
       system%solvent%id = 0
       system%temperature = 1.0e5_wp
       system%solvent%number_density_au = 0.005_wp
+      ! Ideal-dipole dielectric of the weak polar bulk for DRISM
+      system%solvent%epsilon = 1.0_wp + 4.0_wp*acos(-1.0_wp)*atomic_unit_of_energy &
+         & /(Boltzmann_constant*system%temperature)*system%solvent%number_density_au &
+         & *sum(matmul(bulk_xyz, bulk_q)**2)/3.0_wp
       allocate (system%solv_mol)
       call new(system%solv_mol, [1, 1], bulk_xyz)
       call new_vv_solvent(solvent, ctx, system, err)
@@ -905,8 +910,6 @@ contains
 
       ! A fresh accepted bulk identity also changes RISM to the analytical DRISM path.
       params%solvent%theory = "DRISM"
-      params%solvent%drism_dielectric = 1.0_wp + 4.0_wp*acos(-1.0_wp)*solvent%beta()*solvent%density()* &
-         & sum(matmul(bulk_xyz, bulk_q)**2)/3.0_wp
       call solvent%update(err)
       if (.not. allocated(err)) call solvent%solve(err, params%solvent)
       call check_moist_error(error, err)

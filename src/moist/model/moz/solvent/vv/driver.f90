@@ -162,7 +162,7 @@ contains
          call fatal_error(error, "1D VV potential tables must have shape (npts, ns*(ns+1)/2)")
          return
       end if
-      call new_closure(self%closure, params%closure, error, ctx%get_num_threads())
+      call new_closure(self%closure, params%closure, error, self%ctx)
       if (allocated(error)) return
       call check_preconditioner_name(params%precond, preconditioners_1d_vv, "1D VV", error)
       if (allocated(error)) return
