@@ -20,7 +20,7 @@ With :ref:`verbosity <verbosity>` 2 the update prints a table of every site with
 
 ``monopole_type`` uses host-supplied atomic charges to build a point-charge potential in the 1D and 3D models.
 ``multipole_type`` uses host-supplied atomic multipoles, respectively. For 1D models; this averages out so that only the monopole term actually contributes.
-``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail.
+``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail :cite:p:`ng1974hnc`.
 Each concrete electrostatic term owns its host-data requirements and adjoints.
 
 Construction

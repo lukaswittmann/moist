@@ -32,9 +32,9 @@ Solve
    call solvent%susceptibility(chi, error)
    call solvent%thermodynamics(thermo, error)
 
-The solve uses ordinary RISM by default (``theory = "RISM"``; ``XRISM`` is an alias)
+The solve uses ordinary RISM :cite:p:`chandler1972rism,hirata1981xrism` by default (``theory = "RISM"``; ``XRISM`` is an alias)
 for one rigid molecular species with one site per atom; every site carries the molecular density.
-``theory = "DRISM"`` selects the Perkyns-Pettitt dielectric correction for a polar solvent.
+``theory = "DRISM"`` selects the Perkyns-Pettitt dielectric correction :cite:p:`perkyns1992drism` for a polar solvent.
 The correction is a mathematical port from RISMiCal through pysofft; its provenance
 is recorded in ``solvent/theory/PROVENANCE.md``.
 
@@ -162,7 +162,7 @@ Outputs
    * ``direct_moment``: ``C = sum_ab c_ab(k = 0)``, over all ordered site pairs.
    * ``compressibility``: ``kappa_T`` from ``rho kT kappa_T = 1/(1 - rho C)``.
    * ``pressure``: ``P = (n + 1)/2 rho kT - kT/2 rho^2 C`` for ``n`` sites
-     (Sergiievskyi, Jeanmairet, Levesque and Borgis, J. Chem. Phys. 143, 184116 (2015), Eq. 21).
+     (:cite:t:`sergiievskyi2015pressure`, Eq. 21).
      The expression is derived for HNC and is evaluated unchanged for KH and PSE; it is the
      RISM bulk pressure used in pressure corrections, not the physical pressure of the fluid,
      which XRISM overestimates by orders of magnitude for water.

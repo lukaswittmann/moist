@@ -1,8 +1,8 @@
 Thermodynamic items
 ===================
 
-Bulk pressure and compressibility, 3D UV partial molar volume, PC, PC+ and the leading Hunenberger
-corrections share one abstract ``thermodynamic_quantity_type``. ``thermo_list_type`` owns copies of
+Bulk pressure and compressibility, 3D UV partial molar volume, PC, PC+ :cite:p:`sergiievskyi2015pressure` and the leading Hunenberger
+corrections :cite:p:`hunenberger1999ewald,kovalenko2000ions` share one abstract ``thermodynamic_quantity_type``. ``thermo_list_type`` owns copies of
 these items and their scalar inputs. The bulk and 3D thermodynamics records and model methods,
 and the 3D ``correction = "none"``, ``"PC"`` or ``"PC+"`` settings keep their interfaces and formulas.
 
