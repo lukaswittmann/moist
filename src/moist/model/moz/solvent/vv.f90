@@ -6,7 +6,8 @@
 !>   of the VV tables
 !> - One site per atom
 !> - Custom solvent: hand-filled `solvent_system_type` (solvent id 0,
-!>   temperature, number density and structure)
+!>   temperature, number density and structure; DRISM also needs epsilon >= 1)
+!> - DRISM takes its dielectric constant from the solvent system
 !> - Owns the 1D VV solve, the solvent susceptibility and the bulk thermodynamics
 !> - The UV models copy it
 !>
@@ -29,6 +30,7 @@ module moist_model_moz_solvent_vv
    use moist_utils_timer, only: cat_setup, cat_solve, cat_properties
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_solvent_system, only: solvent_system_type
+   use moist_output_citations, only: citation
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
    use moist_math_packed_sym, only: packed_index_lut, npair_from_ns
@@ -275,7 +277,6 @@ contains
          return
       end if
       if (present(parameters)) params = parameters
-      params = resolved_parameters(self, params)
       call params%validate(error)
       if (allocated(error)) return
       call self%ctx%timer%start("Setup", category=cat_setup)
@@ -293,8 +294,11 @@ contains
       allocate (q(ns), source=0.0_wp)
       if (allocated(sites%q)) q = sites%q
       call new_bulk_theory(self%theory, params%theory, self%system%solv_mol%xyz, q, self%density(), &
-         & self%beta(), params%drism_dielectric, params%drism_smear, error)
+         & self%beta(), self%system%solvent%epsilon, params%drism_smear, error)
       if (allocated(error)) return
+      call self%ctx%cite(citation%rism)
+      if (self%theory%name() == "DRISM") call self%ctx%cite(citation%drism)
+      if (self%potential%ng_split()) call self%ctx%cite(citation%ng)
       allocate (zeta, mold=wk)
       allocate (zmat(ns, ns), zscaled(ns, ns))
       do i = 1, size(wk, 1)
@@ -389,26 +393,10 @@ contains
       solved = self%solved .and. self%potential%is_updated() .and. &
          & self%potential%generation() == self%solved_generation
       if (present(parameters)) then
-         solved = solved .and. self%solved_parameters%same_state(resolved_parameters(self, parameters)) .and. &
+         solved = solved .and. self%solved_parameters%same_state(parameters) .and. &
             & self%achieved_residual < parameters%tolerance
       end if
    end function vv_is_solved
-
-   !> Requested settings with an unset DRISM dielectric taken from the solvent table
-   !>
-   !> @param[in] self        Constructed solvent
-   !> @param[in] parameters  Requested bulk settings
-   pure function resolved_parameters(self, parameters) result(params)
-      !> Solvent
-      class(solvent_vv_type), intent(in) :: self
-      !> Requested bulk settings
-      type(solvent_vv_parameters_type), intent(in) :: parameters
-      !> Settings with the dielectric resolved
-      type(solvent_vv_parameters_type) :: params
-      params = parameters
-      if (allocated(params%drism_dielectric) .or. .not. self%constructed) return
-      params%drism_dielectric = self%system%solvent%epsilon
-   end function resolved_parameters
 
    !> Canonical name of the bulk theory; RISM before the first solve
    !>

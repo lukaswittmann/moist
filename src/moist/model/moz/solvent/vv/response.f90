@@ -10,8 +10,7 @@ module moist_model_moz_solvent_vv_response
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
    use moist_math_packed_sym, only: packed_index_lut, npair_from_ns
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    use moist_model_moz_solvent_vv_kernel, only: vv_transform_at
    use moist_model_moz_solvent_theory, only: bulk_theory_type, rism_theory_type
    use moist_model_moz_solvent_theory_type, only: bulk_charges_neutral, check_bulk_charge_neutrality
@@ -347,11 +346,11 @@ contains
          a(:, j) = a(:, j) + rho*gamma*dq*q(j)
          a(j, j) = a(j, j) + 1.0_wp
       end do
-      call wrap_getrf(a, ipiv, info)
+      call getrf(a, ipiv, info)
       if (info /= 0) return
       rhs(:, :ns) = w
       rhs(:, ns + 1) = dq
-      call wrap_getrs(a, rhs, ipiv, info)
+      call getrs(a, rhs, ipiv, info)
       if (info /= 0) return
       chi = 0.5_wp*(rhs(:, :ns) + transpose(rhs(:, :ns)))
       if (k == 0.0_wp) chi = 1.0_wp/(1.0_wp - rho*sum(cbar))

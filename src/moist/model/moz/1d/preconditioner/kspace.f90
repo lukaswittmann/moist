@@ -10,8 +10,7 @@ module moist_model_moz_1d_preconditioner_kspace
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: resolve_num_threads
    use moist_math_packed_sym, only: packed_index_lut
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    use moist_model_moz_solver_core_preconditioner, only: moist_model_moz_solver_preconditioner_type
    use moist_model_moz_1d_preconditioner_spectral, only: moist_model_moz_1d_preconditioner_spectral_type
    implicit none(type, external)
@@ -230,7 +229,7 @@ contains
                rhs(is, js) = vk(ik, self%lut%idx(is, js))
             end do
          end do
-         call wrap_getrs(self%lu(:, :, ik), rhs, self%ipiv(:, ik), info)
+         call getrs(self%lu(:, :, ik), rhs, self%ipiv(:, ik), info)
          do js = 1, ns
             do is = 1, js
                ip = self%lut%idx(is, js)
@@ -360,7 +359,7 @@ contains
          do is = 1, ns
             self%lu(is, is, ik) = self%lu(is, is, ik) + 1.0_wp
          end do
-         call wrap_getrf(self%lu(:, :, ik), self%ipiv(:, ik), info)
+         call getrf(self%lu(:, :, ik), self%ipiv(:, ik), info)
          if (info /= 0) then
             self%lu(:, :, ik) = 0.0_wp
             do is = 1, ns

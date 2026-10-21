@@ -56,11 +56,10 @@ In UV or CLI input files, select the theory in the ``solvent`` group:
    theory = "DRISM"
 
    [solvent.drism]
-   dielectric = 78.355  # optional; default: the solvent's tabulated value
    smear = 0.6682  # bohr; exp(-smear^2*k^2/2)
 
 Standalone VV parameter files such as ``vv.toml`` above use ``theory`` at the
-root and ``[drism]`` for the dielectric and smearing settings.
+root and ``[drism]`` for the smearing setting.
 
 The bulk ``bulk_theory_type`` has RISM and DRISM implementations. DRISM computes
 the fixed correction ``zeta(k)`` once on the native grid, uses
@@ -101,7 +100,6 @@ Settings
 Key                              Default      Meaning
 ===============================  ===========  ==================================================
 ``theory``                       ``RISM``     RISM (XRISM alias) or DRISM
-``drism.dielectric``              solvent      DRISM relative dielectric constant; unset takes the solvent table value
 ``drism.smear``                   0.6682       DRISM Gaussian smearing width (bohr)
 ``closure``                      ``KH``       HNC, KH or PSE2-4
 ``grid.npts``, ``grid.dr``       8192, 0.015  Points and spacing (bohr) of the radial pair
@@ -184,6 +182,6 @@ the same cSPC/E nonbonded parameters on the table geometry.
 The ``moz_solvent_vv`` test ``pysofft_reference`` keeps these numbers.
 
 RISM and DRISM use the same closures, solvers and fixed-bulk UV derivatives.
-Theory, dielectric, smearing width, closure, radial grid and achieved residual
-are checked before reusing a solved bulk solvent. A model supplied with a solved
+Theory, smearing width, closure, radial grid and achieved residual are checked
+before reusing a solved bulk solvent; the dielectric is fixed by its solvent system. A model supplied with a solved
 solvent and no overriding parameters inherits that solvent's bulk settings.

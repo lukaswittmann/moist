@@ -15,8 +15,8 @@ module moist_app_rism_input
    type, extends(moist_model_parameters_type) :: rism_system_parameters_type
       !> Solvent name or id, resolved against the solvent table; empty selects the default
       character(len=64) :: solvent = ""
-      !> Temperature in K (default 298.15) and pressure in Pa (default 101325)
-      real(wp) :: temperature = 298.15_wp, pressure = 101325.0_wp
+      !> Temperature in K and pressure in Pa; unallocated selects the solvent-system default
+      real(wp), allocatable :: temperature, pressure
       !> Total molecular charge in e; unallocated means no override
       real(wp), allocatable :: charge
    contains
@@ -125,15 +125,15 @@ contains
       end if
    end subroutine input_validate
 
-   !> Restore the default state point, with no explicit charge override
+   !> Restore the default state point, with no explicit overrides
    !>
    !> @param[inout] self  state point
    subroutine system_defaults(self)
       !> State point
       class(rism_system_parameters_type), intent(inout) :: self
       self%solvent = ""
-      self%temperature = 298.15_wp
-      self%pressure = 101325.0_wp
+      if (allocated(self%temperature)) deallocate(self%temperature)
+      if (allocated(self%pressure)) deallocate(self%pressure)
       if (allocated(self%charge)) deallocate(self%charge)
    end subroutine system_defaults
 
@@ -144,42 +144,23 @@ contains
       !> State point
       class(rism_system_parameters_type), intent(inout), target :: self
       call self%register_string("solvent", self%solvent, level=2)
-      call self%register_real_scalar("temperature", self%temperature, level=2)
-      call self%register_real_scalar("pressure", self%pressure, level=2)
+      call self%register_alloc_real_scalar("temperature", self%temperature, level=2)
+      call self%register_alloc_real_scalar("pressure", self%pressure, level=2)
       call self%register_alloc_real_scalar("charge", self%charge, level=2)
    end subroutine system_entries
 
-   !> Check state-point ranges; solvent identity is resolved after CLI overrides
+   !> Check the charge; the solvent system checks the state point after CLI overrides
    !>
    !> @param[inout] self  state point
-   !> @param[out] error   invalid temperature, pressure or charge
+   !> @param[out] error   invalid charge
    subroutine system_validate(self, error)
       !> State point
       class(rism_system_parameters_type), intent(inout) :: self
-      !> Invalid temperature, pressure or charge
+      !> Invalid charge
       type(error_type), allocatable, intent(out) :: error
-      if (.not. positive(self%temperature) .or. .not. nonnegative(self%pressure)) then
-         call fatal_error(error, "System temperature must be positive and pressure nonnegative (K, Pa)")
-      else if (allocated(self%charge)) then
+      if (allocated(self%charge)) then
          if (.not. ieee_is_finite(self%charge)) call fatal_error(error, "System charge must be finite")
       end if
    end subroutine system_validate
 
-   !> Finite positive scalar
-   !>
-   !> @param[in] value  scalar to check
-   pure logical function positive(value)
-      !> Scalar to check
-      real(wp), intent(in) :: value
-      positive = ieee_is_finite(value) .and. value > 0.0_wp
-   end function positive
-
-   !> Finite nonnegative scalar
-   !>
-   !> @param[in] value  scalar to check
-   pure logical function nonnegative(value)
-      !> Scalar to check
-      real(wp), intent(in) :: value
-      nonnegative = ieee_is_finite(value) .and. value >= 0.0_wp
-   end function nonnegative
 end module moist_app_rism_input

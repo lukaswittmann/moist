@@ -168,7 +168,7 @@ contains
          call fatal_error(error, "1D UV potential tables must have shape (npts, nu nv)")
          return
       end if
-      call new_closure(self%closure, params%closure, error, ctx%get_num_threads())
+      call new_closure(self%closure, params%closure, error, self%ctx)
       if (allocated(error)) return
       call check_preconditioner_name(params%precond, preconditioners_1d_uv, "1D UV", error)
       if (allocated(error)) return

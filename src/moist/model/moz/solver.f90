@@ -145,7 +145,7 @@ contains
 
    !> Canonical solver kind of a name: picard, diis, jfnk or hybrid
    !>
-   !> - Case-insensitive; MDIIS is DIIS
+   !> - Case-insensitive; MDIIS and Anderson are DIIS, Newton and Newton-Krylov are JFNK
    !> - Empty for an unknown name
    !>
    !> @param[in] name Solver name
@@ -161,7 +161,7 @@ contains
          continue
       case ("mdiis", "anderson")
          kind = "diis"
-      case ("newton", "newton-krylov", "gmres")
+      case ("newton", "newton-krylov")
          kind = "jfnk"
       case default
          kind = ""

@@ -16,7 +16,9 @@
 !> TODO: Add closures with bridge functions evaluated from physical quantities
 module moist_model_moz_closure
    use mctc_env, only: wp, error_type, fatal_error
-   use moist_context, only: resolve_num_threads
+   use mctc_io_utils, only: to_lower
+   use moist_context, only: moist_context_type, resolve_num_threads
+   use moist_output_citations, only: citation
 !$ use omp_lib, only: omp_in_parallel
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use moist_model_moz_closure_kernel, only: &
@@ -236,50 +238,48 @@ contains
 
    !> Construct an HNC, KH or PSE2-4 closure
    !>
+   !> - KH and PSE2-4 record their citation on the context; HNC has none
+   !>
    !> @param[out] closure Allocated closure; unallocated on failure
    !> @param[in] name Closure identifier: HNC, KH or PSE2-4
-   !> @param[out] error Unknown closure identifier or negative thread count
-   !> @param[in] nthreads OpenMP team size; absent or zero takes omp_get_max_threads
-   subroutine new_closure(closure, name, error, nthreads)
+   !> @param[out] error Unknown closure identifier
+   !> @param[in,out] ctx Run context for the OpenMP team size and citations; absent takes omp_get_max_threads
+   subroutine new_closure(closure, name, error, ctx)
       !> Allocated closure; unallocated on failure
       class(moist_model_moz_closure_type), allocatable, intent(out) :: closure
       !> Closure identifier: HNC, KH or PSE2-4
       character(len=*), intent(in) :: name
-      !> Unknown closure identifier or negative thread count
+      !> Unknown closure identifier
       type(error_type), allocatable, intent(out) :: error
-      !> OpenMP team size, e.g. ctx%get_num_threads(); absent or zero takes omp_get_max_threads
-      integer, intent(in), optional :: nthreads
+      !> Run context for the OpenMP team size and citations
+      type(moist_context_type), intent(inout), optional :: ctx
 
-      select case (trim(adjustl(name)))
-      case ("HNC", "hnc")
+      select case (to_lower(trim(adjustl(name))))
+      case ("hnc")
          allocate (moist_model_moz_closure_hnc_type :: closure)
-      case ("KH", "kh")
+         ! TODO: Citation?
+      case ("kh")
          allocate (moist_model_moz_closure_kh_type :: closure)
-      case ("PSE2", "pse2", "PSE3", "pse3", "PSE4", "pse4")
+         if (present(ctx)) call ctx%cite(citation%kh)
+      case ("pse2", "pse3", "pse4")
          allocate (moist_model_moz_closure_pse_type :: closure)
          select type (closure)
          type is (moist_model_moz_closure_pse_type)
-            select case (trim(adjustl(name)))
-            case ("PSE2", "pse2")
+            select case (to_lower(trim(adjustl(name))))
+            case ("pse2")
                closure%order = 2
-            case ("PSE3", "pse3")
+            case ("pse3")
                closure%order = 3
-            case ("PSE4", "pse4")
+            case ("pse4")
                closure%order = 4
-            case default
-               call fatal_error(error, "Unknown PSE closure: "//trim(name))
             end select
          end select
+         if (present(ctx)) call ctx%cite(citation%pse)
       case default
          call fatal_error(error, "Unknown MOZ closure: "//trim(name))
-      end select
-      if (.not. allocated(closure) .or. .not. present(nthreads)) return
-      if (nthreads < 0) then
-         deallocate (closure)
-         call fatal_error(error, "Closure thread count must be nonnegative")
          return
-      end if
-      closure%nthreads = nthreads
+      end select
+      if (present(ctx)) closure%nthreads = ctx%get_num_threads()
    end subroutine new_closure
 
    !> OpenMP team size for n values from the closure's thread count

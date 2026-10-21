@@ -50,7 +50,7 @@ contains
          write(unit, "(a)") 'closure = "HNC"', "[system]", 'solvent = "water"', "charge = -1.0", &
             & "temperature = 310.0", "[potential]", "q = [-1.0]", "[convergence]", "tolerance = 2e-8", &
             & "[solvent]", 'closure = "KH"', 'theory = "DRISM"', &
-            & "[solvent.drism]", "dielectric = 45.0", "smear = 0.71", &
+            & "[solvent.drism]", "smear = 0.71", &
             & "[solvent.convergence]", "tolerance = 3e-11"
          close(unit)
          call input%read_file(path, err, strict=.true.)
@@ -67,13 +67,13 @@ contains
          type is (model_moz_1d_parameters_type)
             call check(error, params%closure == "HNC" .and. params%solvent%closure == "KH" &
                & .and. params%tolerance == 2.0e-8_wp .and. params%solvent%tolerance == 3.0e-11_wp &
-               & .and. params%solvent%theory == "DRISM" .and. params%solvent%drism_dielectric == 45.0_wp &
+               & .and. params%solvent%theory == "DRISM" &
                & .and. params%solvent%drism_smear == 0.71_wp &
                & .and. input%grid%kind == "radial")
          type is (model_moz_3d_parameters_type)
             call check(error, params%closure == "HNC" .and. params%solvent%closure == "KH" &
                & .and. params%tolerance == 2.0e-8_wp .and. params%solvent%tolerance == 3.0e-11_wp &
-               & .and. params%solvent%theory == "DRISM" .and. params%solvent%drism_dielectric == 45.0_wp &
+               & .and. params%solvent%theory == "DRISM" &
                & .and. params%solvent%drism_smear == 0.71_wp &
                & .and. input%grid%kind == "cartesian")
          end select

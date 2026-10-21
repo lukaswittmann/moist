@@ -17,8 +17,7 @@ module moist_model_moz_solvent_vv_equation
    use moist_math_packed_sym, only: packed_index_lut, npair_from_ns
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, transform_dst4
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    use moist_model_moz_solvent_vv_kernel, only: vv_kblock, vv_build_blocks, vv_solve_block, vv_solve_point
    use moist_model_moz_fields, only: field_num_threads
    implicit none(type, external)
@@ -416,8 +415,8 @@ contains
          end do
          rhs(:, 1:self%ns) = matmul(w_pt, matmul(c_pt, w_pt))
          rhs(:, self%ns + 1:2*self%ns) = w_pt
-         call wrap_getrf(a_pt, ipiv, info)
-         if (info == 0) call wrap_getrs(a_pt, rhs, ipiv, info)
+         call getrf(a_pt, ipiv, info)
+         if (info == 0) call getrs(a_pt, rhs, ipiv, info)
          if (info == 0 .and. .not. all(abs(rhs) <= huge(1.0_wp))) info = 1
          if (info /= 0) then
             error_flag = max(error_flag, ik)

@@ -11,8 +11,7 @@ module moist_model_moz_solvent_vv_kernel
    use mctc_env, only: wp
    use moist_context, only: resolve_num_threads
    use moist_math_packed_sym, only: packed_index_lut
-   use moist_math_lapack_getrf, only: wrap_getrf
-   use moist_math_lapack_getrs, only: wrap_getrs
+   use moist_math_lapack, only: getrf, getrs
    implicit none(type, external)
    private
 
@@ -314,11 +313,11 @@ contains
       do is = 1, ns
          iwcp(is, is) = iwcp(is, is) + 1.0_wp
       end do
-      call wrap_getrf(iwcp, ipiv, info)
+      call getrf(iwcp, ipiv, info)
       if (info /= 0) return
       temp = matmul(ck, w)
       hk = matmul(w, temp)
-      call wrap_getrs(iwcp, hk, ipiv, info)
+      call getrs(iwcp, hk, ipiv, info)
    end subroutine vv_solve_point
 
 end module moist_model_moz_solvent_vv_kernel

@@ -23,8 +23,6 @@ module moist_model_moz_solvent_vv_parameters
    type, extends(moist_model_parameters_type) :: solvent_vv_parameters_type
       !> Bulk theory: ordinary RISM by default; XRISM is an alias
       character(len=8) :: theory = "RISM"
-      !> DRISM dielectric constant; unset takes the solvent's tabulated value
-      real(wp), allocatable :: drism_dielectric
       !> DRISM Gaussian width, bohr
       real(wp) :: drism_smear = 0.6682_wp
       !> Closure: HNC, KH or PSE2-4
@@ -76,7 +74,6 @@ contains
       type(solvent_vv_parameters_type) :: defaults
 
       self%theory = defaults%theory
-      if (allocated(self%drism_dielectric)) deallocate(self%drism_dielectric)
       self%drism_smear = defaults%drism_smear
       self%closure = defaults%closure
       self%npts = defaults%npts
@@ -112,7 +109,6 @@ contains
       precond_level = self%solver%group_level("jfnk", 2)
       filter_level = self%solver%group_level("jfnk", 3)
       call self%register_string("theory", self%theory, level=2)
-      call self%register_alloc_real_scalar("drism.dielectric", self%drism_dielectric, level=drism_level)
       call self%register_real_scalar("drism.smear", self%drism_smear, level=max(3, drism_level))
       call self%register_string("closure", self%closure, level=2)
       call self%register_int_scalar("grid.npts", self%npts, level=2)
@@ -147,23 +143,9 @@ contains
          return
       end if
       if (canonical_bulk_theory(self%theory) == "DRISM") then
-         if (.not. ieee_is_finite(self%drism_smear)) then
-            call fatal_error(error, "DRISM dielectric and smear must be finite")
+         if (.not. ieee_is_finite(self%drism_smear) .or. self%drism_smear < 0.0_wp) then
+            call fatal_error(error, "DRISM smear must be finite and >= 0 (bohr)")
             return
-         end if
-         if (self%drism_smear < 0.0_wp) then
-            call fatal_error(error, "DRISM needs dielectric >= 1 and smear >= 0 (bohr)")
-            return
-         end if
-         if (allocated(self%drism_dielectric)) then
-            if (.not. ieee_is_finite(self%drism_dielectric)) then
-               call fatal_error(error, "DRISM dielectric and smear must be finite")
-               return
-            end if
-            if (self%drism_dielectric < 1.0_wp) then
-               call fatal_error(error, "DRISM needs dielectric >= 1 and smear >= 0 (bohr)")
-               return
-            end if
          end if
       end if
       call new_closure(closure, self%closure, error)
@@ -201,11 +183,7 @@ contains
          & to_lower(trim(self%closure)) == to_lower(trim(other%closure)) .and. &
          & self%npts == other%npts .and. self%dr == other%dr
       if (canonical_bulk_theory(self%theory) == "DRISM") then
-         same = same .and. self%drism_smear == other%drism_smear .and. &
-            & (allocated(self%drism_dielectric) .eqv. allocated(other%drism_dielectric))
-         if (same .and. allocated(self%drism_dielectric)) then
-            same = self%drism_dielectric == other%drism_dielectric
-         end if
+         same = same .and. self%drism_smear == other%drism_smear
       end if
    end function same_vv_state
 

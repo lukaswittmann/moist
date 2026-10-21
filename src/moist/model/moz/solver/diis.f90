@@ -3,10 +3,11 @@ module moist_model_moz_solver_diis
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_output_citations, only: citation
    use moist_model_moz_solver_core_base, only: moist_model_moz_solver_type, validate_solver_arrays
    use moist_model_moz_solver_core_base, only: moist_model_moz_solver_statistics_type
    use moist_model_moz_solver_core_checks, only: finite_positive, unit_fraction, step_fraction
-   use moist_math_lapack_gesv, only: dgesv
+   use moist_math_lapack, only: lapack_gesv
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_blas, only: gemv, syrk
    use moist_model_moz_solver_core_evaluator, only: moist_model_moz_solver_evaluator_type
@@ -168,6 +169,7 @@ contains
       type(moist_model_moz_solver_diis_type) :: self
 
       self%ctx => ctx
+      call self%ctx%cite(citation%mdiis)
       if (present(parameters)) self%params = parameters
       if (present(picard)) self%picard = picard
    end function new_diis_solver
@@ -236,7 +238,7 @@ contains
       integer(lapack_ik) :: info
       logical :: filling_history
       integer(lapack_ik), allocatable :: ipiv(:)
-      real(wp), allocatable :: A(:, :), A_gram(:, :), b(:)
+      real(wp), allocatable :: A(:, :), A_gram(:, :), b(:, :)
       real(wp), allocatable :: diff(:), c_flat(:), c_comb(:), res_comb(:)
       real(wp) :: rmse, step_rmse, step_rmse_base, max_step_rmse, alpha_bt, sumsq
 
@@ -310,11 +312,11 @@ contains
          return
       end if
 
-      allocate (A_gram(m, m), A(m + 1, m + 1), b(m + 1), ipiv(m + 1), c_comb(nflat), res_comb(nflat))
+      allocate (A_gram(m, m), A(m + 1, m + 1), b(m + 1, 1), ipiv(m + 1), c_comb(nflat), res_comb(nflat))
       A = 0.0_wp
       A_gram = 0.0_wp
       b = 0.0_wp
-      b(m + 1) = -1.0_wp
+      b(m + 1, 1) = -1.0_wp
 
       call syrk(self%res(:, 1:m), A_gram, uplo="l", trans="t", alpha=1.0_wp, beta=0.0_wp)
       A(1:m, 1:m) = A_gram
@@ -331,7 +333,7 @@ contains
       end do
       A(m + 1, m + 1) = 0.0_wp
 
-      call dgesv(int(m + 1, lapack_ik), 1_lapack_ik, A, int(m + 1, lapack_ik), &
+      call lapack_gesv(int(m + 1, lapack_ik), 1_lapack_ik, A, int(m + 1, lapack_ik), &
          ipiv, b, int(m + 1, lapack_ik), info)
 
       if (info /= 0) then
@@ -349,8 +351,8 @@ contains
          return
       end if
 
-      call gemv(self%fr(:, 1:m), b(1:m), c_comb, alpha=1.0_wp, beta=0.0_wp, trans="n")
-      call gemv(self%res(:, 1:m), b(1:m), res_comb, alpha=1.0_wp, beta=0.0_wp, trans="n")
+      call gemv(self%fr(:, 1:m), b(1:m, 1), c_comb, alpha=1.0_wp, beta=0.0_wp, trans="n")
+      call gemv(self%res(:, 1:m), b(1:m, 1), res_comb, alpha=1.0_wp, beta=0.0_wp, trans="n")
 
       c_comb = c_comb + res_comb
 

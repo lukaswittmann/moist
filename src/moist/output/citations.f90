@@ -41,6 +41,16 @@ module moist_output_citations
       integer :: lpb = 24
       integer :: slic = 25
       integer :: nonlocal = 26
+      integer :: rism = 27
+      integer :: drism = 28
+      integer :: rism3d = 29
+      integer :: kh = 30
+      integer :: pse = 31
+      integer :: ng = 32
+      integer :: pressure_correction = 33
+      integer :: finite_size = 34
+      integer :: mdiis = 35
+      integer :: jfnk = 36
    end type citation_label_type
 
    !> Global instance of the label enum
@@ -442,6 +452,124 @@ contains
          "element methods for nonlocal protein electrostatics in the Julia language.", &
          journal="J. Comput. Sci. 2018, 28, 193-203", &
          doi="https://doi.org/10.1016/j.jocs.2018.08.008")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%rism, &
+         authors="Chandler, D., Andersen, H.C.", &
+         title="Optimized Cluster Expansions for Classical Fluids. II. Theory of "// &
+         "Molecular Liquids.", &
+         journal="J. Chem. Phys. 1972, 57, 1930-1937", &
+         doi="https://doi.org/10.1063/1.1678513")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%rism, &
+         authors="Hirata, F., Rossky, P.J.", &
+         title="An extended RISM equation for molecular polar fluids.", &
+         journal="Chem. Phys. Lett. 1981, 83, 329-334", &
+         doi="https://doi.org/10.1016/0009-2614(81)85474-7")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%drism, &
+         authors="Perkyns, J., Pettitt, B.M.", &
+         title="A dielectrically consistent interaction site theory for "// &
+         "solvent-electrolyte mixtures.", &
+         journal="Chem. Phys. Lett. 1992, 190, 626-630", &
+         doi="https://doi.org/10.1016/0009-2614(92)85201-K")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%rism3d, &
+         authors="Beglov, D., Roux, B.", &
+         title="An Integral Equation To Describe the Solvation of Polar Molecules in "// &
+         "Liquid Water.", &
+         journal="J. Phys. Chem. B 1997, 101, 7821-7826", &
+         doi="https://doi.org/10.1021/jp971083h")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%rism3d, &
+         authors="Kovalenko, A., Hirata, F.", &
+         title="Three-dimensional density profiles of water in contact with a solute "// &
+         "of arbitrary shape: a RISM approach.", &
+         journal="Chem. Phys. Lett. 1998, 290, 237-244", &
+         doi="https://doi.org/10.1016/S0009-2614(98)00471-0")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%kh, &
+         authors="Kovalenko, A., Hirata, F.", &
+         title="Self-consistent description of a metal-water interface by the "// &
+         "Kohn-Sham density functional theory and the three-dimensional "// &
+         "reference interaction site model.", &
+         journal="J. Chem. Phys. 1999, 110, 10095-10112", &
+         doi="https://doi.org/10.1063/1.478883")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%pse, &
+         authors="Kast, S.M., Kloss, T.", &
+         title="Closed-form expressions of the chemical potential for integral "// &
+         "equation closures with certain bridge functions.", &
+         journal="J. Chem. Phys. 2008, 129, 236101", &
+         doi="https://doi.org/10.1063/1.3041709")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%ng, &
+         authors="Ng, K.-C.", &
+         title="Hypernetted chain solutions for the classical one-component plasma up "// &
+         "to Gamma=7000.", &
+         journal="J. Chem. Phys. 1974, 61, 2680-2689", &
+         doi="https://doi.org/10.1063/1.1682399")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%pressure_correction, &
+         authors="Sergiievskyi, V., Jeanmairet, G., Levesque, M., Borgis, D.", &
+         title="Solvation free-energy pressure corrections in the three dimensional "// &
+         "reference interaction site model.", &
+         journal="J. Chem. Phys. 2015, 143, 184116", &
+         doi="https://doi.org/10.1063/1.4935065")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%finite_size, &
+         authors="Hunenberger, P.H., McCammon, J.A.", &
+         title="Ewald artifacts in computer simulations of ionic solvation and "// &
+         "ion-ion interaction: A continuum electrostatics study.", &
+         journal="J. Chem. Phys. 1999, 110, 1856-1872", &
+         doi="https://doi.org/10.1063/1.477873")
+
+      call moist_citations%add( &
+         category="Models", &
+         label=citation%finite_size, &
+         authors="Kovalenko, A., Hirata, F.", &
+         title="Potentials of mean force of simple ions in ambient aqueous solution. "// &
+         "I. Three-dimensional reference interaction site model approach.", &
+         journal="J. Chem. Phys. 2000, 112, 10391-10402", &
+         doi="https://doi.org/10.1063/1.481676")
+
+      call moist_citations%add( &
+         category="Solvers", &
+         label=citation%mdiis, &
+         authors="Kovalenko, A., Ten-no, S., Hirata, F.", &
+         title="Solution of three-dimensional reference interaction site model and "// &
+         "hypernetted chain equations for simple point charge water by modified "// &
+         "method of direct inversion in iterative subspace.", &
+         journal="J. Comput. Chem. 1999, 20, 928-936", &
+         doi="https://doi.org/10.1002/(SICI)1096-987X(19990715)20:9<928::AID-JCC4>3.0.CO;2-X")
+
+      call moist_citations%add( &
+         category="Solvers", &
+         label=citation%jfnk, &
+         authors="Knoll, D.A., Keyes, D.E.", &
+         title="Jacobian-free Newton-Krylov methods: a survey of approaches and "// &
+         "applications.", &
+         journal="J. Comput. Phys. 2004, 193, 357-397", &
+         doi="https://doi.org/10.1016/j.jcp.2003.08.010")
 
       initialised = .true.
    end subroutine fill_citations

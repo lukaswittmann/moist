@@ -23,6 +23,7 @@ module moist_model_moz_3d_type
    use mctc_io_convert, only: autokcal, autoaa
    use mctc_io_utils, only: to_lower
    use moist_context, only: moist_context_type
+   use moist_output_citations, only: citation
    use moist_utils_timer, only: cat_setup, cat_solve, cat_energy, cat_properties, cat_gradient
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_model_type, only: solvation_model_type, invalidate_model
@@ -228,6 +229,10 @@ contains
       call self%potential%update(mol, self%grid, error)
       if (allocated(error)) return
       self%total_charge = mol%charge
+      call self%ctx%cite(citation%rism3d)
+      if (self%potential%ng_split()) call self%ctx%cite(citation%ng)
+      if (to_lower(trim(adjustl(self%params%correction))) /= "none") call self%ctx%cite(citation%pressure_correction)
+      if (to_lower(trim(adjustl(self%params%finite_size))) /= "none") call self%ctx%cite(citation%finite_size)
       if (self%ctx%verbosity(2)) then
          call self%ctx%message("Solute potential parameters", 2)
          call self%potential%print_table(self%ctx%unit, error)
