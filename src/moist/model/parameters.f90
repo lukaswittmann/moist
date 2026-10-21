@@ -3,7 +3,8 @@
 !>
 !> Derived types declare their fields in register_entries and defaults in
 !> init_defaults; each field carries a print level, 2 for the normal printout
-!> and 3 (default) for the detailed one
+!> and 3 (default) for the detailed one. Integer choices can print by name
+!> through print_choices
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -44,6 +45,8 @@ module moist_model_parameters
       procedure :: print_parameters
       !> Print parameter values as an aligned key-value table
       procedure :: print_table
+      !> Print integer choices by name ahead of the table; none by default
+      procedure :: print_choices
       procedure :: register_real_scalar
       procedure :: register_int_scalar
       procedure :: register_logical
@@ -249,6 +252,7 @@ contains
 
    !> Print parameter values as an aligned key-value table
    !>
+   !> - the integer choices by name first (print_choices), at every level
    !> - one line per registered field, in registration order; a dotted key
    !>   group becomes a nested section
    !> - works on a copy, so printing leaves the values untouched
@@ -267,6 +271,7 @@ contains
       type(error_type), allocatable :: error
       type(toml_table), pointer :: root
 
+      call self%print_choices(pp)
       allocate(work, source=self)
       if (present(level)) work%print_level = level
       !$omp critical (moist_parameter_documents)
@@ -284,6 +289,17 @@ contains
       call work%clear_document()
       !$omp end critical (moist_parameter_documents)
    end subroutine print_table
+
+   !> Default for parameter sets without integer choices: nothing to print
+   !>
+   !> @param[in] self Parameter values
+   !> @param[in,out] pp Pretty printer
+   subroutine print_choices(self, pp)
+      !> Parameter values
+      class(moist_model_parameters_type), intent(in) :: self
+      !> Pretty printer
+      type(prettyprinter), intent(inout) :: pp
+   end subroutine print_choices
 
    !> Print every entry of one document table, nesting subtables as sections
    !>

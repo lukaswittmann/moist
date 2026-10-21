@@ -77,6 +77,8 @@ module moist_model_continuum_component_pcm_type
       procedure :: register_entries => register_parameter_entries
       !> Check solver controls
       procedure :: validate => validate_pcm_parameters
+      !> Print the solver and the operator storage by name
+      procedure :: print_choices => print_pcm_choices
    end type moist_pcm_parameters_type
 
    !> Abstract PCM base component
@@ -315,16 +317,48 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_pcm_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("solver", self%solver, level=2)
+      call self%register_int_scalar("solver", self%solver)
       call self%register_real_scalar("solver_tol", self%solver_tol)
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
       call self%register_int_scalar("solver_restart", self%solver_restart)
-      call self%register_int_scalar("storage", self%storage, level=2)
+      call self%register_int_scalar("storage", self%storage)
       call self%register_real_scalar("newton_tol", self%newton_tol)
       call self%register_int_scalar("newton_maxiter", self%newton_maxiter)
       call self%register_logical("parameter_derivatives", self%parameter_derivatives)
       call self%register_logical("point_potential", self%point_potential)
    end subroutine register_parameter_entries
+
+   !> Print the linear solver and, for the iterative one, the operator storage by name
+   !>
+   !> @param[in] self Parameter values
+   !> @param[in,out] pp Pretty printer inside the component section
+   subroutine print_pcm_choices(self, pp)
+      !> Parameter values
+      class(moist_pcm_parameters_type), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+      !> Name of the current choice
+      character(len=:), allocatable :: label
+
+      if (self%solver == solver_type%dense) then
+         label = "Dense"
+      else if (self%solver == solver_type%iterative) then
+         label = "Iterative (GMRES)"
+      else
+         label = "unknown"
+      end if
+      call pp%kv("Solver", self%solver, label)
+      if (self%solver /= solver_type%iterative) return
+
+      if (self%storage == pcm_storage_dense) then
+         label = "Dense"
+      else if (self%storage == pcm_storage_matrix_free) then
+         label = "Matrix-free"
+      else
+         label = "unknown"
+      end if
+      call pp%kv("Storage", self%storage, label)
+   end subroutine print_pcm_choices
 
    !> Linear solver settings of the component
    !>
