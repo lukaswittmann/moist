@@ -241,7 +241,12 @@ contains
       allocate (w_vn(size(self%q)), source=0.0_wp)
    end subroutine pcm_component_normal_trace_adjoint
 
-   !> Form n dot grad(phi) from the host's raw spatial derivative
+   !> Form the normal trace `vn = n dot grad(phi)` from the host's raw spatial derivative
+   !>
+   !> - Outward unit normal `n`, pointing into the solvent
+   !> - Host potential only, nuclear plus electronic, without the reaction field
+   !> - `vn = -E_n`, minus the outward normal component of the solute electric field
+   !> - Gaussian surfaces: derivative of the smeared potential, so the smeared field
    subroutine pcm_component_normal_trace(self, coupling, cavity, vn, error)
       class(model_continuum_component_pcm), intent(in) :: self
       class(coupling_view_type), intent(in) :: coupling
@@ -375,9 +380,9 @@ contains
    !> Every chain-rule contraction through the host potential (Fock weights,
    !> the direct nuclear term, the surface-position and width weights) uses
    !> this vector, never the charges themselves. It equals the surface charge
-   !> `q` only for stationary potential-only models (CPCM, COSMO); IEF-PCM and
-   !> SS(V)PE return the symmetrized adjoint, and models that also consume the
-   !> normal trace (DPCM, DPCM-original, LPB, SLIC, nonlocal) return their own
+   !> `q` only for stationary potential-only models (CPCM, COSMO); IEF-PCM,
+   !> SS(V)PE and LPB return the symmetrized adjoint, and models that also consume
+   !> the normal trace (DPCM, DPCM-original, SLIC, nonlocal) return their own
    !> `dE/dphi`, with `dE/dvn` carried separately by `normal_trace_adjoint`
    !>
    !> @param[in]  self  PCM component with current surface charges

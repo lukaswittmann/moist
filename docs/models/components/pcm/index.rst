@@ -11,7 +11,8 @@ component type and constructor.
 The host supplies the raw electrostatic potential and its requested
 derivatives. For models using the normal derivative, MOIST forms
 :math:`v_n=\mathbf n\cdot\nabla\phi` from the same potential used for
-:math:`\phi`, Gaussian or point. The host also contracts the ``potential_adjoint`` response,
+:math:`\phi`, Gaussian or point. With the outward normal :math:`\mathbf n`,
+:math:`v_n` is minus the normal component of the solute's electric field. The host also contracts the ``potential_adjoint`` response,
 including ``w_dphi_dr`` when present. See :doc:`/reference/coupling` for the
 request and response shapes.
 
