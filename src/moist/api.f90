@@ -219,6 +219,8 @@ module moist_api
       integer(c_int) :: newton_maxiter = 50_c_int
       !> Return the parameter_adjoint response item
       logical(c_bool) :: parameter_derivatives = .false._c_bool
+      !> Couple Gaussian surfaces through point potential integrals
+      logical(c_bool) :: point_potential = .false._c_bool
    end type api_pcm_options
 
    !> Minimum valid caller size for the generated PCM controls
@@ -479,6 +481,7 @@ contains
       value%newton_tol = native%newton_tol
       value%newton_maxiter = native%newton_maxiter
       value%parameter_derivatives = logical(native%parameter_derivatives, c_bool)
+      value%point_potential = logical(native%point_potential, c_bool)
    end function default_pcm_options
 
    !> Convert interoperable PCM controls to the native parameter object
@@ -493,6 +496,7 @@ contains
       param%newton_tol = real(options%newton_tol, wp)
       param%newton_maxiter = int(options%newton_maxiter)
       param%parameter_derivatives = logical(options%parameter_derivatives)
+      param%point_potential = logical(options%point_potential)
    end function pcm_parameters_from_options
 
    !> Obtain cfc defaults from the native parameter type
@@ -1266,6 +1270,7 @@ contains
       defaults%newton_tol = values%newton_tol
       defaults%newton_maxiter = values%newton_maxiter
       defaults%parameter_derivatives = values%parameter_derivatives
+      defaults%point_potential = values%point_potential
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, pcm_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_pcm_options")
    end subroutine init_pcm_options_api

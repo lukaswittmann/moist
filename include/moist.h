@@ -354,6 +354,7 @@ typedef struct {
     double newton_tol;
     int newton_maxiter;
     bool parameter_derivatives; /* return the "parameter_adjoint" response item */
+    bool point_potential; /* request "point_potential" on Gaussian surfaces too */
 } moist_pcm_options;
 
 moist_API_ENTRY void moist_API_CALL

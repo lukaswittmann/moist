@@ -68,8 +68,8 @@ All accept keyword-only ``parameters=PCMParameters(...)`` and optional
 ``context=...``. Its controls are
 ``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,
 ``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.DENSE``
-(default) or ``MATRIX_FREE``), ``newton_tol`` and
-``newton_maxiter``. See :doc:`/models/components/pcm/index` for defaults.
+(default) or ``MATRIX_FREE``), ``newton_tol``, ``newton_maxiter`` and ``point_potential``.
+See :doc:`/models/components/pcm/index` for defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain

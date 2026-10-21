@@ -451,13 +451,20 @@ class PySCFHost:
     # contractions of the response items
     # ------------------------------------------------------------------
 
-    def fock_potential(self, coords: np.ndarray, xi: np.ndarray, w_phi: np.ndarray) -> np.ndarray:
-        """Return ``sum_i w_phi_i dphi_i/dP``: potential adjoint times the Gaussian integrals."""
+    def fock_potential(self, coords: np.ndarray, xi, w_phi: np.ndarray) -> np.ndarray:
+        """Return ``sum_i w_phi_i dphi_i/dP``: potential adjoint times the point or Gaussian integrals."""
+        if xi is None:
+            return -np.einsum("i,iuv->uv", np.asarray(w_phi),
+                              self.mol.intor("int1e_grids", grids=coords))
         return -np.einsum("i,uvi->uv", np.asarray(w_phi), self._gaussian_integrals(coords, xi))
 
-    def fock_potential_gradient(self, coords: np.ndarray, xi: np.ndarray,
-                                weights: np.ndarray) -> np.ndarray:
+    def fock_potential_gradient(self, coords: np.ndarray, xi, weights: np.ndarray) -> np.ndarray:
         """Contract spatial-potential derivative weights with their AO integrals."""
+        if xi is None:
+            # d(uv|C)/dC = <du|C|v> + <u|C|dv> by translational invariance
+            block = np.einsum("ik,kiuv->uv", np.asarray(weights),
+                              self.mol.intor("int1e_grids_ip", grids=coords))
+            return -(block + block.T)
         return np.einsum("ik,kuvi->uv", np.asarray(weights),
                          self._gaussian_integrals(coords, xi, "int3c2e_ip2"))
 
@@ -512,9 +519,12 @@ class PySCFHost:
             gradient[:, atom] = weighted[:, lo:hi].sum(axis=1)
         return np.ascontiguousarray(gradient.T)
 
-    def _gradient_dphi_dr(self, coords: np.ndarray, weights: np.ndarray,
-                          xi: np.ndarray) -> np.ndarray:
+    def _gradient_dphi_dr(self, coords: np.ndarray, weights: np.ndarray, xi) -> np.ndarray:
         """Contract spatial-potential weights with AO-center nuclear derivatives."""
+        if xi is None:
+            raise NotImplementedError(
+                "The point-potential normal-trace gradient needs second-derivative grid "
+                "integrals, which PySCF does not provide")
         dm = self._density_matrix()
         integrals = self._gaussian_integrals(coords, xi, "int3c2e_ip1ip2")
         integrals = integrals.reshape(3, 3, self.mol.nao, self.mol.nao, -1)
@@ -929,6 +939,7 @@ class PySCFSolvation:
         cavity = self.model.cavity
         coords = cavity.xyz
         if isinstance(request, PointPotentialRequest):
+            self._xi = None
             outputs = {}
             if "phi" in request.missing:
                 outputs["phi"] = self.host.surface_potential(coords)

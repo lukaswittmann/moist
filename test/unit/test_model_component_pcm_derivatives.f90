@@ -26,6 +26,9 @@
 !>   host with forward/reverse gradient parity, a supplied external potential
 !> - `cpcm_iterative_surface_gradient`: `surface_gradient` with GMRES at the
 !>   default tolerance, whose residual-corrected energy the weights differentiate
+!> - `point_potential_*`: `surface_gradient`, `nuclear_gradient` and
+!>   `component_paths` of every model on Gaussian surfaces coupled through
+!>   point potential integrals; every check also confirms the staged request
 module test_model_component_pcm_derivatives
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
@@ -45,7 +48,7 @@ module test_model_component_pcm_derivatives
    use test_pcm_conductor_probe, only: probe_conductor_bilinear_weights, &
       & probe_conductor_nuclear_gradient
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
-      & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, new_pcm, make_component, &
+      & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, npcm, new_pcm, make_component, &
       & seed_drop, seed_name, first_seed, new_seed_cavity, fd_cavity, get_seed, nmol, &
       & mol_label, get_solute, thr_vacuous, pcm_physics, stage_energy, answer_sources, host_energy, host_charges
    use moist_context, only: moist_context_type, new_context
@@ -254,6 +257,9 @@ contains
          & new_unittest("nonlocal_mf_parameter_derivatives_point", test_nonlocal_mf_parameter_derivatives_point), &
          & new_unittest("component_paths_gaussian", test_gaussian_component_paths), &
          & new_unittest("component_paths_point", test_point_component_paths), &
+         & new_unittest("point_potential_surface_gradient", test_point_potential_surface_gradient), &
+         & new_unittest("point_potential_nuclear_gradient", test_point_potential_nuclear_gradient), &
+         & new_unittest("point_potential_component_paths", test_point_potential_component_paths), &
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
          & new_unittest("cpcm_nuclear_gradient_ecp", test_cpcm_nuclear_gradient_ecp), &
          & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient) &
@@ -622,7 +628,8 @@ contains
    !> @param[in]  imol      Solute index
    !> @param[in]  smeared   Gaussian surface (else point surface)
    !> @param[in]  iterative Solve with GMRES at the default tolerance (default dense)
-   subroutine check_surface_gradient(error, kind, imol, smeared, iterative)
+   !> @param[in]  point_potential Couple through point potential integrals (default off)
+   subroutine check_surface_gradient(error, kind, imol, smeared, iterative, point_potential)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
@@ -633,6 +640,8 @@ contains
       logical, intent(in) :: smeared
       !> Solve with GMRES at the default tolerance
       logical, intent(in), optional :: iterative
+      !> Couple through point potential integrals
+      logical, intent(in), optional :: point_potential
 
       !> Run context borrowed by the component
       type(moist_context_type), target :: ctx
@@ -671,6 +680,7 @@ contains
             atol = gmres_atol
          end if
       end if
+      if (present(point_potential)) pcm%param%point_potential = point_potential
       call get_solute(imol, mol)
       q = host_charges(mol)
       seed = first_seed(kind)
@@ -679,7 +689,11 @@ contains
       h = merge(step_drop_surface, step, seed == seed_drop)
       prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))// &
          & merge(", Gaussian", ", point   ", smeared)
+      if (pcm%param%point_potential) prefix = trim(prefix)//", point potential"
       if (pcm%param%solver == solver_type%iterative) prefix = trim(prefix)//", GMRES"
+      call check_potential_request(error, pcm, mol, cavity, smeared .and. .not. pcm%param%point_potential, &
+         & trim(prefix))
+      if (allocated(error)) return
       call host_surface_weights(pcm, mol, cavity, q, acc, energy, error)
       if (allocated(error)) return
 
@@ -710,7 +724,7 @@ contains
       call pcm%update(mol, cavity, err)
       call check_moist_error(error, err, "update")
       if (allocated(error)) return
-      call host_traces(mol, q, cavity, smeared, phi, dphi_dr)
+      call host_traces(mol, q, cavity, smeared .and. .not. pcm%param%point_potential, phi, dphi_dr)
       call trace_adjoints(pcm, mol, cavity, phi, dphi_dr, w_phi, w_dphi_dr, error)
       if (allocated(error)) return
       call trace_direction(cavity%ngrid, 1, du)
@@ -1170,7 +1184,8 @@ contains
    !> @param[in]  kind  Model identifier
    !> @param[in]  imol  Solute index
    !> @param[in]  seed  Cavity kind rebuilt at every geometry
-   subroutine check_nuclear_gradient(error, kind, imol, seed)
+   !> @param[in]  point_potential Couple through point potential integrals (default off)
+   subroutine check_nuclear_gradient(error, kind, imol, seed, point_potential)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
@@ -1179,6 +1194,8 @@ contains
       integer, intent(in) :: imol
       !> Cavity kind
       integer, intent(in) :: seed
+      !> Couple through point potential integrals
+      logical, intent(in), optional :: point_potential
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -1204,16 +1221,23 @@ contains
       integer :: idir, k
       !> Failure context
       character(len=240) :: context
+      !> Failure context prefix
+      character(len=:), allocatable :: prefix
 
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error)
       if (allocated(error)) return
+      if (present(point_potential)) pcm%param%point_potential = point_potential
       call get_solute(imol, mol)
       call electron_host(mol, el_xyz, el_q)
       call new_host_cavity(seed, pcm, ctx, cavity, error)
       if (allocated(error)) return
+      prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))
+      if (pcm%param%point_potential) prefix = prefix//", point potential"
 
       call nuclear_state(pcm, mol, el_xyz, el_q, cavity, coupling, energy, error)
+      if (allocated(error)) return
+      call check_potential_request(error, pcm, mol, cavity, .not. pcm%param%point_potential, prefix)
       if (allocated(error)) return
       call pcm%prepare_gradient(cavity, coupling, err)
       call check_moist_error(error, err, "gradient staging")
@@ -1221,11 +1245,10 @@ contains
       call answer_nuclear_host(cavity, coupling, mol, el_xyz, el_q)
       allocate (gradient(3, mol%nat), source=0.0_wp)
       call pcm%get_gradient(component_view(coupling), cavity, response, gradient, err)
-      call check_moist_error(error, err, trim(pcm%name)//", "//trim(mol_label(imol))//" on "// &
-         & trim(seed_name(seed))//": nuclear gradient")
+      call check_moist_error(error, err, prefix//": nuclear gradient")
       if (allocated(error)) return
-      call check(error, maxval(abs(gradient)) > thr_vacuous, message=trim(pcm%name)//", "// &
-         & trim(mol_label(imol))//": nuclear gradient is vacuously zero")
+      call check(error, maxval(abs(gradient)) > thr_vacuous, message=prefix// &
+         & ": nuclear gradient is vacuously zero")
       if (allocated(error)) return
 
       call nuclear_directions(mol%nat, dirs)
@@ -1240,9 +1263,8 @@ contains
          if (allocated(error)) return
          analytic = sum(gradient*dirs(:, :, idir))
          scale = sum(abs(gradient*dirs(:, :, idir)))
-         write (context, '(a,", ",a,", ",a,": direction ",i0," dE/dt ",es12.4," vs FD ",es12.4, &
-            & ", dev ",es9.2)') trim(pcm%name), trim(mol_label(imol)), trim(seed_name(seed)), &
-            & idir, analytic, fd, abs(analytic - fd)
+         write (context, '(a,": direction ",i0," dE/dt ",es12.4," vs FD ",es12.4, &
+            & ", dev ",es9.2)') prefix, idir, analytic, fd, abs(analytic - fd)
          call check(error, abs(analytic - fd) <= nuc_atol + nuc_rtol*scale, &
             & message="nuclear gradient disagrees with the energy difference", &
             & more=trim(context))
@@ -1311,6 +1333,53 @@ contains
       end select
       channels = trim(channels)
    end function active_channels
+
+   !> Potential request the component stages for the energy phase
+   !>
+   !> The fixture hosts answer whichever request is staged, so the energy
+   !> differences alone cannot tell whether `point_potential` took effect
+   !>
+   !> @param[out]    error    Test failure
+   !> @param[in,out] pcm      Component under test, updated on `cavity`
+   !> @param[in]     mol      Solute
+   !> @param[in,out] cavity   Cavity, current for `mol`
+   !> @param[in]     gaussian Expect `gaussian_potential` (else `point_potential`)
+   !> @param[in]     context  Failure context
+   subroutine check_potential_request(error, pcm, mol, cavity, gaussian, context)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Component under test
+      class(model_continuum_component_pcm), intent(inout) :: pcm
+      !> Solute
+      type(structure_type), intent(in) :: mol
+      !> Cavity
+      class(cavity_type), intent(inout) :: cavity
+      !> Expect Gaussian potential integrals
+      logical, intent(in) :: gaussian
+      !> Failure context
+      character(len=*), intent(in) :: context
+
+      !> Unanswered energy-phase coupling
+      type(coupling_type), target :: coupling
+      !> Staged potential requests
+      logical :: found_gaussian, found_point
+
+      call stage_energy(pcm, mol, cavity, coupling, error)
+      if (allocated(error)) return
+      found_gaussian = .false.
+      found_point = .false.
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (gaussian_potential_request_type)
+            found_gaussian = .true.
+         type is (point_potential_request_type)
+            found_point = .true.
+         end select
+      end do
+      call check(error, (found_gaussian .eqv. gaussian) .and. (found_point .neqv. gaussian), &
+         & message="unexpected potential request", more=context// &
+         & merge(": expected gaussian_potential", ": expected point_potential   ", gaussian))
+   end subroutine check_potential_request
 
    !> Total surface weights of the gradient phase with host point charges
    !>
@@ -1941,18 +2010,73 @@ contains
       end do
    end subroutine test_point_component_paths
 
+   !* ================================================================================= *!
+   !*                        Point potential on Gaussian surfaces                       *!
+   !* ================================================================================= *!
+
+   !> Every model: `surface_gradient` on Gaussian surfaces with a point-potential host
+   subroutine test_point_potential_surface_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model and solute indices
+      integer :: kind, imol
+
+      do kind = 1, npcm
+         do imol = 1, nmol
+            call check_surface_gradient(error, kind, imol, .true., point_potential=.true.)
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_point_potential_surface_gradient
+
+   !> Every model: `nuclear_gradient` on rebuilt Gaussian cavities with a point-potential host
+   subroutine test_point_potential_nuclear_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model, solute and seed indices
+      integer :: kind, imol, seed
+
+      do kind = 1, npcm
+         do imol = 1, nmol
+            do seed = first_seed(kind), seed_drop
+               call check_nuclear_gradient(error, kind, imol, seed, point_potential=.true.)
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+   end subroutine test_point_potential_nuclear_gradient
+
+   !> Every model: `component_paths` on the Gaussian fixture with a point-potential host,
+   !> including the density-following surface of the response phase
+   subroutine test_point_potential_component_paths(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Model index
+      integer :: kind
+
+      do kind = 1, npcm
+         call check_component_path(kind, .true., error, point_potential=.true.)
+         if (allocated(error)) return
+      end do
+   end subroutine test_point_potential_component_paths
+
    !> Check a component through its public coupling and surface interfaces
    !>
    !> @param[in] kind Component constructor index
    !> @param[in] gaussian Whether the surface has Gaussian widths
    !> @param[out] error Test failure
-   subroutine check_component_path(kind, gaussian, error)
+   !> @param[in] point_potential Couple through point potential integrals (default off)
+   subroutine check_component_path(kind, gaussian, error, point_potential)
       !> Component constructor index
       integer, intent(in) :: kind
       !> Whether the surface has Gaussian widths
       logical, intent(in) :: gaussian
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> Couple through point potential integrals
+      logical, intent(in), optional :: point_potential
+      !> The host potential depends on the widths
+      logical :: host_gaussian
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
       type(structure_type) :: mol
@@ -1979,6 +2103,9 @@ contains
       label = trim(component%name)//merge(" Gaussian", " point   ", gaussian)
       component%param%solver_tol = 1.0e-12_wp
       component%param%newton_tol = 1.0e-13_wp
+      if (present(point_potential)) component%param%point_potential = point_potential
+      if (component%param%point_potential) label = label//", point potential"
+      host_gaussian = gaussian .and. .not. component%param%point_potential
       cavity%ngrid = nfixture
       cavity%nsph = 1
       cavity%updated = .true.
@@ -1998,6 +2125,8 @@ contains
          dg(:, i) = direction(i)*[0.3_wp, 0.6_wp, -0.2_wp]
       end do
 
+      call check_potential_request(error, component, mol, cavity, host_gaussian, label)
+      if (allocated(error)) return
       call component%update(mol, cavity, err)
       call require_success("update")
       if (allocated(error)) return
@@ -2254,7 +2383,7 @@ contains
          do point = 1, nfixture
             dx = surface%xyz(:, point) - fixture_xyz(:, point)
             dxi = 0.0_wp
-            if (gaussian) dxi = surface%xi0(point) - fixture_xis(point)
+            if (host_gaussian) dxi = surface%xi0(point) - fixture_xis(point)
             base_grad = 0.01_wp*real(point, wp)*[1.0_wp, -0.5_wp, 0.7_wp]
             do axis = 1, 3
                hessian(axis, axis, point) = 0.002_wp*real(axis + point, wp)

@@ -10,8 +10,8 @@ component type and constructor.
 
 The host supplies the raw electrostatic potential and its requested
 derivatives. For models using the normal derivative, MOIST forms
-:math:`v_n=\mathbf n\cdot\nabla\phi` from the same Gaussian potential used for
-:math:`\phi`. The host also contracts the ``potential_adjoint`` response,
+:math:`v_n=\mathbf n\cdot\nabla\phi` from the same potential used for
+:math:`\phi`, Gaussian or point. The host also contracts the ``potential_adjoint`` response,
 including ``w_dphi_dr`` when present. See :doc:`/reference/coupling` for the
 request and response shapes.
 
@@ -41,6 +41,12 @@ to ``1e-8``, ``solver_maxiter`` to ``1000``, and ``solver_restart`` to ``100``.
 ``storage`` chooses ``dense`` (default) or ``matrix_free`` for the operator.
 ``newton_tol`` (``1e-10``) and ``newton_maxiter`` (``50``) control nonlinear
 models. The dense solver does not use the iterative controls.
+
+``point_potential`` (default off) couples a Gaussian surface through point potential integrals.
+The component then requests ``point_potential`` instead of ``gaussian_potential``, and the direct nuclear gradient uses the bare Coulomb operator.
+The surface operator stays Gaussian.
+This option has no effect on point surfaces, so a host with only point integrals can set it unconditionally.
+The advantage is: integrals are multiple times faster, while the results are nearly identical.
 
 The parameter printout shows ``solver`` and ``storage`` at verbosity 2.
 Verbosity 3 and above also shows the solver and Newton tolerances and iteration

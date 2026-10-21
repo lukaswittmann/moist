@@ -55,8 +55,9 @@ PCM constructors use one ``moist_pcm_options`` layout. Initialize it with
 ``storage`` is ``moist_pcm_storage_dense`` (default) or
 ``moist_pcm_storage_matrix_free``. The remaining controls are ``solver_tol``,
 ``solver_maxiter``, ``solver_restart``,
-``newton_tol`` and ``newton_maxiter``. See :doc:`/models/components/pcm/index`
-for defaults and solver behavior.
+``newton_tol`` and ``newton_maxiter``. ``point_potential`` makes Gaussian
+surfaces request point potential integrals. See
+:doc:`/models/components/pcm/index` for defaults and solver behavior.
 
 The available PCM constructors are ``moist_new_cpcm_component`` and
 ``moist_new_cosmo_component``; ``moist_new_iefpcm_component`` and

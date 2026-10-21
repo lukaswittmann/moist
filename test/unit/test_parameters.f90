@@ -227,11 +227,12 @@ contains
       call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", ""))
       if (allocated(error)) return
       call capture_table(pcm, lines, nline, level=3)
-      call check(error, nline, 8, "detailed PCM settings include all solver controls")
+      call check(error, nline, 9, "detailed PCM settings include all solver controls")
       if (allocated(error)) return
       call check(error, printed_entry(lines, "solver_tol", "") .and. &
          & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
-         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", ""))
+         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", "") .and. &
+         & printed_entry(lines, "point_potential", ""))
       if (allocated(error)) return
 
       ! Nothing prints at verbosity 0

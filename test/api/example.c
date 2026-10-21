@@ -4475,6 +4475,8 @@ int test_options_padding(void)
         MARK_FIELD(pcm, storage);
         MARK_FIELD(pcm, newton_tol);
         MARK_FIELD(pcm, newton_maxiter);
+        MARK_FIELD(pcm, parameter_derivatives);
+        MARK_FIELD(pcm, point_potential);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_pcm_options(error, &value, sizeof value);

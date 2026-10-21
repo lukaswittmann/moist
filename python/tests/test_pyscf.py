@@ -45,6 +45,7 @@ from moist.interface import (
     ModelComponentCOSMO,
     ModelComponentDPCM,
     NuclearChargesRequest,
+    PointPotentialRequest,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
@@ -73,6 +74,8 @@ PROJ_TOL = 1e-13
 #: Dense PCM solves: the difference and PySCF checks are tighter than the
 #: iterative solver tolerance
 DENSE = PCMParameters(solver="dense")
+#: Dense solves with point potential integrals on Gaussian surfaces
+DENSE_POINT = PCMParameters(solver="dense", point_potential=True)
 
 #: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
@@ -160,6 +163,9 @@ COMPONENTS = {
     "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE), ModelComponentPV(PRESSURE)],
     # Reads the normal trace: d2phi_dr2, d2phi_dr_dxi and w_dphi_dr on a moving surface
     "dpcm": lambda: [ModelComponentDPCM(EPSILON, parameters=DENSE)],
+    # The same models coupled through point potential integrals
+    "cpcm_point": lambda: [ModelComponentCPCM(EPSILON, parameters=DENSE_POINT)],
+    "dpcm_point": lambda: [ModelComponentDPCM(EPSILON, parameters=DENSE_POINT)],
 }
 
 
@@ -594,6 +600,72 @@ def test_l1_normal_trace_fock_and_gradient_match_fd():
     gradient = solvation.gradient(dm)
     numerical = fd_position(mol, mol.atom_coords(), dm, index, isodensity=True, components="dpcm")
     assert deviation(gradient.flatten(order="C")[index], numerical) <= 1.0
+
+
+def point_coupled(mol, dm, *, isodensity, components):
+    """Driver whose Gaussian surface requests point potentials only."""
+    solvation = solve(mol, dm=dm, isodensity=isodensity, components=components)
+    model = solvation.model
+    assert model.cavity.xi0 is not None
+    coupling = model.new_coupling()
+    model.prepare_energy(coupling)
+    requests = [type(request) for request in coupling]
+    assert PointPotentialRequest in requests and GaussianPotentialRequest not in requests
+    return solvation
+
+
+@pytest.mark.conventions
+@pytest.mark.parametrize("isodensity", [False, True], ids=("vdw", "isodensity"))
+def test_point_potential_on_gaussian_surfaces_matches_fd(isodensity):
+    """CPCM with ``point_potential``: a Gaussian surface coupled through point integrals.
+
+    The Fock matrix and the nuclear gradient are differences of the point-coupled
+    model's own energy, so the host weights without ``dphi_dxi`` and the point
+    direct nuclear term are checked together. The isodensity surface adds the
+    response-phase host weights of a moving surface.
+    """
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    solvation = point_coupled(mol, dm, isodensity=isodensity, components="cpcm_point")
+
+    gaussian = solve(mol, dm=dm, isodensity=isodensity, components="cpcm")
+    assert solvation.energy != gaussian.energy
+    # Measured: 2.3e-3 (vdw) and 2.2e-3 (isodensity)
+    assert solvation.energy == pytest.approx(gaussian.energy, rel=5e-3)
+
+    direction = next(iter(symmetric_directions(dm.shape[0], 1)))
+    numerical = fd_density(mol, dm, direction, isodensity=isodensity, components="cpcm_point")
+    analytic = float(np.einsum("uv,uv->", solvation.fock, direction))
+    assert deviation(analytic, numerical) <= 1.0
+
+    index = sampled_coordinates(mol.natm)[2]
+    gradient = solvation.gradient(dm)
+    numerical = fd_position(mol, mol.atom_coords(), dm, index, isodensity=isodensity,
+                            components="cpcm_point")
+    assert deviation(gradient.flatten(order="C")[index], numerical) <= 1.0
+
+
+@pytest.mark.conventions
+def test_point_potential_normal_trace_fock_matches_fd_and_gradient_is_refused():
+    """DPCM with ``point_potential``: ``w_dphi_dr`` against the point integrals.
+
+    The Fock matrix contracts ``w_dphi_dr`` with ``int1e_grids_ip``; the basis-center
+    gradient of that term needs second-derivative grid integrals PySCF lacks, so the
+    host refuses it instead of returning an incomplete gradient.
+    """
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    solvation = point_coupled(mol, dm, isodensity=False, components="dpcm_point")
+    (potential,) = [item for item in solvation.response if item.name == "potential_adjoint"]
+    assert potential.w_dphi_dr is not None
+
+    direction = next(iter(symmetric_directions(dm.shape[0], 1)))
+    numerical = fd_density(mol, dm, direction, isodensity=False, components="dpcm_point")
+    analytic = float(np.einsum("uv,uv->", solvation.fock, direction))
+    assert deviation(analytic, numerical) <= 1.0
+
+    with pytest.raises(NotImplementedError, match="second-derivative grid integrals"):
+        solvation.gradient(dm)
 
 
 @pytest.mark.conventions
