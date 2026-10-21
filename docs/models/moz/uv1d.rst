@@ -1,7 +1,7 @@
 1D MOZ Model
 ============
 
-``model_moz_1d_type`` (``model/moz/1d/``) is the 1D solute-solvent (UV) model: XRISM at infinite
+``model_moz_1d_type`` (``model/moz/1d/``) is the 1D solute-solvent (UV) model: XRISM :cite:p:`chandler1972rism,hirata1981xrism` at infinite
 dilution on a radial grid of its own, with the solvent response of the bulk solvent (:doc:`solvent`).
 The energy is the solvation free energy; the response is its derivative with respect to
 the host data of the solute terms. The nuclear gradient differentiates solute geometry

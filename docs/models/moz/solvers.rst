@@ -27,7 +27,7 @@ Supported solvers
    Damped fixed-point mixing: ``gamma_new = gamma - damping*R(gamma)``.
 
 ``DIIS``
-   Modified direct inversion in the iterative subspace. Picard mixing fills
+   Modified direct inversion in the iterative subspace :cite:p:`kovalenko1999mdiis`. Picard mixing fills
    the history, then a constrained residual Gram solve combines stored
    iterates and residuals. A singular history uses Picard mixing; excessive
    residual growth clears the history. An optional step limit bounds the
@@ -35,7 +35,7 @@ Supported solvers
    aliases.
 
 ``JFNK``
-   Newton-Krylov iteration with restarted GMRES for ``J*delta = R`` and an
+   Newton-Krylov iteration :cite:p:`knoll2004jfnk` with restarted GMRES :cite:p:`saad1986gmres` for ``J*delta = R`` and an
    Armijo line search for ``gamma - alpha*delta``. The solver never assembles
    a Jacobian. ``jfnk.use_exact_jvp`` selects the Jacobian-vector products:
    ``true`` (default) uses exact matrix-free products from the evaluator and

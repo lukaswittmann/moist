@@ -1167,24 +1167,33 @@ contains
       type(nuclear_charge_request_type) :: charges
       logical :: normal, field, gaussian
 
-      normal = self%uses_normal_trace()
-      field = cavity%has_field_dependent_geometry()
-      gaussian = self%uses_gaussian_potential(cavity)
-      if (gaussian) then
-         allocate (gaussian_potential_request_type :: potential)
-      else
-         allocate (point_potential_request_type :: potential)
-      end if
+      need_normal = self%uses_normal_trace()
+
+      ! Energy
       call request_require(potential, moist_phase_energy, "phi", error)
       if (allocated(error)) return
-      call request_require(potential, moist_phase_energy, "dphi_dr", normal, error)
-      if (allocated(error)) return
+      if (need_normal) then
+         call request_require(potential, moist_phase_energy, "dphi_dr", error)
+         if (allocated(error)) return
+      end if
+
+      ! Response
       call request_require(potential, moist_phase_response, "phi", error)
       if (allocated(error)) return
       call request_require(potential, moist_phase_response, "dphi_dr", field .or. normal, error)
       if (allocated(error)) return
       call request_require(potential, moist_phase_response, "d2phi_dr2", normal .and. field, error)
       if (allocated(error)) return
+      if (need_normal) then
+         call request_require(potential, moist_phase_response, "d2phi_dr2", &
+            & cavity%has_field_dependent_geometry(), error)
+         if (allocated(error)) return
+         call request_require(potential, moist_phase_response, "d2phi_dr_dxi", &
+            & cavity%has_field_dependent_geometry(), error)
+         if (allocated(error)) return
+      end if
+
+      ! Gradient
       call request_require(potential, moist_phase_gradient, "phi", error)
       if (allocated(error)) return
       call request_require(potential, moist_phase_gradient, "dphi_dr", error)
@@ -1201,11 +1210,15 @@ contains
          call request_require(potential, moist_phase_gradient, "d2phi_dr_dxi", normal, error)
          if (allocated(error)) return
       end if
+
       call coupling_register(coupling, "potential", potential, error)
       if (allocated(error)) return
+
+      ! Nuclear charges
       call request_require(charges, moist_phase_gradient, "z", error)
       if (allocated(error)) return
       call coupling_register(coupling, "nuclear_charges", charges, error)
+
    end subroutine pcm_component_declare_coupling
 
 end module moist_model_continuum_component_pcm_type

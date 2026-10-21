@@ -1,7 +1,7 @@
 3D MOZ Model
 ============
 
-``model_moz_3d_type`` (``model/moz/3d/``) is the 3D solute-solvent (UV) model: 3D-RISM at infinite
+``model_moz_3d_type`` (``model/moz/3d/``) is the 3D solute-solvent (UV) model: 3D-RISM :cite:p:`beglov1997rism3d,kovalenko1998rism3d` at infinite
 dilution on a volume grid, with the solvent response of the bulk solvent (:doc:`solvent`).
 The energy is the solvation free energy, with optional pressure and electrostatic finite-size corrections. Host field and atomic
 charge responses are implemented at fixed geometry and fixed bulk solvent. Nuclear gradients
@@ -118,7 +118,7 @@ remaining leading term from the omitted charge-response zero mode,
 This gives the formula above. The usual ``-2.837297479480619/L`` Ewald constant
 belongs to a fully periodic energy reference and cannot be inserted unchanged
 into this reported physical-c energy. This adaptation follows the background
-response in `Kovalenko and Hirata (2000), Eq. (20) <https://doi.org/10.1063/1.481676>`_.
+response in :cite:t:`kovalenko2000ions`, Eq. (20).
 
 This implementation requires a Cartesian point grid, ``susceptibility = "oz"`` and
 the analytical Ng Coulomb split. Bounded molecular grids do not cover the full
@@ -132,7 +132,7 @@ for fixed total charge, reciprocal lattice and bulk solvent.
 Only the leading net-charge term is included; finite-cavity and multipole terms
 are outside this approximation. It is a Hunenberger-type continuum background
 correction adapted to the current RISM energy reference, rather than the complete
-`Hunenberger and McCammon (1999) <https://doi.org/10.1063/1.477873>`_ scheme.
+:cite:t:`hunenberger1999ewald` scheme.
 
 Host response
 -------------
@@ -213,8 +213,7 @@ outside the current 3D gradient implementation.
 Pressure corrections
 --------------------
 
-The PC and PC+ corrections of Sergiievskyi, Jeanmairet, Levesque and Borgis
-(J. Chem. Phys. 143, 184116 (2015)) remove the large bulk pressure of the integral-equation
+The PC and PC+ corrections of :cite:t:`sergiievskyi2015pressure` remove the large bulk pressure of the integral-equation
 solvent from the free energy of creating the solute's volume:
 
 * ``dG_PC = dG - P Vbar`` and ``dG_PC+ = dG - (P - P_ideal) Vbar``;

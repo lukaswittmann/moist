@@ -27,10 +27,10 @@ in uppercase or lowercase, with surrounding whitespace removed.
    * - HNC
      - ``c = exp(x) - 1 - t``
      - Available
-   * - KH
+   * - KH :cite:p:`kovalenko1999kh`
      - HNC for ``x <= 0``; ``c = x - t`` for ``x > 0``
      - Available
-   * - PSE2, PSE3, PSE4
+   * - PSE2, PSE3, PSE4 :cite:p:`kast2008pse`
      - HNC for ``x <= 0``; ``c = sum(x**k/k!, k=0..n) - 1 - t``
        for ``x > 0``
      - Available
