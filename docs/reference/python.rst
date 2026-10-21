@@ -204,8 +204,8 @@ MOIST evaluates spatial density derivatives; the host supplies basis-center
 derivative contractions.
 
 ``get_version_string()`` returns the linked library's full release string;
-``get_banner(style)`` returns its banner without printing (``full``, ``short``,
-``ascii`` or ``build``).
+``get_banner(style)`` returns its banner without printing (``full``, ``tagline``,
+``logo``, ``build`` or ``compact``).
 
 Solvents
 --------

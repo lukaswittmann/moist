@@ -376,8 +376,9 @@ moist_init_gostshyp_options(moist_error error, moist_gostshyp_options *options,
 
 /// Banner text returned by moist_get_banner
 typedef enum {
-    moist_banner_full = 0, moist_banner_short = 1,
-    moist_banner_ascii = 2, moist_banner_build = 3
+    moist_banner_full = 0, moist_banner_tagline = 1,
+    moist_banner_logo = 2, moist_banner_build = 3,
+    moist_banner_compact = 4
 } moist_banner;
 
 /// Copy banner text, or query its length with buffer=NULL and capacity=0

@@ -38,9 +38,9 @@ def get_version_string():
 
 
 def get_banner(style="full"):
-    """Return native banner text; style is full, short, ascii or build."""
-    if style not in ("full", "short", "ascii", "build"):
-        raise ValueError("banner style must be full, short, ascii or build")
+    """Return native banner text; style is full, tagline, logo, build or compact."""
+    if style not in ("full", "tagline", "logo", "build", "compact"):
+        raise ValueError("banner style must be full, tagline, logo, build or compact")
     return _native_text(lib.moist_get_banner, getattr(lib, "moist_banner_" + style))
 
 

@@ -4055,7 +4055,7 @@ cleanup:
 
 #undef REQUIRE
 
-/* -1 selects version text; nonnegative values select one of the four banners */
+/* -1 selects version text; nonnegative values select one of the five banners */
 static void query_text(moist_error error, int style, char *buffer,
                        size_t capacity, size_t *length)
 {
@@ -4069,7 +4069,7 @@ int test_string_queries(void)
     char *full = NULL;
     char small[8];
     int failed = 1;
-    for (int style = -1; style <= moist_banner_build; ++style) {
+    for (int style = -1; style <= moist_banner_compact; ++style) {
         size_t needed = 0, length = 123;
         query_text(error, style, NULL, 0, &needed);
         if (moist_check_error(error) || needed < sizeof small) goto cleanup;

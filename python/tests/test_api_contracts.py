@@ -164,7 +164,7 @@ def test_response_without_pcm_has_no_potential_adjoint():
 
 def test_native_strings():
     assert moist.get_version_string().startswith(library.get_api_version())
-    for style in ("full", "short", "ascii", "build"):
+    for style in ("full", "tagline", "logo", "build", "compact"):
         assert moist.get_banner(style)
     with pytest.raises(ValueError):
         moist.get_banner("invalid")
@@ -306,8 +306,9 @@ def test_density_matrix_answer_rejects_invalid_values(invalid, build_with):
 
 
 @pytest.mark.parametrize("style, native_style", [
-    ("full", "moist_banner_full"), ("short", "moist_banner_short"),
-    ("ascii", "moist_banner_ascii"), ("build", "moist_banner_build"),
+    ("full", "moist_banner_full"), ("tagline", "moist_banner_tagline"),
+    ("logo", "moist_banner_logo"), ("build", "moist_banner_build"),
+    ("compact", "moist_banner_compact"),
 ])
 def test_banner_style_reaches_native_entry(style, native_style, monkeypatch):
     calls = []

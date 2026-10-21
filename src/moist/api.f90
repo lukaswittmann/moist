@@ -57,7 +57,7 @@ module moist_api
    use moist_data_solvents, only: max_solvent_name_len
    use moist_solvent_descriptors, only: solvent_descriptors_type, get_solvent_descriptors, &
       & get_solvent_descriptors_by_id
-   use moist_output_ascii, only: moist_banner_text
+   use moist_output_ascii, only: BANNER_FULL, BANNER_COMPACT, moist_banner_text
    implicit none(type, external)
    private
 
@@ -587,7 +587,7 @@ contains
       type(vp_error), pointer :: error
 
       if (.not. valid_string_output(verror, buffer, capacity, length, "get_banner", error)) return
-      if (style < 0 .or. style > 3) then
+      if (style < BANNER_FULL .or. style > BANNER_COMPACT) then
          call api_error(error%ptr, "get_banner", "Invalid banner style")
          return
       end if
