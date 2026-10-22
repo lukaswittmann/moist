@@ -331,6 +331,7 @@ contains
          & new_unittest("iefpcm_equals_cpcm_conductor", test_iefpcm_equals_cpcm_conductor), &
          & new_unittest("cosmo_equals_cpcm_conductor", test_cosmo_equals_cpcm_conductor), &
          & new_unittest("nonlocal_interior_permittivity", test_nonlocal_interior_permittivity), &
+         & new_unittest("nonlocal_local_limit_lambda", test_nonlocal_local_limit_lambda), &
          & new_unittest("lpb_strong_screening", test_lpb_strong_screening), &
          & new_unittest("nonlocal_strong_screening", test_nonlocal_strong_screening), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
@@ -1085,7 +1086,9 @@ contains
    !> @param[in]  charge        Central charge, e
    !> @param[out] energy        Polarization energy, hartree
    !> @param[out] error         Test failure
-   subroutine central_charge_energy(kind, physics, point_surface, solver, charge, energy, error)
+   !> @param[in]  offset        Charge position relative to the center, bohr (default 0)
+   subroutine central_charge_energy(kind, physics, point_surface, solver, charge, energy, error, &
+      & offset)
       !> Model identifier
       integer, intent(in) :: kind
       !> Physical parameters
@@ -1100,6 +1103,8 @@ contains
       real(wp), intent(out) :: energy
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> Charge position relative to the center
+      real(wp), intent(in), optional :: offset(3)
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -1107,8 +1112,8 @@ contains
       type(moist_context_type), target :: ctx
       !> Component under test
       class(model_continuum_component_pcm), allocatable :: pcm
-      !> Single-sphere solute
-      type(structure_type) :: mol
+      !> Single-sphere solute and the position of its charge
+      type(structure_type) :: mol, src
       !> Spherical cavity
       class(cavity_type), allocatable :: cavity
 
@@ -1128,7 +1133,9 @@ contains
       call check_moist_error(error, err, "cavity update")
       if (allocated(error)) return
       if (point_surface) deallocate (cavity%xi0)
-      call host_energy(pcm, mol, cavity, mol, [charge], energy, error)
+      src = mol
+      if (present(offset)) src%xyz(:, 1) = offset
+      call host_energy(pcm, mol, cavity, src, [charge], energy, error)
    end subroutine central_charge_energy
 
    !> Nonlocal: interior permittivity, local limit and full nonlocal energy
@@ -1196,6 +1203,40 @@ contains
          tol = merge(1.0e-6_wp, 3.0e-4_wp, local_limit)
       end if
    end function interior_tolerance
+
+   !> Nonlocal: the local limit eps = eps_inf does not depend on lambda
+   !>
+   !> lambda enters only through the Yukawa double layer, which cancels exactly on
+   !> the discrete surface; an off-center charge, as the central one hides part of
+   !> a leak by symmetry. Gaussian and point surfaces, interior permittivity 1 and 2
+   subroutine test_nonlocal_local_limit_lambda(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp), parameter :: lambda(3) = [0.5_wp, 3.0_wp, 25.0_wp], eta(2) = [1.0_wp, 2.0_wp]
+      real(wp) :: energy(size(lambda)), spread
+      integer :: ieta, isurf, ilambda
+      character(len=160) :: context
+
+      do ieta = 1, size(eta)
+         do isurf = 1, 2
+            do ilambda = 1, size(lambda)
+               physics = pcm_physics(eps=80.0_wp, eps_inf=80.0_wp, lambda=lambda(ilambda), &
+                  & eps_solute=eta(ieta))
+               call central_charge_energy(pcm_nonlocal, physics, isurf == 2, solver_type%dense, &
+                  & 1.0_wp, energy(ilambda), error, offset=[0.0_wp, 0.0_wp, 1.5_wp])
+               if (allocated(error)) return
+            end do
+            spread = (maxval(energy) - minval(energy))/abs(energy(1))
+            write (context, '("eta ",f4.1,1x,a,", energies ",3es20.12,", rel. spread ",es9.2)') &
+               & eta(ieta), merge("point   ", "Gaussian", isurf == 2), energy, spread
+            call check(error, spread <= 1.0e-12_wp, &
+               & message="Nonlocal local limit depends on lambda", more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_nonlocal_local_limit_lambda
 
    !> LPB at inverse Debye lengths of 40 and 100 per bohr stays finite and Debye-Hueckel
    !>

@@ -12,6 +12,7 @@ The model requires cavity normals and principal curvatures; the curvature enters
 The exterior Green identity of the solute potential, which holds for a solute whose charge lies inside the cavity, is removed from the right-hand side.
 Every remaining source term carries a permittivity contrast, so a uniform medium (``eps_solvent = eps_inf = eps_solute``, vacuum included) gives exactly zero energy and response on any surface.
 Solute charge outside the cavity therefore acts only through these contrast terms.
+The system is solved for the exterior auxiliary trace minus the solute potential, so in the local limit ``eps_solvent = eps_inf`` the Yukawa operators cancel exactly and the energy does not depend on ``lambda``.
 
 .. code-block:: fortran
 
