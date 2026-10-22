@@ -222,17 +222,30 @@ contains
       call check(error, pcm%storage, pcm_storage_dense, "default dense storage")
       if (allocated(error)) return
       call capture_table(pcm, lines, nline, level=2)
-      call check(error, nline, 2, "normal PCM settings contain only solver and storage")
+      call check(error, nline, 2, "normal PCM settings contain only the named solver and storage")
       if (allocated(error)) return
-      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", ""))
+      call check(error, printed_entry(lines, "Solver", "Iterative") .and. printed_entry(lines, "Storage", "Dense"), &
+         & "level 2 names the solver and storage")
+      if (allocated(error)) return
+      call check(error, .not. (printed_entry(lines, "solver", "") .or. printed_entry(lines, "storage", "")), &
+         & "level 2 drops the raw solver and storage")
       if (allocated(error)) return
       call capture_table(pcm, lines, nline, level=3)
-      call check(error, nline, 9, "detailed PCM settings include all solver controls")
+      call check(error, nline, 11, "detailed PCM settings include the names and all solver controls")
       if (allocated(error)) return
-      call check(error, printed_entry(lines, "solver_tol", "") .and. &
+      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", "") .and. &
+         & printed_entry(lines, "solver_tol", "") .and. &
          & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
          & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", "") .and. &
          & printed_entry(lines, "point_potential", ""))
+      if (allocated(error)) return
+
+      ! Storage only applies to the iterative solver
+      pcm%solver = solver_type%dense
+      call capture_table(pcm, lines, nline, level=2)
+      call check(error, nline, 1, "the dense solver omits the storage")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "Solver", "Dense"), "level 2 names the dense solver")
       if (allocated(error)) return
 
       ! Nothing prints at verbosity 0
@@ -366,8 +379,8 @@ contains
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_component(pcm, [character(len=32) :: "solver_tol", "solver_maxiter"], error, &
-         normal=[character(len=32) :: "storage"])
+      call require_component(pcm, [character(len=32) :: "solver", "storage", "solver_tol", "solver_maxiter"], error, &
+         normal=[character(len=32) :: "Solver", "Storage"])
       if (allocated(error)) return
 
       call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)
