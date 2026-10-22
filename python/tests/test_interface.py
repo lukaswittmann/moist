@@ -540,7 +540,8 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
         assert component.description in text
     lines = text.splitlines()
     assert any(line.split()[:1] == ["Epsilon"] and "32.0" in line for line in lines)
-    assert any(line.split()[:1] == ["solver"] and line.split()[-1] == "2" for line in lines)
+    assert any(line.split()[:1] == ["Solver"] and line.split()[2:] == ["2", "Iterative", "(GMRES)"] for line in lines)
+    assert any(line.split()[:1] == ["Storage"] and line.split()[2:] == ["1", "Dense"] for line in lines)
     (pressure,) = [line.split() for line in lines if line.split()[:1] == ["Pressure"]]
     assert pressure[2:4] == ["2.50E-04", "Eh/bohr^3"] and pressure[-1] == "GPa"
     # 2.5e-4 Eh/bohr^3 is 7.355 GPa
