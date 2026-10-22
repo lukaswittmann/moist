@@ -37,9 +37,9 @@ module moist_model_continuum_component_pcm_nonlocal
       real(wp) :: eps_solute = 1.0_wp
       !> Solvent polarization correlation length, bohr
       real(wp) :: lambda = 1.0_wp
-      !> Interior potential trace times 4*pi, shape (ngrid)
+      !> Interior trace of eps_solute times the reaction potential, shape (ngrid)
       real(wp), allocatable :: u(:)
-      !> Exterior auxiliary trace times 4*pi, shape (ngrid)
+      !> Exterior auxiliary trace, shape (ngrid)
       real(wp), allocatable :: w_ext(:)
       !> Gaussian surface kernel state
       type(nonlocal_pcm_state) :: gauss

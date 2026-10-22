@@ -9,9 +9,9 @@ The energy is the physical reaction energy of a solute embedded in a cavity of r
 For a charge ``Q`` at the center of a sphere of radius ``R`` the energy is :math:`\frac{Q^2}{2R}\left[\frac1{\varepsilon} - \frac1{\eta} + \left(\frac1{\varepsilon_\infty} - \frac1\varepsilon\right)\frac1{1+\nu}\right]` with :math:`\nu = \sqrt{\varepsilon/\varepsilon_\infty}\,R/\lambda` and :math:`\eta` = ``eps_solute``; in the local limit ``eps_solvent = eps_inf`` it is :math:`\frac{Q^2}{2R}(1/\varepsilon - 1/\eta)`.
 The model requires cavity normals and principal curvatures; the curvature enters the self term of the double-layer operator.
 
-The exterior Green identity of the solute potential, which holds for a solute whose charge lies inside the cavity, is removed from the right-hand side.
-Every remaining source term carries a permittivity contrast, so a uniform medium (``eps_solvent = eps_inf = eps_solute``, vacuum included) gives exactly zero energy and response on any surface.
-Solute charge outside the cavity therefore acts only through these contrast terms.
+The Laplace terms of the right-hand side use the solute potential rather than its normal derivative (the two differ by the exterior Green identity, which holds for charge inside the cavity), and the energy is that of the apparent surface charges in the solute potential.
+In the local limit ``eps_solvent = eps_inf`` the model is therefore IEF-PCM on its own surface operators (not those of the IEF-PCM component, which it matches only to the discretization), and solute charge outside the cavity, such as the tail of a QM electron density, is polarized as in IEF-PCM instead of being seen only through its flux though the cavity.
+Every source term carries a permittivity contrast, so a uniform medium (``eps_solvent = eps_inf = eps_solute``) gives exactly zero energy and response.
 The system is solved for the exterior auxiliary trace minus the solute potential, so in the local limit ``eps_solvent = eps_inf`` the Yukawa operators cancel exactly and the energy does not depend on ``lambda``.
 
 .. code-block:: fortran
