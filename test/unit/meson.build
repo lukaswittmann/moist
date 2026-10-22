@@ -17,6 +17,7 @@ tests = [
   'utils_mem',
   'utils_prettylistprint',
   'utils_prettylistprint_threaded',
+  'utils_prettyprint_threaded',
   'channels',
   'data',
   'radii',
@@ -116,6 +117,7 @@ test_selected = {
     'bad_volume_phase_reference',
   ],
   'utils_prettylistprint_threaded': ['independent_rows'],
+  'utils_prettyprint_threaded': ['independent_lines'],
   'math_grid_3d_threaded': [
     'batched_ifft_uses_threaded_backend',
     'molecular_nufft_type12_threaded',

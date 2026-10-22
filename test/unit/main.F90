@@ -11,6 +11,7 @@ program tester
    use test_utils_mem, only: collect_utils_mem
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_utils_prettylistprint_threaded, only: collect_utils_prettylistprint_threaded
+   use test_utils_prettyprint_threaded, only: collect_utils_prettyprint_threaded
    use test_channels, only: collect_channels
    use test_moz_1d, only: collect_moz_1d
    use test_moz_3d, only: collect_moz_3d
@@ -99,6 +100,7 @@ program tester
       & new_testsuite("utils_mem", collect_utils_mem), &
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
       & new_testsuite("utils_prettylistprint_threaded", collect_utils_prettylistprint_threaded), &
+      & new_testsuite("utils_prettyprint_threaded", collect_utils_prettyprint_threaded), &
       & new_testsuite("channels", collect_channels), &
       & new_testsuite("data", collect_data), &
       & new_testsuite("radii", collect_radii), &

@@ -83,15 +83,15 @@ contains
       if (present(dot_total)) self%dot_total = dot_total
       if (present(fmt_len)) self%fmt_len = fmt_len
 
-      if (.not. allocated(self%fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
-      if (.not. allocated(self%fmt_real)) self%fmt_real = fixed_fmt(self%fmt_len, 6)
-      if (.not. allocated(self%fmt_exp)) self%fmt_exp = exp_fmt(self%fmt_len, 2)
+      if (.not. allocated(self%fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
+      if (.not. allocated(self%fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
+      if (.not. allocated(self%fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
       if (.not. allocated(self%fmt_logical)) self%fmt_logical = "L1"
 
       if (present(fmt_len)) then
-         if (.not. present(fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
-         if (.not. present(fmt_real)) self%fmt_real = fixed_fmt(self%fmt_len, 6)
-         if (.not. present(fmt_exp)) self%fmt_exp = exp_fmt(self%fmt_len, 2)
+         if (.not. present(fmt_int)) call int_fmt(self%fmt_len, self%fmt_int)
+         if (.not. present(fmt_real)) call fixed_fmt(self%fmt_len, 6, self%fmt_real)
+         if (.not. present(fmt_exp)) call exp_fmt(self%fmt_len, 2, self%fmt_exp)
       end if
 
       if (present(fmt_int)) self%fmt_int = trim(fmt_int)
@@ -210,12 +210,12 @@ contains
          if (use_exp) then
             eff_fmt = self%fmt_exp
          else
-            eff_fmt = default_fmt(self, val)
+            call default_fmt(self, val, eff_fmt)
          end if
       else
-         eff_fmt = default_fmt(self, val)
+         call default_fmt(self, val, eff_fmt)
       end if
-      vstr = value_to_string(val, eff_fmt)
+      call value_to_string(val, eff_fmt, vstr)
 
       left = prefix//trim(desc)//repeat(" ", self%dot_gap)
 
@@ -290,10 +290,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            eff_fmt1 = default_fmt(self, val1)
+            call default_fmt(self, val1, eff_fmt1)
          end if
       else
-         eff_fmt1 = default_fmt(self, val1)
+         call default_fmt(self, val1, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -302,14 +302,14 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            eff_fmt2 = default_fmt(self, val2)
+            call default_fmt(self, val2, eff_fmt2)
          end if
       else
-         eff_fmt2 = default_fmt(self, val2)
+         call default_fmt(self, val2, eff_fmt2)
       end if
 
-      vstr1 = value_to_string(val1, eff_fmt1)
-      vstr2 = value_to_string(val2, eff_fmt2)
+      call value_to_string(val1, eff_fmt1, vstr1)
+      call value_to_string(val2, eff_fmt2, vstr2)
       u1 = ""
       u2 = ""
       if (present(unit1)) u1 = trim(unit1)
@@ -394,10 +394,10 @@ contains
          if (use_exp1) then
             eff_fmt1 = self%fmt_exp
          else
-            eff_fmt1 = default_fmt(self, val1)
+            call default_fmt(self, val1, eff_fmt1)
          end if
       else
-         eff_fmt1 = default_fmt(self, val1)
+         call default_fmt(self, val1, eff_fmt1)
       end if
 
       if (present(fmt2)) then
@@ -406,10 +406,10 @@ contains
          if (use_exp2) then
             eff_fmt2 = self%fmt_exp
          else
-            eff_fmt2 = default_fmt(self, val2)
+            call default_fmt(self, val2, eff_fmt2)
          end if
       else
-         eff_fmt2 = default_fmt(self, val2)
+         call default_fmt(self, val2, eff_fmt2)
       end if
 
       if (present(fmt3)) then
@@ -418,15 +418,15 @@ contains
          if (use_exp3) then
             eff_fmt3 = self%fmt_exp
          else
-            eff_fmt3 = default_fmt(self, val3)
+            call default_fmt(self, val3, eff_fmt3)
          end if
       else
-         eff_fmt3 = default_fmt(self, val3)
+         call default_fmt(self, val3, eff_fmt3)
       end if
 
-      vstr1 = value_to_string(val1, eff_fmt1)
-      vstr2 = value_to_string(val2, eff_fmt2)
-      vstr3 = value_to_string(val3, eff_fmt3)
+      call value_to_string(val1, eff_fmt1, vstr1)
+      call value_to_string(val2, eff_fmt2, vstr2)
+      call value_to_string(val3, eff_fmt3, vstr3)
       u = ""
       if (present(unit)) u = trim(unit)
 
@@ -456,10 +456,10 @@ contains
       write (self%iu, "(A)") line
    end subroutine kvvv
 
-   function default_fmt(self, val) result(fmt)
+   subroutine default_fmt(self, val, fmt)
       class(prettyprinter), intent(in) :: self
       class(*), intent(in) :: val
-      character(:), allocatable :: fmt
+      character(:), allocatable, intent(out) :: fmt
 
       select type (val)
       type is (integer(int8))
@@ -471,9 +471,9 @@ contains
       type is (integer(int64))
          fmt = self%fmt_int
       type is (real(real32))
-         fmt = default_real_fmt(self, real(val, kind=real64))
+         call default_real_fmt(self, real(val, kind=real64), fmt)
       type is (real(real64))
-         fmt = default_real_fmt(self, val)
+         call default_real_fmt(self, val, fmt)
       type is (logical)
          fmt = self%fmt_logical
       type is (character(*))
@@ -481,12 +481,12 @@ contains
       class default
          fmt = "A"
       end select
-   end function default_fmt
+   end subroutine default_fmt
 
-   function value_to_string(val, fmt) result(s)
+   subroutine value_to_string(val, fmt, s)
       class(*), intent(in) :: val
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
+      character(:), allocatable, intent(out) :: s
       character(256) :: buf
       character(:), allocatable :: f
 
@@ -504,13 +504,13 @@ contains
          write (buf, f) val
       type is (real(real32))
          if (val == 0.0_real32) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, f) val
       type is (real(real64))
          if (val == 0.0_real64) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, f) val
@@ -523,11 +523,11 @@ contains
       end select
 
       s = trim(buf)
-   end function value_to_string
+   end subroutine value_to_string
 
-   function zero_value_string(fmt) result(s)
+   subroutine zero_value_string(fmt, s)
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
+      character(:), allocatable, intent(out) :: s
       character(256) :: buf
       character(:), allocatable :: f
       integer :: idot, w
@@ -542,41 +542,41 @@ contains
       else
          s = "0.0"
       end if
-   end function zero_value_string
+   end subroutine zero_value_string
 
-   function fixed_fmt(width, decimals) result(fmt)
+   subroutine fixed_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end function fixed_fmt
+   end subroutine fixed_fmt
 
-   function exp_fmt(width, decimals) result(fmt)
+   subroutine exp_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end function exp_fmt
+   end subroutine exp_fmt
 
-   function int_fmt(width) result(fmt)
+   subroutine int_fmt(width, fmt)
       integer, intent(in) :: width
-      character(:), allocatable :: fmt
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf
 
       write (wbuf, "(I0)") max(1, width - 7)
       fmt = "I"//trim(wbuf)
-   end function int_fmt
+   end subroutine int_fmt
 
-   function default_real_fmt(self, val) result(fmt)
+   subroutine default_real_fmt(self, val, fmt)
       class(prettyprinter), intent(in) :: self
       real(real64), intent(in) :: val
-      character(:), allocatable :: fmt
+      character(:), allocatable, intent(out) :: fmt
       real(real64) :: aval
 
       aval = abs(val)
@@ -587,6 +587,6 @@ contains
       else
          fmt = self%fmt_real
       end if
-   end function default_real_fmt
+   end subroutine default_real_fmt
 
 end module moist_utils_prettyprint
