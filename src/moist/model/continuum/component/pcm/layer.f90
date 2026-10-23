@@ -7,7 +7,8 @@ module moist_model_continuum_component_pcm_layer
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_coupling, only: coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
-      & pcm_tangent_block, pcm_tangent_require
+      & pcm_tangent_block, pcm_tangent_require, pcm_component_list_fields
+   use moist_channels_fields, only: field_query_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver, pcm_block_jacobi, pcm_check_finite
    implicit none(type, external)
@@ -41,6 +42,7 @@ module moist_model_continuum_component_pcm_layer
       procedure :: get_surface_weights => layer_get_surface_weights
       procedure :: get_gradient_surface_weights => layer_get_gradient_surface_weights
       procedure :: surface_weight_tangent => layer_surface_weight_tangent
+      procedure :: list_fields => layer_list_fields
       procedure(assemble_layer_iface), deferred :: assemble_layer
       procedure(solve_layer_iface), deferred :: solve_layer
       procedure(layer_weights_iface), deferred :: layer_weights
@@ -334,6 +336,23 @@ contains
       end if
       allocate (w_phi, source=self%qsym)
    end subroutine layer_potential_adjoint
+
+   !> Publish `potential_adjoint` and `surface_charge`, the solution `q` of the
+   !> generated solve (ngrid)
+   !>
+   !> `potential_adjoint` is the symmetrized adjoint, not generally `q`;
+   !> both are left out while the charges are not current
+   !>
+   !> @param[in]    self  Layer component
+   !> @param[inout] query Field walker
+   subroutine layer_list_fields(self, query)
+      class(pcm_layer_base), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+      call pcm_component_list_fields(self, query)
+      if (.not. self%charges_valid) return
+      call query%add_real("surface_charge", &
+         & "Surface charges q of the generated solve of this component (ngrid)", self%q)
+   end subroutine layer_list_fields
 
    !> Return dE/d(n dot grad phi), zero for potential-only models
    subroutine layer_normal_trace_adjoint(self, w_vn, error)

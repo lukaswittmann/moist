@@ -31,6 +31,7 @@ module moist_model_continuum_component_pcm_type
    public :: solver_type
    public :: pcm_tangent_block, pcm_tangent_require
    public :: pcm_component_declare_coupling
+   public :: pcm_component_list_fields
 
    !> One-block kernel direction of a surface channel, zero when unallocated
    interface pcm_tangent_block
