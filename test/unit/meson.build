@@ -35,6 +35,7 @@ tests = [
   'math_grid_atomic',
   'math_fft_dst4',
   'math_fft_3d',
+  'math_fft_threads',
   'finufft',
   'math_grid_3d_fft',
   'math_grid_3d_nufft',
