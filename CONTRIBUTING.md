@@ -6,8 +6,6 @@ Before you start, please read the following guidelines; this will allow for fast
 
 There are many ways to contribute: writing tutorials or blog posts, improving the documentation, submitting [bug reports and feature requests](https://github.com/lukaswittmann/moist/issues/new/choose) or writing code which can be incorporated into MOIST itself.
 
-After submitting a pull request, you will be asked in the PR thread to sign a [CLA](CLA.md) with your GitHub account. Please note that this CLA is a temporary agreement: it is in place until the licensing of MOIST within established quantum-chemistry packages has been settled. Once those discussions conclude, the CLA will be retired and no CLA will be required for future contributions; licenses already granted under it remain in effect.
-
 ## Philosophy
 
 MOIST aims at reusable solvation models and infrastructure;  contributions should follow the following principles:
