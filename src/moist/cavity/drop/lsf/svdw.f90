@@ -73,6 +73,7 @@
 !>        the vanishing block by an exact zero being the same arithmetic as
 !>        skipping it
 module moist_cavity_drop_lsf_svdw
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
@@ -232,6 +233,8 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: screening_offset => lsf_screening_offset
       !> Exact surface-free radius from the 1-Lipschitz property
       procedure, public :: exclusion_radius => lsf_svdw_exclusion_radius
+      !> Exclude boxes using the positive cone of atomic surface normals
+      procedure, public :: stationary_box_excluded => lsf_svdw_stationary_box_excluded
       !> Finalizer
       final :: finalize_lsf_svdw
    end type moist_cavity_drop_lsf_svdw_type
@@ -2178,6 +2181,108 @@ contains
 
       r = abs(lsf0)
    end function lsf_svdw_exclusion_radius
+
+   !> Exclude stationary points by a common sign of atomic cross products
+   !>
+   !> For nonnegative blend coefficients, Z is a polynomial with nonnegative
+   !> coefficients in the screening factors u_A, so grad S is a nonnegative
+   !> combination of atom normals. Stationarity needs (x-anchor) cross grad S = 0. Each atom gives
+   !> (x-anchor) cross (anchor-atom) divided by a positive distance. A component
+   !> with one strict sign for every atom throughout the box cannot cancel
+   !>
+   !> A cached enclosure of all atom centers bounds the whole positive cone in
+   !> constant work per box, including every possible screened active subset
+   !> Outward-rounded interval arithmetic includes coordinate rounding
+   !> An inconclusive enclosure keeps the box for subdivision or refinement
+   !>
+   !> @param[in] self       Positive-mixture SvdW model
+   !> @param[in] anchor     Distance origin (3)
+   !> @param[in] center     Box midpoint (3)
+   !> @param[in] half_width Nonnegative cube half-width
+   pure function lsf_svdw_stationary_box_excluded(self, anchor, center, half_width) result(excluded)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Box midpoint
+      real(wp), intent(in) :: center(3)
+      !> Cube half-width
+      real(wp), intent(in) :: half_width
+      !> Whole box contains no stationary distance point
+      logical :: excluded
+      !> Outward enclosures of x-anchor and anchor-atom
+      real(wp) :: ulo(3), uhi(3), vlo(3), vhi(3)
+      !> Product and cross-product enclosures
+      real(wp) :: plo, phi, qlo, qhi, cross_lo, cross_hi
+      !> Cyclic component indices
+      integer :: k, j, l
+
+      excluded = .false.
+      if (self%ncenters <= 0) return
+      if (.not. self%center_bounds_valid) return
+      if (.not. all(ieee_is_finite([self%param%blend_k, self%param%blend_1b, &
+                                    self%param%blend_2b, self%param%blend_3b]))) return
+      if (self%param%blend_k <= 0.0_wp) return
+      if (min(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) < 0.0_wp) return
+      if (max(self%param%blend_1b, self%param%blend_2b, self%param%blend_3b) <= 0.0_wp) return
+      if (.not. all(ieee_is_finite(anchor))) return
+      if (.not. all(ieee_is_finite(center))) return
+      if (.not. ieee_is_finite(half_width)) return
+      if (half_width < 0.0_wp) return
+
+      ulo = nearest(nearest(center - half_width, -1.0_wp) - anchor, -1.0_wp)
+      uhi = nearest(nearest(center + half_width, 1.0_wp) - anchor, 1.0_wp)
+      if (.not. all(ieee_is_finite(ulo))) return
+      if (.not. all(ieee_is_finite(uhi))) return
+      if (all(ulo <= 0.0_wp .and. uhi >= 0.0_wp)) return
+      vlo = nearest(anchor - self%center_upper, -1.0_wp)
+      vhi = nearest(anchor - self%center_lower, 1.0_wp)
+      if (.not. all(ieee_is_finite(vlo))) return
+      if (.not. all(ieee_is_finite(vhi))) return
+      do k = 1, 3
+         j = modulo(k, 3) + 1
+         l = modulo(k + 1, 3) + 1
+         call interval_product(ulo(j), uhi(j), vlo(l), vhi(l), plo, phi)
+         call interval_product(ulo(l), uhi(l), vlo(j), vhi(j), qlo, qhi)
+         cross_lo = nearest(plo - qhi, -1.0_wp)
+         cross_hi = nearest(phi - qlo, 1.0_wp)
+         if (.not. ieee_is_finite(cross_lo)) return
+         if (.not. ieee_is_finite(cross_hi)) return
+         if (cross_lo > 0.0_wp .or. cross_hi < 0.0_wp) then
+            excluded = .true.
+            return
+         end if
+      end do
+   end function lsf_svdw_stationary_box_excluded
+
+   !> Outward-rounded product of two finite real intervals
+   !>
+   !> @param[in]  alo First lower endpoint
+   !> @param[in]  ahi First upper endpoint
+   !> @param[in]  blo Second lower endpoint
+   !> @param[in]  bhi Second upper endpoint
+   !> @param[out] lo  Product lower endpoint
+   !> @param[out] hi  Product upper endpoint
+   pure subroutine interval_product(alo, ahi, blo, bhi, lo, hi)
+      !> First lower endpoint
+      real(wp), intent(in) :: alo
+      !> First upper endpoint
+      real(wp), intent(in) :: ahi
+      !> Second lower endpoint
+      real(wp), intent(in) :: blo
+      !> Second upper endpoint
+      real(wp), intent(in) :: bhi
+      !> Product lower endpoint
+      real(wp), intent(out) :: lo
+      !> Product upper endpoint
+      real(wp), intent(out) :: hi
+      !> Endpoint products
+      real(wp) :: products(4)
+
+      products = [alo*blo, alo*bhi, ahi*blo, ahi*bhi]
+      lo = nearest(minval(products), -1.0_wp)
+      hi = nearest(maxval(products), 1.0_wp)
+   end subroutine interval_product
 
    !* ================================================================================= *!
    !*                                    Finalizer                                      *!
