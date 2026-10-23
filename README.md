@@ -252,7 +252,7 @@ It also bundles third-party code under separate licenses. The full inventory, wi
 We gratefully acknowledge the people and projects `moist` builds on:
 
 - Jaś Kachnowicz for help with the initial version of the solvent properties and geometries.
-- [Jacob Williams](https://github.com/jacobwilliams) for modern Fortran editions of the SLSQP, L-BFGS-B, nlesolver, fmin, LSQR, LSMR, and LUSOL solvers.
+- [Jacob Williams](https://github.com/jacobwilliams) for modern Fortran implementations of the SLSQP, L-BFGS-B, nlesolver, fmin, LSQR, LSMR, and LUSOL solvers.
 - The [FINUFFT](https://github.com/flatironinstitute/finufft) developers at the Flatiron Institute, Martin Reinecke for [ducc0](https://gitlab.mpcdf.mpg.de/mtr/ducc), and the [xsimd](https://github.com/xtensor-stack/xsimd) developers for the FFT and SIMD code.
 - The authors of the force-field parameter sources: Peter Boyd for [lammps_interface](https://github.com/peteboyd/lammps_interface); the [openmmforcefields](https://github.com/openmm/openmmforcefields) developers; Leela S. Dodda and the Jorgensen Lab for [OPLSAA-DB](https://github.com/leelasd/OPLSAA-DB); Gajanan Kanagalingam, Sebastian Schmitt, Florian Fleckenstein, and Simon Stephan for [TUK-FFDat](https://doi.org/10.5281/zenodo.8116422); and the [VeloxChem](https://github.com/VeloxChem/VeloxChem) developers.
 - The developers of the [mctc-lib](https://github.com/grimme-lab/mctc-lib), [mstore](https://github.com/grimme-lab/mstore), [toml-f](https://github.com/toml-f/toml-f), [jonquil](https://github.com/toml-f/jonquil), [test-drive](https://github.com/fortran-lang/test-drive), and [fclap](https://github.com/chselz/fclap) projects.
