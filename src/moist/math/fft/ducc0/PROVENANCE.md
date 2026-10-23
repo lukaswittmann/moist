@@ -8,7 +8,7 @@ Every file below is a byte-for-byte copy of `src/ducc0/<path>` at that tag, exce
 
 - `infra/threading.cc`, `ducc_thread_pool::shutdown_locked()`: lock each worker's mutex before `notify_all()`.
   Upstream sets `shutdown_` and notifies without that lock. A worker that has evaluated its wait predicate but has not yet blocked then misses the notify, and `join()` hangs forever.
-  This hit `moist_fft_release_threads()`, which shuts the pool down right after creating it..
+  This hit `moist_fft_release_threads()`, which shuts the pool down right after creating it.
 
 ## License
 
