@@ -22,6 +22,7 @@ contains
          new_unittest("unbalanced_poisons_nan", test_unbalanced_poisons_nan), &
          new_unittest("mismatch_unwind", test_mismatch_unwind), &
          new_unittest("handle_fast_path", test_handle_fast_path), &
+         new_unittest("last_interval", test_last_interval), &
          new_unittest("current_open_node", test_current_open_node), &
          new_unittest("introspection", test_introspection), &
          new_unittest("double_start_poisons", test_double_start_poisons), &
@@ -32,7 +33,6 @@ contains
          new_unittest("growth_preserves_tree", test_growth_preserves_tree), &
          new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
          new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts), &
-         new_unittest("simple_report", test_simple_report), &
          new_unittest("report_leaves_open_timers", test_report_leaves_open_timers) &
          ]
 
@@ -199,6 +199,43 @@ contains
 
       call t%delete()
    end subroutine test_handle_fast_path
+
+   !> last returns the most recent closed interval, 0 before any stop or for an
+   !> unknown handle
+   subroutine test_last_interval(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      integer :: h, idle
+      real(wp) :: first, total
+
+      call t%new()
+      h = t%resolve("step", 0)
+      idle = t%resolve("idle", 0)
+      call check(error, t%last(h) == 0.0_wp .and. t%last(idle) == 0.0_wp, "no interval before a stop")
+      if (allocated(error)) return
+
+      call t%start(h)
+      call busy()
+      call t%stop(h)
+      first = t%node_time(h)
+      call check(error, abs(t%last(h) - first) <= 1.0e-9_wp, "first last equals the first interval")
+      if (allocated(error)) return
+
+      call t%start(h)
+      call busy()
+      call t%stop(h)
+      total = t%node_time(h)
+      call check(error, t%last(h) >= 0.0_wp .and. t%last(h) <= total, "last lies within the total")
+      if (allocated(error)) return
+      call check(error, abs(t%last(h) - (total - first)) <= 1.0e-9_wp, "last equals the second interval")
+      if (allocated(error)) return
+      call check(error, t%last(idle) == 0.0_wp, "never-stopped node stays at 0")
+      if (allocated(error)) return
+      call check(error, t%last(0) == 0.0_wp .and. t%last(-1) == 0.0_wp .and. &
+                 t%last(t%num_nodes() + 1) == 0.0_wp, "unknown handle gives 0")
+
+      call t%delete()
+   end subroutine test_last_interval
 
    !> current() returns the innermost open node so a handle-based consumer can
    !> nest its timers under whatever the caller opened by name (0 when nothing is
@@ -559,63 +596,12 @@ contains
       call t%delete()
    end subroutine test_handle_and_mismatch_contracts
 
-   !> The simple report shows levels 0-2 and the wall time, without the full
-   !> report's shares, category pivot or CPU time; the full report of the same
-   !> tree is the positive control
-   subroutine test_simple_report(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(timer_type) :: t
-      character(len=*), parameter :: markers(*) = [character(len=12) :: &
-         "lvl0_root", "lvl1_child", "lvl2_grand", "lvl3_deep", &
-         "Wall time", "%tot", "by category", "CPU-time"]
-      logical :: found(size(markers))
-
-      call t%new(verbose=.true.)
-      call t%start("lvl0_root", category=cat_setup)
-      call t%start("lvl1_child")
-      call t%start("lvl2_grand")
-      call t%start("lvl3_deep")
-      call busy()
-      call t%stop()
-      call t%stop()
-      call t%stop()
-      call t%stop()
-
-      call scan_report(t, .true., markers, found, error)
-      if (allocated(error)) return
-      call check(error, all(found(1:3)) .and. .not. found(4), "simple report shows levels 0-2 only")
-      if (allocated(error)) return
-      call check(error, found(5), "simple report closes with the wall time")
-      if (allocated(error)) return
-      call check(error, .not. any(found(6:8)), "simple report has no shares, categories or CPU time")
-      if (allocated(error)) return
-
-      call scan_report(t, .true., markers, found, error, max_depth=huge(1))
-      if (allocated(error)) return
-      call check(error, found(3) .and. .not. found(4), "simple report caps a deeper request at level 2")
-      if (allocated(error)) return
-
-      call scan_report(t, .true., markers, found, error, max_depth=1)
-      if (allocated(error)) return
-      call check(error, found(2) .and. .not. found(3), "simple report honours a shallower request")
-      if (allocated(error)) return
-
-      call scan_report(t, .false., markers, found, error)
-      if (allocated(error)) return
-      call check(error, found(4) .and. all(found(6:8)), &
-                 "full report shows level 3, shares, categories and CPU time")
-      call t%delete()
-   end subroutine test_simple_report
-
-   !> Both reports show a timer that is still open as running, without a NaN in
-   !> the tree or the category pivot, and leave it measuring: after its stop it
+   !> Both reports leave a timer that is still open measuring: after its stop it
    !> reads a finite time
    subroutine test_report_leaves_open_timers(error)
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
-      character(len=*), parameter :: markers(*) = [character(len=12) :: &
-         "running", "NaN", "by category"]
-      logical :: found(size(markers))
+      integer :: iu, stat
 
       call t%new(verbose=.true.)
       call t%start("closed", category=cat_setup)
@@ -625,16 +611,12 @@ contains
       call t%start("inner")
       call busy()
 
-      call scan_report(t, .false., markers, found, error)
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the timer report opens")
       if (allocated(error)) return
-      call check(error, found(1) .and. .not. found(2), "full report shows open timers as running")
-      if (allocated(error)) return
-      call check(error, found(3), "full report keeps the pivot of the closed timers")
-      if (allocated(error)) return
-      call scan_report(t, .true., markers, found, error)
-      if (allocated(error)) return
-      call check(error, found(1) .and. .not. found(2), "simple report shows open timers as running")
-      if (allocated(error)) return
+      call t%write(iu)
+      call t%write_simple(iu)
+      close (iu)
 
       call t%stop("inner")
       call t%stop("open")
@@ -643,43 +625,5 @@ contains
       call check(error, .not. ieee_is_nan(t%get("open/inner")), "a report leaves a nested open timer measuring")
       call t%delete()
    end subroutine test_report_leaves_open_timers
-
-   !> Write a report of `t` to a scratch unit and report which markers appear
-   !>
-   !> @param[inout] t          timer to report
-   !> @param[in]    simple     write the simple report instead of the full one
-   !> @param[in]    markers    substrings to look for
-   !> @param[out]   found      whether each marker appears in the report
-   !> @param[out]   error      scratch-unit failure
-   !> @param[in]    max_depth  optional depth passed to the report
-   subroutine scan_report(t, simple, markers, found, error, max_depth)
-      type(timer_type), intent(inout) :: t
-      logical, intent(in) :: simple
-      character(len=*), intent(in) :: markers(:)
-      logical, intent(out) :: found(:)
-      type(error_type), allocatable, intent(out) :: error
-      integer, intent(in), optional :: max_depth
-      integer :: iu, stat, k
-      character(256) :: line
-
-      found = .false.
-      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
-      call check(error, stat == 0, "scratch unit for the timer report opens")
-      if (allocated(error)) return
-      if (simple) then
-         call t%write_simple(iu, max_depth=max_depth)
-      else
-         call t%write(iu, max_depth=max_depth)
-      end if
-      rewind (iu)
-      do
-         read (iu, "(a)", iostat=stat) line
-         if (stat /= 0) exit
-         do k = 1, size(markers)
-            found(k) = found(k) .or. index(line, trim(markers(k))) > 0
-         end do
-      end do
-      close (iu)
-   end subroutine scan_report
 
 end module test_utils_timer

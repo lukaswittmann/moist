@@ -1,27 +1,25 @@
 !> Shared fixtures of the MOZ tests (not a suite)
 !>
 !> - Table water solvent with custom LJ and fixed charges
-!> - Pair-only term with switchable declaration failure
+!> - Table water solvent with cSPC/E LJ and charges, for physical VV solves
 !> - Reference 12-6 potential with Lorentz-Berthelot mixing
 !> - Answers to pending atomic_charges requests
 module test_moz_fixtures
    use mctc_env, only: wp, moist_error => error_type, fatal_error
-   use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_channels_coupling, only: coupling_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
-   use moist_model_moz_potential_term, only: potential_term_type, potential_name_len
-   use moist_model_moz_potential_lj_base, only: new_lj_12_6
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
+   use moist_model_moz_potential, only: lj_cspce, coulomb_cspce
    implicit none(type, external)
    private
 
    public :: water_id, water_sigma, water_epsilon, water_charges
-   public :: new_water_system, new_water_solvent, ref_lj, answer_charges
+   public :: new_water_system, new_water_solvent, new_cspce_water_solvent, ref_lj, answer_charges
 
    !> Water solvent id of the table
    integer, parameter :: water_id = 175
@@ -73,6 +71,28 @@ contains
       if (.not. allocated(err)) call solvent%potential%add(charges, err)
       if (.not. allocated(err)) call solvent%update(err)
    end subroutine new_water_solvent
+
+   !> Updated table water solvent with cSPC/E LJ and charges
+   !>
+   !> - Table geometry, not the SPC/E geometry
+   !>
+   !> @param[in]  ctx      run context, outlives the solvent
+   !> @param[out] solvent  updated solvent
+   !> @param[out] err      construction or update error
+   subroutine new_cspce_water_solvent(ctx, solvent, err)
+      !> Run context, outlives the solvent
+      type(moist_context_type), intent(in), target :: ctx
+      !> Updated solvent
+      type(solvent_vv_type), intent(out) :: solvent
+      !> Construction or update error
+      type(moist_error), allocatable, intent(out) :: err
+      type(solvent_system_type) :: system
+      call new_water_system(system, err)
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      if (.not. allocated(err)) call solvent%potential%add(lj_cspce, err)
+      if (.not. allocated(err)) call solvent%potential%add(coulomb_cspce, err)
+      if (.not. allocated(err)) call solvent%update(err)
+   end subroutine new_cspce_water_solvent
 
    !> Reference 12-6 potential with Lorentz-Berthelot mixing
    !>

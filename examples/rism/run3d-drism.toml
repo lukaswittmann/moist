@@ -1,0 +1,42 @@
+# moist model rism3d examples/rism/chloride.xyz -p examples/rism/run3d-drism.toml
+closure = "KH"
+correction = "PC+"
+finite_size = "hunenberger"
+
+[system]
+solvent = "water"
+charge = -1.0
+
+[potential]
+lj = "uff"
+charges = "fixed"
+q = [-1.0]  # electrons, one value per atom
+
+[grid]
+kind = "cartesian"
+nx = 64
+ny = 64
+nz = 64
+dr = 0.6  # bohr
+margin = 10.0  # bohr
+
+[convergence]
+tolerance = 1e-7
+
+[solver]
+name = "JFNK"
+
+[solvent]
+theory = "DRISM"
+closure = "KH"
+
+[solvent.drism]
+smear = 0.6682  # bohr
+
+[solvent.convergence]
+tolerance = 1e-11
+
+[solvent.potential]
+lj = "cspce"
+charges = "cspce"
+mixing = "lorentz-berthelot"

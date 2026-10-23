@@ -20,7 +20,7 @@ With :ref:`verbosity <verbosity>` 2 the update prints a table of every site with
 
 ``monopole_type`` uses host-supplied atomic charges to build a point-charge potential in the 1D and 3D models.
 ``multipole_type`` uses host-supplied atomic multipoles, respectively. For 1D models; this averages out so that only the monopole term actually contributes.
-``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail.
+``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail :cite:p:`ng1974hnc`.
 Each concrete electrostatic term owns its host-data requirements and adjoints.
 
 Construction
@@ -31,7 +31,7 @@ Construction
    use moist_data_solvents, only : get_solvent_id
    use moist_solvent, only : solvent_system_type, new_solvent_system
    use moist_model_moz, only : solvent_vv_type, new_vv_solvent, model_moz_3d_type, new_moz_3d_model
-   use moist_model_moz_potential, only : lj_spce, lj_gaff, lj_uff, lj_tm, coulomb_spce, &
+   use moist_model_moz_potential, only : lj_cspce, lj_gaff, lj_uff, lj_tm, coulomb_cspce, &
       & coulomb_resp_solvent, monopole_type
 
    type(solvent_system_type) :: system
@@ -47,9 +47,9 @@ Construction
 
    ! Water: SPC/E covers every site. Any other solvent: SPC/E covers nothing,
    ! GAFF and the RESP table charges fill in
-   call solvent%potential%add(lj_spce, error)
+   call solvent%potential%add(lj_cspce, error)
    call solvent%potential%add(lj_gaff, error)
-   call solvent%potential%add(coulomb_spce, error)
+   call solvent%potential%add(coulomb_cspce, error)
    call solvent%potential%add(coulomb_resp_solvent, error)
    call solvent%update(error)
 
@@ -186,12 +186,14 @@ Terms
    * - ``lj_tm``
      - Fourteen transition metals.
    * - ``lj_spce``
-     - The sites of neutral water.
+     - Standard SPC/E for neutral water; hydrogen LJ is zero and its sites remain covered.
+   * - ``lj_cspce``
+     - cSPC/E for neutral water; nonzero hydrogen LJ from the Luchko modification.
    * - ``coulomb_<model>_<environment>``
      - Solvents with tabulated charges: ``hirshfeld``, ``resp``, ``mbis`` or
        ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation.
-   * - ``coulomb_spce``
-     - The SPC/E charges of neutral water.
+   * - ``coulomb_spce``, ``coulomb_cspce``
+     - Identical SPC/E charges of neutral water; the cSPC/E name shares the same implementation.
    * - ``monopole_type``
      - Host-supplied atomic charges and their point-charge potential (1D and 3D solute only).
    * - ``multipole_type``

@@ -8,6 +8,7 @@ srcs += files(
   'gesvd.F90',
   'sptrs.f90',
   'gels.F90',
+  'ggev.F90',
   'potrf.f90',
   'potrs.f90',
   'sytrf.f90',

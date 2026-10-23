@@ -22,7 +22,7 @@
 !> timer that is still running as `running` and leaves it measuring
 !>
 !> FIXME: TODO: the timer is NOT thread-safe; inside OpenMP regions gate
-!> start/stop to a single thread (see cavity/drop/gradient.f90)
+!> start/stop to a single thread (see cavity/drop/derivatives/forward.f90)
 module moist_utils_timer
    use mctc_env, only: wp, int64 => i8
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -127,6 +127,8 @@ module moist_utils_timer
       integer, private, allocatable :: ncalls(:)
       !> Accumulated wall time in clock ticks
       integer(int64), private, allocatable :: t_acc(:)
+      !> Last closed interval in clock ticks, 0 if never stopped
+      integer(int64), private, allocatable :: t_last(:)
       !> Start tick while running
       integer(int64), private, allocatable :: t0(:)
       !> Whether the node is currently open
@@ -180,6 +182,7 @@ module moist_utils_timer
       procedure :: node_name
       procedure :: node_depth
       procedure :: node_time
+      procedure :: last
       !> Currently-open node (top of the nesting stack), 0 if none
       !>
       !> - lets a handle-based hot loop attach its fine timers under whatever
@@ -226,6 +229,7 @@ contains
       allocate (self%category(self%cap), source=cat_none)
       allocate (self%ncalls(self%cap), source=0)
       allocate (self%t_acc(self%cap), source=0_int64)
+      allocate (self%t_last(self%cap), source=0_int64)
       allocate (self%t0(self%cap), source=0_int64)
       allocate (self%running(self%cap), source=.false.)
       allocate (self%poisoned(self%cap), source=.false.)
@@ -260,6 +264,7 @@ contains
       if (allocated(self%category)) deallocate (self%category)
       if (allocated(self%ncalls)) deallocate (self%ncalls)
       if (allocated(self%t_acc)) deallocate (self%t_acc)
+      if (allocated(self%t_last)) deallocate (self%t_last)
       if (allocated(self%t0)) deallocate (self%t0)
       if (allocated(self%running)) deallocate (self%running)
       if (allocated(self%poisoned)) deallocate (self%poisoned)
@@ -283,6 +288,7 @@ contains
 
       if (self%n > 0) then
          self%t_acc(1:self%n) = 0_int64
+         self%t_last(1:self%n) = 0_int64
          self%t0(1:self%n) = 0_int64
          self%ncalls(1:self%n) = 0
          self%running(1:self%n) = .false.
@@ -387,6 +393,7 @@ contains
          self%category(id) = cat_none
       end if
       self%t_acc(id) = 0_int64
+      self%t_last(id) = 0_int64
       self%t0(id) = 0_int64
       self%running(id) = .false.
       self%poisoned(id) = .false.
@@ -538,7 +545,8 @@ contains
 
       call system_clock(c)
       if (self%running(id)) then
-         self%t_acc(id) = self%t_acc(id) + (c - self%t0(id))
+         self%t_last(id) = c - self%t0(id)
+         self%t_acc(id) = self%t_acc(id) + self%t_last(id)
          self%running(id) = .false.
       else
          self%poisoned(id) = .true.
@@ -732,6 +740,30 @@ contains
       sec = node_seconds(self, id)
 
    end function node_time
+
+   !> Seconds of the last closed interval by index
+   !>
+   !> - set by every stop of a running node; balance state is not checked
+   !> - 0 for an invalid index or a node never stopped
+   !>
+   !> @param[in] self  Timer instance
+   !> @param[in] id    Node index (1..num_nodes)
+   !> @return    Seconds
+   pure function last(self, id) result(sec)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Node index
+      integer, intent(in) :: id
+      !> Seconds
+      real(wp) :: sec
+
+      if (id < 1 .or. id > self%n) then
+         sec = 0.0_wp
+      else
+         sec = real(self%t_last(id), wp)/real(self%rate, wp)
+      end if
+
+   end function last
 
    !> Write a single named timer line to `iunit`
    !>
@@ -1423,6 +1455,10 @@ contains
       allocate (lbuf(newcap), source=0_int64)
       lbuf(1:m) = self%t_acc(1:m)
       call move_alloc(lbuf, self%t_acc)
+
+      allocate (lbuf(newcap), source=0_int64)
+      lbuf(1:m) = self%t_last(1:m)
+      call move_alloc(lbuf, self%t_last)
 
       allocate (lbuf(newcap), source=0_int64)
       lbuf(1:m) = self%t0(1:m)

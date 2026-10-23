@@ -1193,8 +1193,6 @@ contains
          type is (moist_math_grid_3d_molecular_type)
             if (grid%owner(i) == a) motion(c) = shift
          end select
-         ! Per-element checks ~30x slower on millions of points
-         ! `.not. all(... < thr)` also rejects NaN
          if (.not. all(abs(moved%xyz(:, i) - grid%xyz(:, i) - motion) < 1.0e-12_wp)) then
             call test_failed(error, grid%kind_name()//": retained point identities must stay fixed")
             return

@@ -252,6 +252,8 @@ endif()
 add_executable(moist-exe
   app/main.f90
   app/cli.f90
+  app/rism/input.f90
+  app/rism/setup.f90
   app/driver.f90
 )
 set_target_properties(moist-exe PROPERTIES
@@ -300,15 +302,16 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
-    api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
+    api parameters rism_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
-    math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_nufft
+    math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_transform_adjoint math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
-    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent
+    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response
+    moz_closure moz_closure_kernel moz_solver moz_1d_preconditioner moz_thermodynamics
     math_grid_3d_partition
     math_grid_3d_guards math_grid_3d_derivatives
     math_grid_3d_integration
@@ -329,6 +332,9 @@ if(MOIST_TESTS)
     model_continuum channels model_coupling
   )
   # Each run as a selected test, outside test-drive's OpenMP team
+  set(moist_test_selected_moz_thermodynamics
+    reference_values corrected_energy finite_size finite_size_response beta_scaling moment_derivatives shared_dependencies
+    selection graph_derivatives list_errors parallel_lists)
   set(moist_test_selected_utils_prettylistprint_threaded independent_rows)
   set(moist_test_selected_math_grid_3d_derivatives
     single_atom dimer amino20x4_gly_xab mb16_43_01 but14diol_1 il16_008
@@ -354,7 +360,49 @@ if(MOIST_TESTS)
   set(moist_test_selected_math_grid_3d_threaded
     batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
-    radial_trafo_one_per_thread partition_grid_threaded)
+    radial_trafo_one_per_thread partition_grid_threaded compensated_integration)
+  set(moist_test_selected_moz_solvent_vv
+    intramolecular block_solve map_consistency jvp_differences
+    coarse_matrix thread_independence setup_errors parameters evaluator_products
+    damping_step solve_water solve_variants solve_refusals thermodynamics_reduction
+    solve_outputs pysofft_reference converged_field solve_replacement susceptibility_at)
+  set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
+  set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
+  set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)
+  set(moist_test_selected_moz_3d_response equation_cartesian equation_molecular tables_cartesian tables_molecular tables_weighted_cartesian tables_weighted_molecular
+    scf_tables_cartesian scf_tables_molecular scf_fallback scf_host cold_guesses
+    host_charges host_field fixed_terms geometry_cartesian geometry_molecular gradient_cartesian gradient_charges gradient_molecular gradient_ec
+    gradient_drism_cartesian gradient_drism_charges gradient_drism_molecular gradient_drism_ec)
+  set(moist_test_selected_math_grid_3d_transform_adjoint optional_derivatives cartesian_even cartesian_odd molecular_type12 molecular_type3
+    geometry_cartesian geometry_type12 geometry_type3)
+  set(moist_test_selected_moz_3d_uv
+    parameters susceptibility_cartesian susceptibility_molecular susceptibility_refusals
+    equation_map equation_copy equation_setup_errors
+    energy_cartesian finite_size_box energy_threads energy_blocks energy_refusals)
+  set(moist_test_selected_moz_1d_uv
+    parameters prepare_solvent block_products map_consistency jvp_affine
+    thread_independence setup_errors problem_setup_errors warm_start scf_reuse operator_cache charge_moment
+    water_in_water response_tables response_charges response_fixed host_charges
+    energy_refusals pysofft_reference)
+  set(moist_test_selected_moz_closure
+    construction reference_values first_derivatives second_derivatives branch_boundary energy_integrands
+    physical_inputs invalid_inputs noncontiguous_arrays block_sweeps nested_teams fused_derivative array_integrands energy_derivatives custom_extension)
+  set(moist_test_selected_moz_1d_preconditioner
+    spectral_identity spectral_filter spectral_thread_independence spectral_setup_errors kspace_block_inverse kspace_activation
+    kspace_thread_independence kspace_update_errors kspace_reallocation kspace_singular_fallback kspace_release_guard kspace_block_query selection)
+  set(moist_test_selected_moz_solver
+    factory parameters_file picard_update diis_extrapolation diis_convergence diis_stages
+    diis_divergence_restart adjoint_solve adjoint_failures jfnk_nonlinear
+    adjoint_shared_workspace adjoint_workspace_recovery
+    jfnk_preconditioner jfnk_line_search jfnk_forcing jfnk_deflation
+    jfnk_deflation_warnings jfnk_recycle_warnings jfnk_stage_summary
+    jfnk_exact_newton jfnk_exact_required jfnk_validate
+    hybrid_switch hybrid_convergence hybrid_lifecycle solver_failures jfnk_callback_errors
+    preconditioner_contract workspace_reconfigure diis_residual_precision
+    iteration_controller iteration_timer deflation_algebra
+    concurrent_solves mgs_streaming blas_row_blocks solver_lifecycle reduction_thread_independence
+    workspace_and_parallel_step parallel_restart parallel_cgs2 happy_breakdown
+    infeasible_jvp recycle_small recycle_parallel recycle_reconfigure)
 
   set(moist_test_srcs
     "${_unit}/main.F90"
@@ -368,7 +416,7 @@ if(MOIST_TESTS)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
   endforeach()
 
-  add_executable(moist-tester ${moist_test_srcs})
+  add_executable(moist-tester ${moist_test_srcs} app/rism/input.f90 app/rism/setup.f90)
   set_target_properties(moist-tester PROPERTIES
     Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-modules"
     LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}
@@ -392,6 +440,8 @@ if(MOIST_TESTS)
     add_test(NAME api-cpp COMMAND moist-api-cpp-tester)
   endif()
 
+  # Suites whose tests take minutes in debug; same list as test_timeouts in test/unit/meson.build
+  set(moist_test_long_suites moz_1d_uv moz_1d_gradient moz_3d_response)
   foreach(suite IN LISTS moist_test_suites)
     if(DEFINED moist_test_selected_${suite})
       set(runs "")
@@ -406,9 +456,13 @@ if(MOIST_TESTS)
     # Serial BLAS: suites run their tests in an OpenMP parallel; meson runs suites
     # concurrently, so threaded BLAS (MKL on intel25, pthreaded OpenBLAS on the
     # conda, ilp64 and MSYS2 legs) oversubscribes
+    set(timeout 420)
+    if(suite IN_LIST moist_test_long_suites)
+      set(timeout 900)
+    endif()
     set_tests_properties(${runs} PROPERTIES
       ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR};MKL_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1"
-      TIMEOUT 420
+      TIMEOUT ${timeout}
     )
   endforeach()
 endif()

@@ -17,7 +17,11 @@ Citation: S. L. Mayo, B. D. Olafson, and W. A. Goddard III, *DREIDING: a generic
 
 ## GAFF2
 
-Permissive reference: [`openmmforcefields/gaff-2.2.20.dat`](https://github.com/openmm/openmmforcefields/blob/f0dfefff34e8af3cd5742686b6a9015661d4d5b6/openmmforcefields/ffxml/amber/gaff/dat/gaff-2.2.20.dat), commit `f0dfefff34e8af3cd5742686b6a9015661d4d5b6` (2026-10-06). Its [license](https://github.com/openmm/openmmforcefields/blob/f0dfefff34e8af3cd5742686b6a9015661d4d5b6/LICENSE) is MIT, `Copyright (c) 2016-2019` Chodera lab / Memorial Sloan Kettering Cancer Center and Pande group / Stanford University.
+The native nonbonded table is GAFF2 **2.2.30**. A comparison on 2026-10-13 against [`AmberClassic/dat/leap/parm/gaff2.dat`](https://github.com/Amber-MD/AmberClassic/blob/919e8b895a4566669325aee14ecf540a5fcb1b89/dat/leap/parm/gaff2.dat), commit `919e8b895a4566669325aee14ecf540a5fcb1b89`, confirmed that all 98 nonwater rows match exactly in both Rmin/2 (Angstrom) and epsilon (kcal/mol). That file identifies version 2.2.30 (October 2025); its SHA256 is `2244b58627a85693776d12a0155a292f72b65b4398a03b87958136ad7460c67f`. The zero-valued `hw` and `ow` rows are local water placeholders outside the upstream nonbonded table.
+
+Permissive parameter-value reference: [`openmmforcefields/gaff-2.2.20.dat`](https://github.com/openmm/openmmforcefields/blob/f0dfefff34e8af3cd5742686b6a9015661d4d5b6/openmmforcefields/ffxml/amber/gaff/dat/gaff-2.2.20.dat), commit `f0dfefff34e8af3cd5742686b6a9015661d4d5b6` (2026-10-06). Its [license](https://github.com/openmm/openmmforcefields/blob/f0dfefff34e8af3cd5742686b6a9015661d4d5b6/LICENSE) is MIT, `Copyright (c) 2016-2019` Chodera lab / Memorial Sloan Kettering Cancer Center and Pande group / Stanford University.
+
+This older reference contains the other 97 nonwater rows with identical values. It lacks the `hb` key present in 2.2.30; the native `hb` row has the same values as `ha` in both references: Rmin/2 = 1.4735 Angstrom and epsilon = 0.0161 kcal/mol. The 2.2.20 link therefore records the permissive parameter-value reference, while the 2.2.30 comparison above verifies the native table's version.
 
 GAFF citation: J. Wang, R. M. Wolf, J. W. Caldwell, P. A. Kollman, and D. A. Case, *Development and testing of a general amber force field*, **J. Comput. Chem. 25** (2004), 1157-1174, [doi:10.1002/jcc.20035](https://doi.org/10.1002/jcc.20035).
 
@@ -34,8 +38,8 @@ Source:
 
 Citation: F. Sebesta, V. Slama, J. Melcr, Z. Futera, and J. V. Burda, *Estimation of Transition-Metal Empirical Parameters for Molecular Mechanical Force Fields*, **J. Chem. Theory Comput. 12** (2016), 3681-3688, [doi:10.1021/acs.jctc.6b00416](https://doi.org/10.1021/acs.jctc.6b00416).
 
-## SPC/E water
+## SPC/E and cSPC/E water
 
-Permissive reference: the `cspce` entry in [`VeloxChem/src/pymodule/waterparameters.py`](https://github.com/VeloxChem/VeloxChem/blob/d4290334938fb5cab7e2e9954bd6dea5865d7b1c/src/pymodule/waterparameters.py), at the same revision and with the same BSD-3-Clause notice as the TM source. The nonzero hydrogen LJ terms identify a modified SPC/E model.
+Permissive reference: the `spce` and `cspce` entries in [`VeloxChem/src/pymodule/waterparameters.py`](https://github.com/VeloxChem/VeloxChem/blob/d4290334938fb5cab7e2e9954bd6dea5865d7b1c/src/pymodule/waterparameters.py), at the same revision and with the same BSD-3-Clause notice as the TM source. Standard SPC/E has zero hydrogen LJ; cSPC/E has the Luchko hydrogen LJ modification. The tables retain the existing oxygen precision, and the cSPC/E table retains the existing hydrogen values. Hydrogen sigma in standard SPC/E is stored as zero because its LJ interaction is inactive. Both presets keep hydrogen sites covered, preventing a fallback term from filling them.
 
 Base model citation: H. J. C. Berendsen, J. R. Grigera, and T. P. Straatsma, *The Missing Term in Effective Pair Potentials*, **J. Phys. Chem. 91** (1987), 6269-6271, [doi:10.1021/j100308a038](https://doi.org/10.1021/j100308a038). Upstream's `cspce` entry cites T. Luchko, S. Gusarov, D. R. Roe, C. Simmerling, D. A. Case, J. Tuszynski, and A. Kovalenko, *Three-Dimensional Molecular Theory of Solvation Coupled with Molecular Dynamics in Amber*, **J. Chem. Theory Comput. 6** (2010), 607-624, [doi:10.1021/ct900460m](https://doi.org/10.1021/ct900460m).

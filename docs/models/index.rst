@@ -6,8 +6,10 @@ The shared model base is in ``src/moist/model/type.f90``; models are organized b
 
 * ``model/continuum`` contains cavity-based models and components.
 * ``model/moz`` contains molecular Ornstein Zernike-type theories, including the Reference Interaction Site Model (RISM) theories.
-   * ``model/moz/1d`` contains the VV and UV 1D-RISM model.
+   * ``model/moz/solvent`` contains the bulk solvent and its 1D VV solve.
+   * ``model/moz/1d`` contains the UV 1D-RISM model: solvation free energy at infinite dilution.
    * ``model/moz/3d`` contains the UV 3D-RISM model.
+   * ``model/moz/closure`` and ``model/moz/solver`` contain the closures and nonlinear solvers shared by the MOZ models.
 
 Solvation Model Interface
 -------------------------
