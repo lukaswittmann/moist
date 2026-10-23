@@ -168,7 +168,7 @@ module moist_cavity_drop_projector
       real(wp) :: work_tangent_t1(3)
       real(wp) :: work_tangent_t2(3)
 
-      !> Certified octree branch search (projection level 9)
+      !> Octree surface coverage and local refinement (projection level 9)
       !>
       !> - scratch sized on first use, reused for every later anchor on this thread
       type(moist_math_octree_branch_type) :: octree
@@ -177,7 +177,6 @@ module moist_cavity_drop_projector
       integer :: octree_max_boxes = 200000
       integer :: octree_max_survivors = 20000
       integer :: octree_max_depth = 12
-      integer :: octree_seed_mode = 1
 
    contains
       procedure :: init => projector_init
@@ -195,6 +194,10 @@ module moist_cavity_drop_projector
       procedure, private :: refine_seeds => projector_refine_seeds
       procedure :: filter_candidates
       procedure :: refine_point => projector_refine_point
+      !> Construct one Newton context for an anchor's seed batch
+      procedure, private :: new_refiner => projector_new_refiner
+      !> Reuse a configured Newton instance for one independent seed
+      procedure, private :: refine_with_solver => projector_refine_with_solver
       procedure :: check_constrained_optimality
       procedure :: riemannian_newton_escape
       procedure :: retract_to_surface
@@ -343,7 +346,6 @@ contains
       self%octree_max_boxes = param%octree_max_boxes
       self%octree_max_survivors = param%octree_max_survivors
       self%octree_max_depth = param%octree_max_depth
-      self%octree_seed_mode = param%octree_seed_mode
 
       ! Store solver configuration
       if (present(tol)) then
@@ -382,7 +384,6 @@ contains
       ! The gate the cell grid was built for; the seed stage may loosen it
       ! temporarily, and this is what it gets restored to
       self%prod_screening_threshold = self%lsf%screening_threshold
-
 
       ! Invalidate SSD point cache (geometry changed)
       self%ssd_cache_valid = .false.
@@ -841,6 +842,29 @@ contains
       call ctx%lsf%f0(lsf0)
       radius = ctx%lsf%exclusion_radius(lsf0)
    end subroutine octree_probe
+
+   !> Ask the LSF for a whole-box stationarity exclusion
+   !>
+   !> @param[in] center     Box midpoint (3)
+   !> @param[in] half_width Nonnegative cube half-width
+   !> @param[in] context    Projection context
+   function octree_stationarity_excluded(center, half_width, context) result(excluded)
+      !> Box midpoint
+      real(wp), intent(in) :: center(3)
+      !> Cube half-width
+      real(wp), intent(in) :: half_width
+      !> Projection context
+      class(*), intent(in) :: context
+      !> Whether the whole box contains no stationary projection
+      logical :: excluded
+
+      excluded = .false.
+      select type (context)
+      type is (projection_context_type)
+         if (.not. associated(context%lsf)) return
+         excluded = context%lsf%stationary_box_excluded(context%anchor, center, half_width)
+      end select
+   end function octree_stationarity_excluded
 
    !* ================================================================================= *!
    !*                    Seed generation: multi-start solver drivers                    *!
@@ -1379,7 +1403,7 @@ contains
       end do
    end subroutine projector_trace_rho_bound
 
-   !> Enumerate every branch seed for one anchor, with a completeness certificate
+   !> Cover possible stationary regions and emit local-refinement seeds
    !>
    !> Two phases, of which phase 0 runs the plain local SLSQP and keeps its point
    !> as a seed without refining it:
@@ -1438,6 +1462,17 @@ contains
 
       n_seeds = 0
 
+      ! A zero window at an exact surface anchor contains only the anchor
+      ! No positive-radius covering search is needed for this singleton
+      if (lsf0_anchor == 0.0_wp .and. self%branch_rho2_slack == 0.0_wp) then
+         allocate (x_seeds(3, 1))
+         x_seeds(:, 1) = anchor
+         n_seeds = 1
+         call self%lsf%set_max_deriv(2)
+         self%ssd_cache_valid = .false.
+         return
+      end if
+
       ! The octree scratch is sized once per thread; projector_init cannot size
       ! it, having no channel to report an invalid budget
       if (.not. allocated(self%octree%seeds)) then
@@ -1445,7 +1480,6 @@ contains
                                max_boxes=self%octree_max_boxes, &
                                max_survivors=self%octree_max_survivors, &
                                max_depth=self%octree_max_depth, &
-                               seed_mode=self%octree_seed_mode, &
                                error=error)
          if (allocated(error)) return
       end if
@@ -1523,6 +1557,7 @@ contains
                               rho_max=rho_start, &
                               rho2_slack=self%branch_rho2_slack, &
                               probe=octree_probe, &
+                              exclude_region=octree_stationarity_excluded, &
                               context=proj_context, &
                               error=error)
          !$omp end critical (drop_octree_report)
@@ -1532,6 +1567,7 @@ contains
                               rho_max=rho_start, &
                               rho2_slack=self%branch_rho2_slack, &
                               probe=octree_probe, &
+                              exclude_region=octree_stationarity_excluded, &
                               context=proj_context, &
                               error=error)
       end if
@@ -1611,6 +1647,8 @@ contains
       real(wp) :: x_refined(3), lambda_refined, rho_refined, phi_refined, normal_refined(3)
       real(wp) :: grad_phi_seed(3), norm_grad2
       integer :: i_seed, n_failed
+      !> One solver and callback context per anchor, independent initial iterates
+      class(solver_base_type), allocatable :: refiner
       character(len=512) :: seed_error_msgs(n_seeds)
       integer :: failed_indices(n_seeds)
 
@@ -1672,13 +1710,15 @@ contains
       else
          ! Accurate path: refine each seed with coupled Newton solve
          n_failed = 0
+         if (n_seeds > 0) then
+            call self%new_refiner(anchor, xl, xu, rho_max, owner, refiner, error)
+            if (allocated(error)) return
+         end if
          do i_seed = 1, n_seeds
-            call self%refine_point( &
+            call self%refine_with_solver( &
+               solver=refiner, &
                anchor=anchor, &
                x_slsqp=x_seeds(:, i_seed), &
-               xl=xl, &
-               xu=xu, &
-               displacement_threshold=rho_max, &
                owner=owner, &
                index=index, &
                error=error, &
@@ -1722,6 +1762,8 @@ contains
             work%normals(:, n_points) = normal_refined(:)
             work%converged(n_points) = .true.
          end do
+
+         if (allocated(refiner)) call refiner%destroy()
 
          ! Print collected errors when all seeds failed (no error propagation
          ! here - let the caller handle fallback via n_points == 0)
@@ -1833,9 +1875,9 @@ contains
                        ((level >= 5)) &
                        )
 
-      ! Level 9 certifies every anchor: there is no gradient gate, because a
-      ! gate would leave the anchors it skips uncertified and the guarantee is
-      ! the whole point of the level -- cheap gating belongs in a heuristic mode
+      ! Cover the admissible surface region for every anchor. Local refinement
+      ! is still numerical: coverage of the leaves alone does not certify that
+      ! every minimum inside them was found
       if (level >= 9) then
          call self%run_octree_search(anchor, xl, xu, proj_context, index, &
                                      x_slsqp, tmp_val(1), rho_max, &
@@ -1971,7 +2013,7 @@ contains
    !> @param[in]  anchor       Optional anchor for debug diagnostics
    !> @param[in]  pp_sep_cut_inp Optional minimum separation for point removal
    !> @param[in]  pm_sep_cut_inp Optional squared-rho slack over the closest
-   !>                            candidate; branches beyond it carry no weight
+   !>                            candidate admitted by the search window
    subroutine filter_candidates(self, candidates, n_candidates, keep_mask, error, anchor, &
                                 pp_sep_cut_inp, pm_sep_cut_inp)
       class(drop_projector_type), intent(inout) :: self
@@ -2029,10 +2071,9 @@ contains
          end if
       end do
 
-      !> Discard points that cannot carry branch weight; a branch enters the
-      !> quadrature with weight exp[-(Phi_b - Phi_min)/sigma], and with the
-      !> quadratic objective Phi = (alpha/2) rho^2 that admissible set is a
-      !> difference of *squares*: rho_b^2 <= rho_min^2 + pm_sep_cut
+      !> Apply the same squared-distance window used by the branch search
+      !> The default follows the softmax weight floor; an explicit window is
+      !> independent of the branch weight model
       rho2_min = huge(1.0_wp)
       do i = 1, n_candidates
          if (keep_mask(i)) then
@@ -2147,43 +2188,95 @@ contains
    !*                      Newton refinement of a single candidate                      *!
    !* ================================================================================= *!
 
-   !> Refine a single SLSQP candidate with Newton and optimality checks
+   !> Refine one candidate with a fresh Newton instance
    !>
-   !> @param[in]     anchor      Anchor point for projection
-   !> @param[in]     x_slsqp     Candidate point from SLSQP stage
-   !> @param[in]     xl          Lower bounds for xyz
-   !> @param[in]     xu          Upper bounds for xyz
-   !> @param[in]     displacement_threshold  Maximum allowed displacement
-   !> @param[in]     owner       Owner atom index
-   !> @param[in]     index       Grid point index (for diagnostics)
-   !> @param[out]    error       Error if refinement fails
-   !> @param[out]    gridpoint   Refined projected point
-   !> @param[out]    lambda_out  Optional lagrange multiplier
-   !> @param[out]    rho_out     Optional displacement norm
-   !> @param[out]    phi_out     Optional final objective value at converged point
-   !> @param[out]    normal_out  Optional unit surface normal
+   !> @param[inout] self       Projector and LSF cache
+   !> @param[in] anchor        Distance origin (3)
+   !> @param[in] x_slsqp       Initial spatial guess (3)
+   !> @param[in] xl            Lower spatial bounds (3)
+   !> @param[in] xu            Upper spatial bounds (3)
+   !> @param[in] displacement_threshold Maximum allowed displacement
+   !> @param[in] owner         Owner atom index
+   !> @param[in] index         Grid point index for diagnostics
+   !> @param[out] error        Refinement failure
+   !> @param[out] gridpoint    Refined spatial point (3)
+   !> @param[out] lambda_out   Optional Lagrange multiplier
+   !> @param[out] rho_out      Optional displacement norm
+   !> @param[out] phi_out      Optional objective value
+   !> @param[out] normal_out   Optional unit normal (3)
    subroutine projector_refine_point(self, anchor, x_slsqp, xl, xu, displacement_threshold, &
                                      owner, index, error, gridpoint, lambda_out, rho_out, phi_out, normal_out)
+      !> Projector instance
       class(drop_projector_type), intent(inout), target :: self
+      !> Distance origin
       real(wp), intent(in) :: anchor(3)
+      !> Initial spatial guess
       real(wp), intent(in) :: x_slsqp(3)
-      real(wp), intent(in) :: xl(3), xu(3)
+      !> Lower spatial bounds
+      real(wp), intent(in) :: xl(3)
+      !> Upper spatial bounds
+      real(wp), intent(in) :: xu(3)
+      !> Maximum allowed displacement
       real(wp), intent(in) :: displacement_threshold
-      integer, intent(in) :: owner, index
+      !> Owner atom index
+      integer, intent(in) :: owner
+      !> Grid point index
+      integer, intent(in) :: index
+      !> Refinement failure
       type(error_type), allocatable, intent(out) :: error
+      !> Refined spatial point
       real(wp), intent(out) :: gridpoint(3)
+      !> Lagrange multiplier
       real(wp), intent(out), optional :: lambda_out
+      !> Displacement norm
       real(wp), intent(out), optional :: rho_out
+      !> Final objective value
       real(wp), intent(out), optional :: phi_out
+      !> Unit surface normal
       real(wp), intent(out), optional :: normal_out(3)
-
-      logical :: is_saddle, is_kkt
-      real(wp) :: lambda_curr
-      real(wp) :: phi_curr
-      real(wp) :: z_solution(4)
-      real(wp) :: rho_actual
+      !> Fresh solver for callers outside the batch path
       class(solver_base_type), allocatable :: solver
+
+      call self%new_refiner(anchor, xl, xu, displacement_threshold, owner, solver, error)
+      if (allocated(error)) return
+      call self%refine_with_solver(solver, anchor, x_slsqp, owner, index, error, gridpoint, &
+                                   lambda_out, rho_out, phi_out, normal_out)
+      call solver%destroy()
+   end subroutine projector_refine_point
+
+   !> Configure a Newton solver shared by seeds of one anchor
+   !>
+   !> The solver owns a copy of its context; geometry pointers remain valid for
+   !> the enclosing batch. Each solve resets its iterate and convergence state
+   !>
+   !> @param[inout] self       Projector and LSF cache
+   !> @param[in] anchor        Distance origin (3)
+   !> @param[in] xl            Lower spatial bounds (3)
+   !> @param[in] xu            Upper spatial bounds (3)
+   !> @param[in] displacement_threshold Maximum allowed displacement
+   !> @param[in] owner         Owner atom index
+   !> @param[out] solver       Configured Newton solver
+   !> @param[out] error        Invalid solver configuration
+   subroutine projector_new_refiner(self, anchor, xl, xu, displacement_threshold, owner, solver, error)
+      !> Projector instance
+      class(drop_projector_type), intent(inout), target :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Lower spatial bounds
+      real(wp), intent(in) :: xl(3)
+      !> Upper spatial bounds
+      real(wp), intent(in) :: xu(3)
+      !> Maximum allowed displacement
+      real(wp), intent(in) :: displacement_threshold
+      !> Owner atom index
+      integer, intent(in) :: owner
+      !> Configured Newton instance
+      class(solver_base_type), allocatable, intent(out) :: solver
+      !> Invalid configuration
+      type(error_type), allocatable, intent(out) :: error
+      !> Bounds including the Lagrange multiplier
       real(wp) :: lxl(4), lxu(4)
+      !> Per-anchor callback context copied into the solver
       type(projection_context_type) :: proj_context
 
       proj_context%projector => self
@@ -2191,9 +2284,6 @@ contains
       proj_context%anchor(:) = anchor(:)
       proj_context%owner = owner
       proj_context%threshold = displacement_threshold
-
-      z_solution(1:3) = x_slsqp(:)
-      z_solution(4) = 0.0_wp
 
       ! Keep xyz inside displacement box and lambda in a wide finite range
       lxl(1:3) = xl(:)
@@ -2244,6 +2334,58 @@ contains
          return
       end if
 
+   end subroutine projector_new_refiner
+
+   !> Refine an independent seed with an existing per-anchor solver
+   !>
+   !> @param[inout] self       Projector and LSF cache
+   !> @param[inout] solver     Newton instance configured for this anchor
+   !> @param[in] anchor        Distance origin (3)
+   !> @param[in] x_slsqp       Initial spatial guess (3)
+   !> @param[in] owner         Owner atom index
+   !> @param[in] index         Grid point index for diagnostics
+   !> @param[out] error        Refinement failure
+   !> @param[out] gridpoint    Refined spatial point (3)
+   !> @param[out] lambda_out   Optional Lagrange multiplier
+   !> @param[out] rho_out      Optional displacement norm
+   !> @param[out] phi_out      Optional objective value
+   !> @param[out] normal_out   Optional unit normal (3)
+   subroutine projector_refine_with_solver(self, solver, anchor, x_slsqp, owner, index, &
+                                           error, gridpoint, lambda_out, rho_out, phi_out, normal_out)
+      !> Projector instance
+      class(drop_projector_type), intent(inout), target :: self
+      !> Configured Newton instance
+      class(solver_base_type), intent(inout) :: solver
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Initial spatial guess
+      real(wp), intent(in) :: x_slsqp(3)
+      !> Owner atom index
+      integer, intent(in) :: owner
+      !> Grid point index
+      integer, intent(in) :: index
+      !> Refinement failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Refined spatial point
+      real(wp), intent(out) :: gridpoint(3)
+      !> Lagrange multiplier
+      real(wp), intent(out), optional :: lambda_out
+      !> Displacement norm
+      real(wp), intent(out), optional :: rho_out
+      !> Final objective value
+      real(wp), intent(out), optional :: phi_out
+      !> Unit surface normal
+      real(wp), intent(out), optional :: normal_out(3)
+      !> Optimality classification
+      logical :: is_saddle, is_kkt
+      !> Final multiplier, objective, and displacement
+      real(wp) :: lambda_curr, phi_curr, rho_actual
+      !> Independent initial iterate for each seed
+      real(wp) :: z_solution(4)
+
+      z_solution(1:3) = x_slsqp
+      z_solution(4) = 0.0_wp
+
       ! Solve the coupled KKT nonlinear system for [x, lambda]
       call solver%solve(z_solution, error)
       if (allocated(error)) then
@@ -2276,10 +2418,6 @@ contains
 
          ! Drop non-KKT points so the caller can trigger multistart fallback
          if (.not. is_kkt) then
-            if (allocated(solver)) then
-               call solver%destroy()
-               deallocate (solver)
-            end if
             call fatal_error(error, "Converged point is not a KKT point; dropping candidate")
             return
          end if
@@ -2300,30 +2438,6 @@ contains
                lambda_out=z_solution(4), &
                error=error &
                )
-
-            if (.not. allocated(solver)) then
-               lxl(1:3) = xl(:)
-               lxl(4) = -1.0e6_wp
-               lxu(1:3) = xu(:)
-               lxu(4) = 1.0e6_wp
-               call new_newton_solver( &
-                  solver=solver, &
-                  n=4, m=4, &
-                  error=error, &
-                  func_ctx=projection_residual, &
-                  grad_ctx=projection_jacobian, &
-                  context=proj_context, &
-                  max_iter=self%newton_max_iter, &
-                  tol=self%newton_tol, &
-                  tolx=self%newton_tol*0.1_wp, &
-                  alpha=0.01_wp, &
-                  use_broyden=.false., &
-                  bounds_mode=3, &
-                  xlow=lxl, &
-                  xupp=lxu &
-                  )
-               if (allocated(error)) return
-            end if
 
             call solver%solve(z_solution, error)
 
@@ -2359,19 +2473,10 @@ contains
 
             ! Drop non-KKT points after escape (mirrors first-call guard)
             if (.not. is_kkt) then
-               if (allocated(solver)) then
-                  call solver%destroy()
-                  deallocate (solver)
-               end if
                call fatal_error(error, "Escaped point is not a KKT point; dropping candidate")
                return
             end if
          end if
-      end if
-
-      if (allocated(solver)) then
-         call solver%destroy()
-         deallocate (solver)
       end if
 
       gridpoint(:) = z_solution(1:3)
@@ -2401,7 +2506,7 @@ contains
       if (present(lambda_out)) lambda_out = lambda_curr
       if (present(rho_out)) rho_out = rho_actual
 
-   end subroutine projector_refine_point
+   end subroutine projector_refine_with_solver
 
    !* ================================================================================= *!
    !*                            Check constrained optimality                           *!

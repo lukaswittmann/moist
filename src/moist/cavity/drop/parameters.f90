@@ -3,6 +3,7 @@ module moist_cavity_drop_parameters
    use mctc_env_error, only: error_type, fatal_error
    use moist_model_parameters, only: moist_model_parameters_type
    use, intrinsic :: iso_fortran_env, only: output_unit
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_bornzeta, only: get_born_zeta
 
@@ -86,10 +87,10 @@ module moist_cavity_drop_parameters
       !> 6 = Newton-deflation on 4D KKT system
       !> 7 = Regular SLSQP multistart
       !> 8 = Fine SLSQP multistart reference (very expensive)
-      !> 9 = Certified octree branch search
+      !> 9 = Octree surface coverage followed by local refinement
       integer :: proj_level = 3
 
-      !* ------------------ Certified octree branch search (level 9) ------------------ *!
+      !* --------------------- Octree surface coverage (level 9) ---------------------- *!
 
       !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr)
       real(wp) :: octree_seed_size = 0.2_wp
@@ -99,10 +100,11 @@ module moist_cavity_drop_parameters
       integer :: octree_max_survivors = 200000
       !> Octree depth limit
       integer :: octree_max_depth = 12
-      !> Seed extraction:
-      !>   1 = one seed per discrete local minimum of the survivor set
-      !>   2 = one seed per surviving leaf (slower reference)
-      integer :: octree_seed_mode = 1
+      !> Explicit search window rho^2 - rho_min^2, in Bohr^2
+      !>
+      !> - -1: derive the window from the current softmax weight floor
+      !> - >= 0: use this window independently of branch weights
+      real(wp) :: branch_search_rho2_slack = -1.0_wp
 
       !* ---------------------------------- Screening --------------------------------- *!
 
@@ -269,12 +271,12 @@ contains
       ! Projection
       self%proj_maxiter = fresh%proj_maxiter
       self%proj_level = fresh%proj_level
-      ! Certified octree branch search
+      ! Octree surface coverage
       self%octree_seed_size = fresh%octree_seed_size
       self%octree_max_boxes = fresh%octree_max_boxes
       self%octree_max_survivors = fresh%octree_max_survivors
       self%octree_max_depth = fresh%octree_max_depth
-      self%octree_seed_mode = fresh%octree_seed_mode
+      self%branch_search_rho2_slack = fresh%branch_search_rho2_slack
       ! Screening
       self%cell_grid_full_scan_below = fresh%cell_grid_full_scan_below
       self%cell_grid_fraction = fresh%cell_grid_fraction
@@ -322,6 +324,15 @@ contains
       if (self%tolerance <= 0.0_wp .or. self%rho_grid_h <= 0.0_wp .or. &
           self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > 9) then
          call fatal_error(error, "Invalid DROP numerical parameters")
+         return
+      end if
+
+      if (.not. ieee_is_finite(self%branch_search_rho2_slack)) then
+         call fatal_error(error, "Branch search squared-distance slack must be finite")
+         return
+      end if
+      if (self%branch_search_rho2_slack < 0.0_wp .and. self%branch_search_rho2_slack /= -1.0_wp) then
+         call fatal_error(error, "Branch search squared-distance slack must be -1 or nonnegative")
          return
       end if
 
@@ -438,12 +449,12 @@ contains
       ! Projection
       call self%register_int_scalar("projection.maxiter", self%proj_maxiter)
       call self%register_int_scalar("projection.level", self%proj_level)
-      ! Certified octree branch search (projection level 9)
+      call self%register_real_scalar("projection.branch_search_rho2_slack", self%branch_search_rho2_slack)
+      ! Octree surface coverage (projection level 9)
       call self%register_real_scalar("projection.octree.seed_size", self%octree_seed_size)
       call self%register_int_scalar("projection.octree.max_boxes", self%octree_max_boxes)
       call self%register_int_scalar("projection.octree.max_survivors", self%octree_max_survivors)
       call self%register_int_scalar("projection.octree.max_depth", self%octree_max_depth)
-      call self%register_int_scalar("projection.octree.seed_mode", self%octree_seed_mode)
       ! Screening
       call self%register_int_scalar("screening.cell_grid_full_scan_below", &
                                     self%cell_grid_full_scan_below)
@@ -522,14 +533,16 @@ contains
       case (8)
          label = "Fine SLSQP multistart reference"
       case (9)
-         label = "Certified octree branch search"
+         label = "Octree surface coverage + local refinement"
       case default
          label = "unknown"
       end select
    end function get_proj_level_label
 
-   !> Largest projection distance a competing branch may have and still carry weight
+   !> Largest projection distance admitted by the configured search window
    !>
+   !> The default window follows the current softmax model. An explicit
+   !> `branch_search_rho2_slack` overrides it for other branch weight models.
    !> A branch enters the quadrature with the softmax weight
    !> `p_b = exp[-(Phi_b - Phi_min)/sigma] / Z`. Dropping the normalization
    !> (`Z >= 1`, so the bound errs towards keeping branches) it clears the
@@ -545,7 +558,7 @@ contains
    !>
    !> @param[in] self    Parameter container
    !> @param[in] rho_min Projection distance of the closest branch found so far
-   !> @return    rho_max Radius beyond which no branch can carry weight
+   !> @return    rho_max Radius admitted by the branch search window
    pure function rho_max_from_rho_min(self, rho_min) result(rho_max)
       class(moist_cavity_drop_parameters_type), intent(in) :: self
       real(wp), intent(in) :: rho_min
@@ -562,7 +575,11 @@ contains
       class(moist_cavity_drop_parameters_type), intent(in) :: self
       real(wp) :: slack
 
-      slack = 2.0_wp*self%branch_dphi_max/self%phi_alpha
+      if (self%branch_search_rho2_slack >= 0.0_wp) then
+         slack = self%branch_search_rho2_slack
+      else
+         slack = 2.0_wp*self%branch_dphi_max/self%phi_alpha
+      end if
    end function branch_rho2_slack_value
 
    !> Print current parameter values
@@ -583,6 +600,8 @@ contains
       integer :: iu
       !> Whether the detailed settings print
       logical :: detailed
+      !> Effective search window; a function result in class(*) prints as unsupported
+      real(wp) :: rho2_slack
 
       iu = output_unit
       if (present(unit)) iu = unit
@@ -633,10 +652,11 @@ contains
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
       if (detailed) then
          call pp%kv("Maximum iterations", self%proj_maxiter)
+         rho2_slack = self%branch_rho2_slack()
+         call pp%kv("Branch search window", rho2_slack, "Bohr^2")
          if (self%proj_level >= 9) then
             call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
             call pp%kv("Octree box budget", self%octree_max_boxes)
-            call pp%kv("Octree seed mode", self%octree_seed_mode)
          end if
       end if
       call pp%pop()

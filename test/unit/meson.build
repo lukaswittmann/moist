@@ -63,6 +63,7 @@ tests = [
   'cavity_drop_integration',
   'cavity_drop_filter',
   'cavity_drop_projector',
+  'cavity_drop_projection',
   'cavity_drop_cpcm',
   'cavity_drop_properties',
   'cavity_iswig',

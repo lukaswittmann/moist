@@ -315,8 +315,8 @@ if(MOIST_TESTS)
     math_grid_3d_invariance
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_cpcm
-    cavity_drop_properties
+    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_projection
+    cavity_drop_cpcm cavity_drop_properties
     cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel

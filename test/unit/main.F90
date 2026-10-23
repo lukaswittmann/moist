@@ -67,6 +67,7 @@ program tester
    use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_cavity_drop_projector, only: collect_cavity_drop_projector
+   use test_cavity_drop_projection, only: collect_cavity_drop_projection
    use test_cavity_drop_properties, only: collect_cavity_drop_properties
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
@@ -147,6 +148,7 @@ program tester
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
+      & new_testsuite("cavity_drop_projection", collect_cavity_drop_projection), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
