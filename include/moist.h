@@ -1375,6 +1375,9 @@ moist_get_model_field_bool(moist_error error,
 /// contribution to the latest moist_get_model_energy in Hartree, after a
 /// successful evaluation; moist_update_model clears it, and a failed
 /// evaluation leaves it unavailable for the failing and later components.
+/// Under the same rule a component lists its own per-point results (ngrid
+/// each): a PCM `potential_adjoint` (its share of dE/dphi), GOSTSHYP `omega`,
+/// `gt`, `ftilde`, `amplitude` and `point_energy` (adding up to its energy).
 /// A model of another family and an index outside the count are errors.
 /// See docs/reference/fields.rst
 

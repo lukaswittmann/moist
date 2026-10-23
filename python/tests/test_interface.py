@@ -510,8 +510,11 @@ def test_model_components_report_their_energies(diatomic) -> None:
     # The two CPCM components differ only in f(epsilon) = (epsilon - 1)/epsilon
     assert shares[0] != 0.0
     assert shares[2] / shares[0] == approx((3.0 / 4.0) / (31.0 / 32.0), rel=1.0e-12)
-    (info,) = components[0].fields()
+    info, adjoint = components[0].fields()
     assert (info.name, info.shape, info.count) == ("energy", (), 1)
+    ngrid = model.cavity.ngrid
+    assert (adjoint.name, adjoint.shape, adjoint.count) == ("potential_adjoint", (ngrid,), ngrid)
+    assert [field.name for field in components[1].fields()] == ["energy"]
     assert "Hartree" in components[0].describe("energy")
     assert components[0].get("energy") == shares[0]
 

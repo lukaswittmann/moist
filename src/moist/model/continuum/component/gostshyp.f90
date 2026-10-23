@@ -16,6 +16,7 @@ module moist_model_continuum_component_gostshyp
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
    use moist_channels_response, only: response_type, gaussian_amplitude_response_type, &
       & response_accumulate
+   use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_register, request_require
@@ -60,6 +61,17 @@ module moist_model_continuum_component_gostshyp
       real(wp) :: pressure = 0.0_wp
       !> Numerical settings, constant throughout the calculation
       type(moist_gostshyp_parameters_type) :: param
+      !> Gaussian exponents of the latest energy (ngrid)
+      !>
+      !> Like `gt`, `ftilde` and `alpha`, set by `get_energy` for `list_fields`
+      !> and cleared by `update`; the other phases recompute their own
+      real(wp), allocatable :: omega(:)
+      !> Density at the unit Gaussians <G_i> of the latest energy (ngrid)
+      real(wp), allocatable :: gt(:)
+      !> Normal gradient traces of the latest energy (ngrid)
+      real(wp), allocatable :: ftilde(:)
+      !> Pressure amplitudes dE/d<G_i> of the latest energy (ngrid)
+      real(wp), allocatable :: alpha(:)
    contains
       procedure :: update => gostshyp_update
       procedure :: get_energy => gostshyp_get_energy
@@ -70,6 +82,8 @@ module moist_model_continuum_component_gostshyp
       procedure :: declare_coupling => gostshyp_declare_coupling
       !> Print the applied pressure
       procedure :: print_inputs => gostshyp_print_inputs
+      !> Publish the per-point results of the latest energy
+      procedure :: list_fields => gostshyp_list_fields
       !> Numerical settings of the component
       procedure :: parameters => gostshyp_component_parameters
    end type model_continuum_component_gostshyp
@@ -139,6 +153,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      if (allocated(self%alpha)) deallocate (self%omega, self%gt, self%ftilde, self%alpha)
       call validate_settings(self, error)
       if (allocated(error)) return
       call self%require_context(error)
@@ -578,6 +593,10 @@ contains
       call gostshyp_amplitudes(self, cavity, gt, pt, omega, ftilde, alpha, beta, error, counts)
       if (allocated(error)) return
       energy = energy + dot_product(alpha, gt)
+      call move_alloc(omega, self%omega)
+      call move_alloc(gt, self%gt)
+      call move_alloc(ftilde, self%ftilde)
+      call move_alloc(alpha, self%alpha)
 
       if (associated(self%ctx)) then
          if (counts(2) > 0) then
@@ -592,6 +611,35 @@ contains
       end if
 
    end subroutine gostshyp_get_energy
+
+   !> Publish the per-point results of the latest energy (ngrid each)
+   !>
+   !> `omega`, `gt`, `ftilde`, `amplitude` and `point_energy` = amplitude*gt,
+   !> which add up to the energy; nothing without an energy since the last
+   !> update, or with zero pressure or scale
+   !>
+   !> @param[in]    self  Pressure component
+   !> @param[inout] query Field walker
+   subroutine gostshyp_list_fields(self, query)
+      !> Pressure component
+      class(model_continuum_component_gostshyp), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      !> Energy per point
+      real(wp), allocatable :: point_energy(:)
+
+      if (.not. allocated(self%alpha)) return
+      call query%add_real("omega", "Gaussian exponent pi ln2/a_i, 0 for a switched-off point, bohr**-2 (ngrid)", &
+         & self%omega)
+      call query%add_real("gt", "Density at the unit Gaussian <G_i>, bohr**-3 (ngrid)", self%gt)
+      call query%add_real("ftilde", "Normal gradient trace -2 omega_i n_i.<(r - r_i) G_i>, bohr**-4 (ngrid)", &
+         & self%ftilde)
+      call query%add_real("amplitude", "Pressure amplitude dE/d<G_i>, Hartree bohr**3 (ngrid)", self%alpha)
+      point_energy = self%alpha*self%gt
+      call query%add_real("point_energy", "Energy per point, amplitude*gt, Hartree (ngrid)", point_energy)
+
+   end subroutine gostshyp_list_fields
 
    !> Hand the host the amplitudes conjugate to its Gaussian integral blocks
    !>

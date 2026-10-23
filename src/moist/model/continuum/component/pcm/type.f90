@@ -22,6 +22,7 @@ module moist_model_continuum_component_pcm_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense, &
       & pcm_storage_matrix_free
    use moist_utils_prettyprint, only: prettyprinter
+   use moist_channels_fields, only: field_query_type
    implicit none(type, external)
    private
 
@@ -190,6 +191,9 @@ module moist_model_continuum_component_pcm_type
 
       !> Print the dielectric constant and its scaling factor
       procedure :: print_inputs => pcm_component_print_inputs
+
+      !> Publish the potential adjoint of the current charges
+      procedure :: list_fields => pcm_component_list_fields
 
    end type model_continuum_component_pcm
 
@@ -438,6 +442,31 @@ contains
       w_phi = self%q
 
    end subroutine pcm_component_potential_adjoint
+
+   !> Publish `potential_adjoint`, this component's `w_phi = dE/dphi` (ngrid)
+   !>
+   !> The share of the model's potential adjoint response item; not listed
+   !> while the charges are not current
+   !>
+   !> @param[in]    self  PCM component
+   !> @param[inout] query Field walker
+   subroutine pcm_component_list_fields(self, query)
+      !> PCM component
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      !> Potential adjoint of the current charges
+      real(wp), allocatable :: w_phi(:)
+      !> Charges not current
+      type(error_type), allocatable :: error
+
+      call self%potential_adjoint(w_phi, error)
+      if (allocated(error)) return
+      call query%add_real("potential_adjoint", &
+         & "Potential adjoint dE/dphi of this component, e (ngrid)", w_phi)
+
+   end subroutine pcm_component_list_fields
 
    !> Compute PCM solvation energy
    !>

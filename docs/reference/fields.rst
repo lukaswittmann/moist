@@ -11,7 +11,7 @@ Five kinds of objects expose fields:
 
 - the cavity: its grid and results;
 - the model: the grid of its evaluation domain (a continuum model forwards its cavity's);
-- a continuum component: its latest ``energy`` contribution in Hartree (0-based index in C/Python);
+- a continuum component: its latest ``energy`` contribution in Hartree, then its own per-point results (0-based index in C/Python);
 - the current response item: the arrays the host contracts, e.g. ``w_phi`` (:ref:`coupling-response`);
 - the current coupling request: its inputs, e.g. the Gaussian moment ``width`` (:ref:`coupling-requests`).
 
@@ -25,6 +25,7 @@ Each field has a name, a type tag (``MOIST_FIELD_REAL``, ``MOIST_FIELD_INT``, ``
 - Names have at most ``MOIST_FIELD_NAME_MAX`` characters.
 - Response items, requests and components declare real fields only.
 - Component ``energy`` appears after successful ``get_energy`` and clears on update or deferred surface rebuild. If a component fails during energy evaluation, only earlier components' energies remain available.
+- A component's per-point results (ngrid each) follow the same rule: PCM components list ``potential_adjoint``, their share of dE/dphi; GOSTSHYP lists ``omega``, ``gt``, ``ftilde``, ``amplitude`` and ``point_energy``, which adds up to its energy.
 
 .. list-table::
    :widths: 15 85

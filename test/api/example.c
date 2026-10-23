@@ -3688,7 +3688,7 @@ int test_coupling_protocol_gostshyp(void)
     moist_cavity borrowed = NULL;
     double *xyz = NULL, *xi = NULL, *phi = NULL, *dphi = NULL, *dxi = NULL;
     double *gt = NULL, *pt = NULL, *mt = NULL, *rt = NULL, *width = NULL;
-    double *w_overlap = NULL, *w_normal_deriv = NULL;
+    double *w_overlap = NULL, *w_normal_deriv = NULL, *point_energy = NULL;
     double energy = 0.0, gradient[3 * H2O_NATOMS] = {0};
     /* Per-component energies, read by 0-based component index */
     double share[2] = {0.0, 0.0}, again = 0.0;
@@ -3827,17 +3827,21 @@ int test_coupling_protocol_gostshyp(void)
     moist_get_model_energy(error, model, cpl, &energy);
     REQUIRE(!moist_check_error(error) && isfinite(energy));
     printf("  energy = %.12f\n", energy);
-    /* Each component reports its own share of that energy */
+    /* Each component reports its own share of that energy, then its per-point
+     * results: CPCM its potential adjoint, GOSTSHYP omega, gt, ftilde,
+     * amplitude and point_energy */
     {
         int ncomponents = 0, nfield = 0, dtype = 0, rank = -1, count = 0;
         int dims[MOIST_FIELD_MAX_RANK] = {0};
+        const int expected[2] = {2, 6};
         char field[MOIST_FIELD_NAME_MAX + 1], name[16];
         size_t length = 0;
+        double sum = 0.0;
         moist_get_model_component_count(error, model, &ncomponents);
         REQUIRE(!moist_check_error(error) && ncomponents == 2);
         for (int i = 0; i < ncomponents; ++i) {
             moist_get_model_component_field_count(error, model, i, &nfield);
-            REQUIRE(!moist_check_error(error) && nfield == 1);
+            REQUIRE(!moist_check_error(error) && nfield == expected[i]);
             moist_get_model_component_field_info(error, model, i, 0, field, &dtype, &rank, dims, &count);
             REQUIRE(!moist_check_error(error) && strcmp(field, "energy") == 0);
             REQUIRE(dtype == MOIST_FIELD_REAL && rank == 0 && count == 1);
@@ -3846,6 +3850,19 @@ int test_coupling_protocol_gostshyp(void)
             printf("  component %d energy = %.12f\n", i, share[i]);
         }
         REQUIRE(fabs(share[0] + share[1] - energy) <= 1.0e-12 * fmax(1.0, fabs(energy)));
+        moist_get_model_component_field_info(error, model, 0, 1, field, &dtype, &rank, dims, &count);
+        REQUIRE(!moist_check_error(error) && strcmp(field, "potential_adjoint") == 0);
+        REQUIRE(dtype == MOIST_FIELD_REAL && rank == 1 && count == ngrid);
+        /* The GOSTSHYP point energies add up to its share */
+        moist_get_model_component_field_info(error, model, 1, 5, field, &dtype, &rank, dims, &count);
+        REQUIRE(!moist_check_error(error) && strcmp(field, "point_energy") == 0);
+        REQUIRE(dtype == MOIST_FIELD_REAL && rank == 1 && count == ngrid);
+        point_energy = malloc((size_t)ngrid * sizeof(double));
+        REQUIRE(point_energy != NULL);
+        moist_get_model_component_field_real(error, model, 1, "point_energy", point_energy);
+        REQUIRE(!moist_check_error(error));
+        for (int k = 0; k < ngrid; ++k) sum += point_energy[k];
+        REQUIRE(fabs(sum - share[1]) <= 1.0e-12 * fmax(1.0, fabs(share[1])));
         moist_get_model_component_name(error, model, 2, name, sizeof name, &length);
         if (expect_failure(&error, "Component index out of range",
                            "component past the list")) goto cleanup;
@@ -3981,7 +3998,7 @@ cleanup:
     if (moist_check_error(error)) show_error(error);
     free(xyz); free(xi); free(phi); free(dphi); free(dxi);
     free(gt); free(pt); free(mt); free(rt); free(width);
-    free(w_overlap); free(w_normal_deriv); free(settings); free(radii);
+    free(w_overlap); free(w_normal_deriv); free(point_energy); free(settings); free(radii);
     moist_delete_coupling(&cpl);
     moist_delete_cavity(&borrowed);
     moist_delete_response(&response);
