@@ -84,6 +84,8 @@ def test_context_thread_count_is_fixed(baseline):
         moist.Context(nthreads=True)
     with pytest.raises(TypeError):
         moist.Context(nthreads=0, debug=1)
+    with pytest.raises(TypeError):
+        moist.Context(nthreads=0, warnings_to_stderr=1)
     with pytest.raises(RuntimeError, match="Thread count must not be negative"):
         moist.Context(nthreads=-1)
     # Threads and logging belong to the context alone

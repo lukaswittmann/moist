@@ -42,11 +42,11 @@ the surface independently. ``PCMParameters`` applies to every PCM model.
 ``GOSTSHYPParameters`` sets the fixed reciprocal regularization width and optional
 negative-amplitude suppression for ``ModelComponentGOSTSHYP``.
 
-``Context(nthreads=0, verbosity=2, debug=False)`` creates the
+``Context(nthreads=0, verbosity=2, debug=False, warnings_to_stderr=False)`` creates the
 :ref:`run context <api-context>`. The defaults take the calling thread's OpenMP
 setting (``OMP_NUM_THREADS`` unless the host changed it), print the normal
-output (:ref:`levels <verbosity>`) and leave the debug stream off; a negative thread
-count raises. Everything built on a context retains it.
+output (:ref:`levels <verbosity>`), leave the debug stream off and print warnings
+on standard output only; a negative thread count raises. Everything built on a context retains it.
 ``context.print_timer()`` prints the recorded timings on the process standard
 output; ``context.print_timer(simple=True)`` prints the compact form.
 ``with context.timer(name):`` times host work under the report's ``Host`` node
@@ -68,8 +68,8 @@ All accept keyword-only ``parameters=PCMParameters(...)`` and optional
 ``context=...``. Its controls are
 ``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,
 ``solver_maxiter``, ``solver_restart``, ``storage`` (``PCMStorage.DENSE``
-(default) or ``MATRIX_FREE``), ``newton_tol`` and
-``newton_maxiter``. See :doc:`/models/components/pcm/index` for defaults.
+(default) or ``MATRIX_FREE``), ``newton_tol``, ``newton_maxiter`` and ``point_potential``.
+See :doc:`/models/components/pcm/index` for defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
@@ -204,8 +204,8 @@ MOIST evaluates spatial density derivatives; the host supplies basis-center
 derivative contractions.
 
 ``get_version_string()`` returns the linked library's full release string;
-``get_banner(style)`` returns its banner without printing (``full``, ``short``,
-``ascii`` or ``build``).
+``get_banner(style)`` returns its banner without printing (``full``, ``tagline``,
+``logo``, ``build`` or ``compact``).
 
 Solvents
 --------

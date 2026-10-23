@@ -172,6 +172,8 @@ class PCMParameters(_Parameters):
 
     ``parameter_derivatives`` adds the :class:`~moist.ParameterAdjointResponse`
     item (dE/dp of the physical model parameters) to the response.
+    ``point_potential`` makes Gaussian surfaces request point potential
+    integrals; it has no effect on point surfaces.
     """
 
     _kind = "pcm"
@@ -183,6 +185,7 @@ class PCMParameters(_Parameters):
     newton_tol: float = _native_default("pcm", "newton_tol")
     newton_maxiter: int = _native_default("pcm", "newton_maxiter")
     parameter_derivatives: bool = _native_default("pcm", "parameter_derivatives")
+    point_potential: bool = _native_default("pcm", "point_potential")
 
     def __post_init__(self):
         value = self.solver

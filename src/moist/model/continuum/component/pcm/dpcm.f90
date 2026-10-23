@@ -25,7 +25,7 @@ module moist_model_continuum_component_pcm_dpcm
    !> - Physical input: solvent relative permittivity epsilon
    !> - Cavity positions, normals, principal curvatures and grid point areas
    !> - Gaussian charge widths when available
-   !> - Host potential and its outward normal derivative at the surface points
+   !> - Host potential and its spatial derivative at the surface points
    !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(pcm_layer_base) :: model_continuum_component_dpcm
       !> Gaussian surface kernel state

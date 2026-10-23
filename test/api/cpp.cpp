@@ -111,7 +111,7 @@ int main()
     moist_error error = moist_new_error();
     if (!error || moist_check_error(error) != moist_success ||
         moist_check_error(nullptr) != moist_invalid_error) return fail(__LINE__);
-    moist_context context = moist_new_context(error, 2, 0, false);
+    moist_context context = moist_new_context(error, 2, 0, false, false);
     if (!context || moist_check_error(error) != moist_success) return fail(__LINE__);
     if (!host_timer_stops_on_every_path(error, context)) return fail(__LINE__);
     moist_lsf lsf = moist_new_svdw_lsf(error, nullptr);

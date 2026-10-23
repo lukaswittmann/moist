@@ -9,10 +9,12 @@ module moist_output_ascii
    implicit none(type, external)
    private
 
-   !> Header style constants
-   integer, parameter, public :: HEADER_FULL = 0  !< Logo + tagline (default)
-   integer, parameter, public :: HEADER_SHORT = 1  !< Tagline box only
-   integer, parameter, public :: HEADER_ASCII = 2  !< Logo only, no tagline
+   !> Banner style constants
+   integer, parameter, public :: BANNER_FULL = 0  !< Boxed logo + tagline (default)
+   integer, parameter, public :: BANNER_TAGLINE = 1  !< Tagline box only
+   integer, parameter, public :: BANNER_LOGO = 2  !< Logo box only
+   integer, parameter, public :: BANNER_BUILD = 3  !< Version, commit and host box
+   integer, parameter, public :: BANNER_COMPACT = 4  !< Boxless logo, tagline and version beside it
 
    public :: moist_banner_text
    public :: moist_header
@@ -22,16 +24,9 @@ module moist_output_ascii
 
 contains
 
-   !> Print moist banner
-   !>
-   !> @param[in] unit   Fortran I/O unit (6 = stdout)
-   !> @param[in] style  Optional style selector:
-   !>                    HEADER_FULL (0, default) = logo + tagline,
-   !>                    HEADER_SHORT (1) = tagline box only,
-   !>                    HEADER_ASCII (2) = logo only
-   !>
    !> Return the canonical banner as text with newline-terminated lines
-   !> @param[in] style Full (0), short (1), ASCII (2), or build information (3)
+   !>
+   !> @param[in] style One of the BANNER_* constants
    function moist_banner_text(style) result(text)
       !> Banner selector
       integer, intent(in) :: style
@@ -42,7 +37,7 @@ contains
       !> Newline separator
       character(len=1), parameter :: nl = achar(10)
       text = ""
-      if (style == HEADER_FULL .or. style == HEADER_ASCII) then
+      if (style == BANNER_FULL .or. style == BANNER_LOGO) then
          text = "                            _   _     _             "//nl// &
             "                _ __ ___   / \ (_)___| |_           "//nl// &
             "     .---------| '_ ` _ \ /   \| / __| __|---------."//nl// &
@@ -50,19 +45,31 @@ contains
             "     |         |_| |_| |_|\___/|_|___/\__|         |"//nl// &
             "     |                                             |"//nl
       end if
-      if (style == HEADER_SHORT) text = "     .---------------------------------------------."//nl
-      if (style == HEADER_FULL .or. style == HEADER_SHORT) then
-         text = text//"     |       Modular and open-source               |"//nl// &
-            "     |            implicit solvation toolkit       |"//nl
+      if (style == BANNER_TAGLINE) text = "     .---------------------------------------------."//nl
+      if (style == BANNER_FULL .or. style == BANNER_TAGLINE) then
+         text = text//"     |       Modular and Open-source               |"//nl// &
+            "     |            Implicit Solvation Toolkit       |"//nl
       end if
-      if (style >= 0 .and. style <= 2) text = text//"     '---------------------------------------------'"//nl// &
-            ""//nl
-      if (style == 3) then
+      if (style >= BANNER_FULL .and. style <= BANNER_LOGO) then
+         text = text//"     '---------------------------------------------'"//nl//nl
+      end if
+      if (style == BANNER_BUILD .or. style == BANNER_COMPACT) then
          call get_moist_version(string=version)
-         line = "moist v"//version//" ("//trim(git_commit)//")"
-         text = "     .---------------------------------------------."//nl//boxed(line)//nl
+         line = "v"//version//" ("//trim(git_commit)//")"
+      end if
+      if (style == BANNER_BUILD) then
+         text = "     .---------------------------------------------."//nl//boxed("moist "//line)//nl
          if (len_trim(build_host) > 0) text = text//boxed(trim(build_host))//nl
          text = text//"     '---------------------------------------------'"//nl//nl
+      end if
+      if (style == BANNER_COMPACT) then
+         text = "                  _   _     _"//nl// &
+            "      _ __ ___   / \ (_)___| |_     Modular and Open-source"//nl// &
+            "     | '_ ` _ \ /   \| / __| __|    Implicit Solvation Toolkit"//nl// &
+            "     | | | | | |     | \__ \ |_"//nl// &
+            "     |_| |_| |_|\___/|_|___/\__|    "//line//nl
+         if (len_trim(build_host) > 0) text = text//repeat(" ", 36)//trim(build_host)//nl
+         text = text//nl
       end if
    contains
       !> Center one build metadata line inside the banner
@@ -76,11 +83,15 @@ contains
       end function boxed
    end function moist_banner_text
 
+   !> Print a moist banner, BANNER_FULL unless `style` is given
    subroutine moist_header(unit, style)
+      !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit
+      !> One of the BANNER_* constants
       integer, intent(in), optional :: style
+      !> Resolved banner style
       integer :: selected
-      selected = HEADER_FULL
+      selected = BANNER_FULL
       if (present(style)) selected = style
       write(unit, "(a)", advance="no") moist_banner_text(selected)
    end subroutine moist_header
@@ -89,7 +100,7 @@ contains
    subroutine moist_build_header(unit)
       !> Destination Fortran unit
       integer, intent(in) :: unit
-      write(unit, "(a)", advance="no") moist_banner_text(3)
+      write(unit, "(a)", advance="no") moist_banner_text(BANNER_BUILD)
    end subroutine moist_build_header
 
    !> Print one-line version string, e.g. "moist version 0.5.0"

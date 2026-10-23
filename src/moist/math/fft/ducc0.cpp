@@ -378,4 +378,19 @@ int moist_fft_dst4(int npts, int nbatch, const double *in, double *out,
    return status_ok;
 }
 
+//! Stop and join the workers of ducc0's process-wide thread pool.
+//!
+//! @return status  Zero on success, nonzero if the backend failed
+int moist_fft_release_threads()
+{
+#ifndef DUCC0_NO_LOWLEVEL_THREADING
+   try {
+      ducc0::detail_threading::resize_thread_pool(1);
+   } catch (...) {
+      return status_from_exception();
+   }
+#endif
+   return status_ok;
+}
+
 } // extern "C"

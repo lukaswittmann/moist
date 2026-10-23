@@ -705,6 +705,7 @@ contains
    !>
    !> - `energy`, the scalar of the latest evaluation; not listed before it,
    !>   after an update and when this component failed or was not reached
+   !> - then the component's own results (`list_fields`), under the same rule
    !> - an index outside the list declares nothing
    !>
    !> @param[in] self Model
@@ -721,6 +722,7 @@ contains
       if (index < 1 .or. index > self%component_count()) return
       call query%add_real_scalar("energy", "Energy contribution of the latest evaluation, in Hartree", &
          & self%components(index)%energy)
+      if (allocated(self%components(index)%energy)) call self%components(index)%item%list_fields(query)
 
    end subroutine continuum_list_component_fields
 

@@ -315,7 +315,12 @@ class ducc_thread_pool: public thread_pool
       {
       shutdown_ = true;
       for (auto &worker : workers_)
+        {
+        // moist patch: take the worker's mutex so a worker between its wait
+        // predicate and the wait itself cannot miss the notify (lost wakeup)
+        { lock_t lock(worker.mut); }
         worker.work_ready.notify_all();
+        }
 
       for (auto &worker : workers_)
         if (worker.thread.joinable())

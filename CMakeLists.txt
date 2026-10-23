@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.0.0-alpha.1)
+# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.0-alpha)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
@@ -304,7 +304,7 @@ if(MOIST_TESTS)
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
-    math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_nufft
+    math_fft_dst4 math_fft_3d math_fft_threads finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d

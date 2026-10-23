@@ -256,7 +256,7 @@ contains
                   descriptors%molecular_volume_au, "bohr**3")
       call pp%kv2("Surface tension", descriptors%surface_tension_si, "N/m", &
                   descriptors%surface_tension_au, "Eh/bohr**2")
-      call pp%kv("Rel. permitivity", descriptors%epsilon, "eps/eps0")
+      call pp%kv("Rel. permittivity", descriptors%epsilon, "eps/eps0")
       call pp%kv("Refractive index", descriptors%refractive_index, "c/c0")
       call pp%kv("HB acidity", descriptors%abraham_alpha)
       call pp%kv("HB basicity", descriptors%abraham_beta)

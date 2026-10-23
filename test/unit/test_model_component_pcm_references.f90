@@ -24,11 +24,11 @@ module test_model_component_pcm_references
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, skip_test
    use test_helpers, only: check_moist_error, component_view, get_test_structures, &
       & center_at_origin, get_test_cavity_iswig, build_test_cavity, fill_point_charge_potential, &
-      & stage_point_charge_energy
+      & stage_point_charge_energy, submit
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
       & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, pcm_physics, new_pcm, &
-      & seed_drop, first_seed, host_energy, fd_cavity, get_seed, nmol, mol_label, get_solute, &
-      & host_charges, thr_vacuous
+      & seed_drop, first_seed, host_energy, stage_energy, fd_cavity, get_seed, nmol, mol_label, &
+      & get_solute, host_charges, thr_vacuous
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
@@ -37,7 +37,8 @@ module test_model_component_pcm_references
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: radius_type, radius_type_static, new_radii_custom_atoms
-   use moist_channels_coupling, only: coupling_type
+   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type, &
+      & point_potential_request_type, nuclear_charge_request_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & moist_pcm_parameters_type, solver_type
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, &
@@ -78,7 +79,7 @@ module test_model_component_pcm_references
    !> Relative tolerances of the strong-screening checks, twice the measured deviations
    !>
    !> LPB at kappa = 40 and 100: 4.7e-5 and 2.6e-5 (Debye-Hueckel); nonlocal at
-   !> lambda = 1e-2 and 1e-4 bohr: 2.0e-4 and 3.4e-6 (dense and iterative alike)
+   !> lambda = 1e-2 and 1e-4 bohr: 2.0e-4 and 2.3e-6 (dense and iterative alike)
    real(wp), parameter :: lpb_strong_tolerance = 1.0e-4_wp, nonlocal_strong_tolerance = 5.0e-4_wp
    !> Roundoff floor of the energy gap of a switched-off point, Eh
    real(wp), parameter :: thr_gap = 1.0e-12_wp
@@ -331,6 +332,8 @@ contains
          & new_unittest("iefpcm_equals_cpcm_conductor", test_iefpcm_equals_cpcm_conductor), &
          & new_unittest("cosmo_equals_cpcm_conductor", test_cosmo_equals_cpcm_conductor), &
          & new_unittest("nonlocal_interior_permittivity", test_nonlocal_interior_permittivity), &
+         & new_unittest("nonlocal_local_limit_lambda", test_nonlocal_local_limit_lambda), &
+         & new_unittest("nonlocal_escaped_charge", test_nonlocal_escaped_charge), &
          & new_unittest("lpb_strong_screening", test_lpb_strong_screening), &
          & new_unittest("nonlocal_strong_screening", test_nonlocal_strong_screening), &
          & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
@@ -1085,7 +1088,11 @@ contains
    !> @param[in]  charge        Central charge, e
    !> @param[out] energy        Polarization energy, hartree
    !> @param[out] error         Test failure
-   subroutine central_charge_energy(kind, physics, point_surface, solver, charge, energy, error)
+   !> @param[in]  offset        Charge position relative to the center, bohr (default 0)
+   !> @param[in]  alpha         Exponent of a Gaussian density at the center instead of the
+   !>                           point charge, 1/bohr^2
+   subroutine central_charge_energy(kind, physics, point_surface, solver, charge, energy, error, &
+      & offset, alpha)
       !> Model identifier
       integer, intent(in) :: kind
       !> Physical parameters
@@ -1100,6 +1107,10 @@ contains
       real(wp), intent(out) :: energy
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> Charge position relative to the center
+      real(wp), intent(in), optional :: offset(3)
+      !> Exponent of a Gaussian density instead of the point charge
+      real(wp), intent(in), optional :: alpha
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -1107,10 +1118,12 @@ contains
       type(moist_context_type), target :: ctx
       !> Component under test
       class(model_continuum_component_pcm), allocatable :: pcm
-      !> Single-sphere solute
-      type(structure_type) :: mol
+      !> Single-sphere solute and the position of its charge
+      type(structure_type) :: mol, src
       !> Spherical cavity
       class(cavity_type), allocatable :: cavity
+      !> Host coupling of the Gaussian density
+      type(coupling_type), target :: coupling
 
       energy = 0.0_wp
       call new_context(ctx, verbosity=0)
@@ -1128,8 +1141,70 @@ contains
       call check_moist_error(error, err, "cavity update")
       if (allocated(error)) return
       if (point_surface) deallocate (cavity%xi0)
-      call host_energy(pcm, mol, cavity, mol, [charge], energy, error)
+      if (present(alpha)) then
+         call stage_energy(pcm, mol, cavity, coupling, error)
+         if (allocated(error)) return
+         call answer_gaussian_density(cavity, coupling, charge, alpha)
+         call pcm%get_energy(component_view(coupling), cavity, energy, err)
+         call check_moist_error(error, err, "energy")
+         return
+      end if
+      src = mol
+      if (present(offset)) src%xyz(:, 1) = offset
+      call host_energy(pcm, mol, cavity, src, [charge], energy, error)
    end subroutine central_charge_energy
+
+   !> Answer the potential requests of a Gaussian density at the origin
+   !>
+   !> charge (alpha/pi)^(3/2) exp(-alpha r^2) has the potential charge erf(beta r)/r with
+   !> beta^2 = alpha, probed by a Gaussian of width xi0 beta^2 = alpha xi0^2/(alpha + xi0^2);
+   !> no nuclei
+   !>
+   !> @param[in]     cavity   Cavity the coupling was staged on
+   !> @param[in,out] coupling Staged coupling
+   !> @param[in]     charge   Charge of the density, e
+   !> @param[in]     alpha    Exponent of the density, 1/bohr^2
+   subroutine answer_gaussian_density(cavity, coupling, charge, alpha)
+      !> Cavity the coupling was staged on
+      class(cavity_type), intent(in) :: cavity
+      !> Staged coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Charge of the density
+      real(wp), intent(in) :: charge
+      !> Exponent of the density
+      real(wp), intent(in) :: alpha
+
+      !> Exponents of the probed density, potential and its gradient on the grid
+      real(wp), allocatable :: beta(:), phi(:), dphi(:, :)
+      !> Distance of a grid point from the center
+      real(wp) :: r
+      !> Grid point index
+      integer :: i
+
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (gaussian_potential_request_type)
+            beta = sqrt(alpha*cavity%xi0**2/(alpha + cavity%xi0**2))
+         type is (point_potential_request_type)
+            allocate (beta(cavity%ngrid), source=sqrt(alpha))
+         type is (nuclear_charge_request_type)
+            call submit(coupling, "z", [0.0_wp])
+            cycle
+         class default
+            cycle
+         end select
+         allocate (phi(cavity%ngrid), dphi(3, cavity%ngrid))
+         do i = 1, cavity%ngrid
+            r = norm2(cavity%xyz(:, i))
+            phi(i) = charge*erf(beta(i)*r)/r
+            dphi(:, i) = (2.0_wp*charge*beta(i)/sqrt(acos(-1.0_wp))*exp(-(beta(i)*r)**2) &
+               & - phi(i))*cavity%xyz(:, i)/r**2
+         end do
+         call submit(coupling, "phi", phi)
+         call submit(coupling, "dphi_dr", dphi)
+         deallocate (beta, phi, dphi)
+      end do
+   end subroutine answer_gaussian_density
 
    !> Nonlocal: interior permittivity, local limit and full nonlocal energy
    !>
@@ -1176,9 +1251,9 @@ contains
    !> Tolerance of the interior-permittivity check in units of Q**2/(2 R)
    !>
    !> Twice the measured deviations of the 302-point sphere at eta = 2 and 4:
-   !> - Gaussian: 4.8e-7 in the local limit, 1.3e-4 full nonlocal (the
+   !> - Gaussian: 1.0e-8 in the local limit, 1.3e-4 full nonlocal (the
    !>   discretization error of the eta = 1 check, the same at every eta)
-   !> - point: 3.8e-4 and 2.2e-3
+   !> - point: 2.9e-3 and 2.1e-3
    !>
    !> @param[in] point_surface Point instead of Gaussian surface charges
    !> @param[in] local_limit   Local limit eps = eps_inf
@@ -1191,11 +1266,92 @@ contains
       real(wp) :: tol
 
       if (point_surface) then
-         tol = merge(1.0e-3_wp, 5.0e-3_wp, local_limit)
+         tol = merge(6.0e-3_wp, 5.0e-3_wp, local_limit)
       else
-         tol = merge(1.0e-6_wp, 3.0e-4_wp, local_limit)
+         tol = merge(3.0e-8_wp, 3.0e-4_wp, local_limit)
       end if
    end function interior_tolerance
+
+   !> Nonlocal: the local limit eps = eps_inf does not depend on lambda
+   !>
+   !> lambda enters only through the Yukawa double layer, which cancels exactly on
+   !> the discrete surface; an off-center charge, as the central one hides part of
+   !> a leak by symmetry. Gaussian and point surfaces, interior permittivity 1 and 2
+   subroutine test_nonlocal_local_limit_lambda(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp), parameter :: lambda(3) = [0.5_wp, 3.0_wp, 25.0_wp], eta(2) = [1.0_wp, 2.0_wp]
+      real(wp) :: energy(size(lambda)), spread
+      integer :: ieta, isurf, ilambda
+      character(len=160) :: context
+
+      do ieta = 1, size(eta)
+         do isurf = 1, 2
+            do ilambda = 1, size(lambda)
+               physics = pcm_physics(eps=80.0_wp, eps_inf=80.0_wp, lambda=lambda(ilambda), &
+                  & eps_solute=eta(ieta))
+               call central_charge_energy(pcm_nonlocal, physics, isurf == 2, solver_type%dense, &
+                  & 1.0_wp, energy(ilambda), error, offset=[0.0_wp, 0.0_wp, 1.5_wp])
+               if (allocated(error)) return
+            end do
+            spread = (maxval(energy) - minval(energy))/abs(energy(1))
+            write (context, '("eta ",f4.1,1x,a,", energies ",3es20.12,", rel. spread ",es9.2)') &
+               & eta(ieta), merge("point   ", "Gaussian", isurf == 2), energy, spread
+            call check(error, spread <= 1.0e-12_wp, &
+               & message="Nonlocal local limit depends on lambda", more=trim(context))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_nonlocal_local_limit_lambda
+
+   !> Nonlocal: solute charge outside the cavity is polarized as in IEF-PCM
+   !>
+   !> A unit Gaussian density exp(-0.2 r^2) at the center of the sphere, 9.4 % of it
+   !> outside, in the local limit eps = eps_inf = 80. The potential right-hand side and
+   !> the surface-charge energy recover its volume polarization, 1/2 int rho dphi with
+   !> dphi(r) = (1/eps - 1) int Q(s)/s^2 ds from max(r, R) on (Q the enclosed charge,
+   !> quadrature to 1e-13). Written with the normal field the model would see only the
+   !> enclosed charge, (1/eps - 1) Q(R)^2/(2 R) = -0.1014 Eh, 16 % off
+   subroutine test_nonlocal_escaped_charge(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(pcm_physics) :: physics
+      real(wp), parameter :: alpha = 0.2_wp, exact = -1.206972975269118e-1_wp
+      real(wp) :: energy, deviation
+      integer :: isurf
+      character(len=160) :: context
+
+      physics = pcm_physics(eps=80.0_wp, eps_inf=80.0_wp, lambda=3.0_wp)
+      do isurf = 1, 2
+         call central_charge_energy(pcm_nonlocal, physics, isurf == 2, solver_type%dense, &
+            & 1.0_wp, energy, error, alpha=alpha)
+         if (allocated(error)) return
+         deviation = abs(energy - exact)/abs(exact)
+         write (context, '(a,", energy ",es20.12,", exact ",es20.12,", rel. dev ",es9.2)') &
+            & merge("point   ", "Gaussian", isurf == 2), energy, exact, deviation
+         call check(error, deviation <= escaped_tolerance(isurf == 2), &
+            & message="Nonlocal energy of a density outside the cavity deviates", &
+            & more=trim(context))
+         if (allocated(error)) return
+      end do
+   end subroutine test_nonlocal_escaped_charge
+
+   !> Tolerance of the escaped-charge check, twice the measured deviation
+   !>
+   !> 9.8e-4 Gaussian (with the Gaussian-probed potential), 5.5e-3 point
+   !>
+   !> @param[in] point_surface Point instead of Gaussian surface charges
+   pure function escaped_tolerance(point_surface) result(tol)
+      !> Point instead of Gaussian surface charges
+      logical, intent(in) :: point_surface
+      !> Relative tolerance
+      real(wp) :: tol
+
+      tol = merge(1.2e-2_wp, 2.0e-3_wp, point_surface)
+   end function escaped_tolerance
 
    !> LPB at inverse Debye lengths of 40 and 100 per bohr stays finite and Debye-Hueckel
    !>
@@ -1330,9 +1486,9 @@ contains
    !> Point surface, all models and parameter sets of `born_cases`: 1 %, the
    !> discretization error of the point quadrature (the self terms) measured
    !> as 0.2 % for C-PCM, COSMO, IEF-PCM, SS(V)PE, 0.1 % DPCM, 0.13 % SLIC,
-   !> 0.2-0.45 % LPB (largest at eps = 1, kappa = 0.3), 0.15-0.5 % nonlocal
-   !> (largest at lambda = 5 bohr). A point branch with the wrong dielectric
-   !> is off by tens of percent at eps = 2
+   !> 0.2-0.45 % LPB (largest at eps = 1, kappa = 0.3); nonlocal 2.5 %, measured
+   !> 0.45-1.1 % (largest at lambda = 5 bohr). A point branch with the wrong
+   !> dielectric is off by tens of percent at eps = 2
    !>
    !> Gaussian surface:
    !> Measured deviations on 110, 302 and 1202 points:
@@ -1357,7 +1513,7 @@ contains
       real(wp) :: tol
 
       if (.not. smeared) then
-         tol = 1.0e-2_wp
+         tol = merge(2.5e-2_wp, 1.0e-2_wp, kind == pcm_nonlocal)
          return
       end if
       select case (kind)

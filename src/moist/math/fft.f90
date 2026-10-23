@@ -23,6 +23,7 @@ module moist_math_fft
    public :: moist_fft_c2c_3d_pass, moist_fft_c2c_3d_pass_inplace
    public :: moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
    public :: moist_fft_dst4
+   public :: moist_fft_release_threads
 
    interface
 
@@ -287,6 +288,15 @@ module moist_math_fft
          !> Backend status, zero on success, nonzero if the backend failed
          integer(c_int) :: status
       end function moist_fft_dst4
+
+      !> Stop and join the workers of ducc0's process-wide thread pool
+      function moist_fft_release_threads() result(status) &
+         & bind(C, name="moist_fft_release_threads")
+         import :: c_int
+         implicit none(type, external)
+         !> Backend status, zero on success, nonzero if the backend failed
+         integer(c_int) :: status
+      end function moist_fft_release_threads
 
    end interface
 

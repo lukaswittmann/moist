@@ -158,8 +158,9 @@ The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr
 Both potential requests carry the total nuclear plus electronic potential.
 ``dphi_dr`` is its derivative with respect to the evaluation point, without a charge multiplication or electric-field sign change. ``d2phi_dr2`` is its spatial Hessian; ``d2phi_dr_dxi`` differentiates that same spatial derivative with respect to the Gaussian inverse width ``xi``.
 
-PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fock matrix and nuclear gradient, including the normal derivative :math:`v_n=\mathbf n\cdot\nabla\phi` needed by some variants. ``dphi_dxi`` differentiates the inverse length ``xi`` in bohr**-1, not the exponent ``xi**2``.
-The point operator is a separate request for components requiring bare Coulomb potentials.
+On a Gaussian surface, PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fock matrix and nuclear gradient, including the normal derivative :math:`v_n=\mathbf n\cdot\nabla\phi` needed by some variants. ``dphi_dxi`` differentiates the inverse length ``xi`` in bohr**-1, not the exponent ``xi**2``.
+PCM requests ``point_potential`` instead on point surfaces, and on Gaussian surfaces when its ``point_potential`` option is set; the host then uses the bare Coulomb operator in all three places, and the surface operator stays Gaussian.
+Other components requiring bare Coulomb potentials use the same request.
 
 Gaussian moment widths are exponents in bohr**-2, chosen by GOSTSHYP as ``pi*ln(2)/a`` from the per-point area.
 Every moment uses the unit-integral Gaussian ``G=(width/pi)**1.5 * exp(-width*|r-C|**2)``.

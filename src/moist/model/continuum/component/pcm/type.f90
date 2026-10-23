@@ -11,9 +11,9 @@ module moist_model_continuum_component_pcm_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       & parameter_adjoint_response_type, response_accumulate
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & gaussian_potential_request_type, nuclear_charge_request_type, moist_phase_energy, &
-      & moist_phase_response, moist_phase_gradient, coupling_register, request_require
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_request_type, &
+      & point_potential_request_type, gaussian_potential_request_type, nuclear_charge_request_type, &
+      & moist_phase_energy, moist_phase_response, moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_direct_gradient, &
@@ -22,6 +22,7 @@ module moist_model_continuum_component_pcm_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense, &
       & pcm_storage_matrix_free
    use moist_utils_prettyprint, only: prettyprinter
+   use moist_channels_fields, only: field_query_type
    implicit none(type, external)
    private
 
@@ -29,6 +30,8 @@ module moist_model_continuum_component_pcm_type
    public :: pcm_solver_type
    public :: solver_type
    public :: pcm_tangent_block, pcm_tangent_require
+   public :: pcm_component_declare_coupling
+   public :: pcm_component_list_fields
 
    !> One-block kernel direction of a surface channel, zero when unallocated
    interface pcm_tangent_block
@@ -67,6 +70,8 @@ module moist_model_continuum_component_pcm_type
       integer :: newton_maxiter = 50
       !> Add the parameter derivatives of the energy to `get_response`, never to gradient reads
       logical :: parameter_derivatives = .false.
+      !> Couple Gaussian surfaces through point potential integrals; no effect on point surfaces
+      logical :: point_potential = .false.
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
@@ -74,6 +79,8 @@ module moist_model_continuum_component_pcm_type
       procedure :: register_entries => register_parameter_entries
       !> Check solver controls
       procedure :: validate => validate_pcm_parameters
+      !> Print the solver and the operator storage by name
+      procedure :: print_choices => print_pcm_choices
    end type moist_pcm_parameters_type
 
    !> Abstract PCM base component
@@ -112,6 +119,12 @@ module moist_model_continuum_component_pcm_type
       !> Whether charges belong to the current cavity and host potential
       logical :: charges_valid = .false.
 
+      !> Whether the host answers Gaussian potential integrals, set by `update`
+      !>
+      !> Read by the host-weight routines, which get no cavity; the operator
+      !> discretization is the separate concern of the concrete models
+      logical :: gaussian_potential = .false.
+
    contains
 
       !> Request normals when the model uses a normal potential trace
@@ -119,6 +132,9 @@ module moist_model_continuum_component_pcm_type
 
       !> Whether this component reads n dot grad(phi)
       procedure :: uses_normal_trace => pcm_component_uses_normal_trace
+
+      !> Whether the host potential uses Gaussian integrals on a cavity
+      procedure :: uses_gaussian_potential => pcm_component_uses_gaussian_potential
 
       !> Adjoint of n dot grad(phi), zero for conductor models
       procedure :: normal_trace_adjoint => pcm_component_normal_trace_adjoint
@@ -177,6 +193,9 @@ module moist_model_continuum_component_pcm_type
       !> Print the dielectric constant and its scaling factor
       procedure :: print_inputs => pcm_component_print_inputs
 
+      !> Publish the potential adjoint of the current charges
+      procedure :: list_fields => pcm_component_list_fields
+
    end type model_continuum_component_pcm
 
 contains
@@ -198,6 +217,24 @@ contains
       uses = .false.
    end function pcm_component_uses_normal_trace
 
+   !> Whether the host potential uses Gaussian integrals on a cavity
+   !>
+   !> - Gaussian surface: Gaussian integrals unless `point_potential` is set
+   !> - Point surface: always point integrals
+   !>
+   !> @param[in] self   PCM component
+   !> @param[in] cavity Cavity the component is built on
+   pure function pcm_component_uses_gaussian_potential(self, cavity) result(uses)
+      !> PCM component
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Cavity the component is built on
+      class(cavity_type), intent(in) :: cavity
+      !> Gaussian potential integrals
+      logical :: uses
+
+      uses = allocated(cavity%xi0) .and. .not. self%param%point_potential
+   end function pcm_component_uses_gaussian_potential
+
    !> Default zero adjoint of the normal potential trace
    subroutine pcm_component_normal_trace_adjoint(self, w_vn, error)
       class(model_continuum_component_pcm), intent(in) :: self
@@ -211,7 +248,12 @@ contains
       allocate (w_vn(size(self%q)), source=0.0_wp)
    end subroutine pcm_component_normal_trace_adjoint
 
-   !> Form n dot grad(phi) from the host's raw spatial derivative
+   !> Form the normal trace `vn = n dot grad(phi)` from the host's raw spatial derivative
+   !>
+   !> - Outward unit normal `n`, pointing into the solvent
+   !> - Host potential only, nuclear plus electronic, without the reaction field
+   !> - `vn = -E_n`, minus the outward normal component of the solute electric field
+   !> - Gaussian surfaces: derivative of the smeared potential, so the smeared field
    subroutine pcm_component_normal_trace(self, coupling, cavity, vn, error)
       class(model_continuum_component_pcm), intent(in) :: self
       class(coupling_view_type), intent(in) :: coupling
@@ -271,6 +313,7 @@ contains
       self%newton_tol = defaults%newton_tol
       self%newton_maxiter = defaults%newton_maxiter
       self%parameter_derivatives = defaults%parameter_derivatives
+      self%point_potential = defaults%point_potential
    end subroutine init_parameter_defaults
 
    !> Declare parameter fields for JSON input, output, and printing
@@ -279,15 +322,48 @@ contains
    subroutine register_parameter_entries(self)
       class(moist_pcm_parameters_type), intent(inout), target :: self
 
-      call self%register_int_scalar("solver", self%solver, level=2)
+      call self%register_int_scalar("solver", self%solver)
       call self%register_real_scalar("solver_tol", self%solver_tol)
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
       call self%register_int_scalar("solver_restart", self%solver_restart)
-      call self%register_int_scalar("storage", self%storage, level=2)
+      call self%register_int_scalar("storage", self%storage)
       call self%register_real_scalar("newton_tol", self%newton_tol)
       call self%register_int_scalar("newton_maxiter", self%newton_maxiter)
       call self%register_logical("parameter_derivatives", self%parameter_derivatives)
+      call self%register_logical("point_potential", self%point_potential)
    end subroutine register_parameter_entries
+
+   !> Print the linear solver and, for the iterative one, the operator storage by name
+   !>
+   !> @param[in] self Parameter values
+   !> @param[in,out] pp Pretty printer inside the component section
+   subroutine print_pcm_choices(self, pp)
+      !> Parameter values
+      class(moist_pcm_parameters_type), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+      !> Name of the current choice
+      character(len=:), allocatable :: label
+
+      if (self%solver == solver_type%dense) then
+         label = "Dense"
+      else if (self%solver == solver_type%iterative) then
+         label = "Iterative (GMRES)"
+      else
+         label = "unknown"
+      end if
+      call pp%kv("Solver", self%solver, label)
+      if (self%solver /= solver_type%iterative) return
+
+      if (self%storage == pcm_storage_dense) then
+         label = "Dense"
+      else if (self%storage == pcm_storage_matrix_free) then
+         label = "Matrix-free"
+      else
+         label = "unknown"
+      end if
+      call pp%kv("Storage", self%storage, label)
+   end subroutine print_pcm_choices
 
    !> Linear solver settings of the component
    !>
@@ -343,9 +419,9 @@ contains
    !> Every chain-rule contraction through the host potential (Fock weights,
    !> the direct nuclear term, the surface-position and width weights) uses
    !> this vector, never the charges themselves. It equals the surface charge
-   !> `q` only for stationary potential-only models (CPCM, COSMO); IEF-PCM and
-   !> SS(V)PE return the symmetrized adjoint, and models that also consume the
-   !> normal trace (DPCM, DPCM-original, LPB, SLIC, nonlocal) return their own
+   !> `q` only for stationary potential-only models (CPCM, COSMO); IEF-PCM,
+   !> SS(V)PE and LPB return the symmetrized adjoint, and models that also consume
+   !> the normal trace (DPCM, DPCM-original, SLIC, nonlocal) return their own
    !> `dE/dphi`, with `dE/dvn` carried separately by `normal_trace_adjoint`
    !>
    !> @param[in]  self  PCM component with current surface charges
@@ -367,6 +443,31 @@ contains
       w_phi = self%q
 
    end subroutine pcm_component_potential_adjoint
+
+   !> Publish `potential_adjoint`, this component's `w_phi = dE/dphi` (ngrid)
+   !>
+   !> The share of the model's potential adjoint response item; not listed
+   !> while the charges are not current
+   !>
+   !> @param[in]    self  PCM component
+   !> @param[inout] query Field walker
+   subroutine pcm_component_list_fields(self, query)
+      !> PCM component
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      !> Potential adjoint of the current charges
+      real(wp), allocatable :: w_phi(:)
+      !> Charges not current
+      type(error_type), allocatable :: error
+
+      call self%potential_adjoint(w_phi, error)
+      if (allocated(error)) return
+      call query%add_real("potential_adjoint", &
+         & "Potential adjoint dE/dphi of this component, e (ngrid)", w_phi)
+
+   end subroutine pcm_component_list_fields
 
    !> Compute PCM solvation energy
    !>
@@ -723,31 +824,6 @@ contains
 
    end subroutine read_host_nuclear_charges
 
-   !> Contract the raw spatial derivative with this component's potential adjoint
-   !>
-   !> The nuclear and electronic contributions share the host's potential convention
-   !>
-   !> @param[in]  coupling QM coupling data
-   !> @param[in]  w_phi    Potential adjoint of this component (ngrid)
-   !> @param[out] w_xyz    Host total surface-position weight (3, ngrid)
-   !> @param[out] error    Error handling
-   subroutine read_host_position_weight(coupling, w_phi, w_xyz, error)
-      !> Scoped raw host primitives
-      class(coupling_view_type), intent(in) :: coupling
-      !> Potential adjoint of this component
-      real(wp), intent(in) :: w_phi(:)
-      !> Contracted position weights
-      real(wp), allocatable, intent(out) :: w_xyz(:, :)
-      !> Missing spatial derivative
-      type(error_type), allocatable, intent(out) :: error
-      integer :: i
-      call coupling%read("potential", "dphi_dr", w_xyz, error)
-      if (allocated(error)) return
-      do i = 1, size(w_phi)
-         w_xyz(:, i) = w_phi(i)*w_xyz(:, i)
-      end do
-   end subroutine read_host_position_weight
-
    !> Add the operator and host trace surface weights for the gradient
    subroutine pcm_component_get_gradient_surface_weights(self, coupling, cavity, acc, error)
       !> PCM component with its own solved charges
@@ -771,7 +847,8 @@ contains
    !> adjoint `w_phi` (equal to `q` only for stationary potential-only models);
    !> this term does not reach the energy through any cavity surface quantity,
    !> so it stays with the component instead of going through the cavity
-   !> contraction
+   !> contraction. The nuclear potential matches the host request, Gaussian or
+   !> point
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data
@@ -798,6 +875,8 @@ contains
       integer :: i
       !> Solute atom count and grid size
       integer :: nat, ngrid
+      !> Gaussian host potential
+      logical :: gaussian
 
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid
@@ -813,9 +892,15 @@ contains
       if (allocated(error)) return
       call read_host_nuclear_charges(coupling, nat, za, error)
       if (allocated(error)) return
+      gaussian = self%uses_gaussian_potential(cavity)
       allocate (grad_direct(3, nat))
-      call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
-         & w_phi, za, grad_direct, error, xi=cavity%xi0)
+      if (gaussian) then
+         call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+            & w_phi, za, grad_direct, error, xi=cavity%xi0)
+      else
+         call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+            & w_phi, za, grad_direct, error)
+      end if
       if (allocated(error)) return
 
       if (self%uses_normal_trace()) then
@@ -833,8 +918,13 @@ contains
          do i = 1, ngrid
             w_grad(:, i) = w_vn(i)*cavity%normal0(:, i)
          end do
-         call pcm_electrostatic_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
-            & w_grad, za, grad_normal, error, xi=cavity%xi0)
+         if (gaussian) then
+            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+               & w_grad, za, grad_normal, error, xi=cavity%xi0)
+         else
+            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+               & w_grad, za, grad_normal, error)
+         end if
          if (allocated(error)) return
          grad_direct = grad_direct + grad_normal
       end if
@@ -993,6 +1083,9 @@ contains
 
    !> Contract raw potential derivatives into position and Gaussian-width adjoints
    !>
+   !> The width adjoint only for Gaussian potential integrals; point integrals
+   !> do not depend on the widths
+   !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data carrying the host weights
    !> @param[in,out] acc      Accumulated cavity surface adjoints
@@ -1009,31 +1102,53 @@ contains
       integer, intent(in) :: ngrid
       !> Missing or mismatched derivative
       type(error_type), allocatable, intent(out) :: error
+      !> Raw host derivatives, contracted in place
       real(wp), allocatable :: w_xyz(:, :), w_xi(:)
       !> Potential adjoint of this component
       real(wp), allocatable :: w_phi(:)
-      call self%potential_adjoint(w_phi, error)
+      integer :: i
+
+      call coupling%read("potential", "dphi_dr", w_xyz, error)
       if (allocated(error)) return
-      call read_host_position_weight(coupling, w_phi, w_xyz, error)
-      if (allocated(error)) return
-      if (size(w_xyz, 2) /= ngrid) then
+      if (any(shape(w_xyz) /= [3, ngrid])) then
          call fatal_error(error, "PCM spatial derivative grid mismatch")
          return
       end if
-      call coupling%read("potential", "dphi_dxi", w_xi, error)
+      if (self%gaussian_potential) then
+         call coupling%read("potential", "dphi_dxi", w_xi, error)
+         if (allocated(error)) return
+         if (size(w_xi) /= ngrid) then
+            call fatal_error(error, "PCM width derivative grid mismatch")
+            return
+         end if
+      end if
+      call self%potential_adjoint(w_phi, error)
       if (allocated(error)) return
-      call acc%add_surface_weights(error, w_xyz=w_xyz, w_xi=w_phi*w_xi)
+      if (size(w_phi) /= ngrid) then
+         call fatal_error(error, "PCM spatial derivative grid mismatch")
+         return
+      end if
+      do i = 1, ngrid
+         w_xyz(:, i) = w_phi(i)*w_xyz(:, i)
+      end do
+      if (self%gaussian_potential) then
+         call acc%add_surface_weights(error, w_xyz=w_xyz, w_xi=w_phi*w_xi)
+      else
+         call acc%add_surface_weights(error, w_xyz=w_xyz)
+      end if
    end subroutine pcm_component_get_host_surface_weights
 
    !* ================================================================================= *!
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
-   !> Declare Gaussian potential outputs independently for each phase
+   !> Declare the host potential outputs independently for each phase
    !>
-   !> Spatial and width derivatives are needed in the response only when the
-   !> level set follows the density, and in every nuclear gradient; the
-   !> nuclear charges only in the gradient
+   !> - `gaussian_potential` when `uses_gaussian_potential`, else `point_potential`
+   !> - Spatial derivatives (and width derivatives of Gaussian integrals) in the
+   !>   response only when the level set follows the density, and in every
+   !>   nuclear gradient; second derivatives only for normal-trace models
+   !> - The nuclear charges only in the gradient
    !>
    !> @param[in]    self     PCM component instance
    !> @param[in]    cavity   Cavity the model is built on
@@ -1048,42 +1163,42 @@ contains
       type(coupling_type), intent(inout) :: coupling
       !> Registration error
       type(error_type), allocatable, intent(out) :: error
-      type(gaussian_potential_request_type) :: potential
+      class(coupling_request_type), allocatable :: potential
       type(nuclear_charge_request_type) :: charges
-      logical :: need_normal
+      logical :: normal, field, gaussian
 
-      need_normal = self%uses_normal_trace()
+      normal = self%uses_normal_trace()
+      field = cavity%has_field_dependent_geometry()
+      gaussian = self%uses_gaussian_potential(cavity)
+      if (gaussian) then
+         allocate (gaussian_potential_request_type :: potential)
+      else
+         allocate (point_potential_request_type :: potential)
+      end if
       call request_require(potential, moist_phase_energy, "phi", error)
       if (allocated(error)) return
-      if (need_normal) then
-         call request_require(potential, moist_phase_energy, "dphi_dr", error)
-         if (allocated(error)) return
-      end if
+      call request_require(potential, moist_phase_energy, "dphi_dr", normal, error)
+      if (allocated(error)) return
       call request_require(potential, moist_phase_response, "phi", error)
       if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "dphi_dr", &
-         & cavity%has_field_dependent_geometry() .or. need_normal, error)
+      call request_require(potential, moist_phase_response, "dphi_dr", field .or. normal, error)
       if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "dphi_dxi", cavity%has_field_dependent_geometry(), error)
+      call request_require(potential, moist_phase_response, "d2phi_dr2", normal .and. field, error)
       if (allocated(error)) return
-      if (need_normal) then
-         call request_require(potential, moist_phase_response, "d2phi_dr2", &
-            & cavity%has_field_dependent_geometry(), error)
-         if (allocated(error)) return
-         call request_require(potential, moist_phase_response, "d2phi_dr_dxi", &
-            & cavity%has_field_dependent_geometry(), error)
-         if (allocated(error)) return
-      end if
       call request_require(potential, moist_phase_gradient, "phi", error)
       if (allocated(error)) return
       call request_require(potential, moist_phase_gradient, "dphi_dr", error)
       if (allocated(error)) return
-      call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
+      call request_require(potential, moist_phase_gradient, "d2phi_dr2", normal, error)
       if (allocated(error)) return
-      if (need_normal) then
-         call request_require(potential, moist_phase_gradient, "d2phi_dr2", error)
+      if (gaussian) then
+         call request_require(potential, moist_phase_response, "dphi_dxi", field, error)
          if (allocated(error)) return
-         call request_require(potential, moist_phase_gradient, "d2phi_dr_dxi", error)
+         call request_require(potential, moist_phase_response, "d2phi_dr_dxi", normal .and. field, error)
+         if (allocated(error)) return
+         call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
+         if (allocated(error)) return
+         call request_require(potential, moist_phase_gradient, "d2phi_dr_dxi", normal, error)
          if (allocated(error)) return
       end if
       call coupling_register(coupling, "potential", potential, error)
