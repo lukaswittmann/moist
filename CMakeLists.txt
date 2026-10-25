@@ -395,13 +395,13 @@ if(MOIST_TESTS)
     parameters prepare_solvent block_products map_consistency jvp_affine
     thread_independence setup_errors problem_setup_errors warm_start scf_reuse operator_cache charge_moment
     water_in_water response_tables response_charges response_fixed host_charges
-    energy_refusals reference_values)
+    energy_refusals filters_refusal picard_damping reference_values)
   set(moist_test_selected_moz_closure
     construction reference_values first_derivatives second_derivatives branch_boundary energy_integrands
     physical_inputs invalid_inputs noncontiguous_arrays block_sweeps nested_teams fused_derivative array_integrands energy_derivatives custom_extension)
   set(moist_test_selected_moz_1d_preconditioner
     spectral_identity spectral_filter spectral_thread_independence spectral_setup_errors kspace_block_inverse kspace_activation
-    kspace_thread_independence kspace_update_errors kspace_reallocation kspace_singular_fallback kspace_release_guard kspace_block_query selection)
+    kspace_thread_independence kspace_update_errors kspace_reallocation kspace_singular_fallback kspace_release_guard kspace_block_query selection filters_damping filters_attach)
   set(moist_test_selected_moz_solver
     factory parameters_file picard_update diis_extrapolation diis_convergence diis_stages
     diis_divergence_restart adjoint_solve adjoint_failures jfnk_nonlinear

@@ -139,7 +139,7 @@ test_selected = {
     'parameters', 'prepare_solvent', 'block_products', 'map_consistency', 'jvp_affine',
     'thread_independence', 'setup_errors', 'problem_setup_errors', 'warm_start', 'scf_reuse', 'operator_cache', 'charge_moment',
     'water_in_water', 'response_tables', 'response_charges', 'response_fixed', 'host_charges',
-    'energy_refusals', 'reference_values',
+    'energy_refusals', 'filters_refusal', 'picard_damping', 'reference_values',
   ],
   'moz_solvent_vv': [
     'intramolecular', 'block_solve', 'map_consistency', 'jvp_differences',
@@ -209,6 +209,8 @@ test_selected = {
     'kspace_release_guard',
     'kspace_block_query',
     'selection',
+    'filters_damping',
+    'filters_attach',
   ],
   'moz_solver': [
     'factory',

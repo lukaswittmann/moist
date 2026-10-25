@@ -5,13 +5,24 @@ module test_moz_1d_preconditioner
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair, &
       & transform_quadrature
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
+   use moist_context, only: moist_context_type, new_context
    use moist_model_moz_solver_core_preconditioner, only: moist_model_moz_solver_preconditioner_type
+   use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
+      & moist_model_moz_solver_parameters_type, new_solver
+   use moist_model_moz_solver_jfnk, only: moist_model_moz_solver_jfnk_type, new_jfnk_solver
    use moist_model_moz_1d_preconditioner, only: moist_model_moz_1d_preconditioner_spectral_type, &
       & moist_model_moz_1d_preconditioner_kspace_type, select_1d_preconditioner, &
       & preconditioners_1d_uv, preconditioners_1d_vv
+   use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
    implicit none(type, external)
    private
    public :: collect_moz_1d_preconditioner
+
+   !> Residual R(gamma) = gamma with its root at zero
+   type, extends(moist_model_moz_solver_evaluator_type) :: identity_residual_type
+   contains
+      procedure :: residual => identity_residual
+   end type identity_residual_type
 
    !> Radial nodes and spacing of the test grids, bohr; 48 has an odd factor,
    !> so the characteristic-length index meets exact rounding ties
@@ -42,7 +53,9 @@ contains
          & new_unittest("kspace_singular_fallback", test_kspace_singular), &
          & new_unittest("kspace_release_guard", test_kspace_release_guard), &
          & new_unittest("kspace_block_query", test_kspace_block_query), &
-         & new_unittest("selection", test_selection)]
+         & new_unittest("selection", test_selection), &
+         & new_unittest("filters_damping", test_filters_damping), &
+         & new_unittest("filters_attach", test_filters_attach)]
    end subroutine collect_moz_1d_preconditioner
 
    !> Build the uniform test grid pair
@@ -708,5 +721,167 @@ contains
          end do
       end do
    end subroutine gauss_jordan
+
+   !> Damp only updates the solver allows to post-process, with the damping filter's own weights
+   !>
+   !> - PICARD and DIIS: damped when enabled, unchanged when disabled
+   !> - JFNK: never damped; HYBRID: damped in the MDIIS phase, not after the switch to JFNK
+   !> - Damping and spectral filters differ, so applying the wrong one fails the check
+   !> @param[out] error Test failure
+   subroutine test_filters_damping(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_model_moz_1d_solver_filters_type) :: filters, undamped
+      type(moist_model_moz_1d_preconditioner_spectral_type) :: reference, spectral
+      type(moist_model_moz_solver_parameters_type) :: parameters
+      class(moist_model_moz_solver_type), allocatable :: solver
+      type(identity_residual_type) :: evaluator
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      type(moist_context_type), target :: ctx
+      type(moist_error), allocatable :: err
+      real(wp), allocatable :: gamma(:, :), proposed(:, :), damped(:, :), expected(:, :), wrong(:, :), delta(:)
+      real(wp), allocatable :: updated(:, :)
+      character(len=6), parameter :: postprocessed(2) = [character(len=6) :: "PICARD", "DIIS"]
+      integer, parameter :: npair = 3
+      real(wp), parameter :: damp_k0 = 2.0_wp*k0, damp_weight = 0.5_wp
+      real(wp) :: rmse, scale
+      logical :: feasible
+      integer :: i
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call make_pair(rgrid, kgrid, error)
+      if (allocated(error)) return
+      call filters%setup(rgrid, kgrid, 1, "spectral", k0, w0, .true., damp_k0, damp_weight, err)
+      if (.not. allocated(err)) call undamped%setup(rgrid, kgrid, 1, "spectral", k0, w0, .false., damp_k0, &
+         & damp_weight, err)
+      if (.not. allocated(err)) call reference%setup(rgrid, kgrid, damp_k0, damp_weight, err)
+      if (.not. allocated(err)) call spectral%setup(rgrid, kgrid, k0, w0, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      gamma = reshape(0.5_wp*test_vector(npair), [npts, npair])
+      proposed = reshape(test_vector(npair), [npts, npair])
+      delta = reshape(proposed - gamma, [npts*npair])
+      call reference%apply(delta)
+      expected = gamma + reshape(delta, [npts, npair])
+      delta = reshape(proposed - gamma, [npts*npair])
+      call spectral%apply(delta)
+      wrong = gamma + reshape(delta, [npts, npair])
+      scale = 1.0e-12_wp*(1.0_wp + maxval(abs(expected)))
+      call check(error, maxval(abs(expected - wrong)) > 1.0e-6_wp, "The test needs distinct filters")
+      if (allocated(error)) return
+
+      do i = 1, size(postprocessed)
+         parameters%name = postprocessed(i)
+         call new_solver(solver, ctx, err, parameters)
+         call check(error, .not. allocated(err))
+         if (allocated(error)) return
+         damped = proposed
+         call filters%damp(solver, gamma, damped)
+         call check(error, maxval(abs(damped - expected)) < scale, &
+            & "Enabled damping must apply the damping filter: "//trim(postprocessed(i)))
+         if (allocated(error)) return
+         damped = proposed
+         call undamped%damp(solver, gamma, damped)
+         call check(error, all(damped == proposed), "Disabled damping must keep the update: "//trim(postprocessed(i)))
+         if (allocated(error)) return
+      end do
+
+      parameters%name = "JFNK"
+      call new_solver(solver, ctx, err, parameters)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      damped = proposed
+      call filters%damp(solver, gamma, damped)
+      call check(error, all(damped == proposed), "JFNK updates must not be damped")
+      if (allocated(error)) return
+
+      parameters%name = "HYBRID"
+      parameters%hybrid%switch_rmse = 1.0e3_wp
+      parameters%jfnk%use_exact_jvp = .false.
+      call new_solver(solver, ctx, err, parameters)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      damped = proposed
+      call filters%damp(solver, gamma, damped)
+      call check(error, maxval(abs(damped - expected)) < scale, "HYBRID must damp in its MDIIS phase")
+      if (allocated(error)) return
+      allocate (updated, mold=gamma)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, err)
+      call check(error, feasible .and. .not. allocated(err) .and. .not. solver%allows_postprocessing(), &
+         & "HYBRID must switch to JFNK below switch_rmse")
+      if (allocated(error)) return
+      damped = proposed
+      call filters%damp(solver, gamma, damped)
+      call check(error, all(damped == proposed), "HYBRID must not damp after switching to JFNK")
+      call ctx%delete()
+   end subroutine test_filters_damping
+
+   !> Lend the selected preconditioner and always the fallback filter; detach keeps both built
+   !> @param[out] error Test failure
+   subroutine test_filters_attach(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
+      type(moist_model_moz_solver_jfnk_type) :: jfnk
+      class(moist_model_moz_solver_preconditioner_type), pointer :: precond
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      type(moist_context_type), target :: ctx
+      type(moist_error), allocatable :: err
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call make_pair(rgrid, kgrid, error)
+      if (allocated(error)) return
+      jfnk = new_jfnk_solver(ctx)
+
+      call filters%setup(rgrid, kgrid, 1, "none", k0, w0, .false., k0, w0, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call filters%attach(jfnk)
+      call check(error, .not. associated(jfnk%precond) .and. associated(jfnk%smoother, filters%spectral), &
+         & "Without a preconditioner the fallback filter must still be lent")
+      if (allocated(error)) return
+      precond => filters%response_preconditioner()
+      call check(error, .not. associated(precond), "No response preconditioner for none")
+      if (allocated(error)) return
+      call filters%detach(jfnk)
+      call check(error, .not. associated(jfnk%precond) .and. .not. associated(jfnk%smoother), &
+         & "Detach must take both operators back")
+      if (allocated(error)) return
+
+      call filters%setup(rgrid, kgrid, 1, "Spectral", k0, w0, .false., k0, w0, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call filters%attach(jfnk)
+      call check(error, associated(jfnk%precond, filters%spectral) .and. associated(jfnk%smoother, filters%spectral), &
+         & "The spectral filter must precondition and filter the fallback")
+      if (allocated(error)) return
+      call filters%detach(jfnk)
+      precond => filters%response_preconditioner()
+      call check(error, associated(precond, filters%spectral) .and. filters%spectral%ready(1.0_wp) .and. &
+         & .not. associated(jfnk%precond) .and. .not. associated(jfnk%smoother), &
+         & "Detached filters must stay built for the response")
+      if (allocated(error)) return
+
+      call filters%setup(rgrid, kgrid, 1, "kspace", k0, w0, .false., k0, w0, err)
+      call check(error, allocated(err), "1D UV filters must refuse the VV-only kspace")
+      call ctx%delete()
+   end subroutine test_filters_attach
+
+   !> Residual R(gamma) = gamma
+   !>
+   !> @param[in]  self      evaluator
+   !> @param[in]  gamma     iterate
+   !> @param[out] residual  gamma
+   !> @param[out] feasible  always true
+   !> @param[out] error     never allocated
+   subroutine identity_residual(self, gamma, residual, feasible, error)
+      class(identity_residual_type), intent(in) :: self
+      real(wp), intent(in) :: gamma(:, :)
+      real(wp), intent(out) :: residual(:, :)
+      logical, intent(out) :: feasible
+      type(moist_error), allocatable, intent(out) :: error
+
+      associate (unused => self); end associate
+      residual = gamma
+      feasible = .true.
+   end subroutine identity_residual
 
 end module test_moz_1d_preconditioner

@@ -76,7 +76,9 @@ cold; a feasible warm attempt that fails retries once from ``c_s = 0``.
 ``convergence.reuse_initial_guess = false`` selects cold starts while retaining storage.
 A geometry update, changed grid pair, changed bulk or explicit invalidation rebuilds
 the problem. Standalone calls start cold unless ``guess`` or
-``reuse_initial_guess=true`` is supplied.
+``reuse_initial_guess=true`` is supplied. A standalone ``uv_problem_type`` takes the
+preconditioner and damping filters from ``new_uv_filters`` as the first argument of
+``solve`` and ``response``; the model owns its own set and lends it the same way.
 
 Response
 --------

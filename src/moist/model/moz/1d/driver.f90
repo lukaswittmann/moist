@@ -4,7 +4,7 @@
 !> - Closure gives c_s(r), equation maps it back, R(t_s) = t_s - T(C(t_s))
 !> - One stage at full coupling, from a supplied t_s guess or c_s = 0
 !> - Exact Jacobian and transpose products, J v = v - T'(c' v), T affine
-!> - Small-k damping of updates the solver lets us post-process
+!> - Preconditioner and small-k damping come from the model's filters (1d/solver_filters.f90)
 !> - Solvation free energy dG = (1/beta) sum_ia rho_a int Phi(h_ia, c_ia) d^3r
 !>   with physical h and c
 !>   - Coulomb tails of c cancel in the sum over the sites of a neutral solvent
@@ -18,17 +18,14 @@ module moist_model_moz_1d_driver
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
    use mctc_io_convert, only: autokcal
-   use mctc_io_utils, only: to_lower
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_packed_sym, only: npair_from_ns
    use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
    use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
       & moist_model_moz_solver_iteration_type, moist_model_moz_solver_printer_type, &
       & moist_model_moz_solver_preconditioner_type, &
-      & moist_model_moz_solver_statistics_type, new_solver, run_iterations, solve_adjoint, &
-      & check_preconditioner_name
-   use moist_model_moz_1d_preconditioner, only: moist_model_moz_1d_preconditioner_spectral_type, &
-      & select_1d_preconditioner, preconditioners_1d_uv
+      & moist_model_moz_solver_statistics_type, new_solver, run_iterations, solve_adjoint
+   use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
    use moist_model_moz_1d_equation, only: uv_equation_type
    use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
    use moist_model_moz_response_kernel, only: uv_response_rhs, uv_response_sr, uv_response_lr
@@ -37,7 +34,7 @@ module moist_model_moz_1d_driver
    implicit none(type, external)
    private
 
-   public :: uv_problem_type, uv_evaluator_type, new_uv_problem
+   public :: uv_problem_type, uv_evaluator_type, new_uv_problem, new_uv_filters
 
 
    !> Fixed UV data, operators and the iterate of one solve
@@ -66,14 +63,6 @@ module moist_model_moz_1d_driver
       logical :: linearized = .false.
       !> Whether the current t_s can seed another solve on the same radial pair
       logical, private :: has_guess = .false.
-      !> Lowercase preconditioner name: none or spectral
-      character(len=8) :: precond = "none"
-      !> Small-k damping of post-processed updates
-      logical :: damp_small_k = .false.
-      !> Spectral filter: preconditioner when selected and the Picard fallback filter
-      type(moist_model_moz_1d_preconditioner_spectral_type) :: spectral
-      !> Small-k damping filter
-      type(moist_model_moz_1d_preconditioner_spectral_type) :: damping
    contains
       !> Replace fixed-grid potential tables while retaining operators and solver storage
       procedure :: update_potential => problem_update_potential
@@ -104,8 +93,10 @@ module moist_model_moz_1d_driver
    type, extends(moist_model_moz_solver_iteration_type) :: uv_iteration_type
       !> Evaluator borrowing the problem
       type(uv_evaluator_type) :: evaluator
-      !> Proposed iterate and its residual, (npts, nu nv), and damping scratch
-      real(wp), allocatable :: gamma_new(:, :), residual(:, :), delta(:)
+      !> Proposed iterate and its residual, (npts, nu nv)
+      real(wp), allocatable :: gamma_new(:, :), residual(:, :)
+      !> Borrowed filters of this solve
+      type(moist_model_moz_1d_solver_filters_type), pointer :: filters => null()
       !> Borrowed iteration table; null when quiet
       type(moist_model_moz_solver_printer_type), pointer :: printer => null()
       !> Tolerance; on the converging step the update is checked against its input
@@ -117,6 +108,30 @@ module moist_model_moz_1d_driver
    end type uv_iteration_type
 
 contains
+
+   !> Build the preconditioner and damping filters of UV solves from the settings
+   !>
+   !> @param[out] filters  filters for problems on this radial pair
+   !> @param[in]  ctx      run context; OpenMP team size
+   !> @param[in]  rgrid    real-space uniform DST-IV grid
+   !> @param[in]  kgrid    reciprocal grid of the pair
+   !> @param[in]  params   validated settings
+   !> @param[out] error    unknown preconditioner name or filter setup failure
+   subroutine new_uv_filters(filters, ctx, rgrid, kgrid, params, error)
+      !> Filters
+      type(moist_model_moz_1d_solver_filters_type), intent(out) :: filters
+      !> Run context
+      type(moist_context_type), intent(in) :: ctx
+      !> Radial pair
+      type(moist_math_grid_radial_type), intent(in) :: rgrid, kgrid
+      !> Settings
+      type(model_moz_1d_parameters_type), intent(in) :: params
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call filters%setup(rgrid, kgrid, ctx%get_num_threads(), params%precond, params%precond_k0, params%precond_w0, &
+         & params%damp_small_k, params%damp_small_k_k0, params%damp_small_k_min_weight, error)
+   end subroutine new_uv_filters
 
    !> Build a UV problem from the fixed tables and the settings
    !>
@@ -132,7 +147,7 @@ contains
    !> @param[in]  rho        solvent site number densities, 1/bohr^3 (nv)
    !> @param[in]  beta       inverse thermal energy, 1/Hartree
    !> @param[in]  params     validated settings
-   !> @param[out] error      closure, solver, equation or filter setup failure
+   !> @param[out] error      closure, solver or equation setup failure
    subroutine new_uv_problem(self, ctx, rgrid, kgrid, wu, response, u_sr, ur_lr, uk_lr, rho, beta, params, error)
       !> Problem
       type(uv_problem_type), intent(out) :: self
@@ -165,23 +180,11 @@ contains
       end if
       call new_closure(self%closure, params%closure, error, self%ctx)
       if (allocated(error)) return
-      call check_preconditioner_name(params%precond, preconditioners_1d_uv, "1D UV", error)
-      if (allocated(error)) return
       call new_solver(self%solver, ctx, error, params%solver)
       if (allocated(error)) return
       self%equation%nthreads = ctx%get_num_threads()
       call self%equation%setup(rgrid, kgrid, wu, response, beta, uk_lr, error)
       if (allocated(error)) return
-      self%spectral%nthreads = ctx%get_num_threads()
-      call self%spectral%setup(rgrid, kgrid, params%precond_k0, params%precond_w0, error)
-      if (allocated(error)) return
-      self%damp_small_k = params%damp_small_k
-      if (self%damp_small_k) then
-         self%damping%nthreads = ctx%get_num_threads()
-         call self%damping%setup(rgrid, kgrid, params%damp_small_k_k0, params%damp_small_k_min_weight, error)
-         if (allocated(error)) return
-      end if
-      self%precond = to_lower(trim(adjustl(params%precond)))
       self%rgrid = rgrid
       self%kgrid = kgrid
       self%u_sr = u_sr
@@ -239,6 +242,7 @@ contains
    !>   fallback summary after each attempt
    !>
    !> @param[inout] self       problem; returns the last accepted t_s and c_s
+   !> @param[inout] filters    preconditioner and damping on the problem's radial pair, lent for this solve
    !> @param[in]    tolerance  RMS residual of a converged solve
    !> @param[in]    maxiter    outer iterations
    !> @param[out]   converged  whether the solve converged
@@ -247,9 +251,12 @@ contains
    !> @param[out]   error      map, residual or closure failure
    !> @param[in]    guess      initial short-range t_s(r), (npts, nu nv); absent for a fresh start
    !> @param[in]    reuse_initial_guess Try the retained field when guess is absent; default false
-   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, guess, reuse_initial_guess)
+   subroutine problem_solve(self, filters, tolerance, maxiter, converged, rmse, niter, error, guess, &
+      & reuse_initial_guess)
       !> Problem
       class(uv_problem_type), intent(inout), target :: self
+      !> Filters, built on the problem's radial pair
+      type(moist_model_moz_1d_solver_filters_type), intent(inout), target :: filters
       !> Tolerance
       real(wp), intent(in) :: tolerance
       !> Iteration limit
@@ -269,7 +276,6 @@ contains
       type(uv_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
-      class(moist_model_moz_solver_preconditioner_type), pointer :: precond
       type(error_type), allocatable :: guess_error
       logical :: warm
       integer :: attempt, attempted_steps
@@ -277,10 +283,12 @@ contains
       converged = .false.
       rmse = huge(1.0_wp)
       niter = 0
+      call filters%check(self%rgrid, self%kgrid, error)
+      if (allocated(error)) return
       context%evaluator%problem => self
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
-      if (self%damp_small_k) allocate (context%delta(size(self%tr)))
+      context%filters => filters
       if (self%ctx%verbosity(4)) then
          call printer%setup(unit=self%ctx%unit, energy_label="DG kcal", denergy_label="dDG kcal", &
             & inner_rows=self%ctx%verbosity(5))
@@ -289,11 +297,7 @@ contains
          call printer%header("1D UV")
          call printer%blank()
       end if
-      if (self%solver%uses_preconditioner()) then
-         call select_1d_preconditioner(self%precond, self%spectral, precond)
-         if (associated(precond)) call self%solver%set_preconditioner(precond)
-         call self%solver%set_fallback_filter(self%spectral)
-      end if
+      call filters%attach(self%solver)
       work0 = self%solver%get_statistics()
 
       self%linearized = .false.
@@ -356,8 +360,7 @@ contains
       end do
 
       call self%solver%set_iteration_printer()
-      call self%solver%set_preconditioner()
-      call self%solver%set_fallback_filter()
+      call filters%detach(self%solver)
       if (associated(context%printer)) then
          call printer%separator()
          call printer%blank()
@@ -430,7 +433,7 @@ contains
    !>
    !> - Valid at a converged iterate; the closure derivative is taken there
    !> - Right-hand side g = dE/dt_s from energy-weighted Phi derivatives at physical h and c
-   !> - Transposed solve J^T lambda = g with the problem's preconditioner
+   !> - Transposed solve J^T lambda = g with the filters' preconditioner, whatever solver ran the primal solve
    !>   - Starts from lambda on entry when it has the field shape, else from zero
    !> - With dh = energy_seed*dPhi/dh and dc = energy_seed*dPhi/dc:
    !>   w_sr = dc_s/du_sr [a (dh + dc) + mu], mu = T'^T lambda;
@@ -439,6 +442,7 @@ contains
    !> - Adjoint convention: dE = sum w_sr du_sr + sum w_lr du_lr(r) + sum w_k du_lr(k)
    !>
    !> @param[inout] self       problem with a converged iterate
+   !> @param[inout] filters    filters on the problem's radial pair
    !> @param[in]    tolerance  RMS of the transpose residual relative to the RMS of g
    !> @param[out]   w_sr       adjoint of u_sr, (npts, nu nv)
    !> @param[out]   w_lr       adjoint of u_lr(r), (npts, nu nv)
@@ -447,9 +451,11 @@ contains
    !> @param[out]   error      infeasible iterate, closure failure or unconverged transposed solve
    !> @param[in]    free_energy_weight  optional free-energy sensitivity; default one
    !> @param[out]   w_wu       optional adjoint of packed solute W(k), Hartree
-   subroutine problem_response(self, tolerance, w_sr, w_lr, w_k, lambda, error, free_energy_weight, w_wu)
+   subroutine problem_response(self, filters, tolerance, w_sr, w_lr, w_k, lambda, error, free_energy_weight, w_wu)
       !> Problem
       class(uv_problem_type), intent(inout), target :: self
+      !> Filters, built on the problem's radial pair
+      type(moist_model_moz_1d_solver_filters_type), intent(inout), target :: filters
       !> Relative tolerance
       real(wp), intent(in) :: tolerance
       !> Table adjoints
@@ -471,6 +477,8 @@ contains
       integer :: i, col, nv, nt
       logical :: feasible, warm
 
+      call filters%check(self%rgrid, self%kgrid, error)
+      if (allocated(error)) return
       if (.not. ieee_is_finite(tolerance) .or. tolerance <= 0.0_wp) then
          call fatal_error(error, "1D UV response needs a positive finite tolerance")
          return
@@ -511,7 +519,7 @@ contains
       if (allocated(lambda)) warm = all(shape(lambda) == shape(rhs))
       ! A zero objective has an exact zero solution; discard a nonzero warm start
       warm = warm .and. any(rhs /= 0.0_wp)
-      call select_1d_preconditioner(self%precond, self%spectral, precond)
+      precond => filters%response_preconditioner()
       if (associated(precond) .and. warm) then
          call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, preconditioner=precond, &
             & guess=lambda, workspace_owner=self%solver)
@@ -573,11 +581,7 @@ contains
       associate (p => self%evaluator%problem)
          call p%solver%outer_step(self%evaluator, p%tr, self%gamma_new, rmse, feasible, error)
          if (allocated(error) .or. .not. feasible) return
-         if (p%damp_small_k .and. p%solver%allows_postprocessing()) then
-            self%delta = reshape(self%gamma_new - p%tr, [size(self%delta)])
-            call p%damping%apply(self%delta)
-            self%gamma_new = p%tr + reshape(self%delta, shape(p%tr))
-         end if
+         call self%filters%damp(p%solver, p%tr, self%gamma_new)
          if (rmse < self%tolerance) then
             call finish_solve(self, rmse, feasible, error)
             return

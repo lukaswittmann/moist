@@ -2,6 +2,7 @@
 module test_moz_3d_response
    use, intrinsic :: iso_fortran_env, only: output_unit
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_associated
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
@@ -326,7 +327,7 @@ contains
             end if
             call check_moist_error(error, err)
             if (allocated(error)) return
-            call check(error, size(problem%solver%workspace%ws_v, 2) == 13, &
+            call check(error, problem%solver%workspace%capacity() == 12, &
                & more="3D response ignored its configured restart")
             if (allocated(error)) return
             do itab = 1, 4
@@ -444,6 +445,8 @@ contains
       real(wp), parameter :: beta = 1.7_wp
       real(wp) :: rmse, ew, ec
       logical :: converged, kept
+      !> Krylov basis allocation before an SCF update
+      type(c_ptr) :: basis
       integer :: ic, step, nw, nc, warm_steps, cold_steps
       type(moist_context_type), target :: ctx
 
@@ -482,12 +485,10 @@ contains
             previous_t = warm%tr
             before = warm%solver%get_statistics()
             if (params%solver%name == "JFNK") then
-               ! Sentinel in deflation scratch: the undeflated 3D solve never touches it and
-               ! a workspace reallocation drops it; a deflated solve would resize it and fail
+               ! A rebuilt or reset workspace replaces the Krylov basis allocation
                call check(error, allocated(warm%solver%workspace), more="JFNK storage released after solve")
                if (allocated(error)) return
-               if (.not. allocated(warm%solver%workspace%ws_z)) allocate (warm%solver%workspace%ws_z(1))
-               warm%solver%workspace%ws_z(1) = 7.0_wp
+               basis = warm%solver%workspace%basis_location()
             end if
             call warm%update_potential(changed_sr, changed_lr, changed_k, err)
             call check_moist_error(error, err)
@@ -503,9 +504,7 @@ contains
             after = warm%solver%get_statistics()
             if (params%solver%name == "JFNK") then
                kept = .false.
-               if (allocated(warm%solver%workspace)) then
-                  if (allocated(warm%solver%workspace%ws_z)) kept = warm%solver%workspace%ws_z(1) == 7.0_wp
-               end if
+               if (allocated(warm%solver%workspace)) kept = c_associated(basis, warm%solver%workspace%basis_location())
                call check(error, after%nresidual > before%nresidual .and. kept, &
                   & more="SCF update rebuilt or reset JFNK storage")
                if (allocated(error)) return

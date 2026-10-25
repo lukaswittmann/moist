@@ -44,7 +44,8 @@ module moist_model_moz_1d_type
    use moist_model_moz_1d_thermodynamics, only: model_moz_1d_thermodynamics_type, new_moz_1d_thermodynamics
    use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
    use moist_model_moz_1d_operators, only: uv_operators_type, same_grid => same_radial_grid
-   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem
+   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem, new_uv_filters
+   use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
    use moist_model_moz_solvent_vv_kernel, only: vv_intramolecular_adjoint
    implicit none(type, external)
    private
@@ -74,6 +75,8 @@ module moist_model_moz_1d_type
       type(model_moz_1d_thermodynamics_type), private :: thermo
       !> Latest UV problem, kept for the response and for reuse
       type(uv_problem_type), allocatable, private :: problem
+      !> Preconditioner and damping lent to the problem's solver; rebuilt with the problem
+      type(moist_model_moz_1d_solver_filters_type), private :: filters
       !> Fixed operators survive host updates and UV problem reconstruction
       type(uv_operators_type), private :: operators
       !> Potential tables of the kept solution, (npts, nu nv)
@@ -435,6 +438,8 @@ contains
       if (allocated(self%problem)) then
          call self%problem%update_potential(u_sr, ur_lr, uk_lr, error)
       else
+         call new_uv_filters(self%filters, self%ctx, self%rgrid, self%kgrid, self%params, error)
+         if (allocated(error)) return
          allocate (self%problem)
          call new_uv_problem(self%problem, self%ctx, self%rgrid, self%kgrid, self%operators%wu, &
             & self%operators%response, u_sr, ur_lr, uk_lr, &
@@ -442,7 +447,7 @@ contains
       end if
       if (allocated(error)) return
       call self%ctx%timer%stop("Setup")
-      call self%problem%solve(self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
+      call self%problem%solve(self%filters, self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
          & reuse_initial_guess=reuse_guess)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
@@ -582,7 +587,7 @@ contains
       call self%ctx%timer%start("1D UV response", category=cat_gradient)
       phases: block
          call self%ctx%timer%start("Adjoint solve")
-         call self%problem%response(self%params%tolerance, w_sr, w_lr, w_k, self%lambda, error)
+         call self%problem%response(self%filters, self%params%tolerance, w_sr, w_lr, w_k, self%lambda, error)
          if (allocated(error)) exit phases
          call self%ctx%timer%stop("Adjoint solve")
          call self%ctx%timer%start("Contraction")
@@ -635,7 +640,8 @@ contains
       call self%ctx%timer%start("1D UV gradient", category=cat_gradient)
       phases: block
          call self%ctx%timer%start("Adjoint solve")
-         call self%problem%response(self%params%tolerance, w_sr, w_lr, w_k, self%lambda, error, w_wu=w_wu)
+         call self%problem%response(self%filters, self%params%tolerance, w_sr, w_lr, w_k, self%lambda, error, &
+            & w_wu=w_wu)
          if (allocated(error)) exit phases
          call self%ctx%timer%stop("Adjoint solve")
          call self%ctx%timer%start("Contraction")

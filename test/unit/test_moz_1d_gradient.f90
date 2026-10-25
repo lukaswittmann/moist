@@ -8,7 +8,8 @@ module test_moz_1d_gradient
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv_kernel, only: vv_intramolecular, vv_intramolecular_adjoint
    use moist_model_moz_1d_equation, only: uv_equation_type
-   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem
+   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem, new_uv_filters
+   use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
    use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
    use moist_model_moz_solvent_vv, only: solvent_vv_type
@@ -174,6 +175,7 @@ contains
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(packed_index_lut) :: lut
       type(uv_problem_type) :: problem
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
       type(model_moz_1d_parameters_type) :: params
       type(moist_context_type), target :: ctx
       integer, parameter :: n = 128, nv = 2
@@ -209,7 +211,7 @@ contains
          do is = 1, size(seeds)
             call solve_at(coordinates, e0)
             if (allocated(error)) return
-            call problem%response(1.0e-11_wp, w_sr, w_lr, w_k, lambda, err, &
+            call problem%response(filters, 1.0e-11_wp, w_sr, w_lr, w_k, lambda, err, &
                & free_energy_weight=seeds(is), w_wu=ww)
             if (.not. allocated(err)) call problem%free_energy(after, err)
             call check_moist_error(error, err)
@@ -250,7 +252,9 @@ contains
          call vv_intramolecular(kgrid%r, xyz, lut, wu)
          call new_uv_problem(problem, ctx, rgrid, kgrid, wu, response, sr, lr, uk, [0.012_wp, 0.017_wp], &
             & 2.3_wp, params, err)
-         if (.not. allocated(err)) call problem%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+         if (.not. allocated(err)) call new_uv_filters(filters, ctx, rgrid, kgrid, params, err)
+         if (.not. allocated(err)) call problem%solve(filters, params%tolerance, params%maxiter, converged, rmse, &
+            & niter, err)
          if (.not. allocated(err)) then
             if (.not. converged) then
                call test_failed(error, "Synthetic 1D gradient solve did not converge")

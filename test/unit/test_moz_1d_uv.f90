@@ -3,7 +3,7 @@
 !> SPC/E water as the solvent; the equation tests use a four-site solute with a
 !> synthetic nonsymmetric solvent response; each test runs as a selected test
 module test_moz_1d_uv
-   use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_associated
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_associated
    !$ use omp_lib, only: omp_in_parallel
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type
@@ -16,7 +16,9 @@ module test_moz_1d_uv
    use moist_model_moz_1d_kernel, only: uv_kblock, uv_block_product, uv_block_product_transpose, &
       & uv_charge_moment_correction
    use moist_model_moz_1d_equation, only: uv_equation_type
-   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem
+   use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem, new_uv_filters
+   use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
+   use moist_model_moz_1d_preconditioner, only: moist_model_moz_1d_preconditioner_spectral_type
    use moist_model_moz_1d_operators, only: uv_operators_type
    use moist_model_moz_solvent_vv_kernel, only: vv_intramolecular
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
@@ -82,6 +84,8 @@ contains
          & new_unittest("response_fixed", check_response_fixed), &
          & new_unittest("host_charges", check_host_charges), &
          & new_unittest("energy_refusals", check_energy_refusals), &
+         & new_unittest("filters_refusal", check_filters_refusal), &
+         & new_unittest("picard_damping", check_picard_damping), &
          & new_unittest("reference_values", check_reference_values)]
    end subroutine collect_moz_1d_uv
 
@@ -500,10 +504,11 @@ contains
       type(moist_error), allocatable :: err
       type(uv_case_type) :: case
       type(uv_problem_type) :: problem
+      type(moist_model_moz_1d_solver_filters_type) :: filters
       type(model_moz_1d_parameters_type) :: params, defaults
       real(wp), allocatable :: rho(:), u_sr(:, :), ur_lr(:, :)
       integer, parameter :: wrong_counts(4) = [0, 2, 4, 6]
-      !> VV-only and unknown names, refused by the UV problem itself
+      !> VV-only and unknown names, refused by the UV filters
       character(len=8), parameter :: bad_precond(2) = [character(len=8) :: "kspace", "bogus"]
       !> Quiet four-thread run context borrowed by the problems
       type(moist_context_type), target :: ctx
@@ -528,8 +533,7 @@ contains
       rho = [0.005_wp, 0.004_wp, 0.003_wp]
       do i = 1, size(bad_precond)
          params%precond = bad_precond(i)
-         call new_uv_problem(problem, ctx, case%rgrid, case%kgrid, case%wu, case%response, u_sr, ur_lr, &
-            & case%uk_lr, rho, beta, params, err)
+         call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
          call check(error, allocated(err), more="1D UV accepted preconditioner '"//trim(bad_precond(i))//"'")
          if (allocated(error)) return
       end do
@@ -542,10 +546,129 @@ contains
       call check(error, problem%equation%ready() .and. all(problem%rho == rho), &
          & more="a valid site density vector was refused or changed")
       if (allocated(error)) return
-      call check(error, problem%spectral%nthreads == 4 .and. problem%damping%nthreads == 4, &
+      call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, filters%spectral%nthreads == 4 .and. filters%damping%nthreads == 4, &
          & more="the filters did not inherit the model's thread count")
       call ctx%delete()
    end subroutine check_problem_setup_errors
+
+   !> Solve and response refuse filters that are not set up or belong to another radial pair
+   subroutine check_filters_refusal(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(uv_case_type) :: case
+      type(uv_problem_type) :: problem
+      type(moist_model_moz_1d_solver_filters_type), target :: filters, blank, other
+      type(moist_math_grid_radial_type) :: other_r, other_k
+      type(model_moz_1d_parameters_type) :: params
+      !> Quiet run context borrowed by the problem
+      type(moist_context_type), target :: ctx
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), wr(:, :), wl(:, :), wk(:, :), lambda(:, :)
+      real(wp) :: rmse
+      integer :: niter
+      logical :: converged
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_uv_case(case, err)
+      params%tolerance = 1.0e-12_wp
+      u_sr = -0.02_wp*case%cr
+      ur_lr = 0.0_wp*case%cr
+      if (.not. allocated(err)) call new_uv_problem(problem, ctx, case%rgrid, case%kgrid, case%wu, case%response, &
+         & u_sr, ur_lr, case%uk_lr, spread(0.005_wp, 1, nv), beta, params, err)
+      if (.not. allocated(err)) call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
+      ! Same point count, other spacing: only the nodes tell the pairs apart
+      if (.not. allocated(err)) call new_uniform_radial_pair(other_r, other_k, case%rgrid%npts, &
+         & 1.1_wp*case%rgrid%spacing, err)
+      if (.not. allocated(err)) call new_uv_filters(other, ctx, other_r, other_k, params, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+
+      call problem%solve(blank, params%tolerance, params%maxiter, converged, rmse, niter, err)
+      call check(error, allocated(err) .and. .not. converged, more="1D solve accepted filters that were not set up")
+      if (allocated(error)) return
+      call problem%solve(other, params%tolerance, params%maxiter, converged, rmse, niter, err)
+      call check(error, allocated(err) .and. .not. converged, more="1D solve accepted filters of another radial pair")
+      if (allocated(error)) return
+      call problem%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, converged, more="1D solve with matching filters did not converge")
+      if (allocated(error)) return
+      call problem%response(blank, 1.0e-10_wp, wr, wl, wk, lambda, err)
+      call check(error, allocated(err), more="1D response accepted filters that were not set up")
+      if (allocated(error)) return
+      call problem%response(other, 1.0e-10_wp, wr, wl, wk, lambda, err)
+      call check(error, allocated(err), more="1D response accepted filters of another radial pair")
+      if (allocated(error)) return
+      call problem%response(filters, 1.0e-10_wp, wr, wl, wk, lambda, err)
+      call check_moist_error(error, err)
+      call ctx%delete()
+   end subroutine check_filters_refusal
+
+   !> One PICARD step damps its update with the damping filter, not the spectral one
+   subroutine check_picard_damping(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(uv_case_type) :: case
+      type(uv_problem_type) :: problem
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
+      type(moist_model_moz_1d_preconditioner_spectral_type) :: reference
+      type(model_moz_1d_parameters_type) :: params
+      !> Quiet run context borrowed by the problem
+      type(moist_context_type), target :: ctx
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), zero(:, :), t0(:, :), plain(:, :), damped(:, :)
+      real(wp), allocatable :: expected(:, :), delta(:)
+      real(wp) :: rmse
+      integer :: niter, pass
+      logical :: converged
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_uv_case(case, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      params%solver%name = "PICARD"
+      params%tolerance = 1.0e-14_wp
+      params%damp_small_k_k0 = 0.7_wp
+      params%damp_small_k_min_weight = 0.4_wp
+      u_sr = -0.02_wp*case%cr
+      ur_lr = 0.0_wp*case%cr
+      do pass = 1, 2
+         params%damp_small_k = pass == 2
+         call new_uv_problem(problem, ctx, case%rgrid, case%kgrid, case%wu, case%response, u_sr, ur_lr, &
+            & case%uk_lr, spread(0.005_wp, 1, nv), beta, params, err)
+         if (.not. allocated(err)) call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
+         if (.not. allocated(err)) call problem%solve(filters, params%tolerance, 1, converged, rmse, niter, err)
+         call check_moist_error(error, err)
+         if (allocated(error)) return
+         call check(error, niter == 1 .and. .not. converged, more="one PICARD step expected")
+         if (allocated(error)) return
+         if (pass == 1) then
+            plain = problem%tr
+         else
+            damped = problem%tr
+         end if
+      end do
+      allocate (zero, t0, mold=problem%tr)
+      zero = 0.0_wp
+      call problem%equation%map(zero, t0, err)
+      if (.not. allocated(err)) call reference%setup(case%rgrid, case%kgrid, params%damp_small_k_k0, &
+         & params%damp_small_k_min_weight, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      delta = reshape(plain - t0, [size(t0)])
+      call reference%apply(delta)
+      expected = t0 + reshape(delta, shape(t0))
+      call check(error, maxval(abs(damped - expected)) < 1.0e-12_wp*(1.0_wp + maxval(abs(expected))), &
+         & more="the PICARD update was not damped with the damping filter")
+      if (allocated(error)) return
+      call check(error, maxval(abs(damped - plain)) > 1.0e-6_wp*maxval(abs(plain - t0)), &
+         & more="damping left the PICARD update unchanged")
+      call ctx%delete()
+   end subroutine check_picard_damping
 
    !> Warm and fresh solves agree after a potential change; unusable guesses fall back
    subroutine check_warm_start(error)
@@ -554,6 +677,7 @@ contains
       type(moist_error), allocatable :: err
       type(uv_case_type) :: case
       type(uv_problem_type) :: cold, warm
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
       type(model_moz_1d_parameters_type) :: params
       !> Quiet run context borrowed by the problems
       type(moist_context_type), target :: ctx
@@ -571,7 +695,7 @@ contains
       u_sr = -0.02_wp*case%cr
       ur_lr = 0.0_wp*case%cr
       call build_problem(cold)
-      if (.not. allocated(err)) call cold%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+      if (.not. allocated(err)) call cold%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged, more="fresh UV solve did not converge")
@@ -580,7 +704,7 @@ contains
 
       ! A converged field must be accepted as the initial iterate, with a fresh solver stage.
       call build_problem(warm)
-      if (.not. allocated(err)) call warm%solve(params%tolerance, 1, converged, rmse, niter, err, guess=guess)
+      if (.not. allocated(err)) call warm%solve(filters, params%tolerance, 1, converged, rmse, niter, err, guess=guess)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged .and. niter == 1, more="the converged starting guess was not used")
@@ -589,7 +713,7 @@ contains
       ! A previous solution is only a guess: both solves must converge for the changed potential.
       u_sr = 1.01_wp*u_sr
       call build_problem(cold)
-      if (.not. allocated(err)) call cold%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+      if (.not. allocated(err)) call cold%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged, more="fresh solve of the changed potential did not converge")
@@ -597,7 +721,7 @@ contains
       call cold%free_energy(e_cold, err)
       if (.not. allocated(err)) call build_problem(warm)
       if (.not. allocated(err)) then
-         call warm%solve(params%tolerance, params%maxiter, converged, rmse, niter, err, guess=guess)
+         call warm%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err, guess=guess)
       end if
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -621,7 +745,7 @@ contains
          end if
          call build_problem(warm)
          if (.not. allocated(err)) then
-            call warm%solve(params%tolerance, params%maxiter, converged, rmse, niter, err, guess=invalid)
+            call warm%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err, guess=invalid)
          end if
          call check_moist_error(error, err)
          if (allocated(error)) return
@@ -640,6 +764,7 @@ contains
          type(uv_problem_type), intent(out) :: problem
          call new_uv_problem(problem, ctx, case%rgrid, case%kgrid, case%wu, case%response, u_sr, ur_lr, &
             & case%uk_lr, spread(0.005_wp, 1, nv), beta, params, err)
+         if (.not. allocated(err)) call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
       end subroutine build_problem
 
    end subroutine check_warm_start
@@ -650,6 +775,7 @@ contains
       type(moist_error), allocatable :: err
       type(uv_case_type) :: case
       type(uv_problem_type), target :: warm, cold
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
       type(model_moz_1d_parameters_type) :: params
       type(c_ptr) :: basis
       real(wp), allocatable :: sr(:, :), lr(:, :), old_lr(:, :), old_t(:, :)
@@ -671,12 +797,12 @@ contains
       sr = -0.02_wp*case%cr
       lr = 0.0_wp*case%cr
       call build(warm)
-      if (.not. allocated(err)) call warm%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+      if (.not. allocated(err)) call warm%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged, more="1D reuse reference did not converge")
       if (allocated(error)) return
-      basis = c_loc(warm%solver%workspace%ws_v)
+      basis = warm%solver%workspace%basis_location()
       do step = 1, 2
          old_t = warm%tr
          old_lr = lr
@@ -689,14 +815,14 @@ contains
          call check(error, maxval(abs(warm%tr - old_t - beta*(old_lr - lr))), 0.0_wp, thr=1.0e-14_wp, &
             & more="1D potential update did not preserve physical t")
          if (allocated(error)) return
-         call warm%solve(params%tolerance, params%maxiter, converged, rmse, niter, err, reuse_initial_guess=.true.)
+         call warm%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err, reuse_initial_guess=.true.)
          call check_moist_error(error, err)
          if (allocated(error)) return
-         call check(error, converged .and. c_associated(basis, c_loc(warm%solver%workspace%ws_v)), &
+         call check(error, converged .and. c_associated(basis, warm%solver%workspace%basis_location()), &
             & more="1D host update lost convergence or replaced the Krylov allocation")
          if (allocated(error)) return
          call build(cold)
-         if (.not. allocated(err)) call cold%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+         if (.not. allocated(err)) call cold%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
          if (.not. allocated(err)) call warm%free_energy(ew, err)
          if (.not. allocated(err)) call cold%free_energy(ec, err)
          call check_moist_error(error, err)
@@ -707,11 +833,11 @@ contains
          call check(error, ew, ec, thr=1.0e-10_wp, more="1D reused and cold energies differ")
          if (allocated(error)) return
       end do
-      call warm%response(1.0e-10_wp, wr, wl, wk, lambda, err)
+      call warm%response(filters, 1.0e-10_wp, wr, wl, wk, lambda, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, size(warm%solver%workspace%ws_v, 2) == 7 .and. &
-         & c_associated(basis, c_loc(warm%solver%workspace%ws_v)), more="1D response ignored its restart setting")
+      call check(error, warm%solver%workspace%capacity() == 6 .and. &
+         & c_associated(basis, warm%solver%workspace%basis_location()), more="1D response ignored its restart setting")
       if (allocated(error)) return
       old_t = warm%tr
       call warm%update_potential(sr, lr, case%uk_lr(:, :1), err)
@@ -734,20 +860,20 @@ contains
       case%uk_lr = 0.0_wp
       params%solver%name = "PICARD"
       call build(warm)
-      if (.not. allocated(err)) call warm%solve(params%tolerance, 2, converged, rmse, niter, err)
+      if (.not. allocated(err)) call warm%solve(filters, params%tolerance, 2, converged, rmse, niter, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged .and. niter == 1)
       if (allocated(error)) return
       warm%tr = 1000.0_wp
-      call warm%solve(params%tolerance, 2, converged, rmse, niter, err, reuse_initial_guess=.true.)
+      call warm%solve(filters, params%tolerance, 2, converged, rmse, niter, err, reuse_initial_guess=.true.)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged .and. niter == 3 .and. all(warm%tr == 0.0_wp), &
          & more="failed feasible 1D warm attempt did not retry cold")
       if (allocated(error)) return
       warm%tr(1, 1) = ieee_value(0.0_wp, ieee_quiet_nan)
-      call warm%solve(params%tolerance, 2, converged, rmse, niter, err, reuse_initial_guess=.true.)
+      call warm%solve(filters, params%tolerance, 2, converged, rmse, niter, err, reuse_initial_guess=.true.)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, converged .and. niter == 1 .and. all(warm%tr == 0.0_wp), &
@@ -760,6 +886,7 @@ contains
          type(uv_problem_type), intent(out) :: problem
          call new_uv_problem(problem, ctx, case%rgrid, case%kgrid, case%wu, case%response, sr, lr, case%uk_lr, &
             & spread(0.005_wp, 1, nv), beta, params, err)
+         if (.not. allocated(err)) call new_uv_filters(filters, ctx, case%rgrid, case%kgrid, params, err)
       end subroutine build
 
    end subroutine check_scf_reuse
@@ -1183,6 +1310,7 @@ contains
       type(potential_sites_type) :: sites
       type(packed_index_lut) :: lut_u, lut_v
       type(uv_problem_type) :: problem
+      type(moist_model_moz_1d_solver_filters_type), target :: filters
       type(structure_type) :: mol
       real(wp), parameter :: weights(3) = [1.0_wp, 0.0_wp, 2.5_wp]
       real(wp), parameter :: steps(3) = [1.0e-6_wp, 1.0e-6_wp, 1.0e-4_wp]
@@ -1227,7 +1355,7 @@ contains
       do is = 1, size(weights)
          call solve_terms(u_sr, ur_lr, uk_lr, g_plus)
          if (allocated(error)) return
-         call problem%response(1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, &
+         call problem%response(filters, 1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, &
             & free_energy_weight=weights(is))
          call check_moist_error(error, err)
          if (allocated(error)) return
@@ -1280,7 +1408,7 @@ contains
       call solve_terms(u_sr, ur_lr, uk_lr, g_plus)
       if (allocated(error)) return
       v_sr = w_sr
-      call problem%response(1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, &
+      call problem%response(filters, 1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, &
          & free_energy_weight=weights(size(weights)))
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -1289,7 +1417,7 @@ contains
       if (allocated(error)) return
 
       ! A zero objective must also have a usable tolerance and zero table adjoints.
-      call problem%response(1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, free_energy_weight=0.0_wp)
+      call problem%response(filters, 1.0e-10_wp, w_sr, w_lr, w_k, lambda, err, free_energy_weight=0.0_wp)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, maxval(abs(w_sr)) + maxval(abs(w_lr)) + maxval(abs(w_k)) + maxval(abs(lambda)), 0.0_wp, &
@@ -1307,7 +1435,8 @@ contains
          g = 0.0_wp
          call new_uv_problem(problem, ctx, rgrid, kgrid, wu, response, t_sr, t_lr, t_k, &
             & spread(solvent%density(), 1, nv), solvent%beta(), params, err)
-         if (.not. allocated(err)) call problem%solve(params%tolerance, params%maxiter, converged, rmse, niter, err)
+         if (.not. allocated(err)) call new_uv_filters(filters, ctx, rgrid, kgrid, params, err)
+         if (.not. allocated(err)) call problem%solve(filters, params%tolerance, params%maxiter, converged, rmse, niter, err)
          if (.not. allocated(err) .and. .not. converged) then
             call test_failed(error, "UV solve of the response test did not converge")
             return
