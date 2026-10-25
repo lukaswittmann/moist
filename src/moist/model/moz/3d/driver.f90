@@ -24,7 +24,6 @@ module moist_model_moz_3d_driver
    use moist_math_grid_3d_kernel_integration, only: merge_compensated_sums
    use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
    use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
-      & moist_model_moz_solver_jfnk_adjoint_parameters_type, &
       & moist_model_moz_solver_iteration_type, moist_model_moz_solver_printer_type, &
       & moist_model_moz_solver_statistics_type, new_solver, run_iterations, solve_adjoint
    use moist_model_moz_fields, only: state_feasible, scale_flat, subtract_flat, residual_difference, unflatten
@@ -51,8 +50,6 @@ module moist_model_moz_3d_driver
       class(moist_model_moz_closure_type), allocatable :: closure
       !> Nonlinear solver
       class(moist_model_moz_solver_type), allocatable :: solver
-      !> Transpose Krylov controls, independent of the nonlinear solver
-      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint
       !> Short- and long-range real-space potential, Hartree, (ngrid, nv)
       real(wp), allocatable :: u_sr(:, :), ur_lr(:, :)
       !> Solvent site number densities, 1/bohr^3 (nv)
@@ -170,7 +167,6 @@ contains
       end if
       call new_closure(self%closure, params%closure, error, self%ctx)
       if (allocated(error)) return
-      self%adjoint = params%solver%jfnk%adjoint
       call new_solver(self%solver, ctx, error, params%solver)
       if (allocated(error)) return
       self%equation%nthreads = ctx%get_num_threads()
@@ -587,10 +583,9 @@ contains
       warm = warm .and. any(rhs /= 0.0_wp)
       if (warm) then
          call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, guess=lambda, &
-            & workspace_owner=self%solver, parameters=self%adjoint)
+            & workspace_owner=self%solver)
       else
-         call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, workspace_owner=self%solver, &
-            & parameters=self%adjoint)
+         call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, workspace_owner=self%solver)
       end if
       if (allocated(error)) return
       call move_alloc(solution, lambda)

@@ -221,6 +221,7 @@ test_selected = {
     'adjoint_solve',
     'adjoint_failures',
     'adjoint_shared_workspace',
+    'adjoint_owner_controls',
     'adjoint_workspace_recovery',
     'jfnk_nonlinear',
     'jfnk_preconditioner',

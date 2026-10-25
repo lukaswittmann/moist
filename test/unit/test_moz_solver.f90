@@ -159,6 +159,7 @@ contains
          & new_unittest("adjoint_solve", test_adjoint_solve), &
          & new_unittest("adjoint_failures", test_adjoint_failures), &
          & new_unittest("adjoint_shared_workspace", test_adjoint_shared_workspace), &
+         & new_unittest("adjoint_owner_controls", test_adjoint_owner_controls), &
          & new_unittest("adjoint_workspace_recovery", test_adjoint_workspace_recovery), &
          & new_unittest("jfnk_nonlinear", test_jfnk_nonlinear), &
          & new_unittest("jfnk_preconditioner", test_jfnk_preconditioner), &
@@ -364,7 +365,7 @@ contains
       call check(error, p%diis%depth == 5 .and. p%jfnk%restart == 7 .and. &
          & p%jfnk%eta0 == 0.25_wp .and. .not. p%jfnk%use_exact_jvp .and. p%jfnk%line_search_max_iter == 4 .and. &
          & p%jfnk%recycle == 3 .and. &
-         & p%jfnk%adjoint%restart == 4 .and. p%jfnk%adjoint%max_krylov == 13 .and. &
+         & p%adjoint%restart == 4 .and. p%adjoint%max_krylov == 13 .and. &
          & p%jfnk%max_krylov == defaults%jfnk%max_krylov .and. p%picard%damping == defaults%picard%damping, &
          & "Nested keys must set their fields and omitted keys keep defaults")
       if (allocated(error)) return
@@ -389,8 +390,8 @@ contains
          call p%init_defaults()
          p%diis%step_limit = .false.
          p%jfnk%deflation_rmse = 2.5e-4_wp
-         p%jfnk%adjoint%restart = 6
-         p%jfnk%adjoint%max_krylov = 17
+         p%adjoint%restart = 6
+         p%adjoint%max_krylov = 17
          call p%write_file(stem//extensions(i), merr)
          call check(error, .not. allocated(merr))
          if (allocated(error)) return
@@ -402,7 +403,7 @@ contains
          if (allocated(error)) return
          call check(error, .not. allocated(merr) .and. .not. p%diis%step_limit .and. &
             & p%jfnk%deflation_rmse == 2.5e-4_wp .and. &
-            & p%jfnk%adjoint%restart == 6 .and. p%jfnk%adjoint%max_krylov == 17, "Round trip "//extensions(i))
+            & p%adjoint%restart == 6 .and. p%adjoint%max_krylov == 17, "Round trip "//extensions(i))
          if (allocated(error)) return
       end do
 
@@ -1219,6 +1220,72 @@ contains
       end do
       call ctx%delete()
    end subroutine test_adjoint_shared_workspace
+
+   !> Response solves take the transpose controls of the solver lending its scratch
+   !>
+   !> - new_solver gives every solver kind the jfnk.adjoint group; own constructors keep defaults
+   !> - Explicit controls replace the owner's
+   !> @param[out] error Test failure
+   subroutine test_adjoint_owner_controls(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      class(moist_model_moz_solver_type), allocatable, target :: owner
+      type(moist_model_moz_solver_jfnk_type) :: direct
+      type(moist_model_moz_solver_parameters_type) :: parameters
+      type(adjoint_parameters) :: override
+      type(linear_evaluator_type) :: evaluator
+      type(c_ptr) :: address
+      real(wp) :: gamma(2, 1), updated(2, 1), rhs(2, 1), expected(2), rms
+      real(wp), allocatable :: solution(:, :)
+      character(len=6), parameter :: keys(*) = [character(len=6) :: "Picard", "DIIS", "JFNK", "HYBRID"]
+      type(moist_context_type), target :: ctx
+      integer, target :: linearizations
+      integer :: mode, capacity
+      logical :: feasible
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      parameters%jfnk%restart = 2
+      parameters%adjoint%restart = 7
+      parameters%adjoint%max_krylov = 9
+      direct = new_jfnk_solver(ctx, parameters%jfnk)
+      call check(error, direct%adjoint%restart == 50 .and. direct%adjoint%max_krylov == 50, &
+         & "A directly constructed JFNK solver must start with default adjoint controls")
+      if (allocated(error)) return
+      linearizations = 0
+      evaluator%linearizations => linearizations
+      expected = [0.75_wp, -1.25_wp]
+      rhs(:, 1) = matmul(transpose(evaluator%matrix), expected)
+      do mode = 1, size(keys)
+         parameters%name = keys(mode)
+         call new_solver(owner, ctx, merr, parameters)
+         call check(error, .not. allocated(merr))
+         if (allocated(error)) return
+         call check(error, owner%adjoint%restart == 7 .and. owner%adjoint%max_krylov == 9, &
+            & "Every solver kind must carry jfnk.adjoint: "//trim(keys(mode)))
+         if (allocated(error)) return
+         gamma = 0.0_wp
+         call owner%outer_step(evaluator, gamma, updated, rms, feasible, merr)
+         call check(error, feasible .and. .not. allocated(merr))
+         if (allocated(error)) return
+         call solve_adjoint(ctx, evaluator, rhs, solution, merr, tolerance=1.0e-11_wp, workspace_owner=owner)
+         call check(error, .not. allocated(merr))
+         if (allocated(error)) return
+         call check(error, maxval(abs(solution(:, 1) - expected)) < 1.0e-11_wp)
+         if (allocated(error)) return
+         call krylov_address(owner, address, capacity)
+         call check(error, capacity == 7, "The response must use the owner's transpose restart: "//trim(keys(mode)))
+         if (allocated(error)) return
+         owner%adjoint%max_krylov = 0
+         call solve_adjoint(ctx, evaluator, rhs, solution, merr, tolerance=1.0e-11_wp, workspace_owner=owner)
+         call check(error, allocated(merr), "Invalid owner controls must be used and rejected: "//trim(keys(mode)))
+         if (allocated(error)) return
+         call solve_adjoint(ctx, evaluator, rhs, solution, merr, tolerance=1.0e-11_wp, workspace_owner=owner, &
+            & parameters=override)
+         call check(error, .not. allocated(merr), "Explicit controls must replace the owner's: "//trim(keys(mode)))
+         if (allocated(error)) return
+      end do
+      call ctx%delete()
+   end subroutine test_adjoint_owner_controls
 
    !> Callback failures and differing restarts return usable, independent storage.
    !> @param[out] error Test failure

@@ -110,8 +110,8 @@ contains
       params%tolerance = 1.0e-9_wp
       params%precond = "none"
       params%solver%jfnk%restart = 40
-      params%solver%jfnk%adjoint%restart = 12
-      params%solver%jfnk%adjoint%max_krylov = 36
+      params%solver%adjoint%restart = 12
+      params%solver%adjoint%max_krylov = 36
       params%reuse_initial_guess = .false.
       params%solvent%closure = "HNC"
       params%solvent%npts = 2048
@@ -124,8 +124,8 @@ contains
       if (allocated(error)) return
       call check(error, copy%closure == "PSE3" .and. &
          & copy%tolerance == 1.0e-9_wp .and. copy%precond == "none" .and. &
-         & .not. copy%reuse_initial_guess .and. copy%solver%jfnk%adjoint%restart == 12 .and. &
-         & copy%solver%jfnk%adjoint%max_krylov == 36 .and. &
+         & .not. copy%reuse_initial_guess .and. copy%solver%adjoint%restart == 12 .and. &
+         & copy%solver%adjoint%max_krylov == 36 .and. &
          & copy%solver%jfnk%restart == 40 .and. copy%solvent%closure == "HNC" .and. copy%solvent%npts == 2048 .and. &
          & copy%solvent%solver%jfnk%restart == 30, more="1D settings changed in the TOML round trip")
       if (allocated(error)) return
@@ -667,7 +667,7 @@ contains
       params%damp_small_k = .false.
       params%precond = "none"
       params%solver%jfnk%restart = 6
-      params%solver%jfnk%adjoint%restart = 5
+      params%solver%adjoint%restart = 5
       sr = -0.02_wp*case%cr
       lr = 0.0_wp*case%cr
       call build(warm)

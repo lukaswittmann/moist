@@ -23,7 +23,6 @@ module moist_model_moz_1d_driver
    use moist_math_packed_sym, only: npair_from_ns
    use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
    use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
-      & moist_model_moz_solver_jfnk_adjoint_parameters_type, &
       & moist_model_moz_solver_iteration_type, moist_model_moz_solver_printer_type, &
       & moist_model_moz_solver_preconditioner_type, &
       & moist_model_moz_solver_statistics_type, new_solver, run_iterations, solve_adjoint, &
@@ -51,8 +50,6 @@ module moist_model_moz_1d_driver
       class(moist_model_moz_closure_type), allocatable :: closure
       !> Nonlinear solver
       class(moist_model_moz_solver_type), allocatable :: solver
-      !> Transpose Krylov controls, independent of the nonlinear solver
-      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint
       !> Uniform DST-IV radial pair
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       !> Short- and long-range real-space potential, Hartree, (npts, nu nv)
@@ -170,7 +167,6 @@ contains
       if (allocated(error)) return
       call check_preconditioner_name(params%precond, preconditioners_1d_uv, "1D UV", error)
       if (allocated(error)) return
-      self%adjoint = params%solver%jfnk%adjoint
       call new_solver(self%solver, ctx, error, params%solver)
       if (allocated(error)) return
       self%equation%nthreads = ctx%get_num_threads()
@@ -518,16 +514,15 @@ contains
       call select_1d_preconditioner(self%precond, self%spectral, precond)
       if (associated(precond) .and. warm) then
          call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, preconditioner=precond, &
-            & guess=lambda, workspace_owner=self%solver, parameters=self%adjoint)
+            & guess=lambda, workspace_owner=self%solver)
       else if (associated(precond)) then
          call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, preconditioner=precond, &
-            & workspace_owner=self%solver, parameters=self%adjoint)
+            & workspace_owner=self%solver)
       else if (warm) then
          call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, guess=lambda, &
-            & workspace_owner=self%solver, parameters=self%adjoint)
+            & workspace_owner=self%solver)
       else
-         call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, workspace_owner=self%solver, &
-            & parameters=self%adjoint)
+         call solve_adjoint(self%ctx, evaluator, rhs, solution, error, tolerance=tol, workspace_owner=self%solver)
       end if
       if (allocated(error)) return
       call move_alloc(solution, lambda)

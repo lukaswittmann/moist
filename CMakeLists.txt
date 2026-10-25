@@ -405,7 +405,7 @@ if(MOIST_TESTS)
   set(moist_test_selected_moz_solver
     factory parameters_file picard_update diis_extrapolation diis_convergence diis_stages
     diis_divergence_restart adjoint_solve adjoint_failures jfnk_nonlinear
-    adjoint_shared_workspace adjoint_workspace_recovery
+    adjoint_shared_workspace adjoint_owner_controls adjoint_workspace_recovery
     jfnk_preconditioner jfnk_line_search jfnk_forcing jfnk_deflation
     jfnk_deflation_warnings jfnk_recycle_warnings jfnk_stage_summary
     jfnk_exact_newton jfnk_exact_required jfnk_validate

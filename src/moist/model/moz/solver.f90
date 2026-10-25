@@ -5,6 +5,7 @@ module moist_model_moz_solver
    use mctc_env, only: error_type, fatal_error
    use mctc_io_utils, only: to_lower
    use moist_context, only: moist_context_type
+   use moist_model_moz_solver_core_adjoint, only: moist_model_moz_solver_jfnk_adjoint_parameters_type
    use moist_model_parameters, only: moist_model_parameters_type, print_hidden
    use moist_model_moz_solver_core_base, only: &
       & moist_model_moz_solver_type, moist_model_moz_solver_statistics_type
@@ -19,8 +20,7 @@ module moist_model_moz_solver
    use moist_model_moz_solver_diis, only: moist_model_moz_solver_diis_type, &
       & moist_model_moz_solver_diis_parameters_type, new_diis_solver
    use moist_model_moz_solver_jfnk, only: moist_model_moz_solver_jfnk_type, &
-      & moist_model_moz_solver_jfnk_parameters_type, moist_model_moz_solver_jfnk_adjoint_parameters_type, &
-      & new_jfnk_solver
+      & moist_model_moz_solver_jfnk_parameters_type, new_jfnk_solver
    use moist_model_moz_solver_hybrid, only: &
       & moist_model_moz_solver_hybrid_parameters_type, new_hybrid_solver
    use moist_model_moz_solver_jfnk_adjoint, only: solve_adjoint
@@ -50,6 +50,10 @@ module moist_model_moz_solver
       type(moist_model_moz_solver_jfnk_parameters_type) :: jfnk
       !> Hybrid DIIS-to-JFNK switch
       type(moist_model_moz_solver_hybrid_parameters_type) :: hybrid
+      !> Transpose solves of every solver kind, keys jfnk.adjoint.*
+      ! Intel requires an explicit constructor when outer constructors omit this component
+      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint = &
+         & moist_model_moz_solver_jfnk_adjoint_parameters_type()
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
@@ -78,6 +82,7 @@ contains
       call self%diis%init_defaults()
       call self%jfnk%init_defaults()
       call self%hybrid%init_defaults()
+      call self%adjoint%init_defaults()
    end subroutine init_parameter_defaults
 
    !> Declare parameter fields for JSON/TOML input, output and printing
@@ -91,6 +96,8 @@ contains
       call self%register_group("picard", self%picard, level=self%group_level("picard", 2))
       call self%register_group("diis", self%diis, level=self%group_level("diis", 2))
       call self%register_group("jfnk", self%jfnk, level=self%group_level("jfnk", 2))
+      ! Kept under the JFNK keys and print level, outside the JFNK solver's own controls
+      call self%register_group("jfnk.adjoint", self%adjoint, level=self%group_level("jfnk", 2))
       call self%register_group("hybrid", self%hybrid, level=self%group_level("hybrid", 2))
    end subroutine register_parameter_entries
 
@@ -115,6 +122,8 @@ contains
       call self%hybrid%validate(error)
       if (allocated(error)) return
       call self%jfnk%validate(error)
+      if (allocated(error)) return
+      call self%adjoint%validate(error)
    end subroutine validate_solver_parameters
 
    !> Whether the selected solver runs the controls of one group
@@ -224,6 +233,8 @@ contains
          jfnk = new_jfnk_solver(ctx, p%jfnk)
          allocate (solver, source=new_hybrid_solver(ctx, mdiis, jfnk, p%hybrid))
       end select
+      ! Response solves borrow any primal solver, so every kind carries the transpose controls
+      solver%adjoint = p%adjoint
    end subroutine new_solver
 
 end module moist_model_moz_solver

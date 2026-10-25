@@ -19,30 +19,13 @@ module moist_model_moz_solver_jfnk
    private
 
    public :: moist_model_moz_solver_jfnk_type, moist_model_moz_solver_jfnk_parameters_type
-   public :: moist_model_moz_solver_jfnk_adjoint_parameters_type, new_jfnk_solver
-
-   !> Transpose Krylov controls, independent of the nonlinear JFNK solve
-   !>
-   !> JSON/TOML keys: restart, max_krylov
-   type, extends(moist_model_parameters_type) :: moist_model_moz_solver_jfnk_adjoint_parameters_type
-      !> Transpose GMRES restart length
-      integer :: restart = 50
-      !> Inner GMRES iterations per transpose refinement
-      integer :: max_krylov = 50
-   contains
-      !> Restore compiled defaults
-      procedure :: init_defaults => adjoint_init_defaults
-      !> Declare fields for JSON/TOML input, output and printing
-      procedure :: register_entries => adjoint_register_entries
-      !> Check the Krylov limits
-      procedure :: validate => adjoint_validate
-   end type moist_model_moz_solver_jfnk_adjoint_parameters_type
+   public :: new_jfnk_solver
 
    !> Inner-solve, forcing and line-search controls
    !>
    !> JSON/TOML keys: restart, max_krylov, cgs2, recycle, stagnation_tol, eta0, eta_min, eta_max, forcing_beta,
    !> forcing_power, jvp, fd_eps, deflation, deflation_rmse, line_search_c, line_search_tau, line_search_min_alpha,
-   !> line_search_max_iter, line_search_expand_ratio, alpha_max, fallback_alpha, adjoint.*
+   !> line_search_max_iter, line_search_expand_ratio, alpha_max, fallback_alpha
    type, extends(moist_model_parameters_type) :: moist_model_moz_solver_jfnk_parameters_type
 
       !* ------------------------------ GMRES inner solve ----------------------------- *!
@@ -123,13 +106,6 @@ module moist_model_moz_solver_jfnk
       real(wp) :: alpha_max = 2.0_wp
       !> Initial step length of the Picard fallback after a failed line search
       real(wp) :: fallback_alpha = 0.25_wp
-
-      !* ------------------------------ Transpose solves ------------------------------ *!
-
-      !> Transpose solves, independent of the nonlinear controls
-      ! Intel requires an explicit constructor when outer constructors omit this component
-      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint = &
-         & moist_model_moz_solver_jfnk_adjoint_parameters_type()
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => jfnk_init_defaults
@@ -793,44 +769,6 @@ contains
    !> Restore compiled defaults
    !>
    !> @param[inout] self Parameter values
-   subroutine adjoint_init_defaults(self)
-      !> Parameter values
-      class(moist_model_moz_solver_jfnk_adjoint_parameters_type), intent(inout) :: self
-      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: defaults
-
-      self%restart = defaults%restart
-      self%max_krylov = defaults%max_krylov
-   end subroutine adjoint_init_defaults
-
-   !> Declare parameter fields for JSON/TOML input, output and printing
-   !>
-   !> @param[inout] self Parameter values
-   subroutine adjoint_register_entries(self)
-      !> Parameter values
-      class(moist_model_moz_solver_jfnk_adjoint_parameters_type), intent(inout), target :: self
-
-      call self%register_int_scalar("restart", self%restart)
-      call self%register_int_scalar("max_krylov", self%max_krylov)
-   end subroutine adjoint_register_entries
-
-   !> Check the Krylov limits
-   !>
-   !> @param[inout] self Parameter values
-   !> @param[out] error Invalid limits
-   subroutine adjoint_validate(self, error)
-      !> Parameter values
-      class(moist_model_moz_solver_jfnk_adjoint_parameters_type), intent(inout) :: self
-      !> Invalid limits
-      type(error_type), allocatable, intent(out) :: error
-
-      if (self%restart < 1 .or. self%max_krylov < 1) then
-         call fatal_error(error, "Adjoint needs positive Krylov limits")
-      end if
-   end subroutine adjoint_validate
-
-   !> Restore compiled defaults
-   !>
-   !> @param[inout] self Parameter values
    subroutine jfnk_init_defaults(self)
       !> Parameter values
       class(moist_model_moz_solver_jfnk_parameters_type), intent(inout) :: self
@@ -857,7 +795,6 @@ contains
       self%line_search_expand_ratio = defaults%line_search_expand_ratio
       self%alpha_max = defaults%alpha_max
       self%fallback_alpha = defaults%fallback_alpha
-      call self%adjoint%init_defaults()
    end subroutine jfnk_init_defaults
 
    !> Declare parameter fields for JSON/TOML input, output and printing
@@ -888,7 +825,6 @@ contains
       call self%register_real_scalar("line_search_expand_ratio", self%line_search_expand_ratio)
       call self%register_real_scalar("alpha_max", self%alpha_max)
       call self%register_real_scalar("fallback_alpha", self%fallback_alpha)
-      call self%register_group("adjoint", self%adjoint)
    end subroutine jfnk_register_entries
 
    !> Check the ranges of all controls
@@ -926,8 +862,6 @@ contains
       else if (self%deflation .and. .not. self%use_exact_jvp) then
          call fatal_error(error, "jfnk.deflation needs jfnk.use_exact_jvp")
       end if
-      if (allocated(error)) return
-      call self%adjoint%validate(error)
    end subroutine jfnk_validate
 
    !> Construct a JFNK solver from its controls

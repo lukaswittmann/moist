@@ -4,10 +4,10 @@ module moist_model_moz_solver_jfnk_adjoint
    use moist_context, only: moist_context_type, resolve_num_threads
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_model_moz_solver_core_evaluator, only: moist_model_moz_solver_evaluator_type
+   use moist_model_moz_solver_core_adjoint, only: moist_model_moz_solver_jfnk_adjoint_parameters_type
    use moist_model_moz_solver_core_base, only: moist_model_moz_solver_type
    use moist_model_moz_solver_jfnk, only: moist_model_moz_solver_jfnk_type, &
-      & moist_model_moz_solver_jfnk_parameters_type, moist_model_moz_solver_jfnk_adjoint_parameters_type, &
-      & new_jfnk_solver
+      & moist_model_moz_solver_jfnk_parameters_type, new_jfnk_solver
    use moist_model_moz_solver_core_preconditioner, only: moist_model_moz_solver_preconditioner_type
    implicit none(type, external)
    private
@@ -46,8 +46,10 @@ contains
    !> @param[in]    max_iter         maximum linear refinement steps; default 32
    !> @param[inout] preconditioner   borrowed left preconditioner for J**T
    !> @param[in]    guess            starting point (npts, ncol)
-   !> @param[inout] workspace_owner  completed primal solver; its scratch is returned on success or failure
-   !> @param[in]    parameters       transpose Krylov restart and inner iterations; defaults 50 and 50
+   !> @param[inout] workspace_owner  completed primal solver; its scratch is returned on success or failure,
+   !>                                and its transpose controls apply when parameters is absent
+   !> @param[in]    parameters       transpose Krylov restart and inner iterations; otherwise the owner's,
+   !>                                else 50 and 50
    subroutine solve_adjoint(ctx, evaluator, rhs, solution, error, tolerance, max_iter, preconditioner, guess, &
       & workspace_owner, parameters)
       !> Run context; verbosity and OpenMP team size of the inner solver
@@ -68,9 +70,10 @@ contains
       class(moist_model_moz_solver_preconditioner_type), target, optional, intent(inout) :: preconditioner
       !> Optional starting point with the shape of rhs
       real(wp), intent(in), optional :: guess(:, :)
-      !> Completed primal solver; its scratch is returned on success or failure
+      !> Completed primal solver; its scratch is returned on success or failure,
+      !> and its transpose controls apply when parameters is absent
       class(moist_model_moz_solver_type), optional, intent(inout) :: workspace_owner
-      !> Transpose Krylov controls; defaults when absent
+      !> Transpose Krylov controls; otherwise the owner's, else defaults
       type(moist_model_moz_solver_jfnk_adjoint_parameters_type), optional, intent(in) :: parameters
       !> Frozen transpose evaluator
       type(transpose_evaluator_type) :: linear
@@ -93,7 +96,11 @@ contains
       limit = 32
       if (present(tolerance)) tol = tolerance
       if (present(max_iter)) limit = max_iter
-      if (present(parameters)) controls = parameters
+      if (present(parameters)) then
+         controls = parameters
+      else if (present(workspace_owner)) then
+         controls = workspace_owner%adjoint
+      end if
       call controls%validate(error)
       if (allocated(error)) return
       if (.not. evaluator%has_adjoint()) then

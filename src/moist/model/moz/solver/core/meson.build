@@ -1,4 +1,5 @@
 srcs += files(
+   'adjoint.f90',
    'base.f90',
    'checks.f90',
    'evaluator.f90',

@@ -57,9 +57,9 @@ module moist_model_moz_solvent_vv_parameters
          & moist_model_moz_solver_parameters_type( &
          & picard=moist_model_moz_solver_picard_parameters_type(), &
          & diis=moist_model_moz_solver_diis_parameters_type(), &
-         & jfnk=moist_model_moz_solver_jfnk_parameters_type( &
-         & adjoint=moist_model_moz_solver_jfnk_adjoint_parameters_type(), deflation=.true.), &
-         & hybrid=moist_model_moz_solver_hybrid_parameters_type())
+         & jfnk=moist_model_moz_solver_jfnk_parameters_type(deflation=.true.), &
+         & hybrid=moist_model_moz_solver_hybrid_parameters_type(), &
+         & adjoint=moist_model_moz_solver_jfnk_adjoint_parameters_type())
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_vv_defaults

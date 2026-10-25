@@ -104,9 +104,10 @@ Response solves
 ``solve_adjoint`` solves the transpose system ``J**T*x = rhs`` at the converged
 linearization with the JFNK/GMRES machinery; the UV models use it for the
 energy response and the nuclear gradient. Its controls are the
-``jfnk.adjoint`` group, independent of the solver used for the primal solve.
-The adjoint borrows the primal solver's Krylov workspace instead of
-allocating its own.
+``jfnk.adjoint`` group, which every solver carries (``solver%adjoint``), so
+they apply whichever solver ran the primal solve. The adjoint borrows that
+solver's Krylov workspace and controls; an explicit ``parameters`` argument
+replaces the controls.
 
 Preconditioners
 ---------------

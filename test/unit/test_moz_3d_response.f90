@@ -313,8 +313,8 @@ contains
       params%tolerance = 1.0e-12_wp
       max_error = 0.0_wp
       params%solver%jfnk%restart = 12
-      params%solver%jfnk%adjoint%restart = 9
-      params%solver%jfnk%adjoint%max_krylov = 50
+      params%solver%adjoint%restart = 9
+      params%solver%adjoint%max_krylov = 50
       do ic = 1, size(closures)
          params%closure = trim(closures(ic))
          do is = 1, size(shifts)

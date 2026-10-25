@@ -2,6 +2,7 @@
 module moist_model_moz_solver_core_base
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
+   use moist_model_moz_solver_core_adjoint, only: moist_model_moz_solver_jfnk_adjoint_parameters_type
    use moist_model_moz_solver_core_evaluator, only: moist_model_moz_solver_evaluator_type
    use moist_model_moz_solver_core_printer, only: moist_model_moz_solver_printer_type
    use moist_model_moz_solver_core_preconditioner, only: moist_model_moz_solver_preconditioner_type
@@ -30,6 +31,11 @@ module moist_model_moz_solver_core_base
       real(wp) :: prev_step_maxabs = 0.0_wp, prev_alpha = 0.0_wp
       !> Owned scratch; also caches transpose storage for non-Krylov primal solvers
       type(moist_model_moz_solver_workspace_type), allocatable :: workspace
+      !> Controls of transpose solves that borrow this solver's scratch
+      !>
+      !> - The only copy: new_solver sets it from jfnk.adjoint for every solver kind
+      !> - Defaults for solvers built by their own constructors
+      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint
    contains
       procedure(outer_step_interface), deferred :: outer_step
       procedure(name_interface), deferred :: name
