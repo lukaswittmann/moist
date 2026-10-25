@@ -127,7 +127,9 @@ module moist_model_moz_solver_jfnk
       !* ------------------------------ Transpose solves ------------------------------ *!
 
       !> Transpose solves, independent of the nonlinear controls
-      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint
+      ! Intel requires an explicit constructor when outer constructors omit this component
+      type(moist_model_moz_solver_jfnk_adjoint_parameters_type) :: adjoint = &
+         & moist_model_moz_solver_jfnk_adjoint_parameters_type()
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => jfnk_init_defaults

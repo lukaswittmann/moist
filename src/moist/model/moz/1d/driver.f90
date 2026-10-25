@@ -472,6 +472,8 @@ contains
       class(moist_model_moz_solver_preconditioner_type), pointer :: precond
       real(wp), allocatable :: weight(:), dh(:, :), dc(:, :), dcdu(:, :), rhs(:, :), mu(:, :), solution(:, :)
       real(wp) :: tol, energy_seed
+      !> Per-point measure, private to each OpenMP worker
+      real(wp) :: a
       integer :: i, col, nv, nt
       logical :: feasible, warm
 
@@ -540,13 +542,12 @@ contains
          call self%equation%adjoint(lambda, mu, error, wk=w_k)
       end if
       if (allocated(error)) return
-      !$omp parallel do collapse(2) schedule(static) num_threads(nt)
+      !$omp parallel do collapse(2) schedule(static) num_threads(nt) private(a)
       do col = 1, size(mu, 2)
          do i = 1, size(mu, 1)
-            associate (a => self%rho(mod(col - 1, nv) + 1)*weight(i))
-               w_sr(i, col) = uv_response_sr(a, dh(i, col), dc(i, col), mu(i, col), dcdu(i, col))
-               w_lr(i, col) = uv_response_lr(a, dc(i, col), self%beta)
-            end associate
+            a = self%rho(mod(col - 1, nv) + 1)*weight(i)
+            w_sr(i, col) = uv_response_sr(a, dh(i, col), dc(i, col), mu(i, col), dcdu(i, col))
+            w_lr(i, col) = uv_response_lr(a, dc(i, col), self%beta)
             w_k(i, col) = -self%beta*w_k(i, col)
          end do
       end do

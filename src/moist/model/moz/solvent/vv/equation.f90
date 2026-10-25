@@ -344,6 +344,8 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       real(wp), pointer :: ck(:, :), left(:, :, :, :), right(:, :, :, :)
+      !> Direct lookup alias avoids ifort's nested-descriptor access in the parallel loop
+      integer, pointer :: pair_index(:, :)
       real(wp), allocatable :: w_pt(:, :), c_pt(:, :), a_pt(:, :), rhs(:, :)
       integer, allocatable :: ipiv(:)
       integer :: nt, it, ik, ip, ib, kk, is, js, info, error_flag, trafo_flag
@@ -366,11 +368,12 @@ contains
       ck => self%ck_work
       left => self%left_blk
       right => self%right_blk
+      pair_index => self%lut%idx
       error_flag = 0
       trafo_flag = 0
 
       !$omp parallel num_threads(nt) default(none) &
-      !$omp shared(self, cr, ck, left, right, error_flag, trafo_flag) &
+      !$omp shared(self, cr, ck, left, right, pair_index, error_flag, trafo_flag) &
       !$omp private(it, ik, ip, ib, kk, is, js, info, ipiv, w_pt, c_pt, a_pt, rhs, terr)
       it = 1
       !$ it = omp_get_thread_num() + 1
@@ -402,7 +405,7 @@ contains
          w_pt = self%w_blk(kk, :, :, ib)
          do js = 1, self%ns
             do is = 1, js
-               ip = self%lut%idx(is, js)
+               ip = pair_index(is, js)
                c_pt(is, js) = ck(ik, ip)
                c_pt(js, is) = ck(ik, ip)
             end do

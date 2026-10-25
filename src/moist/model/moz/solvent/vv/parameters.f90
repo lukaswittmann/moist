@@ -11,7 +11,9 @@ module moist_model_moz_solvent_vv_parameters
    use moist_model_parameters, only: moist_model_parameters_type, print_hidden
    use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
    use moist_model_moz_solver, only: moist_model_moz_solver_parameters_type, &
-      & moist_model_moz_solver_jfnk_parameters_type, check_preconditioner_name
+      & moist_model_moz_solver_picard_parameters_type, moist_model_moz_solver_diis_parameters_type, &
+      & moist_model_moz_solver_jfnk_parameters_type, moist_model_moz_solver_jfnk_adjoint_parameters_type, &
+      & moist_model_moz_solver_hybrid_parameters_type, check_preconditioner_name
    use moist_model_moz_1d_preconditioner, only: preconditioners_1d_vv
    use moist_model_moz_solvent_theory, only: canonical_bulk_theory
    implicit none(type, external)
@@ -50,8 +52,14 @@ module moist_model_moz_solvent_vv_parameters
       !> Profiles per site pair of the deflation space
       integer :: deflation_nfun = 2
       !> Solver controls; the VV solve deflates its Newton-Krylov steps by default
+      ! Intel requires explicit constructors for the nested parameter defaults
       type(moist_model_moz_solver_parameters_type) :: solver = &
-         & moist_model_moz_solver_parameters_type(jfnk=moist_model_moz_solver_jfnk_parameters_type(deflation=.true.))
+         & moist_model_moz_solver_parameters_type( &
+         & picard=moist_model_moz_solver_picard_parameters_type(), &
+         & diis=moist_model_moz_solver_diis_parameters_type(), &
+         & jfnk=moist_model_moz_solver_jfnk_parameters_type( &
+         & adjoint=moist_model_moz_solver_jfnk_adjoint_parameters_type(), deflation=.true.), &
+         & hybrid=moist_model_moz_solver_hybrid_parameters_type())
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_vv_defaults
