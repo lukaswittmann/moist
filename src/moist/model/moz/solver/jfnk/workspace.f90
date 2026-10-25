@@ -1,5 +1,6 @@
 !> Owned scratch storage for sequential primal and transpose Krylov solves
 module moist_model_moz_solver_jfnk_workspace
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_null_ptr
    use mctc_env, only: wp
    implicit none(type, external)
    private
@@ -45,6 +46,13 @@ module moist_model_moz_solver_jfnk_workspace
       procedure :: ensure => workspace_ensure
       procedure :: ensure_recycle => workspace_ensure_recycle
       procedure :: ensure_fd => workspace_ensure_fd
+      procedure :: field_shape => workspace_field_shape
+      procedure :: capacity => workspace_capacity
+      procedure :: recycle_capacity => workspace_recycle_capacity
+      procedure :: has_fd_scratch => workspace_has_fd_scratch
+      procedure :: basis_vector => workspace_basis_vector
+      procedure :: basis_location => workspace_basis_location
+      procedure :: recycle_location => workspace_recycle_location
    end type moist_model_moz_solver_workspace_type
 
 contains
@@ -272,6 +280,89 @@ contains
       self%ws_g = 0.0_wp
       self%ws_y = 0.0_wp
    end subroutine allocate_workspace
+
+   !> Field shape (npts, npair) of the scratch; zeros before allocation
+   pure function workspace_field_shape(self) result(field_shape)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> Grid points and site pairs per field
+      integer :: field_shape(2)
+
+      field_shape = [self%ws_npts, self%ws_npair]
+   end function workspace_field_shape
+
+   !> Restart capacity of the Krylov basis; zero before allocation
+   pure function workspace_capacity(self) result(capacity)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> Restart dimension the basis can hold
+      integer :: capacity
+
+      capacity = 0
+      if (allocated(self%ws_v)) capacity = size(self%ws_v, 2) - 1
+   end function workspace_capacity
+
+   !> Allocated recycled dimension; zero without a recycled basis
+   pure function workspace_recycle_capacity(self) result(capacity)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> Recycled vectors the scratch can hold
+      integer :: capacity
+
+      capacity = 0
+      if (allocated(self%ws_u)) capacity = size(self%ws_u, 2)
+   end function workspace_recycle_capacity
+
+   !> Whether finite-difference scratch is allocated
+   pure function workspace_has_fd_scratch(self) result(allocated_fd)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> True once a finite-difference product needed it
+      logical :: allocated_fd
+
+      allocated_fd = allocated(self%ws_f_pert)
+   end function workspace_has_fd_scratch
+
+   !> Copy of one Krylov basis vector; empty before allocation
+   !>
+   !> @param[in] self  owned scratch
+   !> @param[in] j     basis index, 1 <= j <= capacity + 1
+   pure function workspace_basis_vector(self, j) result(vector)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> Basis index
+      integer, intent(in) :: j
+      !> Basis vector (nflat)
+      real(wp), allocatable :: vector(:)
+
+      if (allocated(self%ws_v)) then
+         vector = self%ws_v(:, j)
+      else
+         allocate (vector(0))
+      end if
+   end function workspace_basis_vector
+
+   !> Address of the Krylov basis allocation, for reuse checks; never dereferenced
+   function workspace_basis_location(self) result(location)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in), target :: self
+      !> Null before allocation
+      type(c_ptr) :: location
+
+      location = c_null_ptr
+      if (allocated(self%ws_v)) location = c_loc(self%ws_v)
+   end function workspace_basis_location
+
+   !> Address of the recycled basis allocation, for reuse checks; never dereferenced
+   function workspace_recycle_location(self) result(location)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in), target :: self
+      !> Null without a recycled basis
+      type(c_ptr) :: location
+
+      location = c_null_ptr
+      if (allocated(self%ws_u)) location = c_loc(self%ws_u)
+   end function workspace_recycle_location
 
    !> Swap complete allocations while preserving array layout and shared capacity
    !>

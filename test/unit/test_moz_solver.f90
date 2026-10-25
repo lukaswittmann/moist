@@ -2,7 +2,7 @@
 module test_moz_solver
    !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
-   use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_associated, c_null_ptr
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_associated, c_null_ptr
    use mctc_env, only: wp, mctc_error => error_type, fatal_error
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
@@ -789,21 +789,19 @@ contains
       do i = 1, size(sizes)
          jfnk%params%restart = sizes(i)
          call jfnk%ensure_workspace(gamma)
-         call check(error, size(jfnk%workspace%ws_v, 2) == sizes(i) + 1 .and. size(jfnk%workspace%ws_h, 2) == sizes(i))
+         call check(error, jfnk%workspace%capacity() == sizes(i))
          if (allocated(error)) return
       end do
       jfnk%params%restart = 5
       do i = 2, 3
          jfnk%params%recycle = i
          call jfnk%ensure_workspace(gamma)
-         call check(error, allocated(jfnk%workspace%ws_u))
-         if (allocated(error)) return
-         call check(error, size(jfnk%workspace%ws_u, 2) == i .and. size(jfnk%workspace%ws_bproj, 1) == i)
+         call check(error, jfnk%workspace%recycle_capacity() == i)
          if (allocated(error)) return
       end do
       jfnk%params%recycle = 0
       call jfnk%ensure_workspace(gamma)
-      call check(error, .not. allocated(jfnk%workspace%ws_u))
+      call check(error, jfnk%workspace%recycle_capacity() == 0)
       if (allocated(error)) return
       diis = new_diis_solver(ctx, diis_parameters(depth=2))
       do i = 1, size(sizes)
@@ -1192,7 +1190,7 @@ contains
                & "Transpose solve must retain primal settings, counters and linearization")
             if (allocated(error)) return
             call krylov_address(owner, address, capacity)
-            call check(error, c_associated(address) .and. capacity == 51)
+            call check(error, c_associated(address) .and. capacity == 50)
             if (allocated(error)) return
             if (c_associated(first)) then
                call check(error, c_associated(first, address), "Response must return the same Krylov allocation")
@@ -1247,7 +1245,7 @@ contains
       call check(error, .not. allocated(merr))
       if (allocated(error)) return
       call krylov_address(owner, first, capacity)
-      call check(error, capacity == 51 .and. owner%params%restart == 5 .and. .not. owner%params%cgs2, &
+      call check(error, capacity == 50 .and. owner%params%restart == 5 .and. .not. owner%params%cgs2, &
          & "Shared capacity must preserve the distinct numerical settings")
       if (allocated(error)) return
       independent = new_jfnk_solver(ctx, jfnk_parameters(restart=5))
@@ -1262,7 +1260,7 @@ contains
       call check(error, maxval(abs(matmul(transpose(evaluator%matrix), solution(:, 1)) - rhs(:, 1))) < 1.0e-11_wp)
       if (allocated(error)) return
       call krylov_address(independent, address, capacity)
-      call check(error, capacity == 6 .and. c_associated(address, other), &
+      call check(error, capacity == 5 .and. c_associated(address, other), &
          & "Configured response restart must not grow a sufficient primal basis")
       if (allocated(error)) return
       evaluator%jvp_mode = 1
@@ -1271,7 +1269,7 @@ contains
       call check(error, allocated(merr) .and. .not. allocated(solution))
       if (allocated(error)) return
       call krylov_address(independent, address, capacity)
-      call check(error, capacity == 6 .and. c_associated(address, other), &
+      call check(error, capacity == 5 .and. c_associated(address, other), &
          & "Failed configured adjoint must return its basis")
       if (allocated(error)) return
       do mode = 1, 3
@@ -1296,13 +1294,13 @@ contains
          call check(error, .not. allocated(merr) .and. owner%params%restart == 2 .and. owner%nrecycled == 0)
          if (allocated(error)) return
          call krylov_address(owner, address, capacity)
-         call check(error, c_associated(first, address) .and. capacity == 51, &
+         call check(error, c_associated(first, address) .and. capacity == 50, &
             & "Differing restarts and recycling must not repeatedly resize the basis")
          if (allocated(error)) return
       end do
       small = 0.0_wp
       call owner%ensure_workspace(small)
-      call check(error, owner%workspace%ws_nflat == 3 .and. size(owner%workspace%ws_v, 2) == 3, &
+      call check(error, all(owner%workspace%field_shape() == shape(small)) .and. owner%workspace%capacity() == 2, &
          & "Changed field shape must replace incompatible scratch")
       call ctx%delete()
    end subroutine test_adjoint_workspace_recovery
@@ -1310,7 +1308,7 @@ contains
    !> Observe the allocation through ownership transfer, including Hybrid's child.
    !> @param[inout] solver Solver between completed stages
    !> @param[out] address Opaque address, never dereferenced
-   !> @param[out] capacity Allocated basis columns
+   !> @param[out] capacity Restart capacity of the basis
    subroutine krylov_address(solver, address, capacity)
       class(moist_model_moz_solver_type), intent(inout) :: solver
       type(c_ptr), intent(out) :: address
@@ -1320,13 +1318,22 @@ contains
       address = c_null_ptr
       capacity = 0
       if (allocated(scratch)) then
-         if (allocated(scratch%ws_v)) then
-            address = c_loc(scratch%ws_v)
-            capacity = size(scratch%ws_v, 2)
-         end if
+         address = scratch%basis_location()
+         capacity = scratch%capacity()
       end if
       call solver%exchange_workspace(scratch)
    end subroutine krylov_address
+
+   !> Whether every Krylov basis vector of the scratch is zero
+   !> @param[in] workspace Owned solver scratch
+   logical function basis_is_zero(workspace)
+      type(moist_model_moz_solver_workspace_type), intent(in) :: workspace
+      integer :: j
+      basis_is_zero = .true.
+      do j = 1, workspace%capacity() + 1
+         if (any(workspace%basis_vector(j) /= 0.0_wp)) basis_is_zero = .false.
+      end do
+   end function basis_is_zero
 
    !> Finite differences and exact products reach the same root
    subroutine test_jfnk_nonlinear(error)
@@ -1356,7 +1363,7 @@ contains
          if (allocated(error)) return
          call check(error, (solver%njvp_total > 0) .eqv. (mode == 2))
          if (allocated(error)) return
-         call check(error, allocated(solver%workspace%ws_f_pert) .eqv. (mode == 1), &
+         call check(error, solver%workspace%has_fd_scratch() .eqv. (mode == 1), &
             & "FD scratch must be lazy")
          if (allocated(error)) return
       end do
@@ -1409,7 +1416,7 @@ contains
       end do
       call check(error, i <= 6 .and. abs(gamma(1, 1) - 1.0_wp) < 1.0e-12_wp)
       if (allocated(error)) return
-      call check(error, solver%njvp_total > 0 .and. .not. allocated(solver%workspace%ws_f_pert), &
+      call check(error, solver%njvp_total > 0 .and. .not. solver%workspace%has_fd_scratch(), &
          & "Newton must use exact products only")
       call ctx%delete()
    end subroutine test_jfnk_exact_newton
@@ -1450,7 +1457,7 @@ contains
       if (allocated(error)) return
       call check(error, index(merr%message, "Deliberately unavailable") > 0, "Linearization error must be reported")
       if (allocated(error)) return
-      call check(error, solver%nresidual_total == 2 .and. .not. allocated(solver%workspace%ws_f_pert), &
+      call check(error, solver%nresidual_total == 2 .and. .not. solver%workspace%has_fd_scratch(), &
          & "No finite-difference probes may run")
       call ctx%delete()
    end subroutine test_jfnk_exact_required
@@ -2615,7 +2622,9 @@ contains
       !> Test failure information.
       type(error_type), allocatable, intent(out) :: error
       !> Solver with a small Krylov basis and no preconditioner.
-      type(moist_model_moz_solver_jfnk_type) :: solver
+      type(moist_model_moz_solver_jfnk_type), target :: solver
+      !> Basis allocation before a compatible ensure
+      type(c_ptr) :: basis
       !> Residual callback failure information.
       type(mctc_error), allocatable :: merr
       !> Input and result fields; size exceeds the parallel-vector threshold.
@@ -2638,18 +2647,18 @@ contains
       gamma = 0.0_wp
       small = 0.0_wp
       call solver%ensure_workspace(gamma)
-      call check(error, all(solver%workspace%ws_v == 0.0_wp) .and. .not. allocated(solver%workspace%ws_f_pert))
+      call check(error, basis_is_zero(solver%workspace) .and. .not. solver%workspace%has_fd_scratch())
       if (allocated(error)) return
-      call check(error, solver%workspace%ws_nflat == size(gamma))
+      call check(error, all(solver%workspace%field_shape() == shape(gamma)))
       if (allocated(error)) return
-      solver%workspace%ws_v(1, 1) = 7.0_wp
+      basis = solver%workspace%basis_location()
       call solver%ensure_workspace(gamma)
-      call check(error, solver%workspace%ws_v(1, 1) == 7.0_wp)
+      call check(error, c_associated(basis, solver%workspace%basis_location()), "Compatible scratch must be reused")
       if (allocated(error)) return
       call solver%ensure_workspace(small)
-      call check(error, solver%workspace%ws_npts == 7 .and. solver%workspace%ws_npair == 2)
+      call check(error, all(solver%workspace%field_shape() == shape(small)))
       if (allocated(error)) return
-      call check(error, all(solver%workspace%ws_v == 0.0_wp))
+      call check(error, basis_is_zero(solver%workspace))
       if (allocated(error)) return
 
       call solver%outer_step(diagonal_evaluator_type(), gamma, result, rmse, feasible, merr)
@@ -2758,6 +2767,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Solver using exact finite differences for the identity operator.
       type(moist_model_moz_solver_jfnk_type) :: solver
+      !> Affine operator with a two-dimensional Krylov space for ones
+      type(diagonal_evaluator_type) :: diagonal
       !> Residual callback failure information.
       type(mctc_error), allocatable :: merr
       !> Zero state and residual, unit right-hand side, and computed solution.
@@ -2777,7 +2788,22 @@ contains
       rhs = 0.0_wp
       rhs(1) = 1.0_wp
       call solver%ensure_workspace(gamma)
-      solver%workspace%ws_v(:, 2) = 3.0_wp
+      ! A first solve leaves a stale second basis vector
+      call diagonal%residual(gamma, residual, feasible, merr)
+      rhs = 1.0_wp
+      precond_valid = .false.
+      call solver%linear_solve(diagonal, gamma, residual, rhs, delta, &
+                               1.0e-8_wp, precond_valid, feasible, merr, iterations)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, any(solver%workspace%basis_vector(2) /= 0.0_wp), &
+         & "The first solve must fill the second basis vector")
+      if (allocated(error)) return
+      residual = 0.0_wp
+      rhs = 0.0_wp
+      rhs(1) = 1.0_wp
       precond_valid = .false.
       call solver%linear_solve(identity_evaluator_type(), gamma, residual, rhs, delta, &
                                1.0e-8_wp, precond_valid, feasible, merr, iterations)
@@ -2789,7 +2815,7 @@ contains
       if (allocated(error)) return
       call check(error, all(delta == rhs))
       if (allocated(error)) return
-      call check(error, all(solver%workspace%ws_v(:, 2) == 0.0_wp))
+      call check(error, all(solver%workspace%basis_vector(2) == 0.0_wp))
       call ctx%delete()
    end subroutine test_happy_breakdown
 
@@ -2957,8 +2983,8 @@ contains
          if (allocated(error)) return
          call check(error, solver%nrecycled > 1, "The test must retain an active recycled basis")
          if (allocated(error)) return
-         basis = c_loc(solver%workspace%ws_v)
-         recycled = c_loc(solver%workspace%ws_u)
+         basis = solver%workspace%basis_location()
+         recycled = solver%workspace%recycle_location()
          gamma = updated
 
          ! Reconfigure within the active stage, without clearing it through begin_stage.
@@ -2967,8 +2993,8 @@ contains
          call solver%ensure_workspace(gamma)
          call check(error, solver%nrecycled == 0, "An oversized recycled basis must be discarded")
          if (allocated(error)) return
-         call check(error, c_associated(basis, c_loc(solver%workspace%ws_v)) .and. &
-            & c_associated(recycled, c_loc(solver%workspace%ws_u)), &
+         call check(error, c_associated(basis, solver%workspace%basis_location()) .and. &
+            & c_associated(recycled, solver%workspace%recycle_location()), &
             & "Reducing recycling must preserve shared allocations")
          if (allocated(error)) return
 
@@ -2982,8 +3008,8 @@ contains
          call check(error, after < rmse .and. solver%nrecycled <= limit, &
             & "The next update must reduce the residual within the new recycling limit")
          if (allocated(error)) return
-         call check(error, c_associated(basis, c_loc(solver%workspace%ws_v)) .and. &
-            & c_associated(recycled, c_loc(solver%workspace%ws_u)), &
+         call check(error, c_associated(basis, solver%workspace%basis_location()) .and. &
+            & c_associated(recycled, solver%workspace%recycle_location()), &
             & "The next update must reuse shared allocations")
          if (allocated(error)) return
       end do
