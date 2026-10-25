@@ -1551,7 +1551,7 @@ contains
       end do
 
       ! This invertible left operator gives a one-vector GMRES direction
-      ! that increases the physical merit. As in pysofft the residual replaces
+      ! that increases the physical merit. The residual replaces
       ! it and is searched first; for this identity Jacobian it is the exact
       ! Newton step, so the Picard fallback and its filter are not needed.
       linear%matrix = reshape([1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [2, 2])
@@ -1614,7 +1614,7 @@ contains
       call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
       call check(error, feasible .and. .not. allocated(merr) .and. precond%applied_eta == solver%params%eta0)
       if (allocated(error)) return
-      ! As in pysofft the forcing term lags one update: the second inner solve
+      ! The forcing term lags one update: the second inner solve
       ! still uses eta0, the third uses the ratio of the first two residuals
       previous = rmse
       gamma = updated

@@ -4,9 +4,6 @@
 !> - Radial transform of r-space tables at arbitrary wave numbers
 !> - Lane-major block layout (vv_kblock, ns, ns, nblock) of w(k)
 !> - OZ solve h = (I - w c R)^-1 w c w per block or per point, R = diag(rho)
-!>
-!> The OZ solve is adapted from moist_dev/pysofft (44874e7e), model/rism/1d/equation.f90,
-!> and keeps its association of the products
 module moist_model_moz_solvent_vv_kernel
    use mctc_env, only: wp
    use moist_context, only: resolve_num_threads

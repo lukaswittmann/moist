@@ -5,7 +5,6 @@
 !> - Once active, small systems (npair <= 100) use the borrowed spectral filter
 !> - Before activation `ready` is false and JFNK runs unpreconditioned
 !> - Transforms reuse the spectral filter's uniform radial pair, run outside the OpenMP regions
-!> - Adapted from moist_dev/pysofft (44874e7e)
 module moist_model_moz_1d_preconditioner_kspace
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: resolve_num_threads
@@ -315,8 +314,8 @@ contains
       end if
 
       ! Sample the running average of dc/dgamma at the length scale pi/k,
-      ! approximating the diagonal of FBT . diag(dc/dgamma) . FBT^-1; the node
-      ! rule is pysofft's, including its rounding of ties to the upper node
+      ! approximating the diagonal of FBT . diag(dc/dgamma) . FBT^-1; ties
+      ! round to the upper node
       pi_val = acos(-1.0_wp)
       allocate (j_char(npts))
       do ik = 1, npts

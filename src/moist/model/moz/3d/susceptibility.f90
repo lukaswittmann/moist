@@ -11,7 +11,6 @@
 !> - linear: interpolation of the response at the VV grid's own k nodes
 !>   - At x = |k|/dk + 1/2, between nodes int(x) and int(x) + 1
 !>   - Held constant outside them
-!>   - Tabulation of moist_dev/pysofft (44874e7e), model/rism/3d/uv
 !> - The oz charge response is evaluated without low-k cancellation
 !> - Every |k| must lie in the VV grid's band, |k| <= pi/dr
 module moist_model_moz_3d_susceptibility

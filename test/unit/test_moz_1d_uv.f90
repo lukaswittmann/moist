@@ -82,7 +82,7 @@ contains
          & new_unittest("response_fixed", check_response_fixed), &
          & new_unittest("host_charges", check_host_charges), &
          & new_unittest("energy_refusals", check_energy_refusals), &
-         & new_unittest("pysofft_reference", check_pysofft_reference)]
+         & new_unittest("reference_values", check_reference_values)]
    end subroutine collect_moz_1d_uv
 
    !> Check the 1D settings
@@ -1562,21 +1562,20 @@ contains
       call check(error, allocated(err), more="an update kept the correlations")
    end subroutine check_energy_refusals
 
-   !> Check methane and charged solutes in TIP3P water against pysofft, XRISM/KH
+   !> Check methane and charged solutes in TIP3P water against reference values, XRISM/KH
    !>
-   !> Reference: moist_dev origin/pysofft (d3c3d076), new_rism_vv_problem and
-   !> new_rism_uv_problem with the explicit force fields of its rism_smoke test,
-   !> TIP3P at 298 K and 0.0334 1/A^3, 8192 x 0.025 A, tolerances 1e-10:
+   !> Reference: moist_dev, computed for the moist_dev to moist migration; explicit
+   !> force fields, TIP3P at 298 K and 0.0334 1/A^3, 8192 x 0.025 A, tolerances 1e-10,
+   !> with a rank-one charge-moment correction:
    !> 12.298556534797479 and -44.558275999089851 kcal/mol. The charged cases exercise
    !> the charge-moment correction of the solvent response.
-   !> Fresh pysofft c15bd85a runs also include an anion made by reversing a_q
-   !> (a synthetic fixture, not a physical alanine anion). Its legacy energy is
-   !> -254.339837058849724 kcal/mol. Replacing pysofft's rank-one correction by an
+   !> The anion reverses a_q (a synthetic fixture, not a physical alanine anion);
+   !> its rank-one energy is -254.339837058849724 kcal/mol. moist_dev with an
    !> independent construction of the neutral block R P R, R = I - q q^T/(q^T q),
    !> and both prescribed charge blocks gives -44.558273534779538 (cation) and
    !> -254.339839980442065 (anion). These symmetric references retain the 1e-6
-   !> kcal/mol check; the legacy comparisons allow the measured 3e-6 shift.
-   subroutine check_pysofft_reference(error)
+   !> kcal/mol check; the rank-one comparisons allow the measured 3e-6 shift.
+   subroutine check_reference_values(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -1639,23 +1638,23 @@ contains
 
       call solute_energy([6, 1, 1, 1, 1], m_sig, m_eps, m_q, m_xyz, energy)
       if (allocated(error)) return
-      call check(error, energy*autokcal, 12.298556534797479_wp, thr=1.0e-6_wp, more="methane differs from pysofft")
+      call check(error, energy*autokcal, 12.298556534797479_wp, thr=1.0e-6_wp, more="methane differs from the reference")
       if (allocated(error)) return
       call solute_energy([6, 6, 1, 1, 1, 6, 8, 8, 7, 1, 1, 1, 1], a_sig, a_eps, a_q, a_xyz, energy)
       if (allocated(error)) return
       call check(error, energy*autokcal, -44.558273534779538_wp, thr=1.0e-6_wp, &
-         & more="alanine cation differs from the symmetric pysofft reference")
+         & more="alanine cation differs from the symmetric reference")
       if (allocated(error)) return
       call check(error, energy*autokcal, -44.558275999089851_wp, thr=5.0e-6_wp, &
-         & more="alanine cation differs from pysofft")
+         & more="alanine cation differs from the rank-one reference")
       if (allocated(error)) return
       call solute_energy([6, 6, 1, 1, 1, 6, 8, 8, 7, 1, 1, 1, 1], a_sig, a_eps, -a_q, a_xyz, energy)
       if (allocated(error)) return
       call check(error, energy*autokcal, -254.339839980442065_wp, thr=1.0e-6_wp, &
-         & more="charge-reversed anion differs from the symmetric pysofft reference")
+         & more="charge-reversed anion differs from the symmetric reference")
       if (allocated(error)) return
       call check(error, energy*autokcal, -254.339837058849724_wp, thr=5.0e-6_wp, &
-         & more="charge-reversed anion differs from pysofft")
+         & more="charge-reversed anion differs from the rank-one reference")
 
    contains
 
@@ -1681,6 +1680,6 @@ contains
          call check_moist_error(error, err)
       end subroutine solute_energy
 
-   end subroutine check_pysofft_reference
+   end subroutine check_reference_values
 
 end module test_moz_1d_uv

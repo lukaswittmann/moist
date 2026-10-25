@@ -80,7 +80,7 @@ contains
          & new_unittest("solve_refusals", check_solve_refusals), &
          & new_unittest("thermodynamics_reduction", check_thermodynamics_reduction), &
          & new_unittest("solve_outputs", check_solve_outputs), &
-         & new_unittest("pysofft_reference", check_pysofft_reference), &
+         & new_unittest("reference_values", check_reference_values), &
          & new_unittest("converged_field", check_converged_field), &
          & new_unittest("solve_replacement", check_solve_replacement), &
          & new_unittest("susceptibility_at", check_susceptibility_at)]
@@ -1033,15 +1033,15 @@ contains
       call check(error, ieee_is_finite(thermo%chemical_potential), more="chemical potential is not finite")
    end subroutine check_solve_outputs
 
-   !> Check SPC/E water against pysofft, XRISM/KH
+   !> Check SPC/E water against reference values, XRISM/KH
    !>
-   !> Reference: moist_dev origin/pysofft (d3c3d076), new_rism_vv_model for
-   !> solvent 175 with the default 8192-point, 0.015 bohr grid, GMRES without
-   !> preconditioner, one stage and tolerance 1e-10. pysofft's DG_vv is
+   !> Reference: moist_dev, computed for the moist_dev to moist migration;
+   !> solvent 175 with the default 8192-point, 0.015 bohr grid, GMRES
+   !> without preconditioner, one stage and tolerance 1e-10:
    !> rho mu_ex = -2.5671601075586147e-5 Eh/bohr^3; h(r) at three radii.
    !> The default settings here (spectral filter, deflation) reach it to 2e-11
    !> in the energy and 4e-14 in h
-   subroutine check_pysofft_reference(error)
+   subroutine check_reference_values(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -1053,7 +1053,7 @@ contains
       real(wp), allocatable :: cr(:, :), tr(:, :), hr(:, :)
       real(wp), parameter :: ref_rho_mu = -2.5671601075586147e-5_wp
       integer, parameter :: points(3) = [374, 600, 1000]
-      !> h_OO, h_OH and h_HH at the points, pysofft
+      !> Reference h_OO, h_OH and h_HH at the points
       real(wp), parameter :: ref_h(3, 3) = reshape([ &
          & 1.3504911788524510_wp, -4.5288448942201853e-2_wp, -5.7089913235408574e-2_wp, &
          & -1.1860725557315277e-1_wp, -1.3351311106949737e-1_wp, -6.5987338816384522e-3_wp, &
@@ -1069,18 +1069,18 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, solvent%density()*thermo%chemical_potential, ref_rho_mu, rel=.true., thr=1.0e-9_wp, &
-         & more="rho mu_ex differs from pysofft's DG_vv")
+         & more="rho mu_ex differs from the reference")
       if (allocated(error)) return
       call lut%init(3)
       do i = 1, size(points)
-         call check(error, hr(points(i), lut%idx(1, 1)), ref_h(1, i), thr=1.0e-10_wp, more="h_OO differs from pysofft")
+         call check(error, hr(points(i), lut%idx(1, 1)), ref_h(1, i), thr=1.0e-10_wp, more="h_OO differs from the reference")
          if (allocated(error)) return
-         call check(error, hr(points(i), lut%idx(1, 2)), ref_h(2, i), thr=1.0e-10_wp, more="h_OH differs from pysofft")
+         call check(error, hr(points(i), lut%idx(1, 2)), ref_h(2, i), thr=1.0e-10_wp, more="h_OH differs from the reference")
          if (allocated(error)) return
-         call check(error, hr(points(i), lut%idx(2, 2)), ref_h(3, i), thr=1.0e-10_wp, more="h_HH differs from pysofft")
+         call check(error, hr(points(i), lut%idx(2, 2)), ref_h(3, i), thr=1.0e-10_wp, more="h_HH differs from the reference")
          if (allocated(error)) return
       end do
-   end subroutine check_pysofft_reference
+   end subroutine check_reference_values
 
    !> Check that a converged stage returns the field whose residual met the tolerance
    !>

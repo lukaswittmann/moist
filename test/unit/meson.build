@@ -105,7 +105,7 @@ tests = [
   'model_coupling',
 ]
 test_timeouts = {
-  # pysofft_reference solves an 8192-point TIP3P VV and three solutes; minutes in debug
+  # reference_values solves an 8192-point TIP3P VV and three solutes; minutes in debug
   'moz_1d_uv': 900,
   'moz_3d_response': 900,
   # four complete-model gradients with finite differences; over 420 s in debug CI
@@ -139,13 +139,13 @@ test_selected = {
     'parameters', 'prepare_solvent', 'block_products', 'map_consistency', 'jvp_affine',
     'thread_independence', 'setup_errors', 'problem_setup_errors', 'warm_start', 'scf_reuse', 'operator_cache', 'charge_moment',
     'water_in_water', 'response_tables', 'response_charges', 'response_fixed', 'host_charges',
-    'energy_refusals', 'pysofft_reference',
+    'energy_refusals', 'reference_values',
   ],
   'moz_solvent_vv': [
     'intramolecular', 'block_solve', 'map_consistency', 'jvp_differences',
     'coarse_matrix', 'thread_independence', 'setup_errors', 'parameters',
     'evaluator_products', 'damping_step', 'solve_water', 'solve_variants',
-    'solve_refusals', 'thermodynamics_reduction', 'solve_outputs', 'pysofft_reference',
+    'solve_refusals', 'thermodynamics_reduction', 'solve_outputs', 'reference_values',
     'converged_field', 'solve_replacement', 'susceptibility_at',
   ],
   'math_grid_3d_integration': [

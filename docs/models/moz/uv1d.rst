@@ -181,35 +181,14 @@ Validation
 
 A solute identical to the solvent molecule obeys the VV equation, ``h_uv = w c (w + rho h_vv)``,
 so at infinite dilution ``h_uv = h_vv`` and the solvation free energy of a water molecule in water
-equals the excess chemical potential of the solvent. moist and pysofft both give -3.258589 kcal/mol
-for cSPC/E parameters on table water geometry (KH, 8192 x 0.015 bohr); pysofft prints the VV functional as ``DG_vv = rho mu``
-(-0.0161, per bohr^3), the UV value per molecule. The ``moz_1d_uv`` test ``water_in_water`` keeps
+equals the excess chemical potential of the solvent: -3.258589 kcal/mol
+for cSPC/E parameters on table water geometry (KH, 8192 x 0.015 bohr). The ``moz_1d_uv`` test ``water_in_water`` keeps
 the identity to 1e-7. In the same case the partial molar volume is the molecular volume ``1/rho``,
 since ``D`` then equals ``rho C`` of the solvent and ``kT kappa_T = 1/(rho (1 - rho C))``; the test
 keeps it to 1e-6.
 
-TIP3P water (298 K, 0.0334 1/A^3, KH, 8192 x 0.025 A, tolerance 1e-10) with the explicit force fields
-of pysofft's smoke tests reproduces fresh pysofft runs (``origin/pysofft``, d3c3d076):
-
-=====================  =======================  =======================  ==========
-Solute                 moist (kcal/mol)         pysofft (kcal/mol)       Difference
-=====================  =======================  =======================  ==========
-water                  -5.904507619             -5.904507620             2e-9
-methane                12.298556535             12.298556535             5e-10
-alanine (EEQ charges)  21.560060578             21.560060655             8e-8
-alanine zwitterion     -81.323815675            -81.323815755            8e-8
-alanine cation (+1)    -44.558273289            -44.558275999            2.7e-6
-=====================  =======================  =======================  ==========
-
-The cation's small energy shift follows from moist's symmetric charge-moment
-correction; the legacy pysofft correction is rank one and does not preserve
-susceptibility symmetry. The ``pysofft_reference`` unit test also covers a synthetic
-anion obtained by reversing the cation's site charges. Both charge signs agree
-within 1e-6 kcal/mol with independent pysofft calculations (``c15bd85a``) that retain
-the neutral block ``R P R``, ``R = I - q q^T / (q^T q)``, and impose both corrected
-charge blocks. Comparisons with the legacy energies allow a 5e-6 kcal/mol difference.
-
-The same TIP3P calculations give these partial molar volumes (A^3):
+TIP3P water (298 K, 0.0334 1/A^3, KH, 8192 x 0.025 A, tolerance 1e-10) with explicit force fields
+gives these partial molar volumes (A^3):
 
 =====================  ==========
 Solute                 Vbar

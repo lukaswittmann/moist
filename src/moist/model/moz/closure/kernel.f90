@@ -1,6 +1,5 @@
 !> Numerical kernels for HNC, KH and PSE2-4 MOZ closures
 !>
-!> - Adapted from generated kernels in moist_dev/pysofft (44874e7e)
 !> - Closure objects, input checks and array dispatch live in moist_model_moz_closure
 !> - Values and closure derivatives take matching full (u, t) or Ng (u_sr, t_s) inputs
 !>   - return c or c_s in that representation

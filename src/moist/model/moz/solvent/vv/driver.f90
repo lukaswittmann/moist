@@ -7,9 +7,6 @@
 !> - Exact Jacobian and transpose products, J v = v - T'(c' v), and the
 !>   Gaussian coarse space of the deflated Newton-Krylov steps
 !> - Small-k damping of the updates the solver allows to post-process
-!>
-!> Adapted from moist_dev/pysofft (44874e7e), model/rism/1d/vv/driver.f90 and
-!> model/rism/1d/deflation.f90
 module moist_model_moz_solvent_vv_driver
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type

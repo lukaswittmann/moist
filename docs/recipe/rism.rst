@@ -100,8 +100,8 @@ Pressure and electrostatic finite-size corrections are 3D settings. A 1D input
 containing ``correction`` or ``finite_size`` is rejected. The leading finite-size
 term requires a Cartesian grid, Ng splitting and the default OZ susceptibility.
 
-The 3D response sampling defaults to ``susceptibility = "oz"``. Use ``"linear"``
-to reproduce pysofft's sampling. See :ref:`moz-3d-susceptibility-convergence` for
+The 3D response sampling defaults to ``susceptibility = "oz"``. ``"linear"``
+interpolates the response between the VV grid's k nodes instead. See :ref:`moz-3d-susceptibility-convergence` for
 the chloride refinement results and the conditions needed for energy comparisons.
 
 Potential and grid choices
@@ -138,8 +138,7 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
    nufft_tolerance = 1e-10
 
 The bounded HandyMod mapping uses radial midpoint nodes and accepts a real
-``handymod_exponent``, including values below one. To reproduce pysofft's
-``handyeff`` radial and angular recipe, use ``nrad = 50``,
+``handymod_exponent``, including values below one. A larger radial and angular recipe uses ``nrad = 50``,
 ``angular_degree = 77`` (2030 Lebedev points per shell), ``rmax = 16.0``
 and ``handymod_exponent = 0.34``. Set the reciprocal spacing ``dr`` and NUFFT
 tolerance separately. Explicit input values override the compiled defaults.

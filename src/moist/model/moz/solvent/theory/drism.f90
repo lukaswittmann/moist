@@ -1,7 +1,6 @@
 !> Perkyns-Pettitt (1992) dielectric correction for one rigid polar solvent
 !>
 !> - Port of the Perkyns-Pettitt zeta as implemented in RISMiCal (drism.f / mathlib.f:diprot)
-!> - Via pysofft's moist_dev (c15bd85a), model/rism/1d/equation.f90:compute_chi_drism
 !> - Original centre-of-absolute-charge and dipole projection retained
 !> - Complete molecular frame removes orientation ambiguity
 !> - Small-argument series give the analytical zeta/k^2 limit
@@ -74,7 +73,7 @@ contains
       centred = xyz - spread(centre, 2, size(q))
       dipole = matmul(centred, q)
       mu = norm2(dipole)
-      ! RISMiCal/pysofft's dipole floor, e bohr; excludes nonpolar models
+      ! RISMiCal's dipole floor, e bohr; excludes nonpolar models
       if (mu < 1.0e-4_wp) then
          call fatal_error(error, "DRISM requires a polar solvent with a nonzero site dipole")
          return

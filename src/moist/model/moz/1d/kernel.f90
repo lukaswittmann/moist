@@ -8,8 +8,6 @@
 !> - Pointwise energy-response kernels shared with 3D: response_kernel.f90
 !>
 !> - Products follow h_uv = w_u c_uv (w_vv + rho h_vv) of the 1D UV equation
-!> - Charge-moment correction adapted from moist_dev/pysofft (44874e7e),
-!>   model/rism/1d/equation.f90
 module moist_model_moz_1d_kernel
    use mctc_env, only: wp
    use moist_model_moz_response_kernel, only: uv_response_rhs, uv_response_sr, uv_response_lr

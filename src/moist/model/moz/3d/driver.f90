@@ -11,7 +11,6 @@
 !>   - Coulomb tails of c cancel in the sum over the sites of a neutral solvent
 !> - Direct-correlation moment D = sum_a rho_a int c_a dV of the physical c,
 !>   for the partial molar volume
-!> - Adapted from moist_dev/pysofft (44874e7e), model/rism/3d/uv/driver.F90
 module moist_model_moz_3d_driver
 !$ use omp_lib, only: omp_get_thread_num, omp_in_parallel
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite

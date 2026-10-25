@@ -13,8 +13,6 @@
 !>   - Same Coulomb tails cancel in it
 !> - Response: derivatives of dG with respect to u_sr, u_lr(r) and u_lr(k)
 !>   at a converged iterate, from one transposed solve J^T lambda = dE/dt_s
-!>
-!> Adapted from moist_dev/pysofft (44874e7e), model/rism/1d/uv/driver.f90
 module moist_model_moz_1d_driver
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error

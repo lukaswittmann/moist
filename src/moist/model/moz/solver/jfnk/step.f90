@@ -134,7 +134,7 @@ contains
       call unpack_vector(self%workspace%ws_delta_flat, self%workspace%ws_delta, self%team_size())
 
       ! Compute true directional derivative for Armijo condition via one extra JVP
-      ! As in pysofft, an unusable product falls back to slope = -1, and a
+      ! An unusable product falls back to slope = -1, and a
       ! direction that is not a descent direction is replaced by the residual,
       ! searched with slope -||F||^2 before the Picard fallback below
       call self%apply_jacobian(residual_fn, gamma, self%workspace%ws_f_curr, self%workspace%ws_delta_flat, &

@@ -3,7 +3,7 @@
 !> - Applies `w(k) = w0 + (1 - w0) k^2/(k^2 + k0^2)` per site pair
 !> - Through the radial Fourier-Bessel transform
 !> - Also smooths the JFNK Picard fallback step
-!> - Adapted from moist_dev/pysofft (44874e7e) for the uniform DST-IV radial pair
+!> - For the uniform DST-IV radial pair
 !> - Filter copies the pair's nodes and transform
 !> - Columns distributed over the model's OpenMP team, one transform clone per thread
 module moist_model_moz_1d_preconditioner_spectral

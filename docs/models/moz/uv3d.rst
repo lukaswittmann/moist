@@ -46,7 +46,7 @@ return an unsupported-operation error when a response or gradient requests them.
   ``|k|``. The default ``susceptibility = "oz"`` interpolates only short-range ``cbar(k)``
   with a cubic spline, restores the Coulomb tail analytically, and reconstructs ``P`` through
   OZ at each target wave number. ``direct`` transforms the stored ``h_vv(r)`` and ``linear``
-  interpolates the exported susceptibility as moist_dev/pysofft does
+  interpolates the exported susceptibility between the VV grid's k nodes
   (see :ref:`moz-3d-susceptibility-convergence`);
 * solves ``h_a(k) = sum_g c_g(k) P_ga(|k|)`` with the closure, through the grid's forward and
   backward transforms; the first solve uses the selected cold guess and subsequent fixed-geometry
@@ -304,7 +304,7 @@ exact inverses and the solve converges to the tolerance; with ``susceptibility =
 cSPC/E parameters on table water geometry on 64^3 points at 0.5 bohr converges in 11 Newton steps
 (dG -3.008 kcal/mol, partial molar volume 31.18 A^3).
 Atom-centred grids with NUFFT transforms need a validated recipe: with one Lebedev order per atom
-the solve stalls, as moist_dev/pysofft also reports for its plain molecular grid.
+the solve stalls.
 
 Validation
 ----------
@@ -319,36 +319,9 @@ steps and whole-system translations check the full reported energy, including th
 The coarse molecular recipe in these derivative tests does not establish solvation-energy
 convergence for a strongly interacting solute.
 
-TIP3P water (298 K, 0.0334 1/A^3, KH, VV on 8192 x 0.025 A, tolerance 1e-10) with the explicit force
-fields of pysofft's smoke tests, on the Cartesian grid 64^3 x 0.5 bohr of both codes, against fresh
-pysofft runs (``origin/pysofft``, d3c3d076); ``linear`` reproduces pysofft's interpolation of the
-solvent response:
-
-=====================  =======================  =======================  ==========  ===========
-Solute                 moist linear (kcal/mol)  pysofft (kcal/mol)       Difference  direct
-=====================  =======================  =======================  ==========  ===========
-water                  -3.9101135323            -3.9101135325            1.7e-10     -3.9082385
-methane                9.2399863646             9.2399863645             1.6e-10     9.2406029
-alanine (EEQ charges)  11.6725830037            11.6725830020            1.7e-9      11.6755090
-alanine zwitterion     -84.1320991235           -84.1320991276           4.1e-9      -84.1112235
-alanine cation (+1)    -32.8944232888           -32.8944214124           1.9e-6      -32.8807823
-=====================  =======================  =======================  ==========  ===========
-
-Both codes converge each case below 1e-10; the cation's difference (6e-8 relative) does not move
-with a tighter moist tolerance and matches the 1D pattern, where net charges amplify the 1e-11
-difference of the two VV solutions at the smallest k. The ``direct`` response differs from the
-interpolated one by at most 0.02 kcal/mol here.
-
-On an atom-centred grid the phase reference agrees between the transform engine and the
-reciprocal potential tables through ``grid%get_kref()``. The phase-reference fix also returns
-its sensitivity through the volume accumulator, with its nuclear contraction owned by the grid.
-An earlier comparison with the reference at point 1 (``molecular_grid_set_kgrid`` without a
-reference after the update) used TIP3P water on pysofft's ``handyeff`` recipe
-(50 HandyMod shells on midpoints, m = 0.34,
-rmax 16 bohr, 2030-point Lebedev rule, k-grid for 0.7 bohr, NUFFT tolerance 1e-6; 294906 points and
-140400 k-points in both codes), giving -4.1773647267 kcal/mol against pysofft's -4.1773647279.
-The Cartesian value was -3.9101 kcal/mol. Those comparisons predate the gradient implementation;
-they do not establish recipe convergence.
+On an atom-centred grid the transform engine and the reciprocal potential tables share the
+phase reference ``grid%get_kref()``. Its sensitivity returns through the volume accumulator, with
+the nuclear contraction owned by the grid.
 
 .. _moz-3d-susceptibility-convergence:
 
@@ -381,6 +354,5 @@ raw-energy difference in this case. Increasing the VV point count halves ``dk = 
 and doubles the radial cutoff, so this study varies both effects. It establishes neither
 3D spacing/box convergence nor the physical accuracy of the solvent model or charge correction.
 
-Use the default ``oz`` for native calculations and ``linear`` to reproduce pysofft's response
-sampling. Check radial-grid and Cartesian-grid convergence separately when comparing energies;
+Use the default ``oz``; ``linear`` approaches it only as the VV grid is refined. Check radial-grid and Cartesian-grid convergence separately when comparing energies;
 compare raw energies before adding pressure or finite-size corrections.

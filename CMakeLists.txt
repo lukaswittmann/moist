@@ -377,7 +377,7 @@ if(MOIST_TESTS)
     intramolecular block_solve map_consistency jvp_differences
     coarse_matrix thread_independence setup_errors parameters evaluator_products
     damping_step solve_water solve_variants solve_refusals thermodynamics_reduction
-    solve_outputs pysofft_reference converged_field solve_replacement susceptibility_at)
+    solve_outputs reference_values converged_field solve_replacement susceptibility_at)
   set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
   set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
   set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)
@@ -395,7 +395,7 @@ if(MOIST_TESTS)
     parameters prepare_solvent block_products map_consistency jvp_affine
     thread_independence setup_errors problem_setup_errors warm_start scf_reuse operator_cache charge_moment
     water_in_water response_tables response_charges response_fixed host_charges
-    energy_refusals pysofft_reference)
+    energy_refusals reference_values)
   set(moist_test_selected_moz_closure
     construction reference_values first_derivatives second_derivatives branch_boundary energy_integrands
     physical_inputs invalid_inputs noncontiguous_arrays block_sweeps nested_teams fused_derivative array_integrands energy_derivatives custom_extension)

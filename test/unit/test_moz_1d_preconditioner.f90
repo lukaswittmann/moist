@@ -355,7 +355,7 @@ contains
       call kspace%apply(result)
 
       ! Independent reference: running average of dc/dgamma up to node
-      ! nint(min(r_max, pi/k)/dr + 0.5) (pysofft's rule), filtered transform and
+      ! nint(min(r_max, pi/k)/dr + 0.5), filtered transform and
       ! dense solve
       allocate (alpha(npts, npair), num(npts), den(npts))
       do ip = 1, npair

@@ -100,7 +100,7 @@ units of ``u``; ``lambda`` scales the potential and lies in ``[0, 1]``.
 ``closure%free_energy_integrand(h, c, phi, error)``
    Evaluate the dimensionless local integrand for the selected closure.
    Correlations must be finite and ``1 + h >= -1e-12``; the floor admits
-   hard-core roundoff, as in pysofft. The caller supplies density
+   hard-core roundoff. The caller supplies density
    factors and integration weights.
 
 The ``closure_*_c(u, t, beta, lambda, c)`` kernel subroutines evaluate a
@@ -148,10 +148,6 @@ references, input errors and strided array sections. Block sweeps are compared
 with direct kernel calls across incomplete blocks, single and multiple pair
 columns, and strided storage with one and four OpenMP threads.
 
-``test/unit/test_moz_closure_kernel.f90`` retains the pysofft-derived derivative
-checks, compares sweeps with independent mathematical references, and checks
+``test/unit/test_moz_closure_kernel.f90`` checks the kernel derivatives,
+compares sweeps with independent mathematical references, and checks
 branch boundaries, reversed/empty sections and exponential accuracy.
-
-The kernels and their numerical tests are adapted from
-``lukaswittmann/moist_dev``, branch ``pysofft``, commit
-``44874e7e95ebdd35e74c8398476dbc0710bf1ac7``.

@@ -35,8 +35,6 @@ Solve
 The solve uses ordinary RISM :cite:p:`chandler1972rism,hirata1981xrism` by default (``theory = "RISM"``; ``XRISM`` is an alias)
 for one rigid molecular species with one site per atom; every site carries the molecular density.
 ``theory = "DRISM"`` selects the Perkyns-Pettitt dielectric correction :cite:p:`perkyns1992drism` for a polar solvent.
-The correction is a mathematical port from RISMiCal through pysofft; its provenance
-is recorded in ``solvent/theory/PROVENANCE.md``.
 
 The bulk molecule must be electrically neutral. RISM and DRISM reject nonfinite
 charges and any net charge exceeding
@@ -119,7 +117,7 @@ Key                              Default      Meaning
 ===============================  ===========  ==================================================
 
 MDIIS from a cold start diverges for water; use JFNK, or HYBRID with JFNK taking over early.
-Stiff cases such as cold neon with PSE4 need the spectral preconditioner, in pysofft as well.
+Stiff cases such as cold neon with PSE4 need the spectral preconditioner.
 
 Outputs
 -------
@@ -171,15 +169,6 @@ Outputs
 
 Validation
 ----------
-
-The historical table-geometry regression uses water (solvent 175, 298.15 K)
-with the SPC/E charges and the ``lj_cspce`` parameters,
-SPC/E Lennard-Jones on oxygen and the hydrogen Lennard-Jones modification of Luchko et al.,
-with KH on the default grid reproduces the pysofft VV solve (``moist_dev`` ``origin/pysofft``,
-d3c3d076, GMRES without preconditioner): ``rho mu`` (pysofft's ``DG_vv``) agrees to 2e-11
-relative and ``h(r)`` to 4e-14 at every point. This checks the numerics against pysofft on
-the same cSPC/E nonbonded parameters on the table geometry.
-The ``moz_solvent_vv`` test ``pysofft_reference`` keeps these numbers.
 
 RISM and DRISM use the same closures, solvers and fixed-bulk UV derivatives.
 Theory, smearing width, closure, radial grid and achieved residual are checked

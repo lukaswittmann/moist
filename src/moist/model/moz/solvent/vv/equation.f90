@@ -9,7 +9,6 @@
 !> - Coarse matrix of the residual Jacobian I - T' c' on Gaussian profiles
 !>
 !> Each parallel region uses one transform clone per thread and num_threads(nt)
-!> Adapted from moist_dev/pysofft (44874e7e), model/rism/1d/equation.f90
 module moist_model_moz_solvent_vv_equation
    !$ use omp_lib, only: omp_get_thread_num
    use mctc_env, only: wp, error_type, fatal_error

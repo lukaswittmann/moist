@@ -4,9 +4,6 @@
 !> - P(g, a): solvent response w_ga + rho_g h_ga of the VV solution at |k|
 !> - Ng split: c(k) = c_s(k) - beta u_lr(k)
 !>   - t_s(k) = h(k) - c(k) - beta u_lr(k)
-!>
-!> - Products follow the 3D UV equation of moist_dev/pysofft (44874e7e),
-!>   model/rism/3d/uv/equation.F90
 module moist_model_moz_3d_kernel
    use mctc_env, only: wp
    implicit none(type, external)
