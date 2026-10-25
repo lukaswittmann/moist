@@ -140,8 +140,14 @@ contains
          return
       end if
       forcing = max(1.0e-12_wp, min(0.1_wp, 0.1_wp*tol/rms))
-      inner = moist_model_moz_solver_jfnk_parameters_type(restart=controls%restart, max_krylov=controls%max_krylov, &
-         & eta0=forcing, eta_min=forcing, eta_max=forcing, alpha_max=1.0_wp, cgs2=.true.)
+      ! Intel does not like structure constructor with nested parameter defaults
+      inner%restart = controls%restart
+      inner%max_krylov = controls%max_krylov
+      inner%eta0 = forcing
+      inner%eta_min = forcing
+      inner%eta_max = forcing
+      inner%alpha_max = 1.0_wp
+      inner%cgs2 = .true.
       call inner%validate(error)
       if (allocated(error)) return
       solver = new_jfnk_solver(ctx, inner)
