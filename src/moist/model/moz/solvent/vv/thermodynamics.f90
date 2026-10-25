@@ -68,8 +68,17 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Optional owned forward cache of the evaluated bulk list
-      type(thermo_list_type), optional, intent(out) :: items
-      type(thermo_list_type) :: evaluated
+      type(thermo_list_type), optional, intent(out), target :: items
+      !> Owned cache when no output list is requested
+      type(thermo_list_type), target :: local_items
+      !> Build in the output directly; ifort loses cache state in the optional-output copy
+      type(thermo_list_type), pointer :: evaluated
+
+      if (present(items)) then
+         evaluated => items
+      else
+         evaluated => local_items
+      end if
 
       call vv_chemical_potential(closure, rgrid, lut, hr, cr, rho, beta, self%chemical_potential, error)
       if (allocated(error)) return
@@ -85,7 +94,6 @@ contains
       if (.not. allocated(error)) call evaluated%get_value("pressure", self%pressure, error)
       if (.not. allocated(error)) call evaluated%get_value("pressure_ideal", self%pressure_ideal, error)
       if (allocated(error)) return
-      if (present(items)) items = evaluated
    end subroutine new_vv_thermodynamics
 
    !> Excess chemical potential mu = (rho/beta) sum_ab int Phi_ab(h, c) d^3r

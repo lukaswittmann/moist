@@ -72,12 +72,21 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Optional owned forward cache of the evaluated list
-      type(thermo_list_type), optional, intent(out) :: items
+      type(thermo_list_type), optional, intent(out), target :: items
       !> Optional single selected correction: none, PC or PC+
       character(len=*), optional, intent(in) :: correction
       !> Optional finite-size quantity, registered and selected alongside the pressure term
       class(thermodynamic_quantity_type), optional, intent(in) :: finite_size
-      type(thermo_list_type) :: evaluated
+      !> Owned cache when no output list is requested
+      type(thermo_list_type), target :: local_items
+      !> Build in the output directly; ifort loses cache state in the optional-output copy
+      type(thermo_list_type), pointer :: evaluated
+
+      if (present(items)) then
+         evaluated => items
+      else
+         evaluated => local_items
+      end if
 
       if (.not. (ieee_is_finite(free_energy) .and. ieee_is_finite(moment) .and. &
          & ieee_is_finite(solvent%pressure) .and. ieee_is_finite(solvent%pressure_ideal) .and. &
@@ -111,7 +120,6 @@ contains
          call evaluated%get_value(finite_size%name, self%finite_size, error)
          if (allocated(error)) return
       end if
-      if (present(items)) items = evaluated
    end subroutine new_moz_3d_thermodynamics
 
    !> Accumulate ordinary energy derivatives, then convert dE/dD once for the UV driver
