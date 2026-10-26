@@ -2,7 +2,7 @@
 
 !> Wrapper to symmetric divide-and-conquer solver for general eigenvalue problems
 module moist_math_lapack_sygvd
-   use mctc_env, only: sp, dp, error_type, fatal_error
+   use mctc_env, only: dp, error_type, fatal_error
    use moist_output_format, only: format_string
    use moist_math_lapack_type, only: eigen_solver_type, context_solver
    implicit none(type, external)
@@ -11,25 +11,6 @@ module moist_math_lapack_sygvd
    public :: new_sygvd
 
    interface lapack_sygvd
-      pure subroutine ssygvd(itype, jobz, uplo, n, a, lda, b, ldb, w, work, lwork, &
-            & iwork, liwork, info)
-         import :: sp
-         implicit none(type, external)
-         real(sp), intent(inout) :: a(lda, *)
-         real(sp), intent(inout) :: b(ldb, *)
-         real(sp), intent(out) :: w(*)
-         integer, intent(in) :: itype
-         character(len=1), intent(in) :: jobz
-         character(len=1), intent(in) :: uplo
-         integer, intent(out) :: info
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
-         integer, intent(in) :: ldb
-         real(sp), intent(inout) :: work(*)
-         integer, intent(in) :: lwork
-         integer, intent(inout) :: iwork(*)
-         integer, intent(in) :: liwork
-      end subroutine ssygvd
       pure subroutine dsygvd(itype, jobz, uplo, n, a, lda, b, ldb, w, work, lwork, &
             & iwork, liwork, info)
          import :: dp
@@ -56,13 +37,10 @@ module moist_math_lapack_sygvd
       private
       integer :: n = 0
       integer, allocatable :: iwork(:)
-      real(sp), allocatable :: swork(:)
-      real(sp), allocatable :: sbmat(:, :)
       real(dp), allocatable :: dwork(:)
       real(dp), allocatable :: dbmat(:, :)
    contains
-      procedure :: solve_sp
-      procedure :: solve_dp
+      procedure :: solve => solve_dp
    end type sygvd_solver
 
 contains
@@ -72,34 +50,6 @@ contains
       integer, intent(in) :: ndim
       self%n = ndim
    end subroutine new_sygvd
-
-   subroutine solve_sp(self, hmat, smat, eval, error)
-      class(sygvd_solver), intent(inout) :: self
-      real(sp), contiguous, intent(inout) :: hmat(:, :)
-      real(sp), contiguous, intent(in) :: smat(:, :)
-      real(sp), contiguous, intent(inout) :: eval(:)
-      type(error_type), allocatable, intent(out) :: error
-      integer :: info, lswork, liwork
-
-      if (self%n == 0) then
-         self%n = size(hmat, 1)
-      end if
-      if (.not. allocated(self%swork)) then
-         allocate (self%swork(1 + 6*self%n + 2*self%n**2))
-      end if
-      if (.not. allocated(self%iwork)) then
-         allocate (self%iwork(3 + 5*self%n))
-      end if
-      self%sbmat = smat
-      lswork = size(self%swork)
-      liwork = size(self%iwork)
-
-      call lapack_sygvd(1, "v", "u", self%n, hmat, self%n, self%sbmat, self%n, eval, &
-         & self%swork, lswork, self%iwork, liwork, info)
-
-      call handle_info(error, info)
-
-   end subroutine solve_sp
 
    subroutine solve_dp(self, hmat, smat, eval, error)
       class(sygvd_solver), intent(inout) :: self

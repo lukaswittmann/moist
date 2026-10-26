@@ -1,6 +1,6 @@
 !> Reduces a real symmetric-definite generalized eigenproblem to standard form
 module moist_math_lapack_sygst
-   use mctc_env, only: sp, dp
+   use mctc_env, only: dp
    implicit none(type, external)
    private
 
@@ -16,7 +16,6 @@ module moist_math_lapack_sygst
    !>
    !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface wrap_sygst
-      module procedure :: wrap_ssygst
       module procedure :: wrap_dsygst
    end interface wrap_sygst
 
@@ -30,18 +29,6 @@ module moist_math_lapack_sygst
    !>
    !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface lapack_sygst
-      pure subroutine ssygst(itype, uplo, n, a, lda, b, ldb, info)
-         import :: sp
-         implicit none(type, external)
-         real(sp), intent(inout) :: a(lda, *)
-         real(sp), intent(in) :: b(ldb, *)
-         integer, intent(in) :: itype
-         character(len=1), intent(in) :: uplo
-         integer, intent(out) :: info
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
-         integer, intent(in) :: ldb
-      end subroutine ssygst
       pure subroutine dsygst(itype, uplo, n, a, lda, b, ldb, info)
          import :: dp
          implicit none(type, external)
@@ -57,25 +44,6 @@ module moist_math_lapack_sygst
    end interface lapack_sygst
 
 contains
-
-   pure subroutine wrap_ssygst(amat, bmat, info, itype, uplo)
-      real(sp), intent(inout) :: amat(:, :)
-      real(sp), intent(in) :: bmat(:, :)
-      integer, intent(in), optional :: itype
-      character(len=1), intent(in), optional :: uplo
-      integer, intent(out) :: info
-      character(len=1) :: ula
-      integer :: ita, n, lda, ldb
-
-      ita = 1
-      if (present(itype)) ita = itype
-      ula = "u"
-      if (present(uplo)) ula = uplo
-      lda = max(1, size(amat, 1))
-      ldb = max(1, size(bmat, 1))
-      n = size(amat, 2)
-      call lapack_sygst(ita, ula, n, amat, lda, bmat, ldb, info)
-   end subroutine wrap_ssygst
 
    pure subroutine wrap_dsygst(amat, bmat, info, itype, uplo)
       real(dp), intent(inout) :: amat(:, :)

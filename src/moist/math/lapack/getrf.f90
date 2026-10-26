@@ -2,7 +2,7 @@
 
 !> Wrapper routines for LU factorization
 module moist_math_lapack_getrf
-   use mctc_env, only: sp, dp
+   use mctc_env, only: dp
    use moist_math_lapack_kinds, only: lapack_ik
    implicit none(type, external)
    private
@@ -17,37 +17,12 @@ module moist_math_lapack_getrf
    !> diagonal elements (lower trapezoidal if m > n), and U is upper
    !> triangular (upper trapezoidal if m < n). Real and complex matrices.
    interface wrap_getrf
-      module procedure :: wrap_sgetrf
       module procedure :: wrap_dgetrf
       module procedure :: wrap_zgetrf
    end interface wrap_getrf
 
    !> LAPACK LU factorization with partial pivoting of a general matrix
    interface lapack_getrf
-      !> Single precision LU factorization
-      !>
-      !> @param[in]     m     number of rows of a
-      !> @param[in]     n     number of columns of a
-      !> @param[in,out] a     matrix on input, factors on output
-      !> @param[in]     lda   leading dimension of a
-      !> @param[out]    ipiv  pivot indices
-      !> @param[out]    info  zero on success, positive if u is exactly singular
-      pure subroutine sgetrf(m, n, a, lda, ipiv, info)
-         import :: sp, lapack_ik
-         implicit none(type, external)
-         !> Number of rows of a
-         integer(lapack_ik), intent(in) :: m
-         !> Number of columns of a
-         integer(lapack_ik), intent(in) :: n
-         !> Leading dimension of a
-         integer(lapack_ik), intent(in) :: lda
-         !> Matrix and factors
-         real(sp), intent(inout) :: a(lda, *)
-         !> Pivot indices
-         integer(lapack_ik), intent(out) :: ipiv(*)
-         !> Status
-         integer(lapack_ik), intent(out) :: info
-      end subroutine sgetrf
       !> Double precision LU factorization
       !>
       !> @param[in]     m     number of rows of a
@@ -99,29 +74,6 @@ module moist_math_lapack_getrf
    end interface lapack_getrf
 
 contains
-
-!> Single precision LU factorization
-!>
-!> @param[in,out] amat  matrix on input, factors on output, (m, n)
-!> @param[out]    ipiv  pivot indices, (min(m, n))
-!> @param[out]    info  zero on success, positive if u is exactly singular
-   subroutine wrap_sgetrf(amat, ipiv, info)
-      !> Matrix and factors
-      real(sp), intent(inout) :: amat(:, :)
-      !> Pivot indices
-      integer, intent(out) :: ipiv(:)
-      !> Status
-      integer, intent(out) :: info
-      integer(lapack_ik) :: m, n, lda, info_lapack
-      integer(lapack_ik), allocatable :: ipiv_lapack(:)
-      lda = int(max(1, size(amat, 1)), lapack_ik)
-      m = int(size(amat, 1), lapack_ik)
-      n = int(size(amat, 2), lapack_ik)
-      allocate (ipiv_lapack(size(ipiv)))
-      call lapack_getrf(m, n, amat, lda, ipiv_lapack, info_lapack)
-      ipiv = int(ipiv_lapack)
-      info = int(info_lapack)
-   end subroutine wrap_sgetrf
 
 !> Double precision LU factorization
 !>
