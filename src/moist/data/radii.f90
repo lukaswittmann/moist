@@ -32,6 +32,10 @@ module moist_data_radii_legacy
 
    !> CPCM radii (already scaled)
    !>
+   !> - ORCA `ATOM_COSMORadius`, legacy point-charge CPCM set
+   !> - Unscaled COSMO values for H, C, N, O, F, Al, Si, S, Cl, Br, I
+   !> - Others 1.17 x base radius, labeled Bondi in ORCA but mostly not Bondi
+   !> - Placeholders 1.9 x 1.17 = 2.223 A (Ar-Xe), 2.0 x 1.17 = 2.34 A (Cs-Og)
    !> - H = 1.30 A from Klamt et al., J. Phys. Chem. A 102, 5074 (1998)
    !> - DOI: 10.1021/jp980017s
    real(wp), parameter :: cpcm_vdw_rad(max_elem_cpcm) = aatoau*[ &
@@ -121,8 +125,11 @@ module moist_data_radii_legacy
       & 2.17695_wp, 2.21705_wp                          &  ! Np-Pu
       & ]
 
-   !> COSMO optimized van-der-Waals radii
+   !> COSMO van-der-Waals radii
    !>
+   !> - TURBOMOLE `parameter/radii.cosmo`, Version 2.0 080813, via xtb
+   !> - Optimized only for H, C, N, O, F, S, Cl, Br, I; others are guesses
+   !> - 2.223 A placeholder for unparametrized elements
    !> - H = 1.30 A from Klamt et al., J. Phys. Chem. A 102, 5074 (1998)
    !> - DOI: 10.1021/jp980017s
    real(wp), parameter :: cosmo_vdw_rad(max_elem_cosmo) = aatoau*[ &
