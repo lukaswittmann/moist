@@ -100,7 +100,7 @@ add_library(moist_fft OBJECT
 )
 target_include_directories(moist_fft PUBLIC "${_fft_dir}")
 
-# Like upstream: the precision sources once for double and once with FINUFFT_SINGLE
+# Double precision only: the precision sources once, without FINUFFT_SINGLE
 set(FINUFFT_PRECISION_SOURCES
   "${_finufft_dir}/src/makeplan.cpp"
   "${_finufft_dir}/src/setpts.cpp"
@@ -115,20 +115,18 @@ add_library(finufft_common OBJECT
   "${_finufft_dir}/src/common/pswf.cpp"
   "${_finufft_dir}/src/common/utils.cpp"
 )
-add_library(finufft_f32 OBJECT ${FINUFFT_PRECISION_SOURCES})
-target_compile_definitions(finufft_f32 PRIVATE FINUFFT_SINGLE)
 add_library(finufft OBJECT ${FINUFFT_PRECISION_SOURCES}
   "${_finufft_dir}/src/fft.cpp"
   "${_finufft_dir}/src/c_interface.cpp"
   "${_finufft_dir}/src/utils.cpp"
   "${_finufft_dir}/fortran/finufftfort.cpp"
 )
-foreach(tgt finufft_common finufft_f32 finufft)
+foreach(tgt finufft_common finufft)
   target_include_directories(${tgt} PRIVATE
     "${_finufft_dir}/include" "${_fft_dir}/xsimd/include" "${_fft_dir}")
   target_compile_definitions(${tgt} PRIVATE FINUFFT_USE_DUCC0)
 endforeach()
-foreach(tgt moist_fft finufft_common finufft_f32 finufft)
+foreach(tgt moist_fft finufft_common finufft)
   target_link_libraries(${tgt} PUBLIC Threads::Threads)
   if(MOIST_OPENMP)
     target_link_libraries(${tgt} PUBLIC OpenMP::OpenMP_CXX)
@@ -250,7 +248,7 @@ target_link_libraries(moist PUBLIC
   BLAS::BLAS
 )
 # PRIVATE keeps the C++ include directories off moist's consumers
-target_link_libraries(moist PRIVATE moist_fft finufft finufft_f32 finufft_common)
+target_link_libraries(moist PRIVATE moist_fft finufft finufft_common)
 if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()

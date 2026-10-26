@@ -1,3 +1,5 @@
+// Modified for moist: double precision only, float instantiations removed ("moist patch"),
+// see PROVENANCE.md
 #ifdef FINUFFT_USE_DUCC0
 #include "ducc0/fft/fftnd_impl.h" // only needed for do_fft body; not in any header
 #endif
@@ -234,7 +236,6 @@ template<typename T>
 void Finufft_FFT_plan_deleter<T>::operator()(Finufft_FFT_plan<T> *p) const {
   delete p;
 }
-template struct Finufft_FFT_plan_deleter<float>;
 template struct Finufft_FFT_plan_deleter<double>;
 
 // --- FINUFFT_FFT_DEFAULT ---
@@ -246,7 +247,6 @@ extern "C" const int FINUFFT_FFT_DEFAULT = FFTW_ESTIMATE;
 
 // --- FINUFFT_PLAN_T destructor (needs complete Finufft_FFT_plan type) ---
 template<typename TF> FINUFFT_PLAN_T<TF>::~FINUFFT_PLAN_T() {}
-template FINUFFT_PLAN_T<float>::~FINUFFT_PLAN_T();
 template FINUFFT_PLAN_T<double>::~FINUFFT_PLAN_T();
 
 // --- gridsize_for_fft ---
@@ -259,7 +259,6 @@ std::vector<int> FINUFFT_PLAN_T<TF>::gridsize_for_fft() const
   if (dim == 2) return {(int)m.nfdim[1], (int)m.nfdim[0]};
   return {(int)m.nfdim[2], (int)m.nfdim[1], (int)m.nfdim[0]};
 }
-template std::vector<int> FINUFFT_PLAN_T<float>::gridsize_for_fft() const;
 template std::vector<int> FINUFFT_PLAN_T<double>::gridsize_for_fft() const;
 
 // --- do_fft ---
@@ -369,7 +368,6 @@ void FINUFFT_PLAN_T<TF>::do_fft(TC *fwBatch, int ntrans_actual [[maybe_unused]],
     m.fftPlan->execute(fwBatch);
 #endif
 }
-template void FINUFFT_PLAN_T<float>::do_fft(std::complex<float> *, int, bool) const;
 template void FINUFFT_PLAN_T<double>::do_fft(std::complex<double> *, int, bool) const;
 
 // --- create_fft_plan ---
@@ -379,7 +377,6 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::create_fft_plan() {
   m.fftPlan.reset(new Finufft_FFT_plan<TF>(opts.fftw_lock_fun, opts.fftw_unlock_fun,
                                            opts.fftw_lock_data));
 }
-template void FINUFFT_PLAN_T<float>::create_fft_plan();
 template void FINUFFT_PLAN_T<double>::create_fft_plan();
 
 // --- init_grid_kerFT_FFT ---
@@ -464,19 +461,15 @@ template<typename TF> void FINUFFT_PLAN_T<TF>::init_grid_kerFT_FFT() {
              timer.elapsedsec());
   }
 }
-template void FINUFFT_PLAN_T<float>::init_grid_kerFT_FFT();
 template void FINUFFT_PLAN_T<double>::init_grid_kerFT_FFT();
 
 // --- fftw global cleanup utilities ---
 void finufft_fft_forget_wisdom() {
-  Finufft_FFT_plan<float>::forget_wisdom();
   Finufft_FFT_plan<double>::forget_wisdom();
 }
 void finufft_fft_cleanup() {
-  Finufft_FFT_plan<float>::cleanup();
   Finufft_FFT_plan<double>::cleanup();
 }
 void finufft_fft_cleanup_threads() {
-  Finufft_FFT_plan<float>::cleanup_threads();
   Finufft_FFT_plan<double>::cleanup_threads();
 }
