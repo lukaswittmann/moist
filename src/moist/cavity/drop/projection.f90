@@ -738,7 +738,7 @@ contains
       if (allocated(self%w_f0)) deallocate (self%w_f0)
       allocate (self%w_f0(self%ngrid), source=1.0_wp)
 
-      ! Coefficient alpha = 0.5 * w_a from the Jacobian formula:
+      ! Coefficient alpha = w_a from the Jacobian formula:
       ! J_P = alpha * A^{-1} * (I - g*g^T*A^{-1}/(g^T*A^{-1}*g))
       alpha_coeff = self%param%phi_alpha
 
