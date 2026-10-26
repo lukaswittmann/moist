@@ -1,6 +1,7 @@
 !> Owned scratch storage for sequential primal and transpose Krylov solves
 module moist_model_moz_solver_jfnk_workspace
    use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_null_ptr
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
    implicit none(type, external)
    private
@@ -42,6 +43,8 @@ module moist_model_moz_solver_jfnk_workspace
       real(wp), allocatable :: ws_u(:, :), ws_c(:, :)
       !> Recycling Hessenberg copy (capacity + 1, capacity) and projection coefficients (recycle capacity, capacity)
       real(wp), allocatable :: ws_hbar(:, :), ws_bproj(:, :)
+      !> Stamp of the current allocation, unique across workspaces and threads; zero before allocation
+      integer(int64), private :: stamp = 0_int64
    contains
       procedure :: ensure => workspace_ensure
       procedure :: ensure_recycle => workspace_ensure_recycle
@@ -53,7 +56,11 @@ module moist_model_moz_solver_jfnk_workspace
       procedure :: basis_vector => workspace_basis_vector
       procedure :: basis_location => workspace_basis_location
       procedure :: recycle_location => workspace_recycle_location
+      procedure :: allocation_stamp => workspace_allocation_stamp
    end type moist_model_moz_solver_workspace_type
+
+   !> Last allocation stamp handed out to any workspace
+   integer(int64) :: last_stamp = 0_int64
 
 contains
 
@@ -154,6 +161,7 @@ contains
          end do
       end do
       !$omp end parallel do
+      self%stamp = next_stamp()
       reallocated = .true.
    end function workspace_ensure_recycle
 
@@ -279,6 +287,7 @@ contains
       self%ws_h = 0.0_wp
       self%ws_g = 0.0_wp
       self%ws_y = 0.0_wp
+      self%stamp = next_stamp()
    end subroutine allocate_workspace
 
    !> Field shape (npts, npair) of the scratch; zeros before allocation
@@ -363,6 +372,29 @@ contains
       location = c_null_ptr
       if (allocated(self%ws_u)) location = c_loc(self%ws_u)
    end function workspace_recycle_location
+
+   !> Stamp of the current allocation, for reuse checks
+   !>
+   !> - Changes whenever storage is (re)allocated, also in place or at the same address
+   !> - Moves with the storage when workspaces are exchanged
+   pure function workspace_allocation_stamp(self) result(stamp)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(in) :: self
+      !> Zero before allocation
+      integer(int64) :: stamp
+
+      stamp = self%stamp
+   end function workspace_allocation_stamp
+
+   !> Next allocation stamp, unique across all workspaces and threads
+   function next_stamp() result(stamp)
+      !> New stamp
+      integer(int64) :: stamp
+      !$omp atomic capture
+      last_stamp = last_stamp + 1_int64
+      stamp = last_stamp
+      !$omp end atomic
+   end function next_stamp
 
    !> Swap complete allocations while preserving array layout and shared capacity
    !>

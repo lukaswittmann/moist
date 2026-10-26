@@ -129,7 +129,9 @@ Warnings
 Settings that are adjusted and recoveries of a whole solve are reported once
 through the run context, regardless of the verbosity, e.g. a ``jfnk.recycle``
 capped by ``restart`` and ``max_krylov``, a stall at ``eta_min`` after two zero
-steps, an ignored or failed warm-start guess, or too few site pairs for
-``kspace``. Recoveries inside a stage (Picard fallbacks, inner solves capped at
-``max_krylov``, skipped deflation or recycling) are summarized in one note
-after each stage of the iteration table.
+steps, an ignored 1D UV ``guess``, a warm start that fails with an error and
+is retried cold, or too few site pairs for ``kspace``. A kept guess that is
+infeasible, or a warm start that ends unconverged without an error, falls back
+to the cold guess without a warning. Recoveries inside a stage (Picard
+fallbacks, inner solves capped at ``max_krylov``, skipped deflation or
+recycling) are summarized in one note after each stage of the iteration table.

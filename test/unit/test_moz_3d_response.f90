@@ -1,8 +1,7 @@
 !> UV transpose, host response and geometry-gradient finite differences
 module test_moz_3d_response
-   use, intrinsic :: iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit, int64
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-   use, intrinsic :: iso_c_binding, only: c_ptr, c_associated
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
@@ -445,8 +444,8 @@ contains
       real(wp), parameter :: beta = 1.7_wp
       real(wp) :: rmse, ew, ec
       logical :: converged, kept
-      !> Krylov basis allocation before an SCF update
-      type(c_ptr) :: basis
+      !> Workspace allocation stamp before an SCF update
+      integer(int64) :: stamp
       integer :: ic, step, nw, nc, warm_steps, cold_steps
       type(moist_context_type), target :: ctx
 
@@ -485,10 +484,10 @@ contains
             previous_t = warm%tr
             before = warm%solver%get_statistics()
             if (params%solver%name == "JFNK") then
-               ! A rebuilt or reset workspace replaces the Krylov basis allocation
+               ! A rebuilt or reset workspace gets a new allocation stamp
                call check(error, allocated(warm%solver%workspace), more="JFNK storage released after solve")
                if (allocated(error)) return
-               basis = warm%solver%workspace%basis_location()
+               stamp = warm%solver%workspace%allocation_stamp()
             end if
             call warm%update_potential(changed_sr, changed_lr, changed_k, err)
             call check_moist_error(error, err)
@@ -504,7 +503,7 @@ contains
             after = warm%solver%get_statistics()
             if (params%solver%name == "JFNK") then
                kept = .false.
-               if (allocated(warm%solver%workspace)) kept = c_associated(basis, warm%solver%workspace%basis_location())
+               if (allocated(warm%solver%workspace)) kept = warm%solver%workspace%allocation_stamp() == stamp
                call check(error, after%nresidual > before%nresidual .and. kept, &
                   & more="SCF update rebuilt or reset JFNK storage")
                if (allocated(error)) return

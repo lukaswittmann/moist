@@ -6,6 +6,7 @@ module moist_model_moz_solver_jfnk
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: moist_context_type
    use moist_output_citations, only: citation
+   use moist_model_moz_solver_core_adjoint, only: moist_model_moz_solver_jfnk_adjoint_parameters_type
    use moist_model_moz_solver_core_base, only: moist_model_moz_solver_type, moist_model_moz_solver_statistics_type
    use moist_model_moz_solver_core_checks, only: finite_positive, finite_nonnegative, unit_fraction, step_fraction
    use moist_model_moz_solver_core_printer, only: moist_model_moz_solver_printer_type
@@ -19,7 +20,7 @@ module moist_model_moz_solver_jfnk
    private
 
    public :: moist_model_moz_solver_jfnk_type, moist_model_moz_solver_jfnk_parameters_type
-   public :: new_jfnk_solver
+   public :: moist_model_moz_solver_jfnk_adjoint_parameters_type, new_jfnk_solver
 
    !> Inner-solve, forcing and line-search controls
    !>
