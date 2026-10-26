@@ -198,8 +198,8 @@ Surface Projection
         - SLSQP multistart + Newton refinement
         - Recommended for more challenging cases
       * - 9
-        - certified octree branch search + Newton refinement
-        - Reference-quality, recommended for more challenging cases
+        - Octree surface coverage + Newton refinement
+        - Reference searches and difficult concave regions; most expensive
 
 ``projection.maxiter`` (integer, default ``150``)
   Maximum iterations for the projection optimizer.
@@ -208,6 +208,13 @@ Surface Projection
   Weight :math:`w_a` of the anchor term :math:`\tfrac{1}{2} w_a \|\mathbf r - \mathbf r^\circ\|^2` in the projection objective.
   It does not move a point that has a single projection, but branch weights and the admissible branch radius depend on it through :math:`\Phi`, so it does not cancel in concave regions.
   This should not be changed.
+
+``projection.branch_search_rho2_slack`` (real, default ``-1``)
+  Search window :math:`\Delta\rho^2` in bohr^2: a projection :math:`b` of an anchor is kept only if :math:`\rho_b^2 \le \rho_\mathrm{min}^2 + \Delta\rho^2`, where :math:`\rho_\mathrm{min}` is the closest projection found for that anchor.
+  The window applies to every projection level, both to the branch search and to the candidate filter.
+
+  - ``-1``: derived from the branch weights, :math:`\Delta\rho^2 = 2\,\Delta\Phi_\mathrm{max}/w_a`, with the admissible objective excess :math:`\Delta\Phi_\mathrm{max}` from `Branching`_. With the defaults this is about ``0.26`` bohr^2. Every branch outside it has a softmax weight below the floor.
+  - ``>= 0``: explicit window, independent of the branch weights.
 
 .. dropdown:: Legacy projection strategies
 
@@ -301,6 +308,7 @@ Branching
   Branch fractions are a softmax of :math:`-\Phi` over the objective values of all competing projections (i.e. the projected distance), divided by this scale, so equal objective values receive equal weights and a lower objective value smoothly dominates.
   Each branch fraction multiplies the integration weight of its projected point.
   The admissible objective excess of a branch is ``softmax_scale * log(1/floor)``, where the floor is ``branching.weight_floor`` (default ``0.0``) or, when that is not positive, the derived quadrature weight cutoff.
+  It sets the default search window ``projection.branch_search_rho2_slack``.
 
 
 Spatial Screening

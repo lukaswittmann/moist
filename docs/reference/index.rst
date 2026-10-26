@@ -110,7 +110,7 @@ Solvent descriptors
         -
       * - ``surface_tension``
         - Macroscopic surface tension
-        - N/m; Eh/bohr²
+        - N/m; Eh/bohr^2
       * - ``mass_density``
         - Mass density
         - kg/m³; mₑ/bohr³
