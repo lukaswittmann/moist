@@ -148,6 +148,33 @@ rejects incompatible radial bounds.
 Unknown keys and keys for another grid kind are rejected. Native closure and
 solver validation determines which numerical options are available.
 
+Checkpoints and warm starts
+---------------------------
+
+Moist caches the bulk VV and UV fields in ``.mbin`` files by default.
+A later run starts from them: a field that already solves the current equations to the requested tolerance is accepted without iterations, any other fitting field is an initial guess.
+Convergence is decided by that residual check, never by the file metadata; see
+:ref:`moz-checkpoints`.
+
+.. code-block:: toml
+
+   [checkpoint]
+   enabled = true              # false: read and write nothing
+
+   [checkpoint.vv]
+   file = "water-kh.mbin"      # default: vv_rism_solvent_<id>_<theory>_<closure>.mbin
+   interval = 5                # also save every 5 iterations; 0: final field only
+
+   [checkpoint.uv]
+   file = "chloride.mbin"      # default: uv_rism_1d.mbin or uv_rism_3d.mbin
+   guess = "chloride-hnc.mbin" # optional: start from another file
+
+- The automatic VV name goes to the directory in ``MOIST_RISM_VV_OUTDIR`` when set, else the working directory, so runs can reuse the bulk solution.
+- Without ``file`` and ``guess``, a VV solve with no file for its closure starts from the automatic file of another closure of the same theory (HNC, PSE4, PSE3, PSE2, KH, in that order).
+- ``guess`` replaces the file read at the start; ``file`` is still written.
+- Intermediate saves are marked unconverged. The final field is saved when the solve iterated and ended without an error, so an interrupted or unconverged run can be continued.
+- Fields of another grid shape or spacing, or of other solvent or solute atoms, are ignored with a warning and the solve starts cold, then overwrites the file.
+
 Overrides and output
 --------------------
 
@@ -186,4 +213,5 @@ provider, such as a quantum-chemistry integration.
 factories: ``src/moist/math/grid/3d/factory.f90`` builds the UV point grid and
 ``src/moist/model/moz/potential/factory.f90`` the native potential terms. The
 driver evaluates that model through the shared coupling lifecycle; no filenames
-enter the numerical model constructors.
+enter the numerical model constructors. Checkpoint files reach the solvent and model
+as stores attached after construction.

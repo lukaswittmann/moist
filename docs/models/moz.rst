@@ -15,3 +15,4 @@ and they share the closures and nonlinear solvers.
    moz/thermodynamics
    moz/closures
    moz/solvers
+   moz/checkpoints

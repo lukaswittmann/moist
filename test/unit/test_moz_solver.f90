@@ -2462,8 +2462,10 @@ contains
       self%min_elapsed = min(self%min_elapsed, elapsed)
    end subroutine context_observe
 
-   subroutine context_checkpoint(self, error)
+   subroutine context_checkpoint(self, iter, rmse, error)
       class(iteration_context_type), intent(inout) :: self
+      integer, intent(in) :: iter
+      real(wp), intent(in) :: rmse
       type(mctc_error), allocatable, intent(out) :: error
       self%ncheckpoints = self%ncheckpoints + 1
       if (self%fail_checkpoint) call fatal_error(error, "Deliberate checkpoint failure")

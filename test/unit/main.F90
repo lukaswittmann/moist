@@ -13,6 +13,7 @@ program tester
    use test_utils_mem, only: collect_utils_mem
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_utils_prettylistprint_threaded, only: collect_utils_prettylistprint_threaded
+   use test_utils_binio, only: collect_utils_binio
    use test_channels, only: collect_channels
    use test_moz_1d, only: collect_moz_1d
    use test_moz_3d, only: collect_moz_3d
@@ -23,6 +24,7 @@ program tester
    use test_moz_potential_oplsaa, only: collect_moz_potential_oplsaa
    use test_moz_solvent, only: collect_moz_solvent
    use test_moz_solvent_vv, only: collect_moz_solvent_vv
+   use test_moz_checkpoint, only: collect_moz_checkpoint
    use test_moz_response, only: collect_moz_response
    use test_moz_drism, only: collect_moz_drism
    use test_moz_1d_uv, only: collect_moz_1d_uv
@@ -117,6 +119,7 @@ program tester
       & new_testsuite("utils_mem", collect_utils_mem), &
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
       & new_testsuite("utils_prettylistprint_threaded", collect_utils_prettylistprint_threaded), &
+      & new_testsuite("utils_binio", collect_utils_binio), &
       & new_testsuite("channels", collect_channels), &
       & new_testsuite("data", collect_data), &
       & new_testsuite("radii", collect_radii), &
@@ -155,6 +158,7 @@ program tester
       & new_testsuite("moz_potential_oplsaa", collect_moz_potential_oplsaa), &
       & new_testsuite("moz_solvent", collect_moz_solvent), &
       & new_testsuite("moz_solvent_vv", collect_moz_solvent_vv), &
+      & new_testsuite("moz_checkpoint", collect_moz_checkpoint), &
       & new_testsuite("moz_response", collect_moz_response), &
       & new_testsuite("moz_drism", collect_moz_drism), &
       & new_testsuite("moz_1d_uv", collect_moz_1d_uv), &

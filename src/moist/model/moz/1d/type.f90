@@ -21,6 +21,8 @@
 !>   at fixed radial grids, site parameters and bulk solvent; host derivatives returned
 !> - Coupling scope of solute term i: i
 !> - Monopole term owns its host-charge requirements
+!> - Optional checkpoint store: initial guess of a solve without a reusable
+!>   field, saves during and after each UV solve
 !> - The model does not watch its potential: update it again after a change
 module moist_model_moz_1d_type
    use, intrinsic :: iso_fortran_env, only: int64
@@ -47,6 +49,7 @@ module moist_model_moz_1d_type
    use moist_model_moz_1d_driver, only: uv_problem_type, new_uv_problem, new_uv_filters
    use moist_model_moz_1d_solver_filters, only: moist_model_moz_1d_solver_filters_type
    use moist_model_moz_solvent_vv_kernel, only: vv_intramolecular_adjoint
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type, checkpoint_kind_uv1d
    implicit none(type, external)
    private
    public :: model_moz_1d_type, new_moz_1d_model
@@ -63,8 +66,10 @@ module moist_model_moz_1d_type
       type(solvent_vv_type), allocatable, private :: solvent
       !> Settings of the UV solve and of the VV solve of the solvent copy
       type(model_moz_1d_parameters_type), private :: params
-      !> Solute coordinates of the latest update, bohr (3, nu)
-      real(wp), allocatable, private :: xyz(:, :)
+      !> Solute of the latest update
+      type(structure_type), private :: mol
+      !> Optional store of UV states
+      class(moz_checkpoint_type), allocatable, private :: checkpoint
       !> Whether the correlations belong to the latest energy at this structure
       logical, private :: solved = .false.
       !> Bulk identity of the kept UV solution
@@ -87,6 +92,8 @@ module moist_model_moz_1d_type
       final :: destroy_moz_1d_model
       !> Invalidate the UV solution, response guess and host couplings
       procedure :: invalidate => moz_1d_invalidate
+      !> Attach a UV checkpoint store, or detach it
+      procedure :: set_checkpoint => moz_1d_set_checkpoint
       procedure :: update => moz_1d_update
       procedure :: get_energy => moz_1d_energy
       procedure :: get_response => moz_1d_response
@@ -200,7 +207,7 @@ contains
       end if
       call self%potential%update(mol, self%rgrid, error)
       if (allocated(error)) return
-      self%xyz = mol%xyz
+      self%mol = mol
       call self%ctx%cite(citation%rism)
       if (self%potential%ng_split()) call self%ctx%cite(citation%ng)
       if (self%ctx%verbosity(2)) then
@@ -397,7 +404,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(solvent_vv_thermodynamics_type) :: bulk
       type(model_moz_1d_thermodynamics_type) :: thermo
-      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :)
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), guess(:, :)
       type(prettyprinter) :: pp
       character(len=96) :: buf
       real(wp) :: rmse, free_energy, moment
@@ -428,7 +435,7 @@ contains
       reuse_guess = self%solved .and. self%params%reuse_initial_guess
       self%solved = .false.
 
-      call self%operators%prepare(self%kgrid, self%solvent, self%xyz, error)
+      call self%operators%prepare(self%kgrid, self%solvent, self%mol%xyz, error)
       if (allocated(error)) return
       nv = self%solvent%nsite()
 
@@ -446,9 +453,13 @@ contains
             & spread(self%solvent%density(), 1, nv), self%solvent%beta(), self%params, error)
       end if
       if (allocated(error)) return
+      if (allocated(self%checkpoint)) then
+         call set_checkpoint_header(self)
+         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess)
+      end if
       call self%ctx%timer%stop("Setup")
       call self%problem%solve(self%filters, self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
-         & reuse_initial_guess=reuse_guess)
+         & guess=guess, reuse_initial_guess=reuse_guess, checkpoint=self%checkpoint)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged) then
@@ -488,6 +499,48 @@ contains
          call pp%blank()
       end if
    end subroutine solve_uv_tables
+
+   !> Attach a copy of a UV checkpoint store, or detach the store when absent
+   !>
+   !> - The store supplies the initial guess of a UV solve without a reusable
+   !>   field and receives its states
+   !> - The VV store travels with the solvent passed to the constructor
+   !>
+   !> @param[inout] self        model
+   !> @param[in]    checkpoint  store to copy
+   subroutine moz_1d_set_checkpoint(self, checkpoint)
+      !> Model
+      class(model_moz_1d_type), intent(inout) :: self
+      !> Store to copy
+      class(moz_checkpoint_type), intent(in), optional :: checkpoint
+      if (allocated(self%checkpoint)) deallocate (self%checkpoint)
+      if (present(checkpoint)) allocate (self%checkpoint, source=checkpoint)
+   end subroutine moz_1d_set_checkpoint
+
+   !> Describe the states of the current UV solve in the store header
+   !>
+   !> - Radial grid, solvent and solute sites, solute coordinates, closure,
+   !>   bulk theory and temperature
+   !>
+   !> @param[inout] self  updated model with a store
+   subroutine set_checkpoint_header(self)
+      !> Model
+      class(model_moz_1d_type), intent(inout) :: self
+      type(structure_type) :: solvent
+
+      solvent = self%solvent%structure()
+      associate (header => self%checkpoint%header)
+         header%kind = checkpoint_kind_uv1d
+         header%grid_shape = [self%rgrid%npts]
+         header%spacing = self%rgrid%spacing
+         header%solvent_sites = solvent%num(solvent%id)
+         header%solute_sites = self%mol%num(self%mol%id)
+         header%solute_xyz = self%mol%xyz
+         header%closure = trim(adjustl(self%params%closure))
+         header%theory = trim(self%solvent%theory_name())
+         header%temperature = self%solvent%temperature()
+      end associate
+   end subroutine set_checkpoint_header
 
    !> Whether two tables are equal in shape and value
    !>
@@ -647,7 +700,7 @@ contains
          call self%ctx%timer%start("Contraction")
          allocate (local(3, self%atom_count()), source=0.0_wp)
          call lut%init(self%atom_count())
-         call vv_intramolecular_adjoint(self%kgrid%r, self%xyz, lut, w_wu, local)
+         call vv_intramolecular_adjoint(self%kgrid%r, self%mol%xyz, lut, w_wu, local)
          call response_clear(response)
          call self%potential%compute_adjoint(self%rgrid, self%kgrid, self%solvent%potential, coupling, &
             & w_sr, w_lr, w_k, response, error)

@@ -6,6 +6,8 @@ subdir('solvent')
 subdir('solver')
 
 srcs += files(
+  'checkpoint.f90',
+  'checkpoint/file.f90',
   'fields.f90',
   'response_kernel.f90',
   'potential.f90',

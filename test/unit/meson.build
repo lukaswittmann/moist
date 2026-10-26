@@ -18,6 +18,7 @@ tests = [
   'utils_mem',
   'utils_prettylistprint',
   'utils_prettylistprint_threaded',
+  'utils_binio',
   'channels',
   'data',
   'radii',
@@ -56,6 +57,7 @@ tests = [
   'moz_potential_oplsaa',
   'moz_solvent',
   'moz_solvent_vv',
+  'moz_checkpoint',
   'moz_response',
   'moz_drism',
   'moz_1d_uv',
@@ -140,6 +142,10 @@ test_selected = {
     'thread_independence', 'setup_errors', 'problem_setup_errors', 'warm_start', 'scf_reuse', 'operator_cache', 'charge_moment',
     'water_in_water', 'response_tables', 'response_charges', 'response_fixed', 'host_charges',
     'energy_refusals', 'filters_refusal', 'picard_damping', 'reference_values',
+  ],
+  'moz_checkpoint': [
+    'file_round_trip', 'file_candidates', 'file_failed_save', 'vv_reload',
+    'vv_intermediate', 'vv_stages', 'vv_unfitting', 'uv1d_reload', 'uv3d_reload',
   ],
   'moz_solvent_vv': [
     'intramolecular', 'block_solve', 'map_consistency', 'jvp_differences',

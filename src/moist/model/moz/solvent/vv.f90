@@ -19,6 +19,8 @@
 !>
 !> - The solvent does not watch its potential: update it again after a change
 !> - A change also makes a VV solution stale
+!> - An attached checkpoint store supplies the initial guess of each solve and
+!>   receives its states; copies of the solvent carry the store
 module moist_model_moz_solvent_vv
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use, intrinsic :: iso_fortran_env, only: int64
@@ -43,6 +45,7 @@ module moist_model_moz_solvent_vv
    use moist_model_moz_solvent_theory, only: bulk_theory_type, new_bulk_theory
    use moist_model_moz_solvent_vv_driver, only: vv_problem_type, new_vv_problem
    use moist_model_moz_solvent_vv_thermodynamics, only: solvent_vv_thermodynamics_type, new_vv_thermodynamics
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type, checkpoint_kind_vv
    implicit none(type, external)
    private
 
@@ -83,11 +86,15 @@ module moist_model_moz_solvent_vv
       type(solvent_vv_parameters_type), private :: solved_parameters
       !> Bulk thermodynamics of the VV solution
       type(solvent_vv_thermodynamics_type), private :: thermo
+      !> Optional store of VV states: initial guess of each solve, saves during and after it
+      class(moz_checkpoint_type), allocatable, private :: checkpoint
    contains
       !> Update the potential from the solvent structure
       procedure :: update => vv_update
       !> Solve the 1D VV equations
       procedure :: solve => vv_solve
+      !> Attach a checkpoint store, or detach it
+      procedure :: set_checkpoint => vv_set_checkpoint
       !> Whether the VV solution is available and matches the potential
       procedure :: is_solved => vv_is_solved
       !> Copy of the radial pair of the VV solution
@@ -266,6 +273,7 @@ contains
       type(potential_sites_type) :: sites
       real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), wk(:, :), rho(:), hk(:, :)
       real(wp), allocatable :: cr_short(:, :), q(:), tail(:), wbar(:, :), zeta(:, :), zmat(:, :), zscaled(:, :)
+      real(wp), allocatable :: guess(:, :)
       type(prettyprinter) :: pp
       character(len=64) :: buf
       real(wp) :: rmse, alpha
@@ -313,8 +321,10 @@ contains
       call new_vv_problem(problem, self%ctx, rgrid, kgrid, wbar, u_sr, ur_lr, uk_lr, rho, self%beta(), params, &
          & error, h_offset=zeta)
       if (allocated(error)) return
+      if (allocated(self%checkpoint)) call load_guess(self, params, ur_lr, guess)
       call self%ctx%timer%stop("Setup")
-      call problem%solve(params%tolerance, params%maxiter, params%nlambda, converged, rmse, niter, error)
+      call problem%solve(params%tolerance, params%maxiter, params%nlambda, converged, rmse, niter, error, &
+         & guess=guess, checkpoint=self%checkpoint)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged .or. .not. ieee_is_finite(rmse) .or. rmse >= params%tolerance) then
@@ -373,6 +383,53 @@ contains
          call pp%blank()
       end if
    end subroutine solve_bulk
+
+   !> Set the store header of this solve and load an initial guess from the store
+   !>
+   !> - Header: radial grid, solvent sites, closure, theory and temperature
+   !> - Loaded guess reported at verbosity 2, with the VV iteration table
+   !>
+   !> @param[inout] self    solvent with a store and a constructed theory
+   !> @param[in]    params  validated settings of the solve
+   !> @param[in]    ur_lr   long-range real-space potential, Hartree, packed (npts, npair)
+   !> @param[out]   guess   short-range t_s(r), packed (npts, npair); unallocated without a guess
+   subroutine load_guess(self, params, ur_lr, guess)
+      !> Solvent
+      class(solvent_vv_type), intent(inout) :: self
+      !> Settings of the solve
+      type(solvent_vv_parameters_type), intent(in) :: params
+      !> Long-range real-space potential
+      real(wp), intent(in) :: ur_lr(:, :)
+      !> Short-range guess
+      real(wp), allocatable, intent(out) :: guess(:, :)
+
+      associate (header => self%checkpoint%header)
+         header%kind = checkpoint_kind_vv
+         header%grid_shape = [params%npts]
+         header%spacing = params%dr
+         header%solvent_sites = self%system%solv_mol%num(self%system%solv_mol%id)
+         header%closure = trim(adjustl(params%closure))
+         header%theory = trim(self%theory%name())
+         header%temperature = self%temperature()
+      end associate
+      call self%checkpoint%load_guess(self%ctx, self%beta(), ur_lr, 2, guess)
+   end subroutine load_guess
+
+   !> Attach a copy of a checkpoint store, or detach the store when absent
+   !>
+   !> - The store supplies the initial guess of each solve and receives its states
+   !> - Detached: solves read and write nothing
+   !>
+   !> @param[inout] self        solvent
+   !> @param[in]    checkpoint  store to copy
+   subroutine vv_set_checkpoint(self, checkpoint)
+      !> Solvent
+      class(solvent_vv_type), intent(inout) :: self
+      !> Store to copy
+      class(moz_checkpoint_type), intent(in), optional :: checkpoint
+      if (allocated(self%checkpoint)) deallocate (self%checkpoint)
+      if (present(checkpoint)) allocate (self%checkpoint, source=checkpoint)
+   end subroutine vv_set_checkpoint
 
    !> Whether the VV solution is available and matches the potential
    !>

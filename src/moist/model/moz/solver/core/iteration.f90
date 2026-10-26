@@ -61,12 +61,18 @@ module moist_model_moz_solver_core_iteration
       !> Write a checkpoint and restore the solver representation even on error
       !>
       !> @param[inout] self Solve-local checkpoint context
+      !> @param[in] iter Stage-local iteration number
+      !> @param[in] rmse Convergence measure from advance
       !> @param[out] error Failure information
-      subroutine checkpoint_interface(self, error)
-         import :: moist_model_moz_solver_iteration_type, error_type
+      subroutine checkpoint_interface(self, iter, rmse, error)
+         import :: moist_model_moz_solver_iteration_type, wp, error_type
          implicit none(type, external)
          !> Solve-local context
          class(moist_model_moz_solver_iteration_type), intent(inout) :: self
+         !> Stage-local iteration number
+         integer, intent(in) :: iter
+         !> Convergence measure
+         real(wp), intent(in) :: rmse
          !> Failure information
          type(error_type), allocatable, intent(out) :: error
       end subroutine checkpoint_interface
@@ -134,7 +140,7 @@ contains
          ! Fortran does not guarantee short-circuit evaluation of logical AND
          if (checkpoint_interval > 0 .and. (.not. reached_tolerance .or. checkpoint_first)) then
             if (mod(iter, checkpoint_interval) == 0) then
-               call context%checkpoint(error)
+               call context%checkpoint(iter, rmse, error)
                if (allocated(error)) exit
             end if
          end if

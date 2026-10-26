@@ -25,6 +25,7 @@ module moist_model_moz_solvent_vv_driver
    use moist_model_moz_solvent_vv_parameters, only: solvent_vv_parameters_type
    use moist_model_moz_solvent_vv_thermodynamics, only: vv_chemical_potential
    use moist_model_moz_fields, only: state_feasible, scale_flat, subtract_flat, unflatten, residual_difference
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type
    implicit none(type, external)
    private
 
@@ -106,6 +107,10 @@ module moist_model_moz_solvent_vv_driver
       type(moist_model_moz_solver_printer_type), pointer :: printer => null()
       !> Stage tolerance; on the converging step the update is checked against its input
       real(wp) :: tolerance = 0.0_wp
+      !> Borrowed store of intermediate saves; null without checkpoints
+      class(moz_checkpoint_type), pointer :: store => null()
+      !> Iterations of the earlier stages and attempts; makes the saved iteration counts cumulative
+      integer :: offset = 0
    contains
       procedure :: advance => iteration_advance
       procedure :: observe => iteration_observe
@@ -202,25 +207,32 @@ contains
       allocate (self%cr(size(wk, 1), size(wk, 2)), source=0.0_wp)
    end subroutine new_vv_problem
 
-   !> Run the coupling stages lambda = 1/n, ..., 1 from the current c_s
+   !> Run the coupling stages lambda = 1/n, ..., 1 from c_s = 0, or the last stage from a guess
    !>
-   !> - Each stage starts from t_s = T(c_s) and a fresh solver stage
+   !> - Each cold stage starts from t_s = T(c_s) and a fresh solver stage
+   !> - A guess is checked at full coupling: one meeting the tolerance is the
+   !>   solution without iterations; a feasible one starts the last stage, and
+   !>   a failed warm attempt retries the cold stages once with fresh solver history
    !> - Converged stage ends on a field measured below the tolerance
    !> - That field has cr = C(tr); rmse is its residual
    !> - Stops at the first unconverged stage; tr and cr hold its last iterate
+   !> - With a store: saves every `interval` iterations of the last stage, and the
+   !>   final field of the last stage when the solve iterated without error
    !> - Iteration table on the context unit at verbosity 2, with the solver's
    !>   fallback summary after each stage
    !> - The table shows mu_ex of each iterate; lambda only for several stages
    !>
-   !> @param[inout] self       problem; returns the last accepted t_s and c_s
-   !> @param[in]    tolerance  RMS residual of a converged stage
-   !> @param[in]    maxiter    outer iterations per stage
-   !> @param[in]    nlambda    number of stages
-   !> @param[out]   converged  whether every stage converged
-   !> @param[out]   rmse       last RMS residual
-   !> @param[out]   niter      outer iterations of all stages
-   !> @param[out]   error      map, residual, closure or preconditioner failure
-   subroutine problem_solve(self, tolerance, maxiter, nlambda, converged, rmse, niter, error)
+   !> @param[inout] self        problem; returns the last accepted t_s and c_s
+   !> @param[in]    tolerance   RMS residual of a converged stage
+   !> @param[in]    maxiter     outer iterations per stage
+   !> @param[in]    nlambda     number of stages
+   !> @param[out]   converged   whether every stage converged
+   !> @param[out]   rmse        last RMS residual
+   !> @param[out]   niter       outer iterations of all stages
+   !> @param[out]   error       map, residual, closure or preconditioner failure
+   !> @param[in]    guess       short-range t_s(r) at full coupling, packed (npts, npair)
+   !> @param[inout] checkpoint  store of the saved states, with its header set
+   subroutine problem_solve(self, tolerance, maxiter, nlambda, converged, rmse, niter, error, guess, checkpoint)
       !> Problem
       class(vv_problem_type), intent(inout), target :: self
       !> Stage tolerance
@@ -235,12 +247,17 @@ contains
       integer, intent(out) :: niter
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Initial short-range indirect correlation at full coupling
+      real(wp), intent(in), optional :: guess(:, :)
+      !> Store of the saved states
+      class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
       type(vv_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       class(moist_model_moz_solver_preconditioner_type), pointer :: precond
       character(len=32) :: buf
-      integer :: ilam, stage_iter
+      integer :: ilam, first, stage_iter, attempt, interval
+      logical :: warm
 
       converged = .false.
       rmse = huge(1.0_wp)
@@ -249,6 +266,9 @@ contains
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
       if (self%damp_small_k) allocate (context%delta(size(self%tr)))
+      if (present(checkpoint)) then
+         if (allocated(checkpoint)) context%store => checkpoint
+      end if
       if (self%ctx%verbosity(2)) then
          call printer%setup(unit=self%ctx%unit, energy_label="mu kcal", denergy_label="dmu kcal", &
             & inner_rows=self%ctx%verbosity(5), lambda_column=nlambda > 1, energy_columns=self%ctx%verbosity(4))
@@ -256,6 +276,9 @@ contains
          call self%solver%set_iteration_printer(printer)
          call printer%header("1D VV")
          call printer%blank()
+         if (associated(context%store)) then
+            if (len(context%store%note()) > 0) call printer%note(context%store%note())
+         end if
       end if
       if (self%solver%uses_preconditioner()) then
          call select_1d_preconditioner(self%precond, self%spectral, precond, self%kspace)
@@ -264,34 +287,66 @@ contains
       end if
       work0 = self%solver%get_statistics()
 
-      do ilam = 1, nlambda
-         self%lambda = real(ilam, wp)/real(nlambda, wp)
-         converged = .false.
-         call self%equation%map(self%cr, self%tr, error)
-         if (allocated(error)) exit
-         self%linearized = .false.
-         call self%solver%begin_stage()
-         if (associated(context%printer)) then
-            if (ilam > 1) then
-               call printer%separator()
-               call printer%blank()
-            end if
-            if (nlambda > 1) then
-               write (buf, "(f0.3)") self%lambda
-               call printer%note("Solver: "//self%solver%name()//", lambda: "//trim(buf))
-            else
-               call printer%note("Solver: "//self%solver%name())
-            end if
-            call printer%blank()
-            call printer%begin_stage()
-         end if
-         call run_iterations(context, self%ctx, maxiter, tolerance, 0, rmse, stage_iter, &
-            & converged, error)
-         niter = niter + stage_iter
-         if (associated(context%printer)) call printer%note(self%solver%stage_summary())
-         if (allocated(error) .or. .not. converged) exit
-      end do
+      warm = .false.
+      if (present(guess)) call check_guess(context, guess, tolerance, warm, converged, rmse)
 
+      attempts: do attempt = 1, 2
+         if (converged) exit attempts
+         first = 1
+         if (warm) then
+            first = nlambda
+         else
+            self%cr = 0.0_wp
+         end if
+         do ilam = first, nlambda
+            self%lambda = real(ilam, wp)/real(nlambda, wp)
+            converged = .false.
+            ! The warm stage starts from the guess itself
+            if (.not. warm .or. ilam > first) then
+               call self%equation%map(self%cr, self%tr, error)
+               if (allocated(error)) exit
+            end if
+            self%linearized = .false.
+            call self%solver%begin_stage()
+            if (associated(context%printer)) then
+               if (ilam > first .or. attempt > 1) then
+                  call printer%separator()
+                  call printer%blank()
+               end if
+               if (attempt > 1) call printer%note("Retry from c_s = 0")
+               if (nlambda > 1) then
+                  write (buf, "(f0.3)") self%lambda
+                  call printer%note("Solver: "//self%solver%name()//", lambda: "//trim(buf))
+               else
+                  call printer%note("Solver: "//self%solver%name())
+               end if
+               call printer%blank()
+               call printer%begin_stage()
+            end if
+            ! Only fields of the last stage solve the requested equations
+            interval = 0
+            if (associated(context%store) .and. ilam == nlambda) interval = context%store%interval
+            context%offset = niter
+            call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, stage_iter, &
+               & converged, error)
+            niter = niter + stage_iter
+            if (associated(context%printer)) call printer%note(self%solver%stage_summary())
+            if (allocated(error) .or. .not. converged) exit
+         end do
+         if (converged .and. .not. allocated(error)) exit attempts
+         if (.not. warm) exit attempts
+         ! A poor guess must not prevent the cold stages from succeeding
+         if (allocated(error)) then
+            call self%ctx%warning("1D VV: warm start failed: "//error%message//"; retrying cold")
+            deallocate (error)
+         end if
+         warm = .false.
+         self%linearized = .false.
+      end do attempts
+
+      if (associated(context%store) .and. niter > 0 .and. .not. allocated(error)) then
+         if (self%lambda >= 1.0_wp) call save_state(self, context%store, rmse, niter, converged)
+      end if
       call self%solver%set_iteration_printer()
       call self%solver%set_preconditioner()
       call self%solver%set_fallback_filter()
@@ -447,19 +502,112 @@ contains
       end associate
    end subroutine iteration_observe
 
-   !> No file checkpoints; converged bulk fields are retained in memory
+   !> Save the accepted iterate as an unconverged state
+   !>
+   !> - A failed save warns; the solve continues
    !>
    !> @param[inout] self  solve-local context
-   !> @param[out]   error always set
-   subroutine iteration_checkpoint(self, error)
+   !> @param[in]    iter  stage-local iteration of the accepted iterate
+   !> @param[in]    rmse  residual measured by its advance
+   !> @param[out]   error never set
+   subroutine iteration_checkpoint(self, iter, rmse, error)
       !> Solve-local context
       class(vv_iteration_type), intent(inout) :: self
+      !> Stage-local iteration
+      integer, intent(in) :: iter
+      !> RMS residual
+      real(wp), intent(in) :: rmse
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      associate (s => self); end associate
-      call fatal_error(error, "1D VV solve keeps no checkpoints")
+      if (.not. associated(self%store)) return
+      call save_state(self%evaluator%problem, self%store, rmse, self%offset + iter, .false.)
    end subroutine iteration_checkpoint
+
+   !> Check a guess at full coupling and accept it when it meets the tolerance
+   !>
+   !> - Feasible guesses become tr, with cr = C(tr)
+   !> - Rejected guesses warn and leave the cold start
+   !>
+   !> @param[inout] context    solve-local context bound to the problem
+   !> @param[in]    guess      short-range t_s(r), packed (npts, npair)
+   !> @param[in]    tolerance  RMS residual of a converged solve
+   !> @param[out]   warm       whether the guess is feasible
+   !> @param[out]   converged  whether the guess meets the tolerance
+   !> @param[out]   rmse       RMS residual of a feasible guess, else huge
+   subroutine check_guess(context, guess, tolerance, warm, converged, rmse)
+      !> Solve-local context
+      type(vv_iteration_type), intent(inout) :: context
+      !> Short-range guess
+      real(wp), intent(in) :: guess(:, :)
+      !> Tolerance
+      real(wp), intent(in) :: tolerance
+      !> Whether the guess is feasible
+      logical, intent(out) :: warm
+      !> Whether the guess meets the tolerance
+      logical, intent(out) :: converged
+      !> RMS residual of the guess
+      real(wp), intent(out) :: rmse
+      type(error_type), allocatable :: guess_error
+      character(len=16) :: buf
+
+      warm = .false.
+      converged = .false.
+      rmse = huge(1.0_wp)
+      associate (p => context%evaluator%problem)
+         p%lambda = 1.0_wp
+         if (any(shape(guess) /= shape(p%tr))) then
+            call p%ctx%warning("1D VV: guess shape does not match the grid, ignoring guess")
+            return
+         end if
+         call context%evaluator%residual(guess, context%residual, warm, guess_error)
+         warm = warm .and. .not. allocated(guess_error)
+         if (.not. warm) then
+            if (allocated(guess_error)) then
+               call p%ctx%warning("1D VV: guess is infeasible, ignoring guess: "//guess_error%message)
+            else
+               call p%ctx%warning("1D VV: guess is infeasible, ignoring guess")
+            end if
+            return
+         end if
+         p%tr = guess
+         p%cr = p%c_work
+         rmse = sqrt(sum(context%residual**2)/real(size(context%residual), wp))
+         converged = rmse < tolerance
+         if (associated(context%printer)) then
+            write (buf, "(es9.2)") rmse
+            if (converged) then
+               call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf))//", accepted")
+            else
+               call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf)))
+            end if
+         end if
+      end associate
+   end subroutine check_guess
+
+   !> Save the current iterate as a state of the store; a failed save warns
+   !>
+   !> @param[in]    problem    problem with an accepted iterate
+   !> @param[inout] store      store with its header set
+   !> @param[in]    rmse       last measured RMS residual
+   !> @param[in]    niter      outer iterations so far
+   !> @param[in]    converged  whether the field is converged
+   subroutine save_state(problem, store, rmse, niter, converged)
+      !> Problem
+      type(vv_problem_type), intent(in) :: problem
+      !> Store
+      class(moz_checkpoint_type), intent(inout) :: store
+      !> Last measured RMS residual
+      real(wp), intent(in) :: rmse
+      !> Outer iterations so far
+      integer, intent(in) :: niter
+      !> Whether the field is converged
+      logical, intent(in) :: converged
+      type(error_type), allocatable :: error
+
+      call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, problem%lambda, niter, converged, error)
+      if (allocated(error)) call problem%ctx%warning("1D VV checkpoint not saved: "//error%message)
+   end subroutine save_state
 
    !> Residual R(t_s) = t_s - T(C(t_s))
    !>

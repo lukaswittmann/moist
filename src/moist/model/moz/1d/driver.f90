@@ -31,6 +31,7 @@ module moist_model_moz_1d_driver
    use moist_model_moz_response_kernel, only: uv_response_rhs, uv_response_sr, uv_response_lr
    use moist_model_moz_thermodynamics_kernel, only: scale_energy_derivative
    use moist_model_moz_fields, only: state_feasible, scale_flat, subtract_flat, unflatten, residual_difference
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type
    implicit none(type, external)
    private
 
@@ -101,6 +102,10 @@ module moist_model_moz_1d_driver
       type(moist_model_moz_solver_printer_type), pointer :: printer => null()
       !> Tolerance; on the converging step the update is checked against its input
       real(wp) :: tolerance = 0.0_wp
+      !> Borrowed store of intermediate saves; null without checkpoints
+      class(moz_checkpoint_type), pointer :: store => null()
+      !> Iterations of the earlier attempts; makes the saved iteration counts cumulative
+      integer :: offset = 0
    contains
       procedure :: advance => iteration_advance
       procedure :: observe => iteration_observe
@@ -236,8 +241,11 @@ contains
    !>   non-finite or infeasible guess falls back to c_s = 0 with a warning; a failed
    !>   feasible warm attempt retries that cold path once, with fresh solver history,
    !>   and warns with the dropped error, if any
+   !> - A usable guess meeting the tolerance is the solution, without iterations
    !> - A converged solve ends on a field whose residual was measured below the
    !>   tolerance, with cr = C(tr); rmse is the residual of that field
+   !> - With a store: saves every `interval` iterations, and the final field when
+   !>   the solve iterated without error
    !> - Iteration table on the context unit at verbosity 4, with the solver's
    !>   fallback summary after each attempt
    !>
@@ -251,8 +259,9 @@ contains
    !> @param[out]   error      map, residual or closure failure
    !> @param[in]    guess      initial short-range t_s(r), (npts, nu nv); absent for a fresh start
    !> @param[in]    reuse_initial_guess Try the retained field when guess is absent; default false
+   !> @param[inout] checkpoint store of the saved states, with its header set
    subroutine problem_solve(self, filters, tolerance, maxiter, converged, rmse, niter, error, guess, &
-      & reuse_initial_guess)
+      & reuse_initial_guess, checkpoint)
       !> Problem
       class(uv_problem_type), intent(inout), target :: self
       !> Filters, built on the problem's radial pair
@@ -273,12 +282,14 @@ contains
       real(wp), intent(in), optional :: guess(:, :)
       !> Try the previous converged field on the same radial pair
       logical, intent(in), optional :: reuse_initial_guess
+      !> Store of the saved states
+      class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
       type(uv_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       type(error_type), allocatable :: guess_error
       logical :: warm
-      integer :: attempt, attempted_steps
+      integer :: attempt, attempted_steps, interval
 
       converged = .false.
       rmse = huge(1.0_wp)
@@ -289,6 +300,13 @@ contains
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
       context%filters => filters
+      interval = 0
+      if (present(checkpoint)) then
+         if (allocated(checkpoint)) then
+            context%store => checkpoint
+            interval = checkpoint%interval
+         end if
+      end if
       if (self%ctx%verbosity(4)) then
          call printer%setup(unit=self%ctx%unit, energy_label="DG kcal", denergy_label="dDG kcal", &
             & inner_rows=self%ctx%verbosity(5))
@@ -296,6 +314,9 @@ contains
          call self%solver%set_iteration_printer(printer)
          call printer%header("1D UV")
          call printer%blank()
+         if (associated(context%store)) then
+            if (len(context%store%note()) > 0) call printer%note(context%store%note())
+         end if
       end if
       call filters%attach(self%solver)
       work0 = self%solver%get_statistics()
@@ -327,8 +348,10 @@ contains
             if (warm) self%cr = self%c_work
          end if
       end if
+      if (warm) call accept_guess(context, tolerance, rmse, converged)
       self%has_guess = .false.
       do attempt = 1, 2
+         if (converged) exit
          if (.not. warm) then
             self%cr = 0.0_wp
             call self%equation%map(self%cr, self%tr, error)
@@ -345,7 +368,8 @@ contains
             call printer%blank()
             call printer%begin_stage()
          end if
-         call run_iterations(context, self%ctx, maxiter, tolerance, 0, rmse, attempted_steps, &
+         context%offset = niter
+         call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
             & converged, error)
          niter = niter + attempted_steps
          if (associated(context%printer)) call printer%note(self%solver%stage_summary())
@@ -358,6 +382,9 @@ contains
          warm = .false.
          self%linearized = .false.
       end do
+      if (associated(context%store) .and. niter > 0 .and. .not. allocated(error)) then
+         call save_state(self, context%store, rmse, niter, converged)
+      end if
 
       call self%solver%set_iteration_printer()
       call filters%detach(self%solver)
@@ -657,19 +684,81 @@ contains
       end associate
    end subroutine iteration_observe
 
-   !> No file checkpoints: the owning model retains converged fields in memory
+   !> Save the accepted iterate as an unconverged state
+   !>
+   !> - A failed save warns; the solve continues
    !>
    !> @param[inout] self  solve-local context
-   !> @param[out]   error always set
-   subroutine iteration_checkpoint(self, error)
+   !> @param[in]    iter  attempt-local iteration of the accepted iterate
+   !> @param[in]    rmse  residual measured by its advance
+   !> @param[out]   error never set
+   subroutine iteration_checkpoint(self, iter, rmse, error)
       !> Solve-local context
       class(uv_iteration_type), intent(inout) :: self
+      !> Outer iteration
+      integer, intent(in) :: iter
+      !> RMS residual
+      real(wp), intent(in) :: rmse
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      associate (s => self); end associate
-      call fatal_error(error, "1D UV solve keeps no checkpoints")
+      if (.not. associated(self%store)) return
+      call save_state(self%evaluator%problem, self%store, rmse, self%offset + iter, .false.)
    end subroutine iteration_checkpoint
+
+   !> Accept a feasible starting field that already meets the tolerance
+   !>
+   !> - Uses the residual the guess check left in the context
+   !>
+   !> @param[inout] context    solve-local context with the residual of the starting field
+   !> @param[in]    tolerance  RMS residual of a converged solve
+   !> @param[out]   rmse       RMS residual of the starting field
+   !> @param[out]   converged  whether it meets the tolerance
+   subroutine accept_guess(context, tolerance, rmse, converged)
+      !> Solve-local context
+      type(uv_iteration_type), intent(inout) :: context
+      !> Tolerance
+      real(wp), intent(in) :: tolerance
+      !> RMS residual of the starting field
+      real(wp), intent(out) :: rmse
+      !> Whether it meets the tolerance
+      logical, intent(out) :: converged
+      character(len=16) :: buf
+
+      rmse = sqrt(sum(context%residual**2)/real(size(context%residual), wp))
+      converged = rmse < tolerance
+      if (.not. associated(context%printer)) return
+      write (buf, "(es9.2)") rmse
+      if (converged) then
+         call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf))//", accepted")
+      else
+         call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf)))
+      end if
+   end subroutine accept_guess
+
+   !> Save the current iterate as a state of the store; a failed save warns
+   !>
+   !> @param[in]    problem    problem with an accepted iterate
+   !> @param[inout] store      store with its header set
+   !> @param[in]    rmse       last measured RMS residual
+   !> @param[in]    niter      outer iterations so far
+   !> @param[in]    converged  whether the field is converged
+   subroutine save_state(problem, store, rmse, niter, converged)
+      !> Problem
+      type(uv_problem_type), intent(in) :: problem
+      !> Store
+      class(moz_checkpoint_type), intent(inout) :: store
+      !> Last measured RMS residual
+      real(wp), intent(in) :: rmse
+      !> Outer iterations so far
+      integer, intent(in) :: niter
+      !> Whether the field is converged
+      logical, intent(in) :: converged
+      type(error_type), allocatable :: error
+
+      call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, 1.0_wp, niter, converged, error)
+      if (allocated(error)) call problem%ctx%warning("1D UV checkpoint not saved: "//error%message)
+   end subroutine save_state
 
    !> Residual R(t_s) = t_s - T(C(t_s))
    !>

@@ -16,6 +16,8 @@
 !> - Nuclear gradient through potential and transform pullbacks and one grid contraction
 !> - Coupling scope of solute term i: i
 !> - Point grids only, by design: Gaussian widths give the tables nothing and cost more
+!> - Optional checkpoint store: initial guess of a solve without a reusable
+!>   field, saves during and after each UV solve
 !> - The model does not watch its potential: update it again after a change
 module moist_model_moz_3d_type
    use mctc_env, only: wp, error_type, fatal_error
@@ -41,6 +43,7 @@ module moist_model_moz_3d_type
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type, new_uv3d_susceptibility
    use moist_model_moz_3d_driver, only: uv3d_problem_type, new_uv3d_problem
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type, checkpoint_kind_uv3d
    implicit none(type, external)
    private
    public :: model_moz_3d_type, new_moz_3d_model
@@ -71,8 +74,8 @@ module moist_model_moz_3d_type
       type(model_moz_3d_thermodynamics_type), private :: thermo
       !> Cached thermodynamic dependency graph of the same UV solution
       type(thermo_list_type), private :: thermo_items
-      !> Fixed total solute charge from the structure, e; independent of host density
-      real(wp), private :: total_charge = 0.0_wp
+      !> Solute of the latest update; its total charge is independent of host density
+      type(structure_type), private :: mol
       !> Cartesian box lengths captured on successful grid update, bohr; zero otherwise
       real(wp), private :: box_lengths(3) = 0.0_wp
       !> Finite-size quantity cached for the current structure, lattice and bulk solution
@@ -85,9 +88,13 @@ module moist_model_moz_3d_type
       complex(wp), allocatable, private :: uk_lr(:, :)
       !> Last transposed solution, reused as a starting point on the same grid
       real(wp), allocatable, private :: lambda(:, :)
+      !> Optional store of UV states
+      class(moz_checkpoint_type), allocatable, private :: checkpoint
    contains
       final :: destroy_moz_3d_model
       procedure :: invalidate => moz_3d_invalidate
+      !> Attach a UV checkpoint store, or detach it
+      procedure :: set_checkpoint => moz_3d_set_checkpoint
       procedure :: update => moz_3d_update
       procedure :: get_energy => moz_3d_energy
       procedure :: get_response => moz_3d_response
@@ -228,7 +235,7 @@ contains
       end if
       call self%potential%update(mol, self%grid, error)
       if (allocated(error)) return
-      self%total_charge = mol%charge
+      self%mol = mol
       call self%ctx%cite(citation%rism3d)
       if (self%potential%ng_split()) call self%ctx%cite(citation%ng)
       if (to_lower(trim(adjustl(self%params%correction))) /= "none") call self%ctx%cite(citation%pressure_correction)
@@ -405,14 +412,14 @@ contains
          call fatal_error(error, "Hunenberger correction requires the analytical Ng Coulomb split")
          return
       end if
-      if (abs(charge - self%total_charge) > 1.0e-6_wp) then
+      if (abs(charge - self%mol%charge) > 1.0e-6_wp) then
          call fatal_error(error, "Hunenberger correction requires solute tail charges summing to mol%charge")
          return
       end if
       if (allocated(self%finite_size)) return
       call self%solvent%charge_screening(screening, error)
       if (allocated(error)) return
-      call new_hunenberger_correction(quantity, self%total_charge, screening, self%box_lengths, error)
+      call new_hunenberger_correction(quantity, self%mol%charge, screening, self%box_lengths, error)
       if (allocated(error)) return
       allocate (self%finite_size, source=quantity)
    end subroutine moz_3d_prepare_finite_size
@@ -464,7 +471,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(solvent_vv_thermodynamics_type) :: bulk
       type(model_moz_3d_thermodynamics_type) :: thermo
-      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :)
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), guess(:, :)
       complex(wp), allocatable :: uk_lr(:, :)
       type(prettyprinter) :: pp
       character(len=96) :: buf
@@ -516,9 +523,13 @@ contains
             & spread(self%solvent%density(), 1, nv), self%solvent%beta(), self%params, error)
       end if
       if (allocated(error)) return
+      if (allocated(self%checkpoint)) then
+         call set_checkpoint_header(self)
+         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess)
+      end if
       call self%ctx%timer%stop("Setup")
       call self%problem%solve(self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
-         & reuse_initial_guess=reuse_guess)
+         & reuse_initial_guess=reuse_guess, guess=guess, checkpoint=self%checkpoint)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged) then
@@ -624,6 +635,57 @@ contains
       end if
       thermo = self%thermo
    end subroutine moz_3d_thermodynamics
+
+   !> Attach a copy of a UV checkpoint store, or detach the store when absent
+   !>
+   !> - The store supplies the initial guess of a UV solve without a reusable
+   !>   field and receives its states
+   !> - The VV store travels with the solvent passed to the constructor
+   !>
+   !> @param[inout] self        model
+   !> @param[in]    checkpoint  store to copy
+   subroutine moz_3d_set_checkpoint(self, checkpoint)
+      !> Model
+      class(model_moz_3d_type), intent(inout) :: self
+      !> Store to copy
+      class(moz_checkpoint_type), intent(in), optional :: checkpoint
+      if (allocated(self%checkpoint)) deallocate (self%checkpoint)
+      if (present(checkpoint)) allocate (self%checkpoint, source=checkpoint)
+   end subroutine moz_3d_set_checkpoint
+
+   !> Describe the states of the current UV solve in the store header
+   !>
+   !> - Cartesian grids by their dimensions, spacing and origin; other point grids
+   !>   by their point count
+   !> - Solvent and solute sites, solute coordinates, closure and temperature
+   !>
+   !> @param[inout] self  updated model with a store
+   subroutine set_checkpoint_header(self)
+      !> Model
+      class(model_moz_3d_type), intent(inout) :: self
+      type(structure_type) :: solvent
+
+      solvent = self%solvent%structure()
+      associate (header => self%checkpoint%header)
+         header%kind = checkpoint_kind_uv3d
+         if (allocated(header%origin)) deallocate (header%origin)
+         select type (grid => self%grid)
+         class is (moist_math_grid_3d_cartesian_type)
+            header%grid_shape = [grid%nx, grid%ny, grid%nz]
+            header%spacing = grid%dr
+            header%origin = grid%get_origin()
+         class default
+            header%grid_shape = [self%grid%ngrid]
+            header%spacing = 0.0_wp
+         end select
+         header%solvent_sites = solvent%num(solvent%id)
+         header%solute_sites = self%mol%num(self%mol%id)
+         header%solute_xyz = self%mol%xyz
+         header%closure = trim(adjustl(self%params%closure))
+         header%theory = trim(self%solvent%theory_name())
+         header%temperature = self%solvent%temperature()
+      end associate
+   end subroutine set_checkpoint_header
 
    !> Whether two real tables are equal in shape and value
    !>

@@ -4,7 +4,7 @@ module test_rism_input
    use mctc_io, only: structure_type, new
    use testdrive, only: unittest_type, new_unittest, error_type, check
    use moist_app_rism_input, only: rism_input_type, new_rism_input
-   use moist_app_rism_setup, only: new_rism_model
+   use moist_app_rism_setup, only: new_rism_model, vv_checkpoint_name
    use moist_context, only: moist_context_type, new_context
    use moist_model_type, only: solvation_model_type
    use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
@@ -21,17 +21,16 @@ module test_rism_input
 contains
 
    !> Register input-boundary regression cases
-   !> @param[out] testsuite Collected tests
    subroutine collect_rism_input(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("native_schemas", check_native_schemas), &
          & new_unittest("strict_keys", check_strict_keys), &
          & new_unittest("water_presets", check_water_presets), &
-         & new_unittest("construction", check_construction)]
+         & new_unittest("construction", check_construction), &
+         & new_unittest("checkpoint_settings", check_checkpoint_settings)]
    end subroutine collect_rism_input
 
    !> Read independent TOML, retain separate UV/VV controls and copy optional arrays
-   !> @param[out] error Test failure
    subroutine check_native_schemas(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -98,7 +97,6 @@ contains
    end subroutine check_native_schemas
 
    !> Reject unknown keys, empty groups, quoted dotted keys and 3D-only input in 1D
-   !> @param[out] error Test failure
    subroutine check_strict_keys(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -129,8 +127,6 @@ contains
    end subroutine check_strict_keys
 
    !> Read both named water presets and preserve their choices on round trip
-   !>
-   !> @param[out] error Test failure
    subroutine check_water_presets(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -205,7 +201,6 @@ contains
    end subroutine check_water_presets
 
    !> Factories produce updated polymorphic UV models whose bulk remains unsolved
-   !> @param[out] error Test failure
    subroutine check_construction(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -253,6 +248,62 @@ contains
          mol%charge = -1.0_wp
       end do
    end subroutine check_construction
+
+   !> Read the checkpoint group, reject invalid files and intervals, name automatic VV files
+   subroutine check_checkpoint_settings(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(rism_input_type) :: input
+      character(len=:), allocatable :: name
+      integer :: unit, stat
+      character(len=*), parameter :: path = "moist-test-rism-input-checkpoint.toml"
+      character(len=*), parameter :: vv_name = "vv_rism_solvent_175_drism_pse3.mbin"
+
+      call new_rism_input(input, "rism3d", err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, input%checkpoint%enabled .and. input%checkpoint%vv%interval == 5 &
+         & .and. input%checkpoint%uv%interval == 5 .and. .not. allocated(input%checkpoint%vv%file) &
+         & .and. .not. allocated(input%checkpoint%uv%guess), more="unexpected checkpoint defaults")
+      if (allocated(error)) return
+      open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+      call check(error, stat, 0)
+      if (allocated(error)) return
+      write(unit, "(a)") "[potential]", "q = [-1.0]", "[checkpoint]", "enabled = false", "[checkpoint.vv]", &
+         & 'file = "water.mbin"', "interval = 0", "[checkpoint.uv]", 'guess = "start.mbin"', "interval = 2"
+      close(unit)
+      call input%read_file(path, err, strict=.true.)
+      call remove_input(path)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, .not. input%checkpoint%enabled .and. input%checkpoint%vv%interval == 0 &
+         & .and. input%checkpoint%uv%interval == 2, more="checkpoint switch or intervals not read")
+      if (allocated(error)) return
+      call check(error, allocated(input%checkpoint%vv%file) .and. allocated(input%checkpoint%uv%guess) &
+         & .and. .not. allocated(input%checkpoint%uv%file), more="checkpoint files not read")
+      if (allocated(error)) return
+      call check(error, input%checkpoint%vv%file == "water.mbin" .and. input%checkpoint%uv%guess == "start.mbin")
+      if (allocated(error)) return
+      call input%validate(err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+
+      input%checkpoint%uv%interval = -1
+      call input%validate(err)
+      call check(error, allocated(err), more="a negative checkpoint interval was accepted")
+      if (allocated(error)) return
+      input%checkpoint%uv%interval = 1
+      input%checkpoint%uv%file = " "
+      call input%validate(err)
+      call check(error, allocated(err), more="a blank checkpoint file was accepted")
+      if (allocated(error)) return
+
+      ! MOIST_RISM_VV_OUTDIR may prefix a directory; the base name is fixed
+      name = vv_checkpoint_name(175, "DRISM", " PSE3")
+      call check(error, len(name) >= len(vv_name), more="automatic VV name too short: "//name)
+      if (allocated(error)) return
+      call check(error, name(len(name) - len(vv_name) + 1:) == vv_name, more="unexpected automatic VV name: "//name)
+   end subroutine check_checkpoint_settings
 
    !> Remove a fixture owned by this test
    !> @param[in] path Fixture path

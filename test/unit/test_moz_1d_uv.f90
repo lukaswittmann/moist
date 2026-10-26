@@ -702,12 +702,12 @@ contains
       if (allocated(error)) return
       guess = cold%tr
 
-      ! A converged field must be accepted as the initial iterate, with a fresh solver stage.
+      ! A converged field is the solution: it is accepted without iterations.
       call build_problem(warm)
       if (.not. allocated(err)) call warm%solve(filters, params%tolerance, 1, converged, rmse, niter, err, guess=guess)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, converged .and. niter == 1, more="the converged starting guess was not used")
+      call check(error, converged .and. niter == 0, more="the converged starting guess was not used")
       if (allocated(error)) return
 
       ! A previous solution is only a guess: both solves must converge for the changed potential.

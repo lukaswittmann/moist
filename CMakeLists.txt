@@ -312,7 +312,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
-    api parameters rism_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
+    api parameters rism_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded utils_binio
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
@@ -320,7 +320,7 @@ if(MOIST_TESTS)
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
-    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response
+    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_checkpoint moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response
     moz_closure moz_closure_kernel moz_solver moz_1d_preconditioner moz_thermodynamics
     math_grid_3d_partition
     math_grid_3d_guards math_grid_3d_derivatives
@@ -376,6 +376,8 @@ if(MOIST_TESTS)
     coarse_matrix thread_independence setup_errors parameters evaluator_products
     damping_step solve_water solve_variants solve_refusals thermodynamics_reduction
     solve_outputs reference_values converged_field solve_replacement susceptibility_at)
+  set(moist_test_selected_moz_checkpoint
+    file_round_trip file_candidates file_failed_save vv_reload vv_intermediate vv_stages vv_unfitting uv1d_reload uv3d_reload)
   set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
   set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
   set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)

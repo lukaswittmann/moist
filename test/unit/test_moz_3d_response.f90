@@ -665,11 +665,11 @@ contains
                call check(error, maxval(abs(kcs - kts)), 0.0_wp, thr=5.0e-10_wp, more="cold-guess k responses differ")
                if (allocated(error)) return
             end if
-            ! With only one step, a valid retained solution must take precedence over ts0.
+            ! A valid retained solution takes precedence over ts0 and is accepted without iterations.
             call ts0%solve(1.0e-12_wp, 1, converged, rmse, niter, err, reuse_initial_guess=.true.)
             call check_moist_error(error, err)
             if (allocated(error)) return
-            call check(error, converged .and. niter == 1, more="ts0 displaced a valid warm guess")
+            call check(error, converged .and. niter == 0, more="ts0 displaced a valid warm guess")
             if (allocated(error)) return
          end do
       end do

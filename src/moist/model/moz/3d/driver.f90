@@ -3,8 +3,10 @@
 !> - Iterate is the short-range t_s(r) on the grid
 !> - Closure gives c_s(r), equation maps it back, R(t_s) = t_s - T(C(t_s)), at full coupling
 !> - Cold starts use T(c_s = 0) or t_s = 0
-!>   - Checked previous solution takes precedence when reuse is requested
+!>   - Supplied guess or, when reuse is requested, the checked previous solution takes precedence
+!>   - Starting field meeting the tolerance is the solution, without iterations
 !>   - Failed warm attempt retries cold once
+!> - Optional checkpoint store receives intermediate and final fields
 !> - Exact Jacobian products J v = v - T'(c' v), T affine
 !> - Solvation free energy dG = (1/beta) sum_a rho_a int Phi(h_a, c_a) dV
 !>   with physical h and c, by the grid's quadrature
@@ -32,6 +34,7 @@ module moist_model_moz_3d_driver
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type
    use moist_model_moz_3d_equation, only: uv3d_equation_type
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type, cold_guess_modes
+   use moist_model_moz_checkpoint, only: moz_checkpoint_type
    implicit none(type, external)
    private
 
@@ -108,6 +111,10 @@ module moist_model_moz_3d_driver
       type(moist_model_moz_solver_printer_type), pointer :: printer => null()
       !> Tolerance; on the converging step the update is checked against its input
       real(wp) :: tolerance = 0.0_wp
+      !> Borrowed store of intermediate saves; null without checkpoints
+      class(moz_checkpoint_type), pointer :: store => null()
+      !> Iterations of the earlier attempts; makes the saved iteration counts cumulative
+      integer :: offset = 0
    contains
       procedure :: advance => iteration_advance
       procedure :: observe => iteration_observe
@@ -220,12 +227,15 @@ contains
    !> Solve the 3D UV equations at full coupling
    !>
    !> - Cold starts use t_s = T(0) (cs0, default) or t_s = 0 (ts0)
-   !> - A checked retained guess takes precedence when requested
+   !> - A supplied guess, else a checked retained guess when requested, takes precedence
+   !> - A usable starting field meeting the tolerance is the solution, without iterations
    !> - Infeasible guesses and failed warm solves use the selected cold path
-   !> - A warm solve that failed with an error warns with that error before the retry
+   !> - A rejected supplied guess, or a warm solve that failed with an error, warns
    !> - Solver history is cleared for each attempt; plans and allocated workspace persist
    !> - A converged solve ends on a field whose residual was measured below the
    !>   tolerance, with cr = C(tr); rmse is the residual of that field
+   !> - With a store: saves every `interval` iterations, and the final field when
+   !>   the solve iterated without error
    !> - Iteration table on the context unit at verbosity 4, with the solver's
    !>   fallback summary after each attempt
    !>
@@ -237,7 +247,10 @@ contains
    !> @param[out]   niter      outer iterations
    !> @param[out]   error      map, residual or closure failure
    !> @param[in]    reuse_initial_guess  try the retained converged field; default false for standalone calls
-   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, reuse_initial_guess)
+   !> @param[in]    guess      initial short-range t_s(r), (ngrid, nv); takes precedence over reuse
+   !> @param[inout] checkpoint store of the saved states, with its header set
+   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, reuse_initial_guess, guess, &
+      & checkpoint)
       !> Problem
       class(uv3d_problem_type), intent(inout), target :: self
       !> Tolerance
@@ -254,11 +267,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Use the previously converged fields on this geometry
       logical, intent(in), optional :: reuse_initial_guess
+      !> Initial short-range indirect correlation
+      real(wp), intent(in), optional :: guess(:, :)
+      !> Store of the saved states
+      class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
       type(uv3d_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       type(error_type), allocatable :: guess_error
-      integer :: attempt, attempted_steps
+      integer :: attempt, attempted_steps, interval
       logical :: warm
 
       converged = .false.
@@ -267,6 +284,13 @@ contains
       context%evaluator%problem => self
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
+      interval = 0
+      if (present(checkpoint)) then
+         if (allocated(checkpoint)) then
+            context%store => checkpoint
+            interval = checkpoint%interval
+         end if
+      end if
       if (self%ctx%verbosity(4)) then
          call printer%setup(unit=self%ctx%unit, energy_label="DG kcal", denergy_label="dDG kcal", &
             & inner_rows=self%ctx%verbosity(5))
@@ -274,20 +298,41 @@ contains
          call self%solver%set_iteration_printer(printer)
          call printer%header("3D UV")
          call printer%blank()
+         if (associated(context%store)) then
+            if (len(context%store%note()) > 0) call printer%note(context%store%note())
+         end if
       end if
       work0 = self%solver%get_statistics()
 
       self%linearized = .false.
       warm = .false.
-      if (present(reuse_initial_guess)) then
+      if (present(guess)) then
+         ! A rejected caller guess falls back to the cold path and warns why
+         if (any(shape(guess) /= shape(self%tr))) then
+            call self%ctx%warning("3D UV: guess shape does not match the grid, ignoring guess")
+         else
+            call context%evaluator%residual(guess, context%residual, warm, guess_error)
+            warm = warm .and. .not. allocated(guess_error)
+            if (warm) then
+               self%tr = guess
+               self%cr = self%c_work
+            else if (allocated(guess_error)) then
+               call self%ctx%warning("3D UV: guess is infeasible, ignoring guess: "//guess_error%message)
+            else
+               call self%ctx%warning("3D UV: guess is infeasible, ignoring guess")
+            end if
+         end if
+      else if (present(reuse_initial_guess)) then
          if (reuse_initial_guess .and. self%has_guess) then
             call context%evaluator%residual(self%tr, context%residual, warm, guess_error)
             warm = warm .and. .not. allocated(guess_error)
             if (warm) self%cr = self%c_work
          end if
       end if
+      if (warm) call accept_guess(context, tolerance, rmse, converged)
       self%has_guess = .false.
       do attempt = 1, 2
+         if (converged) exit
          if (.not. warm) then
             self%cr = 0.0_wp
             if (self%cold_guess == "ts0") then
@@ -309,7 +354,8 @@ contains
             call printer%blank()
             call printer%begin_stage()
          end if
-         call run_iterations(context, self%ctx, maxiter, tolerance, 0, rmse, attempted_steps, &
+         context%offset = niter
+         call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
             & converged, error)
          niter = niter + attempted_steps
          if (associated(context%printer)) call printer%note(self%solver%stage_summary())
@@ -323,6 +369,9 @@ contains
          warm = .false.
          self%linearized = .false.
       end do
+      if (associated(context%store) .and. niter > 0 .and. .not. allocated(error)) then
+         call save_state(self, context%store, rmse, niter, converged)
+      end if
 
       call self%solver%set_iteration_printer()
       if (associated(context%printer)) then
@@ -713,19 +762,81 @@ contains
       end associate
    end subroutine iteration_observe
 
-   !> No file checkpoints: converged fields are retained in memory for later solves
+   !> Save the accepted iterate as an unconverged state
+   !>
+   !> - A failed save warns; the solve continues
    !>
    !> @param[inout] self  solve-local context
-   !> @param[out]   error always set
-   subroutine iteration_checkpoint(self, error)
+   !> @param[in]    iter  attempt-local iteration of the accepted iterate
+   !> @param[in]    rmse  residual measured by its advance
+   !> @param[out]   error never set
+   subroutine iteration_checkpoint(self, iter, rmse, error)
       !> Solve-local context
       class(uv3d_iteration_type), intent(inout) :: self
+      !> Outer iteration
+      integer, intent(in) :: iter
+      !> RMS residual
+      real(wp), intent(in) :: rmse
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      associate (s => self); end associate
-      call fatal_error(error, "3D UV solve keeps no checkpoints")
+      if (.not. associated(self%store)) return
+      call save_state(self%evaluator%problem, self%store, rmse, self%offset + iter, .false.)
    end subroutine iteration_checkpoint
+
+   !> Accept a feasible starting field that already meets the tolerance
+   !>
+   !> - Uses the residual the guess check left in the context
+   !>
+   !> @param[inout] context    solve-local context with the residual of the starting field
+   !> @param[in]    tolerance  RMS residual of a converged solve
+   !> @param[out]   rmse       RMS residual of the starting field
+   !> @param[out]   converged  whether it meets the tolerance
+   subroutine accept_guess(context, tolerance, rmse, converged)
+      !> Solve-local context
+      type(uv3d_iteration_type), intent(inout) :: context
+      !> Tolerance
+      real(wp), intent(in) :: tolerance
+      !> RMS residual of the starting field
+      real(wp), intent(out) :: rmse
+      !> Whether it meets the tolerance
+      logical, intent(out) :: converged
+      character(len=16) :: buf
+
+      rmse = sqrt(sum(context%residual**2)/real(size(context%residual), wp))
+      converged = rmse < tolerance
+      if (.not. associated(context%printer)) return
+      write (buf, "(es9.2)") rmse
+      if (converged) then
+         call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf))//", accepted")
+      else
+         call context%printer%note("Initial guess: RMS residual "//trim(adjustl(buf)))
+      end if
+   end subroutine accept_guess
+
+   !> Save the current iterate as a state of the store; a failed save warns
+   !>
+   !> @param[in]    problem    problem with an accepted iterate
+   !> @param[inout] store      store with its header set
+   !> @param[in]    rmse       last measured RMS residual
+   !> @param[in]    niter      outer iterations so far
+   !> @param[in]    converged  whether the field is converged
+   subroutine save_state(problem, store, rmse, niter, converged)
+      !> Problem
+      type(uv3d_problem_type), intent(in) :: problem
+      !> Store
+      class(moz_checkpoint_type), intent(inout) :: store
+      !> Last measured RMS residual
+      real(wp), intent(in) :: rmse
+      !> Outer iterations so far
+      integer, intent(in) :: niter
+      !> Whether the field is converged
+      logical, intent(in) :: converged
+      type(error_type), allocatable :: error
+
+      call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, 1.0_wp, niter, converged, error)
+      if (allocated(error)) call problem%ctx%warning("3D UV checkpoint not saved: "//error%message)
+   end subroutine save_state
 
    !> Residual R(t_s) = t_s - T(C(t_s))
    !>
