@@ -8,6 +8,11 @@ file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
 
+# Before project(), whose Windows platform files would default to Debug
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
+endif()
+
 project(
   moist
   VERSION "${MOIST_VERSION}"
@@ -38,10 +43,6 @@ option(MOIST_OPENMP "Use OpenMP parallelisation"            ON)
 option(MOIST_API    "Build C API using iso_c_binding"       ON)
 option(MOIST_ILP64  "Enable BLAS/LAPACK ilp64 support"      OFF)
 option(MOIST_TESTS  "Build the moist unit test suite (ctest)" ON)
-
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
-endif()
 
 # BLAS/LAPACK/OpenMP first: the subprojects' `if(NOT TARGET ...)` guards then reuse them
 if(MOIST_LAPACK STREQUAL "custom")
