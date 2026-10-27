@@ -43,6 +43,7 @@ module moist_model_moz_solvent_vv
    use moist_model_moz_solvent_vv_response, only: vv_response_type, new_vv_response
    use moist_model_moz_solvent_vv_parameters, only: solvent_vv_parameters_type
    use moist_model_moz_solvent_theory, only: bulk_theory_type, new_bulk_theory
+   use moist_model_moz_solvent_theory_type, only: bulk_charges_neutral
    use moist_model_moz_solvent_vv_driver, only: vv_problem_type, new_vv_problem
    use moist_model_moz_solvent_vv_thermodynamics, only: solvent_vv_thermodynamics_type, new_vv_thermodynamics
    use moist_model_moz_checkpoint, only: moz_checkpoint_type, checkpoint_kind_vv
@@ -186,16 +187,20 @@ contains
 
    !> Update the potential from the solvent structure
    !>
-   !> Terms keyed by solvent receive the solvent id; none for a custom solvent
-   !> (id 0). Drops any VV solution
+   !> - Terms keyed by solvent receive the solvent id; none for a custom solvent (id 0)
+   !> - Charges missing bulk neutrality shifted evenly to it with a warning; above 1e-3 e an error
+   !> - Drops any VV solution
    !>
    !> @param[in,out] self Constructed solvent
-   !> @param[out] error Unconstructed solvent, no terms or term failure
+   !> @param[out] error Unconstructed solvent, no terms, term failure or charges far from neutral
    subroutine vv_update(self, error)
       !> Solvent
       class(solvent_vv_type), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      type(potential_sites_type) :: sites
+      character(len=16) :: sum_text, shift_text
+      real(wp) :: shift
       self%solved = .false.
       if (.not. self%constructed) then
          call fatal_error(error, "Construct the 1D VV solvent before update")
@@ -206,7 +211,22 @@ contains
       else
          call self%potential%update(self%system%solv_mol, error)
       end if
+      if (.not. allocated(error)) call self%potential%sites(sites, error)
       if (allocated(error)) return
+      ! Table charges keep six decimals and carry integration error; VV needs a neutral bulk
+      if (allocated(sites%q)) then
+         if (.not. bulk_charges_neutral(sites%q)) then
+            call self%potential%neutralize(shift, error)
+            if (allocated(error)) return
+            if (associated(self%ctx)) then
+               write (sum_text, "(es16.2)") sum(sites%q)
+               write (shift_text, "(es16.2)") shift
+               call self%ctx%warning("Charges of solvent '"//trim(self%system%solvent%name)//"' sum to "// &
+                  & trim(adjustl(sum_text))//" e; every atom is shifted by "//trim(adjustl(shift_text))// &
+                  & " e to a neutral bulk")
+            end if
+         end if
+      end if
       if (.not. associated(self%ctx)) return
       if (self%ctx%verbosity(2)) then
          call self%ctx%message("Solvent potential parameters", 2)

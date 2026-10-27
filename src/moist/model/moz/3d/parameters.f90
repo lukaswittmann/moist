@@ -31,7 +31,7 @@ module moist_model_moz_3d_parameters
       character(len=8) :: closure = "KH"
       !> Pressure correction added to the solvation free energy: none, PC or PC+
       character(len=8) :: correction = "none"
-      !> Independent leading electrostatic finite-size term: none or hunenberger
+      !> Independent leading electrostatic finite-size term: none or huenenberger
       character(len=16) :: finite_size = "none"
       !> Solvent response on the grid's k-points
       !>
@@ -134,7 +134,7 @@ contains
       end if
       if (to_lower(trim(adjustl(self%finite_size))) /= "none" .and. &
          & to_lower(trim(adjustl(self%susceptibility))) /= "oz") then
-         call fatal_error(error, "Hunenberger correction requires the OZ solvent susceptibility")
+         call fatal_error(error, "huenenberger correction requires the OZ solvent susceptibility")
          return
       end if
       call check_preconditioner_name(self%precond, preconditioners_3d_uv, "3D UV", error)

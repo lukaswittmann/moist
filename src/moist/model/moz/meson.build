@@ -9,6 +9,7 @@ srcs += files(
   'checkpoint.f90',
   'checkpoint/file.f90',
   'fields.f90',
+  'input.f90',
   'response_kernel.f90',
   'potential.f90',
   'solver.f90',

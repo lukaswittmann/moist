@@ -9,7 +9,7 @@ module test_moz_thermodynamics
    use moist_model_moz, only: model_moz_3d_thermodynamics_type
    use moist_model_moz_thermodynamics, only: new_moz_3d_thermodynamics, &
       & correction_moment_shift, thermodynamic_quantity_type, thermo_list_type, new_uv_thermo_list, new_bulk_thermo_list, &
-      & accumulate_solvation_adjoint, hunenberger_correction_type, new_hunenberger_correction
+      & accumulate_solvation_adjoint, huenenberger_correction_type, new_huenenberger_correction
    use moist_model_moz_solvent_vv_thermodynamics, only: solvent_vv_thermodynamics_type
    use test_helpers, only: check_moist_error
    implicit none(type, external)
@@ -49,7 +49,7 @@ contains
    subroutine check_finite_size(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
-      type(hunenberger_correction_type) :: quantity
+      type(huenenberger_correction_type) :: quantity
       real(wp) :: mean, energy, empty(0)
 
       mean = coulomb_box_mean([40.0_wp, 40.0_wp, 40.0_wp])
@@ -61,7 +61,7 @@ contains
       call check(error, coulomb_box_mean([40.0_wp, 60.0_wp, 100.0_wp]), &
          & 0.5_wp*coulomb_box_mean([20.0_wp, 30.0_wp, 50.0_wp]), thr=1.0e-14_wp)
       if (allocated(error)) return
-      call new_hunenberger_correction(quantity, -1.0_wp, 0.95_wp, [40.0_wp, 40.0_wp, 40.0_wp], err)
+      call new_huenenberger_correction(quantity, -1.0_wp, 0.95_wp, [40.0_wp, 40.0_wp, 40.0_wp], err)
       if (.not. allocated(err)) call quantity%evaluate(empty, energy, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -73,7 +73,7 @@ contains
       if (allocated(error)) return
       call check(error, electrostatic_finite_size_correction(1.0_wp, 0.0_wp, mean), 0.0_wp)
       if (allocated(error)) return
-      call new_hunenberger_correction(quantity, 1.0_wp, 0.95_wp, [40.0_wp, 0.0_wp, 40.0_wp], err)
+      call new_huenenberger_correction(quantity, 1.0_wp, 0.95_wp, [40.0_wp, 0.0_wp, 40.0_wp], err)
       call check(error, allocated(err), more="a finite-size correction without a periodic box was accepted")
    end subroutine check_finite_size
 
@@ -84,7 +84,7 @@ contains
       type(solvent_vv_thermodynamics_type) :: bulk
       type(model_moz_3d_thermodynamics_type) :: thermo
       type(thermo_list_type) :: items
-      type(hunenberger_correction_type) :: quantity
+      type(huenenberger_correction_type) :: quantity
       real(wp) :: energy, record_energy, seed, shift, correction
       integer :: i
       character(len=4), parameter :: pressure_terms(3) = [character(len=4) :: "none", "PC", "PC+"]
@@ -95,7 +95,7 @@ contains
       bulk%pressure_ideal = 0.0625_wp
       bulk%compressibility = 10.666666666666666_wp
       correction = -0.5_wp*0.95_wp*2.380077363979553_wp/40.0_wp
-      call new_hunenberger_correction(quantity, -1.0_wp, 0.95_wp, [40.0_wp, 40.0_wp, 40.0_wp], err)
+      call new_huenenberger_correction(quantity, -1.0_wp, 0.95_wp, [40.0_wp, 40.0_wp, 40.0_wp], err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       do i = 1, size(pressure_terms)
@@ -117,7 +117,7 @@ contains
          call check(error, shift, pressure_shift(i), thr=1.0e-14_wp)
          if (allocated(error)) return
       end do
-      call items%select("hunenberger", .false., err)
+      call items%select("huenenberger", .false., err)
       if (.not. allocated(err)) call items%energy(energy, err)
       call check_moist_error(error, err)
       if (allocated(error)) return

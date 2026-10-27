@@ -54,6 +54,11 @@ module moist_model_moz_1d_type
    private
    public :: model_moz_1d_type, new_moz_1d_model
 
+   !> Construct from a grid and an updated solvent; the input overload is in moist_model_moz_1d_input
+   interface new_moz_1d_model
+      module procedure new_moz_1d_model_grid
+   end interface new_moz_1d_model
+
    !> Direct 1D MOZ model; energy, host response and nuclear gradient from the UV solve
    type, extends(solvation_model_type) :: model_moz_1d_type
       !> Solute potential; add terms before `update`
@@ -134,7 +139,7 @@ contains
    !> @param[in]  solvent     bulk solvent with an updated potential, copied into the model
    !> @param[out] error       unbuilt grid, node at r <= 0, solvent not updated, invalid settings or copy failure
    !> @param[in]  parameters  UV/VV settings; absent parameters retain accepted bulk settings or use defaults
-   subroutine new_moz_1d_model(self, ctx, rgrid, kgrid, solvent, error, parameters)
+   subroutine new_moz_1d_model_grid(self, ctx, rgrid, kgrid, solvent, error, parameters)
       !> Model
       type(model_moz_1d_type), intent(out) :: self
       !> Run context, borrowed for the lifetime of the model
@@ -172,7 +177,7 @@ contains
       self%rgrid = rgrid
       self%kgrid = kgrid
       self%ctx => ctx
-   end subroutine new_moz_1d_model
+   end subroutine new_moz_1d_model_grid
 
    !> Invalidate the UV solution, response guess and host couplings
    !>
@@ -188,11 +193,13 @@ contains
 
    !> Update the solute potential from the structure on the radial grid
    !>
+   !> - Solute charges must sum to the structure's total charge
    !> - Table printed at verbosity 2
    !>
    !> @param[in,out] self   model
    !> @param[in]     mol    solute structure
-   !> @param[out]    error  unconstructed model, empty structure, no terms, term failure or radial-grid refusal
+   !> @param[out]    error  unconstructed model, empty structure, no terms, term failure, radial-grid refusal
+   !>                       or charges not summing to the total charge
    subroutine moz_1d_update(self, mol, error)
       !> Model
       class(model_moz_1d_type), intent(inout) :: self
@@ -206,6 +213,7 @@ contains
          return
       end if
       call self%potential%update(mol, self%rgrid, error)
+      if (.not. allocated(error)) call self%potential%check_total_charge(error)
       if (allocated(error)) return
       self%mol = mol
       call self%ctx%cite(citation%rism)

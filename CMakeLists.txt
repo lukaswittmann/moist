@@ -262,8 +262,6 @@ endif()
 add_executable(moist-exe
   app/main.f90
   app/cli.f90
-  app/rism/input.f90
-  app/rism/setup.f90
   app/driver.f90
 )
 set_target_properties(moist-exe PROPERTIES
@@ -312,7 +310,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
-    api parameters rism_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded utils_binio
+    api parameters moz_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded utils_binio
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
@@ -428,7 +426,7 @@ if(MOIST_TESTS)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
   endforeach()
 
-  add_executable(moist-tester ${moist_test_srcs} app/rism/input.f90 app/rism/setup.f90)
+  add_executable(moist-tester ${moist_test_srcs})
   set_target_properties(moist-tester PROPERTIES
     Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-modules"
     LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}

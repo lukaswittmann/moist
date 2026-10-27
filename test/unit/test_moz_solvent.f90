@@ -12,7 +12,8 @@ module test_moz_solvent
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_solvent_water, only: new_spce_water_geometry
-   use moist_model_moz_potential, only: moz_potential_type, potential_sites_type
+   use moist_model_moz_potential, only: moz_potential_type, potential_sites_type, lj_uff, solvent_charges_type
+   use moist_data_solvents, only: get_solvent_id
    use moist_model_moz_potential_lj_base, only: lj_mixing_lorentz_berthelot, lj_mixing_geometric
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
@@ -37,6 +38,7 @@ contains
          & new_unittest("density_derivation", check_density_derivation), &
          & new_unittest("host_fed_refused", check_host_fed_refused), &
          & new_unittest("empty_potential_update", check_empty_potential_update), &
+         & new_unittest("neutral_bulk_charges", check_neutral_bulk), &
          & new_unittest("packed_site_pairs", check_site_pairs), &
          & new_unittest("vv_potential_tables", check_potential_tables), &
          & new_unittest("vv_tables_geometric_mixing", check_geometric_tables), &
@@ -285,6 +287,32 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "has no terms") > 0, more=err%message)
    end subroutine check_empty_potential_update
+
+   !> Check the update shifts table charges that miss bulk neutrality
+   subroutine check_neutral_bulk(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_system_type) :: system
+      type(solvent_vv_type) :: solvent
+      type(potential_sites_type) :: sites
+      integer :: id
+
+      ! Methanol Hirshfeld charges sum to about 2e-6 e
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call get_solvent_id("methanol", id, err)
+      if (.not. allocated(err)) call new_solvent_system(system, id, error=err)
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      if (.not. allocated(err)) call solvent%potential%add(lj_uff, err)
+      if (.not. allocated(err)) call solvent%potential%add(solvent_charges_type(environment="solvent", &
+         & model="hirshfeld"), err)
+      if (.not. allocated(err)) call solvent%update(err)
+      if (.not. allocated(err)) call solvent%potential%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, abs(sum(sites%q)) < 1.0e-12_wp, more="the bulk charges were not neutralized")
+   end subroutine check_neutral_bulk
 
    !> Check packed VV upper-triangle pairs
    !>

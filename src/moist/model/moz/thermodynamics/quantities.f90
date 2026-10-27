@@ -21,7 +21,7 @@ module moist_model_moz_thermodynamics_quantities
    public :: partial_molar_volume_type
    public :: pc_item_type
    public :: pc_plus_item_type
-   public :: hunenberger_correction_type, new_hunenberger_correction
+   public :: huenenberger_correction_type, new_huenenberger_correction
 
    !> Bulk compressibility denominator 1 - rho C, dimensionless
    type, extends(thermodynamic_quantity_type) :: compressibility_denominator_type
@@ -75,21 +75,21 @@ module moist_model_moz_thermodynamics_quantities
    end type pc_plus_item_type
 
    !> Leading net-charge finite-size term at fixed charge, box and bulk solvent
-   type, extends(thermodynamic_quantity_type) :: hunenberger_correction_type
+   type, extends(thermodynamic_quantity_type) :: huenenberger_correction_type
       private
       !> Total charge (e), screening S = 1 - 1/epsilon and box mean of 1/r (bohr^-1)
       real(wp) :: charge = 0.0_wp, screening = 0.0_wp, coulomb_mean = 0.0_wp
    contains
-      procedure :: evaluate => hunenberger_evaluate
-      procedure :: accumulate_adjoint => hunenberger_accumulate
-   end type hunenberger_correction_type
+      procedure :: evaluate => huenenberger_evaluate
+      procedure :: accumulate_adjoint => huenenberger_accumulate
+   end type huenenberger_correction_type
 
 contains
 
    !> Set up the leading net-charge finite-size correction
    !>
    !> - Fixes charge, screening and box lengths; evaluates the Coulomb box average once
-   !> - Item hunenberger in Hartree, exclusive group electrostatic_finite_size, a correction
+   !> - Item huenenberger in Hartree, exclusive group electrostatic_finite_size, a correction
    !> - Error for non-finite input, screening outside [0, 1] or a nonpositive box length
    !>
    !> @param[out]   self       correction item to set up
@@ -97,9 +97,9 @@ contains
    !> @param[in]    screening  screening S = 1 - 1/epsilon, dimensionless, in [0, 1]
    !> @param[in]    lengths    box lengths (3), bohr, positive
    !> @param[out]   error      error handler, set for invalid input
-   subroutine new_hunenberger_correction(self, charge, screening, lengths, error)
+   subroutine new_huenenberger_correction(self, charge, screening, lengths, error)
       !> Correction item to set up
-      type(hunenberger_correction_type), intent(out) :: self
+      type(huenenberger_correction_type), intent(out) :: self
       !> Charge (e), screening S in [0, 1], box lengths (3) in bohr
       real(wp), intent(in) :: charge, screening, lengths(3)
       !> Error handler, set for invalid input
@@ -107,21 +107,21 @@ contains
 
       if (.not. ieee_is_finite(charge) .or. .not. ieee_is_finite(screening) .or. &
          & .not. all(ieee_is_finite(lengths))) then
-         call fatal_error(error, "Hunenberger correction needs finite charge, screening and box lengths")
+         call fatal_error(error, "huenenberger correction needs finite charge, screening and box lengths")
          return
       end if
       if (screening < 0.0_wp .or. screening > 1.0_wp .or. any(lengths <= 0.0_wp)) then
-         call fatal_error(error, "Hunenberger correction needs screening in [0,1] and positive box lengths")
+         call fatal_error(error, "huenenberger correction needs screening in [0,1] and positive box lengths")
          return
       end if
-      self%name = "hunenberger"
+      self%name = "huenenberger"
       self%unit = "Hartree"
       self%correction = .true.
       self%exclusive_group = "electrostatic_finite_size"
       self%charge = charge
       self%screening = screening
       self%coulomb_mean = coulomb_box_mean(lengths)
-   end subroutine new_hunenberger_correction
+   end subroutine new_huenenberger_correction
 
    !> Evaluate -Q^2 S <1/r>_box / 2 in Hartree
    !>
@@ -129,9 +129,9 @@ contains
    !> @param[in]    values  dependency values, must be empty
    !> @param[out]   value   finite-size energy, Hartree
    !> @param[out]   error   error handler, set if any dependency is passed
-   subroutine hunenberger_evaluate(self, values, value, error)
+   subroutine huenenberger_evaluate(self, values, value, error)
       !> Finite-size correction
-      class(hunenberger_correction_type), intent(inout) :: self
+      class(huenenberger_correction_type), intent(inout) :: self
       !> Dependency values, must be empty
       real(wp), intent(in) :: values(:)
       !> Finite-size energy, Hartree
@@ -139,11 +139,11 @@ contains
       !> Error handler, set if any dependency is passed
       type(error_type), allocatable, intent(out) :: error
       if (size(values) /= 0) then
-         call fatal_error(error, "Hunenberger correction has no variable dependencies")
+         call fatal_error(error, "huenenberger correction has no variable dependencies")
          return
       end if
       value = electrostatic_finite_size_correction(self%charge, self%screening, self%coulomb_mean)
-   end subroutine hunenberger_evaluate
+   end subroutine huenenberger_evaluate
 
    !> No-op; the fixed charge, lattice and bulk response have no host adjoints
    !>
@@ -152,14 +152,14 @@ contains
    !> @param[in]    value     forward value, unused
    !> @param[in]    seed      dE/dvalue, unused
    !> @param[inout] adjoints  dependency sensitivities, empty, unused
-   pure subroutine hunenberger_accumulate(self, values, value, seed, adjoints)
+   pure subroutine huenenberger_accumulate(self, values, value, seed, adjoints)
       !> Finite-size correction
-      class(hunenberger_correction_type), intent(in) :: self
+      class(huenenberger_correction_type), intent(in) :: self
       !> Dependency values, forward value and seed, all unused
       real(wp), intent(in) :: values(:), value, seed
       !> Dependency sensitivities, empty, unused
       real(wp), intent(inout) :: adjoints(:)
-   end subroutine hunenberger_accumulate
+   end subroutine huenenberger_accumulate
 
    !> Build the bulk scalar graph
    !>

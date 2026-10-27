@@ -13,7 +13,9 @@ A term that cannot parametrise an atom leaves the atom uncovered; later terms fi
 
 * **Lennard-Jones**: the first term with parameters for an atom supplies them.
 * **Charges**: the first term with a charge for an atom supplies it (charges of several terms are not summed).
-* The update fails, naming the atoms, only when an atom is left without Lennard-Jones parameters, or without a charge once any term supplies charges.
+* The update fails, naming the atoms, only when an atom is left without Lennard-Jones parameters, or without a charge.
+* Solvent charges that miss bulk neutrality are shifted by the same amount on every atom, with a warning.
+* The 1D and 3D UV models also require the solute charges, including those from host data, to sum to the structure's total charge.
 
 The order of ``add`` calls is the order of preference: put the specific force field first and the broad fallback last.
 With :ref:`verbosity <verbosity>` 2 the update prints a table of every site with its charge, sigma, epsilon and the term that supplied each.
@@ -202,3 +204,5 @@ Terms
      - Full host potential with constrained ESP-fitted Ng tail charges (3D solute only).
    * - ``new_custom_lj``, ``new_fixed_charges``
      - Explicit per-atom values, optionally for a subset of the atoms.
+   * - ``new_neutral_charges``
+     - Zero charges on every atom, sized to the structure at update.

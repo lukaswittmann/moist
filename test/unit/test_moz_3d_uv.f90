@@ -183,7 +183,7 @@ contains
 
       params%closure = "PSE3"
       params%correction = "PC+"
-      params%finite_size = "hunenberger"
+      params%finite_size = "huenenberger"
       params%tolerance = 1.0e-9_wp
       params%reuse_initial_guess = .false.
       params%cold_guess = "ts0"
@@ -196,7 +196,7 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, copy%closure == "PSE3" .and. copy%correction == "PC+" .and. copy%susceptibility == "oz" &
-         & .and. copy%finite_size == "hunenberger" &
+         & .and. copy%finite_size == "huenenberger" &
          & .and. copy%tolerance == 1.0e-9_wp .and. .not. copy%reuse_initial_guess &
          & .and. copy%cold_guess == "ts0" &
          & .and. copy%solver%jfnk%restart == 40 .and. copy%solvent%npts == 2048, &
@@ -848,7 +848,7 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call energy_settings(params)
-      params%finite_size = "hunenberger"
+      params%finite_size = "huenenberger"
       call new_cspce_water_solvent(ctx, solvent, err)
       if (.not. allocated(err)) call solvent%solve(err, params%solvent)
       if (.not. allocated(err)) call solvent%charge_screening(screening, err)

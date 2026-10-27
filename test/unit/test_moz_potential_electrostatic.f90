@@ -22,7 +22,8 @@ module test_moz_potential_electrostatic
    use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_sites, only: potential_sites_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
-   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
+   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges, &
+      & new_neutral_charges
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
@@ -60,6 +61,8 @@ contains
          & new_unittest("solvent_charges_from_table", check_solvent_charges), &
          & new_unittest("solvent_model_charges", check_solvent_model_charges), &
          & new_unittest("charge_fallback", check_charge_fallback), &
+         & new_unittest("charge_coverage_and_total", check_charge_total), &
+         & new_unittest("neutralize_charges", check_neutralize), &
          & new_unittest("monopole_requests_by_phase", check_monopole_requests), &
          & new_unittest("monopole_tail_charges_from_view", check_monopole_tail_charges), &
          & new_unittest("monopole_tables_match_fixed", check_monopole_tables), &
@@ -478,6 +481,150 @@ contains
       call check(error, index(err%message, "No charges for atoms: O2") > 0, more=err%message)
    end subroutine check_charge_fallback
 
+   !> Check charge-term coverage, zero charges and the total-charge check
+   !>
+   !> - A charge term covering no atom fails the update; a side without charge terms does not
+   !> - Zero charges take the atom count of the update
+   !> - Charges must sum to the total charge; host-data charges are skipped at update
+   subroutine check_charge_total(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moz_potential_type) :: pot
+      type(potential_sites_type) :: sites
+      type(custom_lj_type) :: lj
+      type(fixed_charges_type) :: zero, charged
+      type(ec_charges_type) :: ec
+      type(structure_type) :: mol
+
+      ! Table charges have no entry for a solute: the term covers no atom
+      call make_solute(mol)
+      call pot%add(coulomb_resp_solvent, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      call check(error, allocated(err), more="a charge term covering no atom was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "No charges for atoms: C1, O2, H3") > 0, more=err%message)
+      if (allocated(error)) return
+
+      ! No charge term: no charges, which match only a neutral structure
+      pot = moz_potential_type()
+      call new_custom_lj(lj, sigma_u, eps_u, err)
+      if (.not. allocated(err)) call pot%add(lj, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      mol%charge = 1.0_wp
+      call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      call check(error, allocated(err), more="a charged structure without charges was accepted")
+      if (allocated(error)) return
+
+      ! Zero charges sized at update
+      mol%charge = 0.0_wp
+      pot = moz_potential_type()
+      call new_neutral_charges(zero)
+      call pot%add(zero, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, size(sites%q) == 3 .and. all(sites%q == 0.0_wp), more="zero charges not sized to the structure")
+      if (allocated(error)) return
+
+      ! Explicit charges: the sum must match the total charge
+      pot = moz_potential_type()
+      call new_fixed_charges(charged, [0.5_wp, 0.0_wp, 0.0_wp], err)
+      if (.not. allocated(err)) call pot%add(charged, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      call check(error, allocated(err), more="charges not summing to the total charge were accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "sum to 0.500000 e") > 0 .and. index(err%message, "is 0.000000 e") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      mol%charge = 0.5_wp
+      call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+
+      ! Host-data charges exist only with the host potential: skipped without a coupling
+      pot = moz_potential_type()
+      call pot%add(ec, err)
+      if (.not. allocated(err)) call pot%update(mol, err)
+      if (.not. allocated(err)) call pot%check_total_charge(err)
+      call check_moist_error(error, err)
+   end subroutine check_charge_total
+
+   !> Check the even shift of the tail charges to the total charge
+   !>
+   !> - Methanol Hirshfeld table charges, about 2e-6 e from neutral: raw until neutralized
+   !> - Shift dropped by the next update
+   !> - A mismatch above 1e-3 e drops the update; host-data charges are refused
+   subroutine check_neutralize(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(solvent_system_type) :: system
+      type(moz_potential_type) :: pot, host
+      type(potential_sites_type) :: sites
+      type(monopole_type) :: charges
+      type(structure_type) :: mol, solute
+      real(wp), allocatable :: reference(:)
+      real(wp) :: shift
+      integer :: id
+
+      call get_solvent_id("methanol", id, err)
+      if (.not. allocated(err)) call new_solvent_system(system, id, error=err)
+      if (.not. allocated(err)) call get_solvent_charges(id, "solvent", "hirshfeld", reference, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      mol = system%solv_mol
+      call pot%add(solvent_charges_type(environment="solvent", model="hirshfeld"), err)
+      if (.not. allocated(err)) call pot%update(mol, err, id)
+      if (.not. allocated(err)) call pot%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(sites%q == reference) .and. abs(sum(reference)) > 1.0e-6_wp, &
+         & more="table charges were changed before neutralize")
+      if (allocated(error)) return
+
+      call pot%neutralize(shift, err)
+      if (.not. allocated(err)) call pot%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, abs(shift - sum(reference)/real(mol%nat, wp)) < 1.0e-15_wp, more="shift is not the mean mismatch")
+      if (allocated(error)) return
+      call check(error, all(abs(sites%q - (reference - shift)) < 1.0e-15_wp) .and. abs(sum(sites%q)) < 1.0e-12_wp, &
+         & more="charges were not shifted evenly to neutral")
+      if (allocated(error)) return
+      call pot%update(mol, err, id)
+      if (.not. allocated(err)) call pot%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(sites%q == reference), more="the update kept the shift")
+      if (allocated(error)) return
+
+      ! 1 e off the total charge: no rounding error, the update is dropped
+      mol%charge = 1.0_wp
+      call pot%update(mol, err, id)
+      if (.not. allocated(err)) call pot%neutralize(shift, err)
+      call check(error, allocated(err), more="charges 1 e off the total charge were neutralized")
+      if (allocated(error)) return
+      call check(error, index(err%message, "sum to") > 0 .and. .not. pot%is_updated(), more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+
+      call make_solute(solute)
+      call make_monopole_potential(host, solute, charges, err)
+      if (.not. allocated(err)) call host%neutralize(shift, err)
+      call check(error, allocated(err), more="host charges were neutralized")
+      if (allocated(error)) return
+      call check(error, index(err%message, "host data") > 0, more=err%message)
+   end subroutine check_neutralize
+
    !> Check monopole declarations per phase and solvent-side refusal
    !>
    !> - Own charge request on radial and volume grids
@@ -565,6 +712,21 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check_close(error, q, q_u, 0.0_wp, "host tail charges")
+      if (allocated(error)) return
+
+      ! Host charges must sum to the total charge of the structure
+      call pot_b%sites(sites, err, coupling)
+      call check(error, allocated(err), more="host charges off the total charge were accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "sum to -0.080000 e") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      mol_u%charge = sum(q_u)
+      call pot_b%update(mol_u, err)
+      if (.not. allocated(err)) call pot_b%sites(sites, err, coupling)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_close(error, sites%q, q_u, 0.0_wp, "host site charges")
    end subroutine check_monopole_tail_charges
 
    !> Compare host-fed and fixed-charge tables
@@ -584,7 +746,9 @@ contains
       logical :: split
       integer :: isplit
 
+      ! The host charges q_u carry a net charge, which the structure must match
       call make_solute(mol_u)
+      mol_u%charge = sum(q_u)
       call make_solvent(mol_v)
       call make_grid(grid, mol_u, err)
       if (.not. allocated(err)) call make_potential(pot_v, mol_v, err, sigma_v, eps_v, q_v)
@@ -640,7 +804,9 @@ contains
       real(wp) :: lp, lm, fd
       integer :: a
 
+      ! The host charges q_u carry a net charge, which the structure must match
       call make_solute(mol_u)
+      mol_u%charge = sum(q_u)
       call make_solvent(mol_v)
       call make_grid(grid, mol_u, err)
       if (.not. allocated(err)) call make_potential(pot_v, mol_v, err, sigma_v, eps_v, q_v)
@@ -711,7 +877,9 @@ contains
       real(wp), allocatable :: w_sr(:, :), w_lr(:, :), grad(:, :), w_phi(:), dq(:), w_phi_g(:), dq_g(:)
       complex(wp), allocatable :: w_k(:, :)
 
+      ! The host charges q_u carry a net charge, which the structure must match
       call make_solute(mol_u)
+      mol_u%charge = sum(q_u)
       call make_solvent(mol_v)
       call make_grid(grid, mol_u, err)
       if (.not. allocated(err)) call make_potential(pot_v, mol_v, err, sigma_v, eps_v, q_v)
@@ -768,7 +936,9 @@ contains
       real(wp) :: lp, lm, fd
       integer :: a
 
+      ! The host charges q_u carry a net charge, which the structure must match
       call make_solute(mol_u)
+      mol_u%charge = sum(q_u)
       call make_solvent(mol_v)
       call make_potential(pot_v, mol_v, err, sigma_v, eps_v, q_v)
       if (.not. allocated(err)) call make_potential(pot_a, mol_u, err, sigma_u, eps_u, q_u)

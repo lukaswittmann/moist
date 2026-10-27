@@ -12,7 +12,7 @@
 tests = [
   'api',
   'parameters',
-  'rism_input',
+  'moz_input',
   'utils_timer',
   'utils_context',
   'utils_mem',
@@ -278,7 +278,6 @@ test_srcs = files(
   'test_model_component_helper.f90',
   'test_model_component_pcm_fixtures.f90',
 )
-test_srcs += files('../../app/rism/input.f90', '../../app/rism/setup.f90')
 
 foreach t : tests
   test_srcs += files('test_' + t + '.f90')

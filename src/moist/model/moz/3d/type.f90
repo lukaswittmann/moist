@@ -39,7 +39,7 @@ module moist_model_moz_3d_type
    use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, solvent_vv_thermodynamics_type
    use moist_model_moz_thermodynamics, only: model_moz_3d_thermodynamics_type, new_moz_3d_thermodynamics, &
-      & thermo_list_type, accumulate_solvation_adjoint, hunenberger_correction_type, new_hunenberger_correction
+      & thermo_list_type, accumulate_solvation_adjoint, huenenberger_correction_type, new_huenenberger_correction
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type, new_uv3d_susceptibility
    use moist_model_moz_3d_driver, only: uv3d_problem_type, new_uv3d_problem
@@ -47,6 +47,11 @@ module moist_model_moz_3d_type
    implicit none(type, external)
    private
    public :: model_moz_3d_type, new_moz_3d_model
+
+   !> Construct from a grid and an updated solvent; the input overload is in moist_model_moz_3d_input
+   interface new_moz_3d_model
+      module procedure new_moz_3d_model_grid
+   end interface new_moz_3d_model
 
    !> Refusal of a grid with Gaussian widths
    character(len=*), parameter :: gaussian_grid_refused = &
@@ -79,7 +84,7 @@ module moist_model_moz_3d_type
       !> Cartesian box lengths captured on successful grid update, bohr; zero otherwise
       real(wp), private :: box_lengths(3) = 0.0_wp
       !> Finite-size quantity cached for the current structure, lattice and bulk solution
-      type(hunenberger_correction_type), allocatable, private :: finite_size
+      type(huenenberger_correction_type), allocatable, private :: finite_size
       !> Latest UV problem, kept for reuse
       type(uv3d_problem_type), allocatable, private :: problem
       !> Potential tables of the kept solution
@@ -137,7 +142,7 @@ contains
    !> @param[in]  solvent     bulk solvent with an updated potential, copied into the model
    !> @param[out] error       gaussian-width grid, solvent not updated, invalid settings or allocation failure
    !> @param[in]  parameters  UV/VV settings; absent parameters retain accepted bulk settings or use defaults
-   subroutine new_moz_3d_model(self, ctx, grid, solvent, error, parameters)
+   subroutine new_moz_3d_model_grid(self, ctx, grid, solvent, error, parameters)
       !> Model
       type(model_moz_3d_type), intent(out) :: self
       !> Run context, borrowed for the lifetime of the model
@@ -180,7 +185,7 @@ contains
          return
       end if
       self%grid%nthreads = ctx%get_num_threads()
-   end subroutine new_moz_3d_model
+   end subroutine new_moz_3d_model_grid
 
    !> Drop UV results and the response cache when the model is invalidated
    !>
@@ -201,10 +206,12 @@ contains
    !>
    !> - Potential table printed at verbosity 2
    !> - Grid-dependent term data (EC fit) built from the updated grid
+   !> - Solute charges must sum to the structure's total charge; host-data charges are fitted later
    !>
    !> @param[in,out] self   model
    !> @param[in]     mol    solute structure
-   !> @param[out]    error  grid error, Gaussian-width grid, empty structure, no terms or term failure
+   !> @param[out]    error  grid error, Gaussian-width grid, empty structure, no terms, term failure
+   !>                       or charges not summing to the total charge
    subroutine moz_3d_update(self, mol, error)
       !> Model
       class(model_moz_3d_type), intent(inout) :: self
@@ -229,11 +236,12 @@ contains
       end select
       if (to_lower(trim(adjustl(self%params%finite_size))) /= "none") then
          if (any(self%box_lengths <= 0.0_wp)) then
-            call fatal_error(error, "Hunenberger correction requires a Cartesian grid")
+            call fatal_error(error, "huenenberger correction requires a Cartesian grid")
             return
          end if
       end if
       call self%potential%update(mol, self%grid, error)
+      if (.not. allocated(error)) call self%potential%check_total_charge(error)
       if (allocated(error)) return
       self%mol = mol
       call self%ctx%cite(citation%rism3d)
@@ -404,22 +412,22 @@ contains
       real(wp), intent(in) :: charge
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      type(hunenberger_correction_type) :: quantity
+      type(huenenberger_correction_type) :: quantity
       real(wp) :: screening
 
       if (to_lower(trim(adjustl(self%params%finite_size))) == "none") return
       if (.not. self%potential%ng_split()) then
-         call fatal_error(error, "Hunenberger correction requires the analytical Ng Coulomb split")
+         call fatal_error(error, "huenenberger correction requires the analytical Ng Coulomb split")
          return
       end if
       if (abs(charge - self%mol%charge) > 1.0e-6_wp) then
-         call fatal_error(error, "Hunenberger correction requires solute tail charges summing to mol%charge")
+         call fatal_error(error, "huenenberger correction requires solute tail charges summing to mol%charge")
          return
       end if
       if (allocated(self%finite_size)) return
       call self%solvent%charge_screening(screening, error)
       if (allocated(error)) return
-      call new_hunenberger_correction(quantity, self%mol%charge, screening, self%box_lengths, error)
+      call new_huenenberger_correction(quantity, self%mol%charge, screening, self%box_lengths, error)
       if (allocated(error)) return
       allocate (self%finite_size, source=quantity)
    end subroutine moz_3d_prepare_finite_size
@@ -576,7 +584,7 @@ contains
          call pp%kv("PC correction", thermo%pc*autokcal, "kcal/mol")
          call pp%kv("PC+ correction", thermo%pc_plus*autokcal, "kcal/mol")
          if (allocated(self%finite_size)) then
-            call pp%kv("Hunenberger correction", thermo%finite_size*autokcal, "kcal/mol")
+            call pp%kv("huenenberger correction", thermo%finite_size*autokcal, "kcal/mol")
          end if
          correction_label = trim(self%params%correction)
          if (allocated(self%finite_size)) then

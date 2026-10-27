@@ -18,11 +18,13 @@ module moist
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
    use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
-      & get_solvent_descriptors_by_id
+      & get_solvent_descriptors_by_id, solvent_system_type, new_solvent_system
+   use moist_data, only: get_solvent_id
    use moist_build_info, only: git_commit, build_host
 
    use moist_model, only: solvation_model_type, model_continuum_type, new_continuum_model, &
-      & model_moz_1d_type, new_moz_1d_model, model_moz_3d_type, new_moz_3d_model
+      & model_moz_1d_type, new_moz_1d_model, model_moz_3d_type, new_moz_3d_model, &
+      & model_moz_input_type, model_moz_1d_input_type, model_moz_3d_input_type
    use moist_model_continuum_component, only: model_continuum_component_type, &
       & model_continuum_component_cpcm, new_component_cpcm, &
       model_continuum_component_cosmo, new_component_cosmo, &
@@ -58,9 +60,11 @@ module moist
    public :: cavity_type_drop, new_cavity_drop
    public :: radius_type, new_radii
    public :: solvent_descriptors_type, get_solvent_descriptors, get_solvent_descriptors_by_id
+   public :: solvent_system_type, new_solvent_system, get_solvent_id
    public :: git_commit, build_host
    public :: solvation_model_type, model_continuum_type, new_continuum_model, &
       & model_moz_1d_type, new_moz_1d_model, model_moz_3d_type, new_moz_3d_model
+   public :: model_moz_input_type, model_moz_1d_input_type, model_moz_3d_input_type
    public :: model_continuum_component_type
    public :: model_continuum_component_cpcm, new_component_cpcm
    public :: model_continuum_component_cosmo, new_component_cosmo

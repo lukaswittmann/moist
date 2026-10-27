@@ -87,13 +87,13 @@ an infeasible guess or failed warm attempt falls back to the selected cold start
 Electrostatic finite-size correction
 ------------------------------------
 
-``finite_size = "hunenberger"`` adds a leading net-charge background correction
+``finite_size = "huenenberger"`` adds a leading net-charge background correction
 to the infinite-dilution solvent charging free energy. The default is ``"none"``.
 It can accompany either ``correction = "PC"`` or ``"PC+"``:
 
 .. code-block:: fortran
 
-   params%finite_size = "hunenberger"
+   params%finite_size = "huenenberger"
    params%correction = "PC+"
    mol%charge = -1.0_wp  ! fixed total solute charge, also for a fixed-charge potential
 
@@ -130,9 +130,9 @@ reports its Hartree value. It contributes no host response or nuclear gradient
 for fixed total charge, reciprocal lattice and bulk solvent.
 
 Only the leading net-charge term is included; finite-cavity and multipole terms
-are outside this approximation. It is a Hunenberger-type continuum background
+are outside this approximation. It is a huenenberger-type continuum background
 correction adapted to the current RISM energy reference, rather than the complete
-:cite:t:`hunenberger1999ewald` scheme.
+:cite:t:`huenenberger1999ewald` scheme.
 
 Host response
 -------------
@@ -284,7 +284,7 @@ Key                                   Default     Meaning
 ====================================  ==========  ==============================================
 ``closure``                           ``KH``      HNC, KH or PSE2-4
 ``correction``                        ``none``    Pressure correction added: none, PC or PC+
-``finite_size``                       ``none``    Leading charge correction: none or hunenberger
+``finite_size``                       ``none``    Leading charge correction: none or huenenberger
 ``susceptibility``                    ``oz``      OZ reconstruction, direct transform, or linear sampling
 ``convergence.tolerance``             1e-7        RMS residual of a converged solve
 ``convergence.maxiter``               128         Outer iterations per attempt

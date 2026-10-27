@@ -1,14 +1,11 @@
-# moist model rism3d examples/rism/water.xyz -p examples/rism/run3d-molecular.toml
+# moist model rism3d examples/rism/alanine.xyz -p examples/rism/run3d-molecular.toml
 closure = "KH"
 correction = "PC+"
 
-[system]
-solvent = "water"
-charge = 0.0
-
 [potential]
-lj = "cspce"
-charges = "cspce"
+# First covering table wins: GAFF2 types, UFF for atoms GAFF2 leaves
+lj = ["gaff2", "uff"]
+charges = "none"  # LJ only; give per-atom q with charges = "custom" for the zwitterion
 
 [grid]
 kind = "molecular"
@@ -27,6 +24,8 @@ tolerance = 1e-7
 name = "JFNK"
 
 [solvent]
+name = "water"
+temperature = 298.15  # K
 theory = "RISM"
 closure = "KH"
 
@@ -34,5 +33,6 @@ closure = "KH"
 tolerance = 1e-11
 
 [solvent.potential]
-lj = "cspce"
-charges = "cspce"
+# First covering choice wins: SPC/E models for water, tables and generic LJ otherwise
+lj = ["cspce", "gaff2", "uff", "tm"]
+charges = ["spce", "resp-solvent"]

@@ -22,7 +22,7 @@ module moist_model_moz_thermodynamics
    use moist_model_moz_thermodynamics_type, only: thermodynamic_quantity_type, thermo_input_type
    use moist_model_moz_thermodynamics_list, only: thermo_list_type
    use moist_model_moz_thermodynamics_quantities, only: new_uv_thermo_list, new_bulk_thermo_list, &
-      & hunenberger_correction_type, new_hunenberger_correction
+      & huenenberger_correction_type, new_huenenberger_correction
    implicit none(type, external)
    private
 
@@ -30,7 +30,7 @@ module moist_model_moz_thermodynamics
    public :: correction_moment_shift
    public :: thermodynamic_quantity_type, thermo_input_type, thermo_list_type, new_uv_thermo_list, new_bulk_thermo_list
    public :: accumulate_solvation_adjoint
-   public :: hunenberger_correction_type, new_hunenberger_correction, check_finite_size_name
+   public :: huenenberger_correction_type, new_huenenberger_correction, check_finite_size_name
 
    !> Solvation free energy of a 3D UV solution and its correction terms, atomic units
    type :: model_moz_3d_thermodynamics_type
@@ -233,18 +233,18 @@ contains
    !> - The finite-size term has a separate selector and may accompany PC or PC+
    !>
    !> @param[in]  name   selector, case-insensitive
-   !> @param[out] error  name other than none or hunenberger
+   !> @param[out] error  name other than none or huenenberger
    subroutine check_finite_size_name(name, error)
       !> Selector
       character(len=*), intent(in) :: name
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       select case (to_lower(trim(adjustl(name))))
-      case ("none", "hunenberger")
+      case ("none", "huenenberger")
          continue
       case default
          call fatal_error(error, "Unknown electrostatic finite-size correction: "//trim(name)// &
-            & " (choose none or hunenberger)")
+            & " (choose none or huenenberger)")
       end select
    end subroutine check_finite_size_name
 

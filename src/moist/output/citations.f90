@@ -92,7 +92,7 @@ module moist_output_citations
    logical :: initialised = .false.
 
    !> Maximum line width for word-wrapped output (excluding indent)
-   integer, parameter :: wrap_width = 57
+   integer, parameter :: wrap_width = 80
 
 contains
 
@@ -537,7 +537,7 @@ contains
       call moist_citations%add( &
          category="Models", &
          label=citation%finite_size, &
-         authors="Hunenberger, P.H., McCammon, J.A.", &
+         authors="Hünenberger, P.H., McCammon, J.A.", &
          title="Ewald artifacts in computer simulations of ionic solvation and "// &
          "ion-ion interaction: A continuum electrostatics study.", &
          journal="J. Chem. Phys. 1999, 110, 1856-1872", &

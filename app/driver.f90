@@ -7,8 +7,10 @@ module moist_driver
    use mctc_io, only: structure_type, read_structure, filetype
    use mctc_io_utils, only: to_lower
    use moist_cli, only: run_config
-   use moist_app_rism_input, only: rism_input_type, new_rism_input
-   use moist_app_rism_setup, only: new_rism_model
+   use moist_model_moz_input, only: model_moz_input_type
+   use moist_model_moz_1d_input, only: model_moz_1d_input_type
+   use moist_model_moz_3d_input, only: model_moz_3d_input_type
+   use moist_utils_env, only: get_env
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
    use moist_model_type, only: solvation_model_type
@@ -36,6 +38,9 @@ module moist_driver
    private
 
    public :: main
+
+   !> Environment variable naming the directory of the automatic VV checkpoint files
+   character(len=*), parameter :: vv_outdir_env = "MOIST_RISM_VV_OUTDIR"
 
 contains
 
@@ -70,19 +75,13 @@ contains
 
       !> Solvent system
       type(solvent_system_type), allocatable :: system
-      !> TOML run settings, used only by the RISM commands
-      type(rism_input_type) :: rism_input
-      !> Whether the command is a RISM model (rism1d or rism3d)
-      logical :: rism_mode
 
       character(len=:), allocatable :: filename
-      character(len=:), allocatable :: solvent
 
       integer :: solvent_id
 
       !> File reading and parsing
       integer :: unit, stat
-      character(len=256) :: tmp
       real(wp) :: tmp_wp
 
       !> Open the run context; every cavity/model borrows it, so all sub-timers
@@ -326,49 +325,12 @@ contains
          return
       end if
 
-      ! Read native UV/VV settings plus app setup; CLI values override only when supplied
-      rism_mode = to_lower(config%mode) == "rism1d" .or. to_lower(config%mode) == "rism3d"
-      if (rism_mode) then
-         call new_rism_input(rism_input, trim(config%mode), error)
-         if (.not. allocated(error) .and. config%read_parameters) then
-            call rism_input%read_file(trim(config%parameters_path), error, strict=.true.)
-         end if
-         if (allocated(error)) return
-         if (allocated(config%temperature)) rism_input%system%temperature = config%temperature
-         if (allocated(config%pressure_si)) rism_input%system%pressure = config%pressure_si
-         if (allocated(rism_input%system%charge)) mol%charge = rism_input%system%charge
-         if (allocated(config%charge)) mol%charge = config%charge
-         rism_input%system%charge = mol%charge
-      end if
+      !* ================================================================================= *!
+      !*                                  Solvation models                                 *!
+      !* ================================================================================= *!
 
-      !* ---------------------------------- Get Solvent ---------------------------------- *!
-
-      ! Get solvent
-      if (len_trim(config%solvent) > 0) then
-         solvent = trim(config%solvent)
-      else if (rism_mode .and. len_trim(rism_input%system%solvent) > 0) then
-         solvent = trim(rism_input%system%solvent)
-      else
-         filename = join(dirname(config%input), ".SOLVENT")
-         if (exists(filename)) then
-            open (file=filename, newunit=unit)
-            read (unit, "(A)", iostat=stat) tmp
-            close (unit)
-            if (stat == 0) then
-               ! allocate exactly to the trimmed length
-               allocate (character(len=len_trim(tmp)) :: solvent)
-               solvent = trim(tmp)
-            end if
-         end if
-      end if
-      if (.not. allocated(solvent)) then
-         call fatal_error(error, "No solvent specified")
-         return
-      end if
-
-      if (rism_mode) then
-         rism_input%system%solvent = solvent
-         call run_rism(config, ctx, mol, rism_input, error)
+      if (to_lower(config%mode) == "rism1d" .or. to_lower(config%mode) == "rism3d") then
+         call run_rism(config, ctx, mol, error)
          if (allocated(error)) return
          call ctx%timer%stop("total")
          call ctx%timer%print("moist")
@@ -376,18 +338,6 @@ contains
          call ctx%delete()
          return
       end if
-
-      call get_solvent_id(solvent, solvent_id, error)
-      if (allocated(error)) return
-      allocate (system)
-      call new_solvent_system(system, solvent_id, &
-                                           temperature=config%temperature, pressure_si=config%pressure_si, &
-                                           error=error)
-      if (allocated(error)) return
-
-      !* ================================================================================= *!
-      !*                                  Solvation models                                 *!
-      !* ================================================================================= *!
 
       ! Reserved model commands without an implementation
       call fatal_error(error, "The selected model command is not implemented: "//trim(config%mode))
@@ -397,36 +347,71 @@ contains
 
    !> Run a standalone UV model through the domain-independent model interface
    !>
-   !> @param[in] config    CLI output and gradient options
-   !> @param[in] ctx       borrowed run context
-   !> @param[in] mol       solute with the resolved total charge
-   !> @param[inout] input  native model and application settings
-   !> @param[out] error    setup, solve or output error
-   subroutine run_rism(config, ctx, mol, input, error)
-      !> CLI output and gradient options
+   !> - Settings from the input file; the 1D or 3D model from the command
+   !> - Solvent: --solvent, else solvent.name of the input file
+   !> - --temperature and --pressure override the input file
+   !> - $MOIST_RISM_VV_OUTDIR names the directory of the automatic VV files unless the input does
+   !>
+   !> @param[in] config  CLI input file, solvent, output and gradient options
+   !> @param[in] ctx     borrowed run context
+   !> @param[in] mol     solute with the resolved total charge
+   !> @param[out] error  input, setup, solve or output error
+   subroutine run_rism(config, ctx, mol, error)
+      !> CLI input file, solvent, output and gradient options
       type(run_config), intent(in) :: config
       !> Borrowed run context
       type(moist_context_type), intent(in), target :: ctx
       !> Solute with the resolved total charge
       type(structure_type), intent(in) :: mol
-      !> Native model and application settings
-      type(rism_input_type), intent(inout) :: input
-      !> Setup, solve or output error
+      !> Input, setup, solve or output error
       type(error_type), allocatable, intent(out) :: error
+      class(model_moz_input_type), allocatable :: input
       class(solvation_model_type), allocatable, target :: model
+      type(solvent_system_type) :: system
       type(prettyprinter) :: pp
+      character(len=:), allocatable :: vv_directory
       real(wp), allocatable :: gradient(:, :)
       real(wp) :: energy
       integer :: iat, unit, stat, close_stat
 
+      if (to_lower(config%mode) == "rism1d") then
+         allocate (model_moz_1d_input_type :: input)
+      else
+         allocate (model_moz_3d_input_type :: input)
+      end if
+      call input%init_defaults()
+      if (config%read_parameters) then
+         call input%read_file(trim(config%parameters_path), error, strict=.true.)
+         if (allocated(error)) return
+      end if
+      if (.not. allocated(input%checkpoint%vv%directory)) then
+         vv_directory = get_env(vv_outdir_env)
+         if (len(vv_directory) > 0) input%checkpoint%vv%directory = vv_directory
+      end if
+      if (len_trim(config%solvent) > 0) input%solvent_state%name = trim(config%solvent)
+      if (.not. allocated(input%solvent_state%name)) then
+         call fatal_error(error, "No solvent specified; use --solvent or solvent.name in the input file")
+         return
+      end if
+      if (allocated(config%temperature)) input%solvent_state%temperature = config%temperature
+      if (allocated(config%pressure_si)) input%solvent_state%pressure = config%pressure_si
+      if (any(input%potential%charges == "ec")) then
+         call fatal_error(error, "EC charges are fitted to a host potential, which the moist CLI does not provide")
+         return
+      end if
+      call input%new_system(system, error)
+      if (allocated(error)) return
+
       ! Main settings at verbosity 2, every setting of the selected solvers from 3
       if (ctx%verbosity(2)) then
+         call system%print()
          pp = new_prettyprinter(unit=ctx%unit)
          call pp%section("Resolved RISM input (lengths in bohr, energies in Hartree)")
          call input%print_table(pp, ctx%verbosity())
          call pp%blank()
       end if
-      call new_rism_model(input, ctx, mol, model, error)
+      call input%new_model(ctx, system, model, error)
+      if (.not. allocated(error)) call model%update(mol, error)
       if (allocated(error)) return
       if (config%grad) allocate(gradient(3, mol%nat))
       if (config%grad .and. .not. config%numgrad) then

@@ -64,6 +64,8 @@ module moist_model_parameters
       procedure :: register_alloc_real_vector
       procedure :: register_string
       procedure :: register_alloc_string
+      !> Read or write an optional string list; a bare string reads as one entry
+      procedure :: register_alloc_string_vector
       !> Read or write a nested parameter set under a key group
       procedure :: register_group
       !> Field name with the nested-set prefix
@@ -436,7 +438,7 @@ contains
       end do
    end subroutine print_document_table
 
-   !> Print a real vector one element per line, labelled `key(i)`
+   !> Print a real vector one element per line, labelled `key(i)`, or a string list on one line
    !>
    !> @param[inout] array Document array
    !> @param[in] key Field name
@@ -446,9 +448,21 @@ contains
       character(len=*), intent(in) :: key
       type(prettyprinter), intent(inout) :: pp
       character(len=12) :: label
+      character(len=:), allocatable :: text, joined
       real(wp) :: value
       integer :: i, stat
 
+      if (len(array) > 0) then
+         call get_value(array, 1, joined, stat=stat)
+         if (stat == 0) then
+            do i = 2, len(array)
+               call get_value(array, i, text, stat=stat)
+               if (stat == 0) joined = joined//", "//text
+            end do
+            call pp%kv(key, joined)
+            return
+         end if
+      end if
       do i = 1, len(array)
          call get_value(array, i, value, stat=stat)
          if (stat /= 0) cycle
@@ -753,6 +767,80 @@ contains
       end if
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter string: "//self%qualified(key))
    end subroutine register_alloc_string
+
+   !> Read or write an optional list of fixed-length strings, rejecting oversized entries
+   !>
+   !> - A bare string reads as a one-entry list; a one-entry list writes as a bare string
+   !>
+   !> @param[inout] self Active document
+   !> @param[in] key Dotted field name
+   !> @param[inout] values Optional list; an absent key keeps its current value
+   !> @param[in] level Print level of the field (default 3)
+   subroutine register_alloc_string_vector(self, key, values, level)
+      !> Active document
+      class(moist_model_parameters_type), intent(inout), target :: self
+      !> Dotted field name
+      character(len=*), intent(in) :: key
+      !> Optional list; an absent key keeps its current value
+      ! allow(assumed-size-character-intent): fixed-length entries, oversized input is rejected
+      character(len=*), allocatable, intent(inout) :: values(:)
+      !> Print level of the field (default 3)
+      integer, intent(in), optional :: level
+      type(toml_table), pointer :: parent
+      type(toml_array), pointer :: array
+      class(toml_value), pointer :: entry
+      character(len=:), allocatable :: leaf, text, parsed(:)
+      integer :: stat, i
+
+      if (.not. self%reading .and. .not. allocated(values)) return
+      call self%field_parent(key, parent, leaf, level)
+      if (.not. associated(parent)) return
+      if (.not. self%reading) then
+         if (size(values) == 1) then
+            call set_value(parent, leaf, trim(values(1)), stat=stat)
+         else
+            call get_value(parent, leaf, array, requested=.true., stat=stat)
+            if (stat == 0 .and. .not. associated(array)) stat = 1
+            do i = 1, size(values)
+               if (stat /= 0) exit
+               call set_value(array, i, trim(values(i)), stat=stat)
+            end do
+         end if
+         if (stat /= 0) call fatal_error(self%failure, "Invalid parameter list: "//self%qualified(key))
+         return
+      end if
+      call parent%get(leaf, entry)
+      stat = 1
+      select type (entry)
+      type is (toml_keyval)
+         call get_value(parent, leaf, text, stat=stat)
+         if (stat == 0) then
+            allocate (character(len=len(values)) :: parsed(1))
+            if (len(text) > len(parsed)) stat = 2
+            parsed(1) = text
+         end if
+      type is (toml_array)
+         allocate (character(len=len(values)) :: parsed(len(entry)))
+         stat = 0
+         do i = 1, size(parsed)
+            call get_value(entry, i, text, stat=stat)
+            if (stat /= 0) exit
+            if (len(text) > len(parsed)) stat = 2
+            if (stat /= 0) exit
+            parsed(i) = text
+         end do
+      class default
+         continue
+      end select
+      if (stat == 2) then
+         call fatal_error(self%failure, "Parameter string is too long: "//self%qualified(key))
+      else if (stat /= 0) then
+         call fatal_error(self%failure, "Invalid parameter list: "//self%qualified(key))
+      else
+         ! Typed allocation and assignment: a len(values) declaration and move_alloc corrupted the heap (gfortran 14.3)
+         values = parsed
+      end if
+   end subroutine register_alloc_string_vector
 
    !> Read or write a fixed-length string, rejecting oversized input
    !>

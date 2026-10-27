@@ -33,6 +33,7 @@
 !>   - Table environments: gas, solvent, conductor
 !>   - Solvent multipoles: `multipoles_mbis_<environment>`, stub for 6D MOZ
 !>   - User-data constructors: `new_fixed_charges`, `new_custom_lj`
+!>   - Zero charges sized at update: `new_neutral_charges`
 !>   - Solute electrostatics: `monopole_type`, `multipole_type`, `ec_charges_type`
 module moist_model_moz_potential
    use, intrinsic :: iso_fortran_env, only: int64
@@ -50,7 +51,7 @@ module moist_model_moz_potential
    use moist_model_moz_potential_lj_element, only: lj_element_type, lj_uff, lj_dreiding, lj_tm
    use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce, lj_cspce
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
-   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges
+   use moist_model_moz_potential_electrostatic_fixed, only: fixed_charges_type, new_fixed_charges, new_neutral_charges
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
@@ -68,7 +69,7 @@ module moist_model_moz_potential
    public :: lj_mixing_lorentz_berthelot, lj_mixing_geometric
    public :: lj_typed_type, lj_element_type, lj_solvent_type, custom_lj_type, new_custom_lj
    public :: lj_gaff, lj_oplsaa, lj_uff, lj_dreiding, lj_tm, lj_spce, lj_cspce
-   public :: fixed_charges_type, new_fixed_charges
+   public :: fixed_charges_type, new_fixed_charges, new_neutral_charges
    public :: monopole_type, multipole_type, ec_charges_type
    public :: solvent_charges_type, solvent_model_charges_type, solvent_multipoles_type
    public :: coulomb_hirshfeld_gas, coulomb_hirshfeld_solvent, coulomb_hirshfeld_conductor
@@ -99,6 +100,8 @@ module moist_model_moz_potential
       type(lj_12_6_type), allocatable :: pair
       !> Term supplying the charge of each atom, 0 when no term has charges (natom)
       integer, allocatable :: charge_owner(:)
+      !> Charge subtracted from every tail charge, e; 0 until neutralized
+      real(wp) :: charge_shift = 0.0_wp
       !> Whether the Coulomb tail is split off
       logical :: split = .true.
       !> Ng split parameter, 1/bohr
@@ -145,6 +148,10 @@ module moist_model_moz_potential
       procedure :: generation => potential_generation
       !> Resolved per-atom data of the latest update
       procedure :: sites => potential_sites
+      !> Require the tail charges to sum to the structure's total charge
+      procedure :: check_total_charge => potential_check_total_charge
+      !> Shift the tail charges evenly to the structure's total charge
+      procedure :: neutralize => potential_neutralize
       !> Print the per-atom site parameters as a table
       procedure :: print_table => potential_print_table
       !> Column layout of the 1D tables
@@ -423,12 +430,14 @@ module moist_model_moz_potential
 
       !> Resolve the merged LJ data and tail charges of the latest update
       !>
-      !> - Charge per atom from its owning term
+      !> - Charge per atom from its owning term, less the shift of `neutralize`
       !> - Host owners through scoped view of `coupling`; refusal without coupling
+      !> - With host owners, the charges must sum to the structure's total charge within 1e-4 e
       !>
       !> @param[in]     self      updated potential
       !> @param[out]    sites     resolved data of the side
-      !> @param[out]    error     not updated, host-data owner without coupling, charge read failure
+      !> @param[out]    error     not updated, host-data owner without coupling, charge read failure or
+      !>                          host charges not summing to the total charge
       !> @param[in,out] coupling  optional coupling of the model; host-data term i reads scope i
       module subroutine potential_sites(self, sites, error, coupling)
          implicit none(type, external)
@@ -441,6 +450,41 @@ module moist_model_moz_potential
          !> Optional coupling of the model
          class(coupling_type), intent(inout), target, optional :: coupling
       end subroutine potential_sites
+
+      !> Require the tail charges of the latest update to sum to the structure's total charge
+      !>
+      !> - No charge term: zero charges
+      !> - Host-data charge owners skipped; `sites` checks their charges with the host data
+      !> - A mismatch drops the update, as a failed update does
+      !>
+      !> @param[in,out] self   updated potential
+      !> @param[out]    error  not updated or charges not summing to the total charge
+      module subroutine potential_check_total_charge(self, error)
+         implicit none(type, external)
+         !> Updated potential
+         class(moz_potential_type), intent(inout) :: self
+         !> Error handling
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine potential_check_total_charge
+
+      !> Shift the tail charges of the latest update evenly to the structure's total charge
+      !>
+      !> - For a bulk solvent whose table charges miss neutrality
+      !> - Kept until the next update; a repeated call replaces the shift
+      !> - A mismatch above 1e-3 e drops the update, as a failed update does
+      !>
+      !> @param[in,out] self   updated potential
+      !> @param[out]    shift  charge subtracted from every atom, e; 0 without charges
+      !> @param[out]    error  not updated, host-data charges or a mismatch above 1e-3 e
+      module subroutine potential_neutralize(self, shift, error)
+         implicit none(type, external)
+         !> Updated potential
+         class(moz_potential_type), intent(inout) :: self
+         !> Charge subtracted from every atom, e
+         real(wp), intent(out) :: shift
+         !> Error handling
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine potential_neutralize
 
       !> Print the per-atom site parameters of the latest update as a table
       !>

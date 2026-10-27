@@ -1,15 +1,11 @@
-# moist model rism3d examples/rism/chloride.xyz -p examples/rism/run3d-drism.toml
+# moist model rism3d examples/rism/chloride.xyz --charge -1 -p examples/rism/run3d-drism.toml
 closure = "KH"
 correction = "PC+"
-finite_size = "hunenberger"
-
-[system]
-solvent = "water"
-charge = -1.0
+finite_size = "huenenberger"
 
 [potential]
 lj = "uff"
-charges = "fixed"
+charges = "custom"
 q = [-1.0]  # electrons, one value per atom
 
 [grid]
@@ -27,6 +23,8 @@ tolerance = 1e-7
 name = "JFNK"
 
 [solvent]
+name = "water"
+temperature = 298.15  # K
 theory = "DRISM"
 closure = "KH"
 
@@ -37,6 +35,7 @@ smear = 0.6682  # bohr
 tolerance = 1e-11
 
 [solvent.potential]
-lj = "cspce"
-charges = "cspce"
+# First covering choice wins: SPC/E models for water, tables and generic LJ otherwise
+lj = ["cspce", "gaff2", "uff", "tm"]
+charges = ["spce", "resp-solvent"]
 mixing = "lorentz-berthelot"

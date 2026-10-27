@@ -1,8 +1,8 @@
 Thermodynamic items
 ===================
 
-Bulk pressure and compressibility, 3D UV partial molar volume, PC, PC+ :cite:p:`sergiievskyi2015pressure` and the leading Hunenberger
-corrections :cite:p:`hunenberger1999ewald,kovalenko2000ions` share one abstract ``thermodynamic_quantity_type``. ``thermo_list_type`` owns copies of
+Bulk pressure and compressibility, 3D UV partial molar volume, PC, PC+ :cite:p:`sergiievskyi2015pressure` and the leading huenenberger
+corrections :cite:p:`huenenberger1999ewald,kovalenko2000ions` share one abstract ``thermodynamic_quantity_type``. ``thermo_list_type`` owns copies of
 these items and their scalar inputs. The bulk and 3D thermodynamics records and model methods,
 and the 3D ``correction = "none"``, ``"PC"`` or ``"PC+"`` settings keep their interfaces and formulas.
 
@@ -28,8 +28,8 @@ added to the uncorrected energy and seed reverse sensitivities. PC and PC+ belon
 same exclusive group, so selecting both is an error. Changing selection reuses the forward
 values and invalidates the reverse cache. ``select(name, .false., error)`` removes a term.
 
-``hunenberger_correction_type`` belongs to the separate ``electrostatic_finite_size``
-group. ``new_hunenberger_correction`` fixes its total charge, bulk screening and box
+``huenenberger_correction_type`` belongs to the separate ``electrostatic_finite_size``
+group. ``new_huenenberger_correction`` fixes its total charge, bulk screening and box
 lengths, evaluating the analytical Coulomb box average once. It has no variable dependencies;
 its reverse method is a no-op. The 3D model enables it through the independent
 ``finite_size`` setting (:ref:`moz-3d-finite-size`).

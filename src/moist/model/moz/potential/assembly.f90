@@ -11,6 +11,12 @@ submodule(moist_model_moz_potential) moist_model_moz_potential_assembly
    !> Last change stamp handed out to any potential
    integer(int64) :: last_stamp = 0_int64
 
+   !> Largest accepted difference between the charge sum and the total charge, e
+   real(wp), parameter :: total_charge_tolerance = 1.0e-4_wp
+
+   !> Largest difference between the charge sum and the total charge that `neutralize` shifts away, e
+   real(wp), parameter :: neutralize_limit = 1.0e-3_wp
+
 contains
 
    !> Next change stamp, unique across all potentials and threads
@@ -260,7 +266,59 @@ contains
             deallocate (q_term)
          end associate
       end do
+      sites%q = sites%q - self%charge_shift
+      if (.not. host_charges(self)) return
+      if (abs(sum(sites%q) - self%mol%charge) > total_charge_tolerance) then
+         call charge_sum_error(sum(sites%q), self%mol%charge, error)
+      end if
    end subroutine potential_sites
+
+   module subroutine potential_check_total_charge(self, error)
+      class(moz_potential_type), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      type(potential_sites_type) :: sites
+      real(wp) :: total
+      call self%require_updated(error)
+      if (allocated(error)) return
+      if (host_charges(self)) return
+      call self%sites(sites, error)
+      if (allocated(error)) return
+      total = 0.0_wp
+      if (allocated(sites%q)) total = sum(sites%q)
+      if (abs(total - self%mol%charge) > total_charge_tolerance) then
+         call charge_sum_error(total, self%mol%charge, error)
+         call drop_update(self)
+      end if
+   end subroutine potential_check_total_charge
+
+   module subroutine potential_neutralize(self, shift, error)
+      class(moz_potential_type), intent(inout) :: self
+      real(wp), intent(out) :: shift
+      type(error_type), allocatable, intent(out) :: error
+      type(potential_sites_type) :: sites
+      real(wp) :: mismatch
+      shift = 0.0_wp
+      call self%require_updated(error)
+      if (allocated(error)) return
+      if (host_charges(self)) then
+         call fatal_error(error, "Charges from host data cannot be neutralized")
+         return
+      end if
+      self%charge_shift = 0.0_wp
+      call self%sites(sites, error)
+      if (allocated(error)) return
+      if (.not. allocated(sites%q)) return
+      mismatch = sum(sites%q) - self%mol%charge
+      ! Written so that a NaN sum fails too
+      if (.not. abs(mismatch) <= neutralize_limit) then
+         call charge_sum_error(sum(sites%q), self%mol%charge, error)
+         call drop_update(self)
+         return
+      end if
+      shift = mismatch/real(self%nat, wp)
+      self%charge_shift = shift
+      self%generation_stamp = next_stamp()
+   end subroutine potential_neutralize
 
    module subroutine potential_print_table(self, unit, error)
       class(moz_potential_type), intent(in) :: self
@@ -283,6 +341,7 @@ contains
          if (allocated(error)) return
          where (self%charge_owner == i) q = q_term
       end do
+      q = q - self%charge_shift
       write (unit, "(2a7, a12, 2x, a14, 2a16, 2x, a)") "N", "Sym", "qat", "q/Src         ", "sigma (bohr)", &
          & "eps (kcal/mol)", "Type/Src"
       do iat = 1, self%nat
@@ -347,8 +406,43 @@ contains
       self%nat = 0
       if (allocated(self%pair)) deallocate (self%pair)
       if (allocated(self%charge_owner)) deallocate (self%charge_owner)
+      self%charge_shift = 0.0_wp
       self%generation_stamp = next_stamp()
    end subroutine drop_update
+
+   !> Whether a host-data term owns the charge of any atom
+   !>
+   !> @param[in] self  updated potential
+   pure function host_charges(self) result(host)
+      !> Updated potential
+      class(moz_potential_type), intent(in) :: self
+      !> Whether host data supplies charges
+      logical :: host
+      integer :: i
+      host = .false.
+      do i = 1, self%n_terms()
+         if (any(self%charge_owner == i)) host = host .or. self%slots(i)%term%is_host_fed()
+      end do
+   end function host_charges
+
+   !> Error for charges not summing to the total charge of the structure
+   !>
+   !> @param[in]  total   charge sum, e
+   !> @param[in]  charge  total charge of the structure, e
+   !> @param[out] error   mismatch message
+   subroutine charge_sum_error(total, charge, error)
+      !> Charge sum, e
+      real(wp), intent(in) :: total
+      !> Total charge of the structure, e
+      real(wp), intent(in) :: charge
+      !> Mismatch message
+      type(error_type), allocatable, intent(out) :: error
+      character(len=24) :: sum_text, charge_text
+      write (sum_text, "(f24.6)") total
+      write (charge_text, "(f24.6)") charge
+      call fatal_error(error, "Charges sum to "//trim(adjustl(sum_text))// &
+         & " e, but the total charge of the structure is "//trim(adjustl(charge_text))//" e")
+   end subroutine charge_sum_error
 
    !> Require nonempty updated term data, with `natom` LJ entries when present
    !>
@@ -435,7 +529,8 @@ contains
 
    !> Assign each atom the first term, in insertion order, with a charge for it
    !>
-   !> - Any charge term present: full atom coverage required, named error for uncovered atoms
+   !> - Any charge term present, even one covering no atom: full atom coverage required,
+   !>   named error for uncovered atoms
    !> - Whole-side grid field: no other charge supplier
    !>
    !> @param[in,out] self   potential with updated terms
@@ -463,7 +558,14 @@ contains
             & "add it before any other charge term")
          return
       end do
-      if (all(self%charge_owner == 0) .or. all(self%charge_owner > 0)) return
+      if (all(self%charge_owner > 0)) return
+      if (all(self%charge_owner == 0)) then
+         ! Without a charge term the side has no charges; a charge term must cover every atom
+         do i = 1, self%n_terms()
+            if (len_trim(self%slots(i)%term%charge_label()) > 0) exit
+         end do
+         if (i > self%n_terms()) return
+      end if
       missing = ""
       do iat = 1, mol%nat
          if (self%charge_owner(iat) > 0) cycle
