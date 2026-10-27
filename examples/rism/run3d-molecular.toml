@@ -5,7 +5,22 @@ correction = "PC+"
 [potential]
 # First covering table wins: GAFF2 types, UFF for atoms GAFF2 leaves
 lj = ["gaff2", "uff"]
-charges = "none"  # LJ only; give per-atom q with charges = "custom" for the zwitterion
+charges = "custom"
+q = [
+   -0.479657,  # C1
+   0.290575,   # C2
+   0.160770,   # H3
+   0.141821,   # H4
+   0.135546,   # H5
+   0.636185,   # C6
+   -0.727756,  # O7
+   -0.826705,  # O8
+   -0.606436,  # N9
+   0.393563,   # H10
+   0.379919,   # H11
+   0.075160,   # H12
+   0.427017,   # H13
+]
 
 [grid]
 kind = "molecular"
