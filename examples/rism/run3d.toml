@@ -10,6 +10,8 @@ q = [-1.0]  # electrons, one value per atom
 
 [grid]
 kind = "cartesian"
+
+[grid.cartesian]
 nx = 64
 ny = 64
 nz = 64

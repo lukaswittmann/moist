@@ -93,7 +93,8 @@ contains
       settings = input
       call settings%validate(error)
       if (.not. allocated(error)) call new_input_solvent(settings, ctx, system, settings%uv%solvent, solvent, error)
-      if (.not. allocated(error)) call new_uniform_radial_pair(rgrid, kgrid, settings%grid%npts, settings%grid%dr, error)
+      if (.not. allocated(error)) call new_uniform_radial_pair(rgrid, kgrid, settings%grid%radial%npts, &
+         & settings%grid%radial%dr, error)
       if (allocated(error)) return
       call new_moz_1d_model(self, ctx, rgrid, kgrid, solvent, error, settings%uv)
       if (.not. allocated(error)) call configure_potential(self%potential, settings%potential, error, &

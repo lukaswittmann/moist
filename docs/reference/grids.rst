@@ -50,7 +50,11 @@ Molecular partition weights sum to one over atoms at each point, preventing doub
 ``grid%new_trafo`` creates the transform engine matching the concrete 3D grid.
 Rules, mappings, angular generators, and shell policies are independently replaceable through their abstract interfaces.
 
-To prune only zero-weight molecular points, set both ``weight_threshold`` and ``pruning_threshold`` to zero; larger positive thresholds (:math:`>10^{-10}`) can introduce discontinuities in grid-evaluted/integrated functions.
+To prune only zero-weight molecular points, set both constructor arguments
+``weight_threshold`` and ``pruning_threshold`` to zero. In the RISM input,
+these are ``grid.molecular.weight_pruning_cutoff`` and
+``grid.molecular.partition_pruning_cutoff``. Larger positive cutoffs
+(:math:`>10^{-10}`) can introduce discontinuities in grid-evaluated/integrated functions.
 
 Construction and updates
 ~~~~~~~~~~~~~~~~~~~~~~~~

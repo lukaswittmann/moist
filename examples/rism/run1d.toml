@@ -8,6 +8,8 @@ q = [-1.0]  # electrons, one value per atom
 
 [grid]
 kind = "radial"
+
+[grid.radial]
 npts = 8192
 dr = 0.015  # bohr
 

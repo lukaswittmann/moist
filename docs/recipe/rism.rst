@@ -35,6 +35,8 @@ For a one-atom chloride XYZ, run with ``--charge -1``, a complete 3D input is:
 
    [grid]
    kind = "cartesian"
+
+   [grid.cartesian]
    nx = 64
    ny = 64
    nz = 64
@@ -86,6 +88,8 @@ For 1D, use a radial UV grid; its settings are separate from ``solvent.grid``:
 
    [grid]
    kind = "radial"
+
+   [grid.radial]
    npts = 8192
    dr = 0.015
 
@@ -139,25 +143,68 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
 
    [grid]
    kind = "molecular"
-   nrad = 50
-   angular_degree = 17
-   rmax = 10.0          # bohr; bounded HandyMod radial mapping
-   handymod_exponent = 2.0  # dimensionless; finite and positive
+
+   [grid.molecular]
+   partition = "becke"  # "becke", "ssf", "pvoronoi"
    becke_k = 3
+   ssf_a = 0.64
+   power_width = 1.0    # bohr^2
+   weight_pruning_cutoff = 1e-14  # bohr^3
+   partition_pruning_cutoff = 0.0
    dr = 0.6            # bohr; controls the reciprocal lattice
    kbuffer = 2.0       # bohr
    nufft_tolerance = 1e-10
 
+   [grid.molecular.radial]
+   npts = 50
+   rmax = 10.0          # bohr; bounded HandyMod radial mapping
+   handymod_exponent = 2.0  # dimensionless; finite and positive
+
+   [grid.molecular.angular]
+   degree = 17
+
 The bounded HandyMod mapping uses radial midpoint nodes and accepts a real
-``handymod_exponent``, including values below one. A larger radial and angular recipe uses ``nrad = 50``,
-``angular_degree = 77`` (2030 Lebedev points per shell), ``rmax = 16.0``
-and ``handymod_exponent = 0.34``. Set the reciprocal spacing ``dr`` and NUFFT
-tolerance separately. Explicit input values override the compiled defaults.
+``radial.handymod_exponent``, including values below one. A larger radial and
+angular recipe uses ``radial.npts = 50``, ``angular.degree = 77`` (2030 Lebedev
+points per shell), ``radial.rmax = 16.0`` and ``radial.handymod_exponent = 0.34``.
+These paths are relative to ``grid.molecular``. Set the reciprocal spacing ``dr``
+and NUFFT tolerance in ``grid.molecular``. Explicit input values override the compiled defaults.
 The mapping requires ``rmax > 2**handymod_exponent - 1`` in bohr; its constructor
 rejects incompatible radial bounds.
 
-Unknown keys and keys for another grid kind are rejected. Native closure and
-solver validation determines which numerical options are available.
+``grid.kind`` is the only setting directly under ``[grid]``. Radial, Cartesian
+and molecular settings live under ``[grid.radial]``, ``[grid.cartesian]`` and
+``[grid.molecular]`` respectively. The groups can coexist, so changing only
+``kind`` switches grids while retaining each grid's settings. All groups are
+validated and preserved in written files; printed tables show only the active
+grid. Move the settings of older flat ``[grid]`` inputs into the matching group.
+The bulk solvent's ``solvent.grid`` settings retain their existing layout.
+
+Within ``grid.molecular``, radial settings live under ``[grid.molecular.radial]``
+and angular settings under ``[grid.molecular.angular]``. The former molecular
+keys ``nrad`` and ``angular_degree`` become ``radial.npts`` and ``angular.degree``;
+move ``rmax`` and ``handymod_exponent`` into the radial group as well. Partition,
+pruning and reciprocal-grid settings remain directly under ``[grid.molecular]``.
+
+Molecular partitions are independent of the radial and angular recipe:
+
+* ``becke``: size-adjusted Becke partition; ``becke_k >= 1`` controls the
+  polynomial iteration count (default 3).
+* ``ssf``: Stratmann-Scuseria-Frisch partition with a C3 switch and regions of
+  exactly zero weight; ``ssf_a`` is the switch half-width in ``(0, 1]`` (default 0.64).
+* ``pvoronoi``: fuzzy power-Voronoi partition with a C-infinity switch and
+  regions of exactly zero weight; ``power_width > 0`` sets the power-coordinate
+  half-width in bohr squared (default 1.0).
+
+Only the selected partition's switch parameter is used. The switch parameters
+can coexist in the molecular table, so changing ``partition`` is enough to
+compare schemes. ``weight_pruning_cutoff`` removes points with smaller absolute
+integration weights (bohr cubed); ``partition_pruning_cutoff`` removes points with
+smaller dimensionless owner-partition weights. Set both to zero to remove only
+exactly zero-weight points. Angular degree remains constant across radial shells.
+
+Unknown keys, including old flat grid settings, are rejected. Native closure
+and solver validation determines which numerical options are available.
 
 Checkpoints and warm starts
 ---------------------------

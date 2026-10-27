@@ -23,23 +23,35 @@ q = [
 
 [grid]
 kind = "molecular"
-nrad = 50
-angular_degree = 35
+
+[grid.molecular]
+partition = "pvoronoi"  # "becke", "ssf", "pvoronoi"
+becke_k = 3
+ssf_a = 0.64
+power_width = 1.0  # bohr^2
+weight_pruning_cutoff = 1e-10  # bohr^3; 0 keeps all nonzero weights
+partition_pruning_cutoff = 0.0
+nufft_tolerance = 1e-6
+
+[grid.molecular.radial]
+npts = 50
 rmax = 16.0  # bohr
 handymod_exponent = 0.34
-nufft_tolerance = 1e-6
+
+[grid.molecular.angular]
+degree = 35
 
 [convergence]
 tolerance = 1e-9
 
 [solver]
-name = "hybrid"
+name = "jfnk"
 
 [solvent]
 name = "water"
 temperature = 298.15  # K
 theory = "RISM"
-closure = "KH"
+closure = "PSE2"
 
 [solvent.convergence]
 tolerance = 1e-11
