@@ -199,12 +199,13 @@ Every combination below builds and passes the full test suite in [CI](https://gi
 | Linux x86_64 (Ubuntu 24.04)   | meson, CMake   | meson, CMake       | meson, CMake     | meson, CMake        | 3.10, 3.13 |
 | Linux arm64 (Ubuntu 24.04)    | meson, CMake   | meson, CMake       | –                | –                   | 3.13       |
 | macOS arm64 (macOS 15)        | meson, CMake   | meson, CMake<sup>1</sup>      | –                | –                   | 3.13       |
-| Windows x86_64 ([MSYS2](https://www.msys2.org) UCRT64) | meson, CMake<sup>2</sup>  | –                  | –                | –                   | –          |
+| Windows x86_64                | meson, CMake<sup>2</sup>  | –                  | meson, CMake<sup>3</sup> | –                   | –          |
 
 <sup>1)</sup> With clang 19 and libc++ as the C/C++ compilers.
-<sup>2)</sup> MSYS2 ships only its current GCC, at present 16.x.
+<sup>2)</sup> [MSYS2](https://www.msys2.org) UCRT64, which ships only its current GCC, at present 16.x.
+<sup>3)</sup> Native toolchain with icx and Visual Studio 2022; static library only, meson with `-Ddefault_library=static`.
 
-- **BLAS/LAPACK:** reference LAPACK (Linux, GCC), MKL (ifx, ifort), OpenBLAS (conda-forge, Windows), Accelerate (macOS)
+- **BLAS/LAPACK:** reference LAPACK (Linux, GCC), MKL (ifx, ifort), OpenBLAS (conda-forge, MSYS2), Accelerate (macOS)
 - **ILP64:** 64-bit integer BLAS/LAPACK with GCC 15 and OpenBLAS on Linux x86_64
 - **Debug:** GCC 14 debug build with runtime checks (`-fcheck=bounds,do,mem,pointer`, `_GLIBCXX_ASSERTIONS`) on Linux x86_64
 - **Python:** the bindings are tested against PySCF, both from a meson build and as a pip-installed package

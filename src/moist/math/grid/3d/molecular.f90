@@ -22,6 +22,8 @@ module moist_math_grid_3d_molecular
                                       integrand_3d, check_trafo_blocks
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
+   use moist_math_fft_finufft, only: finufft_default_opts, finufft_makeplan, finufft_setpts, &
+                                     finufft_execute, finufft_destroy
    implicit none(type, external)
    private
 
@@ -1772,7 +1774,6 @@ contains
       type(finufft_opts) :: opts
       real(c_double) :: dummy(1)
       real(wp) :: coord_span
-      external :: finufft_makeplan, finufft_setpts, finufft_default_opts
 
       if (.not. associated(self%grid)) then
          call fatal_error(error, "molecular trafo: not bound to a grid")
@@ -1952,7 +1953,6 @@ contains
       class(moist_math_grid_3d_molecular_trafo_type), intent(inout) :: self
 
       integer :: ier
-      external :: finufft_destroy
 
       if (self%plan_r2k /= 0_int64) then
          call finufft_destroy(self%plan_r2k, ier)
@@ -2067,7 +2067,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: it, nv, ier
-      external :: finufft_execute
 
       call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return
@@ -2105,7 +2104,6 @@ contains
 
       integer :: it, nv, ier
       real(wp) :: scale
-      external :: finufft_execute
 
       call molecular_trafo_check_ready(self, shape(f_r), shape(f_k), error)
       if (allocated(error)) return

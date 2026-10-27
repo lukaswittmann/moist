@@ -21,7 +21,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # icx/icpx default to a fast FP model, like ifx
 foreach(lang C CXX)
-  if(CMAKE_${lang}_COMPILER_ID MATCHES "Intel")
+  if(CMAKE_${lang}_COMPILER_ID MATCHES "Intel" AND WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:${lang}>:/fp:precise>)
+  elseif(CMAKE_${lang}_COMPILER_ID MATCHES "Intel")
     add_compile_options($<$<COMPILE_LANGUAGE:${lang}>:-fp-model=precise>)
   endif()
 endforeach()
@@ -197,7 +199,11 @@ list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 
 # src/moist/data at -O0
 file(GLOB moist_data_srcs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/data/*.f90")
-set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel" AND WIN32)
+  set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS /Od)
+else()
+  set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+endif()
 
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
@@ -226,7 +232,11 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
+  if(WIN32)
+    set(MOIST_INTEL_FFLAGS /traceback /fp:precise /fpscomp:logicals /Qopenmp-simd-)
+  else()
+    set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
+  endif()
   target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
