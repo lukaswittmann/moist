@@ -118,7 +118,7 @@ contains
          & "[convergence_typo]", '"convergence.tolerance" = 1e-8', "[grid]", "[system]", "[potential]", &
          & "[potential.ec]", "[potential]"]
       character(len=40), parameter :: second(10) = [character(len=40) :: &
-         & "", "", "", "", "", "nx = 16", 'solvent = "water"', 'environment = "gas"', "range_scale = 2.0", &
+         & "", "", "", "", "", "nx = 16", 'solvent = "water"', 'environment = "gas"', "outer_distance = 2.0", &
          & 'lj_fallback = "uff"']
 
       do i = 1, size(bad)
@@ -760,7 +760,7 @@ contains
       call check(error, stat, 0)
       if (allocated(error)) return
       write (unit, "(a)") "[potential]", 'charges = "none"', "[solvent.potential]", 'charges = "ec"', &
-         & "[solvent.potential.ec]", "range_scale = 2.0"
+         & "[solvent.potential.ec]", "outer_distance = 2.0"
       close (unit)
       call input%read_file(path, err, strict=.true.)
       call remove_input(path)
@@ -787,16 +787,15 @@ contains
       if (allocated(error)) return
       call new(mol, [17], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), charge=-1.0_wp)
       call input%init_defaults()
-      call check(error, input%potential%ec%exclusion_start == 9.0_wp &
-         & .and. input%potential%ec%exclusion_end == 11.0_wp &
-         & .and. input%potential%ec%restraint_strength == 0.01_wp, more="EC defaults differ from the EC term")
+      call check(error, input%potential%ec%inner_scale == 1.0_wp &
+         & .and. input%potential%ec%outer_distance == 5.0_wp .and. input%potential%ec%switch_width == 1.0_wp &
+         & .and. input%potential%ec%restraint_strength == 1.0e-4_wp, more="EC defaults differ from the EC term")
       if (allocated(error)) return
       open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_start = 1.5", &
-         & "exclusion_end = 3.5", &
-         & "range_scale = 4.0", "long_range_bias = 0.5", "restraint_strength = -1.0", "charge_penalty = 0.2"
+      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "inner_scale = 1.5", &
+         & "outer_distance = 3.5", "switch_width = 0.5", "restraint_strength = -1.0", "charge_penalty = 0.2"
       close (unit)
       call input%read_file(path, err, strict=.true.)
       if (.not. allocated(err)) call input%write_file(path, err)
@@ -804,9 +803,9 @@ contains
       call remove_input(path)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, input%potential%ec%exclusion_start == 1.5_wp &
-         & .and. input%potential%ec%exclusion_end == 3.5_wp .and. input%potential%ec%range_scale == 4.0_wp &
-         & .and. input%potential%ec%long_range_bias == 0.5_wp .and. input%potential%ec%restraint_strength == -1.0_wp &
+      call check(error, input%potential%ec%inner_scale == 1.5_wp &
+         & .and. input%potential%ec%outer_distance == 3.5_wp .and. input%potential%ec%switch_width == 0.5_wp &
+         & .and. input%potential%ec%restraint_strength == -1.0_wp &
          & .and. input%potential%ec%charge_penalty == 0.2_wp, more="EC fit settings not read")
       if (allocated(error)) return
 
@@ -827,17 +826,17 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call input%init_defaults()
-      call check(error, input%potential%ec%exclusion_start == 9.0_wp &
-         & .and. input%potential%ec%exclusion_end == 11.0_wp, more="EC exclusion defaults not restored")
+      call check(error, input%potential%ec%inner_scale == 1.0_wp &
+         & .and. input%potential%ec%outer_distance == 5.0_wp, more="EC shell defaults not restored")
       if (allocated(error)) return
       open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_radius = 1.5"
+      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_start = 9.0"
       close (unit)
       call input%read_file(path, err, strict=.true.)
       call remove_input(path)
-      call check(error, allocated(err), more="obsolete EC exclusion_radius accepted")
+      call check(error, allocated(err), more="obsolete EC exclusion_start accepted")
       if (allocated(error)) return
       call check(error, index(err%message, "Unknown") > 0, more=err%message)
    end subroutine check_ec_settings

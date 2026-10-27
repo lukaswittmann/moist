@@ -2,6 +2,7 @@
 module test_moz_3d
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
+   use mctc_io_convert, only: aatoau
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
@@ -71,8 +72,8 @@ contains
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
       integer :: i
-      potential%exclusion_start = 0.1_wp
-      potential%exclusion_end = 0.2_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) then
@@ -271,8 +272,8 @@ contains
       character(len=96) :: walks(3)
       integer :: kind
 
-      potential%exclusion_start = 0.1_wp
-      potential%exclusion_end = 0.2_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
@@ -364,8 +365,8 @@ contains
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
 
-      potential%exclusion_start = 0.1_wp
-      potential%exclusion_end = 0.2_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)

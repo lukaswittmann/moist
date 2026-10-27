@@ -852,8 +852,8 @@ contains
          case (1)
             call model%potential%add(charges, err)
          case (2)
-            ec%exclusion_start = 1.5_wp
-            ec%exclusion_end = 3.0_wp
+            ec%radii = [1.5_wp, 1.5_wp, 1.5_wp]
+            ec%switch_width = 1.5_wp
             ec%charge_penalty = 0.0_wp
             call model%potential%add(ec, err)
          case (3)
