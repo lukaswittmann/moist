@@ -28,6 +28,7 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("requirements_and_refresh", check_requirements), &
+         & new_unittest("exclusion_interval", check_exclusion_interval), &
          & new_unittest("long_range_and_restraints", check_restraints), &
          & new_unittest("fit_adjoint_fd", check_adjoint), &
          & new_unittest("active_constraint_adjoint_fd", check_active_adjoint), &
@@ -61,6 +62,56 @@ contains
          & 0.2_wp, 6.0_wp, -2.0_wp, -0.3_wp, -6.0_wp, 1.0_wp], [3, 12])
       grid%w = [(0.3_wp + 0.1_wp*real(i, wp), i=1, 12)]
    end subroutine fixture
+
+   !> Check default exclusion weights against an explicitly weighted fit
+   !>
+   !> @param[out] error Test failure
+   subroutine check_exclusion_interval(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid, weighted
+      type(ec_charges_type) :: ec, control
+      type(moist_error), allocatable :: err
+      real(wp), allocatable :: q(:), expected(:)
+      real(wp) :: phi(5), bounds(2, 5)
+      integer :: i
+
+      call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, -2.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
+      grid%ngrid = 5
+      allocate (grid%xyz(3, 5), source=0.0_wp)
+      grid%xyz(1, :) = [8.0_wp, 9.0_wp, 10.0_wp, 11.0_wp, 12.0_wp]
+      grid%w = [1.0_wp, 1.0_wp, 1.0_wp, 1.0_wp, 1.0_wp]
+      phi = [100.0_wp, 100.0_wp, 0.3_wp, -0.1_wp, 0.2_wp]
+      ec%long_range_bias = 0.0_wp
+      ec%charge_penalty = 0.0_wp
+      call check(error, ec%exclusion_start == 9.0_wp .and. ec%exclusion_end == 11.0_wp, &
+         & more="EC exclusion defaults changed")
+      if (allocated(error)) return
+      call fit_values(ec, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      weighted = grid
+      weighted%w = [0.0_wp, 0.0_wp, 0.5_wp, 1.0_wp, 1.0_wp]
+      control = ec
+      control%exclusion_start = 0.1_wp
+      control%exclusion_end = 0.2_wp
+      call fit_values(control, mol, weighted, phi, expected, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_close(error, q, expected, 1.0e-12_wp, "EC 9-11 bohr exclusion weights")
+      if (allocated(error)) return
+
+      bounds = reshape([0.0_wp, 11.0_wp, -1.0_wp, 11.0_wp, 9.0_wp, 9.0_wp, &
+         & 11.0_wp, 9.0_wp, 9.0_wp, ieee_value(1.0_wp, ieee_quiet_nan)], [2, 5])
+      do i = 1, size(bounds, 2)
+         ec%exclusion_start = bounds(1, i)
+         ec%exclusion_end = bounds(2, i)
+         call ec%update(mol, err)
+         call check(error, allocated(err), more="EC accepted invalid exclusion endpoints")
+         if (allocated(error)) return
+      end do
+   end subroutine check_exclusion_interval
 
    !> Analytic host potential with nonzero fit residuals
    !>
@@ -176,6 +227,8 @@ contains
       class(coupling_request_type), allocatable :: item
       real(wp), allocatable :: phi(:), dphi(:, :), q(:), q_old(:), got(:)
       integer :: phase
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call fixture(mol, grid)
       call host_field(grid, phi, dphi)
       call check(error,.not. allocated(ec%reference_charges), more="default EC requires no supplied charges")
@@ -198,10 +251,10 @@ contains
          if (allocated(error)) return
          item = coupling%request()
          call check(error, item%name() == "point_potential" .and. item%is_missing("phi"), &
-            more="wrong potential request")
+                    more="wrong potential request")
          if (allocated(error)) return
          call check(error, item%is_missing("dphi_dr") .eqv. (phase == moist_phase_gradient), &
-            more="wrong derivative phase")
+                    more="wrong derivative phase")
          if (allocated(error)) return
          call check(error,.not. coupling%next(), more="EC registered an extra request")
          if (allocated(error)) return
@@ -301,7 +354,8 @@ contains
       grid%xyz = reshape([-2.2_wp, 0.0_wp, 0.0_wp, 2.2_wp, 0.0_wp, 0.0_wp, &
          & -8.0_wp, 0.0_wp, 0.0_wp, 8.0_wp, 0.0_wp, 0.0_wp], [3, 4])
       grid%w = [1.0_wp, 1.0_wp, 512.0_wp, 512.0_wp]
-      ec%exclusion_radius = 0.1_wp
+      ec%exclusion_start = 0.1_wp
+      ec%exclusion_end = 0.2_wp
       ec%restraint_strength = 1.0e-8_wp
       ec%charge_penalty = 0.0_wp
       ec%long_range_bias = 0.0_wp
@@ -383,6 +437,8 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.7_wp
       call adjoint_case(error, ec, 0)
    end subroutine check_adjoint
 
@@ -392,6 +448,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
       ! Lower bounds, negative kinks, releases and the all-fixed branch: check_bound_adjoint, check_bounds_fit
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       ec%charge_penalty = 0.0_wp
       ec%upper_bounds = [0.03_wp, 10.0_wp, 10.0_wp]
       call adjoint_case(error, ec, 1)
@@ -414,6 +472,8 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(ec_charges_type) :: ec, bounded
       real(wp), allocatable :: phi(:), free(:), q(:)
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call fixture(mol, grid)
       call charge_field(mol, grid, [2.0_wp, -1.0_wp, -0.5_wp], phi)
       ec%charge_penalty = 0.0_wp
@@ -571,6 +631,8 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       ec%charge_penalty = 0.0_wp
       ec%lower_bounds = [-10.0_wp, -0.2_wp, -10.0_wp]
       call adjoint_case(error, ec, 1, 2, -0.2_wp)
@@ -739,6 +801,8 @@ contains
       type(ec_charges_type) :: ec
       type(coupling_type) :: coupling
       real(wp), allocatable :: phi(:), q(:)
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call fixture(mol, grid)
       call ec%update_grid(grid, err)
       call check(error, allocated(err), more="unupdated EC term built a fit")
@@ -773,12 +837,14 @@ contains
       call check(error, allocated(err), more="negative quadrature weights accepted")
       if (allocated(error)) return
       grid%w = 1.0_wp
-      ec%exclusion_radius = 100.0_wp
+      ec%exclusion_start = 100.0_wp
+      ec%exclusion_end = 200.0_wp
       call ec%update(mol, err)
       if (.not. allocated(err)) call ec%update_grid(grid, err)
       call check(error, allocated(err), more="fully excluded fit accepted")
       if (allocated(error)) return
-      ec%exclusion_radius = 1.0_wp
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       mol%charge = 0.7_wp
       phi = grid%xyz(1, :)*0.1_wp
@@ -824,6 +890,8 @@ contains
       type(coupling_type), target :: coupling
       real(wp), allocatable :: sr(:, :), lr(:, :)
       complex(wp), allocatable :: uk(:, :)
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call new_custom_lj(lj, sigma_u, eps_u, err)
       if (.not. allocated(err)) call pot%add(lj, err)
       if (.not. allocated(err)) call pot%add(ec, err)
@@ -866,6 +934,8 @@ contains
       real(wp), parameter :: h = 1.0e-4_wp
       character(len=80) :: label
       integer :: probe(3), a, c, s, ip, g, route
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call make_solute(mol)
       mol%charge = 0.5_wp
       call make_solvent(solvent_mol)
@@ -908,7 +978,7 @@ contains
          call check(error, .false., more="EC pushed an item other than the potential adjoint")
          return
       end select
-      call check(error, .not. response%next(), more="the potential pushed more than the EC potential adjoint")
+      call check(error,.not. response%next(), more="the potential pushed more than the EC potential adjoint")
       if (allocated(error)) return
 
       ! Nuclear gradient, every component
@@ -999,6 +1069,8 @@ contains
       type(volume_adjoint_type) :: acc
       real(wp), allocatable :: phi(:), dphi(:, :), q(:), w_phi(:)
       real(wp) :: w_q(3)
+      ec%exclusion_start = 1.0_wp
+      ec%exclusion_end = 2.0_wp
       call fixture(mol, grid)
       call host_field(grid, phi, dphi)
       w_phi = 0.02_wp*grid%xyz(2, :)
@@ -1064,7 +1136,7 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ec%exclusion_radius = ieee_value(1.0_wp, ieee_quiet_nan)
+      ec%exclusion_start = ieee_value(1.0_wp, ieee_quiet_nan)
       call ec%update(mol, err)
       call check(error, allocated(err), more="EC accepted a nonfinite exclusion radius")
       if (allocated(error)) return

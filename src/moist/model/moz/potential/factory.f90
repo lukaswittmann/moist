@@ -197,9 +197,9 @@ contains
       self%mixing = "lorentz-berthelot"
       self%ng_split = .true.
       self%alpha = 1.0_wp
-      if (allocated(self%q)) deallocate(self%q)
-      if (allocated(self%sigma)) deallocate(self%sigma)
-      if (allocated(self%epsilon)) deallocate(self%epsilon)
+      if (allocated(self%q)) deallocate (self%q)
+      if (allocated(self%sigma)) deallocate (self%sigma)
+      if (allocated(self%epsilon)) deallocate (self%epsilon)
       self%ec = ec
    end subroutine potential_defaults
 
@@ -221,7 +221,8 @@ contains
       call self%register_real_scalar("alpha", self%alpha)
       if (self%solvent_side) call self%register_string("mixing", self%mixing)
       if (has_choice(self%charges, "ec")) then
-         call self%register_real_scalar("ec.exclusion_radius", self%ec%exclusion_radius)
+         call self%register_real_scalar("ec.exclusion_start", self%ec%exclusion_start)
+         call self%register_real_scalar("ec.exclusion_end", self%ec%exclusion_end)
          call self%register_real_scalar("ec.range_scale", self%ec%range_scale)
          call self%register_real_scalar("ec.long_range_bias", self%ec%long_range_bias)
          call self%register_real_scalar("ec.restraint_strength", self%ec%restraint_strength)

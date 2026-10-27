@@ -95,6 +95,8 @@ module moist_math_grid_3d_factory
       real(wp) :: dr = 0.6_wp, kbuffer = 2.0_wp
       !> Requested FINUFFT relative tolerance, positive
       real(wp) :: nufft_tolerance = 1.0e-10_wp
+      !> FINUFFT internal upsampling factor, zero for automatic or greater than one
+      real(wp) :: nufft_upsampfac = 0.0_wp
    contains
       procedure :: init_defaults => molecular_defaults
       procedure :: register_entries => molecular_entries
@@ -177,6 +179,7 @@ contains
          allocate (molecular)
          call new_molecular_point_grid(molecular, error, recipe=recipe, dr=params%molecular%dr, &
             & kbuffer=params%molecular%kbuffer, nufft_tol=params%molecular%nufft_tolerance, partition=scheme, &
+            & nufft_upsampfac=params%molecular%nufft_upsampfac, &
             & becke_k=becke_k, ssf_a=ssf_a, power_width=power_width, &
             & weight_threshold=params%molecular%weight_pruning_cutoff, pruning_threshold=params%molecular%partition_pruning_cutoff)
          if (.not. allocated(error)) call move_alloc(molecular, grid)
@@ -347,6 +350,7 @@ contains
       self%dr = defaults%dr
       self%kbuffer = defaults%kbuffer
       self%nufft_tolerance = defaults%nufft_tolerance
+      self%nufft_upsampfac = defaults%nufft_upsampfac
    end subroutine molecular_defaults
 
    !> Register molecular grid settings and print the selected partition controls
@@ -369,6 +373,7 @@ contains
       call self%register_real_scalar("dr", self%dr, level=2)
       call self%register_real_scalar("kbuffer", self%kbuffer)
       call self%register_real_scalar("nufft_tolerance", self%nufft_tolerance)
+      call self%register_real_scalar("nufft_upsampfac", self%nufft_upsampfac)
    end subroutine molecular_entries
 
    !> Check molecular resolution, partition and pruning settings
@@ -386,6 +391,9 @@ contains
       else if (.not. positive(self%dr) .or. &
          & .not. nonnegative(self%kbuffer) .or. .not. positive(self%nufft_tolerance)) then
          call fatal_error(error, "Invalid grid.molecular reciprocal-grid settings")
+      else if (.not. ieee_is_finite(self%nufft_upsampfac) .or. self%nufft_upsampfac < 0.0_wp .or. &
+         & (self%nufft_upsampfac > 0.0_wp .and. self%nufft_upsampfac <= 1.0_wp)) then
+         call fatal_error(error, "grid.molecular.nufft_upsampfac must be 0 (automatic) or greater than 1")
       else if (self%becke_k < 1 .or. .not. positive(self%ssf_a) .or. self%ssf_a > 1.0_wp .or. &
          & .not. positive(self%power_width)) then
          call fatal_error(error, "grid.molecular needs becke_k >= 1, ssf_a in (0, 1] and positive power_width (bohr**2)")

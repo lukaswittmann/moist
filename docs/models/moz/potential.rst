@@ -126,7 +126,10 @@ The fitted charges enter the Ng split; the full field remains the host's potenti
 
 The normalized fitting weights are proportional to the volume quadrature weights, a smooth nuclear exclusion mask, and ``1 + long_range_bias * R**2 / (R**2 + range_scale**2)``, where ``R`` is the distance from the nuclear centroid.
 The default ``long_range_bias = 1`` and ``range_scale = 5`` bohr increase the relative weight of distant samples up to a factor of two.
-Points within ``exclusion_radius = 1`` bohr of any nucleus are excluded; a quintic switch reaches full weight at twice that radius, with continuous first and second derivatives.
+Points within ``exclusion_start = 9`` bohr of any nucleus are excluded; a quintic switch
+reaches one at ``exclusion_end = 11`` bohr, with continuous first and second derivatives.
+The switches are multiplied over all nuclei. Both radii must be finite and satisfy
+``0 < exclusion_start < exclusion_end``. The fitting grid must extend beyond the exclusion region.
 
 ``restraint_strength`` is ``lambda``, default 0.01/bohr**2, and must be positive.
 ``reference_charges`` can supply one reference charge per atom; when absent, the neutral-atom reference is shifted uniformly to ``Q / natom``.

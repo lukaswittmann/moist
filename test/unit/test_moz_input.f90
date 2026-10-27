@@ -161,7 +161,7 @@ contains
             & "[grid]", 'kind = "'//trim(kinds(dim))//'"', &
             & "[grid.radial]", "npts = 64", "dr = 0.2", &
             & "[grid.cartesian]", "nx = 12", "ny = 14", "nz = 16", "dr = 0.9", "margin = 3.0", &
-            & "[grid.molecular]", "dr = 1.1", 'partition = "SSF"', &
+            & "[grid.molecular]", "dr = 1.1", 'partition = "SSF"', "nufft_upsampfac = 1.5", &
             & "[grid.molecular.radial]", "npts = 24", "rmax = 8.0", "handymod_exponent = 0.7", &
             & "[grid.molecular.angular]", "degree = 31"
          call check(error, stat, 0)
@@ -184,6 +184,7 @@ contains
             & .and. input%grid%molecular%radial%npts == 24 .and. input%grid%molecular%radial%rmax == 8.0_wp &
             & .and. input%grid%molecular%radial%handymod_exponent == 0.7_wp &
             & .and. input%grid%molecular%angular%degree == 31 .and. input%grid%molecular%dr == 1.1_wp &
+            & .and. input%grid%molecular%nufft_upsampfac == 1.5_wp &
             & .and. input%grid%molecular%partition == "ssf", "Grid groups lost their independent settings")
          if (allocated(error)) return
          call input%init_defaults()
@@ -192,6 +193,7 @@ contains
             & .and. input%grid%molecular%dr == 0.6_wp .and. input%grid%molecular%partition == "becke" &
             & .and. input%grid%molecular%radial%npts == 50 .and. input%grid%molecular%radial%rmax == 10.0_wp &
             & .and. input%grid%molecular%radial%handymod_exponent == 2.0_wp &
+            & .and. input%grid%molecular%nufft_upsampfac == 0.0_wp &
             & .and. input%grid%molecular%angular%degree == 17, &
             & "Grid defaults retained earlier input values")
          if (allocated(error)) return
@@ -210,6 +212,8 @@ contains
       type(structure_type) :: mol
       integer :: unit, stat, variant
       integer, parameter :: schemes(3) = [partition_becke, partition_ssf, partition_pvoronoi]
+      real(wp), parameter :: upsampfac(3) = [0.0_wp, 1.25_wp, 2.0_wp]
+      character(len=4), parameter :: factors(3) = ["0.0 ", "1.25", "2.0 "]
       character(len=8), parameter :: names(3) = ["BECKE   ", "SsF     ", "pvoronoi"]
       character(len=*), parameter :: path = "moist-test-moz-input-partitions.toml"
 
@@ -222,7 +226,8 @@ contains
             & "[grid]", 'kind = "Molecular"', "[grid.molecular]", &
             & 'partition = "'//trim(names(variant))//'"', "becke_k = 4", "ssf_a = 0.5", "power_width = 0.8", &
             & "weight_pruning_cutoff = 2e-14", "partition_pruning_cutoff = 1e-9", "dr = 1.2", "kbuffer = 1.5", &
-            & "nufft_tolerance = 2e-6", "[grid.molecular.radial]", "npts = 8", "rmax = 3.0", &
+            & "nufft_tolerance = 2e-6", "nufft_upsampfac = "//factors(variant), &
+            & "[grid.molecular.radial]", "npts = 8", "rmax = 3.0", &
             & "handymod_exponent = 1.0", "[grid.molecular.angular]", "degree = 17"
          call check(error, stat, 0)
          if (allocated(error)) return
@@ -255,6 +260,7 @@ contains
             call check(error, grid%ngrid > 0 .and. all(grid%nrad_per_atom == 8) .and. all(grid%nang_per_atom == 110) &
                & .and. grid%get_dr() == 1.2_wp .and. grid%get_kbuffer() == 1.5_wp &
                & .and. grid%get_nufft_tol() == 2.0e-6_wp .and. grid%get_weight_threshold() == 2.0e-14_wp &
+               & .and. grid%get_nufft_upsampfac() == upsampfac(variant) &
                & .and. grid%get_pruning_threshold() == 1.0e-9_wp, "Molecular grid did not use the input settings")
          class default
             call check(error, .false., "Molecular input constructed another grid kind")
@@ -284,14 +290,16 @@ contains
       type(model_moz_3d_input_type) :: input
       integer :: unit, stat, i
       character(len=*), parameter :: path = "moist-test-moz-input-invalid-grids.toml"
-      character(len=40), parameter :: bad(25) = [character(len=40) :: &
+      character(len=40), parameter :: bad(31) = [character(len=40) :: &
          & 'partition = "unknown"', "npts = 0", "degree = -1", "rmax = -1.0", &
          & "handymod_exponent = 0.0", "dr = 0.0", "kbuffer = -1.0", "nufft_tolerance = 0.0", &
          & "becke_k = 0", "ssf_a = 0.0", "ssf_a = 1.1", "power_width = 0.0", &
          & "weight_pruning_cutoff = -1.0", "partition_pruning_cutoff = -1.0", "partition_pruning_cutoff = 1.0", &
          & "nx = 1", "npts = 1", "dr = 0.6", "nrad = 50", &
          & "nrad = 50", "angular_degree = 17", "rmax = 10.0", "handymod_exponent = 2.0", &
-         & "weight_threshold = 1e-14", "pruning_threshold = 0.0"]
+         & "weight_threshold = 1e-14", "pruning_threshold = 0.0", &
+         & "nufft_upsampfac = -1.0", "nufft_upsampfac = 0.5", "nufft_upsampfac = 1.0", &
+         & "nufft_upsampfac = nan", "nufft_upsampfac = inf", "nufft_upsampfac = -inf"]
 
       do i = 1, size(bad)
          open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
@@ -779,20 +787,25 @@ contains
       if (allocated(error)) return
       call new(mol, [17], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), charge=-1.0_wp)
       call input%init_defaults()
-      call check(error, input%potential%ec%exclusion_radius == 1.0_wp &
+      call check(error, input%potential%ec%exclusion_start == 9.0_wp &
+         & .and. input%potential%ec%exclusion_end == 11.0_wp &
          & .and. input%potential%ec%restraint_strength == 0.01_wp, more="EC defaults differ from the EC term")
       if (allocated(error)) return
       open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_radius = 1.5", &
+      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_start = 1.5", &
+         & "exclusion_end = 3.5", &
          & "range_scale = 4.0", "long_range_bias = 0.5", "restraint_strength = -1.0", "charge_penalty = 0.2"
       close (unit)
       call input%read_file(path, err, strict=.true.)
+      if (.not. allocated(err)) call input%write_file(path, err)
+      if (.not. allocated(err)) call input%read_file(path, err, strict=.true.)
       call remove_input(path)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, input%potential%ec%exclusion_radius == 1.5_wp .and. input%potential%ec%range_scale == 4.0_wp &
+      call check(error, input%potential%ec%exclusion_start == 1.5_wp &
+         & .and. input%potential%ec%exclusion_end == 3.5_wp .and. input%potential%ec%range_scale == 4.0_wp &
          & .and. input%potential%ec%long_range_bias == 0.5_wp .and. input%potential%ec%restraint_strength == -1.0_wp &
          & .and. input%potential%ec%charge_penalty == 0.2_wp, more="EC fit settings not read")
       if (allocated(error)) return
@@ -812,6 +825,21 @@ contains
       call new_moz_3d_model(model, ctx, input, system, err)
       if (.not. allocated(err)) call model%update(mol, err)
       call check_moist_error(error, err)
+      if (allocated(error)) return
+      call input%init_defaults()
+      call check(error, input%potential%ec%exclusion_start == 9.0_wp &
+         & .and. input%potential%ec%exclusion_end == 11.0_wp, more="EC exclusion defaults not restored")
+      if (allocated(error)) return
+      open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
+      call check(error, stat, 0)
+      if (allocated(error)) return
+      write (unit, "(a)") "[potential]", 'charges = "ec"', "[potential.ec]", "exclusion_radius = 1.5"
+      close (unit)
+      call input%read_file(path, err, strict=.true.)
+      call remove_input(path)
+      call check(error, allocated(err), more="obsolete EC exclusion_radius accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Unknown") > 0, more=err%message)
    end subroutine check_ec_settings
 
    !> Read the checkpoint group and reject invalid names and intervals

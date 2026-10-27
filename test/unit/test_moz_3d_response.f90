@@ -852,7 +852,8 @@ contains
          case (1)
             call model%potential%add(charges, err)
          case (2)
-            ec%exclusion_radius = 1.5_wp
+            ec%exclusion_start = 1.5_wp
+            ec%exclusion_end = 3.0_wp
             ec%charge_penalty = 0.0_wp
             call model%potential%add(ec, err)
          case (3)
@@ -1034,7 +1035,7 @@ contains
       if (.not. allocated(err)) call host_response(model, [0.0_wp], .false., derivative, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, .not. allocated(derivative), more="fixed potential returned a host response")
+      call check(error,.not. allocated(derivative), more="fixed potential returned a host response")
    end subroutine fixed_terms
 
    subroutine geometry_cartesian(error)
@@ -1321,7 +1322,7 @@ contains
                   if (allocated(error)) return
                   dot = dot + sum(wq*dq)
                else
-                  call check(error, .not. response%next(), more="fixed terms returned a host response")
+                  call check(error,.not. response%next(), more="fixed terms returned a host response")
                   if (allocated(error)) return
                end if
                if (direction == 1 .and. .not. compact) call current_energy(mol, e0)

@@ -20,7 +20,7 @@ module moist_model_moz_potential_electrostatic_ec
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_lapack, only: potrf, potrs
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len, charge_label_len
-   !$ use omp_lib, only: omp_get_thread_num
+!$ use omp_lib, only: omp_get_thread_num
    implicit none(type, external)
    private
    public :: ec_charges_type
@@ -58,8 +58,10 @@ module moist_model_moz_potential_electrostatic_ec
 
       !* ---------------------------- EC LR charge fitting --------------------------- *!
 
-      !> Nuclear exclusion radius; full weight beyond twice this radius, bohr
-      real(wp) :: exclusion_radius = 1.0_wp
+      !> Distance from each nucleus where the exclusion switch starts, bohr
+      real(wp) :: exclusion_start = 9.0_wp
+      !> Distance from each nucleus where the exclusion switch reaches one, bohr
+      real(wp) :: exclusion_end = 11.0_wp
       !> Distance scale of the far-field weighting, bohr
       real(wp) :: range_scale = 5.0_wp
       !> Far-field weight increases from 1 to 1 + long_range_bias
@@ -199,18 +201,22 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Unused solvent id
       integer, intent(in), optional :: solvent_id
-      real(wp) :: settings(5)
+      real(wp) :: settings(6)
       integer :: i, n
       if (allocated(self%fit)) deallocate (self%fit)
       if (allocated(self%atom_xyz)) deallocate (self%atom_xyz)
       if (allocated(self%reference)) deallocate (self%reference, self%threshold, self%lower, self%upper)
-      settings = [self%exclusion_radius, self%range_scale, self%long_range_bias, &
+      settings = [self%exclusion_start, self%exclusion_end, self%range_scale, self%long_range_bias, &
          & self%restraint_strength, self%charge_penalty]
       if (.not. all(ieee_is_finite(settings))) then
          call fatal_error(error, "EC fit settings must be finite")
          return
       end if
-      if (self%exclusion_radius <= 0.0_wp .or. self%range_scale <= 0.0_wp .or. &
+      if (self%exclusion_start <= 0.0_wp .or. self%exclusion_end <= self%exclusion_start) then
+         call fatal_error(error, "EC fit requires 0 < exclusion_start < exclusion_end (bohr)")
+         return
+      end if
+      if (self%range_scale <= 0.0_wp .or. &
          & self%long_range_bias < 0.0_wp .or. self%restraint_strength <= 0.0_wp .or. self%charge_penalty < 0.0_wp) then
          call fatal_error(error, "EC fit requires positive radii and restraint, nonnegative bias and penalty")
          return
@@ -352,7 +358,7 @@ contains
          g0 = (ib - 1)*block_size + 1
          g1 = min(ib*block_size, grid%ngrid)
          it = 1
-         !$ it = omp_get_thread_num() + 1
+!$       it = omp_get_thread_num() + 1
          call hessian_block(self, grid%xyz(:, g0:g1), weight(g0:g1), h_t(:, :, it))
       end do
       !$omp end parallel do
@@ -465,7 +471,8 @@ contains
       do i = 1, size(xyz, 2)
          product_switch = 1.0_wp
          do a = 1, size(self%atom_xyz, 2)
-            call exclusion_switch(self%exclusion_radius, norm2(xyz(:, i) - self%atom_xyz(:, a)), switch, deriv)
+            call exclusion_switch(self%exclusion_start, self%exclusion_end, &
+               & norm2(xyz(:, i) - self%atom_xyz(:, a)), switch, deriv)
             product_switch = product_switch*switch
          end do
          r = sum((xyz(:, i) - center)**2)
@@ -549,7 +556,7 @@ contains
       !$omp parallel do default(shared) schedule(static) num_threads(self%fit%nthreads) private(ib, g, a, it)
       do ib = 1, nblock
          it = 1
-         !$ it = omp_get_thread_num() + 1
+!$       it = omp_get_thread_num() + 1
          do g = (ib - 1)*block_size + 1, min(ib*block_size, size(y))
             if (self%fit%mask(g) <= 0.0_wp) cycle
             do a = 1, size(x_t, 1)
@@ -563,15 +570,19 @@ contains
 
    !> Smooth exclusion switch of one nucleus and its radial derivative
    !>
-   !> - Quintic smoothstep in t = (r - radius)/radius: zero inside the radius, one beyond twice it
+   !> - Quintic smoothstep in t = (r - start)/(end - start)
+   !> - Zero at or below start, one at or above end
    !>
-   !> @param[in]  radius  exclusion radius, bohr
+   !> @param[in]  start   start of the transition, bohr
+   !> @param[in]  end     end of the transition, bohr
    !> @param[in]  r       distance to the nucleus, bohr
    !> @param[out] switch  switch value
    !> @param[out] deriv   radial derivative, 1/bohr
-   pure subroutine exclusion_switch(radius, r, switch, deriv)
-      !> Exclusion radius
-      real(wp), intent(in) :: radius
+   pure subroutine exclusion_switch(start, end, r, switch, deriv)
+      !> Start of the transition
+      real(wp), intent(in) :: start
+      !> End of the transition
+      real(wp), intent(in) :: end
       !> Distance to the nucleus
       real(wp), intent(in) :: r
       !> Switch value
@@ -579,14 +590,14 @@ contains
       !> Radial derivative
       real(wp), intent(out) :: deriv
       real(wp) :: t
-      t = (r - radius)/radius
+      t = (r - start)/(end - start)
       switch = 0.0_wp
       deriv = 0.0_wp
       if (t <= 0.0_wp) return
       switch = 1.0_wp
       if (t >= 1.0_wp) return
       switch = t**3*(10.0_wp + t*(-15.0_wp + 6.0_wp*t))
-      deriv = 30.0_wp*t**2*(1.0_wp - t)**2/radius
+      deriv = 30.0_wp*t**2*(1.0_wp - t)**2/(end - start)
    end subroutine exclusion_switch
 
    !> Smooth exclusion switches and their radial derivatives
@@ -606,7 +617,8 @@ contains
       real(wp), intent(out) :: deriv(:)
       integer :: a
       do a = 1, size(switch)
-         call exclusion_switch(self%exclusion_radius, norm2(point - self%atom_xyz(:, a)), switch(a), deriv(a))
+         call exclusion_switch(self%exclusion_start, self%exclusion_end, &
+            & norm2(point - self%atom_xyz(:, a)), switch(a), deriv(a))
       end do
    end subroutine exclusion
 

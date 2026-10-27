@@ -71,7 +71,8 @@ contains
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
       integer :: i
-      potential%exclusion_radius = 0.1_wp
+      potential%exclusion_start = 0.1_wp
+      potential%exclusion_end = 0.2_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) then
@@ -134,7 +135,7 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call check(error, .not. coupling%next(), more="point_potential is the only request")
+      call check(error,.not. coupling%next(), more="point_potential is the only request")
       if (allocated(error)) return
 
       ! The test model allows one VV iteration: the energy fails in the solvent solve
@@ -216,7 +217,7 @@ contains
          model_grid => model%grid
          call check(error, model_grid%natom, 1)
          if (allocated(error)) return
-         call check(error, .not. allocated(model_grid%xi0), more="a point grid carries Gaussian widths")
+         call check(error,.not. allocated(model_grid%xi0), more="a point grid carries Gaussian widths")
          if (allocated(error)) return
          call check_grid_fields(error, model)
          if (allocated(error)) return
@@ -270,7 +271,8 @@ contains
       character(len=96) :: walks(3)
       integer :: kind
 
-      potential%exclusion_radius = 0.1_wp
+      potential%exclusion_start = 0.1_wp
+      potential%exclusion_end = 0.2_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
@@ -362,7 +364,8 @@ contains
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
 
-      potential%exclusion_radius = 0.1_wp
+      potential%exclusion_start = 0.1_wp
+      potential%exclusion_end = 0.2_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
@@ -450,7 +453,7 @@ contains
       call model%potential%add(charges, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, .not. model%potential%is_updated(), more="adding a term kept the potential updated")
+      call check(error,.not. model%potential%is_updated(), more="adding a term kept the potential updated")
       if (allocated(error)) return
       call check(error, model%potential%n_terms(), 2)
    end subroutine check_solvent_copy
@@ -707,7 +710,6 @@ contains
       params%solvent%maxiter = 1
    end function failing_params
 
-
    !> Getter guards precede the theory and preserve caller outputs
    !>
    !> Every getter meets a foreign coupling, a model that is not updated, an
@@ -831,7 +833,7 @@ contains
                call test_failed(error, trim(label)//": the refusal replaced the response type")
             end select
             if (allocated(error)) return
-            call check(error, .not. response%next(), &
+            call check(error,.not. response%next(), &
                & more=trim(label)//": the refusal appended a response item")
             if (allocated(error)) return
             deallocate (err)
@@ -844,7 +846,7 @@ contains
       end do
       call model%release_coupling(coupling)
       call foreign%release_coupling(other)
-      call check(error, .not. associated(coupling) .and. .not. associated(other))
+      call check(error,.not. associated(coupling) .and. .not. associated(other))
    end subroutine check_getter_guards
 
    !> Invoke one model getter for a common guard table
@@ -894,7 +896,7 @@ contains
 
       call check(error, model%atom_count(), 0)
       if (allocated(error)) return
-      call check(error, .not. model%is_updated())
+      call check(error,.not. model%is_updated())
       if (allocated(error)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call model%update(mol, err)
@@ -912,7 +914,7 @@ contains
       ! q stays unanswered; the full pass rewinds, so a staged walk offers it again
       call check(error, coupling%next(), more="atomic_charges must be pending")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="atomic_charges is the only request")
+      call check(error,.not. coupling%next(), more="atomic_charges is the only request")
       if (allocated(error)) return
       call new(mol, [integer ::], reshape([real(wp) ::], [3, 0]))
       call model%update(mol, err)
@@ -920,12 +922,12 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "at least one solute atom") > 0, more=err%message)
       if (allocated(error)) return
-      call check(error, .not. model%is_updated(), more="failed update kept valid status")
+      call check(error,.not. model%is_updated(), more="failed update kept valid status")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="failed update kept the staged walk")
+      call check(error,.not. coupling%next(), more="failed update kept the staged walk")
       if (allocated(error)) return
       call model%release_coupling(coupling)
-      call check(error, .not. associated(coupling))
+      call check(error,.not. associated(coupling))
    end subroutine check_update_guards
 
    !> Named model fields match the owned domain in both concrete grid types
@@ -944,7 +946,7 @@ contains
          call query%fetch(trim(names(i)))
          call model%list_fields(query)
          if (i == 5 .and. .not. allocated(model%grid%xi0)) then
-            call check(error, .not. query%found, more="unallocated xi0 was declared")
+            call check(error,.not. query%found, more="unallocated xi0 was declared")
             if (allocated(error)) return
             cycle
          end if

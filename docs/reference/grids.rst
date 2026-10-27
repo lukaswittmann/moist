@@ -89,6 +89,10 @@ Molecular engines require ``prepare(nv)`` before use, including after assignment
 Copying a prepared engine with ``allocate(source=)`` or polymorphic assignment is unsupported.
 
 ``molecular_grid_set_kgrid`` sets the reciprocal grid explicitly; omitted ``buffer`` and ``nufft_tol`` retain their current values.
+Both molecular constructors accept ``nufft_upsampfac``: ``0.0`` (default) lets
+FINUFFT choose its internal FFT upsampling factor; a finite value greater than
+one fixes it for both transform directions and both NUFFT routes.
+``grid%get_nufft_upsampfac()`` returns the requested setting.
 
 Nuclear derivatives
 ~~~~~~~~~~~~~~~~~~~

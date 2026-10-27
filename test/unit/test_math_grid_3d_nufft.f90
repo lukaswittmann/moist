@@ -58,6 +58,7 @@ contains
                   new_unittest("forward_matches_analytic_ft", test_forward_analytic), &
                   new_unittest("convolution_matches_analytic", test_convolution), &
                   new_unittest("type12_matches_type3", test_type12_vs_type3_molecular), &
+                  new_unittest("upsampling_factors", test_upsampling_factors), &
                   new_unittest("ft_lj_coulomb_nufft_vs_fft", test_ft_lj_coulomb) &
                   ]
    end subroutine collect_math_grid_3d_nufft
@@ -104,7 +105,7 @@ contains
       call probe_structure(mol)
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
       if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
-                                                         reciprocal=.false.)
+                                                               reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -219,6 +220,80 @@ contains
       call trafo%destroy()
       call mg%destroy()
    end subroutine test_roundtrip_diagonal
+
+   !> Compare both transform directions with discrete sums for automatic and fixed upsampling
+   !>
+   !> @param[out] error Test failure
+   subroutine test_upsampling_factors(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
+      type(mctc_error_type), allocatable :: merr
+      real(wp), allocatable :: f(:, :), g(:, :), expected_r(:)
+      complex(wp), allocatable :: fk(:, :), expected_k(:)
+      real(wp), parameter :: factors(4) = [0.0_wp, 1.25_wp, 1.5_wp, 2.0_wp]
+      real(wp), parameter :: tol = 1.0e-6_wp
+      real(wp) :: phase, strength, scale
+      integer :: variant, route, j, ip, ik
+
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call get_uniform_recipe(recipe, overrides, 8, 14, merr, rmax=3.0_wp)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      do variant = 1, size(factors)
+         call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
+            & dr=1.2_wp, kbuffer=1.0_wp, nufft_tol=tol, nufft_upsampfac=factors(variant))
+         if (.not. allocated(merr)) call mg%update(mol, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         allocate (f(mg%ngrid, 1), g(mg%ngrid, 1), expected_r(mg%ngrid), &
+            & fk(mg%npts_k, 1), expected_k(mg%npts_k))
+         ip = maxloc(mg%w, dim=1)
+         ik = mg%npts_k/3
+         strength = mg%w(ip)
+         scale = product(mg%get_kspacing())/(2.0_wp*pi)**3
+         do j = 1, mg%npts_k
+            phase = dot_product(mg%kpoint(j), mg%point(ip) - mg%get_kref())
+            expected_k(j) = strength*cmplx(cos(phase), -sin(phase), wp)
+         end do
+         do j = 1, mg%ngrid
+            phase = dot_product(mg%kpoint(ik), mg%point(j) - mg%get_kref())
+            expected_r(j) = scale*cos(phase)
+         end do
+         do route = 1, 2
+            call new_molecular_grid_trafo(trafo, mg, use_type12=route == 1)
+            call trafo%prepare(1, merr)
+            if (allocated(merr)) then
+               call test_failed(error, merr%message)
+               return
+            end if
+            f = 0.0_wp
+            f(ip, 1) = 1.0_wp
+            call forward(error, trafo, f, fk)
+            if (allocated(error)) return
+            call check(error, maxval(abs(fk(:, 1) - expected_k)) <= 10.0_wp*tol*strength, &
+               & "Forward NUFFT with configured upsampling differs from the discrete sum")
+            if (allocated(error)) return
+            fk = cmplx(0.0_wp, 0.0_wp, wp)
+            fk(ik, 1) = cmplx(1.0_wp, 0.0_wp, wp)
+            call backward(error, trafo, fk, g)
+            if (allocated(error)) return
+            call check(error, maxval(abs(g(:, 1) - expected_r)) <= 10.0_wp*tol*scale, &
+               & "Backward NUFFT with configured upsampling differs from the discrete sum")
+            if (allocated(error)) return
+            call trafo%destroy()
+         end do
+         deallocate (f, g, expected_r, fk, expected_k)
+      end do
+   end subroutine test_upsampling_factors
 
    !> Check forward transform of a nucleus-localised Gaussian against the analytic FT
    !>
@@ -517,7 +592,7 @@ contains
       call probe_structure(mol)
       call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
       if (.not. allocated(merr)) call new_molecular_point_grid(mg, merr, recipe=recipe, overrides=overrides, &
-                                                         reciprocal=.false.)
+                                                               reciprocal=.false.)
       if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)

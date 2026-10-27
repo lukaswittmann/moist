@@ -129,9 +129,19 @@ OPLS-AA uses the structure's bond graph and requires
   are left to later choices
 
 ``custom``, ``none`` and ``ec`` cover every atom and stand alone. With ``charges = "ec"``,
-``potential.ec`` takes the fit settings ``exclusion_radius`` and ``range_scale``
+``potential.ec`` takes the fit settings ``exclusion_start``, ``exclusion_end`` and ``range_scale``
 (bohr), ``long_range_bias``, ``restraint_strength`` and ``charge_penalty``; their
 defaults are those of ``ec_charges_type``.
+
+.. code-block:: toml
+
+   [potential.ec]
+   exclusion_start = 9.0   # bohr; zero fit weight at or below this distance from any nucleus
+   exclusion_end = 11.0    # bohr; each nuclear exclusion switch reaches one
+
+The exclusion switches use a smooth quintic transition and require
+``0 < exclusion_start < exclusion_end``. These replace the former
+``exclusion_radius`` setting, whose full-weight radius was twice its value.
 
 Both potential groups accept ``ng_split`` (default true) and ``alpha``
 (default ``1.0`` in inverse bohr). The bulk mixing choice also applies to UV
@@ -154,6 +164,7 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
    dr = 0.6            # bohr; controls the reciprocal lattice
    kbuffer = 2.0       # bohr
    nufft_tolerance = 1e-10
+   nufft_upsampfac = 0.0  # automatic FINUFFT internal upsampling
 
    [grid.molecular.radial]
    npts = 50
@@ -169,6 +180,12 @@ angular recipe uses ``radial.npts = 50``, ``angular.degree = 77`` (2030 Lebedev
 points per shell), ``radial.rmax = 16.0`` and ``radial.handymod_exponent = 0.34``.
 These paths are relative to ``grid.molecular``. Set the reciprocal spacing ``dr``
 and NUFFT tolerance in ``grid.molecular``. Explicit input values override the compiled defaults.
+``nufft_upsampfac`` defaults to ``0.0`` for FINUFFT's automatic choice; a finite
+value greater than one fixes its internal FFT upsampling factor. Common choices
+are ``1.25`` (smaller FFT and lower memory use, but wider spreading kernels) and
+``2.0`` (larger FFT, narrower kernels and tighter achievable accuracy).
+This setting leaves the molecular points and requested reciprocal grid unchanged.
+FINUFFT reports an error if the chosen factor cannot achieve ``nufft_tolerance``.
 The mapping requires ``rmax > 2**handymod_exponent - 1`` in bohr; its constructor
 rejects incompatible radial bounds.
 

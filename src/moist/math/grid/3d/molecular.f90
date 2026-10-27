@@ -157,6 +157,8 @@ module moist_math_grid_3d_molecular
       !> Transform inherits at `prepare` unless overridden
       !> See `default_nufft_tol` for cost and accuracy
       real(wp), private :: nufft_tol = default_nufft_tol
+      !> FINUFFT internal upsampling factor, zero for automatic or greater than one
+      real(wp), private :: nufft_upsampfac = 0.0_wp
       !> Symmetric period around an explicit phase reference
       logical, private :: centered_period = .false.
       !> Explicit reference offset from the molecular centroid, bohr
@@ -204,6 +206,8 @@ module moist_math_grid_3d_molecular
       procedure :: get_pruning_threshold => molecular_get_pruning_threshold
       !> Requested FINUFFT relative tolerance
       procedure :: get_nufft_tol => molecular_get_nufft_tol
+      !> Requested FINUFFT internal upsampling factor, zero for automatic
+      procedure :: get_nufft_upsampfac => molecular_get_nufft_upsampfac
       !> Reciprocal mode counts `[nkx, nky, nkz]`
       procedure :: get_kmodes => molecular_get_kmodes
       !> Reciprocal spacings `[dkx, dky, dkz]` (1/bohr)
@@ -315,8 +319,9 @@ contains
    !> @param[in] partition Optional partition scheme
    !> @param[in] power_width Optional power half-width, bohr**2
    !> @param[in] weight_threshold Optional weight pruning threshold, bohr**3
+   !> @param[in] nufft_upsampfac Optional FINUFFT upsampling factor, zero for automatic or greater than one
    subroutine new_molecular_point_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
-         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold)
+         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold, nufft_upsampfac)
       !> Grid configuration
       type(moist_math_grid_3d_molecular_type), intent(inout) :: self
       !> Configuration error
@@ -345,11 +350,14 @@ contains
       real(wp), intent(in), optional :: power_width
       !> Weight pruning threshold, bohr**3
       real(wp), intent(in), optional :: weight_threshold
+      !> FINUFFT internal upsampling factor
+      real(wp), intent(in), optional :: nufft_upsampfac
 
       call configure_molecular_grid(self, error, gaussian=.false., recipe=recipe, overrides=overrides, &
          & becke_k=becke_k, ssf_a=ssf_a, pruning_threshold=pruning_threshold, &
          & dr=dr, kbuffer=kbuffer, nufft_tol=nufft_tol, &
-         & reciprocal=reciprocal, partition=partition, power_width=power_width, weight_threshold=weight_threshold)
+         & reciprocal=reciprocal, partition=partition, power_width=power_width, weight_threshold=weight_threshold, &
+         & nufft_upsampfac=nufft_upsampfac)
    end subroutine new_molecular_point_grid
 
    !> Configure a molecular gaussian grid without realizing geometry
@@ -369,8 +377,9 @@ contains
    !> @param[in] power_width Optional power half-width, bohr**2
    !> @param[in] weight_threshold Optional weight pruning threshold, bohr**3
    !> @param[in] xi0_factor Optional gaussian width scale
+   !> @param[in] nufft_upsampfac Optional FINUFFT upsampling factor, zero for automatic or greater than one
    subroutine new_molecular_gaussian_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
-         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold, xi0_factor)
+         & dr, kbuffer, nufft_tol, reciprocal, partition, power_width, weight_threshold, xi0_factor, nufft_upsampfac)
       !> Grid configuration
       type(moist_math_grid_3d_molecular_type), intent(inout) :: self
       !> Configuration error
@@ -401,12 +410,14 @@ contains
       real(wp), intent(in), optional :: weight_threshold
       !> Gaussian width scale
       real(wp), intent(in), optional :: xi0_factor
+      !> FINUFFT internal upsampling factor
+      real(wp), intent(in), optional :: nufft_upsampfac
 
       call configure_molecular_grid(self, error, gaussian=.true., recipe=recipe, overrides=overrides, &
          & becke_k=becke_k, ssf_a=ssf_a, pruning_threshold=pruning_threshold, &
          & dr=dr, kbuffer=kbuffer, nufft_tol=nufft_tol, &
          & reciprocal=reciprocal, partition=partition, power_width=power_width, weight_threshold=weight_threshold, &
-         & xi0_factor=xi0_factor)
+         & xi0_factor=xi0_factor, nufft_upsampfac=nufft_upsampfac)
    end subroutine new_molecular_gaussian_grid
 
    !> Contract molecular point, weight, Gaussian-width and phase-reference adjoints
@@ -537,7 +548,7 @@ contains
    !> - `becke_k = 3` without SSF, `pruning_threshold = 0` (no partition
    !>   pruning), `weight_threshold = 1e-14` bohr**3, `xi0_factor = 1`
    !> - Point or Gaussian variant selected by the calling constructor
-   !> - `dr = 0.5` bohr, `kbuffer = 2` bohr, `nufft_tol = 1e-10`,
+   !> - `dr = 0.5` bohr, `kbuffer = 2` bohr, `nufft_tol = 1e-10`, `nufft_upsampfac = 0`,
    !>   `reciprocal = .true.`
    !>
    !> Integration grids: `default_element_recipes` per-element table
@@ -562,8 +573,9 @@ contains
    !> @param[in]  partition          Scheme constant; default Becke, or SSF when ssf_a is supplied
    !> @param[in]  power_width        Positive power-gap half-width in bohr**2; only with partition_pvoronoi
    !> @param[in]  weight_threshold   Nonnegative quadrature-weight cutoff in bohr**3; zero for exact-zero pruning
+   !> @param[in]  nufft_upsampfac     FINUFFT internal upsampling factor, zero for automatic or greater than one
    subroutine configure_molecular_grid(self, error, recipe, overrides, becke_k, ssf_a, pruning_threshold, &
-         & dr, kbuffer, nufft_tol, gaussian, xi0_factor, reciprocal, partition, power_width, weight_threshold)
+         & dr, kbuffer, nufft_tol, gaussian, xi0_factor, reciprocal, partition, power_width, weight_threshold, nufft_upsampfac)
       !> Configured grid
       type(moist_math_grid_3d_molecular_type), intent(inout) :: self
       !> Error handling
@@ -597,6 +609,8 @@ contains
       real(wp), intent(in), optional :: power_width
       !> Quadrature-weight pruning threshold
       real(wp), intent(in), optional :: weight_threshold
+      !> FINUFFT internal upsampling factor
+      real(wp), intent(in), optional :: nufft_upsampfac
 
       integer :: generation, scheme
 
@@ -638,6 +652,7 @@ contains
       if (present(dr)) self%dr = dr
       if (present(kbuffer)) self%kbuffer = kbuffer
       if (present(nufft_tol)) self%nufft_tol = nufft_tol
+      if (present(nufft_upsampfac)) self%nufft_upsampfac = nufft_upsampfac
       self%gaussian = gaussian
       if (present(xi0_factor)) self%xi0_factor = xi0_factor
       if (present(reciprocal)) self%auto_kgrid = reciprocal
@@ -742,6 +757,11 @@ contains
 
       call check_kgrid_settings(self%dr, self%kbuffer, self%nufft_tol, error)
       if (allocated(error)) return
+      if (.not. ieee_is_finite(self%nufft_upsampfac) .or. self%nufft_upsampfac < 0.0_wp .or. &
+         & (self%nufft_upsampfac > 0.0_wp .and. self%nufft_upsampfac <= 1.0_wp)) then
+         call fatal_error(error, "molecular domain: nufft_upsampfac must be 0 (automatic) or greater than 1")
+         return
+      end if
       if (.not. all(ieee_is_finite([self%pruning_threshold, self%xi0_factor, self%weight_threshold]))) then
          call fatal_error(error, "molecular domain: settings must be finite")
       else if (self%weight_threshold < 0.0_wp) then
@@ -1490,6 +1510,17 @@ contains
       nufft_tol = self%nufft_tol
    end function molecular_get_nufft_tol
 
+   !> Requested FINUFFT internal upsampling factor
+   !>
+   !> @param[in] self Grid instance
+   pure function molecular_get_nufft_upsampfac(self) result(value)
+      !> Grid instance
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Upsampling factor, zero for automatic
+      real(wp) :: value
+      value = self%nufft_upsampfac
+   end function molecular_get_nufft_upsampfac
+
    !* ================================================================================= *!
    !*                                      Destroy                                      *!
    !* ================================================================================= *!
@@ -1865,6 +1896,7 @@ contains
       end if
 
       call finufft_default_opts(opts)
+      opts%upsampfac = real(self%grid%nufft_upsampfac, c_double)
       ! CMCL modes: -N/2 .. N/2-1, x fastest
       opts%modeord = 0
       ! Explicit worker count: FINUFFT would otherwise take omp_get_max_threads
