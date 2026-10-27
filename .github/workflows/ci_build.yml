@@ -234,6 +234,7 @@ jobs:
       FC: ifx
       CC: icx
       CXX: icx
+      OMP_STACKSIZE: 8M
     steps:
       # Keep LF line endings in sources and test data
       - name: Disable autocrlf
