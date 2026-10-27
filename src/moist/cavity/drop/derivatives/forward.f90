@@ -563,7 +563,7 @@ contains
          ! Derivatives: dJ/dr_A via chain rule through all intermediates
          if (do_timing) call self%ctx%timer%start(h_cpj)
 
-         ! Coefficient alpha = 0.5 * w_a
+         ! Coefficient alpha = w_a
          alpha_coeff = self%param%phi_alpha
 
          ! Get LSF gradient g and Hessian H at projected point

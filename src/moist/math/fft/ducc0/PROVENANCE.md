@@ -2,7 +2,13 @@
 
 Origin: **ducc0** (Distinctly Useful Code Collection) by Martin Reinecke: https://gitlab.mpcdf.mpg.de/mtr/ducc (https://github.com/mreineck/ducc)
 Tag: `ducc0_0_39_1` (commit `0c0525521bc56d1b7bef8eb97a6debb6a3bfd33c`).
-Every file below is a byte-for-byte copy of `src/ducc0/<path>` at that tag; nothing was modified.
+Every file below is a byte-for-byte copy of `src/ducc0/<path>` at that tag, except for the patch listed under "Local modifications".
+
+## Local modifications
+
+- `infra/threading.cc`, `ducc_thread_pool::shutdown_locked()`: lock each worker's mutex before `notify_all()`.
+  Upstream sets `shutdown_` and notifies without that lock. A worker that has evaluated its wait predicate but has not yet blocked then misses the notify, and `join()` hangs forever.
+  This hit `moist_fft_release_threads()`, which shuts the pool down right after creating it.
 
 ## License
 

@@ -4,8 +4,8 @@ cc = meson.get_compiler('c')
 cxx = meson.get_compiler('cpp')
 fc_id = fc.get_id()
 
-# Treat Intel LLVM compiler as standard Intel compiler for compatibility
-if fc_id == 'intel-llvm'
+# Treat Intel LLVM and Windows (MSVC-style) Intel compilers as standard Intel compiler
+if fc_id in ['intel-llvm', 'intel-cl', 'intel-llvm-cl']
   fc_id = 'intel'
 endif
 
@@ -19,6 +19,21 @@ if fc_id == 'gcc'
   libheapt_w = fc.find_library('heapt_w', required: false)
   if libheapt_w.found()
     lib_deps += libheapt_w
+  endif
+elif fc_id == 'intel' and fc.get_argument_syntax() == 'msvc'
+  add_project_arguments(
+    '/traceback',
+    '/fp:precise',
+    '/fpscomp:logicals',
+    '/Qopenmp-simd-',
+    language: 'fortran',
+  )
+  add_project_link_arguments('/STACK:8388608', language: ['fortran', 'c', 'cpp'])
+  # Windows does not preprocess .F90 by its case; global, as mctc-lib passes /fpp to ifort only
+  if meson.is_subproject()
+    add_project_arguments('/fpp', language: 'fortran')
+  else
+    add_global_arguments('/fpp', language: 'fortran')
   endif
 elif fc_id == 'intel'
   add_project_arguments(
@@ -55,6 +70,8 @@ endif
 foreach lang, comp : {'c': cc, 'cpp': cxx}
   if comp.get_id() in ['intel', 'intel-llvm']
     add_project_arguments('-fp-model=precise', language: lang)
+  elif comp.get_id() in ['intel-cl', 'intel-llvm-cl']
+    add_project_arguments('/fp:precise', language: lang)
   endif
 endforeach
 

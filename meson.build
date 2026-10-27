@@ -1,7 +1,7 @@
 project(
   'moist',
   'fortran',
-  version: '1.1.0-alpha.1',
+  version: '1.2.0-alpha',
   license: 'MPL-2.0',
   meson_version: '>=0.57',
   default_options: [
@@ -24,8 +24,11 @@ subdir('config')
 srcs = []
 subdir('src')
 
-is_libcxx = cxx.get_define('_LIBCPP_VERSION', prefix: '#include <cstddef>') != ''
-lib_deps += cxx.find_library(is_libcxx ? 'c++' : 'stdc++')
+# MSVC-style objects name their C++ runtime themselves
+if cxx.get_argument_syntax() != 'msvc'
+  is_libcxx = cxx.get_define('_LIBCPP_VERSION', prefix: '#include <cstddef>') != ''
+  lib_deps += cxx.find_library(is_libcxx ? 'c++' : 'stdc++')
+endif
 
 # Windows DLLs export every symbol, which clashes with the executables' own static subprojects
 moist_link_args = []
@@ -38,7 +41,7 @@ data_lib = static_library(
   'moist-data',
   sources: data_srcs,
   dependencies: lib_deps,
-  fortran_args: '-O0',
+  fortran_args: fc.get_argument_syntax() == 'msvc' ? '/Od' : '-O0',
   pic: true,
   install: false,
 )

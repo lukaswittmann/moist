@@ -808,6 +808,8 @@ contains
       real(wp) :: value
       !> Whether a component lists its energy
       logical :: found
+      !> Field walker
+      type(field_query_type) :: query
       !> Component index
       integer :: i
 
@@ -981,6 +983,10 @@ contains
          call read_energy(i, found, value)
          call check(error,.not. found, more="failing or later component still lists an energy")
          if (allocated(error)) return
+         call query%enumerate()
+         call model%list_component_fields(i, query)
+         call check(error, query%nfield == 0, more="failing or later component still lists a result")
+         if (allocated(error)) return
       end do
 
       ! An update clears every energy and restores the volume
@@ -1077,6 +1083,9 @@ contains
 
       !> Read every component energy, each a listed, finite real scalar
       !>
+      !> A CPCM component then lists its potential adjoint (ngrid), a PV
+      !> component nothing more
+      !>
       !> @param[in] label Situation named in the failure message
       !> @param[out] values Component energies in list order
       subroutine read_all(label, values)
@@ -1095,11 +1104,18 @@ contains
          do j = 1, size(values)
             call query%enumerate()
             call model%list_component_fields(j, query)
-            call check(error, query%nfield == 1, more=label//": a component does not list one result")
+            call check(error, query%nfield == merge(2, 1, names(j) == "CPCM"), &
+               & more=label//": a component lists the wrong number of results")
             if (allocated(error)) return
             call check(error, query%info(1)%name == "energy" .and. query%info(1)%rank == 0 &
                & .and. query%info(1)%dtype == field_real, more=label//": wrong energy descriptor")
             if (allocated(error)) return
+            if (names(j) == "CPCM") then
+               call check(error, query%info(2)%name == "potential_adjoint" .and. query%info(2)%rank == 1 &
+                  & .and. query%info(2)%dims(1) == model%cavity%ngrid .and. query%info(2)%dtype == field_real, &
+                  & more=label//": wrong potential adjoint descriptor")
+               if (allocated(error)) return
+            end if
             call read_energy(j, listed, values(j))
             call check(error, listed .and. ieee_is_finite(values(j)), &
                & more=label//": a component energy is missing or not finite")

@@ -19,10 +19,18 @@ class Context:
 
     ``verbosity`` runs from ``0`` (silent) to ``6`` (debug), ``2`` by default, see
     the API reference for the levels; ``debug=True`` raises it to ``6``.
+    Warnings print to the process standard output at every verbosity;
+    ``warnings_to_stderr=True`` also copies them to standard error.
     """
 
-    def __init__(self, nthreads: int = 0, verbosity: int = 2, debug: bool = False) -> None:
-        self._handle = library.new_context(nthreads, verbosity, debug)
+    def __init__(
+        self,
+        nthreads: int = 0,
+        verbosity: int = 2,
+        debug: bool = False,
+        warnings_to_stderr: bool = False,
+    ) -> None:
+        self._handle = library.new_context(nthreads, verbosity, debug, warnings_to_stderr)
 
     @property
     def nthreads(self) -> int:

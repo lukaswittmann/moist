@@ -8,6 +8,7 @@ module test_finufft
    use iso_fortran_env, only: int64
    use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr, c_loc
    use finufft_mod, only: finufft_opts
+   use moist_math_fft_finufft, only: finufft_default_opts, finufft_destroy
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string
    implicit none(type, external)
    private
@@ -118,7 +119,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(finufft_opts), target :: opts
-      external :: finufft_default_opts
 
       real(wp), allocatable :: xj(:)
       complex(wp), allocatable :: cj(:), fk(:)
@@ -152,7 +152,6 @@ contains
    subroutine test_makeplan_eps_too_small(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      external :: finufft_destroy
 
       integer :: ttype, dim, ntrans, iflag, ier
       integer(int64) :: n_modes(3)

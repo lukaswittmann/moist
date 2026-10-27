@@ -2,6 +2,7 @@
 !> Driver for unit testing
 program tester
    use, intrinsic :: iso_fortran_env, only: error_unit
+   use moist_math_fft, only: moist_fft_release_threads
    use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
    use test_parameters, only: collect_parameters
@@ -36,6 +37,7 @@ program tester
    use test_math_grid_atomic, only: collect_math_grid_atomic
    use test_math_fft_dst4, only: collect_math_fft_dst4
    use test_math_fft_3d, only: collect_math_fft_3d
+   use test_math_fft_threads, only: collect_math_fft_threads
    use test_finufft, only: collect_finufft
    use test_math_grid_3d_fft, only: collect_math_grid_3d_fft
    use test_math_grid_3d_nufft, only: collect_math_grid_3d_nufft
@@ -65,6 +67,7 @@ program tester
    use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_cavity_drop_projector, only: collect_cavity_drop_projector
+   use test_cavity_drop_projection, only: collect_cavity_drop_projection
    use test_cavity_drop_properties, only: collect_cavity_drop_properties
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
@@ -117,6 +120,7 @@ program tester
       & new_testsuite("math_grid_atomic", collect_math_grid_atomic), &
       & new_testsuite("math_fft_dst4", collect_math_fft_dst4), &
       & new_testsuite("math_fft_3d", collect_math_fft_3d), &
+      & new_testsuite("math_fft_threads", collect_math_fft_threads), &
       & new_testsuite("finufft", collect_finufft), &
       & new_testsuite("math_grid_3d_fft", collect_math_grid_3d_fft), &
       & new_testsuite("math_grid_3d_nufft", collect_math_grid_3d_nufft), &
@@ -144,6 +148,7 @@ program tester
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
+      & new_testsuite("cavity_drop_projection", collect_cavity_drop_projection), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
@@ -201,6 +206,12 @@ program tester
          write (error_unit, fmt) "Testing:", trim(testsuites(is)%name)
          call run_testsuite(testsuites(is)%collect, error_unit, stat)
       end do
+   end if
+
+   ! Join ducc0's idle FFT workers; left alive at exit they can hang it on Windows
+   if (moist_fft_release_threads() /= 0) then
+      write (error_unit, "(a)") "Releasing the FFT worker threads failed"
+      error stop 1
    end if
 
    if (stat > 0) then

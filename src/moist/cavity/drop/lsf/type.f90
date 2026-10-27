@@ -32,7 +32,7 @@
 !>
 !>   - [[exclusion_radius]]`(lsf0)` -- how far a piece of *surface* must be from
 !>     the evaluation point, given the value there
-!>     - consumer: the certified branch search, "can I discard this region?"
+!>     - consumer: the octree surface coverage, "can I discard this region?"
 !>     - safe answer **zero**, i.e. certify nothing and prune nothing
 !>     - an over-estimate silently loses branches
 !>   - [[screening_offset]]`(radius)` -- how far an *atom* can be from the
@@ -93,6 +93,7 @@
 !>   - [[lsf_thread_slot]] wraps a clone, since Fortran does not (afaik) allow
 !>     `class(...), allocatable :: arr(:)`
 module moist_cavity_drop_lsf_base
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
@@ -165,6 +166,12 @@ module moist_cavity_drop_lsf_base
       integer :: ncenters = 0
       !> Molecular structure data
       type(structure_type) :: mol
+      !> Lower corner of the atomic center enclosure, refreshed with geometry
+      real(wp) :: center_lower(3) = 0.0_wp
+      !> Upper corner of the atomic center enclosure
+      real(wp) :: center_upper(3) = 0.0_wp
+      !> Whether the enclosure contains finite, nonempty geometry
+      logical :: center_bounds_valid = .false.
       !> Atomic radii (per-atom, user-space)
       real(wp), allocatable :: radii(:)
       !> Screening threshold below which the LSF contribution is treated as zero
@@ -248,6 +255,8 @@ module moist_cavity_drop_lsf_base
       !> Geometric bound query 1 of 2: how far a *surface* can be from a point
       !> with a known LSF value (see the "Two geometric-bound queries" note above)
       procedure :: exclusion_radius => lsf_base_exclusion_radius
+      !> Whether a box provably contains no stationary distance point
+      procedure :: stationary_box_excluded => lsf_base_stationary_box_excluded
       !> Geometric bound query 2 of 2, consumer side: how far an *atom* can be from
       !> a point and still matter, derived from `screening_offset` and not
       !> overridable, so gate and reach stay the same mathematics
@@ -575,6 +584,13 @@ contains
       end if
 
       n = self%ncenters
+      self%center_lower = 0.0_wp
+      self%center_upper = 0.0_wp
+      self%center_bounds_valid = n > 0 .and. all(ieee_is_finite(self%mol%xyz))
+      if (self%center_bounds_valid) then
+         self%center_lower = minval(self%mol%xyz, dim=2)
+         self%center_upper = maxval(self%mol%xyz, dim=2)
+      end if
 
       call lsf_base_spatial_sort(self%mol%xyz, n, self%sorted_to_orig, self%orig_to_sorted)
 
@@ -1254,8 +1270,8 @@ contains
    !>   in less than that distance
    !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
    !>
-   !> What lets the certified branch search (`proj_level = 9`) enumerate *all*
-   !> branches carrying weight: minima live on the surface, so a region proven
+   !> What lets the octree surface coverage (`proj_level = 9`) discard boxes
+   !> within the search window: minima live on the surface, so a region proven
    !> free of surface holds no minimum
    !>
    !> Zero is the safe answer and the base returns it unconditionally: it
@@ -1273,6 +1289,27 @@ contains
       r = 0.0_wp
       if (self%ncenters < 0 .and. lsf0 /= 0.0_wp) r = 0.0_wp
    end function lsf_base_exclusion_radius
+
+   !> Keep boxes when no stationarity bound is available
+   !>
+   !> @param[in] self       LSF instance
+   !> @param[in] anchor     Distance origin (3)
+   !> @param[in] center     Box midpoint (3)
+   !> @param[in] half_width Nonnegative cube half-width
+   pure function lsf_base_stationary_box_excluded(self, anchor, center, half_width) result(excluded)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Distance origin
+      real(wp), intent(in) :: anchor(3)
+      !> Box midpoint
+      real(wp), intent(in) :: center(3)
+      !> Cube half-width
+      real(wp), intent(in) :: half_width
+      !> No exclusion without a concrete LSF bound
+      logical :: excluded
+
+      excluded = .false.
+   end function lsf_base_stationary_box_excluded
 
    !> Is this level set a function of a density, and with which constant factor?
    !>

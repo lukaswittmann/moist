@@ -1,13 +1,12 @@
-!> Certified best-first octree search for all closest-point branches
+!> Best-first octree surface coverage for closest-point branch seeding
 !>
-!> Enumerates every local minimum of the distance to an implicit surface
-!> within a given radius of an anchor, with a proof that no further one was
-!> missed
+!> Covers unresolved regions with surviving leaves and discards boxes proven
+!> surface-free, outside the distance window, or irrelevant by a caller bound
+!> Neither finite leaf size nor subsequent local refinement proves that every
+!> local minimum was recovered
 !>
 !> - the proof is purely geometric: minima of the distance live *on* the
 !>   surface, so a region certified to contain no surface contains no minimum
-!> - covering the search ball with such regions reduces "did we find them
-!>   all?" to "is the ball covered?"
 !> - the caller supplies that certificate through a probe callback returning,
 !>   at a point `x`, both the level set value `S(x)` and a radius `r` such
 !>   that `S` has no zero in `B(x, r)`
@@ -22,6 +21,7 @@
 !>       pop the box with the smallest lower bound on ||x - anchor||
 !>       if that bound exceeds rho_max  -> DONE, the rest of the ball is proven
 !>       if |S(center)| >= circumradius -> discard, certified surface-free
+!>       if exclude_region certifies it -> discard, no relevant stationary root
 !>       if the box is at seed size     -> keep as a survivor
 !>       else                           -> split into 8 and push
 !>
@@ -46,14 +46,13 @@
 !>
 !> What the certificate covers is the *coverage of the search ball*
 !>
-!> - every box is either examined or proven to hold no surface, so no branch
-!>   escapes the surviving leaves
-!> - turning those leaves into seeds is a separate step; in
-!>   `octree_seed_cluster` mode it is a heuristic -- one seed per discrete
-!>   local minimum of an estimated surface distance, which can merge two
-!>   basins that share a survivor patch
-!> - `octree_seed_per_leaf` performs no such reduction and is the mode to fall
-!>   back on when that matters
+!> - every box is examined or excluded using a conservative bound
+!> - the optional exclude_region callback bounds the caller's root conditions;
+!>   omitting it retains exhaustive surface coverage for reference searches
+!> - every surviving leaf supplies a seed, preserving coverage before
+!>   local refinement
+!> - every leaf still supplies only one seed; a root-isolation or basin
+!>   certificate would be needed to prove completeness after refinement
 !>
 !> Deliberately not a [[solver_base_type]]
 !>
@@ -63,22 +62,14 @@
 module moist_math_solver_octree_branch
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use, intrinsic :: iso_fortran_env, only: int64, output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    implicit none(type, external)
    private
 
    public :: moist_math_octree_branch_type
-   public :: octree_seed_cluster, octree_seed_per_leaf
 
-   !> Emit one seed per discrete local minimum of the survivor set (default)
-   integer, parameter :: octree_seed_cluster = 1
-   !> Emit one seed per surviving leaf
-   integer, parameter :: octree_seed_per_leaf = 2
-
-   !> Largest octree depth the integer lattice key can address without
-   !> overflowing a 64-bit integer (the key packs three coordinates in base
-   !> `2**depth`); far above any depth a sane `seed_size` produces
+   !> Supported depth limit, keeping integer lattice coordinates representable
    integer, parameter :: max_addressable_depth = 20
 
    !> Number of radius-tightening events kept for the debug report
@@ -104,6 +95,24 @@ module moist_math_solver_octree_branch
          real(wp), intent(out) :: radius
          class(*), intent(in) :: context
       end subroutine octree_probe_context_interface
+
+      !> Certify a whole box irrelevant to the caller's root search
+      !>
+      !> @param[in] center     Box midpoint (3)
+      !> @param[in] half_width Nonnegative cube half-width
+      !> @param[in] context    Caller context forwarded unchanged
+      function octree_exclude_region_interface(center, half_width, context) result(excluded)
+         import :: wp
+         implicit none(type, external)
+         !> Box midpoint
+         real(wp), intent(in) :: center(3)
+         !> Cube half-width
+         real(wp), intent(in) :: half_width
+         !> Caller context
+         class(*), intent(in) :: context
+         !> Whether the whole box can be discarded
+         logical :: excluded
+      end function octree_exclude_region_interface
    end interface
 
    !> Best-first octree branch search
@@ -124,8 +133,6 @@ module moist_math_solver_octree_branch
       integer :: max_survivors = 200000
       !> Largest octree depth
       integer :: max_depth = 12
-      !> How survivors are turned into seeds (`octree_seed_*`)
-      integer :: seed_mode = octree_seed_cluster
       !> Emit a per-anchor trace of what the search did
       logical :: debug = .false.
       !> Output unit for the trace
@@ -139,10 +146,12 @@ module moist_math_solver_octree_branch
       real(wp), allocatable :: seeds(:, :)
       !> Number of seeds produced by the last run
       integer :: n_seeds = 0
-      !> Radius the last run ended up certifying (after self-tightening)
+      !> Final admissible radius after conservative self-tightening
       real(wp) :: rho_max_final = 0.0_wp
       !> Boxes examined by the last run, for cost diagnostics
       integer :: n_boxes_visited = 0
+      !> Boxes discarded by the optional region certificate
+      integer :: n_regions_excluded = 0
 
       !*---------------------------- Debug bookkeeping ----------------------- *!
 
@@ -185,36 +194,12 @@ module moist_math_solver_octree_branch
       integer, allocatable :: heap_lat(:, :)
       integer :: heap_size = 0
 
-      !> Surviving leaves: lattice position, center, the box's distance lower
-      !> bound (used to apply the final cap) and an estimate of how far the
-      !> *surface inside that box* is from the anchor (used to rank them)
-      !>
-      !> Neither of the two obvious rankings works
-      !>
-      !> - the lower bound is quantized, so whole rings of leaves share one
-      !>   value and a smooth patch becomes a plateau on which dozens of cells
-      !>   look like minima
-      !> - the center distance is worse: survivors form a slab straddling the
-      !>   surface, and a center sitting inside the slab is nearer the anchor
-      !>   than the surface it stands for, which drags the ranking onto the
-      !>   slab's inner face and spreads the minimum around a ring
-      !> - the estimate below corrects the center distance by the level set
-      !>   value -- the surface lies |S| away from the center, beyond it when
-      !>   the center is on the anchor's side of the surface and nearer
-      !>   otherwise -- exact for a signed distance field with a locally flat
-      !>   surface, and it puts the minimum where the surface actually comes
-      !>   closest
-      integer, allocatable :: surv_lat(:, :)
+      !> Centers of surviving leaves, emitted as seeds after the final cap
       real(wp), allocatable :: surv_center(:, :)
+      !> Box distance lower bounds used to apply the final cap
       real(wp), allocatable :: surv_rho(:)
-      real(wp), allocatable :: surv_rho_est(:)
+      !> Number of surviving leaves
       integer :: n_surv = 0
-
-      !> Survivor lattice keys, sorted, with the permutation that produced
-      !> them; answers face-neighbour queries by binary search
-      integer(int64), allocatable :: surv_key(:)
-      integer(int64), allocatable :: surv_key_sorted(:)
-      integer, allocatable :: surv_order(:)
 
       !> Hard ceiling on the heap size, derived from the survivor budget
       integer :: heap_capacity_max = 0
@@ -222,8 +207,6 @@ module moist_math_solver_octree_branch
       !> Anchor and root half-width of the run in progress
       real(wp) :: anchor(3) = 0.0_wp
       real(wp) :: root_half = 0.0_wp
-      !> Lattice edge count at the leaf depth, the base of the lattice key
-      integer(int64) :: lattice_base = 1_int64
 
    contains
       !> Size the scratch arrays; call once per thread
@@ -253,16 +236,13 @@ contains
    !> @param[in]    max_boxes     Box budget per anchor
    !> @param[in]    max_survivors Survivor budget per anchor
    !> @param[in]    max_depth     Depth limit
-   !> @param[in]    seed_mode     One of the `octree_seed_*` constants
    !> @param[out]   error         Invalid configuration
-   subroutine octree_init(self, seed_size, max_boxes, max_survivors, max_depth, &
-                          seed_mode, error)
+   subroutine octree_init(self, seed_size, max_boxes, max_survivors, max_depth, error)
       class(moist_math_octree_branch_type), intent(inout) :: self
       real(wp), intent(in), optional :: seed_size
       integer, intent(in), optional :: max_boxes
       integer, intent(in), optional :: max_survivors
       integer, intent(in), optional :: max_depth
-      integer, intent(in), optional :: seed_mode
       type(error_type), allocatable, intent(out) :: error
 
       integer :: heap_capacity
@@ -274,7 +254,6 @@ contains
       if (present(max_boxes)) self%max_boxes = max_boxes
       if (present(max_survivors)) self%max_survivors = max_survivors
       if (present(max_depth)) self%max_depth = max_depth
-      if (present(seed_mode)) self%seed_mode = seed_mode
 
       if (self%seed_size <= 0.0_wp) then
          call fatal_error(error, "Octree branch search: seed_size must be positive")
@@ -288,12 +267,6 @@ contains
          call fatal_error(error, "Octree branch search: max_depth out of range")
          return
       end if
-      if (self%seed_mode /= octree_seed_cluster .and. &
-          self%seed_mode /= octree_seed_per_leaf) then
-         call fatal_error(error, "Octree branch search: unknown seed mode")
-         return
-      end if
-
       call self%destroy()
 
       ! Splitting a box removes one entry and adds eight, so the heap never
@@ -349,36 +322,22 @@ contains
       class(moist_math_octree_branch_type), intent(inout) :: self
       integer, intent(in) :: capacity
 
-      integer, allocatable :: new_lat(:, :), new_order(:)
-      real(wp), allocatable :: new_center(:, :), new_rho(:), new_rho_est(:)
-      integer(int64), allocatable :: new_key(:), new_key_sorted(:)
+      real(wp), allocatable :: new_center(:, :), new_rho(:)
       integer :: kept
 
       kept = 0
       if (allocated(self%surv_rho)) kept = min(self%n_surv, size(self%surv_rho))
 
-      allocate (new_lat(3, capacity))
       allocate (new_center(3, capacity))
       allocate (new_rho(capacity))
-      allocate (new_rho_est(capacity))
-      allocate (new_key(capacity))
-      allocate (new_key_sorted(capacity))
-      allocate (new_order(capacity))
 
       if (kept > 0) then
-         new_lat(:, 1:kept) = self%surv_lat(:, 1:kept)
          new_center(:, 1:kept) = self%surv_center(:, 1:kept)
          new_rho(1:kept) = self%surv_rho(1:kept)
-         new_rho_est(1:kept) = self%surv_rho_est(1:kept)
       end if
 
-      call move_alloc(new_lat, self%surv_lat)
       call move_alloc(new_center, self%surv_center)
       call move_alloc(new_rho, self%surv_rho)
-      call move_alloc(new_rho_est, self%surv_rho_est)
-      call move_alloc(new_key, self%surv_key)
-      call move_alloc(new_key_sorted, self%surv_key_sorted)
-      call move_alloc(new_order, self%surv_order)
 
       if (allocated(self%seeds)) deallocate (self%seeds)
       allocate (self%seeds(3, capacity))
@@ -393,18 +352,15 @@ contains
       if (allocated(self%heap_key)) deallocate (self%heap_key)
       if (allocated(self%heap_depth)) deallocate (self%heap_depth)
       if (allocated(self%heap_lat)) deallocate (self%heap_lat)
-      if (allocated(self%surv_lat)) deallocate (self%surv_lat)
       if (allocated(self%surv_center)) deallocate (self%surv_center)
       if (allocated(self%surv_rho)) deallocate (self%surv_rho)
-      if (allocated(self%surv_rho_est)) deallocate (self%surv_rho_est)
-      if (allocated(self%surv_key)) deallocate (self%surv_key)
-      if (allocated(self%surv_key_sorted)) deallocate (self%surv_key_sorted)
-      if (allocated(self%surv_order)) deallocate (self%surv_order)
       if (allocated(self%seeds)) deallocate (self%seeds)
 
       self%heap_size = 0
       self%n_surv = 0
       self%n_seeds = 0
+      self%n_boxes_visited = 0
+      self%n_regions_excluded = 0
    end subroutine octree_destroy
 
 !* ================================================================================= *!
@@ -588,12 +544,13 @@ contains
 !*                                    Main search                                    *!
 !* ================================================================================= *!
 
-   !> Enumerate all branch seeds within the admissible radius of one anchor
+   !> Cover unresolved regions within the admissible radius of one anchor
    !>
    !> - on return `self%seeds(:, 1:self%n_seeds)` holds the seed points and
    !>   `self%rho_max_final` the radius actually certified
-   !> - an empty seed list is a legitimate answer: the whole ball was proven
-   !>   surface-free
+   !> - without an extra region certificate, surviving leaves cover the surface
+   !> - a supplied certificate can also discard boxes without relevant roots
+   !> - local refinement of finite leaves does not certify root completeness
    !>
    !> @param[inout] self         Search instance (must be initialized)
    !> @param[in]    anchor       Anchor point (3)
@@ -606,14 +563,17 @@ contains
    !> @param[in]    probe        Level set probe callback
    !> @param[in]    context      Context forwarded to `probe`
    !> @param[out]   error        Budget exhausted, i.e. no certificate obtained
+   !> @param[in]    exclude_region Optional conservative whole-box certificate
    subroutine octree_run(self, anchor, lsf0_anchor, rho_max, rho2_slack, &
-                         probe, context, error)
+                         probe, context, error, exclude_region)
       class(moist_math_octree_branch_type), intent(inout) :: self
       real(wp), intent(in) :: anchor(3)
       real(wp), intent(in) :: lsf0_anchor
       real(wp), intent(in) :: rho_max
       real(wp), intent(in) :: rho2_slack
       procedure(octree_probe_context_interface) :: probe
+      !> Optional caller-specific root exclusion
+      procedure(octree_exclude_region_interface), optional :: exclude_region
       class(*), intent(in) :: context
       type(error_type), allocatable, intent(out) :: error
 
@@ -650,6 +610,7 @@ contains
       self%n_surv = 0
       self%n_seeds = 0
       self%n_boxes_visited = 0
+      self%n_regions_excluded = 0
 
       trace = self%debug
       self%dbg_valid = trace
@@ -666,8 +627,6 @@ contains
 
       ! Depth at which the edge length first drops to the seed size
       !
-      ! - every survivor stops there, so they all share one lattice, which is
-      !   what lets face adjacency be an integer test further down
       ! - stopping early because `max_depth` ran out would hand back leaves
       !   coarser than asked for, merging minima that the configured
       !   resolution separates -- and still report a completed search
@@ -687,7 +646,6 @@ contains
          call fatal_error(error, trim(buffer))
          return
       end if
-      self%lattice_base = 2_int64**leaf_depth
       self%dbg_leaf_depth = leaf_depth
 
       excl_ratio = 0.0_wp
@@ -773,6 +731,17 @@ contains
             cycle
          end if
 
+         if (present(exclude_region)) then
+            if (exclude_region(center, half, context)) then
+               self%n_regions_excluded = self%n_regions_excluded + 1
+               if (trace) then
+                  write (action, "(a)") "root-free: subtree pruned"
+                  call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
+               end if
+               cycle
+            end if
+         end if
+
          if (depth >= leaf_depth) then
             if (self%n_surv >= size(self%surv_rho)) then
                if (self%n_surv >= self%max_survivors) then
@@ -785,27 +754,12 @@ contains
                                          min(2*size(self%surv_rho), self%max_survivors))
             end if
             self%n_surv = self%n_surv + 1
-            self%surv_lat(:, self%n_surv) = lat
             self%surv_center(:, self%n_surv) = center
             self%surv_rho(self%n_surv) = key
             if (trace) then
                self%dbg_kept(depth) = self%dbg_kept(depth) + 1
                write (action, "(a,i0)") "leaf: survivor ", self%n_surv
                call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
-            end if
-            ! Estimated distance from the anchor to the surface *through* the box
-            !
-            ! - the offset is the certified radius, not `abs(lsf0)`: the probe
-            !   contract gives units only to the radius, whereas the level set
-            !   value carries meaning in its sign alone
-            ! - the two coincide for a 1-Lipschitz LSF, but an LSF that must
-            !   divide by a gradient bound (or works in density units) would
-            !   rank nonsense
-            self%surv_rho_est(self%n_surv) = norm2(center - anchor)
-            if (lsf0*lsf0_anchor >= 0.0_wp) then
-               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) + excl_radius
-            else
-               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) - excl_radius
             end if
             cycle
          end if
@@ -850,7 +804,8 @@ contains
       ! they were accepted; drop the ones the final cap rules out
       call drop_survivors_beyond(self, rho_cap)
 
-      call collect_seeds(self, leaf_depth)
+      self%n_seeds = self%n_surv
+      self%seeds(:, 1:self%n_seeds) = self%surv_center(:, 1:self%n_surv)
 
       if (trace) call self%report(anchor)
    end subroutine octree_run
@@ -870,234 +825,12 @@ contains
          if (self%surv_rho(i) > rho_cap) cycle
          n_kept = n_kept + 1
          if (n_kept /= i) then
-            self%surv_lat(:, n_kept) = self%surv_lat(:, i)
             self%surv_center(:, n_kept) = self%surv_center(:, i)
             self%surv_rho(n_kept) = self%surv_rho(i)
-            self%surv_rho_est(n_kept) = self%surv_rho_est(i)
          end if
       end do
       self%n_surv = n_kept
    end subroutine drop_survivors_beyond
-
-!* ================================================================================= *!
-!*                              Survivors to seed points                             *!
-!* ================================================================================= *!
-
-   !> Turn surviving leaves into seed points
-   !>
-   !> - `per_leaf` mode: every survivor is a seed
-   !> - `cluster` mode: a survivor is a seed when none of its 26 lattice
-   !>   neighbours present in the survivor set is closer to the anchor -- the
-   !>   discrete local minima of the distance field restricted to the survivors
-   !> - one seed per basin rather than one per box, and no connected patch can
-   !>   be skipped: the smallest survivor of a connected group is a local
-   !>   minimum of that group by construction
-   !>
-   !> The full 26-neighbourhood matters
-   !>
-   !> - survivors are not a surface but a slab roughly two cells thick (a leaf
-   !>   survives whenever the surface passes within its circumradius)
-   !> - across a slab the six face neighbours alone leave a cell looking like a
-   !>   minimum whenever the descent direction runs diagonally, which on a
-   !>   curved patch is most of them
-   !> - testing against face neighbours only produced ~100 seeds for a patch
-   !>   holding one minimum
-   !>
-   !> Ties are broken by lattice key so a symmetric pair of neighbours produces
-   !> one seed rather than two or none
-   !>
-   !> @param[inout] self       Search instance
-   !> @param[in]    leaf_depth Depth all survivors share
-   subroutine collect_seeds(self, leaf_depth)
-      class(moist_math_octree_branch_type), intent(inout) :: self
-      integer, intent(in) :: leaf_depth
-
-      integer :: i, dx, dy, dz, neighbour, lattice_edge
-      integer :: neighbour_lat(3)
-      logical :: is_minimum
-
-      self%n_seeds = 0
-      if (self%n_surv <= 0) return
-
-      if (self%seed_mode == octree_seed_per_leaf) then
-         self%n_seeds = self%n_surv
-         self%seeds(:, 1:self%n_seeds) = self%surv_center(:, 1:self%n_surv)
-         return
-      end if
-
-      do i = 1, self%n_surv
-         self%surv_key(i) = lattice_key(self, self%surv_lat(:, i))
-         self%surv_key_sorted(i) = self%surv_key(i)
-      end do
-      call heapsort_keys(self%n_surv, self%surv_key_sorted, self%surv_order)
-
-      lattice_edge = 2**leaf_depth
-
-      do i = 1, self%n_surv
-         is_minimum = .true.
-         neighbour_loop: do dz = -1, 1
-            do dy = -1, 1
-               do dx = -1, 1
-                  if (dx == 0 .and. dy == 0 .and. dz == 0) cycle
-                  neighbour_lat = self%surv_lat(:, i) + [dx, dy, dz]
-                  if (any(neighbour_lat < 0) .or. any(neighbour_lat >= lattice_edge)) cycle
-                  neighbour = find_survivor(self, lattice_key(self, neighbour_lat))
-                  if (neighbour <= 0) cycle
-                  if (precedes(self, neighbour, i)) then
-                     is_minimum = .false.
-                     exit neighbour_loop
-                  end if
-               end do
-            end do
-         end do neighbour_loop
-
-         if (.not. is_minimum) cycle
-         self%n_seeds = self%n_seeds + 1
-         self%seeds(:, self%n_seeds) = self%surv_center(:, i)
-      end do
-   end subroutine collect_seeds
-
-   !> Whether survivor `a` sorts strictly before survivor `b`
-   !>
-   !> Estimated surface distance first (see `surv_rho_est`), with the lattice
-   !> key as the tie-break, so the order is total and two exactly-tied
-   !> neighbours cannot each rule the other out
-   !>
-   !> @param[in] self Search instance
-   !> @param[in] a    First survivor index
-   !> @param[in] b    Second survivor index
-   !> @returns        `.true.` when `a` precedes `b`
-   pure function precedes(self, a, b) result(before)
-      class(moist_math_octree_branch_type), intent(in) :: self
-      integer, intent(in) :: a, b
-      logical :: before
-
-      if (self%surv_rho_est(a) /= self%surv_rho_est(b)) then
-         before = self%surv_rho_est(a) < self%surv_rho_est(b)
-      else
-         before = self%surv_key(a) < self%surv_key(b)
-      end if
-   end function precedes
-
-   !> Pack a lattice position into a single sortable integer
-   !>
-   !> @param[in] self Search instance
-   !> @param[in] lat  Lattice position at the leaf depth
-   !> @returns   key  Packed key
-   pure function lattice_key(self, lat) result(key)
-      class(moist_math_octree_branch_type), intent(in) :: self
-      integer, intent(in) :: lat(3)
-      integer(int64) :: key
-
-      key = int(lat(1), int64) &
-            + self%lattice_base*(int(lat(2), int64) &
-                                 + self%lattice_base*int(lat(3), int64))
-   end function lattice_key
-
-   !> Sort `n` keys ascending, carrying an index permutation alongside
-   !>
-   !> Heapsort: in place, no recursion, and no worst case that a pathological
-   !> survivor layout could trigger
-   !>
-   !> @param[in]    n     Number of entries to sort
-   !> @param[inout] keys  Keys, sorted ascending on exit
-   !> @param[out]   order Permutation mapping sorted position to input position
-   pure subroutine heapsort_keys(n, keys, order)
-      integer, intent(in) :: n
-      integer(int64), intent(inout) :: keys(:)
-      integer, intent(out) :: order(:)
-
-      integer :: i
-
-      do i = 1, n
-         order(i) = i
-      end do
-
-      do i = n/2, 1, -1
-         call sift_down(i, n, keys, order)
-      end do
-      do i = n, 2, -1
-         call swap_entries(1, i, keys, order)
-         call sift_down(1, i - 1, keys, order)
-      end do
-   end subroutine heapsort_keys
-
-   !> Restore the max-heap property below `start` within `bound`
-   !>
-   !> @param[in]    start Position to sift down from
-   !> @param[in]    bound Last position belonging to the heap
-   !> @param[inout] keys  Key array
-   !> @param[inout] order Permutation moved alongside the keys
-   pure subroutine sift_down(start, bound, keys, order)
-      integer, intent(in) :: start, bound
-      integer(int64), intent(inout) :: keys(:)
-      integer, intent(inout) :: order(:)
-
-      integer :: root, child
-
-      root = start
-      do
-         child = 2*root
-         if (child > bound) exit
-         if (child < bound) then
-            if (keys(child + 1) > keys(child)) child = child + 1
-         end if
-         if (keys(root) >= keys(child)) exit
-         call swap_entries(root, child, keys, order)
-         root = child
-      end do
-   end subroutine sift_down
-
-   !> Exchange two entries of a key array and its permutation
-   !>
-   !> @param[in]    i1    First position
-   !> @param[in]    i2    Second position
-   !> @param[inout] keys  Key array
-   !> @param[inout] order Permutation moved alongside the keys
-   pure subroutine swap_entries(i1, i2, keys, order)
-      integer, intent(in) :: i1, i2
-      integer(int64), intent(inout) :: keys(:)
-      integer, intent(inout) :: order(:)
-
-      integer(int64) :: tmp_key
-      integer :: tmp_idx
-
-      tmp_key = keys(i1)
-      keys(i1) = keys(i2)
-      keys(i2) = tmp_key
-
-      tmp_idx = order(i1)
-      order(i1) = order(i2)
-      order(i2) = tmp_idx
-   end subroutine swap_entries
-
-   !> Find the survivor holding a given lattice key
-   !>
-   !> @param[in] self Search instance
-   !> @param[in] key  Packed lattice key to look for
-   !> @returns   idx  Survivor index, or 0 when that cell did not survive
-   pure function find_survivor(self, key) result(idx)
-      class(moist_math_octree_branch_type), intent(in) :: self
-      integer(int64), intent(in) :: key
-      integer :: idx
-
-      integer :: low, high, mid
-
-      idx = 0
-      low = 1
-      high = self%n_surv
-      do while (low <= high)
-         mid = (low + high)/2
-         if (self%surv_key_sorted(mid) == key) then
-            idx = self%surv_order(mid)
-            return
-         else if (self%surv_key_sorted(mid) < key) then
-            low = mid + 1
-         else
-            high = mid - 1
-         end if
-      end do
-   end function find_survivor
 
 !* ================================================================================= *!
 !*                                   Debug report                                    *!
@@ -1115,7 +848,7 @@ contains
    !>   boxes, and the gap between its two distance columns is what the
    !>   exclusion radius bought
    !> - seed table -- "what came out, and is it plausible?" Seeds should sit at
-   !>   a distance close to the certified radius, one per branch
+   !>   centers of all surviving leaves in the admissible surface region
    !>
    !> Callers inside an OpenMP region should wrap this in a critical section;
    !> the report is one contiguous block per anchor so it stays readable
@@ -1132,6 +865,7 @@ contains
 
       write (self%unit, "(a)") ""
       write (self%unit, "(4x,a,f13.5)") "rho_max (certified)    ", self%rho_max_final
+      write (self%unit, "(4x,a,i0)") "Additional root-free boxes: ", self%n_regions_excluded
       write (self%unit, "(a)") ""
 
       !> Where the boxes went, level by level

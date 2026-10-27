@@ -222,16 +222,30 @@ contains
       call check(error, pcm%storage, pcm_storage_dense, "default dense storage")
       if (allocated(error)) return
       call capture_table(pcm, lines, nline, level=2)
-      call check(error, nline, 2, "normal PCM settings contain only solver and storage")
+      call check(error, nline, 2, "normal PCM settings contain only the named solver and storage")
       if (allocated(error)) return
-      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", ""))
+      call check(error, printed_entry(lines, "Solver", "Iterative") .and. printed_entry(lines, "Storage", "Dense"), &
+         & "level 2 names the solver and storage")
+      if (allocated(error)) return
+      call check(error, .not. (printed_entry(lines, "solver", "") .or. printed_entry(lines, "storage", "")), &
+         & "level 2 drops the raw solver and storage")
       if (allocated(error)) return
       call capture_table(pcm, lines, nline, level=3)
-      call check(error, nline, 8, "detailed PCM settings include all solver controls")
+      call check(error, nline, 11, "detailed PCM settings include the names and all solver controls")
       if (allocated(error)) return
-      call check(error, printed_entry(lines, "solver_tol", "") .and. &
+      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", "") .and. &
+         & printed_entry(lines, "solver_tol", "") .and. &
          & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
-         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", ""))
+         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", "") .and. &
+         & printed_entry(lines, "point_potential", ""))
+      if (allocated(error)) return
+
+      ! Storage only applies to the iterative solver
+      pcm%solver = solver_type%dense
+      call capture_table(pcm, lines, nline, level=2)
+      call check(error, nline, 1, "the dense solver omits the storage")
+      if (allocated(error)) return
+      call check(error, printed_entry(lines, "Solver", "Dense"), "level 2 names the dense solver")
       if (allocated(error)) return
 
       ! Nothing prints at verbosity 0
@@ -365,8 +379,8 @@ contains
       call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call require_component(pcm, [character(len=32) :: "solver_tol", "solver_maxiter"], error, &
-         normal=[character(len=32) :: "storage"])
+      call require_component(pcm, [character(len=32) :: "solver", "storage", "solver_tol", "solver_maxiter"], error, &
+         normal=[character(len=32) :: "Solver", "Storage"])
       if (allocated(error)) return
 
       call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)
@@ -855,12 +869,15 @@ contains
 
       drop%tolerance = 1.0e-8_wp
       drop%do_fine = .true.
+      drop%branch_search_rho2_slack = 3.2_wp
       do format_index = 1, 2
          call roundtrip(drop, stem, error, format_index)
          if (allocated(error)) return
          call check(error, drop%proj_tol, 1.0e-8_wp)
          if (allocated(error)) return
          call check(error, drop%do_fine)
+         if (allocated(error)) return
+         call check(error, drop%branch_rho2_slack(), 3.2_wp)
          if (allocated(error)) return
       end do
       iswig%cut_f = 0.02_wp
@@ -1223,8 +1240,8 @@ contains
       type(moist_pcm_parameters_type) :: pcm
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
-                      '"projection":{"maxiter":72,"level":9,'// &
-                      '"octree":{"seed_size":0.7,"max_boxes":123,"max_survivors":43,"max_depth":8,"seed_mode":2}},'// &
+                      '"projection":{"maxiter":72,"level":9,"branch_search_rho2_slack":1.5,'// &
+                      '"octree":{"seed_size":0.7,"max_boxes":123,"max_survivors":43,"max_depth":8}},'// &
                       '"screening":{"cell_grid_full_scan_below":19,"cell_grid_fraction":0.4},'// &
                       '"switching":{"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,'// &
                       '"w_0tra_from":0.15,"w_0tra_to":0.4,"wleb_prune_level":2},'// &
@@ -1233,15 +1250,15 @@ contains
       call check(error, drop%num_leb == 110 .and. drop%do_fine .and. &
                  drop%proj_maxiter == 72 .and. drop%proj_level == 9 .and. &
                  drop%octree_max_boxes == 123 .and. drop%octree_max_survivors == 43 .and. &
-                 drop%octree_max_depth == 8 .and. drop%octree_seed_mode == 2 .and. &
+                 drop%octree_max_depth == 8 .and. &
                  drop%cell_grid_full_scan_below == 19 .and. drop%wleb_prune_level == 2)
       if (allocated(error)) return
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%octree_seed_size, &
                                     drop%cell_grid_fraction, drop%w_0ls_from, drop%w_0ls_to, drop%w_0ls_p, drop%w_0ls_a, &
                                     drop%w_0tra_from, drop%w_0tra_to, drop%rho_grid_h, drop%branch_weight_s, &
-                                    drop%branch_weight_floor] - &
+                                    drop%branch_weight_floor, drop%branch_search_rho2_slack] - &
                                    [2.0e-7_wp, 2.0_wp, 0.7_wp, 0.4_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 0.15_wp, 0.4_wp, &
-                                    0.8_wp, 0.04_wp, 0.2_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                    0.8_wp, 0.04_wp, 0.2_wp, 1.5_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
                  drop%do_r_iI .and. drop%do_rho, more="do_fine from a file did not switch every property on")

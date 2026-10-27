@@ -57,7 +57,7 @@ module moist_api
    use moist_data_solvents, only: max_solvent_name_len
    use moist_solvent_descriptors, only: solvent_descriptors_type, get_solvent_descriptors, &
       & get_solvent_descriptors_by_id
-   use moist_output_ascii, only: moist_banner_text
+   use moist_output_ascii, only: BANNER_FULL, BANNER_COMPACT, moist_banner_text
    implicit none(type, external)
    private
 
@@ -219,6 +219,8 @@ module moist_api
       integer(c_int) :: newton_maxiter = 50_c_int
       !> Return the parameter_adjoint response item
       logical(c_bool) :: parameter_derivatives = .false._c_bool
+      !> Couple Gaussian surfaces through point potential integrals
+      logical(c_bool) :: point_potential = .false._c_bool
    end type api_pcm_options
 
    !> Minimum valid caller size for the generated PCM controls
@@ -479,6 +481,7 @@ contains
       value%newton_tol = native%newton_tol
       value%newton_maxiter = native%newton_maxiter
       value%parameter_derivatives = logical(native%parameter_derivatives, c_bool)
+      value%point_potential = logical(native%point_potential, c_bool)
    end function default_pcm_options
 
    !> Convert interoperable PCM controls to the native parameter object
@@ -493,6 +496,7 @@ contains
       param%newton_tol = real(options%newton_tol, wp)
       param%newton_maxiter = int(options%newton_maxiter)
       param%parameter_derivatives = logical(options%parameter_derivatives)
+      param%point_potential = logical(options%point_potential)
    end function pcm_parameters_from_options
 
    !> Obtain cfc defaults from the native parameter type
@@ -583,7 +587,7 @@ contains
       type(vp_error), pointer :: error
 
       if (.not. valid_string_output(verror, buffer, capacity, length, "get_banner", error)) return
-      if (style < 0 .or. style > 3) then
+      if (style < BANNER_FULL .or. style > BANNER_COMPACT) then
          call api_error(error%ptr, "get_banner", "Invalid banner style")
          return
       end if
@@ -658,7 +662,9 @@ contains
    !> @param[in] nthreads  OpenMP thread count, fixed for the context's lifetime
    !> @param[in] verbosity output level
    !> @param[in] debug     diagnostic flag
-   function new_context_api(verror, nthreads, verbosity, debug) result(handle) bind(C, name=namespace//"new_context")
+   !> @param[in] warnings_to_stderr  also copy warnings to stderr
+   function new_context_api(verror, nthreads, verbosity, debug, warnings_to_stderr) result(handle) &
+      & bind(C, name=namespace//"new_context")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> OpenMP thread count; 0 takes the calling thread's current OpenMP setting
@@ -667,6 +673,8 @@ contains
       integer(c_int), value, intent(in) :: verbosity
       !> Diagnostic flag
       logical(c_bool), value, intent(in) :: debug
+      !> Whether warnings are also copied to stderr
+      logical(c_bool), value, intent(in) :: warnings_to_stderr
       !> Owning context handle; NULL on failure
       type(c_ptr) :: handle
       !> Decoded diagnostic handle
@@ -689,7 +697,8 @@ contains
          call api_error(error%ptr, "new_context", "Cannot allocate context")
          return
       end if
-      call new_context(context%ctx, nthreads=int(nthreads), verbosity=int(verbosity), debug=logical(debug))
+      call new_context(context%ctx, nthreads=int(nthreads), verbosity=int(verbosity), debug=logical(debug), &
+         & warnings_to_stderr=logical(warnings_to_stderr))
       handle = c_loc(context)
    end function new_context_api
 
@@ -1261,6 +1270,7 @@ contains
       defaults%newton_tol = values%newton_tol
       defaults%newton_maxiter = values%newton_maxiter
       defaults%parameter_derivatives = values%parameter_derivatives
+      defaults%point_potential = values%point_potential
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, pcm_options_min_size, error%ptr)
       call prefix_api_error(error%ptr, "init_pcm_options")
    end subroutine init_pcm_options_api

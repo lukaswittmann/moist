@@ -9,12 +9,10 @@ module moist_model_continuum_component_pcm_conductor
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & coupling_request_type, gaussian_potential_request_type, &
-      & point_potential_request_type, nuclear_charge_request_type, moist_phase_energy, moist_phase_response, &
-      & moist_phase_gradient, coupling_register, request_require
+   use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
-      & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require
+      & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require, &
+      & pcm_component_declare_coupling
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver, pcm_check_finite
    use pcmgen_gauss_conductor, only: conductor_state, &
@@ -45,7 +43,6 @@ module moist_model_continuum_component_pcm_conductor
       procedure :: get_surface_weights => conductor_get_surface_weights
       procedure :: get_parameter_adjoint => conductor_get_parameter_adjoint
       procedure :: get_gradient_surface_weights => conductor_get_gradient_surface_weights
-      procedure :: get_host_surface_weights => conductor_get_host_surface_weights
       procedure :: surface_weight_tangent => conductor_surface_weight_tangent
       procedure :: declare_coupling => conductor_declare_coupling
    end type model_continuum_component_pcm_conductor
@@ -178,50 +175,18 @@ contains
       self%param = settings
    end subroutine configure_conductor
 
-   !> Register the potential primitive matching the conductor discretization
+   !> Refuse a Gaussian surface without switching factors, then declare the shared requests
    subroutine conductor_declare_coupling(self, cavity, coupling, error)
       class(model_continuum_component_pcm_conductor), intent(in) :: self
       class(cavity_type), intent(in) :: cavity
       type(coupling_type), intent(inout) :: coupling
       type(error_type), allocatable, intent(out) :: error
-      class(coupling_request_type), allocatable :: potential
-      type(nuclear_charge_request_type) :: charges
-      logical :: gaussian, field
 
-      gaussian = allocated(cavity%xi0)
-      if (gaussian .and. .not. allocated(cavity%f)) then
+      if (allocated(cavity%xi0) .and. .not. allocated(cavity%f)) then
          call fatal_error(error, "Conductor PCM Gaussian surface requires switching factors")
-         if (allocated(error)) return
+         return
       end if
-      field = cavity%has_field_dependent_geometry()
-      if (gaussian) then
-         allocate (gaussian_potential_request_type :: potential)
-      else
-         allocate (point_potential_request_type :: potential)
-      end if
-      call request_require(potential, moist_phase_energy, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "dphi_dr", field, error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_response, "dphi_dxi", field, error)
-         if (allocated(error)) return
-      end if
-      call request_require(potential, moist_phase_gradient, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_gradient, "dphi_dr", error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
-         if (allocated(error)) return
-      end if
-      call coupling_register(coupling, "potential", potential, error)
-      if (allocated(error)) return
-      call request_require(charges, moist_phase_gradient, "z", error)
-      if (allocated(error)) return
-      call coupling_register(coupling, "nuclear_charges", charges, error)
+      call pcm_component_declare_coupling(self, cavity, coupling, error)
    end subroutine conductor_declare_coupling
 
    !> Assemble the conductor operator for the current cavity
@@ -250,6 +215,7 @@ contains
          return
       end if
       self%smeared = allocated(cavity%xi0)
+      self%gaussian_potential = self%uses_gaussian_potential(cavity)
       if (self%smeared .and. .not. allocated(cavity%f)) then
          call fatal_error(error, "Conductor PCM Gaussian surface requires switching factors")
          if (allocated(error)) return
@@ -471,36 +437,6 @@ contains
          call self%get_host_surface_weights(coupling, acc, cavity%ngrid, error)
       end if
    end subroutine conductor_get_gradient_surface_weights
-
-   !> Contract host potential derivatives for Gaussian or point charges
-   subroutine conductor_get_host_surface_weights(self, coupling, acc, ngrid, error)
-      class(model_continuum_component_pcm_conductor), intent(inout) :: self
-      class(coupling_view_type), intent(in) :: coupling
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
-      integer, intent(in) :: ngrid
-      type(error_type), allocatable, intent(out) :: error
-      real(wp), allocatable :: w_phi(:), w_xyz(:, :), w_xi(:)
-      integer :: i
-
-      call self%potential_adjoint(w_phi, error)
-      if (allocated(error)) return
-      call coupling%read("potential", "dphi_dr", w_xyz, error)
-      if (allocated(error)) return
-      if (any(shape(w_xyz) /= [3, ngrid])) then
-         call fatal_error(error, "PCM spatial derivative grid mismatch")
-         return
-      end if
-      do i = 1, ngrid
-         w_xyz(:, i) = w_phi(i)*w_xyz(:, i)
-      end do
-      if (self%smeared) then
-         call coupling%read("potential", "dphi_dxi", w_xi, error)
-         if (allocated(error)) return
-         call acc%add_surface_weights(error, w_xyz=w_xyz, w_xi=w_phi*w_xi)
-      else
-         call acc%add_surface_weights(error, w_xyz=w_xyz)
-      end if
-   end subroutine conductor_get_host_surface_weights
 
    !> Derivative of the energy with respect to the solvent permittivity
    !>

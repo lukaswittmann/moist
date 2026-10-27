@@ -3,10 +3,15 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.0.0-alpha.1)
+# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.0-alpha)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
+
+# Before project(), whose Windows platform files would default to Debug
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
+endif()
 
 project(
   moist
@@ -21,7 +26,9 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # icx/icpx default to a fast FP model, like ifx
 foreach(lang C CXX)
-  if(CMAKE_${lang}_COMPILER_ID MATCHES "Intel")
+  if(CMAKE_${lang}_COMPILER_ID MATCHES "Intel" AND WIN32)
+    add_compile_options($<$<COMPILE_LANGUAGE:${lang}>:/fp:precise>)
+  elseif(CMAKE_${lang}_COMPILER_ID MATCHES "Intel")
     add_compile_options($<$<COMPILE_LANGUAGE:${lang}>:-fp-model=precise>)
   endif()
 endforeach()
@@ -36,10 +43,6 @@ option(MOIST_OPENMP "Use OpenMP parallelisation"            ON)
 option(MOIST_API    "Build C API using iso_c_binding"       ON)
 option(MOIST_ILP64  "Enable BLAS/LAPACK ilp64 support"      OFF)
 option(MOIST_TESTS  "Build the moist unit test suite (ctest)" ON)
-
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
-endif()
 
 # BLAS/LAPACK/OpenMP first: the subprojects' `if(NOT TARGET ...)` guards then reuse them
 if(MOIST_LAPACK STREQUAL "custom")
@@ -197,7 +200,11 @@ list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 
 # src/moist/data at -O0
 file(GLOB moist_data_srcs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/data/*.f90")
-set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel" AND WIN32)
+  set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS /Od)
+else()
+  set_source_files_properties(${moist_data_srcs} PROPERTIES COMPILE_OPTIONS -O0)
+endif()
 
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
@@ -226,7 +233,12 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
+  if(WIN32)
+    set(MOIST_INTEL_FFLAGS /traceback /fp:precise /fpscomp:logicals /Qopenmp-simd-)
+    add_link_options(LINKER:/STACK:8388608)
+  else()
+    set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals -qno-openmp-simd)
+  endif()
   target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
@@ -304,7 +316,7 @@ if(MOIST_TESTS)
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
-    math_fft_dst4 math_fft_3d finufft math_grid_3d_fft math_grid_3d_nufft
+    math_fft_dst4 math_fft_3d math_fft_threads finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
@@ -315,8 +327,8 @@ if(MOIST_TESTS)
     math_grid_3d_invariance
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_cpcm
-    cavity_drop_properties
+    cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_projection
+    cavity_drop_cpcm cavity_drop_properties
     cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel

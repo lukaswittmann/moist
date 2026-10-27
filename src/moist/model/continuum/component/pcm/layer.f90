@@ -5,12 +5,10 @@ module moist_model_continuum_component_pcm_layer
    use moist_cavity_type, only: cavity_type
    use moist_output_citations, only: citation
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & coupling_request_type, point_potential_request_type, gaussian_potential_request_type, &
-      & nuclear_charge_request_type, moist_phase_energy, moist_phase_response, moist_phase_gradient, &
-      & coupling_register, request_require
+   use moist_channels_coupling, only: coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
-      & pcm_tangent_block, pcm_tangent_require
+      & pcm_tangent_block, pcm_tangent_require, pcm_component_list_fields
+   use moist_channels_fields, only: field_query_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver, pcm_block_jacobi, pcm_check_finite
    implicit none(type, external)
@@ -43,9 +41,8 @@ module moist_model_continuum_component_pcm_layer
       procedure :: uses_normal_trace => layer_uses_normal_trace
       procedure :: get_surface_weights => layer_get_surface_weights
       procedure :: get_gradient_surface_weights => layer_get_gradient_surface_weights
-      procedure :: declare_coupling => layer_declare_coupling
-      procedure :: get_host_surface_weights => layer_get_host_surface_weights
       procedure :: surface_weight_tangent => layer_surface_weight_tangent
+      procedure :: list_fields => layer_list_fields
       procedure(assemble_layer_iface), deferred :: assemble_layer
       procedure(solve_layer_iface), deferred :: solve_layer
       procedure(layer_weights_iface), deferred :: layer_weights
@@ -175,63 +172,6 @@ contains
       uses = self%needs_normal
    end function layer_uses_normal_trace
 
-   !> Register the potential primitive matching the cavity discretization
-   subroutine layer_declare_coupling(self, cavity, coupling, error)
-      class(pcm_layer_base), intent(in) :: self
-      class(cavity_type), intent(in) :: cavity
-      type(coupling_type), intent(inout) :: coupling
-      type(error_type), allocatable, intent(out) :: error
-      class(coupling_request_type), allocatable :: potential
-      type(nuclear_charge_request_type) :: charges
-      logical :: normal, field, gaussian
-
-      normal = self%uses_normal_trace()
-      field = cavity%has_field_dependent_geometry()
-      gaussian = allocated(cavity%xi0)
-      if (gaussian) then
-         allocate (gaussian_potential_request_type :: potential)
-      else
-         allocate (point_potential_request_type :: potential)
-      end if
-      call request_require(potential, moist_phase_energy, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_energy, "dphi_dr", normal, error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_response, "dphi_dr", field .or. normal, error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_response, "dphi_dxi", field, error)
-         if (allocated(error)) return
-      end if
-      call request_require(potential, moist_phase_response, "d2phi_dr2", normal .and. field, error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_response, "d2phi_dr_dxi", normal .and. field, error)
-         if (allocated(error)) return
-      end if
-      call request_require(potential, moist_phase_gradient, "phi", error)
-      if (allocated(error)) return
-      call request_require(potential, moist_phase_gradient, "dphi_dr", error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
-         if (allocated(error)) return
-      end if
-      call request_require(potential, moist_phase_gradient, "d2phi_dr2", normal, error)
-      if (allocated(error)) return
-      if (gaussian) then
-         call request_require(potential, moist_phase_gradient, "d2phi_dr_dxi", normal, error)
-         if (allocated(error)) return
-      end if
-      call coupling_register(coupling, "potential", potential, error)
-      if (allocated(error)) return
-      call request_require(charges, moist_phase_gradient, "z", error)
-      if (allocated(error)) return
-      call coupling_register(coupling, "nuclear_charges", charges, error)
-   end subroutine layer_declare_coupling
-
    !> Request normals and principal curvatures before cavity update
    subroutine layer_configure_cavity(self, cavity, error)
       class(pcm_layer_base), intent(inout) :: self
@@ -307,6 +247,7 @@ contains
       solver%nonlinear_tol = self%param%newton_tol
       solver%nonlinear_max_iter = self%param%newton_maxiter
       self%smeared = allocated(cavity%xi0)
+      self%gaussian_potential = self%uses_gaussian_potential(cavity)
       if (self%smeared .and. self%needs_switching) then
          if (.not. allocated(cavity%f)) then
             call fatal_error(error, "Layer PCM Gaussian surface requires switching factors")
@@ -396,6 +337,23 @@ contains
       allocate (w_phi, source=self%qsym)
    end subroutine layer_potential_adjoint
 
+   !> Publish `potential_adjoint` and `surface_charge`, the solution `q` of the
+   !> generated solve (ngrid)
+   !>
+   !> `potential_adjoint` is the symmetrized adjoint, not generally `q`;
+   !> both are left out while the charges are not current
+   !>
+   !> @param[in]    self  Layer component
+   !> @param[inout] query Field walker
+   subroutine layer_list_fields(self, query)
+      class(pcm_layer_base), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+      call pcm_component_list_fields(self, query)
+      if (.not. self%charges_valid) return
+      call query%add_real("surface_charge", &
+         & "Surface charges q of the generated solve of this component (ngrid)", self%q)
+   end subroutine layer_list_fields
+
    !> Return dE/d(n dot grad phi), zero for potential-only models
    subroutine layer_normal_trace_adjoint(self, w_vn, error)
       class(pcm_layer_base), intent(in) :: self
@@ -411,40 +369,6 @@ contains
          allocate (w_vn(size(self%q)), source=0.0_wp)
       end if
    end subroutine layer_normal_trace_adjoint
-
-   !> Contract host potential derivatives for point or Gaussian surfaces
-   subroutine layer_get_host_surface_weights(self, coupling, acc, ngrid, error)
-      class(pcm_layer_base), intent(inout) :: self
-      class(coupling_view_type), intent(in) :: coupling
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
-      integer, intent(in) :: ngrid
-      type(error_type), allocatable, intent(out) :: error
-      real(wp), allocatable :: grad_phi(:, :), dphi_dxi(:), w_xyz(:, :), w_xi(:)
-      integer :: i
-
-      call coupling%read("potential", "dphi_dr", grad_phi, error)
-      if (allocated(error)) return
-      if (any(shape(grad_phi) /= [3, ngrid])) then
-         call fatal_error(error, "Layer PCM host position derivative shape mismatch")
-         return
-      end if
-      allocate (w_xyz(3, ngrid))
-      do i = 1, ngrid
-         w_xyz(:, i) = self%qsym(i)*grad_phi(:, i)
-      end do
-      if (self%smeared) then
-         call coupling%read("potential", "dphi_dxi", dphi_dxi, error)
-         if (allocated(error)) return
-         if (size(dphi_dxi) /= ngrid) then
-            call fatal_error(error, "Layer PCM host width derivative shape mismatch")
-            return
-         end if
-         w_xi = self%qsym*dphi_dxi
-         call acc%add_surface_weights(error, w_xyz=w_xyz, w_xi=w_xi)
-      else
-         call acc%add_surface_weights(error, w_xyz=w_xyz)
-      end if
-   end subroutine layer_get_host_surface_weights
 
    !> Add generated geometry weights and response of host raw traces
    subroutine layer_get_surface_weights(self, coupling, cavity, acc, error)
@@ -594,7 +518,7 @@ contains
          w_xyz(:, i) = self%qn(i)*matmul(transpose(hess_phi(:, :, i)), cavity%normal0(:, i))
          w_n(:, i) = self%qn(i)*grad_phi(:, i)
       end do
-      if (self%smeared) then
+      if (self%gaussian_potential) then
          call coupling%read("potential", "d2phi_dr_dxi", mixed, error)
          if (allocated(error)) return
          if (any(shape(mixed) /= [3, n])) then

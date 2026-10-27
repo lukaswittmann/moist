@@ -10,6 +10,7 @@ module moist_model_continuum_component_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_channels_response, only: response_type
+   use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, coupling_begin_registration, &
       & coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate
@@ -84,6 +85,8 @@ module moist_model_continuum_component_type
       procedure :: parameters => component_parameters_default
       !> Print the solvent and physical inputs (none by default)
       procedure :: print_inputs => print_component_inputs_default
+      !> Publish the per-point results of the latest evaluation (none by default)
+      procedure :: list_fields => list_component_fields_default
       !> Print name, description, scale, inputs and settings
       procedure :: print_parameters => print_component_parameters
       !> Fail without a run context; called first by every `update`
@@ -570,6 +573,21 @@ contains
       type(prettyprinter), intent(inout) :: pp
 
    end subroutine print_component_inputs_default
+
+   !> Publish no per-point results
+   !>
+   !> A component overrides this to declare what it keeps from its latest
+   !> evaluation; the model lists it after `energy`, only once that is set
+   !>
+   !> @param[in]    self  Solvation component
+   !> @param[inout] query Field walker
+   subroutine list_component_fields_default(self, query)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+   end subroutine list_component_fields_default
 
    !> Print one component section
    !>

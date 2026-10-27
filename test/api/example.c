@@ -722,7 +722,7 @@ int test_h2o_cavity(void)
         goto cleanup;
     }
 
-    printf("  Cavity surface area: %.4f Bohr²\n", area);
+    printf("  Cavity surface area: %.4f Bohr^2\n", area);
     printf("  Cavity volume: %.4f Bohr^3\n", volume);
 
     if (read_drop_fields(error, cav, &nmax, normal, wleb, r_iI0, f, rho)) {
@@ -3688,7 +3688,7 @@ int test_coupling_protocol_gostshyp(void)
     moist_cavity borrowed = NULL;
     double *xyz = NULL, *xi = NULL, *phi = NULL, *dphi = NULL, *dxi = NULL;
     double *gt = NULL, *pt = NULL, *mt = NULL, *rt = NULL, *width = NULL;
-    double *w_overlap = NULL, *w_normal_deriv = NULL;
+    double *w_overlap = NULL, *w_normal_deriv = NULL, *point_energy = NULL;
     double energy = 0.0, gradient[3 * H2O_NATOMS] = {0};
     /* Per-component energies, read by 0-based component index */
     double share[2] = {0.0, 0.0}, again = 0.0;
@@ -3827,17 +3827,21 @@ int test_coupling_protocol_gostshyp(void)
     moist_get_model_energy(error, model, cpl, &energy);
     REQUIRE(!moist_check_error(error) && isfinite(energy));
     printf("  energy = %.12f\n", energy);
-    /* Each component reports its own share of that energy */
+    /* Each component reports its own share of that energy, then its per-point
+     * results: CPCM its potential adjoint, GOSTSHYP omega, gt, ftilde,
+     * amplitude and point_energy */
     {
         int ncomponents = 0, nfield = 0, dtype = 0, rank = -1, count = 0;
         int dims[MOIST_FIELD_MAX_RANK] = {0};
+        const int expected[2] = {2, 6};
         char field[MOIST_FIELD_NAME_MAX + 1], name[16];
         size_t length = 0;
+        double sum = 0.0;
         moist_get_model_component_count(error, model, &ncomponents);
         REQUIRE(!moist_check_error(error) && ncomponents == 2);
         for (int i = 0; i < ncomponents; ++i) {
             moist_get_model_component_field_count(error, model, i, &nfield);
-            REQUIRE(!moist_check_error(error) && nfield == 1);
+            REQUIRE(!moist_check_error(error) && nfield == expected[i]);
             moist_get_model_component_field_info(error, model, i, 0, field, &dtype, &rank, dims, &count);
             REQUIRE(!moist_check_error(error) && strcmp(field, "energy") == 0);
             REQUIRE(dtype == MOIST_FIELD_REAL && rank == 0 && count == 1);
@@ -3846,6 +3850,19 @@ int test_coupling_protocol_gostshyp(void)
             printf("  component %d energy = %.12f\n", i, share[i]);
         }
         REQUIRE(fabs(share[0] + share[1] - energy) <= 1.0e-12 * fmax(1.0, fabs(energy)));
+        moist_get_model_component_field_info(error, model, 0, 1, field, &dtype, &rank, dims, &count);
+        REQUIRE(!moist_check_error(error) && strcmp(field, "potential_adjoint") == 0);
+        REQUIRE(dtype == MOIST_FIELD_REAL && rank == 1 && count == ngrid);
+        /* The GOSTSHYP point energies add up to its share */
+        moist_get_model_component_field_info(error, model, 1, 5, field, &dtype, &rank, dims, &count);
+        REQUIRE(!moist_check_error(error) && strcmp(field, "point_energy") == 0);
+        REQUIRE(dtype == MOIST_FIELD_REAL && rank == 1 && count == ngrid);
+        point_energy = malloc((size_t)ngrid * sizeof(double));
+        REQUIRE(point_energy != NULL);
+        moist_get_model_component_field_real(error, model, 1, "point_energy", point_energy);
+        REQUIRE(!moist_check_error(error));
+        for (int k = 0; k < ngrid; ++k) sum += point_energy[k];
+        REQUIRE(fabs(sum - share[1]) <= 1.0e-12 * fmax(1.0, fabs(share[1])));
         moist_get_model_component_name(error, model, 2, name, sizeof name, &length);
         if (expect_failure(&error, "Component index out of range",
                            "component past the list")) goto cleanup;
@@ -3858,7 +3875,7 @@ int test_coupling_protocol_gostshyp(void)
         char head[16];
         moist_get_model_parameters_text(error, model, NULL, 0, &length);
         REQUIRE(!moist_check_error(error) && length == 0);
-        shown_context = moist_new_context(error, 0, 2, false);
+        shown_context = moist_new_context(error, 0, 2, false, false);
         shown = moist_new_model(error, shown_context, cav);
         moist_add_model_component(error, shown, pcm);
         moist_add_model_component(error, shown, gostshyp);
@@ -3981,7 +3998,7 @@ cleanup:
     if (moist_check_error(error)) show_error(error);
     free(xyz); free(xi); free(phi); free(dphi); free(dxi);
     free(gt); free(pt); free(mt); free(rt); free(width);
-    free(w_overlap); free(w_normal_deriv); free(settings); free(radii);
+    free(w_overlap); free(w_normal_deriv); free(point_energy); free(settings); free(radii);
     moist_delete_coupling(&cpl);
     moist_delete_cavity(&borrowed);
     moist_delete_response(&response);
@@ -4055,7 +4072,7 @@ cleanup:
 
 #undef REQUIRE
 
-/* -1 selects version text; nonnegative values select one of the four banners */
+/* -1 selects version text; nonnegative values select one of the five banners */
 static void query_text(moist_error error, int style, char *buffer,
                        size_t capacity, size_t *length)
 {
@@ -4069,7 +4086,7 @@ int test_string_queries(void)
     char *full = NULL;
     char small[8];
     int failed = 1;
-    for (int style = -1; style <= moist_banner_build; ++style) {
+    for (int style = -1; style <= moist_banner_compact; ++style) {
         size_t needed = 0, length = 123;
         query_text(error, style, NULL, 0, &needed);
         if (moist_check_error(error) || needed < sizeof small) goto cleanup;
@@ -4117,7 +4134,7 @@ cleanup:
 static int runtime_threads(moist_error error)
 {
     int count = 0;
-    moist_context probe = moist_new_context(error, 0, 0, false);
+    moist_context probe = moist_new_context(error, 0, 0, false, false);
     if (!probe || moist_check_error(error)) return -1;
     moist_get_context_num_threads(error, probe, &count);
     moist_delete(probe);
@@ -4135,16 +4152,16 @@ int test_context(void)
     moist_structure mol = NULL;
     moist_lsf lsf = NULL;
     int baseline = 0, pinned = 0, count = 123, failed = 1;
-    if (moist_new_context(NULL, 0, 0, false)) goto cleanup;
-    if (moist_new_context(error, -1, 0, false) || !moist_check_error(error)) goto cleanup;
+    if (moist_new_context(NULL, 0, 0, false, false)) goto cleanup;
+    if (moist_new_context(error, -1, 0, false, false) || !moist_check_error(error)) goto cleanup;
     baseline = runtime_threads(error);
     if (baseline < 1) goto cleanup;
     pinned = baseline + 1;
     /* An explicit count is fixed per context and leaves this thread's OpenMP
      * runtime untouched */
-    context = moist_new_context(error, pinned, 2, true);
+    context = moist_new_context(error, pinned, 2, true, false);
     if (!context || moist_check_error(error) || runtime_threads(error) != baseline) goto cleanup;
-    other = moist_new_context(error, pinned + 1, 0, false);
+    other = moist_new_context(error, pinned + 1, 0, false, false);
     if (!other || moist_check_error(error) || runtime_threads(error) != baseline) goto cleanup;
     moist_get_context_num_threads(error, context, &count);
     if (moist_check_error(error) || count != pinned) goto cleanup;
@@ -4156,7 +4173,7 @@ int test_context(void)
     count = 123;
     moist_get_context_num_threads(error, NULL, &count);
     if (!moist_check_error(error) || count != 123) goto cleanup;
-    context = moist_new_context(error, 0, 0, false);
+    context = moist_new_context(error, 0, 0, false, false);
     if (!context || moist_check_error(error)) goto cleanup;
     moist_get_context_num_threads(error, context, NULL);
     if (!moist_check_error(error)) goto cleanup;
@@ -4201,7 +4218,7 @@ int test_context(void)
     mol = make_h2o(error);
     if (!lsf || !mol || moist_check_error(error)) goto cleanup;
     for (int kind = 0; kind < 2; ++kind) {
-        context = moist_new_context(error, pinned, 0, false);
+        context = moist_new_context(error, pinned, 0, false, false);
         if (!context || moist_check_error(error)) goto cleanup;
         moist_get_context_num_threads(error, context, &count);
         if (moist_check_error(error) || count != pinned) goto cleanup;
@@ -4279,7 +4296,7 @@ done:
 int test_host_timers(void)
 {
     moist_error error = moist_new_error();
-    moist_context context = moist_new_context(error, 0, 0, false);
+    moist_context context = moist_new_context(error, 0, 0, false, false);
     char name[64] = {0};
     int failed = 1;
     if (!context || moist_check_error(error)) goto cleanup;
@@ -4475,6 +4492,8 @@ int test_options_padding(void)
         MARK_FIELD(pcm, storage);
         MARK_FIELD(pcm, newton_tol);
         MARK_FIELD(pcm, newton_maxiter);
+        MARK_FIELD(pcm, parameter_derivatives);
+        MARK_FIELD(pcm, point_potential);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_pcm_options(error, &value, sizeof value);
@@ -4567,7 +4586,7 @@ int test_v1_contract(void)
     moist_get_banner(NULL, moist_banner_full, buffer, sizeof buffer, &length);
     if (buffer[0] != '\0' || buffer[1] != 'X') goto cleanup;
     moist_get_version_string(error, buffer, sizeof buffer, &length);
-    if (strcmp(buffer, "1.1.0-alpha.1")) goto cleanup;
+    if (strcmp(buffer, "1.2.0-alpha")) goto cleanup;
     moist_get_version_string(error, buffer, 1, &length);
     if (buffer[0] != '\0') goto cleanup;
 
@@ -4805,7 +4824,7 @@ int main(void)
     size_t nfailed = 0;
     moist_error error = moist_new_error();
 
-    fixture_context = moist_new_context(error, 0, 0, false);
+    fixture_context = moist_new_context(error, 0, 0, false, false);
     if (!fixture_context || moist_check_error(error)) {
         show_error(error);
         moist_delete_error(&error);

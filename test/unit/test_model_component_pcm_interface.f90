@@ -1263,7 +1263,7 @@ contains
       end do
       call weights%init(2)
       call component%get_host_surface_weights(component_view(coupling), weights, 2, err)
-      call expect_error("position derivative shape mismatch")
+      call expect_error("spatial derivative grid mismatch")
       if (allocated(error)) return
       call weights%init(1)
       call component%get_host_surface_weights(component_view(coupling), weights, 1, err)

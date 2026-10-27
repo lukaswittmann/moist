@@ -8,8 +8,6 @@ module moist_data_radii_legacy
    implicit none(type, external)
    private
 
-   integer :: i
-
    !> Upper bounds for each radii array
    integer, parameter :: max_elem_cpcm = 118
    integer, parameter :: max_elem_smd = 118
@@ -34,91 +32,107 @@ module moist_data_radii_legacy
 
    !> CPCM radii (already scaled)
    !>
+   !> - ORCA `ATOM_COSMORadius`, legacy point-charge CPCM set
+   !> - Unscaled COSMO values for H, C, N, O, F, Al, Si, S, Cl, Br, I
+   !> - Others 1.17 x base radius, labeled Bondi in ORCA but mostly not Bondi
+   !> - Placeholders 1.9 x 1.17 = 2.223 A (Ar-Xe), 2.0 x 1.17 = 2.34 A (Cs-Og)
    !> - H = 1.30 A from Klamt et al., J. Phys. Chem. A 102, 5074 (1998)
    !> - DOI: 10.1021/jp980017s
    real(wp), parameter :: cpcm_vdw_rad(max_elem_cpcm) = aatoau*[ &
-                          1.300_wp, 1.400_wp*1.17_wp, &
-                          1.200_wp*1.17_wp, 0.900_wp*1.17_wp, 1.750_wp*1.17_wp, 2.000_wp, 1.830_wp, 1.720_wp, &
-                          1.720_wp, 1.540_wp*1.17_wp, 1.500_wp*1.17_wp, 1.400_wp*1.17_wp, 2.153_wp, 2.200_wp, &
-                          1.800_wp*1.17_wp, 2.16_wp, 2.050_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &
-                          [(1.900_wp*1.17_wp, i=1, 10)], &
-                          1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &
-                          2.160_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &
-                          [(1.900_wp*1.17_wp, i=1, 10)], &
-                          1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 2.320_wp, &
-                          1.900_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &
-                          [(2.000_wp*1.17_wp, i=1, 14)], [(2.000_wp*1.17_wp, i=1, 6)], &
-                          1.720_wp*1.17_wp, 1.720_wp*1.17_wp, 2.000_wp*1.17_wp, &
-                          [(2.000_wp*1.17_wp, i=1, 6)], &
-                          2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &
-                          [(2.000_wp*1.17_wp, i=1, 14)], [(2.000_wp*1.17_wp, i=1, 9)], &
-                          [(2.000_wp*1.17_wp, i=1, 6)] &
-                          ]
+      & 1.300_wp,         1.400_wp*1.17_wp, 1.200_wp*1.17_wp, 0.900_wp*1.17_wp, &  ! H-Be
+      & 1.750_wp*1.17_wp, 2.000_wp,         1.830_wp,         1.720_wp,         &  ! B-O
+      & 1.720_wp,         1.540_wp*1.17_wp, 1.500_wp*1.17_wp, 1.400_wp*1.17_wp, &  ! F-Mg
+      & 2.153_wp,         2.200_wp,         1.800_wp*1.17_wp, 2.160_wp,         &  ! Al-S
+      & 2.050_wp,         1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Cl-Ca
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Sc-Cr
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Mn-Ni
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Cu-Ge
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 2.160_wp,         1.900_wp*1.17_wp, &  ! As-Kr
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Rb-Zr
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Nb-Ru
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! Rh-Cd
+      & 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, 1.900_wp*1.17_wp, &  ! In-Te
+      & 2.320_wp,         1.900_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! I-Ba
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! La-Nd
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Pm-Gd
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Tb-Er
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Tm-Hf
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Ta-Os
+      & 2.000_wp*1.17_wp, 1.720_wp*1.17_wp, 1.720_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Ir-Hg
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Tl-Po
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! At-Ra
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Ac-U
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Np-Cm
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Bk-Fm
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Md-Rf
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Db-Hs
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Mt-Cn
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, 2.000_wp*1.17_wp, &  ! Nh-Lv
+      & 2.000_wp*1.17_wp, 2.000_wp*1.17_wp                                      &  ! Ts-Og
+      & ]
 
    !> SMD radii
    !>
    !> - H = 1.20 A from Marenich et al., J. Phys. Chem. B 113, 6378 (2009)
    !> - DOI: 10.1021/jp810292n
    real(wp), parameter :: smd_vdw_rad(max_elem_smd) = aatoau*[ &
-                          1.20_wp, 1.40_wp, &
-                          1.82_wp, 1.53_wp, 1.92_wp, 1.85_wp, 1.89_wp, 1.52_wp, 1.73_wp, 1.54_wp, &
-                          2.27_wp, 1.73_wp, 1.84_wp, 2.47_wp, 2.12_wp, 2.49_wp, 2.38_wp, 1.88_wp, &
-                          2.75_wp, 2.31_wp, &
-                          2.16_wp, 1.87_wp, 1.79_wp, 1.89_wp, 1.97_wp, 1.94_wp, 1.92_wp, 1.84_wp, 1.86_wp, 2.10_wp, &
-                          1.87_wp, 2.11_wp, 1.85_wp, 1.90_wp, 3.06_wp, 2.02_wp, &
-                          3.03_wp, 2.49_wp, &
-                          2.19_wp, 1.86_wp, 2.07_wp, 2.09_wp, 2.09_wp, 2.07_wp, 1.95_wp, 2.02_wp, 2.03_wp, 2.30_wp, &
-                          1.93_wp, 2.17_wp, 2.06_wp, 2.06_wp, 1.98_wp, 2.16_wp, &
-                          3.43_wp, 2.68_wp, &
-                          2.40_wp, &
-                          2.35_wp, 2.39_wp, 2.29_wp, 2.36_wp, 2.29_wp, 2.33_wp, 2.37_wp, 2.21_wp, 2.29_wp, 2.16_wp, &
-                          2.35_wp, 2.27_wp, 2.42_wp, 2.21_wp, &
-                          2.12_wp, 2.17_wp, 2.10_wp, 2.17_wp, 2.16_wp, 2.02_wp, 2.09_wp, 2.17_wp, 2.09_wp, &
-                          1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, &
-                          3.48_wp, 2.83_wp, &
-                          2.60_wp, &
-                          2.37_wp, 2.43_wp, 2.40_wp, 2.21_wp, 2.43_wp, 2.44_wp, 2.45_wp, 2.44_wp, 2.45_wp, 2.45_wp, &
-                          2.45_wp, 2.46_wp, 2.46_wp, 2.45_wp, &
-                          [(2.45_wp, i=1, 9)], &
-                          [(2.45_wp, i=1, 6)] &
-                          ]
+      & 1.20_wp, 1.40_wp, 1.82_wp, 1.53_wp, 1.92_wp, 1.85_wp, 1.89_wp, 1.52_wp, &  ! H-O
+      & 1.73_wp, 1.54_wp, 2.27_wp, 1.73_wp, 1.84_wp, 2.47_wp, 2.12_wp, 2.49_wp, &  ! F-S
+      & 2.38_wp, 1.88_wp, 2.75_wp, 2.31_wp, 2.16_wp, 1.87_wp, 1.79_wp, 1.89_wp, &  ! Cl-Cr
+      & 1.97_wp, 1.94_wp, 1.92_wp, 1.84_wp, 1.86_wp, 2.10_wp, 1.87_wp, 2.11_wp, &  ! Mn-Ge
+      & 1.85_wp, 1.90_wp, 3.06_wp, 2.02_wp, 3.03_wp, 2.49_wp, 2.19_wp, 1.86_wp, &  ! As-Zr
+      & 2.07_wp, 2.09_wp, 2.09_wp, 2.07_wp, 1.95_wp, 2.02_wp, 2.03_wp, 2.30_wp, &  ! Nb-Cd
+      & 1.93_wp, 2.17_wp, 2.06_wp, 2.06_wp, 1.98_wp, 2.16_wp, 3.43_wp, 2.68_wp, &  ! In-Ba
+      & 2.40_wp, 2.35_wp, 2.39_wp, 2.29_wp, 2.36_wp, 2.29_wp, 2.33_wp, 2.37_wp, &  ! La-Gd
+      & 2.21_wp, 2.29_wp, 2.16_wp, 2.35_wp, 2.27_wp, 2.42_wp, 2.21_wp, 2.12_wp, &  ! Tb-Hf
+      & 2.17_wp, 2.10_wp, 2.17_wp, 2.16_wp, 2.02_wp, 2.09_wp, 2.17_wp, 2.09_wp, &  ! Ta-Hg
+      & 1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, 3.48_wp, 2.83_wp, &  ! Tl-Ra
+      & 2.60_wp, 2.37_wp, 2.43_wp, 2.40_wp, 2.21_wp, 2.43_wp, 2.44_wp, 2.45_wp, &  ! Ac-Cm
+      & 2.44_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.46_wp, 2.46_wp, 2.45_wp, 2.45_wp, &  ! Bk-Rf
+      & 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, &  ! Db-Cn
+      & 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp, 2.45_wp                    &  ! Nh-Og
+      & ]
 
    !> D3 van-der-Waals radii
    !>
    !> - Grimme et al., J. Chem. Phys. 132, 154104 (2010)
    !> - DOI: 10.1063/1.3382344; homonuclear pair cutoffs divided by two
    !> - Stored H = 1.09155 A; reference H-H cutoff / 2 = 1.09115 A
-   real(wp), parameter :: d3_vdw_rad(1:94) = aatoau*[&
-      & 1.09155_wp, 0.86735_wp, 1.74780_wp, 1.54910_wp, &
-      & 1.60800_wp, 1.45515_wp, 1.31125_wp, 1.24085_wp, &
-      & 1.14980_wp, 1.06870_wp, 1.85410_wp, 1.74195_wp, &
-      & 2.00530_wp, 1.89585_wp, 1.75085_wp, 1.65535_wp, &
-      & 1.55230_wp, 1.45740_wp, 2.12055_wp, 2.05175_wp, &
-      & 1.94515_wp, 1.88210_wp, 1.86055_wp, 1.72070_wp, &
-      & 1.77310_wp, 1.72105_wp, 1.71635_wp, 1.67310_wp, &
-      & 1.65040_wp, 1.61545_wp, 1.97895_wp, 1.93095_wp, &
-      & 1.83125_wp, 1.76340_wp, 1.68310_wp, 1.60480_wp, &
-      & 2.30880_wp, 2.23820_wp, 2.10980_wp, 2.02985_wp, &
-      & 1.92980_wp, 1.87715_wp, 1.78450_wp, 1.73115_wp, &
-      & 1.69875_wp, 1.67625_wp, 1.66540_wp, 1.73100_wp, &
-      & 2.13115_wp, 2.09370_wp, 2.00750_wp, 1.94505_wp, &
-      & 1.86900_wp, 1.79445_wp, 2.52835_wp, 2.59070_wp, &
-      & 2.31305_wp, 2.31005_wp, 2.28510_wp, 2.26355_wp, &
-      & 2.24480_wp, 2.22575_wp, 2.21170_wp, 2.06215_wp, &
-      & 2.12135_wp, 2.07705_wp, 2.13970_wp, 2.12250_wp, &
-      & 2.11040_wp, 2.09930_wp, 2.00650_wp, 2.12250_wp, &
-      & 2.04900_wp, 1.99275_wp, 1.94775_wp, 1.87450_wp, &
-      & 1.72280_wp, 1.67625_wp, 1.62820_wp, 1.67995_wp, &
-      & 2.15635_wp, 2.13820_wp, 2.05875_wp, 2.00270_wp, &
-      & 1.93220_wp, 1.86080_wp, 2.53980_wp, 2.46470_wp, &
-      & 2.35215_wp, 2.21260_wp, 2.22970_wp, 2.19785_wp, &
-      & 2.17695_wp, 2.21705_wp]
+   real(wp), parameter :: d3_vdw_rad(max_elem_d3) = aatoau*[ &
+      & 1.09155_wp, 0.86735_wp, 1.74780_wp, 1.54910_wp, &  ! H-Be
+      & 1.60800_wp, 1.45515_wp, 1.31125_wp, 1.24085_wp, &  ! B-O
+      & 1.14980_wp, 1.06870_wp, 1.85410_wp, 1.74195_wp, &  ! F-Mg
+      & 2.00530_wp, 1.89585_wp, 1.75085_wp, 1.65535_wp, &  ! Al-S
+      & 1.55230_wp, 1.45740_wp, 2.12055_wp, 2.05175_wp, &  ! Cl-Ca
+      & 1.94515_wp, 1.88210_wp, 1.86055_wp, 1.72070_wp, &  ! Sc-Cr
+      & 1.77310_wp, 1.72105_wp, 1.71635_wp, 1.67310_wp, &  ! Mn-Ni
+      & 1.65040_wp, 1.61545_wp, 1.97895_wp, 1.93095_wp, &  ! Cu-Ge
+      & 1.83125_wp, 1.76340_wp, 1.68310_wp, 1.60480_wp, &  ! As-Kr
+      & 2.30880_wp, 2.23820_wp, 2.10980_wp, 2.02985_wp, &  ! Rb-Zr
+      & 1.92980_wp, 1.87715_wp, 1.78450_wp, 1.73115_wp, &  ! Nb-Ru
+      & 1.69875_wp, 1.67625_wp, 1.66540_wp, 1.73100_wp, &  ! Rh-Cd
+      & 2.13115_wp, 2.09370_wp, 2.00750_wp, 1.94505_wp, &  ! In-Te
+      & 1.86900_wp, 1.79445_wp, 2.52835_wp, 2.59070_wp, &  ! I-Ba
+      & 2.31305_wp, 2.31005_wp, 2.28510_wp, 2.26355_wp, &  ! La-Nd
+      & 2.24480_wp, 2.22575_wp, 2.21170_wp, 2.06215_wp, &  ! Pm-Gd
+      & 2.12135_wp, 2.07705_wp, 2.13970_wp, 2.12250_wp, &  ! Tb-Er
+      & 2.11040_wp, 2.09930_wp, 2.00650_wp, 2.12250_wp, &  ! Tm-Hf
+      & 2.04900_wp, 1.99275_wp, 1.94775_wp, 1.87450_wp, &  ! Ta-Os
+      & 1.72280_wp, 1.67625_wp, 1.62820_wp, 1.67995_wp, &  ! Ir-Hg
+      & 2.15635_wp, 2.13820_wp, 2.05875_wp, 2.00270_wp, &  ! Tl-Po
+      & 1.93220_wp, 1.86080_wp, 2.53980_wp, 2.46470_wp, &  ! At-Ra
+      & 2.35215_wp, 2.21260_wp, 2.22970_wp, 2.19785_wp, &  ! Ac-U
+      & 2.17695_wp, 2.21705_wp                          &  ! Np-Pu
+      & ]
 
-   !> COSMO optimized van-der-Waals radii
+   !> COSMO van-der-Waals radii
    !>
+   !> - TURBOMOLE `parameter/radii.cosmo`, Version 2.0 080813, via xtb
+   !> - Optimized only for H, C, N, O, F, S, Cl, Br, I; others are guesses
+   !> - 2.223 A placeholder for unparametrized elements
    !> - H = 1.30 A from Klamt et al., J. Phys. Chem. A 102, 5074 (1998)
    !> - DOI: 10.1021/jp980017s
-   real(wp), parameter :: cosmo_vdw_rad(1:94) = aatoau*[ &
+   real(wp), parameter :: cosmo_vdw_rad(max_elem_cosmo) = aatoau*[ &
       & 1.3000_wp, 1.6380_wp, 1.5700_wp, 1.0530_wp, &  ! H-Be
       & 2.0480_wp, 2.0000_wp, 1.8300_wp, 1.7200_wp, &  ! B-O
       & 1.7200_wp, 1.8018_wp, 1.8000_wp, 1.6380_wp, &  ! F-Mg
@@ -142,7 +156,8 @@ module moist_data_radii_legacy
       & 2.2230_wp, 2.3600_wp, 2.4220_wp, 2.3050_wp, &  ! Tl-Po
       & 2.3630_wp, 2.5740_wp, 2.2230_wp, 2.2230_wp, &  ! At-Ra
       & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &  ! Ac-U
-      & 2.2230_wp, 2.2230_wp]                          ! Np-Pu
+      & 2.2230_wp, 2.2230_wp                        &  ! Np-Pu
+      & ]
 
    !> Gaussian charge scheme radii, uniformly scaled by 1.2
    !>
@@ -156,28 +171,22 @@ module moist_data_radii_legacy
    !> - Some stored values differ from those sources, including Li and Sr
    !> - Transition-metal entries and 2.0 A fallbacks are local choices
    real(wp), parameter :: gauss_vdw_rad(max_elem_gauss) = (aatoau*1.2_wp)*[ &
-      & 1.100_wp, 1.400_wp, &                                          ! H -He
-      & 1.820_wp, 1.530_wp, 1.920_wp, 1.700_wp, 1.550_wp, 1.520_wp, &  ! Li-O
-      & 1.470_wp, 1.540_wp, &                                          ! F -Ne
-      & 2.270_wp, 1.730_wp, 1.840_wp, 2.100_wp, 1.800_wp, 1.800_wp, &  ! Na-S
-      & 1.750_wp, 1.880_wp, &                                          ! Cl-Ar
-      & 2.750_wp, 2.310_wp, &                                          ! K -Ca
-      & [(2.000_wp, i=1, 7)], 1.630_wp, 1.400_wp, 1.390_wp, &          ! Sc-Zn
-      & 1.870_wp, 2.110_wp, 1.850_wp, 1.900_wp, 1.850_wp, 2.020_wp, &  ! Ga-Kr
-      & 3.030_wp, 2.500_wp, &                                          ! Rb-Sr
-      & [(2.000_wp, i=1, 7)], 1.630_wp, 1.720_wp, 1.580_wp, &          ! Y -Cd
-      & 1.930_wp, 2.170_wp, 2.060_wp, 2.060_wp, 1.980_wp, 2.160_wp, &  ! In-Xe
-      & 3.430_wp, 2.680_wp, &                                          ! Cs-Ba
-      & 2.000_wp, &                                                    ! La
-      & [(2.000_wp, i=1, 14)], &                                       ! Ce-Lu
-      & [(2.000_wp, i=1, 6)], 1.720_wp, 1.660_wp, 1.550_wp, &          ! Hf-Hg
-      & 1.960_wp, 2.020_wp, 2.070_wp, 1.970_wp, 2.020_wp, 2.200_wp, &  ! Tl-Rn
-      & 3.480_wp, 2.830_wp, &                                          ! Fr-Ra
-      & 2.000_wp, &                                                    ! Ac
-      & 2.000_wp, 2.000_wp, 1.860_wp, [(2.000_wp, i=1, 11)], &         ! Th-Lr
-      & [(2.000_wp, i=1, 9)], &                                        ! Rf-Cn
-      & [(2.000_wp, i=1, 6)] &                                         ! Nh-Og
-   ]
+      & 1.10_wp, 1.40_wp, 1.82_wp, 1.53_wp, 1.92_wp, 1.70_wp, 1.55_wp, 1.52_wp, &  ! H-O
+      & 1.47_wp, 1.54_wp, 2.27_wp, 1.73_wp, 1.84_wp, 2.10_wp, 1.80_wp, 1.80_wp, &  ! F-S
+      & 1.75_wp, 1.88_wp, 2.75_wp, 2.31_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! Cl-Cr
+      & 2.00_wp, 2.00_wp, 2.00_wp, 1.63_wp, 1.40_wp, 1.39_wp, 1.87_wp, 2.11_wp, &  ! Mn-Ge
+      & 1.85_wp, 1.90_wp, 1.85_wp, 2.02_wp, 3.03_wp, 2.50_wp, 2.00_wp, 2.00_wp, &  ! As-Zr
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 1.63_wp, 1.72_wp, 1.58_wp, &  ! Nb-Cd
+      & 1.93_wp, 2.17_wp, 2.06_wp, 2.06_wp, 1.98_wp, 2.16_wp, 3.43_wp, 2.68_wp, &  ! In-Ba
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! La-Gd
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! Tb-Hf
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 1.72_wp, 1.66_wp, 1.55_wp, &  ! Ta-Hg
+      & 1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, 3.48_wp, 2.83_wp, &  ! Tl-Ra
+      & 2.00_wp, 2.00_wp, 2.00_wp, 1.86_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! Ac-Cm
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! Bk-Rf
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, &  ! Db-Cn
+      & 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp, 2.00_wp                    &  ! Nh-Og
+      & ]
 
    !> In case no van-der-Waals value is provided
    ! TODO: this is dangerous, better use some stub?
@@ -187,24 +196,25 @@ module moist_data_radii_legacy
    !>
    !> - J. Phys. Chem. A 113, 5806-5812 (2009), DOI: 10.1021/jp8111556
    !> - Bondi values plus 16 extensions; H = 1.1 A from Rowland and Taylor
-   real(wp), parameter :: bondi_vdw_rad(1:88) = aatoau*[ &
+   real(wp), parameter :: bondi_vdw_rad(max_elem_bondi) = aatoau*[ &
       & 1.10_wp, 1.40_wp, 1.81_wp, 1.53_wp, 1.92_wp, 1.70_wp, 1.55_wp, 1.52_wp, &  ! H-O
       & 1.47_wp, 1.54_wp, 2.27_wp, 1.73_wp, 1.84_wp, 2.10_wp, 1.80_wp, 1.80_wp, &  ! F-S
       & 1.75_wp, 1.88_wp, 2.75_wp, 2.31_wp, missing, missing, missing, missing, &  ! Cl-Cr
       & missing, missing, missing, missing, missing, missing, 1.87_wp, 2.11_wp, &  ! Mn-Ge
       & 1.85_wp, 1.90_wp, 1.83_wp, 2.02_wp, 3.03_wp, 2.49_wp, missing, missing, &  ! As-Zr
       & missing, missing, missing, missing, missing, missing, missing, missing, &  ! Nb-Cd
-      & 1.93_wp, 2.17_wp, 2.06_wp, 2.06_wp, 1.98_wp, 2.16_wp, 3.43_wp, 2.68_wp, &  ! I-Ba
+      & 1.93_wp, 2.17_wp, 2.06_wp, 2.06_wp, 1.98_wp, 2.16_wp, 3.43_wp, 2.68_wp, &  ! In-Ba
       & missing, missing, missing, missing, missing, missing, missing, missing, &  ! La-Gd
       & missing, missing, missing, missing, missing, missing, missing, missing, &  ! Tb-Hf
       & missing, missing, missing, missing, missing, missing, missing, missing, &  ! Ta-Hg
-      & 1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, 3.48_wp, 2.83_wp]    ! Tl-Ra
+      & 1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, 3.48_wp, 2.83_wp  &  ! Tl-Ra
+      & ]
 
    !> Rahm, Hoffmann & Ashcroft (2016) atomic radii
    !>
    !> - 0.001 e/bohr^3 isodensity surface of free atoms (DFT PBE0)
    !> - Chem. Eur. J. 22, 14625-14632 (2016), DOI: 10.1002/chem.201602949
-   real(wp), parameter :: rahm_vdw_rad(1:96) = aatoau*[ &
+   real(wp), parameter :: rahm_vdw_rad(max_elem_rahm) = aatoau*[ &
       & 1.54_wp, 1.34_wp, 2.20_wp, 2.19_wp, 2.05_wp, 1.90_wp, 1.79_wp, 1.71_wp, &  ! H-O
       & 1.63_wp, 1.56_wp, 2.25_wp, 2.40_wp, 2.39_wp, 2.32_wp, 2.23_wp, 2.14_wp, &  ! F-S
       & 2.06_wp, 1.97_wp, 2.34_wp, 2.70_wp, 2.63_wp, 2.57_wp, 2.52_wp, 2.33_wp, &  ! Cl-Cr
@@ -216,7 +226,8 @@ module moist_data_radii_legacy
       & 2.76_wp, 2.75_wp, 2.73_wp, 2.72_wp, 2.71_wp, 2.77_wp, 2.70_wp, 2.64_wp, &  ! Tb-Hf
       & 2.58_wp, 2.53_wp, 2.49_wp, 2.44_wp, 2.33_wp, 2.30_wp, 2.26_wp, 2.29_wp, &  ! Ta-Hg
       & 2.42_wp, 2.49_wp, 2.50_wp, 2.50_wp, 2.47_wp, 2.43_wp, 2.58_wp, 2.92_wp, &  ! Tl-Ra
-      & 2.93_wp, 2.89_wp, 2.85_wp, 2.83_wp, 2.80_wp, 2.78_wp, 2.76_wp, 2.76_wp]    ! Ac-Cm
+      & 2.93_wp, 2.89_wp, 2.85_wp, 2.83_wp, 2.80_wp, 2.78_wp, 2.76_wp, 2.76_wp  &  ! Ac-Cm
+      & ]
 
    public :: get_radius
    public :: get_radius_func

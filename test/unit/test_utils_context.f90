@@ -38,6 +38,7 @@ contains
                   new_unittest("print_settings_runs", test_print_settings_runs), &
                   new_unittest("debug_message_gated", test_debug_message_gated), &
                   new_unittest("message_flush_gated", test_message_flush_gated), &
+                  new_unittest("warning_in_output", test_warning_in_output), &
                   new_unittest("delete_is_safe", test_delete_is_safe), &
                   new_unittest("output_contracts", test_output_contracts), &
                   new_unittest("failed_files", test_failed_files) &
@@ -55,6 +56,8 @@ contains
       if (allocated(error)) return
       call check(error,.not. ctx%debug, "default debug is false")
       if (allocated(error)) return
+      call check(error,.not. ctx%warnings_to_stderr, "default keeps warnings off stderr")
+      if (allocated(error)) return
       ! a fresh context owns an initialized, empty timer tree
       call check(error, ctx%timer%num_nodes() == 0, "fresh timer has no nodes")
       if (allocated(error)) return
@@ -70,6 +73,11 @@ contains
       call check(error, ctx%debug, "explicit debug applied")
       if (allocated(error)) return
       call check(error, ctx%verbosity() == 6, "debug raises verbosity to 6")
+      if (allocated(error)) return
+      call ctx%delete()
+
+      call new_context(ctx, nthreads=0, warnings_to_stderr=.true.)
+      call check(error, ctx%warnings_to_stderr, "explicit warnings_to_stderr applied")
       if (allocated(error)) return
       call ctx%delete()
 
@@ -726,6 +734,33 @@ contains
       end if
       close (iu, status="delete")
    end subroutine test_message_flush_gated
+
+   !> A warning lands in the output unit even at verbosity 0, in order with the messages
+   subroutine test_warning_in_output(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      character(*), parameter :: path = "test_context_warning.tmp"
+      integer :: iu, stat
+      character(64) :: line
+
+      call new_context(ctx, nthreads=0, verbosity=0, logfile=path)
+      call ctx%message("silent at verbosity 0")
+      call ctx%warning("always written")
+      call ctx%delete()
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
+      call check(error, stat == 0, "log file exists")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      call check(error, stat == 0, "log file is non-empty")
+      if (.not. allocated(error)) then
+         call check(error, trim(line) == "[Warning] always written", "warning written to the log")
+      end if
+      if (.not. allocated(error)) then
+         read (iu, "(a)", iostat=stat) line
+         call check(error, is_iostat_end(stat), "only the warning written")
+      end if
+      close (iu, status="delete")
+   end subroutine test_warning_in_output
 
    !> delete() is safe to call, including twice, and reports no nodes after
    subroutine test_delete_is_safe(error)

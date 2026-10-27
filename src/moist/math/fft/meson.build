@@ -28,7 +28,7 @@ fft_lib = static_library(
   implicit_include_directories: false,
 )
 
-srcs += files('dst4.f90')
+srcs += files('dst4.f90', 'finufft.f90')
 
 if install
   install_data(

@@ -198,13 +198,14 @@ typedef struct moist_lsf_s* moist_lsf;
 /// calling thread's omp_get_max_threads at construction, negative is an error.
 /// The count sizes MOIST's own OpenMP regions; the host's OpenMP runtime and
 /// the BLAS/LAPACK threading are left alone. verbosity (0 silent ... 6 debug,
-/// 2 is the library default; levels in the API reference) and debug are the
-/// only logging settings; debug raises the verbosity to 6. Every model
-/// constructor requires a context, a cavity or component constructor takes one
-/// optionally; each retains it
+/// 2 is the library default; levels in the API reference), debug and
+/// warnings_to_stderr are the only logging settings; debug raises the
+/// verbosity to 6. Warnings print to standard output, warnings_to_stderr also
+/// copies them to standard error. Every model constructor requires a context,
+/// a cavity or component constructor takes one optionally; each retains it
 moist_API_ENTRY moist_context moist_API_CALL
 moist_new_context(moist_error error, int nthreads, int verbosity,
-                  bool debug) moist_API_SUFFIX__V_1_0;
+                  bool debug, bool warnings_to_stderr) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL
 moist_delete_context(moist_context *context) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY void moist_API_CALL
@@ -353,6 +354,7 @@ typedef struct {
     double newton_tol;
     int newton_maxiter;
     bool parameter_derivatives; /* return the "parameter_adjoint" response item */
+    bool point_potential; /* request "point_potential" on Gaussian surfaces too */
 } moist_pcm_options;
 
 moist_API_ENTRY void moist_API_CALL
@@ -374,8 +376,9 @@ moist_init_gostshyp_options(moist_error error, moist_gostshyp_options *options,
 
 /// Banner text returned by moist_get_banner
 typedef enum {
-    moist_banner_full = 0, moist_banner_short = 1,
-    moist_banner_ascii = 2, moist_banner_build = 3
+    moist_banner_full = 0, moist_banner_tagline = 1,
+    moist_banner_logo = 2, moist_banner_build = 3,
+    moist_banner_compact = 4
 } moist_banner;
 
 /// Copy banner text, or query its length with buffer=NULL and capacity=0
@@ -1372,6 +1375,9 @@ moist_get_model_field_bool(moist_error error,
 /// contribution to the latest moist_get_model_energy in Hartree, after a
 /// successful evaluation; moist_update_model clears it, and a failed
 /// evaluation leaves it unavailable for the failing and later components.
+/// Under the same rule a component lists its own per-point results (ngrid
+/// each): a PCM `potential_adjoint` (its share of dE/dphi), GOSTSHYP `omega`,
+/// `gt`, `ftilde`, `amplitude` and `point_energy` (adding up to its energy).
 /// A model of another family and an index outside the count are errors.
 /// See docs/reference/fields.rst
 

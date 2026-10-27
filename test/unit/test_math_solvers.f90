@@ -25,8 +25,7 @@ module test_math_solvers
    use moist_math_solver_newton_deflation, only: new_newton_deflation_solver, &
                                                  moist_math_solver_newton_deflation_type
    use moist_math_solver_deflation, only: moist_deflation_operator_type
-   use moist_math_solver_octree_branch, only: moist_math_octree_branch_type, &
-                                              octree_seed_cluster, octree_seed_per_leaf
+   use moist_math_solver_octree_branch, only: moist_math_octree_branch_type
    use mctc_env_error, only: moist_error_type => error_type
    ! Raw vendored solver APIs (upstream test ports folded into this suite)
    use slsqp_module, only: slsqp_solver
@@ -137,7 +136,8 @@ contains
          & new_unittest("octree_single_sphere_one_branch", test_octree_single_sphere), &
          & new_unittest("octree_sign_change_bound_is_tight", test_octree_sign_change_bound), &
          & new_unittest("octree_certifies_empty_ball", test_octree_empty_ball), &
-         & new_unittest("octree_seed_modes_agree", test_octree_seed_modes), &
+         & new_unittest("octree_surface_patch_coverage", test_octree_surface_patch_coverage), &
+         & new_unittest("octree_optional_region_certificate", test_octree_region_certificate), &
          & new_unittest("octree_budget_is_an_error", test_octree_budget, should_fail=.true.), &
          & new_unittest("octree_depth_cap_is_an_error", test_octree_depth_cap), &
          & new_unittest("octree_negative_slack_is_an_error", test_octree_negative_slack) &
@@ -2150,7 +2150,7 @@ contains
    end subroutine test_lbfgsb_bound_active
 
    !* ================================================================================= *!
-   !*              Certified octree branch search on an analytic level set              *!
+   !*                  Octree surface coverage on an analytic level set                 *!
    !* ================================================================================= *!
 
    !> Probe callback: level set value and exact Lipschitz exclusion radius
@@ -2219,23 +2219,22 @@ contains
          return
       end if
 
-      call check(error, octree%n_seeds, 2, &
-                 message="expected exactly two branch seeds, got "// &
-                 to_string(octree%n_seeds))
+      call check(error, octree%n_seeds > 0, message="surface coverage produced no seeds")
       if (allocated(error)) return
 
-      ! One seed on each side, each near the inner pole of its sphere
+      ! Both admissible surface patches have seeds near their surfaces
       n_left = 0
       n_right = 0
       do i = 1, octree%n_seeds
          if (octree%seeds(1, i) < 0.0_wp) n_left = n_left + 1
          if (octree%seeds(1, i) > 0.0_wp) n_right = n_right + 1
-         call check(error, abs(norm2(octree%seeds(:, i) - anchor) - 1.0_wp) < 0.2_wp, &
-                    message="seed is not near the surface at rho = 1")
+         call sphere_union_probe(octree%seeds(:, i), lsf0, radius, ctx)
+         call check(error, radius <= sqrt(3.0_wp)*octree%seed_size/2.0_wp, &
+                    message="seed lies farther than a leaf circumradius from the surface")
          if (allocated(error)) return
       end do
-      call check(error, n_left == 1 .and. n_right == 1, &
-                 message="branch seeds are not one per sphere")
+      call check(error, n_left > 0 .and. n_right > 0, &
+                 message="one of the two surface patches has no seed")
    end subroutine test_octree_two_sphere
 
    !> A single sphere admits exactly one branch, and the search tightens its own
@@ -2271,9 +2270,7 @@ contains
          return
       end if
 
-      call check(error, octree%n_seeds, 1, &
-                 message="expected exactly one branch seed, got "// &
-                 to_string(octree%n_seeds))
+      call check(error, octree%n_seeds > 0, message="surface coverage produced no seeds")
       if (allocated(error)) return
 
       ! rho_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
@@ -2320,9 +2317,7 @@ contains
          return
       end if
 
-      call check(error, octree%n_seeds, 1, &
-                 message="expected exactly one branch seed, got "// &
-                 to_string(octree%n_seeds))
+      call check(error, octree%n_seeds > 0, message="surface coverage produced no seeds")
       if (allocated(error)) return
 
       rho_true = sqrt(4.0_wp + slack)
@@ -2378,61 +2373,135 @@ contains
                  message="empty ball took more than the root box to certify")
    end subroutine test_octree_empty_ball
 
-   !> The per-leaf reference mode must see the same branches as the clustered
-   !> mode, just spread over many more seeds
-   subroutine test_octree_seed_modes(error)
+   !> Cover an analytically known spherical cap throughout its admissible window
+   subroutine test_octree_surface_patch_coverage(error)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
-
+      !> Search under test
       type(moist_math_octree_branch_type) :: octree
+      !> Analytic sphere
       type(sphere_union_context) :: ctx
+      !> Search error
       type(moist_error_type), allocatable :: solver_error
+      !> Search anchor and level-set probe
       real(wp) :: anchor(3), lsf0, radius
-      integer :: n_cluster, n_leaf
+      !> Exact cap samples and distance to the closest seed box
+      real(wp) :: point(3), theta, phi, distance
+      !> Sample and seed indices
+      integer :: itheta, iphi, i
 
-      ctx%nsphere = 2
-      ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%center(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius = [1.0_wp, 1.0_wp]
-      anchor = 0.0_wp
-
+      ctx%nsphere = 1
+      ctx%center(:, 1) = 0.0_wp
+      ctx%radius(1) = 1.0_wp
+      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
       call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      call octree%init(seed_size=0.1_wp, seed_mode=octree_seed_cluster, &
-                       error=solver_error)
+      call octree%init(seed_size=0.1_wp, error=solver_error)
       if (allocated(solver_error)) then
-         call test_failed(error, "octree init (cluster): "//solver_error%message)
+         call test_failed(error, solver_error%message)
          return
       end if
       call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
                       rho2_slack=0.5_wp, probe=sphere_union_probe, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
-         call test_failed(error, "octree run (cluster): "//solver_error%message)
+         call test_failed(error, solver_error%message)
          return
       end if
-      n_cluster = octree%n_seeds
 
-      call octree%init(seed_size=0.1_wp, seed_mode=octree_seed_per_leaf, &
-                       error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree init (per leaf): "//solver_error%message)
-         return
-      end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
-                      rho2_slack=0.5_wp, probe=sphere_union_probe, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree run (per leaf): "//solver_error%message)
-         return
-      end if
-      n_leaf = octree%n_seeds
+      ! rho^2 = 5 - 4*cos(theta); the admissible cap has cos(theta) >= 7/8
+      do itheta = 0, 8
+         theta = acos(0.875_wp)*real(itheta, wp)/8.0_wp
+         do iphi = 0, 23
+            phi = 2.0_wp*acos(-1.0_wp)*real(iphi, wp)/24.0_wp
+            point = [cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi)]
+            distance = huge(1.0_wp)
+            do i = 1, octree%n_seeds
+               distance = min(distance, maxval(abs(point - octree%seeds(:, i))))
+            end do
+            call check(error, distance <= 0.5_wp*octree%seed_size + 1.0e-12_wp, &
+                       message="an admissible surface point has no seed box")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_octree_surface_patch_coverage
 
-      call check(error, n_cluster == 2, &
-                 message="clustered mode did not reduce to one seed per branch")
+   !> Keep analytic sphere stationary points while discarding transverse boxes
+   subroutine test_octree_region_certificate(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Reused tree
+      type(moist_math_octree_branch_type) :: tree
+      !> Unit sphere at the origin
+      type(sphere_union_context) :: context
+      !> Native error
+      type(moist_error_type), allocatable :: native_error
+      !> Distance origin and probe values
+      real(wp) :: anchor(3), value, radius, distance
+      !> Unpruned count and nearest/farthest sphere point indices
+      integer :: unpruned, sign_index, i
+
+      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
+      call sphere_union_probe(anchor, value, radius, context)
+      call tree%init(seed_size=0.1_wp, error=native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe, context, native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      unpruned = tree%n_seeds
+      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe, context, native_error, &
+                    exclude_region=sphere_stationarity_excluded)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call check(error, tree%n_regions_excluded > 0 .and. 2*tree%n_seeds < unpruned, &
+                 message="Optional certificate did not discard transverse boxes")
       if (allocated(error)) return
-      call check(error, n_leaf > n_cluster, &
-                 message="per-leaf mode should emit more seeds than clustered mode")
-   end subroutine test_octree_seed_modes
+      do sign_index = -1, 1, 2
+         distance = huge(1.0_wp)
+         do i = 1, tree%n_seeds
+            distance = min(distance, maxval(abs(tree%seeds(:, i) - [real(sign_index, wp), 0.0_wp, 0.0_wp])))
+         end do
+         call check(error, distance <= 0.5_wp*tree%seed_size, &
+                    message="Optional certificate removed an analytic stationary point")
+         if (allocated(error)) return
+      end do
+      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe, context, native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call check(error, tree%n_seeds, unpruned, message="Reference search changed after a pruned run")
+      if (allocated(error)) return
+      call check(error, tree%n_regions_excluded, 0, message="Region exclusion count was not reset")
+   end subroutine test_octree_region_certificate
+
+   !> Exact stationary-axis exclusion for the analytic sphere fixture
+   !>
+   !> @param[in] center     Box midpoint (3)
+   !> @param[in] half_width Cube half-width
+   !> @param[in] context    Single sphere centered on the anchor's x-axis
+   function sphere_stationarity_excluded(center, half_width, context) result(excluded)
+      !> Box midpoint
+      real(wp), intent(in) :: center(3)
+      !> Cube half-width
+      real(wp), intent(in) :: half_width
+      !> Analytic sphere fixture
+      class(*), intent(in) :: context
+      !> Box cannot intersect the stationary x-axis
+      logical :: excluded
+
+      excluded = .false.
+      select type (context)
+      type is (sphere_union_context)
+         excluded = any(abs(center(2:3) - context%center(2:3, 1)) > half_width)
+      end select
+   end function sphere_stationarity_excluded
 
    !> Exhausting the box budget must be reported, never silently truncated: a
    !> partial search carries no completeness certificate

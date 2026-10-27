@@ -2,8 +2,8 @@ SS(V)PE
 ========
 
 The surface and simulation of volume polarization equation :cite:p:`chipman2000ssvpe` is a dielectric
-boundary formulation, the symmetrized counterpart of IEF-PCM :cite:p:`lange2011symmetric`, that uses the surface potential and its normal derivative.
-It requires cavity normals. Construct it with ``epsilon`` through
+boundary formulation, the symmetrized counterpart of IEF-PCM :cite:p:`lange2011symmetric`, that uses the solute's surface potential alone.
+Its double-layer operator requires cavity normals. Construct it with ``epsilon`` through
 ``new_component_ssvpe`` (Fortran), ``moist_new_ssvpe_component`` (C), or
 ``ModelComponentSSVPE`` (Python); numerical controls use the shared PCM options.
 
