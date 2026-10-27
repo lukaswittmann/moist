@@ -221,10 +221,9 @@ contains
       call self%register_real_scalar("alpha", self%alpha)
       if (self%solvent_side) call self%register_string("mixing", self%mixing)
       if (has_choice(self%charges, "ec")) then
-         call self%register_real_scalar("ec.exclusion_start", self%ec%exclusion_start)
-         call self%register_real_scalar("ec.exclusion_end", self%ec%exclusion_end)
-         call self%register_real_scalar("ec.range_scale", self%ec%range_scale)
-         call self%register_real_scalar("ec.long_range_bias", self%ec%long_range_bias)
+         call self%register_real_scalar("ec.inner_scale", self%ec%inner_scale)
+         call self%register_real_scalar("ec.outer_distance", self%ec%outer_distance)
+         call self%register_real_scalar("ec.switch_width", self%ec%switch_width)
          call self%register_real_scalar("ec.restraint_strength", self%ec%restraint_strength)
          call self%register_real_scalar("ec.charge_penalty", self%ec%charge_penalty)
       end if
