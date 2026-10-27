@@ -39,14 +39,23 @@ contains
    end subroutine collect_utils_timer
 
    !> Spin the CPU for a short but measurable interval
+   !>
+   !> Ends only after the timer's clock has ticked; ifx on Windows ticks too
+   !> coarsely for the loop alone
    subroutine busy()
       integer :: k
+      integer(i8) :: c0, c
       real(wp) :: x
+      call system_clock(c0)
       x = 0.0_wp
       do k = 1, 50000
          x = x + sqrt(real(k, wp))
       end do
       if (x < 0.0_wp) error stop
+      do
+         call system_clock(c)
+         if (c /= c0) exit
+      end do
    end subroutine busy
 
    !> Re-entering a name accumulates into one node and counts every call

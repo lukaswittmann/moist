@@ -28,6 +28,7 @@ elif fc_id == 'intel' and fc.get_argument_syntax() == 'msvc'
     '/Qopenmp-simd-',
     language: 'fortran',
   )
+  add_project_link_arguments('/STACK:8388608', language: ['fortran', 'c', 'cpp'])
   # Windows does not preprocess .F90 by its case; global, as mctc-lib passes /fpp to ifort only
   if meson.is_subproject()
     add_project_arguments('/fpp', language: 'fortran')
