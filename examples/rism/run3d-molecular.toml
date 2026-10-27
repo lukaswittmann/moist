@@ -3,40 +3,37 @@ closure = "KH"
 correction = "PC+"
 
 [potential]
-# First covering table wins: GAFF2 types, UFF for atoms GAFF2 leaves
-lj = ["gaff2", "uff"]
+lj = ["gaff2", "uff", "tm"]
 charges = "custom"
 q = [
    -0.479657,  # C1
-   0.290575,   # C2
-   0.160770,   # H3
-   0.141821,   # H4
-   0.135546,   # H5
-   0.636185,   # C6
+    0.290575,   # C2
+    0.160770,   # H3
+    0.141821,   # H4
+    0.135546,   # H5
+    0.636185,   # C6
    -0.727756,  # O7
    -0.826705,  # O8
    -0.606436,  # N9
-   0.393563,   # H10
-   0.379919,   # H11
-   0.075160,   # H12
-   0.427017,   # H13
+    0.393563,   # H10
+    0.379919,   # H11
+    0.075160,   # H12
+    0.427017,   # H13
 ]
 
 [grid]
 kind = "molecular"
 nrad = 50
-angular_degree = 17
-rmax = 10.0  # bohr
-becke_k = 3
-dr = 0.6  # bohr
-kbuffer = 2.0  # bohr
-nufft_tolerance = 1e-10
+angular_degree = 35
+rmax = 16.0  # bohr
+handymod_exponent = 0.34
+nufft_tolerance = 1e-6
 
 [convergence]
-tolerance = 1e-7
+tolerance = 1e-9
 
 [solver]
-name = "JFNK"
+name = "hybrid"
 
 [solvent]
 name = "water"
