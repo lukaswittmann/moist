@@ -1,0 +1,283 @@
+# =============================================================================
+# 3D UV-RISM / EC-RISM: complete TOML keyword reference
+# =============================================================================
+# Part I: regular settings. Part II: extended settings with working defaults.
+
+
+# #############################################################################
+# PART I: REGULAR SETTINGS
+# #############################################################################
+
+# =============================================================================
+# 1. UV model: closure, free-energy corrections and convergence
+# =============================================================================
+closure = "HNC"           # Closure: "KH", "PSE2", "PSE3", "PSE4", "HNC"
+correction = "none"       # Pressure correction: "none", "PC", "PC+"
+finite_size = "none"       # Charge correction: "none", "huenenberger"
+susceptibility = "oz"     # Bulk response: "oz" reconstruction, "direct" transform,
+                          # or "linear" interpolation
+
+[convergence]
+tolerance = 1e-9           # Converged RMS residual; > 0
+maxiter = 128              # Outer iterations per attempt; integer >= 1
+
+# Closure ramp and initial guess
+closure_ramp = true        # Cold starts: KH -> PSE2 -> PSE3 -> HNC up to the requested one
+closure_ramp_rmse = 1e-5   # Residual threshold to advance the ramp; > 0
+reuse_initial_guess = true # Reuse converged fields after fixed-geometry host updates
+cold_guess = "cs0"         # "cs0": map c_s=0 through OZ; "ts0": start with t_s=0
+
+# =============================================================================
+# 2. Bulk solvent: name, state point and VV equations
+# =============================================================================
+
+[solvent]
+name = "water"  # Solvent name
+
+# System settings
+temperature = 298.15  # Optional example, K; > 0
+pressure = 101325.0   # Optional example, Pa; > 0
+
+# Solvent theory
+theory = "RISM"  # "RISM" (alias "XRISM") or "DRISM"
+closure = "HNC"  # "KH", "PSE2", "PSE3", "PSE4", "HNC"
+
+# =============================================================================
+# 3. Solute potential: Lennard-Jones, fixed charges or host EC field
+# =============================================================================
+
+[potential]
+lj = ["gaff2", "uff", "tm"] # First LJ covering choice wins
+charges = "ec"              # Solute "charges"/elstat. coupling
+ng_split = true             # Analytical Ng Coulomb split; true or false
+alpha = 1.0                 # Ng splitting parameter, 1/bohr; > 0
+
+# =============================================================================
+# 4. UV spatial grid: choose Cartesian or molecular
+# =============================================================================
+
+[grid]
+kind = "cartesian"       # 3D choices: "cartesian", "molecular"
+
+# --- Cartesian point grid -----------------------------------------------------
+[grid.cartesian]
+nx = 128                 # Points along x; integer >= 2
+ny = 128                 # Points along y; integer >= 2
+nz = 128                 # Points along z; integer >= 2
+dr = 0.6                 # Spacing, bohr; > 0
+margin = 10.0            # Required minimum nucleus-to-face distance, bohr; >= 0
+
+# --- Atom-centred molecular point grid (inactive with kind="cartesian") --------
+# Partition, pruning and NUFFT settings: section 7
+
+# Radial part
+[grid.molecular.radial]
+npts = 50                # Bounded HandyMod radial shells per atom; integer >= 1
+rmax = 10.0              # Outer radius, bohr; > 0 and > 2**handymod_exponent - 1
+handymod_exponent = 2.0  # Mapping exponent; > 0 (values below 1 are allowed)
+
+# Angular part
+[grid.molecular.angular]
+degree = 35              # Minimum Lebedev exactness degree; integer >= 0
+
+# =============================================================================
+# 5. Checkpoints: persistent bulk and UV guesses
+# =============================================================================
+
+[checkpoint]
+enabled = true   # false: disable all checkpoint reads and writes
+[checkpoint.vv]
+interval = 0     # Intermediate save interval; integer >= 0; 0: final only
+[checkpoint.uv]
+interval = 0     # Intermediate save interval; integer >= 0; 0: final only
+
+# #############################################################################
+# PART II: EXTENDED SETTINGS
+# #############################################################################
+
+# =============================================================================
+# 6. EC LR charge fit (optional, with charges = "ec")
+# =============================================================================
+
+# [potential.ec]
+# inner_scale = 1.0          # Inner shell radius / atomic radius; dimensionless, > 0
+# outer_distance = 5.0       # Outer shell distance beyond atomic radius, bohr; > 0
+# switch_width = 1.0         # Smooth inner/outer switch width, bohr; > 0
+# restraint_strength = 1e-4  # Restraint relative to mean data-Hessian diagonal; > 0
+# charge_penalty = 0.1       # Linear excess-charge penalty, e/bohr^2; >= 0
+
+# =============================================================================
+# 7. Molecular grid: partition, pruning and NUFFT
+# =============================================================================
+
+[grid.molecular]
+partition = "pvoronoi"   # "becke", "ssf", "pvoronoi"
+
+# Partition settings
+becke_k = 3              # Becke polynomial iterations; integer >= 1
+ssf_a = 0.64             # SSF switch half-width; 0 < value <= 1
+power_width = 1.0        # Power-Voronoi switch half-width, bohr^2; > 0
+
+# Pruning settings
+weight_pruning_cutoff = 1e-14   # Absolute integration-weight cutoff, bohr^3; >= 0
+partition_pruning_cutoff = 0.0  # Owner-partition cutoff; 0 <= value < 1
+
+# Settings for the non-uniform FFT (NUFFT)
+dr = 0.6                 # Reciprocal lattice's real-space spacing, bohr; > 0
+kbuffer = 2.0            # Reciprocal period margin, bohr; >= 0
+nufft_tolerance = 1e-6   # Requested FINUFFT relative tolerance; > 0
+nufft_upsampfac = 0.0    # 0: automatic; otherwise > 1 (commonly 1.25 or 2.0)
+
+# --- Registered for file compatibility, but used only by the 1D UV model -------
+# [grid.radial]
+# npts = 8192             # Uniform radial points; integer >= 2
+# dr = 0.015              # Spacing, bohr; > 0; kind="radial" is invalid for 3D
+
+# =============================================================================
+# 8. Bulk solvent: radial grid, convergence, damping and interactions
+# =============================================================================
+
+[solvent.drism]
+smear = 0.6682  # DRISM Gaussian width, bohr; >= 0; used only for DRISM
+
+[solvent.grid]
+npts = 8192  # Uniform radial VV points; integer >= 2
+dr = 0.015   # Radial spacing, bohr; > 0
+
+[solvent.convergence]
+tolerance = 1e-11         # Converged VV RMS residual; > 0
+maxiter = 128             # Outer iterations; integer >= 1
+closure_ramp = true       # Cold continuation through the same closure ladder as UV
+closure_ramp_rmse = 1e-5  # Residual threshold to advance the ramp; > 0
+
+[solvent.damping]
+small_k = true             # Small-k damping of eligible Picard/DIIS updates
+small_k_k0 = 1.0           # Damping wave number, 1/bohr; > 0
+small_k_min_weight = 0.15  # Weight at k=0; 0 <= value <= 1
+
+# --- Solvent interaction parameters -------------------------------------------
+[solvent.potential]
+
+# Use special water parameters; otherwise first covering choice
+lj = ["cspce", "gaff2", "uff", "tm"] # Same LJ options/precedence as section 3
+charges = ["spce", "resp-solvent"]
+
+mixing = "lorentz-berthelot"  # "lorentz-berthelot" or "geometric"; applies to UV too
+ng_split = true               # Analytical Ng Coulomb split; true or false
+alpha = 1.0                   # Ng splitting parameter, 1/bohr; > 0
+
+# =============================================================================
+# 9. UV solver: all algorithms (only the selected algorithm runs)
+# =============================================================================
+
+[solver]
+name = "JFNK"            # "PICARD", "DIIS", "JFNK", "HYBRID" (DIIS -> JFNK)
+
+[solver.picard]
+damping = 0.1            # Picard mixing, also while DIIS fills history; > 0
+
+[solver.diis]
+depth = 12                   # History size; integer >= 1
+damping = 0.2                # Mixing when step_limit=false; > 0
+step_limit = true            # Bound update relative to fixed-point residual
+step_limit_tau = 0.5         # Step reduction factor; 0 < value < 1
+step_limit_min_alpha = 1e-3  # Minimum step fraction before Picard fallback; (0,1]
+step_limit_ratio = 200.0     # Maximum update / residual ratio; > 0
+
+[solver.hybrid]
+switch_rmse = 1e-3       # Switch from DIIS to JFNK below this RMS residual; > 0
+
+[solver.jfnk]
+restart = 50             # GMRES restart length; integer >= 1
+max_krylov = 50          # GMRES iterations per Newton update; integer >= 1
+cgs2 = false             # true: twice classical Gram-Schmidt; false: modified GS
+recycle = 0              # Recycled Krylov vectors; integer >= 0; 0 disables recycling
+stagnation_tol = 0.0     # Restart-cycle relative decrease cutoff; [0,1); 0 disables
+eta0 = 0.5               # Forcing term for first two Newton steps; (0,1)
+eta_min = 1e-3           # Lower later forcing bound; (0,1), <= eta_max
+eta_max = 0.1            # Upper later forcing bound; (0,1)
+forcing_beta = 0.9       # Eisenstat-Walker forcing scale; (0,1]
+forcing_power = 2.0      # Eisenstat-Walker exponent; (1,2]
+use_exact_jvp = true     # Exact Jacobian-vector products; false: finite differences
+fd_eps = 0.0             # Finite-difference displacement; >= 0; 0: automatic
+
+# Linesearch/stepsize
+line_search_c = 1e-4             # Armijo sufficient decrease; (0,1)
+line_search_tau = 0.5            # Backtracking reduction factor; (0,1)
+line_search_min_alpha = 1e-4     # Smallest backtracking step fraction; (0,1]
+line_search_max_iter = 10        # Maximum backtracking trials; integer >= 1
+line_search_expand_ratio = 0.25  # Merit fraction above which to extend step; [0,1]
+alpha_max = 2.0                  # Longest Newton step; >= 1; 1 disables extension
+fallback_alpha = 0.25            # Initial Picard fallback step fraction; (0,1]
+precond = "none"                 # Only supported 3D UV preconditioner: "none"
+
+[solver.jfnk.adjoint]
+restart = 50             # Transpose GMRES restart length; integer >= 1
+max_krylov = 50          # Transpose GMRES iteration limit; integer >= 1
+
+# =============================================================================
+# 10. Bulk VV solver: independent controls with VV-specific preconditioning
+# =============================================================================
+
+[solvent.solver]
+name = "JFNK"            # "PICARD", "DIIS", "JFNK", "HYBRID" (DIIS -> JFNK)
+
+[solvent.solver.picard]
+damping = 0.1            # Picard mixing, also while DIIS fills history; > 0
+
+[solvent.solver.diis]
+depth = 12                   # History size; integer >= 1
+damping = 0.2                # Mixing when step_limit=false; > 0
+step_limit = true            # Bound update relative to fixed-point residual
+step_limit_tau = 0.5         # Step reduction factor; 0 < value < 1
+step_limit_min_alpha = 1e-3  # Minimum step fraction before Picard fallback; (0,1]
+step_limit_ratio = 200.0     # Maximum update / residual ratio; > 0
+
+[solvent.solver.hybrid]
+switch_rmse = 1e-3       # Switch from DIIS to JFNK below this RMS residual; > 0
+
+[solvent.solver.jfnk]
+restart = 50                      # GMRES restart length; integer >= 1
+max_krylov = 50                   # GMRES iterations per Newton update; integer >= 1
+cgs2 = false                      # true: twice classical Gram-Schmidt; false: modified GS
+recycle = 0                       # Recycled Krylov vectors; integer >= 0; 0 disables recycling
+stagnation_tol = 0.0              # Restart-cycle relative decrease cutoff; [0,1); 0 disables
+eta0 = 0.5                        # Forcing term for first two Newton steps; (0,1)
+eta_min = 1e-3                    # Lower later forcing bound; (0,1), <= eta_max
+eta_max = 0.1                     # Upper later forcing bound; (0,1)
+forcing_beta = 0.9                # Eisenstat-Walker forcing scale; (0,1]
+forcing_power = 2.0               # Eisenstat-Walker exponent; (1,2]
+use_exact_jvp = true              # Exact Jacobian-vector products; false: finite differences
+fd_eps = 0.0                      # Finite-difference displacement; >= 0; 0: automatic
+deflation = true                  # Coarse-space deflation; requires use_exact_jvp=true
+deflation_rmse = 1e-3             # Enable deflation below this RMS residual; > 0 when enabled
+line_search_c = 1e-4              # Armijo sufficient decrease; (0,1)
+line_search_tau = 0.5             # Backtracking reduction factor; (0,1)
+line_search_min_alpha = 1e-4      # Smallest backtracking step fraction; (0,1]
+line_search_max_iter = 10         # Maximum backtracking trials; integer >= 1
+line_search_expand_ratio = 0.25   # Merit fraction above which to extend step; [0,1]
+alpha_max = 2.0                   # Longest Newton step; >= 1; 1 disables extension
+fallback_alpha = 0.25             # Initial Picard fallback step fraction; (0,1]
+precond = "spectral"              # "none", "spectral", "kspace"
+precond_k0 = 1.0                  # Spectral filter wave number, 1/bohr; > 0
+precond_w0 = 0.1                  # Spectral filter weight at k=0; [0,1]
+deflation_sigma = 2.35            # Gaussian deflation profile width, bohr; > 0
+deflation_nfun = 2                # Profiles per site pair; integer >= 1
+
+[solvent.solver.jfnk.adjoint]
+restart = 50             # Transpose GMRES restart length; integer >= 1
+max_krylov = 50          # Transpose GMRES iteration limit; integer >= 1
+
+# =============================================================================
+# 11. Checkpoint files
+# =============================================================================
+
+# [checkpoint.vv]
+# file = "bulk.mbin"         # Optional explicit save file; default automatic name
+# guess = "bulk-guess.mbin"  # Optional initial file
+# directory = "."            # Optional automatic-name directory; default: working dir
+
+# [checkpoint.uv]
+# file = "solute.mbin"  # Optional save file; default: uv_rism_3d.mbin
+# guess = "guess.mbin"  # Optional initial file; default: saved file
+# directory = "."       # Optional automatic-name directory; default: working dir

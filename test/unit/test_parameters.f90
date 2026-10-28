@@ -4,34 +4,20 @@ module test_parameters
    use mctc_env, only: wp, moist_error => error_type
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_model_parameters, only: moist_model_parameters_type
+   use moist_model_moz_solver, only: moist_model_moz_solver_parameters_type
    use moist, only: moist_cavity_drop_parameters_type, moist_cavity_iswig_parameters_type, &
                     moist_cavity_numsa_parameters_type, moist_cavity_mc_parameters_type, &
                     moist_cavity_drop_lsf_svdw_param_type, moist_cavity_drop_lsf_cfc_param_type, &
                     moist_cavity_drop_lsf_isodensity_param_type, moist_pcm_parameters_type, moist_gostshyp_parameters_type, &
                     moist_cavity_mt_parameters_type
-   use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
-   use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_cavity_mt, only: cavity_type_mt, new_cavity_mt
-   use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
-   use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
-   use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_pcm_type, only: solver_type
-   use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense
-   use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cosmo, new_component_cosmo
-   use moist_model_continuum_component_pcm_iefpcm, only: model_continuum_component_iefpcm, new_component_iefpcm
-   use moist_model_continuum_component_pcm_lpb, only: model_continuum_component_lpb, new_component_lpb
-   use moist_model_continuum_component_pcm_slic, only: model_continuum_component_slic, new_component_slic
-   use moist_model_continuum_component_pcm_nonlocal, only: model_continuum_component_nonlocal, new_component_nonlocal
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
-   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use test_helpers, only: read_printout, printed_entry
    implicit none(type, external)
    private
    public :: collect_parameters
@@ -43,107 +29,31 @@ module test_parameters
    type, extends(moist_model_parameters_type) :: vector_parameters_type
       real(wp) :: weights(2) = [1.0_wp, 2.0_wp]
       character(len=16) :: label = "default"
+      real(wp), allocatable :: optional_scale, optional_weights(:)
    contains
       procedure :: init_defaults => init_vector_defaults
       procedure :: register_entries => register_vector_entries
    end type vector_parameters_type
 
+   !> Middle level of a nested parameter set
+   type, extends(moist_model_parameters_type) :: middle_parameters_type
+      integer :: depth = 1
+      type(vector_parameters_type) :: leaf
+   contains
+      procedure :: init_defaults => init_middle_defaults
+      procedure :: register_entries => register_middle_entries
+   end type middle_parameters_type
+
+   !> Top level of a nested parameter set
+   type, extends(moist_model_parameters_type) :: outer_parameters_type
+      real(wp) :: scale = 1.0_wp
+      type(middle_parameters_type) :: solver
+   contains
+      procedure :: init_defaults => init_outer_defaults
+      procedure :: register_entries => register_outer_entries
+   end type outer_parameters_type
+
 contains
-
-   !> Check model-specific physical inputs before the first update
-   subroutine test_pcm_physical_inputs(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Construction error
-      type(moist_error), allocatable :: err
-      !> Components under test
-      type(model_continuum_component_lpb) :: lpb
-      type(model_continuum_component_slic) :: slic
-      type(model_continuum_component_nonlocal) :: nonlocal
-      type(model_continuum_component_cpcm) :: cpcm
-      type(model_continuum_component_cosmo) :: cosmo
-      type(model_continuum_component_iefpcm) :: iefpcm
-      !> Captured parameter output
-      character(len=160) :: lines(80)
-      !> Scratch unit and line count
-      integer :: unit, nline
-
-      call new_component_lpb(lpb, 80.0_wp, 0.125_wp, err)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call lpb%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
-         & printed_entry(lines, "Kappa", "0.125000 bohr^-1"), "LPB screening input missing")
-      if (allocated(error)) return
-      call check(error,.not. printed_entry(lines, "f(eps)", ""), "LPB prints an internal factor")
-      if (allocated(error)) return
-
-      call new_component_slic(slic, 80.0_wp, 0.125_wp, 0.25_wp, 0.5_wp, err, &
-         & mu=0.0625_wp, phi_static=1.25_wp)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call slic%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
-         & printed_entry(lines, "Alpha", "0.125000") .and. &
-         & printed_entry(lines, "Beta", "0.250000 a.u.^-1") .and. &
-         & printed_entry(lines, "Gamma", "0.500000") .and. &
-         & printed_entry(lines, "Mu", "0.062500") .and. &
-         & printed_entry(lines, "Static potential", "1.250000 Eh/e"), "SLIC physical inputs missing")
-      if (allocated(error)) return
-      call check(error,.not. printed_entry(lines, "f(eps)", ""), "SLIC prints an internal factor")
-      if (allocated(error)) return
-
-      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 10.0_wp, err, eps_solute=1.5_wp)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call nonlocal%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
-         & printed_entry(lines, "Epsilon (high-frequency)", "2.000000") .and. &
-         & printed_entry(lines, "Epsilon (solute)", "1.500000") .and. &
-         & printed_entry(lines, "Correlation length", "10.000000 bohr"), "Nonlocal physical inputs missing")
-      if (allocated(error)) return
-      call check(error,.not. printed_entry(lines, "f(eps)", ""), "Nonlocal prints an internal factor")
-      if (allocated(error)) return
-
-      call new_component_iefpcm(iefpcm, 80.0_wp, err)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call iefpcm%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "Epsilon", "80.000000") .and. &
-         & .not. printed_entry(lines, "f(eps)", ""), "Layer PCM prints an internal factor")
-      if (allocated(error)) return
-
-      call new_component_cpcm(cpcm, 2.0_wp, err)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call cpcm%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "f(eps)", "0.500000"), "CPCM scaling factor missing")
-      if (allocated(error)) return
-
-      call new_component_cosmo(cosmo, 2.0_wp, err)
-      call check(error,.not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call cosmo%print_parameters(unit, level=2)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "f(eps)", "0.400000"), "COSMO scaling factor missing")
-   end subroutine test_pcm_physical_inputs
 
    !> Reset the helper parameter values
    !>
@@ -152,6 +62,8 @@ contains
       class(vector_parameters_type), intent(inout) :: self
       self%weights = [1.0_wp, 2.0_wp]
       self%label = "default"
+      if (allocated(self%optional_scale)) deallocate (self%optional_scale)
+      if (allocated(self%optional_weights)) deallocate (self%optional_weights)
    end subroutine init_vector_defaults
 
    !> Register vector and fixed-length string fields
@@ -161,337 +73,69 @@ contains
       class(vector_parameters_type), intent(inout), target :: self
       call self%register_real_vector("weights", self%weights)
       call self%register_string("label", self%label, level=2)
+      call self%register_alloc_real_scalar("optional_scale", self%optional_scale, level=2)
+      call self%register_alloc_real_vector("optional_weights", self%optional_weights, level=2)
    end subroutine register_vector_entries
 
-   !> Print a parameter table into a scratch unit and read its lines back
+   !> Reset the middle level and its group
    !>
-   !> @param[in] param Parameter values
-   !> @param[out] lines Printed lines
-   !> @param[out] nline Number of printed lines
-   !> @param[in] level Verbosity level of the printout
-   subroutine capture_table(param, lines, nline, level)
-      class(moist_model_parameters_type), intent(in) :: param
-      character(len=*), intent(out) :: lines(:)
-      integer, intent(out) :: nline
-      integer, intent(in), optional :: level
-      type(prettyprinter) :: pp
-      integer :: unit
+   !> @param[inout] self Test parameters
+   subroutine init_middle_defaults(self)
+      class(middle_parameters_type), intent(inout) :: self
+      self%depth = 1
+      call self%leaf%init_defaults()
+   end subroutine init_middle_defaults
 
-      open (newunit=unit, status="scratch", action="readwrite")
-      pp = new_prettyprinter(unit=unit)
-      call param%print_table(pp, level)
-      call read_printout(unit, lines, nline)
-      close (unit)
-   end subroutine capture_table
-
-   !> A table printed for a verbosity keeps the fields at or below it
-   subroutine test_print_levels(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(vector_parameters_type) :: vector
-      type(moist_gostshyp_parameters_type) :: gostshyp
-      type(moist_pcm_parameters_type) :: pcm
-      character(len=128) :: lines(64)
-      integer :: nline, unit
-      type(moist_error), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(cavity_type_iswig) :: iswig
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(cavity_type_drop) :: drop
-
-      call capture_table(vector, lines, nline)
-      call check(error, printed_entry(lines, "label", "default") .and. printed_entry(lines, "weights(1)", "1."), &
-         & "a table without a level lists every field")
-      if (allocated(error)) return
-
-      call capture_table(vector, lines, nline, level=2)
-      call check(error, printed_entry(lines, "label", "default"), "level 2 keeps the normal field")
-      if (allocated(error)) return
-      call check(error,.not. printed_entry(lines, "weights(1)", "1."), "level 2 drops the detailed field")
-      if (allocated(error)) return
-
-      ! Every GOSTSHYP setting is detailed: the normal table is empty
-      call capture_table(gostshyp, lines, nline, level=2)
-      call check(error, nline, 0, "a table without normal fields prints nothing")
-      if (allocated(error)) return
-      call capture_table(gostshyp, lines, nline, level=3)
-      call check(error, printed_entry(lines, "regularization_start", ""), "level 3 lists the detailed fields")
-      if (allocated(error)) return
-
-      call check(error, pcm%solver, solver_type%iterative, "default iterative solver")
-      if (allocated(error)) return
-      call check(error, pcm%storage, pcm_storage_dense, "default dense storage")
-      if (allocated(error)) return
-      call capture_table(pcm, lines, nline, level=2)
-      call check(error, nline, 2, "normal PCM settings contain only the named solver and storage")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines, "Solver", "Iterative") .and. printed_entry(lines, "Storage", "Dense"), &
-         & "level 2 names the solver and storage")
-      if (allocated(error)) return
-      call check(error, .not. (printed_entry(lines, "solver", "") .or. printed_entry(lines, "storage", "")), &
-         & "level 2 drops the raw solver and storage")
-      if (allocated(error)) return
-      call capture_table(pcm, lines, nline, level=3)
-      call check(error, nline, 11, "detailed PCM settings include the names and all solver controls")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines, "solver", "") .and. printed_entry(lines, "storage", "") .and. &
-         & printed_entry(lines, "solver_tol", "") .and. &
-         & printed_entry(lines, "solver_maxiter", "") .and. printed_entry(lines, "solver_restart", "") .and. &
-         & printed_entry(lines, "newton_tol", "") .and. printed_entry(lines, "newton_maxiter", "") .and. &
-         & printed_entry(lines, "point_potential", ""))
-      if (allocated(error)) return
-
-      ! Storage only applies to the iterative solver
-      pcm%solver = solver_type%dense
-      call capture_table(pcm, lines, nline, level=2)
-      call check(error, nline, 1, "the dense solver omits the storage")
-      if (allocated(error)) return
-      call check(error, printed_entry(lines, "Solver", "Dense"), "level 2 names the dense solver")
-      if (allocated(error)) return
-
-      ! Nothing prints at verbosity 0
-      call new_context(ctx, nthreads=0, verbosity=0)
-      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call iswig%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, nline, 0, "verbosity 0 prints settings")
-      if (allocated(error)) return
-      call ctx%delete()
-
-      ! From verbosity 1 an explicit request prints the normal settings
-      call new_context(ctx, nthreads=0, verbosity=1)
-      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call iswig%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "num_leb", "110"), "verbosity 1 omits the normal settings")
-      if (allocated(error)) return
-      call check(error, .not. printed_entry(lines, "cut_a", ""), "verbosity 1 lists the detailed settings")
-      if (allocated(error)) return
-
-      call lsf%new()
-      call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      open (newunit=unit, status="scratch", action="readwrite")
-      call drop%print_parameters(unit)
-      call read_printout(unit, lines, nline)
-      close (unit)
-      call check(error, printed_entry(lines, "Number of Leb. points", "194"), &
-         & "verbosity 1 omits the normal DROP settings")
-      if (allocated(error)) return
-      call check(error, .not. printed_entry(lines, "Projection tol.", ""), "verbosity 1 lists the detailed DROP settings")
-      call ctx%delete()
-   end subroutine test_print_levels
-
-   !> Level 3 adds the detailed settings of every cavity, level set and component
+   !> Register a scalar and the leaf group
    !>
-   !> Each detailed entry is also required to be absent at level 2, so the
-   !> check fails if the level gate stops working in either direction
-   subroutine test_print_detailed(error)
-      !> Test failure
+   !> @param[inout] self Test parameters
+   subroutine register_middle_entries(self)
+      class(middle_parameters_type), intent(inout), target :: self
+      call self%register_int_scalar("depth", self%depth)
+      call self%register_group("leaf", self%leaf)
+   end subroutine register_middle_entries
+
+   !> Reset the top level and its group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine init_outer_defaults(self)
+      class(outer_parameters_type), intent(inout) :: self
+      self%scale = 1.0_wp
+      call self%solver%init_defaults()
+   end subroutine init_outer_defaults
+
+   !> Register a scalar and the solver group
+   !>
+   !> @param[inout] self Test parameters
+   subroutine register_outer_entries(self)
+      class(outer_parameters_type), intent(inout), target :: self
+      call self%register_real_scalar("scale", self%scale)
+      call self%register_group("solver", self%solver)
+   end subroutine register_outer_entries
+
+   !> Files keep the controls of every solver group, selected or not
+   subroutine test_solver_file_groups(error)
       type(error_type), allocatable, intent(out) :: error
-      !> Library error
+      type(moist_model_moz_solver_parameters_type) :: solver, copy
       type(moist_error), allocatable :: err
-      !> Run context borrowed by every part
-      type(moist_context_type), target :: ctx
-      !> DROP settings reaching the conditional octree and switching rows
-      type(moist_cavity_drop_parameters_type) :: param
-      !> Level sets
-      type(moist_cavity_drop_lsf_svdw_type) :: svdw
-      type(moist_cavity_drop_lsf_cfc_type) :: cfc
-      type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho
-      !> Cavities
-      type(cavity_type_drop) :: drop
-      type(cavity_type_iswig) :: iswig
-      type(cavity_type_numsa) :: numsa
-      type(cavity_type_mt) :: mt
-      type(cavity_type_mc) :: mc
-      !> Components
-      type(model_continuum_component_cpcm) :: pcm
-      type(model_continuum_component_gostshyp) :: gostshyp
+      integer :: unit, stat
+      !> Round-trip file of the solver controls
+      character(len=*), parameter :: path = "moist-test-parameters-solver.toml"
 
-      call new_context(ctx, nthreads=0, verbosity=0)
-      call param%new(proj_level=9, wleb_prune_level=2, error=err)
-      call check(error, .not. allocated(err))
+      solver%name = "PICARD"
+      solver%jfnk%restart = 7
+      call solver%write_file(path, err)
+      call check(error, .not. allocated(err), "writing the solver controls failed")
       if (allocated(error)) return
-
-      call svdw%new()
-      call new_cavity_drop(drop, default_cpcm_radii(), svdw, err, param, ctx=ctx)
-      call check(error, .not. allocated(err))
+      call copy%read_file(path, err, strict=.true.)
+      open (newunit=unit, file=path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
+      call check(error, stat, 0)
       if (allocated(error)) return
-      call require_cavity(drop, [character(len=32) :: "Projection tol.", "Wleb switch from", "xi_born", &
-         "Octree seed size", "Softmax scale", "Cell grid fraction", "Surface normals"], error)
+      call check(error, .not. allocated(err), "reading the solver controls failed")
       if (allocated(error)) return
-
-      call cfc%new()
-      call new_cavity_drop(drop, default_cpcm_radii(), cfc, err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(drop, [character(len=32) :: "Projection tol."], error, &
-         normal=[character(len=32) :: "Atomic exponent (a1)"])
-      if (allocated(error)) return
-
-      call rho%new(c_null_funptr, c_null_ptr, moist_cavity_drop_lsf_isodensity_param_type(log_grad_out=6.0_wp))
-      call new_cavity_drop(drop, default_cpcm_radii(), rho, err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(drop, [character(len=32) :: "ECP core fill radius (of R_A)", &
-         "Exclusion |grad ln rho| (out)", "Exclusion radius cap"], error, &
-         normal=[character(len=32) :: "Isovalue (rho_iso)", "ECP core fill"])
-      if (allocated(error)) return
-
-      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(iswig, [character(len=32) :: "cut_a", "cut_f"], error)
-      if (allocated(error)) return
-
-      call new_cavity_numsa(numsa, default_cpcm_radii(), err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(numsa, [character(len=32) :: "offset", "smoothing", "tolsesp"], error, &
-         normal=[character(len=32) :: "probe"])
-      if (allocated(error)) return
-
-      call new_cavity_mt(mt, default_cpcm_radii(), svdw, err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(mt, [character(len=32) :: "area_tolerance", "w_0ls_from", "w_0ls_to", "w_0ls_p", &
-         "w_0ls_a", "weight_cutoff"], error, normal=[character(len=32) :: "spacing", "target_area", "gaussian_scale"])
-      if (allocated(error)) return
-
-      ! Unset export paths print nothing
-      call new_cavity_mc(mc, default_cpcm_radii(), svdw, err, &
-         moist_cavity_mc_parameters_type(obj_file="mesh.obj", pqr_file="mesh.pqr"), ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_cavity(mc, [character(len=32) :: "obj_file", "pqr_file"], error, &
-         normal=[character(len=32) :: "spacing"])
-      if (allocated(error)) return
-
-      call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_component(pcm, [character(len=32) :: "solver", "storage", "solver_tol", "solver_maxiter"], error, &
-         normal=[character(len=32) :: "Solver", "Storage"])
-      if (allocated(error)) return
-
-      call new_component_gostshyp(gostshyp, 1.0e-6_wp, ctx=ctx, error=err)
-      call check(error, .not. allocated(err))
-      if (allocated(error)) return
-      call require_component(gostshyp, [character(len=32) :: "regularization_start", "regularization_end", &
-         "suppress_negative_amplitudes"], error, normal=[character(len=32) :: "Pressure"])
-      call ctx%delete()
-
-   contains
-
-      !> Print a cavity at levels 2 and 3 and compare the detailed entries
-      !>
-      !> @param[in] cavity Constructed cavity
-      !> @param[in] detailed Entries printed only from level 3
-      !> @param[out] error Test failure
-      !> @param[in] normal Entries printed at both levels
-      subroutine require_cavity(cavity, detailed, error, normal)
-         !> Constructed cavity
-         class(cavity_type), intent(in) :: cavity
-         !> Entries printed only from level 3
-         character(len=*), intent(in) :: detailed(:)
-         !> Test failure
-         type(error_type), allocatable, intent(out) :: error
-         !> Entries printed at both levels
-         character(len=*), intent(in), optional :: normal(:)
-         !> Printed lines per level
-         character(len=128) :: lines2(128), lines3(128)
-         !> Line count and scratch unit
-         integer :: nline, unit
-
-         open (newunit=unit, status="scratch", action="readwrite")
-         call cavity%print_parameters(unit, level=2)
-         call read_printout(unit, lines2, nline)
-         close (unit)
-         open (newunit=unit, status="scratch", action="readwrite")
-         call cavity%print_parameters(unit, level=3)
-         call read_printout(unit, lines3, nline)
-         close (unit)
-         call compare_levels(lines2, lines3, detailed, error, normal)
-      end subroutine require_cavity
-
-      !> Print a component at levels 2 and 3 and compare the detailed entries
-      !>
-      !> @param[in] component Constructed component
-      !> @param[in] detailed Entries printed only from level 3
-      !> @param[out] error Test failure
-      !> @param[in] normal Entries printed at both levels
-      subroutine require_component(component, detailed, error, normal)
-         !> Constructed component
-         class(model_continuum_component_type), intent(in) :: component
-         !> Entries printed only from level 3
-         character(len=*), intent(in) :: detailed(:)
-         !> Test failure
-         type(error_type), allocatable, intent(out) :: error
-         !> Entries printed at both levels
-         character(len=*), intent(in), optional :: normal(:)
-         !> Printed lines per level
-         character(len=128) :: lines2(64), lines3(64)
-         !> Line count and scratch unit
-         integer :: nline, unit
-
-         open (newunit=unit, status="scratch", action="readwrite")
-         call component%print_parameters(unit, level=2)
-         call read_printout(unit, lines2, nline)
-         close (unit)
-         open (newunit=unit, status="scratch", action="readwrite")
-         call component%print_parameters(unit, level=3)
-         call read_printout(unit, lines3, nline)
-         close (unit)
-         call compare_levels(lines2, lines3, detailed, error, normal)
-      end subroutine require_component
-
-      !> Detailed entries appear only at level 3, normal entries at both
-      !>
-      !> @param[in] lines2 Level-2 printout
-      !> @param[in] lines3 Level-3 printout
-      !> @param[in] detailed Entries printed only from level 3
-      !> @param[out] error Test failure
-      !> @param[in] normal Entries printed at both levels
-      subroutine compare_levels(lines2, lines3, detailed, error, normal)
-         !> Level-2 printout
-         character(len=*), intent(in) :: lines2(:)
-         !> Level-3 printout
-         character(len=*), intent(in) :: lines3(:)
-         !> Entries printed only from level 3
-         character(len=*), intent(in) :: detailed(:)
-         !> Test failure
-         type(error_type), allocatable, intent(out) :: error
-         !> Entries printed at both levels
-         character(len=*), intent(in), optional :: normal(:)
-         !> Entry index
-         integer :: i
-
-         do i = 1, size(detailed)
-            call check(error, printed_entry(lines3, trim(detailed(i)), ""), &
-               more="level 3 omits "//trim(detailed(i)))
-            if (allocated(error)) return
-            call check(error, .not. printed_entry(lines2, trim(detailed(i)), ""), &
-               more="level 2 prints "//trim(detailed(i)))
-            if (allocated(error)) return
-         end do
-         if (.not. present(normal)) return
-         do i = 1, size(normal)
-            call check(error, printed_entry(lines2, trim(normal(i)), "") .and. &
-               printed_entry(lines3, trim(normal(i)), ""), more="a level omits "//trim(normal(i)))
-            if (allocated(error)) return
-         end do
-      end subroutine compare_levels
-
-   end subroutine test_print_detailed
+      call check(error, copy%name == "PICARD" .and. copy%jfnk%restart == 7, "files lost an unselected solver")
+   end subroutine test_solver_file_groups
 
    !> DROP settings load from TOML and JSON with their derived values recomputed
    !>
@@ -734,6 +378,95 @@ contains
       call expect_error(error, err, "Cannot read parameter file")
    end subroutine test_bad_drop_load_missing_file
 
+   !> Nested parameter sets read, write and fail under their key groups
+   !>
+   !> - Two group levels: solver.depth, solver.leaf.weights and solver.leaf.label
+   !> - Omitted nested fields keep their defaults; both formats round-trip
+   !> - Errors name the full key; a nested set alone reads unprefixed keys
+   subroutine test_nested_groups(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(outer_parameters_type) :: param
+      type(moist_error), allocatable :: err
+      integer :: format_index
+      !> Temporary path owned by this test
+      character(len=*), parameter :: path = "moist-test-parameters-nested.json"
+
+      call read_text(param, '{"scale": 2.0, "solver": {"depth": 3, "leaf": {"weights": [0.5, 4.0]}}}', err, error)
+      if (allocated(error)) return
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, param%scale == 2.0_wp .and. param%solver%depth == 3, more="nested scalars not read")
+      if (allocated(error)) return
+      call check(error, all(param%solver%leaf%weights == [0.5_wp, 4.0_wp]), more="nested vector not read")
+      if (allocated(error)) return
+      call check(error, trim(param%solver%leaf%label) == "default", more="omitted nested field lost its default")
+      if (allocated(error)) return
+      param%solver%leaf%label = "written"
+      do format_index = 1, 2
+         call roundtrip(param, "moist-test-parameters-nested", error, format_index)
+         if (allocated(error)) return
+         call check(error, param%scale == 2.0_wp .and. param%solver%depth == 3 .and. &
+            & all(param%solver%leaf%weights == [0.5_wp, 4.0_wp]) .and. trim(param%solver%leaf%label) == "written", &
+            & more="nested values changed in a round trip")
+         if (allocated(error)) return
+      end do
+
+      call read_text(param, '{"solver": {"leaf": {"weights": [1.0]}}}', err, error)
+      if (allocated(error)) return
+      call check(error, allocated(err), more="a nested vector of the wrong length was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid parameter vector: solver.leaf.weights") > 0, more=err%message)
+      if (allocated(error)) return
+      call read_text(param, '{"solver": {"leaf": 3}}', err, error)
+      if (allocated(error)) return
+      call check(error, allocated(err), more="a scalar nested group was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid parameter group: solver.leaf.") > 0, more=err%message)
+      if (allocated(error)) return
+
+      call read_text(param%solver%leaf, '{"weights": [7.0, 8.0]}', err, error)
+      if (allocated(error)) return
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, all(param%solver%leaf%weights == [7.0_wp, 8.0_wp]), &
+         & more="a nested set alone did not read unprefixed keys")
+
+   contains
+
+      !> Write one document and read it into a parameter set
+      !>
+      !> @param[inout] target_param Parameter set reading the document
+      !> @param[in] text JSON document
+      !> @param[out] err Library error of the read
+      !> @param[out] error Test failure from the file handling
+      subroutine read_text(target_param, text, err, error)
+         !> Parameter set reading the document
+         class(moist_model_parameters_type), intent(inout) :: target_param
+         !> JSON document
+         character(len=*), intent(in) :: text
+         !> Library error of the read
+         type(moist_error), allocatable, intent(out) :: err
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> File unit and I/O status
+         integer :: unit, stat
+
+         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         write(unit, "(a)", iostat=stat) text
+         close(unit)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         call target_param%read_file(path, err)
+         open(newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close(unit, status="delete", iostat=stat)
+         call check(error, stat, 0)
+      end subroutine read_text
+
+   end subroutine test_nested_groups
+
    !> Collect parameter API regressions
    !>
    !> @param[out] testsuite Tests to run
@@ -743,18 +476,17 @@ contains
          new_unittest("file_roundtrip", test_roundtrip), &
          new_unittest("copies_and_errors", test_copies_and_errors), &
          new_unittest("vector_and_string", test_vector_and_string), &
-         new_unittest("print_levels", test_print_levels), &
-         new_unittest("print_detailed", test_print_detailed), &
+         new_unittest("solver_file_groups", test_solver_file_groups), &
          new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
-         new_unittest("pcm_physical_inputs", test_pcm_physical_inputs), &
          new_unittest("invalid_fields", test_invalid_fields), &
          new_unittest("file_formats", test_file_formats), &
          new_unittest("drop_contracts", test_drop_contracts), &
          new_unittest("configuration_fields", test_configuration_fields), &
          new_unittest("parameter_validation", test_parameter_validation), &
-         new_unittest("optional_overrides", test_optional_overrides)]
+         new_unittest("optional_overrides", test_optional_overrides), &
+         new_unittest("nested_groups", test_nested_groups)]
    end subroutine collect_parameters
 
    !> Check copied settings, derived values, and resetting to defaults

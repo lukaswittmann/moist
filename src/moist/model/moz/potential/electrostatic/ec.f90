@@ -2,7 +2,8 @@
 !>
 !> - Own point-potential request: phi in every phase, dphi_dr for gradients
 !> - Exact total charge, quadratic reference restraint and linear excess-charge penalty
-!> - Smooth nuclear exclusion and extra weight on distant samples
+!> - CHELPG-like fit shell: smooth switches at scaled vdW radii and a distance beyond the vdW surfaces
+!> - Restraint relative to the data: lambda = restraint_strength * trace(H_data)/natom
 !> - Fit built once per geometry in `update_grid` from the model's volume grid
 !> - Matrix-free: mask, weights and Hessian kept; 1/r basis recomputed in grid blocks
 !> - Charges fitted to each current host potential; any other grid refused by name
@@ -19,8 +20,9 @@ module moist_model_moz_potential_electrostatic_ec
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_lapack, only: potrf, potrs
+   use moist_data_radii_legacy, only: get_radius, rad_type
    use moist_model_moz_potential_term, only: potential_term_type, potential_name_len, charge_label_len
-   !$ use omp_lib, only: omp_get_thread_num
+!$ use omp_lib, only: omp_get_thread_num
    implicit none(type, external)
    private
    public :: ec_charges_type
@@ -45,6 +47,8 @@ module moist_model_moz_potential_electrostatic_ec
       real(wp), allocatable :: weight(:)
       !> Restrained Hessian, 1/bohr**2 (natom, natom)
       real(wp), allocatable :: h(:, :)
+      !> Absolute restraint lambda, 1/bohr**2
+      real(wp) :: restraint = 0.0_wp
       !> Sum of unnormalized fitting weights, bohr**3
       real(wp) :: normalization = 0.0_wp
       !> Threads of the grid's team for the basis products
@@ -58,19 +62,21 @@ module moist_model_moz_potential_electrostatic_ec
 
       !* ---------------------------- EC LR charge fitting --------------------------- *!
 
-      !> Nuclear exclusion radius; full weight beyond twice this radius, bohr
-      real(wp) :: exclusion_radius = 1.0_wp
-      !> Distance scale of the far-field weighting, bohr
-      real(wp) :: range_scale = 5.0_wp
-      !> Far-field weight increases from 1 to 1 + long_range_bias
-      real(wp) :: long_range_bias = 1.0_wp
-      !> Quadratic reference-charge restraint, 1/bohr**2; positive
-      real(wp) :: restraint_strength = 0.01_wp
+      !> Inner switch of each atom starts at inner_scale * radius; positive
+      real(wp) :: inner_scale = 1.0_wp
+      !> Outer switch of each atom ends at radius + outer_distance, bohr; positive
+      real(wp) :: outer_distance = 5.0_wp
+      !> Width of the inner and outer switches, bohr; positive
+      real(wp) :: switch_width = 1.0_wp
+      !> Reference-charge restraint relative to trace(H_data)/natom; positive
+      real(wp) :: restraint_strength = 1.0e-4_wp
       !> Slope of the linear excess-charge penalty, e/bohr**2; nonnegative
       real(wp) :: charge_penalty = 0.1_wp
 
       !* ------------------------ Reference charges and bounds ------------------------ *!
 
+      !> Optional fit radii, bohr (natom); default 1.2-scaled Bondi radii
+      real(wp), allocatable :: radii(:)
       !> Optional reference charges, e (natom); default total charge / natom
       real(wp), allocatable :: reference_charges(:)
       !> Optional thresholds for the excess-charge penalty, e (natom)
@@ -84,6 +90,8 @@ module moist_model_moz_potential_electrostatic_ec
 
       !> Updated nuclear coordinates, bohr (3, natom)
       real(wp), allocatable, private :: atom_xyz(:, :)
+      !> Updated fit radii, bohr (natom)
+      real(wp), allocatable, private :: radius(:)
       !> Updated reference charges, e (natom)
       real(wp), allocatable, private :: reference(:)
       !> Updated excess-charge penalty thresholds, e (natom)
@@ -203,16 +211,16 @@ contains
       integer :: i, n
       if (allocated(self%fit)) deallocate (self%fit)
       if (allocated(self%atom_xyz)) deallocate (self%atom_xyz)
+      if (allocated(self%radius)) deallocate (self%radius)
       if (allocated(self%reference)) deallocate (self%reference, self%threshold, self%lower, self%upper)
-      settings = [self%exclusion_radius, self%range_scale, self%long_range_bias, &
+      settings = [self%inner_scale, self%outer_distance, self%switch_width, &
          & self%restraint_strength, self%charge_penalty]
       if (.not. all(ieee_is_finite(settings))) then
          call fatal_error(error, "EC fit settings must be finite")
          return
       end if
-      if (self%exclusion_radius <= 0.0_wp .or. self%range_scale <= 0.0_wp .or. &
-         & self%long_range_bias < 0.0_wp .or. self%restraint_strength <= 0.0_wp .or. self%charge_penalty < 0.0_wp) then
-         call fatal_error(error, "EC fit requires positive radii and restraint, nonnegative bias and penalty")
+      if (any(settings(1:4) <= 0.0_wp) .or. self%charge_penalty < 0.0_wp) then
+         call fatal_error(error, "EC fit requires positive shell settings and restraint, nonnegative penalty")
          return
       end if
       n = mol%nat
@@ -224,11 +232,25 @@ contains
          call fatal_error(error, "EC fit needs finite nuclear coordinates")
          return
       end if
-      call check_setting(self%reference_charges, n, "reference charges", error)
+      call check_setting(self%radii, n, "radii", error)
+      if (.not. allocated(error)) call check_setting(self%reference_charges, n, "reference charges", error)
       if (.not. allocated(error)) call check_setting(self%charge_thresholds, n, "charge thresholds", error)
       if (.not. allocated(error)) call check_setting(self%lower_bounds, n, "lower bounds", error)
       if (.not. allocated(error)) call check_setting(self%upper_bounds, n, "upper bounds", error)
       if (allocated(error)) return
+      allocate (self%radius(n))
+      if (allocated(self%radii)) then
+         self%radius = self%radii
+      else
+         do i = 1, n
+            call get_radius(mol%num(mol%id(i)), rad_type%gauss, self%radius(i), error)
+            if (allocated(error)) return
+         end do
+      end if
+      if (any(self%radius <= 0.0_wp)) then
+         call fatal_error(error, "EC fit radii must be positive")
+         return
+      end if
       allocate (self%reference(n), self%threshold(n), self%lower(n), self%upper(n))
       self%reference = mol%charge/real(n, wp)
       if (allocated(self%reference_charges)) self%reference = self%reference_charges
@@ -292,6 +314,7 @@ contains
    !>
    !> - Once per geometry; the grid is kept to refuse any other grid later
    !> - Hessian from per-thread block sums, added up serially
+   !> - Restraint scaled by the mean diagonal of the data Hessian
    !>
    !> @param[in,out] self   updated term
    !> @param[in]     grid   volume grid of the owning model, updated to the structure
@@ -308,7 +331,6 @@ contains
       real(wp), allocatable :: mask(:), weight(:)
       !> Per-thread Hessian sums (natom, natom, nthreads)
       real(wp), allocatable :: h_t(:, :, :)
-      real(wp) :: center(3)
       integer :: n, a, ib, nblock, g0, g1, it, nt
       if (allocated(self%fit)) deallocate (self%fit)
       if (.not. allocated(self%atom_xyz)) then
@@ -330,19 +352,18 @@ contains
       n = size(self%atom_xyz, 2)
       nt = max(1, grid%team_size())
       allocate (mask(grid%ngrid))
-      center = sum(self%atom_xyz, dim=2)/real(n, wp)
       nblock = (grid%ngrid + block_size - 1)/block_size
       !$omp parallel do default(shared) schedule(static) num_threads(nt) private(ib, g0, g1)
       do ib = 1, nblock
          g0 = (ib - 1)*block_size + 1
          g1 = min(ib*block_size, grid%ngrid)
-         call mask_block(self, center, grid%xyz(:, g0:g1), mask(g0:g1))
+         call mask_block(self, grid%xyz(:, g0:g1), mask(g0:g1))
       end do
       !$omp end parallel do
       allocate (fit)
       fit%normalization = sum(grid%w*mask)
       if (.not. ieee_is_finite(fit%normalization) .or. fit%normalization <= tiny(1.0_wp)) then
-         call fatal_error(error, "EC fit has no positively weighted samples outside the nuclear exclusion")
+         call fatal_error(error, "EC fit has no positively weighted samples in its fit shell")
          return
       end if
       weight = grid%w*mask/fit%normalization
@@ -352,7 +373,7 @@ contains
          g0 = (ib - 1)*block_size + 1
          g1 = min(ib*block_size, grid%ngrid)
          it = 1
-         !$ it = omp_get_thread_num() + 1
+!$       it = omp_get_thread_num() + 1
          call hessian_block(self, grid%xyz(:, g0:g1), weight(g0:g1), h_t(:, :, it))
       end do
       !$omp end parallel do
@@ -362,8 +383,13 @@ contains
       call move_alloc(mask, fit%mask)
       call move_alloc(weight, fit%weight)
       fit%h = sum(h_t, dim=3)
+      fit%restraint = 0.0_wp
       do a = 1, n
-         fit%h(a, a) = fit%h(a, a) + self%restraint_strength
+         fit%restraint = fit%restraint + fit%h(a, a)
+      end do
+      fit%restraint = self%restraint_strength*fit%restraint/real(n, wp)
+      do a = 1, n
+         fit%h(a, a) = fit%h(a, a) + fit%restraint
       end do
       call move_alloc(fit, self%fit)
    end subroutine ec_charges_update_grid_3d
@@ -445,31 +471,21 @@ contains
       end if
    end subroutine require_fit_grid
 
-   !> Fit mask of a block of grid points: product of the exclusion switches times the far-field weight
+   !> Fit mask of a block of grid points
    !>
-   !> @param[in]  self    updated term
-   !> @param[in]  center  unweighted nuclear centroid, bohr (3)
-   !> @param[in]  xyz     grid points of the block, bohr (3, nb)
-   !> @param[out] mask    fit mask (nb)
-   subroutine mask_block(self, center, xyz, mask)
+   !> @param[in]  self  updated term
+   !> @param[in]  xyz   grid points of the block, bohr (3, nb)
+   !> @param[out] mask  fit mask (nb)
+   subroutine mask_block(self, xyz, mask)
       !> Updated term
       class(ec_charges_type), intent(in) :: self
-      !> Unweighted nuclear centroid
-      real(wp), intent(in) :: center(3)
       !> Grid points of the block
       real(wp), intent(in) :: xyz(:, :)
       !> Fit mask
       real(wp), intent(out) :: mask(:)
-      real(wp) :: r, switch, deriv, product_switch
-      integer :: i, a
+      integer :: i
       do i = 1, size(xyz, 2)
-         product_switch = 1.0_wp
-         do a = 1, size(self%atom_xyz, 2)
-            call exclusion_switch(self%exclusion_radius, norm2(xyz(:, i) - self%atom_xyz(:, a)), switch, deriv)
-            product_switch = product_switch*switch
-         end do
-         r = sum((xyz(:, i) - center)**2)
-         mask(i) = product_switch*(1.0_wp + self%long_range_bias*r/(r + self%range_scale**2))
+         call fit_mask(self, xyz(:, i), mask(i))
       end do
    end subroutine mask_block
 
@@ -549,7 +565,7 @@ contains
       !$omp parallel do default(shared) schedule(static) num_threads(self%fit%nthreads) private(ib, g, a, it)
       do ib = 1, nblock
          it = 1
-         !$ it = omp_get_thread_num() + 1
+!$       it = omp_get_thread_num() + 1
          do g = (ib - 1)*block_size + 1, min(ib*block_size, size(y))
             if (self%fit%mask(g) <= 0.0_wp) cycle
             do a = 1, size(x_t, 1)
@@ -561,54 +577,83 @@ contains
       x = sum(x_t, dim=2)
    end subroutine apply_basis_transpose
 
-   !> Smooth exclusion switch of one nucleus and its radial derivative
+   !> Quintic smoothstep and its derivative
    !>
-   !> - Quintic smoothstep in t = (r - radius)/radius: zero inside the radius, one beyond twice it
+   !> - Zero at or below t = 0, one at or above t = 1
+   !> - Continuous first and second derivatives
    !>
-   !> @param[in]  radius  exclusion radius, bohr
-   !> @param[in]  r       distance to the nucleus, bohr
+   !> @param[in]  t       transition coordinate
    !> @param[out] switch  switch value
-   !> @param[out] deriv   radial derivative, 1/bohr
-   pure subroutine exclusion_switch(radius, r, switch, deriv)
-      !> Exclusion radius
-      real(wp), intent(in) :: radius
-      !> Distance to the nucleus
-      real(wp), intent(in) :: r
+   !> @param[out] deriv   derivative with respect to t
+   elemental subroutine smoothstep(t, switch, deriv)
+      !> Transition coordinate
+      real(wp), intent(in) :: t
       !> Switch value
       real(wp), intent(out) :: switch
-      !> Radial derivative
+      !> Derivative with respect to t
       real(wp), intent(out) :: deriv
-      real(wp) :: t
-      t = (r - radius)/radius
       switch = 0.0_wp
       deriv = 0.0_wp
       if (t <= 0.0_wp) return
       switch = 1.0_wp
       if (t >= 1.0_wp) return
       switch = t**3*(10.0_wp + t*(-15.0_wp + 6.0_wp*t))
-      deriv = 30.0_wp*t**2*(1.0_wp - t)**2/radius
-   end subroutine exclusion_switch
+      deriv = 30.0_wp*t**2*(1.0_wp - t)**2
+   end subroutine smoothstep
 
-   !> Smooth exclusion switches and their radial derivatives
+   !> Products of all other entries, without division
    !>
-   !> @param[in]  self    term
-   !> @param[in]  point   volume point, bohr (3)
-   !> @param[out] switch  switches per nucleus (natom)
-   !> @param[out] deriv   radial derivatives, 1/bohr (natom)
-   subroutine exclusion(self, point, switch, deriv)
-      !> Term
+   !> @param[in] f  factors (n)
+   pure function others(f) result(p)
+      !> Factors
+      real(wp), intent(in) :: f(:)
+      !> Product of every factor but the own one (n)
+      real(wp) :: p(size(f))
+      real(wp) :: running
+      integer :: a
+      running = 1.0_wp
+      do a = 1, size(f)
+         p(a) = running
+         running = running*f(a)
+      end do
+      running = 1.0_wp
+      do a = size(f), 1, -1
+         p(a) = p(a)*running
+         running = running*f(a)
+      end do
+   end function others
+
+   !> Fit mask of a point and its derivatives by the nuclear distances
+   !>
+   !> - Mask prod_a s_a * (1 - prod_a o_a), a CHELPG-like shell around the solute
+   !> - s_a: zero within inner_scale * radius_a, one a switch width further out
+   !> - o_a: one beyond radius_a + outer_distance, zero a switch width further in
+   !>
+   !> @param[in]  self   updated term
+   !> @param[in]  point  volume point, bohr (3)
+   !> @param[out] mask   fit mask
+   !> @param[out] dmask  optional derivatives by the nuclear distances, 1/bohr (natom)
+   subroutine fit_mask(self, point, mask, dmask)
+      !> Updated term
       class(ec_charges_type), intent(in) :: self
       !> Volume point
       real(wp), intent(in) :: point(3)
-      !> Switches per nucleus
-      real(wp), intent(out) :: switch(:)
-      !> Radial derivatives
-      real(wp), intent(out) :: deriv(:)
+      !> Fit mask
+      real(wp), intent(out) :: mask
+      !> Optional derivatives by the nuclear distances
+      real(wp), intent(out), optional :: dmask(:)
+      real(wp) :: r(size(self%radius)), inner(size(r)), d_inner(size(r)), outer(size(r)), d_outer(size(r))
+      real(wp) :: shell
       integer :: a
-      do a = 1, size(switch)
-         call exclusion_switch(self%exclusion_radius, norm2(point - self%atom_xyz(:, a)), switch(a), deriv(a))
+      do a = 1, size(r)
+         r(a) = norm2(point - self%atom_xyz(:, a))
       end do
-   end subroutine exclusion
+      call smoothstep((r - self%inner_scale*self%radius)/self%switch_width, inner, d_inner)
+      call smoothstep((r - self%radius - self%outer_distance)/self%switch_width + 1.0_wp, outer, d_outer)
+      shell = 1.0_wp - product(outer)
+      mask = product(inner)*shell
+      if (present(dmask)) dmask = (d_inner*others(inner)*shell - product(inner)*d_outer*others(outer))/self%switch_width
+   end subroutine fit_mask
 
    !> Read and validate the current host potential
    !>
@@ -698,7 +743,8 @@ contains
 
    !> Reverse the constrained fit and the full-field evaluation
    !>
-   !> Derivatives use the current active constraints; charge-penalty kinks are piecewise differentiable
+   !> - Derivatives use the current active constraints; charge-penalty kinks are piecewise differentiable
+   !> - The relative restraint moves with the weights and points through trace(H_data)
    !>
    !> @param[in,out] self          declared term
    !> @param[in]     grid          volume grid
@@ -730,10 +776,10 @@ contains
       real(wp), intent(inout), optional :: gradient(:, :)
       type(potential_adjoint_response_type) :: item
       real(wp), allocatable :: phi(:), dphi(:, :), q(:), v(:), residual(:), t(:), w_raw(:), w_xyz(:, :), w_w(:)
-      real(wp), allocatable :: switches(:), deriv(:), zeros(:)
+      real(wp), allocatable :: inverse_square(:), dmask(:), zeros(:)
       integer, allocatable :: active(:)
-      real(wp) :: multiplier, center(3), d(3), dr(3), r, far, radial, other, w_a, mask_deriv, mean_weight
-      integer :: n, g, a, b
+      real(wp) :: multiplier, d(3), dr(3), r, w_a, mask, restraint
+      integer :: n, g, a
       ! Grid motion needs dphi_dr, a gradient-phase output; refused elsewhere instead of zeros
       if (present(grid_adjoint)) then
          call ec_charges_field(self, grid, view, phi, error, dphi)
@@ -763,43 +809,31 @@ contains
       call apply_basis(self, v, t)
       item%w_phi = w_phi + self%fit%weight*t
       if (present(grid_adjoint) .or. present(gradient)) then
+         ! lambda = restraint_strength/natom sum_g weight_g sum_a 1/r_ga**2 enters as v.(reference - q)
+         restraint = self%restraint_strength/real(n, wp)*dot_product(v, self%reference - q)
          allocate (w_xyz(3, grid%ngrid), source=0.0_wp)
-         allocate (switches(n), deriv(n))
-         mean_weight = sum(self%fit%weight*residual*t)
-         w_raw = (residual*t - mean_weight)/self%fit%normalization
+         allocate (inverse_square(grid%ngrid), source=0.0_wp)
+         allocate (dmask(n))
+         do g = 1, grid%ngrid
+            if (self%fit%mask(g) <= 0.0_wp) cycle
+            do a = 1, n
+               inverse_square(g) = inverse_square(g) + 1.0_wp/sum((grid%xyz(:, g) - self%atom_xyz(:, a))**2)
+            end do
+         end do
+         ! Adjoint of the unnormalized weights, mean removed by the normalization
+         w_raw = residual*t + restraint*inverse_square
+         w_raw = (w_raw - sum(self%fit%weight*w_raw))/self%fit%normalization
          w_w = self%fit%mask*w_raw
-         center = sum(self%atom_xyz, dim=2)/real(n, wp)
          ! TODO: parallelize this per-point loop (per-thread gradient buffers); last serial O(ngrid natom) part
          do g = 1, grid%ngrid
-            call exclusion(self, grid%xyz(:, g), switches, deriv)
-            d = grid%xyz(:, g) - center
-            r = sum(d**2)
-            far = 1.0_wp + self%long_range_bias*r/(r + self%range_scale**2)
-            dr = w_raw(g)*grid%w(g)*product(switches)* &
-               & 2.0_wp*self%long_range_bias*self%range_scale**2*d/(r + self%range_scale**2)**2
-            w_xyz(:, g) = dr
-            if (present(gradient)) then
-               do a = 1, n
-                  gradient(:, a) = gradient(:, a) - dr/real(n, wp)
-               end do
-            end if
+            ! Mask derivatives vanish wherever the mask does
+            if (self%fit%mask(g) <= 0.0_wp) cycle
+            call fit_mask(self, grid%xyz(:, g), mask, dmask)
             do a = 1, n
                d = grid%xyz(:, g) - self%atom_xyz(:, a)
                r = norm2(d)
-               dr = 0.0_wp
-               if (self%fit%mask(g) > 0.0_wp) then
-                  w_a = self%fit%weight(g)*(residual(g)*v(a) - t(g)*q(a))
-                  dr = -w_a*d/r**3
-               end if
-               if (deriv(a) > 0.0_wp) then
-                  other = 1.0_wp
-                  do b = 1, n
-                     if (b /= a) other = other*switches(b)
-                  end do
-                  radial = w_raw(g)*grid%w(g)*far*other*deriv(a)
-                  mask_deriv = radial/r
-                  dr = dr + mask_deriv*d
-               end if
+               w_a = self%fit%weight(g)*((residual(g)*v(a) - t(g)*q(a))/r**3 + 2.0_wp*restraint/r**4)
+               dr = (w_raw(g)*grid%w(g)*dmask(a)/r - w_a)*d
                w_xyz(:, g) = w_xyz(:, g) + dr
                if (present(gradient)) gradient(:, a) = gradient(:, a) - dr
             end do
@@ -841,7 +875,7 @@ contains
       integer :: n, i, iter, hit, release, low_i, high_i, hit_code, release_dir
       n = size(self%reference)
       call apply_basis_transpose(self, self%fit%weight*phi, b)
-      b = b + self%restraint_strength*self%reference
+      b = b + self%fit%restraint*self%reference
       allocate (q(n), active(n), region(n), lo(n), hi(n))
       q = min(self%upper, max(self%lower, self%reference))
       left = 0.0_wp

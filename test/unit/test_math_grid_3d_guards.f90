@@ -8,8 +8,8 @@
 !>   FFT or FINUFFT backend reads or writes past their extents
 !> - Molecular transform state: an unprepared engine, or one prepared on an outdated
 !>   grid geometry, fails instead of transforming with missing or stale plans
-!> - Molecular plan lifecycle: re-creation and copies come out unprepared, so two
-!>   engines never share or reuse FINUFFT plans
+!> - Molecular plan lifecycle: factory replacement and defined assignment produce
+!>   unprepared engines, which build independent FINUFFT plans
 !> - Volume adjoints: mis-sized channels fail instead of being summed out of bounds
 !> - Width adjoints: point grids and molecular Hessians reject Gaussian-width adjoints
 !>   they cannot contract, instead of dropping that contribution

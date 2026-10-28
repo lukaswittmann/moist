@@ -158,12 +158,12 @@ Here `cavity` selects the cavity-only workflow, `drop` the [DROP](https://moist.
 
 ### Other subcommands
 
-- `moist solvent <name>` reports the tabulated properties of a solvent by name
-  or alias.
+- `moist model rism3d <coord> -p run3d.toml` runs 3D solute-solvent RISM. Bulk VV is prepared internally. TOML describes the solvent, grid, potentials and independent UV/VV solver settings. `--grad` requests analytical gradients. See [the RISM recipe](docs/recipe/rism.rst) and [example inputs](examples/rism).
+- `moist solvent <name>` reports the tabulated properties of a solvent by name or alias.
 
 ## API access
 
-`moist` provides first class API support for [Fortran](https://moist.readthedocs.io/en/latest/reference/fortran.html), [C](https://moist.readthedocs.io/en/latest/reference/c.html) and [Python](https://moist.readthedocs.io/en/latest/reference/python.html); see the [API reference](https://moist.readthedocs.io/en/latest/reference/index.html) for an overview. Other programming languages should try to interface with `moist` via one of those three APIs. To provide first class API support for a new language the interface specification should be available as meson build files.
+`moist` provides first class API support for [Fortran](https://moist.readthedocs.io/en/latest/reference/fortran.html), [C](https://moist.readthedocs.io/en/latest/reference/c.html) and [Python](https://moist.readthedocs.io/en/latest/reference/python.html); see the [API reference](https://moist.readthedocs.io/en/latest/reference/index.html) for an overview. Other languages should try to interface with `moist` via one of those three APIs. To provide first class API support for a new language the interface specification should be available as meson build files.
 
 ### Fortran API
 

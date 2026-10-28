@@ -13,14 +13,16 @@ A term that cannot parametrise an atom leaves the atom uncovered; later terms fi
 
 * **Lennard-Jones**: the first term with parameters for an atom supplies them.
 * **Charges**: the first term with a charge for an atom supplies it (charges of several terms are not summed).
-* The update fails, naming the atoms, only when an atom is left without Lennard-Jones parameters, or without a charge once any term supplies charges.
+* The update fails, naming the atoms, only when an atom is left without Lennard-Jones parameters, or without a charge.
+* Solvent charges that miss bulk neutrality are shifted by the same amount on every atom, with a warning.
+* The 1D and 3D UV models also require the solute charges, including those from host data, to sum to the structure's total charge.
 
 The order of ``add`` calls is the order of preference: put the specific force field first and the broad fallback last.
 With :ref:`verbosity <verbosity>` 2 the update prints a table of every site with its charge, sigma, epsilon and the term that supplied each.
 
 ``monopole_type`` uses host-supplied atomic charges to build a point-charge potential in the 1D and 3D models.
 ``multipole_type`` uses host-supplied atomic multipoles, respectively. For 1D models; this averages out so that only the monopole term actually contributes.
-``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail.
+``ec_charges_type`` uses the full host potential sampled on the 3D volume grid and fits its own charges for the Ng tail :cite:p:`ng1974hnc`.
 Each concrete electrostatic term owns its host-data requirements and adjoints.
 
 Construction
@@ -31,7 +33,7 @@ Construction
    use moist_data_solvents, only : get_solvent_id
    use moist_solvent, only : solvent_system_type, new_solvent_system
    use moist_model_moz, only : solvent_vv_type, new_vv_solvent, model_moz_3d_type, new_moz_3d_model
-   use moist_model_moz_potential, only : lj_spce, lj_gaff, lj_uff, lj_tm, coulomb_spce, &
+   use moist_model_moz_potential, only : lj_cspce, lj_gaff, lj_uff, lj_tm, coulomb_cspce, &
       & coulomb_resp_solvent, monopole_type
 
    type(solvent_system_type) :: system
@@ -47,9 +49,9 @@ Construction
 
    ! Water: SPC/E covers every site. Any other solvent: SPC/E covers nothing,
    ! GAFF and the RESP table charges fill in
-   call solvent%potential%add(lj_spce, error)
+   call solvent%potential%add(lj_cspce, error)
    call solvent%potential%add(lj_gaff, error)
-   call solvent%potential%add(coulomb_spce, error)
+   call solvent%potential%add(coulomb_cspce, error)
    call solvent%potential%add(coulomb_resp_solvent, error)
    call solvent%update(error)
 
@@ -122,11 +124,27 @@ The fit minimizes
 ``Q`` is the structure's total charge. The exact charge constraint preserves the monopole of the long-range tail.
 The fitted charges enter the Ng split; the full field remains the host's potential.
 
-The normalized fitting weights are proportional to the volume quadrature weights, a smooth nuclear exclusion mask, and ``1 + long_range_bias * R**2 / (R**2 + range_scale**2)``, where ``R`` is the distance from the nuclear centroid.
-The default ``long_range_bias = 1`` and ``range_scale = 5`` bohr increase the relative weight of distant samples up to a factor of two.
-Points within ``exclusion_radius = 1`` bohr of any nucleus are excluded; a quintic switch reaches full weight at twice that radius, with continuous first and second derivatives.
+The fit samples a CHELPG-like shell around the solute on the model's own volume grid.
+The normalized fitting weights :math:`\bar w_g` are proportional to the volume quadrature weights times the smooth shell mask
 
-``restraint_strength`` is ``lambda``, default 0.01/bohr**2, and must be positive.
+.. math::
+
+   m(r) = \prod_a s\!\left(\frac{|r-R_a| - \sigma R_a}{w}\right)
+   \left[1 - \prod_a s\!\left(\frac{|r-R_a| - R_a - d}{w} + 1\right)\right],
+
+with the quintic smoothstep :math:`s` (zero below 0, one above 1, continuous first and second derivatives).
+The first product removes the points within ``inner_scale`` :math:`\sigma` times each atomic radius :math:`R_a`; the bracket removes the points farther than
+``outer_distance`` :math:`d` from every vdW surface; both switches are ``switch_width`` :math:`w` wide.
+The defaults ``inner_scale = 1``, ``outer_distance = 5`` bohr and ``switch_width = 1`` bohr give a shell like CHELPG's (vdW surface to 2.8 Å beyond).
+The radii default to the Bondi radii scaled by 1.2 (H 1.1 Å, Mantina extensions, 2.0 Å otherwise; the ``gauss`` radius set); ``radii`` can supply one per atom, in bohr.
+The volume grid must cover the whole shell: a Cartesian box needs a margin of at least the largest radius plus ``outer_distance``.
+
+Near the solute the potential determines every charge well; in the far field only the total charge and the dipole leave a trace, and any restraint strong enough to fix the other modes also erases the dipole.
+The shell keeps the dipole in the tail charges, so the short-range remainder of the Ng split carries no long-range dipole field across the periodic box.
+
+``restraint_strength`` scales the restraint relative to the data: :math:`\lambda` is ``restraint_strength`` times the mean diagonal of the data Hessian
+:math:`\sum_g \bar w_g\, |r_g-R_a|^{-2}`, so the setting is dimensionless and independent of the grid and the molecule size.
+The default ``1e-4`` damps only the modes the shell barely sees (charges of buried atoms); it must be positive.
 ``reference_charges`` can supply one reference charge per atom; when absent, the neutral-atom reference is shifted uniformly to ``Q / natom``.
 ``charge_penalty`` is ``kappa``, default 0.1 e/bohr**2. The default threshold ``t_a`` is ``0.5 * Z_a`` e, raised to ``Z_a`` e for H and Li. ``charge_thresholds`` can override these thresholds per atom.
 The linear penalty discourages excessive positive and negative charges.
@@ -141,15 +159,15 @@ Configure the term before adding it to a potential, for example:
 
    type(ec_charges_type) :: ec
 
-   ec%long_range_bias = 2.0_wp
-   ec%restraint_strength = 0.02_wp
+   ec%outer_distance = 6.0_wp
+   ec%restraint_strength = 1.0e-3_wp
    ec%charge_penalty = 0.2_wp
    ! Optional: ec%reference_charges = reference
    ! Optional: ec%lower_bounds = lower; ec%upper_bounds = upper
    call model%potential%add(ec, error)
 
 The fit is built once per geometry, when the model updates its potential on its volume grid (``model%update``, which calls ``potential%update(mol, grid, error)``):
-the exclusion mask, the weights and the restrained Hessian are kept; the point-charge basis :math:`1/|r_g-R_a|` is recomputed in grid blocks instead of stored.
+the shell mask, the weights and the restrained Hessian are kept; the point-charge basis :math:`1/|r_g-R_a|` is recomputed in grid blocks instead of stored.
 Declarations, fields and adjoints on any other grid are refused.
 Each evaluation refits charges to the current host potential.
 Fit derivatives are included in the ``potential_adjoint`` response, the explicit nuclear gradient, and the volume
@@ -186,12 +204,14 @@ Terms
    * - ``lj_tm``
      - Fourteen transition metals.
    * - ``lj_spce``
-     - The sites of neutral water.
+     - Standard SPC/E for neutral water; hydrogen LJ is zero and its sites remain covered.
+   * - ``lj_cspce``
+     - cSPC/E for neutral water; nonzero hydrogen LJ from the Luchko modification.
    * - ``coulomb_<model>_<environment>``
      - Solvents with tabulated charges: ``hirshfeld``, ``resp``, ``mbis`` or
        ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation.
-   * - ``coulomb_spce``
-     - The SPC/E charges of neutral water.
+   * - ``coulomb_spce``, ``coulomb_cspce``
+     - Identical SPC/E charges of neutral water; the cSPC/E name shares the same implementation.
    * - ``monopole_type``
      - Host-supplied atomic charges and their point-charge potential (1D and 3D solute only).
    * - ``multipole_type``
@@ -200,3 +220,5 @@ Terms
      - Full host potential with constrained ESP-fitted Ng tail charges (3D solute only).
    * - ``new_custom_lj``, ``new_fixed_charges``
      - Explicit per-atom values, optionally for a subset of the atoms.
+   * - ``new_neutral_charges``
+     - Zero charges on every atom, sized to the structure at update.

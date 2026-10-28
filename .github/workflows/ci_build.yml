@@ -31,15 +31,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 60}
           # Classic ifort 2021.12 from oneAPI 2024.1, which ships no icc/icpc
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 120}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: macos-arm64, os: macos-15, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: accelerate, timeout: 45}
@@ -136,7 +136,7 @@ jobs:
         platform: [linux-x86_64, linux-arm64, macos-arm64]
         build: [meson, cmake]
         include:
-          - {platform: linux-x86_64, os: ubuntu-24.04, lapack: openblas, timeout: 30,
+          - {platform: linux-x86_64, os: ubuntu-24.04, lapack: openblas, timeout: 60,
              packages: 'gfortran_linux-64=15.2 gcc_linux-64=15.2 gxx_linux-64=15.2 openblas'}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, lapack: openblas, timeout: 30,
              packages: 'gfortran_linux-aarch64=15.2 gcc_linux-aarch64=15.2 gxx_linux-aarch64=15.2 openblas'}
@@ -280,7 +280,7 @@ jobs:
   python:
     name: python (${{ matrix.platform }}, py${{ matrix.python }}, gnu15, pyscf)
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

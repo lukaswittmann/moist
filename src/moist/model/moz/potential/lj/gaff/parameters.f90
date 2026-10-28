@@ -10,7 +10,9 @@ module moist_model_moz_potential_lj_gaff_parameters
 
    public :: lookup_gaff_lj, gaff_parameter_version
 
-   ! GAFF2 Parameters taken from openmmforcefields
+   ! GAFF2 parameter-value reference: openmmforcefields (2.2.20)
+   ! The hb row has the same LJ values as ha
+   ! All 98 nonwater rows match GAFF2 2.2.30; pinned checks in ../PROVENANCE.md
    !
    ! MIT License
    !

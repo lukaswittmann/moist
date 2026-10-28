@@ -1,0 +1,63 @@
+# moist model rism3d examples/rism/alanine.xyz -p examples/rism/run3d-molecular.toml
+closure = "KH"
+correction = "PC+"
+
+[potential]
+lj = ["gaff2", "uff", "tm"]
+charges = "custom"
+q = [
+   -0.479657,  # C1
+    0.290575,   # C2
+    0.160770,   # H3
+    0.141821,   # H4
+    0.135546,   # H5
+    0.636185,   # C6
+   -0.727756,  # O7
+   -0.826705,  # O8
+   -0.606436,  # N9
+    0.393563,   # H10
+    0.379919,   # H11
+    0.075160,   # H12
+    0.427017,   # H13
+]
+
+[grid]
+kind = "molecular"
+
+[grid.molecular]
+partition = "pvoronoi"  # "becke", "ssf", "pvoronoi"
+becke_k = 3
+ssf_a = 0.64
+power_width = 1.0  # bohr^2
+weight_pruning_cutoff = 1e-10  # bohr^3; 0 keeps all nonzero weights
+partition_pruning_cutoff = 0.0
+nufft_tolerance = 1e-6
+nufft_upsampfac = 0.0  # automatic; e.g. 1.25 or 2.0 to fix the factor
+
+[grid.molecular.radial]
+npts = 50
+rmax = 16.0  # bohr
+handymod_exponent = 0.34
+
+[grid.molecular.angular]
+degree = 35
+
+[convergence]
+tolerance = 1e-9
+
+[solver]
+name = "jfnk"
+
+[solvent]
+name = "water"
+temperature = 298.15  # K
+theory = "RISM"
+closure = "PSE2"
+
+[solvent.convergence]
+tolerance = 1e-11
+
+[solvent.potential]
+# First covering choice wins: SPC/E models for water, tables and generic LJ otherwise
+lj = ["cspce", "gaff2", "uff", "tm"]
+charges = ["spce", "resp-solvent"]

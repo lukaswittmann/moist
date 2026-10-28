@@ -2,13 +2,13 @@
 
 !> Interface to LAPACK general linear system solver
 module moist_math_lapack_gesv
-   use mctc_env, only: sp, dp
+   use mctc_env, only: dp
    use moist_math_lapack_kinds, only: lapack_ik
    implicit none(type, external)
    private
 
    public :: lapack_gesv
-   public :: dgesv, sgesv
+   public :: dgesv
 
    !> Computes the solution to a real system of linear equations
    !>    A * X = B,
@@ -20,18 +20,6 @@ module moist_math_lapack_gesv
    !> upper triangular.  The factored form of A is then used to solve the
    !> system of equations A * X = B
    interface lapack_gesv
-      pure subroutine sgesv(n, nrhs, a, lda, ipiv, b, ldb, info)
-         import :: sp, lapack_ik
-         implicit none(type, external)
-         integer(lapack_ik), intent(in) :: n
-         integer(lapack_ik), intent(in) :: nrhs
-         integer(lapack_ik), intent(in) :: lda
-         integer(lapack_ik), intent(in) :: ldb
-         real(sp), intent(inout) :: a(lda, *)
-         integer(lapack_ik), intent(out) :: ipiv(*)
-         real(sp), intent(inout) :: b(ldb, *)
-         integer(lapack_ik), intent(out) :: info
-      end subroutine sgesv
       pure subroutine dgesv(n, nrhs, a, lda, ipiv, b, ldb, info)
          import :: dp, lapack_ik
          implicit none(type, external)

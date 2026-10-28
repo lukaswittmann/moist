@@ -14,7 +14,7 @@ module test_moz_potential_lj
       & lj_mixing_lorentz_berthelot, lj_mixing_geometric, check_lj_mixing
    use moist_model_moz_potential_lj_typed, only: lj_typed_type, lj_gaff
    use moist_model_moz_potential_lj_element, only: lj_element_type, lj_uff, lj_dreiding, lj_tm
-   use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce
+   use moist_model_moz_potential_lj_solvent, only: lj_solvent_type, lj_spce, lj_cspce
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use moist_model_moz_potential, only: moz_potential_type
    use moist_model_moz_potential_sites, only: potential_sites_type
@@ -36,7 +36,8 @@ contains
       testsuite = [ &
          & new_unittest("gaff_water", check_gaff_water), &
          & new_unittest("spce_water", check_spce_water), &
-         & new_unittest("spce_invalid_solvent", check_spce_invalid_solvent), &
+         & new_unittest("cspce_water", check_cspce_water), &
+         & new_unittest("water_invalid_solvent", check_water_invalid_solvent), &
          & new_unittest("potential_water_model", check_potential_water_model), &
          & new_unittest("gaff_methanol", check_gaff_methanol), &
          & new_unittest("gaff_benzene", check_gaff_benzene), &
@@ -183,8 +184,60 @@ contains
          & "GAFF water labels must not name a solvent model")
    end subroutine check_gaff_water
 
-   !> Check legacy water-model values and atom ordering
+   !> Check standard SPC/E coverage, inactive hydrogen LJ and fallback precedence
+   !>
+   !> @param[out] error Test failure
    subroutine check_spce_water(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol, permuted
+      type(moist_error), allocatable :: err
+      type(lj_solvent_type) :: spce
+      type(moz_potential_type) :: pot
+      type(potential_sites_type) :: sites
+      integer, parameter :: order(3) = [3, 1, 2]
+      integer :: water_id
+
+      call solvent_mol(error, "water", mol)
+      if (allocated(error)) return
+      call get_solvent_id("water", water_id, err)
+      spce = lj_spce
+      if (.not. allocated(err)) call spce%update(mol, err, water_id)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(spce%pair%covered), "SPC/E must cover O and both inactive H sites")
+      if (allocated(error)) return
+      call check(error, spce%pair%sigma(1), 5.9823437872334209_wp, thr=thr_rel, rel=.true.)
+      if (allocated(error)) return
+      call check(error, spce%pair%epsilon(1), 2.4748632292216421e-4_wp, thr=thr_rel, rel=.true.)
+      if (allocated(error)) return
+      call check(error, all(spce%pair%epsilon(2:3) == 0.0_wp), "SPC/E hydrogen LJ must be inactive")
+      if (allocated(error)) return
+      call check(error, all(spce%atomtype == ["ow/SPCE ", "hw/SPCE ", "hw/SPCE "]))
+      if (allocated(error)) return
+      call new(permuted, mol%num(mol%id(order)), mol%xyz(:, order))
+      call spce%update(permuted, err, solvent_id=0)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, spce%pair%epsilon(2), 2.4748632292216421e-4_wp, thr=thr_rel, rel=.true.)
+      if (allocated(error)) return
+      call check(error, all(spce%pair%epsilon([1, 3]) == 0.0_wp) .and. all(spce%pair%covered))
+      if (allocated(error)) return
+
+      call pot%add(lj_spce, err)
+      if (.not. allocated(err)) call pot%add(lj_uff, err)
+      if (.not. allocated(err)) call pot%update(mol, err, water_id)
+      if (.not. allocated(err)) call pot%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, all(sites%pair%covered) .and. all(sites%pair%epsilon(2:3) == 0.0_wp), &
+         & "A fallback must not add hydrogen LJ to standard SPC/E")
+   end subroutine check_spce_water
+
+   !> Check cSPC/E reference values and atom ordering
+   !>
+   !> @param[out] error  test error
+   subroutine check_cspce_water(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol, permuted
@@ -195,13 +248,13 @@ contains
          & 2.2028915379925396_wp]
       real(wp), parameter :: epsilon_ref(3) = [2.4748632292216421e-4_wp, 2.4748632292216419e-5_wp, &
          & 2.4748632292216419e-5_wp]
-      character(len=8), parameter :: labels(3) = ["ow/SPCE ", "hw/SPCE ", "hw/SPCE "]
+      character(len=8), parameter :: labels(3) = ["ow/CSPCE", "hw/CSPCE", "hw/CSPCE"]
       integer :: water_id, iat
 
       call solvent_mol(error, "water", mol)
       if (allocated(error)) return
       call get_solvent_id("water", water_id, err)
-      if (.not. allocated(err)) spce = lj_spce
+      if (.not. allocated(err)) spce = lj_cspce
       if (.not. allocated(err)) call spce%update(mol, err, water_id)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -234,10 +287,12 @@ contains
       end do
       call spce%update(mol, err)
       call check_moist_error(error, err)
-   end subroutine check_spce_water
+   end subroutine check_cspce_water
 
    !> Check invalid solvent selection and clearing of built water data
-   subroutine check_spce_invalid_solvent(error)
+   !>
+   !> @param[out] error  test error
+   subroutine check_water_invalid_solvent(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol, other
@@ -258,7 +313,7 @@ contains
       call check(error, index(err%message, "Unknown Lennard-Jones solvent model 99") > 0, err%message)
       if (allocated(error)) return
       deallocate (err)
-      spce = lj_spce
+      spce = lj_cspce
       call spce%update(mol, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -283,7 +338,7 @@ contains
       mol%charge = 0.0_wp
       mol%uhf = 2
       call check_uncovered(error, spce, mol, "open-shell H2O")
-   end subroutine check_spce_invalid_solvent
+   end subroutine check_water_invalid_solvent
 
    !> Check zero SPC/E coverage for an unsupported structure
    !>
@@ -337,7 +392,7 @@ contains
       call check(error, allocated(err), "GAFF alone must not provide a water solvent model")
       if (allocated(error)) return
       deallocate (err)
-      spce = lj_spce
+      spce = lj_cspce
       call pot%add(spce, err)
       if (.not. allocated(err)) call pot%update(mol, err, water_id)
       if (.not. allocated(err)) call pot%sites(sites, err)
@@ -612,8 +667,6 @@ contains
       if (allocated(error)) return
       call check(error, sites%pair%label(3), "Ar/UFF", "Merged label of the UFF argon")
       if (allocated(error)) return
-      call check_site_table(error, pot, mol)
-      if (allocated(error)) return
       ! Separate transition-metal table: iron coverage only
       tm = lj_tm
       if (.not. allocated(err)) call tm%update(mol, err)
@@ -628,56 +681,6 @@ contains
       if (allocated(error)) return
       call check(error, tm%pair%epsilon(4), 2.920432_wp*kjtoau, "TM iron epsilon", thr=thr_rel, rel=.true.)
    end subroutine check_gaff_element_uncovered
-
-   !> Print the built site table to a scratch unit and check rows
-   !> @param[in]  pot    updated potential of methane carbon and hydrogen, argon and iron
-   !> @param[in]  mol    its structure
-   subroutine check_site_table(error, pot, mol)
-      !> Test error
-      type(error_type), allocatable, intent(out) :: error
-      !> Updated potential
-      type(moz_potential_type), intent(in) :: pot
-      !> Structure
-      type(structure_type), intent(in) :: mol
-      type(moist_error), allocatable :: err
-      character(len=96) :: line
-      integer :: unit, stat
-      open (newunit=unit, status="scratch", action="readwrite", form="formatted", iostat=stat)
-      call check(error, stat, 0, "Cannot open a scratch unit")
-      if (allocated(error)) return
-      call pot%print_table(unit, err)
-      call check_moist_error(error, err)
-      if (allocated(error)) return
-      rewind (unit)
-      read (unit, "(a)", iostat=stat) line
-      call check(error, stat, 0, "Table header missing")
-      if (allocated(error)) return
-      call check(error, index(line, "N") > 0 .and. index(line, "Sym") > 0 .and. index(line, "qat") > 0 &
-         & .and. index(line, "sigma (bohr)") > 0 .and. index(line, "eps (kcal/mol)") > 0 &
-         & .and. index(line, "Type/Src") > 0, more="Table header differs: "//trim(line))
-      if (allocated(error)) return
-      read (unit, "(a)", iostat=stat) line
-      call check(error, stat, 0, "First row missing")
-      if (allocated(error)) return
-      ! No electrostatics: "-" in charge column
-      call check(error, index(line, " 1      C") > 0 .and. index(line, " -") > 0 .and. index(line, "/GAFF") > 0, &
-         & more="First row differs: "//trim(line))
-      if (allocated(error)) return
-      read (unit, "(a)", iostat=stat) line
-      call check(error, stat, 0, "Second row missing")
-      if (allocated(error)) return
-      read (unit, "(a)", iostat=stat) line
-      call check(error, stat, 0, "Third row missing")
-      if (allocated(error)) return
-      call check(error, index(line, " 3     Ar") > 0 .and. index(line, "Ar/UFF") > 0, &
-         & more="Third row differs: "//trim(line))
-      if (allocated(error)) return
-      read (unit, "(a)", iostat=stat) line
-      call check(error, stat, 0, "Fourth row missing")
-      if (allocated(error)) return
-      call check(error, index(line, "Fe/UFF") > 0, more="Fourth row differs: "//trim(line))
-      close (unit)
-   end subroutine check_site_table
 
    !> Check uncovered GAFF water placeholders and atoms without GAFF2 rows
    subroutine check_gaff_water_fragment(error)

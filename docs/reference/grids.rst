@@ -50,7 +50,11 @@ Molecular partition weights sum to one over atoms at each point, preventing doub
 ``grid%new_trafo`` creates the transform engine matching the concrete 3D grid.
 Rules, mappings, angular generators, and shell policies are independently replaceable through their abstract interfaces.
 
-To prune only zero-weight molecular points, set both ``weight_threshold`` and ``pruning_threshold`` to zero; larger positive thresholds (:math:`>10^{-10}`) can introduce discontinuities in grid-evaluted/integrated functions.
+To prune only zero-weight molecular points, set both constructor arguments
+``weight_threshold`` and ``pruning_threshold`` to zero. In the RISM input,
+these are ``grid.molecular.weight_pruning_cutoff`` and
+``grid.molecular.partition_pruning_cutoff``. Larger positive cutoffs
+(:math:`>10^{-10}`) can introduce discontinuities in grid-evaluated/integrated functions.
 
 Construction and updates
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -64,6 +68,9 @@ The public 3D constructors, re-exported by ``moist_math_grid``, are:
 
 Constructors configure the grid; call ``grid%update(mol, error)`` before using its points, weights, or transforms.
 Changed settings require a new ``update`` call and ``destroy`` releases geometry while retaining the configuration.
+
+``grid%w(i)`` is the final volume integration weight at point ``i``, in bohr cubed.
+Integration, Fourier transforms, and model responses use this same array directly.
 
 Cartesian grids default to 128 points per axis and a spacing of 0.6 bohr, with weights ``dr**3``.
 The periodic box follows the nuclear centroid; every nucleus must remain at least ``margin`` (default 10 bohr) from its faces.
@@ -82,6 +89,10 @@ Molecular engines require ``prepare(nv)`` before use, including after assignment
 Copying a prepared engine with ``allocate(source=)`` or polymorphic assignment is unsupported.
 
 ``molecular_grid_set_kgrid`` sets the reciprocal grid explicitly; omitted ``buffer`` and ``nufft_tol`` retain their current values.
+Both molecular constructors accept ``nufft_upsampfac``: ``0.0`` (default) lets
+FINUFFT choose its internal FFT upsampling factor; a finite value greater than
+one fixes it for both transform directions and both NUFFT routes.
+``grid%get_nufft_upsampfac()`` returns the requested setting.
 
 Nuclear derivatives
 ~~~~~~~~~~~~~~~~~~~

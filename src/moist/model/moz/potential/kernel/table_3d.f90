@@ -282,7 +282,8 @@ contains
 
       nt = grid%team_size()
       nblock = (grid%ngrid + block_size - 1)/block_size
-      allocate (w_field(grid%ngrid), w_xyz(3, grid%ngrid), source=0.0_wp)
+      allocate (w_field(grid%ngrid), source=0.0_wp)
+      if (geom) allocate (w_xyz(3, grid%ngrid), source=0.0_wp)
       allocate (grad_t(3, inp%nu, nt), wq_point_t(inp%nu, nt), wq_tail_t(inp%nu, nt), source=0.0_wp)
       call new_scratch(scratch, nt, inp%nu)
       allocate (bad_t(nt), source=huge(1))
@@ -292,9 +293,15 @@ contains
          g1 = min(ib*block_size, grid%ngrid)
          it = 1
          !$ it = omp_get_thread_num() + 1
-         call adjoint_block(grid%xyz(:, g0:g1), coord_u, inp, alpha, geom, w_sr(g0:g1, :), w_lr(g0:g1, :), &
-            & w_field(g0:g1), w_xyz(:, g0:g1), grad_t(:, :, it), wq_point_t(:, it), wq_tail_t(:, it), &
-            & scratch(it), bad_t(it))
+         if (geom) then
+            call adjoint_block(grid%xyz(:, g0:g1), coord_u, inp, alpha, geom, w_sr(g0:g1, :), w_lr(g0:g1, :), &
+               & w_field(g0:g1), grad_t(:, :, it), wq_point_t(:, it), wq_tail_t(:, it), &
+               & scratch(it), bad_t(it), w_xyz(:, g0:g1))
+         else
+            call adjoint_block(grid%xyz(:, g0:g1), coord_u, inp, alpha, geom, w_sr(g0:g1, :), w_lr(g0:g1, :), &
+               & w_field(g0:g1), grad_t(:, :, it), wq_point_t(:, it), wq_tail_t(:, it), &
+               & scratch(it), bad_t(it))
+         end if
       end do
       !$omp end parallel do
       call refuse_coincident(minval(bad_t), error)
@@ -558,14 +565,14 @@ contains
    !> @param[in]     w_sr      adjoint of u_sr of the block (n, nv)
    !> @param[in]     w_lr      adjoint of ur_lr of the block (n, nv)
    !> @param[out]    w_phi     adjoint of the full field of the block (n)
-   !> @param[in,out] w_xyz     grid-point adjoint of the block (3, n)
+   !> @param[in,out] w_xyz     grid-point adjoint of the block (3, n), required only with geom
    !> @param[in,out] grad      solute gradient of this thread (3, nu)
    !> @param[in,out] wq_point  adjoint of the point-field charges of this thread (nu)
    !> @param[in,out] wq_tail   adjoint of the tail charges of this thread (nu)
    !> @param[in,out] sc        scratch of this thread
    !> @param[in,out] bad       lowest solute atom too close to a grid point of this thread
-   subroutine adjoint_block(xyz, coord_u, inp, alpha, geom, w_sr, w_lr, w_phi, w_xyz, grad, wq_point, wq_tail, &
-         & sc, bad)
+   subroutine adjoint_block(xyz, coord_u, inp, alpha, geom, w_sr, w_lr, w_phi, grad, wq_point, wq_tail, &
+         & sc, bad, w_xyz)
       !> Grid points of the block, bohr (3, n)
       real(wp), intent(in) :: xyz(:, :)
       !> Solute coordinates, bohr (3, nu)
@@ -582,8 +589,8 @@ contains
       real(wp), intent(in) :: w_lr(:, :)
       !> Adjoint of the full field of the block (n)
       real(wp), intent(out) :: w_phi(:)
-      !> Grid-point adjoint of the block (3, n)
-      real(wp), intent(inout) :: w_xyz(:, :)
+      !> Grid-point adjoint of the block (3, n), present only for geometry
+      real(wp), intent(inout), optional :: w_xyz(:, :)
       !> Solute gradient of this thread (3, nu)
       real(wp), intent(inout) :: grad(:, :)
       !> Adjoint of the point-field charges of this thread (nu)

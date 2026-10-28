@@ -1,5 +1,5 @@
 module moist_math_lapack_sygvr
-   use mctc_env, only: sp, dp, error_type, fatal_error
+   use mctc_env, only: dp, error_type, fatal_error
    use moist_output_format, only: format_string
    use moist_math_lapack_type, only: eigen_solver_type
    use moist_math_lapack_sygst, only: wrap_sygst
@@ -18,32 +18,6 @@ module moist_math_lapack_sygvr
    !> The desired accuracy of the output can be specified by the input
    !> parameter ABSTOL
    interface lapack_syevr
-      pure subroutine ssyevr(jobz, range, uplo, n, a, lda, vl, vu, il, iu, abstol, m, w, &
-            & z, ldz, isuppz, work, lwork, iwork, liwork, info)
-         import :: sp
-         implicit none(type, external)
-         real(sp), intent(inout) :: a(lda, *)
-         real(sp), intent(out) :: w(*)
-         character(len=1), intent(in) :: uplo
-         real(sp), intent(out) :: z(ldz, *)
-         real(sp), intent(in) :: vl
-         real(sp), intent(in) :: vu
-         integer, intent(in) :: il
-         integer, intent(in) :: iu
-         integer, intent(out) :: m
-         integer, intent(out) :: isuppz(*)
-         real(sp), intent(in) :: abstol
-         integer, intent(out) :: info
-         character(len=1), intent(in) :: jobz
-         character(len=1), intent(in) :: range
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
-         integer, intent(in) :: ldz
-         real(sp), intent(inout) :: work(*)
-         integer, intent(in) :: lwork
-         integer, intent(inout) :: iwork(*)
-         integer, intent(in) :: liwork
-      end subroutine ssyevr
       pure subroutine dsyevr(jobz, range, uplo, n, a, lda, vl, vu, il, iu, abstol, m, w, &
             & z, ldz, isuppz, work, lwork, iwork, liwork, info)
          import :: dp
@@ -77,15 +51,11 @@ module moist_math_lapack_sygvr
       integer :: n = 0
       integer, allocatable :: iwork(:)
       integer, allocatable :: isuppz(:)
-      real(sp), allocatable :: swork(:)
-      real(sp), allocatable :: sbmat(:, :)
-      real(sp), allocatable :: schole(:)
       real(dp), allocatable :: dwork(:)
       real(dp), allocatable :: dbmat(:, :)
       real(dp), allocatable :: dchole(:)
    contains
-      procedure :: solve_sp
-      procedure :: solve_dp
+      procedure :: solve => solve_dp
    end type sygvr_solver
 
 contains
@@ -95,98 +65,6 @@ contains
       integer, intent(in) :: ndim
       self%n = ndim
    end subroutine new_sygvr
-
-   subroutine solve_sp(self, hmat, smat, eval, error)
-      class(sygvr_solver), intent(inout) :: self
-      real(sp), contiguous, intent(inout) :: hmat(:, :)
-      real(sp), contiguous, intent(in) :: smat(:, :)
-      real(sp), contiguous, intent(inout) :: eval(:)
-      type(error_type), allocatable, intent(out) :: error
-
-      integer, parameter :: itype = 1
-      character(len=1), parameter :: uplo = "U"
-
-      logical :: upper
-      integer :: info, lswork, liwork, m, ii, jj
-      real(sp) :: abstol, vl, vu
-      character(len=1) :: trans, uplo_new
-
-      if (self%n == 0) then
-         self%n = size(hmat, 1)
-      end if
-      if (.not. allocated(self%swork)) then
-         lswork = query(self%n, uplo, "S")
-         allocate (self%swork(lswork))
-      end if
-      if (.not. allocated(self%iwork)) then
-         liwork = max(1, 10*self%n)
-         allocate (self%iwork(liwork))
-      end if
-      if (.not. allocated(self%schole)) then
-         allocate (self%schole(self%n))
-      end if
-      if (.not. allocated(self%isuppz)) then
-         allocate (self%isuppz(2*self%n))
-      end if
-      self%sbmat = smat
-      lswork = size(self%swork)
-      liwork = size(self%iwork)
-      upper = (uplo == "U" .or. uplo == "u")
-      abstol = slamch_s()
-      info = 0
-
-      ! Form a Cholesky factorization of B
-      call wrap_potrf(self%sbmat, info, uplo=uplo)
-      call handle_info(error, info)
-      if (allocated(error)) return
-
-      ! Transform problem to standard eigenvalue problem and solve
-      call wrap_sygst(hmat, self%sbmat, info, itype=itype, uplo=uplo)
-      call handle_info(error, info)
-      if (allocated(error)) return
-
-      ! Save Cholesky factor in the other triangle of H and chole
-      do ii = 1, self%n
-         self%schole(ii) = self%sbmat(ii, ii)
-      end do
-      if (upper) then
-         do jj = 1, self%n
-            do ii = jj + 1, self%n
-               hmat(ii, jj) = self%sbmat(jj, ii)
-            end do
-         end do
-      else
-         do jj = 1, self%n
-            do ii = 1, jj - 1
-               hmat(ii, jj) = self%sbmat(jj, ii)
-            end do
-         end do
-      end if
-
-      call lapack_syevr("V", "A", uplo, self%n, hmat, self%n, vl, vu, 1, self%n, abstol, &
-         & m, eval, self%sbmat, self%n, self%isuppz, self%swork, lswork, self%iwork, liwork, &
-         & info)
-      call handle_info(error, info)
-      if (allocated(error)) return
-
-      ! Backtransform eigenvectors to the original problem
-      do ii = 1, self%n
-         hmat(ii, ii) = self%schole(ii)
-      end do
-
-      uplo_new = merge("L", "U", upper)
-      upper = .not. upper
-
-      ! For A*x=(lambda)*B*x
-      ! backtransform eigenvectors: x = inv(L)'*y or inv(U)*y'
-      trans = merge("N", "T", upper)
-      call wrap_trsm(hmat, self%sbmat, side="L", uplo=uplo_new, transa=trans, diag="N")
-      do ii = 1, m
-         hmat(1:self%n, ii) = self%sbmat(1:self%n, ii)
-      end do
-      hmat(1:self%n, m + 1:self%n) = 0.0_sp
-
-   end subroutine solve_sp
 
    subroutine solve_dp(self, hmat, smat, eval, error)
       class(sygvr_solver), intent(inout) :: self
@@ -207,7 +85,7 @@ contains
          self%n = size(hmat, 1)
       end if
       if (.not. allocated(self%dwork)) then
-         ldwork = query(self%n, uplo, "D")
+         ldwork = query(self%n, uplo)
          allocate (self%dwork(ldwork))
       end if
       if (.not. allocated(self%iwork)) then
@@ -280,7 +158,7 @@ contains
 
    end subroutine solve_dp
 
-   pure function query(n, uplo, prefix) result(lwork)
+   pure function query(n, uplo) result(lwork)
       interface
          pure integer function ilaenv(ispec, name, opts, n1, n2, n3, n4)
             implicit none(type, external)
@@ -295,22 +173,12 @@ contains
       end interface
       integer, intent(in) :: n
       character(len=1), intent(in) :: uplo
-      character(len=1), intent(in) :: prefix
       integer :: lwork
       integer :: nb
-      nb = ilaenv(1, prefix//"SYTRD", uplo, n, -1, -1, -1)
-      nb = max(nb, ilaenv(1, prefix//"ORMTR", uplo, n, -1, -1, -1))
+      nb = ilaenv(1, "DSYTRD", uplo, n, -1, -1, -1)
+      nb = max(nb, ilaenv(1, "DORMTR", uplo, n, -1, -1, -1))
       lwork = max(1, 26*n, (nb + 1)*n)
    end function query
-
-   pure function slamch_s() result(rmach)
-      real(sp), parameter :: one = 1.0_sp, zero = 0.0_sp, rnd = one
-      real(sp), parameter :: eps = merge(epsilon(zero), epsilon(zero)*0.5_sp, one /= rnd)
-      real(sp), parameter :: tinyz = tiny(zero), small = one/huge(zero)
-      real(sp), parameter :: sfmin = merge(small*(one + eps), tinyz, small >= tinyz)
-      real(sp) :: rmach
-      rmach = sfmin
-   end function slamch_s
 
    pure function dlamch_s() result(rmach)
       real(dp), parameter :: one = 1.0_dp, zero = 0.0_dp, rnd = one
