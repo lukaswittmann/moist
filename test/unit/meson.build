@@ -200,6 +200,7 @@ test_selected = {
     'nested_teams',
     'fused_derivative',
     'array_integrands', 'energy_derivatives', 'custom_extension',
+    'ramp_rungs',
   ],
   'moz_1d_preconditioner': [
     'spectral_identity',

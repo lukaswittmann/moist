@@ -11,7 +11,7 @@
 # =============================================================================
 # 1. UV model: closure, free-energy corrections and convergence
 # =============================================================================
-closure = "KH"            # Closure: "KH", "PSE2", "PSE3", "PSE4", "HNC"
+closure = "HNC"           # Closure: "KH", "PSE2", "PSE3", "PSE4", "HNC"
 correction = "none"       # Pressure correction: "none", "PC", "PC+"
 finite_size = "none"       # Charge correction: "none", "huenenberger"
 susceptibility = "oz"     # Bulk response: "oz" reconstruction, "direct" transform,
@@ -22,7 +22,7 @@ tolerance = 1e-9           # Converged RMS residual; > 0
 maxiter = 128              # Outer iterations per attempt; integer >= 1
 
 # Closure ramp and initial guess
-closure_ramp = true        # Cold starts: KH -> PSE2 -> PSE3 -> HNC up to the requested closure
+closure_ramp = true        # Cold starts: KH -> PSE2 -> PSE3 -> HNC up to the requested one
 closure_ramp_rmse = 1e-5   # Residual threshold to advance the ramp; > 0
 reuse_initial_guess = true # Reuse converged fields after fixed-geometry host updates
 cold_guess = "cs0"         # "cs0": map c_s=0 through OZ; "ts0": start with t_s=0
@@ -272,12 +272,12 @@ max_krylov = 50          # Transpose GMRES iteration limit; integer >= 1
 # 11. Checkpoint files
 # =============================================================================
 
-[checkpoint.vv]
+# [checkpoint.vv]
 # file = "bulk.mbin"         # Optional explicit save file; default automatic name
 # guess = "bulk-guess.mbin"  # Optional initial file
 # directory = "."            # Optional automatic-name directory; default: working dir
 
-[checkpoint.uv]
+# [checkpoint.uv]
 # file = "solute.mbin"  # Optional save file; default: uv_rism_3d.mbin
 # guess = "guess.mbin"  # Optional initial file; default: saved file
 # directory = "."       # Optional automatic-name directory; default: working dir

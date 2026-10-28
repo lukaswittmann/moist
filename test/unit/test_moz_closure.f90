@@ -11,6 +11,7 @@ module test_moz_closure
       & moist_model_moz_closure_pse_type, new_closure
    use moist_model_moz_closure_kernel, only: closure_hnc_c, closure_kh_c, &
       & closure_pse2_c, closure_pse3_c, closure_pse4_c
+   use moist_model_moz_closure_ramp, only: moist_model_moz_closure_ramp_type, new_closure_ramp
    use moist_context, only: moist_context_type, new_context
    implicit none(type, external)
    private
@@ -62,7 +63,8 @@ contains
          & new_unittest("fused_derivative", test_fused_derivative), &
          & new_unittest("array_integrands", test_array_integrands), &
          & new_unittest("energy_derivatives", test_energy_derivatives), &
-         & new_unittest("custom_extension", test_custom_extension)]
+         & new_unittest("custom_extension", test_custom_extension), &
+         & new_unittest("ramp_rungs", test_ramp_rungs)]
    end subroutine collect_moz_closure
 
    !> Outer block workers own parallelism even when nested teams are enabled
@@ -186,6 +188,52 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_construction
+
+   !> Check the rungs of the closure ramp
+   !>
+   !> - Ladder rungs softer than the requested closure, then the requested one
+   !> - A disabled ramp runs the requested closure alone
+   !>
+   !> @param[out] error Test failure
+   subroutine test_ramp_rungs(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_model_moz_closure_ramp_type) :: ramp
+      type(moist_error), allocatable :: err
+
+      call new_closure_ramp(ramp, "hnc", .true., 1.0e-5_wp, err)
+      call check(error, .not. allocated(err), more="HNC ramp was refused")
+      if (allocated(error)) return
+      call check(error, size(ramp%names) == 4, more="HNC ramp needs four rungs")
+      if (allocated(error)) return
+      call check(error, all(ramp%names == [character(len=8) :: "KH", "PSE2", "PSE3", "HNC"]), &
+         & more="HNC ramp has unexpected rungs")
+      if (allocated(error)) return
+
+      call new_closure_ramp(ramp, " PSE4", .true., 1.0e-5_wp, err)
+      call check(error, .not. allocated(err), more="PSE4 ramp was refused")
+      if (allocated(error)) return
+      call check(error, size(ramp%names) == 4, more="PSE4 ramp needs four rungs")
+      if (allocated(error)) return
+      call check(error, all(ramp%names == [character(len=8) :: "KH", "PSE2", "PSE3", "PSE4"]), &
+         & more="PSE4 ramp has unexpected rungs")
+      if (allocated(error)) return
+
+      call new_closure_ramp(ramp, "PSE2", .true., 1.0e-5_wp, err)
+      call check(error, size(ramp%names) == 2 .and. ramp%names(2) == "PSE2", more="PSE2 ramp has unexpected rungs")
+      if (allocated(error)) return
+
+      call new_closure_ramp(ramp, "KH", .true., 1.0e-5_wp, err)
+      call check(error, size(ramp%names) == 1 .and. ramp%at_target(), more="KH ramp has more than one rung")
+      if (allocated(error)) return
+
+      call new_closure_ramp(ramp, "HNC", .false., 1.0e-5_wp, err)
+      call check(error, size(ramp%names) == 1 .and. ramp%names(1) == "HNC", more="disabled ramp has lower rungs")
+      if (allocated(error)) return
+
+      call new_closure_ramp(ramp, "PY", .true., 1.0e-5_wp, err)
+      call check(error, allocated(err), more="unknown closure was accepted by the ramp")
+   end subroutine test_ramp_rungs
 
    !> Check exponential and polynomial branches against independent values
    !>

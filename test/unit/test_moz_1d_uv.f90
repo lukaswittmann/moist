@@ -91,7 +91,7 @@ contains
 
    !> Check the 1D settings
    !>
-   !> - Defaults: KH, JFNK with the spectral filter; HNC and the other VV defaults
+   !> - Defaults: HNC, JFNK with the spectral filter; VV defaults
    !>   in the solvent group
    !> - TOML round trip, including the nested solver and solvent groups
    !> - Names the UV solve does not implement and invalid nested settings are refused
@@ -102,7 +102,7 @@ contains
       type(model_moz_1d_parameters_type) :: params, copy
       integer :: unit, stat
 
-      call check(error, params%closure == "KH" .and. params%solver%name == "JFNK" .and. &
+      call check(error, params%closure == "HNC" .and. params%solver%name == "JFNK" .and. &
          & params%precond == "spectral" .and. params%solvent%closure == "HNC" .and. &
          & params%solvent%solver%jfnk%deflation, more="unexpected 1D defaults")
       if (allocated(error)) return
@@ -117,7 +117,7 @@ contains
       params%solver%adjoint%restart = 12
       params%solver%adjoint%max_krylov = 36
       params%reuse_initial_guess = .false.
-      params%solvent%closure = "HNC"
+      params%solvent%closure = "PSE2"
       params%solvent%npts = 2048
       params%solvent%solver%jfnk%restart = 30
       call params%write_file(parameter_file, err)
@@ -130,7 +130,7 @@ contains
          & copy%tolerance == 1.0e-9_wp .and. copy%precond == "none" .and. &
          & .not. copy%reuse_initial_guess .and. copy%solver%adjoint%restart == 12 .and. &
          & copy%solver%adjoint%max_krylov == 36 .and. &
-         & copy%solver%jfnk%restart == 40 .and. copy%solvent%closure == "HNC" .and. copy%solvent%npts == 2048 .and. &
+         & copy%solver%jfnk%restart == 40 .and. copy%solvent%closure == "PSE2" .and. copy%solvent%npts == 2048 .and. &
          & copy%solvent%solver%jfnk%restart == 30, more="1D settings changed in the TOML round trip")
       if (allocated(error)) return
 
@@ -789,6 +789,7 @@ contains
       call new_uv_case(case, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
+      params%closure = "KH"
       params%tolerance = 1.0e-12_wp
       params%damp_small_k = .false.
       params%precond = "none"
@@ -1170,6 +1171,7 @@ contains
    subroutine energy_settings(params)
       !> Settings
       type(model_moz_1d_parameters_type), intent(out) :: params
+      params%closure = "KH"
       params%tolerance = 1.0e-10_wp
       params%solvent%closure = "KH"
       params%solvent%npts = 1024
@@ -1756,6 +1758,7 @@ contains
       if (.not. allocated(err)) call solvent%potential%add(charges, err)
       if (.not. allocated(err)) call solvent%update(err)
       params%tolerance = 1.0e-10_wp
+      params%closure = "KH"
       params%maxiter = 500
       params%solvent%closure = "KH"
       params%solvent%npts = 8192

@@ -161,7 +161,7 @@ contains
 
    !> Check the 3D settings
    !>
-   !> - Defaults: KH, no correction, OZ response, JFNK without preconditioner
+   !> - Defaults: HNC, no correction, OZ response, JFNK without preconditioner
    !> - TOML round trip, including the nested solver and solvent groups
    !> - Unknown response modes, preconditioners and corrections are refused
    subroutine check_parameters(error)
@@ -171,7 +171,7 @@ contains
       type(model_moz_3d_parameters_type) :: params, copy
       integer :: unit, stat
 
-      call check(error, params%closure == "KH" .and. params%correction == "none" .and. &
+      call check(error, params%closure == "HNC" .and. params%correction == "none" .and. &
          & params%finite_size == "none" .and. &
          & params%susceptibility == "oz" .and. params%solver%name == "JFNK" .and. params%precond == "none" .and. &
          & params%solvent%tolerance == 1.0e-11_wp .and. params%reuse_initial_guess .and. params%cold_guess == "cs0", &
@@ -714,6 +714,7 @@ contains
    subroutine energy_settings(params)
       !> Settings
       type(model_moz_3d_parameters_type), intent(out) :: params
+      params%closure = "KH"
       params%tolerance = 1.0e-8_wp
       params%solvent%npts = 1024
       params%solvent%dr = 0.06_wp

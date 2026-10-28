@@ -558,6 +558,7 @@ contains
          response%values(1, 1, i) = 1.0_wp
          response%values(2, 2, i) = 1.0_wp
       end do
+      params%closure = "KH"
       params%solver%name = "PICARD"
       call new_uv3d_problem(problem, ctx, grid, response, sr, lr, uk, [0.01_wp, 0.014_wp], 1.7_wp, params, err)
       if (.not. allocated(err)) call problem%solve(1.0e-12_wp, 2, converged, rmse, niter, err)
@@ -706,6 +707,7 @@ contains
          response%values(1, 1, i) = 1.0_wp
          response%values(2, 2, i) = 1.0_wp
       end do
+      params%closure = "KH"
       params%cold_guess = "ts0"
       params%solver%name = "PICARD"
       params%solver%picard%damping = 0.5_wp
@@ -819,6 +821,7 @@ contains
       type(potential_sites_type) :: sites
       logical :: keep_bulk
 
+      params%closure = "KH"
       params%tolerance = 1.0e-11_wp
       params%solvent%npts = 1024
       params%solvent%dr = 0.06_wp

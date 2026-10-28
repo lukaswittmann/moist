@@ -396,7 +396,8 @@ if(MOIST_TESTS)
     energy_refusals filters_refusal picard_damping reference_values)
   set(moist_test_selected_moz_closure
     construction reference_values first_derivatives second_derivatives branch_boundary energy_integrands
-    physical_inputs invalid_inputs noncontiguous_arrays block_sweeps nested_teams fused_derivative array_integrands energy_derivatives custom_extension)
+    physical_inputs invalid_inputs noncontiguous_arrays block_sweeps nested_teams fused_derivative array_integrands energy_derivatives custom_extension
+    ramp_rungs)
   set(moist_test_selected_moz_1d_preconditioner
     spectral_identity spectral_filter spectral_thread_independence spectral_setup_errors kspace_block_inverse kspace_activation
     kspace_thread_independence kspace_update_errors kspace_reallocation kspace_singular_fallback kspace_release_guard kspace_block_query selection filters_damping filters_attach)
