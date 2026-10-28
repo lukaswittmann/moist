@@ -37,7 +37,7 @@ module moist_model_moz_solvent_vv_parameters
       real(wp) :: tolerance = 1.0e-11_wp
       !> Outer iterations of the VV solve
       integer :: maxiter = 128
-      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, HNC
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, then PSE4 or HNC
       logical :: closure_ramp = .true.
       !> RMS residual below which the ramp steps to the next closure
       real(wp) :: closure_ramp_rmse = 1.0e-5_wp

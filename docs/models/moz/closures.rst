@@ -141,11 +141,9 @@ energy integrand needs the physical ``h`` and ``c = c_s - beta*lambda*u_lr``.
 Closure ramp
 ------------
 
-Cold solves of the VV, 1D UV and 3D UV equations ramp the closure up the ladder
-``KH -> PSE2 -> PSE3 -> HNC`` to the requested closure; PSE-n reduces to KH
-for ``n = 1`` and tends to HNC. ``moist_model_moz_closure_ramp_type`` in
-``src/moist/model/moz/closure/ramp.f90`` builds every rung once at setup and
-cites each of them.
+Cold solves of the VV, 1D UV and 3D UV equations ramp the closure up the ladder ``KH -> PSE2 -> PSE3 -> PSE4 -> HNC`` to the requested closure.
+PSE-n reduces to KH for ``n = 1`` and tends to HNC.
+``moist_model_moz_closure_ramp_type`` in ``src/moist/model/moz/closure/ramp.f90`` builds every rung once at setup and cites each of them.
 
 * A cold solve starts on KH. Whenever the RMS residual of an iterate falls below
   ``convergence.closure_ramp_rmse`` (default ``1e-5``), or below the solve tolerance,

@@ -1,9 +1,10 @@
 !> Cold-start closure ramp from KH up to the requested closure
 !>
-!> - Ladder KH, PSE2, PSE3, HNC; PSE-n reduces to KH for n = 1 and tends to HNC
+!> - Closures ordered KH, PSE2, PSE3, PSE4, HNC; PSE-n reduces to KH for n = 1 and tends to HNC
+!> - Rungs: the ladder closures KH, PSE2, PSE3 and HNC softer than the requested one, then the requested one
 !> - A cold solve starts on KH and steps up one closure whenever the RMS
 !>   residual falls below the switch threshold
-!> - Closures off the ladder, or a disabled ramp, run alone
+!> - A disabled ramp runs the requested closure alone
 !> - Every rung is built once at setup, so switching cannot fail
 module moist_model_moz_closure_ramp
    use mctc_env, only: wp, error_type
@@ -13,9 +14,11 @@ module moist_model_moz_closure_ramp
    implicit none(type, external)
    private
 
-   public :: closure_ladder, moist_model_moz_closure_ramp_type, new_closure_ramp
+   public :: closure_order, moist_model_moz_closure_ramp_type, new_closure_ramp
 
    !> Closures from the softest to the hardest
+   character(len=4), parameter :: closure_order(5) = [character(len=4) :: "KH", "PSE2", "PSE3", "PSE4", "HNC"]
+   !> Intermediate rungs of a cold solve, in the order of closure_order
    character(len=4), parameter :: closure_ladder(4) = [character(len=4) :: "KH", "PSE2", "PSE3", "HNC"]
 
    !> Closure of one rung
@@ -76,14 +79,9 @@ contains
       type(moist_context_type), intent(inout), optional :: ctx
       integer :: i, top
 
-      top = 0
-      if (enabled) then
-         do i = 1, size(closure_ladder)
-            if (to_lower(trim(closure_ladder(i))) == to_lower(trim(adjustl(name)))) top = i
-         end do
-      end if
-      if (top > 0) then
-         self%names = closure_ladder(:top)
+      top = hardness(name)
+      if (enabled .and. top > 0) then
+         self%names = [character(len=8) :: pack(closure_ladder, hardness(closure_ladder) < top), closure_order(top)]
       else
          self%names = [character(len=8) :: adjustl(name)]
       end if
@@ -203,5 +201,19 @@ contains
       allocate (closure, source=self%rungs(rung)%closure)
       self%rung = rung
    end subroutine select_rung
+
+   !> Position of a closure in closure_order; 0 when unknown
+   !>
+   !> @param[in] name closure name
+   elemental integer function hardness(name)
+      !> Closure name
+      character(len=*), intent(in) :: name
+      integer :: i
+
+      hardness = 0
+      do i = 1, size(closure_order)
+         if (to_lower(trim(adjustl(name))) == to_lower(trim(closure_order(i)))) hardness = i
+      end do
+   end function hardness
 
 end module moist_model_moz_closure_ramp

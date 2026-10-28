@@ -913,7 +913,7 @@ contains
       call new_vv_checkpoint(files, water_id, params, store)
       call check(error, store%file == "cache/"//stem//"kh.mbin", more=store%file)
       if (allocated(error)) return
-      call check(error, size(store%guesses) == 4, more="expected the own file and three other closures")
+      call check(error, size(store%guesses) == 5, more="expected the own file and four other closures")
       if (allocated(error)) return
       call check(error, trim(store%guesses(1)) == store%file &
          & .and. trim(store%guesses(2)) == "cache/"//stem//"hnc.mbin", more=trim(store%guesses(2)))

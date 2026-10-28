@@ -165,7 +165,7 @@ the nested ``solvent`` group.
 =================================  ========  =========================================
 Key                                Default   Meaning
 =================================  ========  =========================================
-``closure``                        ``KH``    HNC, KH or PSE2-4
+``closure``                        ``HNC``   HNC, KH or PSE2-4
 ``convergence.tolerance``          1e-7      RMS residual of a converged solve
 ``convergence.maxiter``            128       Outer iterations
 ``convergence.closure_ramp``       true      Cold solves ramp the closure up from KH

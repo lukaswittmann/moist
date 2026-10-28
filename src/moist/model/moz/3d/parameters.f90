@@ -28,7 +28,7 @@ module moist_model_moz_3d_parameters
    !> Settings of the 3D UV solve and of the solvent's VV solve
    type, extends(moist_model_parameters_type) :: model_moz_3d_parameters_type
       !> Closure: HNC, KH or PSE2-4
-      character(len=8) :: closure = "KH"
+      character(len=8) :: closure = "HNC"
       !> Pressure correction added to the solvation free energy: none, PC or PC+
       character(len=8) :: correction = "none"
       !> Independent leading electrostatic finite-size term: none or huenenberger
@@ -42,7 +42,7 @@ module moist_model_moz_3d_parameters
       real(wp) :: tolerance = 1.0e-9_wp
       !> Outer iterations of the UV solve
       integer :: maxiter = 128
-      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, HNC
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, then PSE4 or HNC
       logical :: closure_ramp = .true.
       !> RMS residual below which the ramp steps to the next closure
       real(wp) :: closure_ramp_rmse = 1.0e-5_wp

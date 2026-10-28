@@ -282,7 +282,7 @@ Settings
 ====================================  ==========  ==============================================
 Key                                   Default     Meaning
 ====================================  ==========  ==============================================
-``closure``                           ``KH``      HNC, KH or PSE2-4
+``closure``                           ``HNC``     HNC, KH or PSE2-4
 ``correction``                        ``none``    Pressure correction added: none, PC or PC+
 ``finite_size``                       ``none``    Leading charge correction: none or huenenberger
 ``susceptibility``                    ``oz``      OZ reconstruction, direct transform, or linear sampling
