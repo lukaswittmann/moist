@@ -163,9 +163,7 @@ Here `cavity` selects the cavity-only workflow, `drop` the [DROP](https://moist.
 
 ## API access
 
-`moist` provides first class API support for Fortran, C and Python.
-Other programming languages should try to interface with `moist` via one of those three APIs.
-To provide first class API support for a new language the interface specification should be available as meson build files.
+`moist` provides first class API support for [Fortran](https://moist.readthedocs.io/en/latest/reference/fortran.html), [C](https://moist.readthedocs.io/en/latest/reference/c.html) and [Python](https://moist.readthedocs.io/en/latest/reference/python.html); see the [API reference](https://moist.readthedocs.io/en/latest/reference/index.html) for an overview. Other languages should try to interface with `moist` via one of those three APIs. To provide first class API support for a new language the interface specification should be available as meson build files.
 
 ### Fortran API
 

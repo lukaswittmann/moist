@@ -21,7 +21,7 @@ module test_model_component_pcm_interface
       & fill_missing_with_zeros, stage_point_charge_energy
    use test_model_component_pcm_fixtures, only: npcm, new_pcm, make_component, seed_iswig, seed_drop, &
       & fd_cavity, get_seed, pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, pcm_lpb, pcm_nonlocal, &
-      & pcm_slic, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
+      & pcm_slic, pcm_dpcm, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
       & answer_sources
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -31,7 +31,8 @@ module test_model_component_pcm_interface
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii, radius_type_static, new_cosmo_radii
-   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
+   use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type, &
+      & point_potential_request_type, coupling_arm, moist_phase_energy, moist_phase_gradient
    use moist_channels_response, only: response_type, parameter_adjoint_response_type, &
       & response_clear
    use moist_model_continuum_type, only: model_continuum_type, new_continuum_model
@@ -83,6 +84,7 @@ contains
          & new_unittest("layer_lifecycle_guards", test_layer_lifecycle_guards), &
          & new_unittest("parameter_derivatives_opt_in", test_parameter_derivatives_opt_in), &
          & new_unittest("conductor_point_cavity_energy", test_conductor_point_cavity), &
+         & new_unittest("potential_request_phases", test_potential_request_phases), &
          & new_unittest("cpcm_requires_update", test_cpcm_requires_update, should_fail=.true.), &
          & new_unittest("cpcm_external_potential_requires_input", &
          & test_cpcm_external_potential_requires_input, should_fail=.true.), &
@@ -1425,6 +1427,83 @@ contains
       call check_moist_error(error, err)
       call ctx%delete()
    end subroutine reject_incomplete_coupling
+
+   !> Point and Gaussian host requests across energy, response and gradient phases
+   subroutine test_potential_request_phases(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Context borrowed by the components
+      type(moist_context_type), target :: ctx
+      !> Solute of the surface fixture
+      type(structure_type) :: mol
+      !> Fixed surface with optional Gaussian widths
+      type(fd_cavity) :: cavity
+      !> Potential-only or normal-trace component
+      class(model_continuum_component_pcm), allocatable :: component
+      !> Declared host requests
+      type(coupling_type), target :: coupling
+      !> Component choices
+      integer, parameter :: kinds(*) = [pcm_cpcm, pcm_dpcm]
+      !> Surface, component and phase indices
+      integer :: surface, model, phase, npotential
+      !> Expected host primitive requirements
+      logical :: gaussian, normal, gradient
+
+      call new_context(ctx, verbosity=0)
+      call get_solute(mol_triatomic, mol)
+      do surface = 1, 2
+         gaussian = surface == 2
+         call get_seed(seed_iswig, gaussian, mol, cavity, error)
+         if (allocated(error)) return
+         do model = 1, size(kinds)
+            normal = kinds(model) == pcm_dpcm
+            call new_pcm(kinds(model), ctx, component, error)
+            if (allocated(error)) return
+            call component%new_coupling(cavity, coupling, err)
+            call check_moist_error(error, err, "potential request declaration")
+            if (allocated(error)) return
+            do phase = moist_phase_energy, moist_phase_gradient
+               gradient = phase == moist_phase_gradient
+               call coupling_arm(coupling, phase, err)
+               call check_moist_error(error, err, "potential request staging")
+               if (allocated(error)) return
+               npotential = 0
+               do while (coupling%next())
+                  associate (request => coupling%request())
+                     select type (request)
+                     type is (gaussian_potential_request_type)
+                        call check(error, gaussian, "unexpected Gaussian host request")
+                     type is (point_potential_request_type)
+                        call check(error,.not. gaussian, "missing Gaussian host request")
+                     class default
+                        cycle
+                     end select
+                     if (allocated(error)) return
+                     npotential = npotential + 1
+                     call check(error, request%is_missing("phi"), "every phase requires the potential")
+                     if (allocated(error)) return
+                     call check(error, request%is_missing("dphi_dr") .eqv. (normal .or. gradient), &
+                        & "spatial derivative requirements")
+                     if (allocated(error)) return
+                     call check(error, request%is_missing("d2phi_dr2") .eqv. (normal .and. gradient), &
+                        & "second spatial derivative requirements on a fixed surface")
+                     if (allocated(error)) return
+                     call check(error, request%is_missing("dphi_dxi") .eqv. (gaussian .and. gradient), &
+                        & "width derivative requirements")
+                     if (allocated(error)) return
+                     call check(error, request%is_missing("d2phi_dr_dxi") .eqv. &
+                        & (gaussian .and. normal .and. gradient), "mixed derivative requirements")
+                     if (allocated(error)) return
+                  end associate
+               end do
+               call check(error, npotential, 1, "one potential request per phase")
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+   end subroutine test_potential_request_phases
 
    !> Conductor models on a point cavity without widths still update and solve
    subroutine test_conductor_point_cavity(error)

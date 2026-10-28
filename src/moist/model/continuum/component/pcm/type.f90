@@ -1167,15 +1167,20 @@ contains
       type(nuclear_charge_request_type) :: charges
       logical :: normal, field, gaussian
 
-      need_normal = self%uses_normal_trace()
+      normal = self%uses_normal_trace()
+      field = cavity%has_field_dependent_geometry()
+      gaussian = self%uses_gaussian_potential(cavity)
+      if (gaussian) then
+         allocate (gaussian_potential_request_type :: potential)
+      else
+         allocate (point_potential_request_type :: potential)
+      end if
 
       ! Energy
       call request_require(potential, moist_phase_energy, "phi", error)
       if (allocated(error)) return
-      if (need_normal) then
-         call request_require(potential, moist_phase_energy, "dphi_dr", error)
-         if (allocated(error)) return
-      end if
+      call request_require(potential, moist_phase_energy, "dphi_dr", normal, error)
+      if (allocated(error)) return
 
       ! Response
       call request_require(potential, moist_phase_response, "phi", error)
@@ -1184,14 +1189,6 @@ contains
       if (allocated(error)) return
       call request_require(potential, moist_phase_response, "d2phi_dr2", normal .and. field, error)
       if (allocated(error)) return
-      if (need_normal) then
-         call request_require(potential, moist_phase_response, "d2phi_dr2", &
-            & cavity%has_field_dependent_geometry(), error)
-         if (allocated(error)) return
-         call request_require(potential, moist_phase_response, "d2phi_dr_dxi", &
-            & cavity%has_field_dependent_geometry(), error)
-         if (allocated(error)) return
-      end if
 
       ! Gradient
       call request_require(potential, moist_phase_gradient, "phi", error)
