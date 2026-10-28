@@ -1,9 +1,8 @@
-!> 1D VV solve: residual evaluator, outer iterations and coupling stages
+!> 1D VV solve: residual evaluator and outer iterations at full coupling
 !>
 !> - The iterate is the short-range t_s(r); the closure gives c_s(r) and the
 !>   equation maps it back, R(t_s) = t_s - T(C(t_s))
-!> - Stages lambda = i/n scale the short-range potential in the closure; each
-!>   starts from t_s = T(c_s) of the previous stage, the first from c_s = 0
+!> - A cold solve starts from c_s = 0 and ramps the closure up from KH
 !> - Exact Jacobian and transpose products, J v = v - T'(c' v), and the
 !>   Gaussian coarse space of the deflated Newton-Krylov steps
 !> - Small-k damping of the updates the solver allows to post-process
@@ -14,7 +13,8 @@ module moist_model_moz_solvent_vv_driver
    use mctc_io_utils, only: to_lower
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_math_packed_sym, only: npair_from_ns, packed_index_lut
-   use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
+   use moist_model_moz_closure, only: moist_model_moz_closure_type
+   use moist_model_moz_closure_ramp, only: moist_model_moz_closure_ramp_type, new_closure_ramp
    use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
       & moist_model_moz_solver_iteration_type, moist_model_moz_solver_printer_type, &
       & moist_model_moz_solver_preconditioner_type, moist_model_moz_solver_deflation_type, &
@@ -40,8 +40,10 @@ module moist_model_moz_solvent_vv_driver
       type(moist_context_type), pointer :: ctx => null()
       !> Equation with the per-k tables and transforms
       type(vv_equation_type) :: equation
-      !> Closure
+      !> Closure of the current ramp rung; the requested one outside a solve
       class(moist_model_moz_closure_type), allocatable :: closure
+      !> Cold-start closure ramp
+      type(moist_model_moz_closure_ramp_type) :: ramp
       !> Nonlinear solver
       class(moist_model_moz_solver_type), allocatable :: solver
       !> Uniform DST-IV radial pair
@@ -54,8 +56,8 @@ module moist_model_moz_solvent_vv_driver
       real(wp), allocatable :: rho(:)
       !> Packed-index lookup of the site pairs
       type(packed_index_lut) :: lut
-      !> Inverse thermal energy, 1/Hartree, and coupling of the current stage
-      real(wp) :: beta = 0.0_wp, lambda = 1.0_wp
+      !> Inverse thermal energy, 1/Hartree
+      real(wp) :: beta = 0.0_wp
       !> Accepted iterate t_s(r) and its c_s(r), packed (npts, npair)
       real(wp), allocatable :: tr(:, :), cr(:, :)
       !> Closure derivative c'(t_s) of the last linearization and scratch, packed (npts, npair)
@@ -77,7 +79,7 @@ module moist_model_moz_solvent_vv_driver
       !> Small-k damping filter
       type(moist_model_moz_1d_preconditioner_spectral_type) :: damping
    contains
-      !> Run the coupling stages
+      !> Solve the VV equations from an optional t_s guess, otherwise c_s = 0
       procedure :: solve => problem_solve
       !> Excess chemical potential of the current iterate
       procedure :: chemical_potential => problem_chemical_potential
@@ -105,16 +107,17 @@ module moist_model_moz_solvent_vv_driver
       real(wp), allocatable :: gamma_new(:, :), residual(:, :), delta(:)
       !> Borrowed iteration table; null when quiet
       type(moist_model_moz_solver_printer_type), pointer :: printer => null()
-      !> Stage tolerance; on the converging step the update is checked against its input
+      !> Tolerance; on the converging step the update is checked against its input
       real(wp) :: tolerance = 0.0_wp
       !> Borrowed store of intermediate saves; null without checkpoints
       class(moz_checkpoint_type), pointer :: store => null()
-      !> Iterations of the earlier stages and attempts; makes the saved iteration counts cumulative
+      !> Iterations of the earlier attempts; makes the saved iteration counts cumulative
       integer :: offset = 0
    contains
       procedure :: advance => iteration_advance
       procedure :: observe => iteration_observe
       procedure :: checkpoint => iteration_checkpoint
+      procedure :: ramp => iteration_ramp
    end type vv_iteration_type
 
 contains
@@ -164,8 +167,10 @@ contains
          call fatal_error(error, "1D VV potential tables must have shape (npts, ns*(ns+1)/2)")
          return
       end if
-      call new_closure(self%closure, params%closure, error, self%ctx)
+      call new_closure_ramp(self%ramp, params%closure, params%closure_ramp, params%closure_ramp_rmse, error, &
+         & self%ctx)
       if (allocated(error)) return
+      call self%ramp%finish(self%closure)
       call check_preconditioner_name(params%precond, preconditioners_1d_vv, "1D VV", error)
       if (allocated(error)) return
       call new_solver(self%solver, ctx, error, params%solver)
@@ -207,38 +212,36 @@ contains
       allocate (self%cr(size(wk, 1), size(wk, 2)), source=0.0_wp)
    end subroutine new_vv_problem
 
-   !> Run the coupling stages lambda = 1/n, ..., 1 from c_s = 0, or the last stage from a guess
+   !> Solve the VV equations from an optional t_s guess, otherwise c_s = 0
    !>
-   !> - Each cold stage starts from t_s = T(c_s) and a fresh solver stage
-   !> - A guess is checked at full coupling: one meeting the tolerance is the
-   !>   solution without iterations; a feasible one starts the last stage, and
-   !>   a failed warm attempt retries the cold stages once with fresh solver history
-   !> - Converged stage ends on a field measured below the tolerance
+   !> - A guess is checked against the requested closure: one meeting the
+   !>   tolerance is the solution without iterations; a feasible one starts the
+   !>   solve, and a failed warm attempt retries cold once with fresh solver history
+   !> - A cold solve starts from t_s = T(0) on the first closure of the ramp
+   !> - Converged solve ends on a field measured below the tolerance
    !> - That field has cr = C(tr); rmse is its residual
-   !> - Stops at the first unconverged stage; tr and cr hold its last iterate
-   !> - With a store: saves every `interval` iterations of the last stage, and the
-   !>   final field of the last stage when the solve iterated without error
+   !> - With a store: saves every `interval` iterations on the requested closure,
+   !>   and the final field when the solve iterated without error
    !> - Iteration table on the context unit at verbosity 2, with the solver's
-   !>   fallback summary after each stage
-   !> - The table shows mu_ex of each iterate; lambda only for several stages
+   !>   fallback summary after each attempt and closure
+   !> - The table shows mu_ex of each iterate
    !>
    !> @param[inout] self        problem; returns the last accepted t_s and c_s
-   !> @param[in]    tolerance   RMS residual of a converged stage
-   !> @param[in]    maxiter     outer iterations per stage
-   !> @param[in]    nlambda     number of stages
-   !> @param[out]   converged   whether every stage converged
+   !> @param[in]    tolerance   RMS residual of a converged solve
+   !> @param[in]    maxiter     outer iterations per attempt
+   !> @param[out]   converged   whether the solve converged
    !> @param[out]   rmse        last RMS residual
-   !> @param[out]   niter       outer iterations of all stages
+   !> @param[out]   niter       outer iterations of all attempts
    !> @param[out]   error       map, residual, closure or preconditioner failure
-   !> @param[in]    guess       short-range t_s(r) at full coupling, packed (npts, npair)
+   !> @param[in]    guess       short-range t_s(r), packed (npts, npair)
    !> @param[inout] checkpoint  store of the saved states, with its header set
-   subroutine problem_solve(self, tolerance, maxiter, nlambda, converged, rmse, niter, error, guess, checkpoint)
+   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, guess, checkpoint)
       !> Problem
       class(vv_problem_type), intent(inout), target :: self
-      !> Stage tolerance
+      !> Tolerance
       real(wp), intent(in) :: tolerance
-      !> Iteration limit and stage count
-      integer, intent(in) :: maxiter, nlambda
+      !> Iteration limit
+      integer, intent(in) :: maxiter
       !> Convergence flag
       logical, intent(out) :: converged
       !> Last RMS residual
@@ -247,7 +250,7 @@ contains
       integer, intent(out) :: niter
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Initial short-range indirect correlation at full coupling
+      !> Initial short-range indirect correlation
       real(wp), intent(in), optional :: guess(:, :)
       !> Store of the saved states
       class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
@@ -255,8 +258,7 @@ contains
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       class(moist_model_moz_solver_preconditioner_type), pointer :: precond
-      character(len=32) :: buf
-      integer :: ilam, first, stage_iter, attempt, interval
+      integer :: attempt, attempted_steps, interval
       logical :: warm
 
       converged = .false.
@@ -266,12 +268,16 @@ contains
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
       if (self%damp_small_k) allocate (context%delta(size(self%tr)))
+      interval = 0
       if (present(checkpoint)) then
-         if (allocated(checkpoint)) context%store => checkpoint
+         if (allocated(checkpoint)) then
+            context%store => checkpoint
+            interval = checkpoint%interval
+         end if
       end if
       if (self%ctx%verbosity(2)) then
          call printer%setup(unit=self%ctx%unit, energy_label="mu kcal", denergy_label="dmu kcal", &
-            & inner_rows=self%ctx%verbosity(5), lambda_column=nlambda > 1, energy_columns=self%ctx%verbosity(4))
+            & inner_rows=self%ctx%verbosity(5), energy_columns=self%ctx%verbosity(4))
          context%printer => printer
          call self%solver%set_iteration_printer(printer)
          call printer%header("1D VV")
@@ -287,66 +293,49 @@ contains
       end if
       work0 = self%solver%get_statistics()
 
+      self%linearized = .false.
       warm = .false.
       if (present(guess)) call check_guess(context, guess, tolerance, warm, converged, rmse)
 
-      attempts: do attempt = 1, 2
-         if (converged) exit attempts
-         first = 1
-         if (warm) then
-            first = nlambda
-         else
+      do attempt = 1, 2
+         if (converged) exit
+         if (.not. warm) then
+            call self%ramp%start(self%closure)
             self%cr = 0.0_wp
+            call self%equation%map(self%cr, self%tr, error)
+            if (allocated(error)) exit
          end if
-         do ilam = first, nlambda
-            self%lambda = real(ilam, wp)/real(nlambda, wp)
-            converged = .false.
-            ! The warm stage starts from the guess itself
-            if (.not. warm .or. ilam > first) then
-               call self%equation%map(self%cr, self%tr, error)
-               if (allocated(error)) exit
-            end if
-            self%linearized = .false.
-            call self%solver%begin_stage()
-            if (associated(context%printer)) then
-               if (ilam > first .or. attempt > 1) then
-                  call printer%separator()
-                  call printer%blank()
-               end if
-               if (attempt > 1) call printer%note("Retry from c_s = 0")
-               if (nlambda > 1) then
-                  write (buf, "(f0.3)") self%lambda
-                  call printer%note("Solver: "//self%solver%name()//", lambda: "//trim(buf))
-               else
-                  call printer%note("Solver: "//self%solver%name())
-               end if
+         call self%solver%begin_stage()
+         if (associated(context%printer)) then
+            if (attempt > 1) then
+               call printer%separator()
                call printer%blank()
-               call printer%begin_stage()
+               call printer%note("Retry from c_s = 0")
             end if
-            ! Only fields of the last stage solve the requested equations
-            interval = 0
-            if (associated(context%store) .and. ilam == nlambda) interval = context%store%interval
-            context%offset = niter
-            call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, stage_iter, &
-               & converged, error)
-            niter = niter + stage_iter
-            if (associated(context%printer)) call printer%note(self%solver%stage_summary())
-            if (allocated(error) .or. .not. converged) exit
-         end do
-         if (converged .and. .not. allocated(error)) exit attempts
-         if (.not. warm) exit attempts
-         ! A poor guess must not prevent the cold stages from succeeding
+            call printer%note("Solver: "//self%solver%name()//", closure: "//self%ramp%name())
+            call printer%blank()
+            call printer%begin_stage()
+         end if
+         context%offset = niter
+         call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
+            & converged, error)
+         niter = niter + attempted_steps
+         if (associated(context%printer)) call printer%note(self%solver%stage_summary())
+         if (converged .and. .not. allocated(error)) exit
+         if (.not. warm) exit
+         ! A poor guess must not prevent the cold solve from succeeding
          if (allocated(error)) then
             call self%ctx%warning("1D VV: warm start failed: "//error%message//"; retrying cold")
             deallocate (error)
          end if
          warm = .false.
          self%linearized = .false.
-      end do attempts
+      end do
 
       if (associated(context%store) .and. niter > 0 .and. .not. allocated(error)) then
-         if (self%lambda >= 1.0_wp) call save_state(self, context%store, rmse, niter, converged)
+         call save_state(self, context%store, rmse, niter, converged)
       end if
+      call self%ramp%finish(self%closure)
       call self%solver%set_iteration_printer()
       call self%solver%set_preconditioner()
       call self%solver%set_fallback_filter()
@@ -362,7 +351,7 @@ contains
    !>
    !> - mu = (rho/beta) sum_ab int Phi_ab(h, c) d^3r with the physical
    !>   c = c_s - beta u_lr and h = c_s + t_s
-   !> - Below the last stage, mu of the partially coupled fluid
+   !> - On a lower ramp rung, mu of that rung's closure
    !> - h and c go to the Jacobian-product scratch dt and dc, free between solver steps
    !>
    !> @param[inout] self   problem with an accepted iterate
@@ -384,18 +373,18 @@ contains
 
    !> Take one solver update, damp it if allowed, and refresh c_s and the kspace inverse
    !>
-   !> - Input iterate meeting the stage tolerance ends the stage on a checked field
-   !> - See finish_stage
+   !> - Input iterate meeting the tolerance ends the solve on a checked field
+   !> - See finish_solve
    !>
    !> @param[inout] self     solve-local context
-   !> @param[in]    iter     stage-local iteration
+   !> @param[in]    iter     attempt-local iteration
    !> @param[out]   rmse     RMS residual of the input iterate
    !> @param[out]   feasible whether an update was accepted
    !> @param[out]   error    solver, closure or preconditioner failure
    subroutine iteration_advance(self, iter, rmse, feasible, error)
       !> Solve-local context
       class(vv_iteration_type), intent(inout) :: self
-      !> Stage-local iteration
+      !> Attempt-local iteration
       integer, intent(in) :: iter
       !> RMS residual
       real(wp), intent(out) :: rmse
@@ -413,18 +402,18 @@ contains
             self%gamma_new = p%tr + reshape(self%delta, shape(p%tr))
          end if
          if (rmse < self%tolerance) then
-            call finish_stage(self, rmse, feasible, error)
+            call finish_solve(self, rmse, feasible, error)
             return
          end if
          p%tr = self%gamma_new
-         call p%closure%apply(p%u_sr, p%tr, p%beta, p%lambda, p%cr, error)
+         call p%closure%apply(p%u_sr, p%tr, p%beta, 1.0_wp, p%cr, error)
          if (allocated(error)) then
             feasible = .false.
             return
          end if
          if (p%precond == "kspace" .and. p%solver%uses_preconditioner()) then
             if (p%kspace%wants_update(rmse, iter)) then
-               call p%closure%derivative(p%u_sr, p%tr, p%beta, p%lambda, p%dc, error)
+               call p%closure%derivative(p%u_sr, p%tr, p%beta, 1.0_wp, p%dc, error)
                if (.not. allocated(error)) call p%kspace%update(p%wk, p%cr, p%rho, p%beta, p%uk_lr, p%dc, error)
                if (allocated(error)) feasible = .false.
             end if
@@ -432,18 +421,18 @@ contains
       end associate
    end subroutine iteration_advance
 
-   !> End a converged stage on the better of the input iterate and the update
+   !> End a converged solve on the better of the input iterate and the update
    !>
    !> - Solver measured the input; the update gets a fresh residual
    !> - Update is kept only when it is not worse
    !> - rmse becomes the residual of the kept field and cr = C(tr)
-   !> - The stage thus returns the field it reports
+   !> - The solve thus returns the field it reports
    !>
    !> @param[inout] self     solve-local context with the update in gamma_new
    !> @param[inout] rmse     residual of the input iterate; of the kept field on return
    !> @param[out]   feasible whether c_s of the kept field is usable
    !> @param[out]   error    closure failure on the kept field
-   subroutine finish_stage(self, rmse, feasible, error)
+   subroutine finish_solve(self, rmse, feasible, error)
       !> Solve-local context
       class(vv_iteration_type), intent(inout) :: self
       !> RMS residual
@@ -465,24 +454,24 @@ contains
                rmse = fresh
             end if
          end if
-         call p%closure%apply(p%u_sr, p%tr, p%beta, p%lambda, p%cr, error)
+         call p%closure%apply(p%u_sr, p%tr, p%beta, 1.0_wp, p%cr, error)
          feasible = .not. allocated(error)
       end associate
-   end subroutine finish_stage
+   end subroutine finish_solve
 
    !> Print one row of the iteration table
    !>
-   !> - Energy columns, shown from verbosity 4, hold mu_ex and its change within the stage;
+   !> - Energy columns, shown from verbosity 4, hold mu_ex and its change within the attempt;
    !>   blank when the closure gives no integrand
    !>
    !> @param[inout] self    solve-local context
-   !> @param[in]    iter    stage-local iteration
+   !> @param[in]    iter    attempt-local iteration
    !> @param[in]    rmse    RMS residual
    !> @param[in]    elapsed advance time, s
    subroutine iteration_observe(self, iter, rmse, elapsed)
       !> Solve-local context
       class(vv_iteration_type), intent(inout) :: self
-      !> Stage-local iteration
+      !> Attempt-local iteration
       integer, intent(in) :: iter
       !> RMS residual and advance time
       real(wp), intent(in) :: rmse, elapsed
@@ -494,9 +483,9 @@ contains
          ! mu only while its columns are shown
          if (self%printer%energy_columns) call p%chemical_potential(energy, energy_error)
          if (.not. self%printer%energy_columns .or. allocated(energy_error)) then
-            call p%solver%print_row(self%printer, iter, elapsed, rmse, hmax=maxval(p%cr + p%tr), lambda=p%lambda)
+            call p%solver%print_row(self%printer, iter, elapsed, rmse, hmax=maxval(p%cr + p%tr))
          else
-            call p%solver%print_row(self%printer, iter, elapsed, rmse, hmax=maxval(p%cr + p%tr), lambda=p%lambda, &
+            call p%solver%print_row(self%printer, iter, elapsed, rmse, hmax=maxval(p%cr + p%tr), &
                & energy=energy*autokcal)
          end if
       end associate
@@ -507,13 +496,13 @@ contains
    !> - A failed save warns; the solve continues
    !>
    !> @param[inout] self  solve-local context
-   !> @param[in]    iter  stage-local iteration of the accepted iterate
+   !> @param[in]    iter  attempt-local iteration of the accepted iterate
    !> @param[in]    rmse  residual measured by its advance
    !> @param[out]   error never set
    subroutine iteration_checkpoint(self, iter, rmse, error)
       !> Solve-local context
       class(vv_iteration_type), intent(inout) :: self
-      !> Stage-local iteration
+      !> Attempt-local iteration
       integer, intent(in) :: iter
       !> RMS residual
       real(wp), intent(in) :: rmse
@@ -523,6 +512,39 @@ contains
       if (.not. associated(self%store)) return
       call save_state(self%evaluator%problem, self%store, rmse, self%offset + iter, .false.)
    end subroutine iteration_checkpoint
+
+   !> Step the closure ramp and restart the solver on the next closure
+   !>
+   !> - c_s of the accepted t_s comes from the next closure
+   !> - Solver history restarts; the table notes the switch between its rows
+   !>
+   !> @param[inout] self     solve-local context
+   !> @param[in]    rmse     RMS residual of the last iterate
+   !> @param[out]   switched whether the closure changed
+   !> @param[out]   error    closure failure on the accepted t_s
+   subroutine iteration_ramp(self, rmse, switched, error)
+      !> Solve-local context
+      class(vv_iteration_type), intent(inout) :: self
+      !> RMS residual
+      real(wp), intent(in) :: rmse
+      !> Whether the closure changed
+      logical, intent(out) :: switched
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      associate (p => self%evaluator%problem)
+         call p%ramp%step(p%closure, rmse, self%tolerance, switched)
+         if (.not. switched) return
+         call p%closure%apply(p%u_sr, p%tr, p%beta, 1.0_wp, p%cr, error)
+         if (allocated(error)) return
+         p%linearized = .false.
+         if (associated(self%printer)) then
+            call self%printer%note(p%solver%stage_summary())
+            call self%printer%starred_note(p%ramp%note(rmse))
+         end if
+         call p%solver%begin_stage()
+      end associate
+   end subroutine iteration_ramp
 
    !> Check a guess at full coupling and accept it when it meets the tolerance
    !>
@@ -555,7 +577,6 @@ contains
       converged = .false.
       rmse = huge(1.0_wp)
       associate (p => context%evaluator%problem)
-         p%lambda = 1.0_wp
          if (any(shape(guess) /= shape(p%tr))) then
             call p%ctx%warning("1D VV: guess shape does not match the grid, ignoring guess")
             return
@@ -605,7 +626,9 @@ contains
       logical, intent(in) :: converged
       type(error_type), allocatable :: error
 
-      call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, problem%lambda, niter, converged, error)
+      ! Fields of a lower ramp rung do not solve the requested equations
+      if (.not. problem%ramp%at_target()) return
+      call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, 1.0_wp, niter, converged, error)
       if (allocated(error)) call problem%ctx%warning("1D VV checkpoint not saved: "//error%message)
    end subroutine save_state
 
@@ -634,7 +657,7 @@ contains
          return
       end if
       associate (p => self%problem)
-         call p%closure%apply(p%u_sr, gamma, p%beta, p%lambda, p%c_work, error)
+         call p%closure%apply(p%u_sr, gamma, p%beta, 1.0_wp, p%c_work, error)
          if (allocated(error)) return
          if (.not. state_feasible(p%c_work, gamma, p%ctx%get_num_threads())) then
             call fatal_error(error, "1D VV closure gave 1 + h < 0")
@@ -679,7 +702,7 @@ contains
       end if
       associate (p => self%problem)
          p%linearized = .false.
-         call p%closure%apply_and_derivative(p%u_sr, gamma, p%beta, p%lambda, p%c_work, p%dcdt, error)
+         call p%closure%apply_and_derivative(p%u_sr, gamma, p%beta, 1.0_wp, p%c_work, p%dcdt, error)
          if (allocated(error)) return
          if (.not. state_feasible(p%c_work, gamma, p%ctx%get_num_threads())) then
             call fatal_error(error, "1D VV closure gave 1 + h < 0 at the linearization point")

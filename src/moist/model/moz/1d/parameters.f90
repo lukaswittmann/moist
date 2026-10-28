@@ -25,6 +25,10 @@ module moist_model_moz_1d_parameters
       real(wp) :: tolerance = 1.0e-7_wp
       !> Outer iterations of the UV solve
       integer :: maxiter = 128
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, PSE4, HNC
+      logical :: closure_ramp = .true.
+      !> RMS residual below which the ramp steps to the next closure
+      real(wp) :: closure_ramp_rmse = 1.0e-5_wp
       !> Reuse converged UV fields across host updates at fixed geometry
       logical :: reuse_initial_guess = .true.
       !> Small-k damping of updates the solver allows to post-process
@@ -61,6 +65,8 @@ contains
       self%closure = defaults%closure
       self%tolerance = defaults%tolerance
       self%maxiter = defaults%maxiter
+      self%closure_ramp = defaults%closure_ramp
+      self%closure_ramp_rmse = defaults%closure_ramp_rmse
       self%reuse_initial_guess = defaults%reuse_initial_guess
       self%damp_small_k = defaults%damp_small_k
       self%damp_small_k_k0 = defaults%damp_small_k_k0
@@ -88,6 +94,8 @@ contains
       call self%register_string("closure", self%closure, level=2)
       call self%register_real_scalar("convergence.tolerance", self%tolerance, level=2)
       call self%register_int_scalar("convergence.maxiter", self%maxiter, level=2)
+      call self%register_logical("convergence.closure_ramp", self%closure_ramp)
+      call self%register_real_scalar("convergence.closure_ramp_rmse", self%closure_ramp_rmse)
       call self%register_logical("convergence.reuse_initial_guess", self%reuse_initial_guess)
       call self%register_logical("damping.small_k", self%damp_small_k, level=damping_level)
       call self%register_real_scalar("damping.small_k_k0", self%damp_small_k_k0, level=damping_level)
@@ -118,8 +126,8 @@ contains
          call fatal_error(error, "jfnk.deflation is only available for the 1D VV solve")
          return
       end if
-      if (.not. positive(self%tolerance) .or. self%maxiter < 1) then
-         call fatal_error(error, "1D MOZ convergence needs a positive tolerance and iteration limit")
+      if (.not. positive(self%tolerance) .or. self%maxiter < 1 .or. .not. positive(self%closure_ramp_rmse)) then
+         call fatal_error(error, "1D MOZ convergence needs a positive tolerance, iteration limit and ramp residual")
       else if (.not. positive(self%damp_small_k_k0) .or. .not. weight(self%damp_small_k_min_weight)) then
          call fatal_error(error, "1D MOZ damping needs a positive k0 and a k = 0 weight in [0, 1]")
       else if (.not. positive(self%precond_k0) .or. .not. weight(self%precond_w0)) then

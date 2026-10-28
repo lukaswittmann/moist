@@ -138,6 +138,25 @@ correlation ``c_s``, because the split leaves the closure exponent
 ``-beta*lambda*u + t`` unchanged (``t_s = t - beta*lambda*u_lr``). The local
 energy integrand needs the physical ``h`` and ``c = c_s - beta*lambda*u_lr``.
 
+Closure ramp
+------------
+
+Cold solves of the VV, 1D UV and 3D UV equations ramp the closure up the ladder
+``KH -> PSE2 -> PSE3 -> PSE4 -> HNC`` to the requested closure; PSE-n reduces to KH
+for ``n = 1`` and tends to HNC. ``moist_model_moz_closure_ramp_type`` in
+``src/moist/model/moz/closure/ramp.f90`` builds every rung once at setup and
+cites each of them.
+
+* A cold solve starts on KH. Whenever the RMS residual of an iterate falls below
+  ``convergence.closure_ramp_rmse`` (default ``1e-5``), or below the solve tolerance,
+  the next closure takes over on the same ``t_s``. The solver history restarts,
+  and a centered ``*** Closure: KH -> PSE2 at RMS residual ... ***`` line in the
+  iteration table notes the switch.
+* All rungs share the ``convergence.maxiter`` budget of the attempt.
+* A lower rung never converges and is never checkpointed.
+* Guesses are checked against the requested closure; a usable guess skips the ramp.
+* ``convergence.closure_ramp = false`` solves with the requested closure only.
+
 Tests
 -----
 

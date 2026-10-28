@@ -28,6 +28,7 @@ module moist_model_moz_input
    use moist_model_moz_solvent_theory, only: canonical_bulk_theory
    use moist_model_moz_solvent_water, only: new_spce_water_geometry, is_water
    use moist_model_moz_checkpoint_file, only: moz_file_checkpoint_type, new_file_checkpoint
+   use moist_model_moz_closure_ramp, only: closure_ladder
    use moist_data_solvents, only: get_solvent_id
    use moist_solvent_system, only: solvent_system_type, new_solvent_system
    implicit none(type, external)
@@ -38,7 +39,8 @@ module moist_model_moz_input
    public :: new_input_solvent, new_vv_checkpoint, new_uv_checkpoint, vv_checkpoint_name
 
    !> Closures whose automatic VV files can warm-start another closure, in order of preference
-   character(len=4), parameter :: fallback_closures(5) = [character(len=4) :: "HNC", "PSE4", "PSE3", "PSE2", "KH"]
+   character(len=4), parameter :: fallback_closures(size(closure_ladder)) = &
+      & closure_ladder(size(closure_ladder):1:-1)
 
    !> Error of settings used before their defaults were restored
    character(len=*), parameter :: undefaulted = &

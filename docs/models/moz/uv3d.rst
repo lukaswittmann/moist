@@ -288,6 +288,8 @@ Key                                   Default     Meaning
 ``susceptibility``                    ``oz``      OZ reconstruction, direct transform, or linear sampling
 ``convergence.tolerance``             1e-7        RMS residual of a converged solve
 ``convergence.maxiter``               128         Outer iterations per attempt
+``convergence.closure_ramp``          true        Cold solves ramp the closure up from KH
+``convergence.closure_ramp_rmse``     1e-5        RMS residual that starts the next closure
 ``convergence.reuse_initial_guess``    true        Previous converged fields at fixed geometry
 ``convergence.cold_guess``             ``cs0``     Cold start: map c_s = 0, or set t_s = 0 with ts0
 ``solver.name``                       ``JFNK``    PICARD, DIIS, JFNK or HYBRID

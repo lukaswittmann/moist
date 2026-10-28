@@ -372,10 +372,10 @@ if(MOIST_TESTS)
   set(moist_test_selected_moz_solvent_vv
     intramolecular block_solve map_consistency jvp_differences
     coarse_matrix thread_independence setup_errors parameters evaluator_products
-    damping_step solve_water solve_variants solve_refusals thermodynamics_reduction
+    damping_step solve_water solve_variants closure_ramp solve_refusals thermodynamics_reduction
     solve_outputs reference_values converged_field solve_replacement susceptibility_at)
   set(moist_test_selected_moz_checkpoint
-    file_round_trip file_candidates file_failed_save vv_reload vv_intermediate vv_stages vv_unfitting uv1d_reload uv3d_reload)
+    file_round_trip file_candidates file_failed_save vv_reload vv_intermediate vv_ramp vv_unfitting uv1d_reload uv3d_reload)
   set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
   set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
   set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)

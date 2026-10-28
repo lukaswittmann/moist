@@ -343,7 +343,7 @@ contains
       if (allocated(error)) return
       if (allocated(self%checkpoint)) call load_guess(self, params, ur_lr, guess)
       call self%ctx%timer%stop("Setup")
-      call problem%solve(params%tolerance, params%maxiter, params%nlambda, converged, rmse, niter, error, &
+      call problem%solve(params%tolerance, params%maxiter, converged, rmse, niter, error, &
          & guess=guess, checkpoint=self%checkpoint)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse

@@ -24,7 +24,8 @@ module moist_model_moz_3d_driver
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_integration, only: integration_block_size, integration_parallel_threshold
    use moist_math_grid_3d_kernel_integration, only: merge_compensated_sums
-   use moist_model_moz_closure, only: moist_model_moz_closure_type, new_closure
+   use moist_model_moz_closure, only: moist_model_moz_closure_type
+   use moist_model_moz_closure_ramp, only: moist_model_moz_closure_ramp_type, new_closure_ramp
    use moist_model_moz_solver, only: moist_model_moz_solver_type, moist_model_moz_solver_evaluator_type, &
       & moist_model_moz_solver_iteration_type, moist_model_moz_solver_printer_type, &
       & moist_model_moz_solver_statistics_type, new_solver, run_iterations, solve_adjoint
@@ -49,8 +50,10 @@ module moist_model_moz_3d_driver
       type(moist_context_type), pointer :: ctx => null()
       !> Equation with the owned grid, the response table and the transforms
       type(uv3d_equation_type) :: equation
-      !> Closure
+      !> Closure of the current ramp rung; the requested one outside a solve
       class(moist_model_moz_closure_type), allocatable :: closure
+      !> Cold-start closure ramp
+      type(moist_model_moz_closure_ramp_type) :: ramp
       !> Nonlinear solver
       class(moist_model_moz_solver_type), allocatable :: solver
       !> Short- and long-range real-space potential, Hartree, (ngrid, nv)
@@ -119,6 +122,7 @@ module moist_model_moz_3d_driver
       procedure :: advance => iteration_advance
       procedure :: observe => iteration_observe
       procedure :: checkpoint => iteration_checkpoint
+      procedure :: ramp => iteration_ramp
    end type uv3d_iteration_type
 
 contains
@@ -172,8 +176,10 @@ contains
          call fatal_error(error, "3D UV potential tables must have shape (ngrid, nv)")
          return
       end if
-      call new_closure(self%closure, params%closure, error, self%ctx)
+      call new_closure_ramp(self%ramp, params%closure, params%closure_ramp, params%closure_ramp_rmse, error, &
+         & self%ctx)
       if (allocated(error)) return
+      call self%ramp%finish(self%closure)
       call new_solver(self%solver, ctx, error, params%solver)
       if (allocated(error)) return
       self%equation%nthreads = ctx%get_num_threads()
@@ -226,7 +232,8 @@ contains
 
    !> Solve the 3D UV equations at full coupling
    !>
-   !> - Cold starts use t_s = T(0) (cs0, default) or t_s = 0 (ts0)
+   !> - Cold starts use t_s = T(0) (cs0, default) or t_s = 0 (ts0) and ramp the closure up from KH
+   !> - Guesses are checked against the requested closure
    !> - A supplied guess, else a checked retained guess when requested, takes precedence
    !> - A usable starting field meeting the tolerance is the solution, without iterations
    !> - Infeasible guesses and failed warm solves use the selected cold path
@@ -234,10 +241,10 @@ contains
    !> - Solver history is cleared for each attempt; plans and allocated workspace persist
    !> - A converged solve ends on a field whose residual was measured below the
    !>   tolerance, with cr = C(tr); rmse is the residual of that field
-   !> - With a store: saves every `interval` iterations, and the final field when
-   !>   the solve iterated without error
+   !> - With a store: saves every `interval` iterations on the requested closure,
+   !>   and the final field when the solve iterated without error
    !> - Iteration table on the context unit at verbosity 4, with the solver's
-   !>   fallback summary after each attempt
+   !>   fallback summary after each attempt and closure
    !>
    !> @param[inout] self       problem; returns the last accepted t_s and c_s
    !> @param[in]    tolerance  RMS residual of a converged solve
@@ -334,6 +341,7 @@ contains
       do attempt = 1, 2
          if (converged) exit
          if (.not. warm) then
+            call self%ramp%start(self%closure)
             self%cr = 0.0_wp
             if (self%cold_guess == "ts0") then
                self%tr = 0.0_wp
@@ -349,7 +357,7 @@ contains
                call printer%blank()
                call printer%note("Retry with cold guess "//trim(self%cold_guess))
             end if
-            call printer%note("Solver: "//self%solver%name())
+            call printer%note("Solver: "//self%solver%name()//", closure: "//self%ramp%name())
             if (.not. warm) call printer%note("Cold guess: "//trim(self%cold_guess))
             call printer%blank()
             call printer%begin_stage()
@@ -372,6 +380,7 @@ contains
       if (associated(context%store) .and. niter > 0 .and. .not. allocated(error)) then
          call save_state(self, context%store, rmse, niter, converged)
       end if
+      call self%ramp%finish(self%closure)
 
       call self%solver%set_iteration_printer()
       if (associated(context%printer)) then
@@ -784,6 +793,39 @@ contains
       call save_state(self%evaluator%problem, self%store, rmse, self%offset + iter, .false.)
    end subroutine iteration_checkpoint
 
+   !> Step the closure ramp and restart the solver on the next closure
+   !>
+   !> - c_s of the accepted t_s comes from the next closure
+   !> - Solver history restarts; the table notes the switch between its rows
+   !>
+   !> @param[inout] self     solve-local context
+   !> @param[in]    rmse     RMS residual of the last iterate
+   !> @param[out]   switched whether the closure changed
+   !> @param[out]   error    closure failure on the accepted t_s
+   subroutine iteration_ramp(self, rmse, switched, error)
+      !> Solve-local context
+      class(uv3d_iteration_type), intent(inout) :: self
+      !> RMS residual
+      real(wp), intent(in) :: rmse
+      !> Whether the closure changed
+      logical, intent(out) :: switched
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      associate (p => self%evaluator%problem)
+         call p%ramp%step(p%closure, rmse, self%tolerance, switched)
+         if (.not. switched) return
+         call p%closure%apply(p%u_sr, p%tr, p%beta, 1.0_wp, p%cr, error)
+         if (allocated(error)) return
+         p%linearized = .false.
+         if (associated(self%printer)) then
+            call self%printer%note(p%solver%stage_summary())
+            call self%printer%starred_note(p%ramp%note(rmse))
+         end if
+         call p%solver%begin_stage()
+      end associate
+   end subroutine iteration_ramp
+
    !> Accept a feasible starting field that already meets the tolerance
    !>
    !> - Uses the residual the guess check left in the context
@@ -834,6 +876,8 @@ contains
       logical, intent(in) :: converged
       type(error_type), allocatable :: error
 
+      ! Fields of a lower ramp rung do not solve the requested equations
+      if (.not. problem%ramp%at_target()) return
       call store%record(problem%tr, problem%beta, problem%ur_lr, rmse, 1.0_wp, niter, converged, error)
       if (allocated(error)) call problem%ctx%warning("3D UV checkpoint not saved: "//error%message)
    end subroutine save_state

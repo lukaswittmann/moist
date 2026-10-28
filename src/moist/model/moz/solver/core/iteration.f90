@@ -13,6 +13,8 @@ module moist_model_moz_solver_core_iteration
       procedure(advance_interface), deferred :: advance
       procedure(observe_interface), deferred :: observe
       procedure(checkpoint_interface), deferred :: checkpoint
+      !> Step a continuation ramp after an observed update; none by default
+      procedure :: ramp => iteration_ramp
    end type moist_model_moz_solver_iteration_type
 
    !> Abstract interfaces of the deferred iteration hooks
@@ -81,6 +83,8 @@ contains
    !> Run one stage with driver-selected checkpoint/convergence ordering
    !>
    !> - Failed attempts count as iterations but are not observed or checkpointed
+   !> - A ramp step after observe changes the equations; that iterate is neither
+   !>   tested for convergence nor checkpointed
    !> - Only advance is timed, on the context timer node `Iterations` under the
    !>   open node; observe receives the last interval
    !> - The node is open on the timer stack during advance, so the solver's
@@ -120,8 +124,8 @@ contains
       integer :: iter
       !> Advance timer node while it is open; 0 when the timer is inactive
       integer :: id
-      !> Step feasibility, convergence and checkpoint ordering flags
-      logical :: feasible, reached_tolerance, checkpoint_first
+      !> Step feasibility, ramp step, convergence and checkpoint ordering flags
+      logical :: feasible, switched, reached_tolerance, checkpoint_first
 
       niter = 0
       converged = .false.
@@ -136,6 +140,9 @@ contains
          call ctx%timer%stop("Iterations")
          if (allocated(error) .or. .not. feasible) exit
          call context%observe(iter, rmse, ctx%timer%last(id))
+         call context%ramp(rmse, switched, error)
+         if (allocated(error)) exit
+         if (switched) cycle
          reached_tolerance = rmse < tolerance
          ! Fortran does not guarantee short-circuit evaluation of logical AND
          if (checkpoint_interval > 0 .and. (.not. reached_tolerance .or. checkpoint_first)) then
@@ -150,4 +157,24 @@ contains
          end if
       end do
    end subroutine run_iterations
+
+   !> Default ramp: the equations never change during a stage
+   !>
+   !> @param[inout] self Solve-local context
+   !> @param[in] rmse Convergence measure from advance
+   !> @param[out] switched Whether the equations changed
+   !> @param[out] error Failure information
+   subroutine iteration_ramp(self, rmse, switched, error)
+      !> Solve-local context
+      class(moist_model_moz_solver_iteration_type), intent(inout) :: self
+      !> Convergence measure
+      real(wp), intent(in) :: rmse
+      !> Whether the equations changed
+      logical, intent(out) :: switched
+      !> Failure information
+      type(error_type), allocatable, intent(out) :: error
+
+      associate (s => self, r => rmse); end associate
+      switched = .false.
+   end subroutine iteration_ramp
 end module moist_model_moz_solver_core_iteration

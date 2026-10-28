@@ -66,7 +66,7 @@ contains
          & new_unittest("file_failed_save", check_file_failed_save), &
          & new_unittest("vv_reload", check_vv_reload), &
          & new_unittest("vv_intermediate", check_vv_intermediate), &
-         & new_unittest("vv_stages", check_vv_stages), &
+         & new_unittest("vv_ramp", check_vv_ramp), &
          & new_unittest("vv_unfitting", check_vv_unfitting), &
          & new_unittest("uv1d_reload", check_uv1d_reload), &
          & new_unittest("uv3d_reload", check_uv3d_reload)]
@@ -343,11 +343,11 @@ contains
       call check(error, mu_warm, mu_cold, rel=.true., thr=1.0e-6_wp, more="restart reached another solution")
    end subroutine check_vv_intermediate
 
-   !> Coupling stages: saves of the last stage only, and a guess skips the ramp
+   !> Closure ramp: saves of the requested closure only, and a guess skips the ramp
    !>
-   !> - Two stages save only fields at full coupling
-   !> - A converged guess is accepted without iterations despite the stages
-   subroutine check_vv_stages(error)
+   !> - HNC ramped from KH saves only HNC fields
+   !> - A converged guess is accepted without iterations despite the ramp
+   subroutine check_vv_ramp(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -360,17 +360,18 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call vv_settings(params)
-      params%nlambda = 2
+      params%closure = "HNC"
       call new_memory_store(store, log)
       store%interval = 1
       call solve_vv(ctx, params, store, cold, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       n = size(log%saved)
-      call check(error, n >= 1, more="the staged solve saved nothing")
+      call check(error, n >= 1, more="the ramped solve saved nothing")
       if (allocated(error)) return
-      call check(error, all(log%saved(:)%lambda == 1.0_wp) .and. log%saved(n)%converged, &
-         & more="a state below full coupling was saved")
+      ! Each of KH and PSE2-4 ends with at least one iteration
+      call check(error, log%saved(1)%iterations > 4 .and. log%saved(n)%converged, &
+         & more="a state below the requested closure was saved")
       if (allocated(error)) return
 
       store%preset = log%saved(n)
@@ -378,8 +379,8 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, size(log%saved) == n .and. warm%is_solved(params), &
-         & more="a converged guess ran the coupling stages")
-   end subroutine check_vv_stages
+         & more="a converged guess ran the closure ramp")
+   end subroutine check_vv_ramp
 
    !> States of another grid or kind are ignored; the solve starts cold
    subroutine check_vv_unfitting(error)

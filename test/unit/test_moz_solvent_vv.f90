@@ -77,6 +77,7 @@ contains
          & new_unittest("damping_step", check_damping_step), &
          & new_unittest("solve_water", check_solve_water), &
          & new_unittest("solve_variants", check_solve_variants), &
+         & new_unittest("closure_ramp", check_closure_ramp), &
          & new_unittest("solve_refusals", check_solve_refusals), &
          & new_unittest("thermodynamics_reduction", check_thermodynamics_reduction), &
          & new_unittest("solve_outputs", check_solve_outputs), &
@@ -508,7 +509,7 @@ contains
 
       params%closure = "HNC"
       params%npts = 4096
-      params%nlambda = 4
+      params%closure_ramp_rmse = 1.0e-4_wp
       params%solver%name = "HYBRID"
       params%precond = "kspace"
       params%deflation_nfun = 3
@@ -520,7 +521,7 @@ contains
       if (stat == 0) close (unit, status="delete")
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, copy%closure == "HNC" .and. copy%npts == 4096 .and. copy%nlambda == 4 .and. &
+      call check(error, copy%closure == "HNC" .and. copy%npts == 4096 .and. copy%closure_ramp_rmse == 1.0e-4_wp .and. &
          & copy%solver%name == "HYBRID" .and. copy%precond == "kspace" .and. copy%deflation_nfun == 3 .and. &
          & copy%solver%jfnk%restart == 30 .and. .not. copy%solver%jfnk%deflation, &
          & more="VV settings changed in the TOML round trip")
@@ -536,7 +537,7 @@ contains
       if (allocated(error)) return
       call refused("precond", "jacobi")
       if (allocated(error)) return
-      call refused("nlambda", "0")
+      call refused("closure_ramp_rmse", "0")
       if (allocated(error)) return
       call refused("restart", "0")
 
@@ -554,8 +555,8 @@ contains
             bad%solver%name = value
          case ("precond")
             bad%precond = value
-         case ("nlambda")
-            bad%nlambda = 0
+         case ("closure_ramp_rmse")
+            bad%closure_ramp_rmse = 0.0_wp
          case default
             bad%solver%jfnk%restart = 0
          end select
@@ -687,7 +688,7 @@ contains
          & case%ur_lr, case%uk_lr, case%rho, case%beta, params, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call problem%solve(params%tolerance, 1, 1, converged, rmse, niter, err)
+      call problem%solve(params%tolerance, 1, converged, rmse, niter, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, .not. converged .and. niter == 1, more="one Picard step converged the water solve")
@@ -696,7 +697,6 @@ contains
       allocate (t0, residual, mold=case%cr)
       call problem%equation%map(0.0_wp*case%cr, t0, err)
       evaluator%problem => problem
-      problem%lambda = 1.0_wp
       if (.not. allocated(err)) call evaluator%residual(t0, residual, feasible, err)
       rgrid = case%rgrid
       kgrid = case%kgrid
@@ -801,7 +801,7 @@ contains
    !>
    !> HYBRID switching to JFNK at once (MDIIS diverges from the cold water
    !> start), JFNK with the kspace inverse, JFNK without preconditioner or
-   !> deflation, and four coupling stages; h agrees to 1e-6
+   !> deflation; h agrees to 1e-6
    !>
    !> - Only kspace warns: water has too few site pairs for its block solve
    subroutine check_solve_variants(error)
@@ -812,7 +812,7 @@ contains
       type(solvent_vv_type) :: solvent
       type(solvent_vv_parameters_type) :: params
       real(wp), allocatable :: cr(:, :), tr(:, :), href(:, :), hr(:, :)
-      character(len=*), parameter :: label(4) = [character(len=16) :: "HYBRID", "kspace", "plain JFNK", "four stages"]
+      character(len=*), parameter :: label(3) = [character(len=16) :: "HYBRID", "kspace", "plain JFNK"]
       integer :: ivar
 
       call new_context(ctx, nthreads=0, verbosity=0)
@@ -820,7 +820,7 @@ contains
       if (.not. allocated(err)) call solvent%correlations(cr, tr, href, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      do ivar = 1, 4
+      do ivar = 1, 3
          call params%init_defaults()
          select case (ivar)
          case (1)
@@ -828,11 +828,9 @@ contains
             params%solver%hybrid%switch_rmse = 10.0_wp
          case (2)
             params%precond = "kspace"
-         case (3)
+         case default
             params%precond = "none"
             params%solver%jfnk%deflation = .false.
-         case default
-            params%nlambda = 4
          end select
          call solve_water(ctx, params, solvent, err)
          if (.not. allocated(err)) call solvent%correlations(cr, tr, hr, err)
@@ -846,6 +844,35 @@ contains
       end do
       call ctx%delete()
    end subroutine check_solve_variants
+
+   !> Check that the closure ramp reaches the solution of the requested closure
+   !>
+   !> - HNC from KH through PSE2-4 and HNC from c_s = 0 agree in h to 1e-6
+   subroutine check_closure_ramp(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_vv_type) :: solvent
+      type(solvent_vv_parameters_type) :: params
+      real(wp), allocatable :: cr(:, :), tr(:, :), href(:, :), hr(:, :)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      params%closure = "HNC"
+      params%closure_ramp = .false.
+      call solve_water(ctx, params, solvent, err)
+      if (.not. allocated(err)) call solvent%correlations(cr, tr, href, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      params%closure_ramp = .true.
+      call solve_water(ctx, params, solvent, err)
+      if (.not. allocated(err)) call solvent%correlations(cr, tr, hr, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, maxval(abs(hr - href)), 0.0_wp, thr=1.0e-6_wp, &
+         & more="the ramped HNC solve reached a different solution")
+      call ctx%delete()
+   end subroutine check_closure_ramp
 
    !> Check refused and stale solves
    !>
@@ -1124,7 +1151,7 @@ contains
       initial = norm2(residual)/sqrt(real(size(residual), wp))
       tolerance = 1.1_wp*initial
 
-      call problem%solve(tolerance, 1, 1, converged, rmse, niter, err)
+      call problem%solve(tolerance, 1, converged, rmse, niter, err)
       if (.not. allocated(err)) call evaluator%residual(problem%tr, residual, feasible, err)
       call check_moist_error(error, err)
       if (allocated(error)) return

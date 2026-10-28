@@ -60,6 +60,7 @@ module moist_model_moz_solver_core_printer
       procedure :: header => printer_header
       procedure :: note => printer_note
       procedure :: sep_note => printer_sep_note
+      procedure :: starred_note => printer_starred_note
       procedure :: print_header => printer_print_header
       procedure :: separator => printer_separator
       procedure :: blank => printer_blank
@@ -195,6 +196,21 @@ contains
       if (len_trim(text) == 0) return
       write (self%plp%unit, "(2x,a)") trim(text)
    end subroutine printer_note
+
+   !> Print a note centered on the table between stars, e.g. a closure switch
+   !>
+   !> - Empty text prints nothing
+   !>
+   !> @param[inout] self  printer set up before
+   !> @param[in]    text  note text
+   subroutine printer_starred_note(self, text)
+      !> Printer set up before
+      class(moist_model_moz_solver_printer_type), intent(inout) :: self
+      !> Note text
+      character(*), intent(in) :: text
+      if (len_trim(text) == 0) return
+      call self%plp%centered("*** "//trim(adjustl(text))//" ***")
+   end subroutine printer_starred_note
 
    !> Print a separator line carrying a note, e.g. the solver in use
    !>

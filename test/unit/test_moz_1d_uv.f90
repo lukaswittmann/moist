@@ -146,7 +146,7 @@ contains
       if (allocated(error)) return
       deallocate (err)
       call copy%init_defaults()
-      copy%solvent%nlambda = 0
+      copy%solvent%closure_ramp_rmse = 0.0_wp
       call copy%validate(err)
       call check(error, allocated(err), more="invalid nested solvent settings were accepted")
    end subroutine check_parameters
@@ -930,7 +930,6 @@ contains
       if (.not. allocated(err)) call solvent%update(err)
       params%solvent%npts = 512
       params%solvent%dr = 0.25_wp
-      params%solvent%nlambda = 1
       if (.not. allocated(err)) call solvent%solve(err, params%solvent)
       if (.not. allocated(err)) call new_uniform_radial_pair(rgrid, kgrid, 128, 1.0_wp, err)
       call check_moist_error(error, err)

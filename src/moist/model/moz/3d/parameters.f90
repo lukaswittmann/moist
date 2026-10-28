@@ -42,6 +42,10 @@ module moist_model_moz_3d_parameters
       real(wp) :: tolerance = 1.0e-7_wp
       !> Outer iterations of the UV solve
       integer :: maxiter = 128
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, PSE4, HNC
+      logical :: closure_ramp = .true.
+      !> RMS residual below which the ramp steps to the next closure
+      real(wp) :: closure_ramp_rmse = 1.0e-5_wp
       !> Use the previous converged UV fields as an initial guess at fixed geometry
       logical :: reuse_initial_guess = .true.
       !> Cold initial field: cs0 maps c_s = 0; ts0 sets t_s = 0 directly
@@ -77,6 +81,8 @@ contains
       self%susceptibility = defaults%susceptibility
       self%tolerance = defaults%tolerance
       self%maxiter = defaults%maxiter
+      self%closure_ramp = defaults%closure_ramp
+      self%closure_ramp_rmse = defaults%closure_ramp_rmse
       self%reuse_initial_guess = defaults%reuse_initial_guess
       self%cold_guess = defaults%cold_guess
       self%precond = defaults%precond
@@ -97,6 +103,8 @@ contains
       call self%register_string("susceptibility", self%susceptibility)
       call self%register_real_scalar("convergence.tolerance", self%tolerance, level=2)
       call self%register_int_scalar("convergence.maxiter", self%maxiter, level=2)
+      call self%register_logical("convergence.closure_ramp", self%closure_ramp)
+      call self%register_real_scalar("convergence.closure_ramp_rmse", self%closure_ramp_rmse)
       call self%register_logical("convergence.reuse_initial_guess", self%reuse_initial_guess)
       call self%register_string("convergence.cold_guess", self%cold_guess)
       call self%register_group("solver", self%solver)
@@ -143,12 +151,21 @@ contains
          call fatal_error(error, "jfnk.deflation is only available for the 1D VV solve")
          return
       end if
-      if (.not. (ieee_is_finite(self%tolerance) .and. self%tolerance > 0.0_wp) .or. self%maxiter < 1) then
-         call fatal_error(error, "3D MOZ convergence needs a positive tolerance and iteration limit")
+      if (.not. positive(self%tolerance) .or. self%maxiter < 1 .or. .not. positive(self%closure_ramp_rmse)) then
+         call fatal_error(error, "3D MOZ convergence needs a positive tolerance, iteration limit and ramp residual")
       else
          call self%solver%validate(error)
          if (.not. allocated(error)) call self%solvent%validate(error)
       end if
    end subroutine validate_3d_parameters
+
+   !> Finite positive value
+   !>
+   !> @param[in] value Scalar to check
+   pure logical function positive(value)
+      !> Scalar to check
+      real(wp), intent(in) :: value
+      positive = ieee_is_finite(value) .and. value > 0.0_wp
+   end function positive
 
 end module moist_model_moz_3d_parameters

@@ -76,14 +76,14 @@ it does not replace the general solvent table.
 
 * The tables come from the updated potential on the uniform DST-IV radial pair of the settings, Ng-split as described in :doc:`potential`.
 * The iterate is the short-range indirect correlation ``t_s(r)``; the closure gives ``c_s(r)``, and per k-point ``h = (I - w c rho)^-1 w c w`` with ``c(k) = c_s(k) - beta u_lr(k)``.
-* Coupling stages ``lambda = 1/n, ..., 1`` scale the short-range potential in the closure; the long-range part is always fully on.
+* A cold solve starts from ``c_s = 0`` and ramps the closure up from KH (see :doc:`closures`).
 * The evaluator provides exact Jacobian and transpose products and the Gaussian coarse space of the deflated Newton-Krylov steps (see :doc:`solvers`).
 * Small-k damping filters the updates of solvers that allow post-processing (Picard and the MDIIS phase); JFNK keeps its line-search update.
 * The solver verbosity and thread count come from the run context; the bulk solve runs once, so at verbosity 2 it prints its iteration table and a result block with the bulk thermodynamics.
 
-A converged stage returns a field whose residual was measured below the tolerance: on the
+A converged solve returns a field whose residual was measured below the tolerance: on the
 converging step the update gets a fresh residual and replaces the input only when it is not worse.
-A stage that does not converge is an error and leaves the solvent unsolved.
+A solve that does not converge is an error and leaves the solvent unsolved.
 The default residual tolerance is ``1e-11``; explicit settings are kept. The achieved RMS
 residual is checked before accepting the solution and is available through ``residual()``.
 Any change of the potential afterwards (a new term, an update, the Ng split or the mixing rule), or its replacement by a potential with another change history, makes the solution stale: ``is_solved`` turns false and the output getters refuse.
@@ -94,27 +94,28 @@ Settings
 
 ``solvent_vv_parameters_type`` reads and writes JSON or TOML; the solver controls of :doc:`solvers` form the nested ``solver`` group.
 
-===============================  ===========  ==================================================
-Key                              Default      Meaning
-===============================  ===========  ==================================================
-``theory``                       ``RISM``     RISM (XRISM alias) or DRISM
-``drism.smear``                   0.6682       DRISM Gaussian smearing width (bohr)
-``closure``                      ``KH``       HNC, KH or PSE2-4
-``grid.npts``, ``grid.dr``       8192, 0.015  Points and spacing (bohr) of the radial pair
-``convergence.tolerance``        1e-11        RMS residual of a converged stage
-``convergence.maxiter``          128          Outer iterations per stage
-``convergence.nlambda``          1            Coupling stages
-``damping.small_k``              true         Small-k damping of post-processed updates
-``damping.small_k_k0``           1.0          Damping wave number (1/bohr)
-``damping.small_k_min_weight``   0.15         Damping weight at k = 0
-``solver.name``                  ``JFNK``     PICARD, DIIS, JFNK or HYBRID
-``solver.jfnk.precond``          spectral     none, spectral or kspace
-``solver.jfnk.precond_k0``       1.0          Spectral-filter wave number (1/bohr)
-``solver.jfnk.precond_w0``       0.1          Spectral-filter weight at k = 0
-``solver.jfnk.deflation``        true         Deflated Newton-Krylov steps (on for the VV solve)
-``solver.jfnk.deflation_sigma``  2.35         Gaussian width (bohr) of the coarse profiles
-``solver.jfnk.deflation_nfun``   2            Coarse profiles per site pair
-===============================  ===========  ==================================================
+=================================  ===========  ==================================================
+Key                                Default      Meaning
+=================================  ===========  ==================================================
+``theory``                         ``RISM``     RISM (XRISM alias) or DRISM
+``drism.smear``                    0.6682       DRISM Gaussian smearing width (bohr)
+``closure``                        ``KH``       HNC, KH or PSE2-4
+``grid.npts``, ``grid.dr``         8192, 0.015  Points and spacing (bohr) of the radial pair
+``convergence.tolerance``          1e-11        RMS residual of a converged solve
+``convergence.maxiter``            128          Outer iterations per attempt
+``convergence.closure_ramp``       true         Cold solves ramp the closure up from KH
+``convergence.closure_ramp_rmse``  1e-5         RMS residual that starts the next closure
+``damping.small_k``                true         Small-k damping of post-processed updates
+``damping.small_k_k0``             1.0          Damping wave number (1/bohr)
+``damping.small_k_min_weight``     0.15         Damping weight at k = 0
+``solver.name``                    ``JFNK``     PICARD, DIIS, JFNK or HYBRID
+``solver.jfnk.precond``            spectral     none, spectral or kspace
+``solver.jfnk.precond_k0``         1.0          Spectral-filter wave number (1/bohr)
+``solver.jfnk.precond_w0``         0.1          Spectral-filter weight at k = 0
+``solver.jfnk.deflation``          true         Deflated Newton-Krylov steps (on for the VV solve)
+``solver.jfnk.deflation_sigma``    2.35         Gaussian width (bohr) of the coarse profiles
+``solver.jfnk.deflation_nfun``     2            Coarse profiles per site pair
+=================================  ===========  ==================================================
 
 MDIIS from a cold start diverges for water; use JFNK, or HYBRID with JFNK taking over early.
 Stiff cases such as cold neon with PSE4 need the spectral preconditioner.

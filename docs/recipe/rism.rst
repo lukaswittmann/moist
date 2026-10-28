@@ -129,19 +129,21 @@ OPLS-AA uses the structure's bond graph and requires
   are left to later choices
 
 ``custom``, ``none`` and ``ec`` cover every atom and stand alone. With ``charges = "ec"``,
-``potential.ec`` takes the fit settings ``exclusion_start``, ``exclusion_end`` and ``range_scale``
-(bohr), ``long_range_bias``, ``restraint_strength`` and ``charge_penalty``; their
-defaults are those of ``ec_charges_type``.
+``potential.ec`` takes the fit settings ``inner_scale``, ``outer_distance`` and ``switch_width``
+(bohr), ``restraint_strength`` and ``charge_penalty``; their defaults are those of
+``ec_charges_type``.
 
 .. code-block:: toml
 
    [potential.ec]
-   exclusion_start = 9.0   # bohr; zero fit weight at or below this distance from any nucleus
-   exclusion_end = 11.0    # bohr; each nuclear exclusion switch reaches one
+   inner_scale = 1.0          # shell starts at this multiple of the 1.2-scaled Bondi radii
+   outer_distance = 5.0       # bohr; shell ends this far beyond the radii
+   switch_width = 1.0         # bohr; width of both smooth switches
+   restraint_strength = 1e-4  # relative to the mean diagonal of the fit Hessian
 
-The exclusion switches use a smooth quintic transition and require
-``0 < exclusion_start < exclusion_end``. These replace the former
-``exclusion_radius`` setting, whose full-weight radius was twice its value.
+The fit samples a CHELPG-like shell on the RISM grid, so the grid must cover it.
+These replace the far-field settings ``exclusion_start``, ``exclusion_end``,
+``range_scale`` and ``long_range_bias``.
 
 Both potential groups accept ``ng_split`` (default true) and ``alpha``
 (default ``1.0`` in inverse bohr). The bulk mixing choice also applies to UV

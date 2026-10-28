@@ -162,21 +162,23 @@ Settings
 :doc:`solvers` form the nested ``solver`` group and the bulk-solvent settings of :doc:`solvent`
 the nested ``solvent`` group.
 
-==============================  ========  =========================================
-Key                             Default   Meaning
-==============================  ========  =========================================
-``closure``                     ``KH``    HNC, KH or PSE2-4
-``convergence.tolerance``       1e-7      RMS residual of a converged solve
-``convergence.maxiter``         128       Outer iterations
-``damping.small_k``             true      Small-k damping of post-processed updates
-``damping.small_k_k0``          1.0       Damping wave number (1/bohr)
-``damping.small_k_min_weight``  0.15      Damping weight at k = 0
-``solver.name``                 ``JFNK``  PICARD, DIIS, JFNK or HYBRID
-``solver.jfnk.precond``         spectral  none or spectral
-``solver.jfnk.precond_k0``      1.0       Spectral-filter wave number (1/bohr)
-``solver.jfnk.precond_w0``      0.1       Spectral-filter weight at k = 0
-``solvent.*``                   (see VV)  Settings of the solvent's VV solve
-==============================  ========  =========================================
+=================================  ========  =========================================
+Key                                Default   Meaning
+=================================  ========  =========================================
+``closure``                        ``KH``    HNC, KH or PSE2-4
+``convergence.tolerance``          1e-7      RMS residual of a converged solve
+``convergence.maxiter``            128       Outer iterations
+``convergence.closure_ramp``       true      Cold solves ramp the closure up from KH
+``convergence.closure_ramp_rmse``  1e-5      RMS residual that starts the next closure
+``damping.small_k``                true      Small-k damping of post-processed updates
+``damping.small_k_k0``             1.0       Damping wave number (1/bohr)
+``damping.small_k_min_weight``     0.15      Damping weight at k = 0
+``solver.name``                    ``JFNK``  PICARD, DIIS, JFNK or HYBRID
+``solver.jfnk.precond``            spectral  none or spectral
+``solver.jfnk.precond_k0``         1.0       Spectral-filter wave number (1/bohr)
+``solver.jfnk.precond_w0``         0.1       Spectral-filter weight at k = 0
+``solvent.*``                      (see VV)  Settings of the solvent's VV solve
+=================================  ========  =========================================
 
 Validation
 ----------

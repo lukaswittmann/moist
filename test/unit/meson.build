@@ -145,12 +145,12 @@ test_selected = {
   ],
   'moz_checkpoint': [
     'file_round_trip', 'file_candidates', 'file_failed_save', 'vv_reload',
-    'vv_intermediate', 'vv_stages', 'vv_unfitting', 'uv1d_reload', 'uv3d_reload',
+    'vv_intermediate', 'vv_ramp', 'vv_unfitting', 'uv1d_reload', 'uv3d_reload',
   ],
   'moz_solvent_vv': [
     'intramolecular', 'block_solve', 'map_consistency', 'jvp_differences',
     'coarse_matrix', 'thread_independence', 'setup_errors', 'parameters',
-    'evaluator_products', 'damping_step', 'solve_water', 'solve_variants',
+    'evaluator_products', 'damping_step', 'solve_water', 'solve_variants', 'closure_ramp',
     'solve_refusals', 'thermodynamics_reduction', 'solve_outputs', 'reference_values',
     'converged_field', 'solve_replacement', 'susceptibility_at',
   ],

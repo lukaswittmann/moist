@@ -33,12 +33,14 @@ module moist_model_moz_solvent_vv_parameters
       integer :: npts = 8192
       !> Radial spacing, bohr
       real(wp) :: dr = 0.015_wp
-      !> RMS residual below which a stage is converged
+      !> RMS residual below which the VV solve is converged
       real(wp) :: tolerance = 1.0e-11_wp
-      !> Outer iterations per stage
+      !> Outer iterations of the VV solve
       integer :: maxiter = 128
-      !> Coupling stages lambda = 1/n, ..., 1 of the short-range potential
-      integer :: nlambda = 1
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, PSE4, HNC
+      logical :: closure_ramp = .true.
+      !> RMS residual below which the ramp steps to the next closure
+      real(wp) :: closure_ramp_rmse = 1.0e-5_wp
       !> Small-k damping of updates the solver allows to post-process
       logical :: damp_small_k = .true.
       !> Wave number and k = 0 weight of the damping, 1/bohr
@@ -88,7 +90,8 @@ contains
       self%dr = defaults%dr
       self%tolerance = defaults%tolerance
       self%maxiter = defaults%maxiter
-      self%nlambda = defaults%nlambda
+      self%closure_ramp = defaults%closure_ramp
+      self%closure_ramp_rmse = defaults%closure_ramp_rmse
       self%damp_small_k = defaults%damp_small_k
       self%damp_small_k_k0 = defaults%damp_small_k_k0
       self%damp_small_k_min_weight = defaults%damp_small_k_min_weight
@@ -123,7 +126,8 @@ contains
       call self%register_real_scalar("grid.dr", self%dr, level=2)
       call self%register_real_scalar("convergence.tolerance", self%tolerance, level=2)
       call self%register_int_scalar("convergence.maxiter", self%maxiter, level=2)
-      call self%register_int_scalar("convergence.nlambda", self%nlambda)
+      call self%register_logical("convergence.closure_ramp", self%closure_ramp)
+      call self%register_real_scalar("convergence.closure_ramp_rmse", self%closure_ramp_rmse)
       call self%register_logical("damping.small_k", self%damp_small_k, level=damping_level)
       call self%register_real_scalar("damping.small_k_k0", self%damp_small_k_k0, level=damping_level)
       call self%register_real_scalar("damping.small_k_min_weight", self%damp_small_k_min_weight, level=damping_level)
@@ -162,8 +166,8 @@ contains
       if (allocated(error)) return
       if (self%npts < 2 .or. .not. positive(self%dr)) then
          call fatal_error(error, "1D VV grid needs at least two points and a finite positive spacing")
-      else if (.not. positive(self%tolerance) .or. self%maxiter < 1 .or. self%nlambda < 1) then
-         call fatal_error(error, "1D VV convergence needs a positive tolerance, iteration limit and stage count")
+      else if (.not. positive(self%tolerance) .or. self%maxiter < 1 .or. .not. positive(self%closure_ramp_rmse)) then
+         call fatal_error(error, "1D VV convergence needs a positive tolerance, iteration limit and ramp residual")
       else if (.not. positive(self%damp_small_k_k0) .or. .not. weight(self%damp_small_k_min_weight)) then
          call fatal_error(error, "1D VV damping needs a positive k0 and a k = 0 weight in [0, 1]")
       else if (.not. positive(self%precond_k0) .or. .not. weight(self%precond_w0)) then
