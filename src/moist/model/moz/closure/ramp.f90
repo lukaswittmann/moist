@@ -1,6 +1,6 @@
 !> Cold-start closure ramp from KH up to the requested closure
 !>
-!> - Ladder KH, PSE2, PSE3, PSE4, HNC; PSE-n reduces to KH for n = 1 and tends to HNC
+!> - Ladder KH, PSE2, PSE3, HNC; PSE-n reduces to KH for n = 1 and tends to HNC
 !> - A cold solve starts on KH and steps up one closure whenever the RMS
 !>   residual falls below the switch threshold
 !> - Closures off the ladder, or a disabled ramp, run alone

@@ -39,10 +39,10 @@ module moist_model_moz_3d_parameters
       !> - direct and linear sample the exported h-based response
       character(len=8) :: susceptibility = "oz"
       !> RMS residual below which the UV solve is converged
-      real(wp) :: tolerance = 1.0e-7_wp
+      real(wp) :: tolerance = 1.0e-9_wp
       !> Outer iterations of the UV solve
       integer :: maxiter = 128
-      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, PSE4, HNC
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, HNC
       logical :: closure_ramp = .true.
       !> RMS residual below which the ramp steps to the next closure
       real(wp) :: closure_ramp_rmse = 1.0e-5_wp

@@ -369,8 +369,8 @@ contains
       n = size(log%saved)
       call check(error, n >= 1, more="the ramped solve saved nothing")
       if (allocated(error)) return
-      ! Each of KH and PSE2-4 ends with at least one iteration
-      call check(error, log%saved(1)%iterations > 4 .and. log%saved(n)%converged, &
+      ! Each of KH, PSE2 and PSE3 ends with at least one iteration
+      call check(error, log%saved(1)%iterations > 3 .and. log%saved(n)%converged, &
          & more="a state below the requested closure was saved")
       if (allocated(error)) return
 
@@ -526,6 +526,7 @@ contains
    subroutine vv_settings(params)
       !> Settings
       type(solvent_vv_parameters_type), intent(out) :: params
+      params%closure = "KH"
       params%npts = 1024
       params%dr = 0.06_wp
       params%tolerance = 1.0e-9_wp

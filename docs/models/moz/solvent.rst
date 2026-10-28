@@ -99,7 +99,7 @@ Key                                Default      Meaning
 =================================  ===========  ==================================================
 ``theory``                         ``RISM``     RISM (XRISM alias) or DRISM
 ``drism.smear``                    0.6682       DRISM Gaussian smearing width (bohr)
-``closure``                        ``KH``       HNC, KH or PSE2-4
+``closure``                        ``HNC``      HNC, KH or PSE2-4
 ``grid.npts``, ``grid.dr``         8192, 0.015  Points and spacing (bohr) of the radial pair
 ``convergence.tolerance``          1e-11        RMS residual of a converged solve
 ``convergence.maxiter``            128          Outer iterations per attempt

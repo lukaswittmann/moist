@@ -12,6 +12,9 @@ The model prepares its bulk solvent internally through ``solvent_vv_type``.
 ``rism1d`` is a 1D **solute-solvent** calculation. Bulk VV has no model command.
 TOML is the documented input format; the same registered fields also accept JSON.
 
+``examples/rism/run3d-reference.toml`` is a complete commented 3D UV/EC-RISM
+input reference.
+
 Input structure and settings
 ----------------------------
 
@@ -157,7 +160,7 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
    kind = "molecular"
 
    [grid.molecular]
-   partition = "becke"  # "becke", "ssf", "pvoronoi"
+   partition = "pvoronoi"  # "becke", "ssf", "pvoronoi"
    becke_k = 3
    ssf_a = 0.64
    power_width = 1.0    # bohr^2
@@ -165,7 +168,7 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
    partition_pruning_cutoff = 0.0
    dr = 0.6            # bohr; controls the reciprocal lattice
    kbuffer = 2.0       # bohr
-   nufft_tolerance = 1e-10
+   nufft_tolerance = 1e-6
    nufft_upsampfac = 0.0  # automatic FINUFFT internal upsampling
 
    [grid.molecular.radial]
@@ -174,7 +177,7 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
    handymod_exponent = 2.0  # dimensionless; finite and positive
 
    [grid.molecular.angular]
-   degree = 17
+   degree = 35
 
 The bounded HandyMod mapping uses radial midpoint nodes and accepts a real
 ``radial.handymod_exponent``, including values below one. A larger radial and
@@ -247,7 +250,7 @@ Convergence is decided by that residual check, never by the file metadata; see
    guess = "chloride-hnc.mbin" # optional: start from another file
 
 - The automatic VV name is ``vv_rism_solvent_<id>_<theory>_<closure>.mbin`` in ``checkpoint.vv.directory``. When the file leaves that unset, the CLI takes the directory from ``MOIST_RISM_VV_OUTDIR``, so runs can share the bulk solution.
-- Without ``file`` and ``guess``, a VV solve with no file for its closure starts from the automatic file of another closure of the same theory (HNC, PSE4, PSE3, PSE2, KH, in that order).
+- Without ``file`` and ``guess``, a VV solve with no file for its closure starts from the automatic file of another closure of the same theory (HNC, PSE3, PSE2, KH, in that order).
 - ``guess`` replaces the file read at the start; ``file`` is still written.
 - Intermediate saves are marked unconverged. The final field is saved when the solve iterated and ended without an error, so an interrupted or unconverged run can be continued.
 - Fields of another grid shape or spacing, or of other solvent or solute atoms, are ignored with a warning and the solve starts cold, then overwrites the file.

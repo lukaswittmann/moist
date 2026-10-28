@@ -66,7 +66,7 @@ module moist_math_grid_3d_factory
    !> Angular quadrature on each molecular radial shell
    type, extends(moist_model_parameters_type) :: rism_molecular_angular_parameters_type
       !> Minimum angular exactness degree, nonnegative
-      integer :: degree = 17
+      integer :: degree = 35
    contains
       procedure :: init_defaults => molecular_angular_defaults
       procedure :: register_entries => molecular_angular_entries
@@ -80,7 +80,7 @@ module moist_math_grid_3d_factory
       !> Angular resolution of each radial shell
       type(rism_molecular_angular_parameters_type) :: angular
       !> Molecular partition: becke, ssf or pvoronoi
-      character(len=16) :: partition = "becke"
+      character(len=16) :: partition = "pvoronoi"
       !> Becke polynomial iteration count, at least one
       integer :: becke_k = default_stiffness
       !> SSF switch half-width in (0, 1]
@@ -94,7 +94,7 @@ module moist_math_grid_3d_factory
       !> Reciprocal-grid real-space spacing and period margin, bohr
       real(wp) :: dr = 0.6_wp, kbuffer = 2.0_wp
       !> Requested FINUFFT relative tolerance, positive
-      real(wp) :: nufft_tolerance = 1.0e-10_wp
+      real(wp) :: nufft_tolerance = 1.0e-6_wp
       !> FINUFFT internal upsampling factor, zero for automatic or greater than one
       real(wp) :: nufft_upsampfac = 0.0_wp
    contains

@@ -286,7 +286,7 @@ Key                                   Default     Meaning
 ``correction``                        ``none``    Pressure correction added: none, PC or PC+
 ``finite_size``                       ``none``    Leading charge correction: none or huenenberger
 ``susceptibility``                    ``oz``      OZ reconstruction, direct transform, or linear sampling
-``convergence.tolerance``             1e-7        RMS residual of a converged solve
+``convergence.tolerance``             1e-9        RMS residual of a converged solve
 ``convergence.maxiter``               128         Outer iterations per attempt
 ``convergence.closure_ramp``          true        Cold solves ramp the closure up from KH
 ``convergence.closure_ramp_rmse``     1e-5        RMS residual that starts the next closure

@@ -490,7 +490,7 @@ contains
 
    !> Check the VV settings
    !>
-   !> - Defaults: KH, JFNK with the spectral filter and deflation
+   !> - Defaults: HNC, JFNK with the spectral filter and deflation
    !> - TOML round trip, including the nested solver group
    !> - Unknown names and invalid ranges are refused
    subroutine check_parameters(error)
@@ -500,14 +500,14 @@ contains
       type(solvent_vv_parameters_type) :: params, copy
       integer :: unit, stat
 
-      call check(error, params%closure == "KH" .and. params%solver%name == "JFNK" .and. &
+      call check(error, params%closure == "HNC" .and. params%solver%name == "JFNK" .and. &
          & params%precond == "spectral" .and. params%solver%jfnk%deflation, more="unexpected VV defaults")
       if (allocated(error)) return
       call params%validate(err)
       call check_moist_error(error, err)
       if (allocated(error)) return
 
-      params%closure = "HNC"
+      params%closure = "PSE3"
       params%npts = 4096
       params%closure_ramp_rmse = 1.0e-4_wp
       params%solver%name = "HYBRID"
@@ -521,13 +521,13 @@ contains
       if (stat == 0) close (unit, status="delete")
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, copy%closure == "HNC" .and. copy%npts == 4096 .and. copy%closure_ramp_rmse == 1.0e-4_wp .and. &
+      call check(error, copy%closure == "PSE3" .and. copy%npts == 4096 .and. copy%closure_ramp_rmse == 1.0e-4_wp .and. &
          & copy%solver%name == "HYBRID" .and. copy%precond == "kspace" .and. copy%deflation_nfun == 3 .and. &
          & copy%solver%jfnk%restart == 30 .and. .not. copy%solver%jfnk%deflation, &
          & more="VV settings changed in the TOML round trip")
       if (allocated(error)) return
       call copy%init_defaults()
-      call check(error, copy%closure == "KH" .and. copy%solver%jfnk%restart == 50 .and. copy%solver%jfnk%deflation, &
+      call check(error, copy%closure == "HNC" .and. copy%solver%jfnk%restart == 50 .and. copy%solver%jfnk%deflation, &
          & more="init_defaults did not restore the VV and solver defaults")
       if (allocated(error)) return
 
@@ -683,6 +683,7 @@ contains
 
       call new_context(ctx, nthreads=1, verbosity=0)
       call new_vv_case(case, err)
+      params%closure = "KH"
       params%solver%name = "PICARD"
       if (.not. allocated(err)) call new_vv_problem(problem, ctx, case%rgrid, case%kgrid, case%wk, case%u_sr, &
          & case%ur_lr, case%uk_lr, case%rho, case%beta, params, err)
@@ -1088,6 +1089,7 @@ contains
       integer :: i
 
       call new_context(ctx, nthreads=0, verbosity=0)
+      params%closure = "KH"
       params%tolerance = 1.0e-10_wp
       call new_cspce_water_solvent(ctx, solvent, err)
       if (.not. allocated(err)) call solvent%solve(err, params)
@@ -1137,6 +1139,7 @@ contains
       u_sr(:, 1) = 0.1_wp*exp(-rgrid%r**2)
       ur_lr = 0.0_wp
       uk_lr = 0.0_wp
+      params%closure = "KH"
       params%solver%name = "PICARD"
       params%solver%picard%damping = 3.0_wp
       params%damp_small_k = .false.

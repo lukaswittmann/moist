@@ -190,11 +190,11 @@ contains
          call input%init_defaults()
          call check(error, input%grid%kind == trim(kinds(dim)) &
             & .and. input%grid%radial%dr == 0.015_wp .and. input%grid%cartesian%dr == 0.6_wp &
-            & .and. input%grid%molecular%dr == 0.6_wp .and. input%grid%molecular%partition == "becke" &
+            & .and. input%grid%molecular%dr == 0.6_wp .and. input%grid%molecular%partition == "pvoronoi" &
             & .and. input%grid%molecular%radial%npts == 50 .and. input%grid%molecular%radial%rmax == 10.0_wp &
             & .and. input%grid%molecular%radial%handymod_exponent == 2.0_wp &
             & .and. input%grid%molecular%nufft_upsampfac == 0.0_wp &
-            & .and. input%grid%molecular%angular%degree == 17, &
+            & .and. input%grid%molecular%angular%degree == 35, &
             & "Grid defaults retained earlier input values")
          if (allocated(error)) return
       end do
@@ -913,7 +913,7 @@ contains
       call new_vv_checkpoint(files, water_id, params, store)
       call check(error, store%file == "cache/"//stem//"kh.mbin", more=store%file)
       if (allocated(error)) return
-      call check(error, size(store%guesses) == 5, more="expected the own file and four other closures")
+      call check(error, size(store%guesses) == 4, more="expected the own file and three other closures")
       if (allocated(error)) return
       call check(error, trim(store%guesses(1)) == store%file &
          & .and. trim(store%guesses(2)) == "cache/"//stem//"hnc.mbin", more=trim(store%guesses(2)))

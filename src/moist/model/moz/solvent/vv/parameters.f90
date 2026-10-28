@@ -28,7 +28,7 @@ module moist_model_moz_solvent_vv_parameters
       !> DRISM Gaussian width, bohr
       real(wp) :: drism_smear = 0.6682_wp
       !> Closure: HNC, KH or PSE2-4
-      character(len=8) :: closure = "KH"
+      character(len=8) :: closure = "HNC"
       !> Points of the uniform radial pair
       integer :: npts = 8192
       !> Radial spacing, bohr
@@ -37,7 +37,7 @@ module moist_model_moz_solvent_vv_parameters
       real(wp) :: tolerance = 1.0e-11_wp
       !> Outer iterations of the VV solve
       integer :: maxiter = 128
-      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, PSE4, HNC
+      !> Cold solves ramp the closure up from KH: KH, PSE2, PSE3, HNC
       logical :: closure_ramp = .true.
       !> RMS residual below which the ramp steps to the next closure
       real(wp) :: closure_ramp_rmse = 1.0e-5_wp

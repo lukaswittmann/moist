@@ -91,7 +91,7 @@ contains
 
    !> Check the 1D settings
    !>
-   !> - Defaults: KH, JFNK with the spectral filter; VV defaults
+   !> - Defaults: KH, JFNK with the spectral filter; HNC and the other VV defaults
    !>   in the solvent group
    !> - TOML round trip, including the nested solver and solvent groups
    !> - Names the UV solve does not implement and invalid nested settings are refused
@@ -103,7 +103,7 @@ contains
       integer :: unit, stat
 
       call check(error, params%closure == "KH" .and. params%solver%name == "JFNK" .and. &
-         & params%precond == "spectral" .and. params%solvent%closure == "KH" .and. &
+         & params%precond == "spectral" .and. params%solvent%closure == "HNC" .and. &
          & params%solvent%solver%jfnk%deflation, more="unexpected 1D defaults")
       if (allocated(error)) return
       call params%validate(err)
@@ -1171,6 +1171,7 @@ contains
       !> Settings
       type(model_moz_1d_parameters_type), intent(out) :: params
       params%tolerance = 1.0e-10_wp
+      params%solvent%closure = "KH"
       params%solvent%npts = 1024
       params%solvent%dr = 0.06_wp
       params%solvent%tolerance = 1.0e-10_wp
@@ -1756,6 +1757,7 @@ contains
       if (.not. allocated(err)) call solvent%update(err)
       params%tolerance = 1.0e-10_wp
       params%maxiter = 500
+      params%solvent%closure = "KH"
       params%solvent%npts = 8192
       params%solvent%dr = 0.025_wp*aatoau
       params%solvent%tolerance = 1.0e-10_wp

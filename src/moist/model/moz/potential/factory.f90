@@ -9,6 +9,7 @@
 !>     models hirshfeld, resp, mbis, chelpg; environments gas, solvent, conductor
 !>   - `ec`: charges fitted to the host potential, solute side only; fit settings in `ec`
 !>   - `custom`, `none` and `ec` cover every atom and stand alone
+!> - Solute-side defaults: GAFF2, UFF and TM LJ with custom charges
 !> - Solvent-side defaults: cSPC/E for water, else GAFF2, UFF and TM LJ with RESP charges
 module moist_model_moz_potential_factory
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -187,7 +188,7 @@ contains
       !> Potential settings
       class(rism_potential_parameters_type), intent(inout) :: self
       type(ec_charges_type) :: ec
-      self%lj = [character(len=16) :: "uff"]
+      self%lj = [character(len=16) :: "gaff2", "uff", "tm"]
       self%charges = [character(len=24) :: "custom"]
       if (self%solvent_side) then
          ! SPC/E models for water; GAFF2, UFF, TM and RESP charges for any other solvent
