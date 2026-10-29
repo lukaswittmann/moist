@@ -12,7 +12,7 @@ module moist_data_solvents
    implicit none(type, external)
 
    !> Number of entries in the solvent descriptor table
-   integer, parameter, public :: max_solvents = 180
+   integer, parameter, public :: max_solvents = 181
 
    !> Longest canonical solvent name, MOIST_NAME_MAX in the C API
    integer, parameter, public :: max_solvent_name_len = 32

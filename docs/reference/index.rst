@@ -82,7 +82,7 @@ The settings printout (:doc:`context`) shows the values a model runs with.
 Solvents
 --------
 
-MOIST contains 180 solvents with their descriptors and geometries; :doc:`/solvents/index` lists them together with the tabulated charges and multipoles.
+MOIST contains 181 solvents with their descriptors and geometries; :doc:`/solvents/index` lists them together with the tabulated charges and multipoles.
 A lookup takes a name or a a moist internal solvent ID.
 Names ignore case and surrounding whitespace and accept various aliases, such as ``H2O``, ``water``, ..., or a CAS number.
 

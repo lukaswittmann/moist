@@ -1,7 +1,7 @@
 Solvents
 ========
 
-MOIST contains a table of 180 solvents.
+MOIST contains a table of 181 solvents.
 For each solvent it stores experimental bulk descriptors, a molecular geometry, and atomic charges and multipoles computed in three environments.
 
 A solvent is looked up by its name or table ID.
@@ -38,6 +38,7 @@ Available data
      - Fortran
 
 Decalin (ID 94) has descriptors only: no geometry, charges or multipoles.
+IDs 182 to 188 (argon, bromine, hydrogen chloride, helium, neon, krypton and xenon) have molecular data only, without descriptors, so they are not in the table.
 
 .. toctree::
    :maxdepth: 1
