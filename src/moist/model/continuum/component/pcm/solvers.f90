@@ -675,11 +675,14 @@ contains
       real(wp), allocatable :: f(:), p(:), x_trial(:), f_trial(:)
       real(wp) :: scale, norm_f, norm_trial, t
       integer :: stat, steps
+      ! Local pointer; gfortran 9 rejects writes through self%solver with intent(in) self
+      class(pcm_solver), pointer :: solver
 
       if (.not. associated(self%solver)) then
          call fatal_error(error, here//" the problem has no solver")
          return
       end if
+      solver => self%solver
       allocate (f(size(x)), stat=stat)
       if (stat == 0) allocate (p(size(x)), stat=stat)
       if (stat == 0) allocate (x_trial(size(x)), stat=stat)
@@ -692,8 +695,8 @@ contains
       call self%residual(x_trial, f, error)
       if (allocated(error)) return
       scale = nrm2(f)
-      self%solver%nonlinear_iterations = 0
-      self%solver%nonlinear_residual = 0.0_wp
+      solver%nonlinear_iterations = 0
+      solver%nonlinear_residual = 0.0_wp
       if (.not. ieee_is_finite(scale)) then
          call fatal_error(error, here//" the residual at zero is not finite")
          return
@@ -712,9 +715,9 @@ contains
          return
       end if
       steps = 0
-      do while (.not. norm_f <= self%solver%nonlinear_tol*scale)
-         if (steps >= self%solver%nonlinear_max_iter) then
-            call newton_statistics(self%solver, steps, norm_f/scale)
+      do while (.not. norm_f <= solver%nonlinear_tol*scale)
+         if (steps >= solver%nonlinear_max_iter) then
+            call newton_statistics(solver, steps, norm_f/scale)
             call fatal_error(error, here//" Newton did not converge: |F|/|F(0)| = " &
                & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps")
             return
@@ -732,7 +735,7 @@ contains
             if (norm_trial <= sqrt(1.0_wp - 2.0_wp*newton_armijo_c*t)*norm_f) exit
             t = 0.5_wp*t
             if (t < newton_step_min) then
-               call newton_statistics(self%solver, steps, norm_f/scale)
+               call newton_statistics(solver, steps, norm_f/scale)
                call fatal_error(error, here//" Newton stalled at |F|/|F(0)| = " &
                   & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps: no step" &
                   & //" length down to "//real_str(newton_step_min)//" decreases |F|; the" &
@@ -744,7 +747,7 @@ contains
          f = f_trial
          norm_f = norm_trial
       end do
-      call newton_statistics(self%solver, steps, norm_f/scale)
+      call newton_statistics(solver, steps, norm_f/scale)
    end subroutine pcm_nonlinear_solve
 
    !> Reject non-finite real data
