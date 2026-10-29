@@ -99,7 +99,7 @@ contains
       call check(error,.not. printed_entry(lines, "f(eps)", ""), "SLIC prints an internal factor")
       if (allocated(error)) return
 
-      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 10.0_wp, err, eps_solute=1.5_wp)
+      call new_component_nonlocal(nonlocal, 80.0_wp, 2.0_wp, 10.0_wp, err, epsilon_solute=1.5_wp)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
       open (newunit=unit, status="scratch", action="readwrite")

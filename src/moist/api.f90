@@ -2131,12 +2131,12 @@ contains
    end function create_slic_component_api
 
    !> Create a NONLOCAL component with optional PCM controls
-   function create_nonlocal_component_api(verror, vcontext, eps_solvent, eps_inf, lambda, eps_solute, options) result(handle) &
+   function create_nonlocal_component_api(verror, vcontext, epsilon, epsilon_inf, lambda, epsilon_solute, options) result(handle) &
       & bind(C, name=namespace//"new_nonlocal_component")
       type(c_ptr), value, intent(in) :: verror, options
       !> Shared run context handle, or NULL
       type(c_ptr), value, intent(in) :: vcontext
-      real(c_double), value, intent(in) :: eps_solvent, eps_inf, lambda, eps_solute
+      real(c_double), value, intent(in) :: epsilon, epsilon_inf, lambda, epsilon_solute
       type(c_ptr) :: handle
       type(vp_component), pointer :: component
       !> Borrowed context; a null pointer passes as absent
@@ -2149,8 +2149,8 @@ contains
       allocate (model_continuum_component_nonlocal :: component%ptr)
       select type (pcm => component%ptr)
       type is (model_continuum_component_nonlocal)
-         call new_component_nonlocal(pcm, eps_solvent=real(eps_solvent, wp), eps_inf=real(eps_inf, wp), &
-            & lambda=real(lambda, wp), eps_solute=real(eps_solute, wp), &
+         call new_component_nonlocal(pcm, epsilon=real(epsilon, wp), epsilon_inf=real(epsilon_inf, wp), &
+            & lambda=real(lambda, wp), epsilon_solute=real(epsilon_solute, wp), &
             & error=component_error, param=param, ctx=ctx)
       end select
       call finish_pcm_component(verror, "new_nonlocal_component", component, component_error, handle)
