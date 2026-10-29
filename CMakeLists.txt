@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.0-alpha)
+# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.1-alpha)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
