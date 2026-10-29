@@ -15,9 +15,9 @@ module moist_model_continuum_component_pcm_type
       & point_potential_request_type, gaussian_potential_request_type, nuclear_charge_request_type, &
       & moist_phase_energy, moist_phase_response, moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_model_continuum_component_pcm_electrostatics, only: &
-      & pcm_electrostatic_direct_gradient, &
-      & pcm_electrostatic_normal_direct_gradient
+   use moist_model_continuum_component_pcm_elstat, only: &
+      & pcm_elstat_direct_gradient, &
+      & pcm_elstat_normal_direct_gradient
    use moist_utils_timer, only: cat_energy
    use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense, &
       & pcm_storage_matrix_free
@@ -626,6 +626,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      item = parameter_adjoint_response_type()
       call fatal_error(error, "Parameter derivatives are not available for "//trim(self%name))
 
    end subroutine pcm_component_get_parameter_adjoint
@@ -895,10 +896,10 @@ contains
       gaussian = self%uses_gaussian_potential(cavity)
       allocate (grad_direct(3, nat))
       if (gaussian) then
-         call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+         call pcm_elstat_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
             & w_phi, za, grad_direct, error, xi=cavity%xi0)
       else
-         call pcm_electrostatic_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+         call pcm_elstat_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
             & w_phi, za, grad_direct, error)
       end if
       if (allocated(error)) return
@@ -919,10 +920,10 @@ contains
             w_grad(:, i) = w_vn(i)*cavity%normal0(:, i)
          end do
          if (gaussian) then
-            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+            call pcm_elstat_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
                & w_grad, za, grad_normal, error, xi=cavity%xi0)
          else
-            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
+            call pcm_elstat_normal_direct_gradient(cavity%xyz, self%mol_solu%xyz, &
                & w_grad, za, grad_normal, error)
          end if
          if (allocated(error)) return

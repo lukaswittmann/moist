@@ -6,8 +6,8 @@ module test_model_component_pcm_electrostatics
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_continuum_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
-      & pcm_electrostatic_direct_gradient, pcm_electrostatic_normal_direct_gradient
+   use moist_model_continuum_component_pcm_elstat, only: pcm_elstat_nuclear_gradient, &
+      & pcm_elstat_direct_gradient, pcm_elstat_normal_direct_gradient
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
                            fd4_scalar, fd4_offsets, point_charge_field
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -65,10 +65,10 @@ contains
 
       do mode = 1, 2
          if (mode == 1) then
-            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, center, w_grad, &
+            call pcm_elstat_normal_direct_gradient(cavity%xyz, center, w_grad, &
                & [0.7_wp], grad, err, xi=cavity%xi0)
          else
-            call pcm_electrostatic_normal_direct_gradient(cavity%xyz, center, w_grad, &
+            call pcm_elstat_normal_direct_gradient(cavity%xyz, center, w_grad, &
                & [0.7_wp], grad, err)
          end if
          if (allocated(err)) then
@@ -208,8 +208,8 @@ contains
       end do
 
       allocate (grad(3, nsph))
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              w_xyz, za, grad, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
+                                       w_xyz, za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "nuclear/electronic contraction failed: "//err%message)
          return
@@ -293,8 +293,8 @@ contains
       ! Direct channel: a rigid surface (no response) and no host weight leave
       ! the plain Coulomb force of the surface charges on each nucleus
       xyz1_rA = 0.0_wp
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              0.0_wp*w_xyz, za, grad, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
+                                       0.0_wp*w_xyz, za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "direct-channel contraction failed: "//err%message)
          return
@@ -327,9 +327,9 @@ contains
             end do
          end do
       end do
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
-                                              0.0_wp*surface_q, w_xyz, &
-                                              0.0_wp*za, grad, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
+                                       0.0_wp*surface_q, w_xyz, &
+                                       0.0_wp*za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "chain-rule contraction failed: "//err%message)
          return
@@ -378,8 +378,8 @@ contains
 
       ! A gradient sized for the wrong number of nuclei
       grad_small = 1.0_wp
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              w_xyz, za, grad_small, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
+                                       w_xyz, za, grad_small, err)
       call check(error, allocated(err), more="a mis-shaped gradient was accepted")
       if (allocated(error)) return
       call check(error, maxval(abs(grad_small)), 0.0_wp, thr=0.0_wp, &
@@ -389,8 +389,8 @@ contains
 
       ! A surface response that does not match the surface it belongs to
       grad = 1.0_wp
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA(:, :, :, 1:2), &
-                                              surface_q, w_xyz, za, grad, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA(:, :, :, 1:2), &
+                                       surface_q, w_xyz, za, grad, err)
       call check(error, allocated(err), &
                  more="a mis-shaped surface response was accepted")
       if (allocated(error)) return
@@ -399,7 +399,7 @@ contains
 
       ! The direct kernel applies the same discipline
       grad_small = 1.0_wp
-      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad_small, err)
+      call pcm_elstat_direct_gradient(xyz, sphxyz, surface_q, za, grad_small, err)
       call check(error, allocated(err), more="direct kernel accepted a mis-shaped gradient")
       if (allocated(error)) return
       call check(error, maxval(abs(grad_small)), 0.0_wp, thr=0.0_wp, &
@@ -408,8 +408,8 @@ contains
 
       ! Gaussian widths that do not match the surface
       grad = 1.0_wp
-      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad, err, &
-                                             xi=[1.0_wp, 1.0_wp])
+      call pcm_elstat_direct_gradient(xyz, sphxyz, surface_q, za, grad, err, &
+                                      xi=[1.0_wp, 1.0_wp])
       if (.not. allocated(err)) then
          call test_failed(error, "direct kernel accepted mis-shaped Gaussian widths")
          return
@@ -424,7 +424,7 @@ contains
 
    !> The direct kernel is the forward kernel's direct channel
    !>
-   !> `pcm_electrostatic_direct_gradient` serves the reverse-mode path, where
+   !> `pcm_elstat_direct_gradient` serves the reverse-mode path, where
    !> the host position weight goes to the cavity instead. It must equal the
    !> forward kernel on a rigid surface (`xyz1_rA = 0`) and its closed form,
    !> the Coulomb force of the surface charges on each nucleus
@@ -474,14 +474,14 @@ contains
          w_xyz(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
       end do
 
-      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad, err)
+      call pcm_elstat_direct_gradient(xyz, sphxyz, surface_q, za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "direct kernel failed: "//err%message)
          return
       end if
       ! A nonzero host weight on a rigid surface contributes nothing
-      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              w_xyz, za, grad_fwd, err)
+      call pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
+                                       w_xyz, za, grad_fwd, err)
       if (allocated(err)) then
          call test_failed(error, "forward kernel failed: "//err%message)
          return
@@ -596,7 +596,7 @@ contains
             ! Round-off floor eps*|E|/h ~ 7e-10 with |E| ~ 3e4; measured 2.0e-9
             tolerance = 1.0e-6_wp
          end if
-         call pcm_electrostatic_direct_gradient(xyz, nuclei, q, [1.3_wp], &
+         call pcm_elstat_direct_gradient(xyz, nuclei, q, [1.3_wp], &
             & gradient, err, xi=xi)
          if (allocated(err)) then
             call test_failed(error, "Gaussian direct gradient failed: "//err%message)
@@ -621,7 +621,7 @@ contains
                & more="Gaussian nuclear gradient differs from the erf potential derivative")
             if (allocated(error)) return
          end do
-         call pcm_electrostatic_nuclear_gradient(xyz, nuclei, response, q, &
+         call pcm_elstat_nuclear_gradient(xyz, nuclei, response, q, &
             & weights, [1.3_wp], forward, err, xi=xi)
          if (allocated(err)) then
             call test_failed(error, "Gaussian forward gradient failed: "//err%message)
@@ -647,7 +647,7 @@ contains
       nuclei = 0.0_wp
       call ieee_get_halting_mode(ieee_divide_by_zero, halt_on_zero)
       call ieee_set_halting_mode(ieee_divide_by_zero, .true.)
-      call pcm_electrostatic_direct_gradient(xyz, nuclei, [1.0_wp], [1.0_wp], &
+      call pcm_elstat_direct_gradient(xyz, nuclei, [1.0_wp], [1.0_wp], &
          & gradient, err, xi=[0.0_wp])
       call ieee_set_halting_mode(ieee_divide_by_zero, halt_on_zero)
       call check(error,.not. allocated(err))

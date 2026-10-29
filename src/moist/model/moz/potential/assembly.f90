@@ -1,5 +1,5 @@
 !> Assembly of a MOZ potential: terms, update, coverage merge, settings and site table
-submodule(moist_model_moz_potential) moist_model_moz_potential_assembly
+submodule(moist_model_moz_potential) moz_potential_assembly
    use mctc_env, only: fatal_error
    use mctc_io_convert, only: autokcal
    use moist_channels_coupling, only: coupling_view_type, coupling_make_view, coupling_close_view, coupling_set_scope
@@ -452,4 +452,4 @@ contains
       call fatal_error(error, "No charges for atoms: "//missing)
    end subroutine merge_charges
 
-end submodule moist_model_moz_potential_assembly
+end submodule moz_potential_assembly
