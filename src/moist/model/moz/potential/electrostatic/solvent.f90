@@ -106,53 +106,55 @@ module moist_model_moz_potential_electrostatic_solvent
 
    ! ifx workaround: protected, not parameter; ifx 2025.1-2025.3 fails copies of derived-type
    ! constants with allocatable components (forrtl 189); TODO: revert to parameter once ifx is fixed
+   ! gfortran 9.4 workaround: explicit pair=null(); the implicit default of pair fails to compile
    !> Hirshfeld table charges, gas phase
    type(solvent_charges_type), protected :: coulomb_hirshfeld_gas = &
-      & solvent_charges_type(environment="gas", model="hirshfeld")
+      & solvent_charges_type(pair=null(), environment="gas", model="hirshfeld")
    !> Hirshfeld table charges, CPCM with the solvent's dielectric
    type(solvent_charges_type), protected :: coulomb_hirshfeld_solvent = &
-      & solvent_charges_type(environment="solvent", model="hirshfeld")
+      & solvent_charges_type(pair=null(), environment="solvent", model="hirshfeld")
    !> Hirshfeld table charges, CPCM conductor
    type(solvent_charges_type), protected :: coulomb_hirshfeld_conductor = &
-      & solvent_charges_type(environment="conductor", model="hirshfeld")
+      & solvent_charges_type(pair=null(), environment="conductor", model="hirshfeld")
    !> RESP table charges, gas phase
    type(solvent_charges_type), protected :: coulomb_resp_gas = &
-      & solvent_charges_type(environment="gas", model="resp")
+      & solvent_charges_type(pair=null(), environment="gas", model="resp")
    !> RESP table charges, CPCM with the solvent's dielectric
    type(solvent_charges_type), protected :: coulomb_resp_solvent = &
-      & solvent_charges_type(environment="solvent", model="resp")
+      & solvent_charges_type(pair=null(), environment="solvent", model="resp")
    !> RESP table charges, CPCM conductor
    type(solvent_charges_type), protected :: coulomb_resp_conductor = &
-      & solvent_charges_type(environment="conductor", model="resp")
+      & solvent_charges_type(pair=null(), environment="conductor", model="resp")
    !> MBIS table charges, gas phase
    type(solvent_charges_type), protected :: coulomb_mbis_gas = &
-      & solvent_charges_type(environment="gas", model="mbis")
+      & solvent_charges_type(pair=null(), environment="gas", model="mbis")
    !> MBIS table charges, CPCM with the solvent's dielectric
    type(solvent_charges_type), protected :: coulomb_mbis_solvent = &
-      & solvent_charges_type(environment="solvent", model="mbis")
+      & solvent_charges_type(pair=null(), environment="solvent", model="mbis")
    !> MBIS table charges, CPCM conductor
    type(solvent_charges_type), protected :: coulomb_mbis_conductor = &
-      & solvent_charges_type(environment="conductor", model="mbis")
+      & solvent_charges_type(pair=null(), environment="conductor", model="mbis")
    !> CHELPG table charges, gas phase
    type(solvent_charges_type), protected :: coulomb_chelpg_gas = &
-      & solvent_charges_type(environment="gas", model="chelpg")
+      & solvent_charges_type(pair=null(), environment="gas", model="chelpg")
    !> CHELPG table charges, CPCM with the solvent's dielectric
    type(solvent_charges_type), protected :: coulomb_chelpg_solvent = &
-      & solvent_charges_type(environment="solvent", model="chelpg")
+      & solvent_charges_type(pair=null(), environment="solvent", model="chelpg")
    !> CHELPG table charges, CPCM conductor
    type(solvent_charges_type), protected :: coulomb_chelpg_conductor = &
-      & solvent_charges_type(environment="conductor", model="chelpg")
+      & solvent_charges_type(pair=null(), environment="conductor", model="chelpg")
    !> SPC/E water charges
-   type(solvent_model_charges_type), protected :: coulomb_spce = solvent_model_charges_type(set=charges_set_spce)
+   type(solvent_model_charges_type), protected :: coulomb_spce = &
+      & solvent_model_charges_type(pair=null(), set=charges_set_spce)
    !> MBIS table multipoles, gas phase; stub
    type(solvent_multipoles_type), parameter :: multipoles_mbis_gas = &
-      & solvent_multipoles_type(environment="gas", model="mbis")
+      & solvent_multipoles_type(pair=null(), environment="gas", model="mbis")
    !> MBIS table multipoles, CPCM with the solvent's dielectric; stub
    type(solvent_multipoles_type), parameter :: multipoles_mbis_solvent = &
-      & solvent_multipoles_type(environment="solvent", model="mbis")
+      & solvent_multipoles_type(pair=null(), environment="solvent", model="mbis")
    !> MBIS table multipoles, CPCM conductor; stub
    type(solvent_multipoles_type), parameter :: multipoles_mbis_conductor = &
-      & solvent_multipoles_type(environment="conductor", model="mbis")
+      & solvent_multipoles_type(pair=null(), environment="conductor", model="mbis")
 
 contains
 
