@@ -14,7 +14,7 @@ Every file below is a byte-for-byte copy of `src/ducc0/<path>` at that tag, exce
 
 ducc0 as a whole is GPL-2.0-or-later, but each file in this directory carries the header `SPDX-License-Identifier: BSD-3-Clause OR GPL-2.0-or-later` and moist takes the **BSD-3-Clause** option.
 
-Keep the headers of these files verbatim; the BSD text they carry is the license notice the BSD-3-Clause requires to be retained. The summary row in `THIRD_PARTY_LICENSES.md` points here.
+Keep the headers of these files verbatim; the BSD text they carry is the license notice the BSD-3-Clause requires to be retained. The summary row in `THIRD_PARTY_NOTICES.md` points here.
 
 ## Files
 
