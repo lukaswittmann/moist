@@ -24,8 +24,8 @@ Component
    One energy term evaluated on the cavity, such as the dielectric polarization of CPCM or COSMO, the pressure-volume term PV or the GOSTSHYP pressure (:doc:`/models/components/index`).
 
 Model
-   The object the host drives: a cavity together with its components (:doc:`/models/index`).
-   The molecular Ornstein-Zernike models (:doc:`/models/moz`) are models too and work on their own grids instead of a cavity.
+   The object the host drives: a cavity together with its components (:doc:`/models/continuum`).
+   The :doc:`molecular Ornstein-Zernike models </models/moz>` are models too and work on their own grids instead of a cavity.
 
 Coupling and response
    A coupling lists what a model needs from the host, such as the electrostatic potential on the grid, and holds the host's answers.
@@ -82,7 +82,7 @@ The settings printout (:doc:`context`) shows the values a model runs with.
 Solvents
 --------
 
-MOIST contains about 180 solvents with their descriptors and geometries.
+MOIST contains 180 solvents with their descriptors and geometries; :doc:`/solvents/index` lists them together with the tabulated charges and multipoles.
 A lookup takes a name or a a moist internal solvent ID.
 Names ignore case and surrounding whitespace and accept various aliases, such as ``H2O``, ``water``, ..., or a CAS number.
 
@@ -131,7 +131,7 @@ Solvent descriptors
    Each language also formats descriptors as a ``Solvent properties`` printout of the values passed, without a new lookup.
 
 Solvent system
-   Fortran only: the descriptors as its ``solvent`` component, together with a temperature, a pressure and the solvent geometry, as the MOZ models use it (:doc:`/models/moz`).
+   Fortran only: the descriptors as its ``solvent`` component, together with a temperature, a pressure and the solvent geometry, as the :doc:`MOZ models </models/moz>` use it.
    Building one fails without a stored geometry.
    The descriptors stay at their reference temperatures and do not follow the system's temperature.
 

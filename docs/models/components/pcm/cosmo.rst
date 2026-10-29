@@ -1,5 +1,5 @@
-COSMO
-=====
+Conductor-like Screening Model (COSMO)
+======================================
 
 The conductor-like screening model :cite:p:`klamt1993cosmo` uses
 

@@ -1,5 +1,5 @@
-CPCM
-====
+Conductor-like Polarizable Continuum Model (CPCM)
+=================================================
 
 The conductor-like polarizable continuum model :cite:p:`barone1998cpcm,cossi2003cpcm` uses
 

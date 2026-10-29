@@ -1,5 +1,5 @@
-SLIC
-====
+Solvation-Layer Interface Condition (SLIC)
+==========================================
 
 The solvation-layer interface condition model :cite:p:`bardhan2014slic,molavitabrizi2017slic` modifies the dielectric boundary response.
 Its physical inputs are ``epsilon``, ``alpha``, ``beta`` and ``gamma``.

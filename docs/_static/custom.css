@@ -1,0 +1,16 @@
+/* Support matrices: center every column except the first */
+table.matrix th,
+table.matrix td {
+    text-align: center;
+    vertical-align: middle;
+}
+
+table.matrix thead tr:first-child th:first-child,
+table.matrix tbody td:first-child {
+    text-align: left;
+}
+
+/* Light green tick: the success colour at reduced strength */
+.tick-light {
+    opacity: 0.4;
+}

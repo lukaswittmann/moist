@@ -2,6 +2,7 @@
 import sys, os.path as op
 
 sys.path.insert(0, op.join(op.dirname(__file__), "..", "python"))
+sys.path.insert(0, op.join(op.dirname(__file__), "_ext"))
 
 try:
     import moist
@@ -22,7 +23,17 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinxcontrib.bibtex",
+    "solvents",
 ]
+
+# Status icons shared by the support tables
+rst_prolog = """
+.. |yes| replace:: :octicon:`check-circle-fill;1em;sd-text-success`
+.. |light| replace:: :octicon:`check-circle-fill;1em;sd-text-success tick-light`
+.. |part| replace:: :octicon:`check-circle-fill;1em;sd-text-warning`
+.. |no| replace:: :octicon:`x-circle;1em;sd-text-muted`
+.. |soon| replace:: :bdg-info:`soon`
+"""
 
 # Global bibliography (sphinxcontrib-bibtex)
 bibtex_bibfiles = ["_static/references.bib"]
@@ -43,13 +54,14 @@ html_theme_options = {
     "use_repository_button": True,
     "use_edit_page_button": True,
     "use_download_button": False,
-    "path_to_docs": "doc",
+    "path_to_docs": "docs",
     "show_navbar_depth": 3
 }
 
 html_sidebars = {}
 
 html_static_path = ["_static"]
+html_css_files = ["custom.css"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build"]
 

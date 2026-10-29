@@ -71,7 +71,8 @@ Frozen geometry
 
 The surface supports frozen-geometry energies and fields (CPCM, COSMO, pressure-volume).
 It has no nuclear or LSF derivatives, and components needing principal curvatures are unsupported.
-The update/build protocol and the supported LSFs are those of :doc:`DROP <drop>`.
+The update/build protocol is that of :doc:`DROP <drop>`; SvdW and CFC level sets are supported.
+An isodensity level set is accepted for a frozen density only: without a density response, it cannot be used in an SCF.
 
 Command line
 ------------
@@ -109,6 +110,6 @@ API
    if (allocated(error)) return
    call cavity%update(mol, error=error)
 
-``CavityMT`` in Python takes ``lsf``, ``parameters`` and ``radii`` directly; ``Isodensity`` works as for DROP.
+``CavityMT`` in Python takes ``lsf``, ``parameters`` and ``radii`` directly.
 The C constructor copies the LSF and radii; NULL selects defaults and CPCM radii. ``fields()``, ``get()`` and ``results()`` expose mesh and patch diagnostics such as ``mesh_area``, ``mesh_volume`` and ``patch_area``.
 The Fortran ``mesh`` and ``patches`` components keep the raw triangulation; ``mesh_area`` and ``mesh_volume`` describe it, while the standard cavity totals use the weighted quadrature.
