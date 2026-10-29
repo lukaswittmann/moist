@@ -1689,7 +1689,12 @@ contains
       if (allocated(self%slots)) n_slots = size(self%slots)
       call check_operator(op%id, op%npt, n_slots, here, error)
       if (allocated(error)) return
-      self%slots(op%id) = pcm_jacobi_slot()
+      ! Reset by field; gfortran 9.4 rejects the empty constructor pcm_jacobi_slot()
+      associate (slot => self%slots(op%id))
+         if (allocated(slot%blocks)) deallocate (slot%blocks)
+         slot%kind = slot_empty
+         slot%npt = 0
+      end associate
       call jacobi_layout(self%block_size, op%id, op%npt, op%npoint, op%points, here, blocks, m, &
          & error)
       if (allocated(error)) return
@@ -1742,7 +1747,12 @@ contains
       if (allocated(self%slots)) n_slots = size(self%slots)
       call check_operator(op%id, op%npt, n_slots, here, error)
       if (allocated(error)) return
-      self%slots(op%id) = pcm_jacobi_slot()
+      ! Reset by field; gfortran 9.4 rejects the empty constructor pcm_jacobi_slot()
+      associate (slot => self%slots(op%id))
+         if (allocated(slot%blocks)) deallocate (slot%blocks)
+         slot%kind = slot_empty
+         slot%npt = 0
+      end associate
       call jacobi_layout(self%block_size, op%id, op%npt, op%npoint, op%points, here, blocks, m, &
          & error)
       if (allocated(error)) return
