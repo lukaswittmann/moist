@@ -4,11 +4,15 @@
 #
 #   tests             suite ids, passed to the tester as its argument
 #   test_timeouts     suite id -> timeout, for suites needing more than the default
+#   test_priority     suite id -> start priority, higher first; the slowest suites
+#                      start at t=0 instead of queueing behind the short ones
 #   test_selected     suite id -> test names, for a suite whose tests must each be
 #                      invoked as `tester <suite> <test>` (test-drive's run_selected, no
 #                      enclosing OpenMP team) rather than `tester <suite>`
 #                      (run_testsuite, whose tests run inside test-drive's own
-#                      `!$omp parallel do`; see CONTRIBUTING.md:47)
+#                      `!$omp parallel do`; see CONTRIBUTING.md:47); also splits a
+#                      long suite into separately scheduled tests. Every test of the
+#                      suite must be listed, an omitted one is not run
 tests = [
   'api',
   'parameters',
@@ -92,6 +96,19 @@ tests = [
 ]
 test_timeouts = {}
 
+# Ranked by CI runtime
+test_priority = {
+  'cavity_drop_projection': 9,
+  'model_component_pcm_derivatives': 8,
+  'math_grid_3d_invariance': 7,
+  'math_grid_3d_derivatives': 6,
+  'cavity_drop_gradient': 5,
+  'cavity_drop_lsf': 4,
+  'cavity_drop_isodensity': 3,
+  'cavity_drop_cpcm': 2,
+  'model_component_pcm_references': 1,
+}
+
 # threaded tests (single testdrive thread)
 test_selected = {
   'math_grid_3d_integration': [
@@ -118,6 +135,13 @@ test_selected = {
     'bad_volume_phase_reference',
   ],
   'utils_prettylistprint_threaded': ['independent_rows'],
+  'cavity_drop_projection': [
+    'octree_connected_minima', 'octree_shallow_minimum', 'octree_search_window',
+    'octree_rigid_motion', 'octree_zero_window_on_surface', 'search_window_validation',
+    'octree_cluster_dimer', 'octree_cluster_cross', 'octree_cluster_octahedron',
+    'octree_cluster_cube', 'octree_cluster_pentagon', 'octree_cluster_tetrahedron',
+    'brute_force_broad_window', 'stationary_box_bounds',
+  ],
   'math_grid_3d_threaded': [
     'batched_ifft_uses_threaded_backend',
     'molecular_nufft_type12_threaded',
@@ -163,6 +187,7 @@ foreach t : tests
       args: test_args,
       env: test_env,
       is_parallel : true,
+      priority: test_priority.get(t, 0),
       timeout: test_timeouts.get(t, 420),
     )
   endforeach
