@@ -1553,14 +1553,14 @@ class ModelComponentSLIC(_ModelComponentPCMBase):
 class ModelComponentNonlocal(_ModelComponentPCMBase):
     """Nonlocal PCM component with dielectric contrast and correlation length."""
 
-    def __init__(self, eps_solvent: float, eps_inf: float, lambda_: float,
-                 eps_solute: float, *, parameters: PCMParameters | None = None,
+    def __init__(self, epsilon: float, epsilon_inf: float, lambda_: float,
+                 epsilon_solute: float, *, parameters: PCMParameters | None = None,
                  context: Context | None = None) -> None:
-        self.eps_inf = float(eps_inf)
+        self.epsilon_inf = float(epsilon_inf)
         self.lambda_ = float(lambda_)
-        self.eps_solute = float(eps_solute)
-        super().__init__(eps_solvent, library.new_nonlocal_component, parameters,
-                         self.eps_inf, self.lambda_, self.eps_solute, context=context)
+        self.epsilon_solute = float(epsilon_solute)
+        super().__init__(epsilon, library.new_nonlocal_component, parameters,
+                         self.epsilon_inf, self.lambda_, self.epsilon_solute, context=context)
 
 
 class ModelComponentPV(SolvationModelComponent):

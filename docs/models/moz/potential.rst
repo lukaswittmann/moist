@@ -189,7 +189,8 @@ Terms
      - The sites of neutral water.
    * - ``coulomb_<model>_<environment>``
      - Solvents with tabulated charges: ``hirshfeld``, ``resp``, ``mbis`` or
-       ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation.
+       ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation
+       (:ref:`solvent-charges`).
    * - ``coulomb_spce``
      - The SPC/E charges of neutral water.
    * - ``monopole_type``

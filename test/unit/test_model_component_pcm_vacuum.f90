@@ -169,7 +169,7 @@ contains
          call get_seed(seed_drop, smeared, mol, cavity, error)
          if (allocated(error)) return
          call new_component_nonlocal(pcm, 4.0_wp, 4.0_wp, 3.0_wp, err, &
-            & moist_pcm_parameters_type(solver=solver_type%dense), eps_solute=4.0_wp, ctx=ctx)
+            & moist_pcm_parameters_type(solver=solver_type%dense), epsilon_solute=4.0_wp, ctx=ctx)
          call check_moist_error(error, err, "nonlocal setup")
          if (allocated(error)) return
          call check_response(error, pcm, mol, cavity, &

@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.25)
 
-# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.0-alpha)
+# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.2.1-alpha)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
@@ -363,6 +363,24 @@ if(MOIST_TESTS)
     single_atom asymmetric_trimer partition_integrals multicenter_integrals
     rotational_convergence integrate_constant_is_box_volume gaussian_width_law)
   set(moist_test_selected_math_grid_3d_invariance single_atom asymmetric_trimer)
+  # Split: the octree_cluster_* tests dominate the suite
+  set(moist_test_selected_cavity_drop_projection
+    octree_connected_minima octree_shallow_minimum octree_search_window
+    octree_rigid_motion octree_zero_window_on_surface search_window_validation
+    octree_cluster_dimer octree_cluster_cross octree_cluster_octahedron
+    octree_cluster_cube octree_cluster_pentagon octree_cluster_tetrahedron
+    brute_force_broad_window stationary_box_bounds)
+
+  # Start priority (ctest COST, higher first), ranked by CI runtime
+  set(moist_test_cost_cavity_drop_projection 9)
+  set(moist_test_cost_model_component_pcm_derivatives 8)
+  set(moist_test_cost_math_grid_3d_invariance 7)
+  set(moist_test_cost_math_grid_3d_derivatives 6)
+  set(moist_test_cost_cavity_drop_gradient 5)
+  set(moist_test_cost_cavity_drop_lsf 4)
+  set(moist_test_cost_cavity_drop_isodensity 3)
+  set(moist_test_cost_cavity_drop_cpcm 2)
+  set(moist_test_cost_model_component_pcm_references 1)
   set(moist_test_selected_math_grid_3d_threaded
     batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
@@ -422,6 +440,9 @@ if(MOIST_TESTS)
       ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR};MKL_NUM_THREADS=1;OPENBLAS_NUM_THREADS=1"
       TIMEOUT 420
     )
+    if(DEFINED moist_test_cost_${suite})
+      set_tests_properties(${runs} PROPERTIES COST ${moist_test_cost_${suite}})
+    endif()
   endforeach()
 endif()
 

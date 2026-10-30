@@ -65,8 +65,8 @@ The available PCM constructors are ``moist_new_cpcm_component`` and
 ``moist_new_dpcm_original_component``; ``moist_new_lpb_component``;
 ``moist_new_slic_component``; and ``moist_new_nonlocal_component``. The first
 six take ``epsilon``. LPB adds ``kappa``; SLIC takes ``epsilon, alpha, beta,
-gamma, mu, phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda,
-eps_solute``. Every constructor ends with an optional options pointer.
+gamma, mu, phi_static``; nonlocal takes ``epsilon, epsilon_inf, lambda,
+epsilon_solute``. Every constructor ends with an optional options pointer.
 
 SvdW, CFC, isodensity, DROP, iSwiG, PCM, and GOSTSHYP settings have separate
 options types. ``struct_size`` is set by the initializer; do not modify it.

@@ -372,7 +372,7 @@ cavity's ``density`` response.
 GOSTSHYP
 ~~~~~~~~
 
-:doc:`GOSTSHYP </models/components/gostshyp>` places one Gaussian on each surface point and chooses its amplitude
+:doc:`GOSTSHYP </models/components/pressure/gostshyp>` places one Gaussian on each surface point and chooses its amplitude
 to reproduce the requested pressure:
 
 .. code-block:: fortran

@@ -1,5 +1,5 @@
-IEF-PCM
-========
+Integral Equation Formalism Polarizable Continuum Model (IEF-PCM)
+=================================================================
 
 The integral-equation formulation :cite:p:`cances1997iefpcm,mennucci1997ief` solves a dielectric boundary equation from
 the solute's surface potential alone. Its double-layer operator requires cavity normals.

@@ -6,7 +6,7 @@ line-length = 132
 extend-exclude = ["config/version.f90"]
 
 [check.per-file-ignores]
-# Vendored third-party solvers (see THIRD_PARTY_LICENSES.md): only fortitude's
+# Vendored third-party solvers (see THIRD_PARTY_NOTICES.md): only fortitude's
 # automatic fixes are applied, to keep them close to upstream
 "src/moist/math/solver/slsqp/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
 "src/moist/math/solver/lbfgsb/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]

@@ -3,6 +3,41 @@ Cavities
 
 This section describes the cavity constructions available in MOIST and the settings that control their shape and surface discretization.
 
+Overview
+--------
+
+For most applications, one of three cavities is the right choice:
+
+- :doc:`iSwiG <iswig>` for a van der Waals cavity from atomic spheres;
+- :doc:`SvdW-DROP <svdw>` for a smooth molecular surface without crevices;
+- :doc:`ρ-DROP <isodensity>` for a cavity that follows the electron density of the QM host.
+
+The remaining constructions serve special purposes, such as reference values for areas and volumes.
+
+.. table::
+   :class: matrix
+
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+   | Construction                    | Surfaces                                                                             | Output       | Derivatives        |
+   |                                 +-------------+--------------------+------------------+--------------------------------+              +----------+---------+
+   |                                 | vdW spheres | :doc:`SvdW <svdw>` | :doc:`CFC <cfc>` | :doc:`Isodensity <isodensity>` |              | Gradient | Hessian |
+   +=================================+=============+====================+==================+================================+==============+==========+=========+
+   | :doc:`iSwiG <iswig>`            | |yes|       | |no|               | |no|             | |no|                           | surface grid | |yes|    | |soon|  |
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+   | :doc:`DROP <drop>`              | |no|        | |yes|              | |yes|            | |yes|                          | surface grid | |yes|    | |soon|  |
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+   | :doc:`Marching tetrahedra <mt>` | |no|        | |yes|              | |yes|            | |part|                         | surface grid | |no|     | |no|    |
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+   | :doc:`Marching cubes <mc>`      | |no|        | |yes|              | |yes|            | |part|                         | area, volume | |no|     | |no|    |
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+   | :doc:`NumSA <numsa>`            | |yes|       | |no|               | |no|             | |no|                           | area         | |part|   | |no|    |
+   +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
+
+|yes| supported, |part| restricted, |no| not supported, |soon| in development.
+Marching tetrahedra and marching cubes accept an isodensity level set for a frozen density only:
+they provide no density response, so they cannot be used in an SCF.
+NumSA provides the gradient of the total area only.
+
 Common Interface
 ----------------
 
@@ -95,6 +130,15 @@ Available Cavities
 
    drop
    iswig
-   numsa
-   mc
    mt
+
+Area & Volume Integrators
+-------------------------
+
+These constructions produce no surface grid and cannot carry a solvation model.
+They integrate the area (and volume) of a cavity, as reference values or for area-based terms.
+
+.. toctree::
+
+   mc
+   numsa

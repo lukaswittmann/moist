@@ -768,7 +768,7 @@ contains
       type(model_continuum_component_nonlocal) :: pcm
 
       call new_context(ctx, verbosity=0)
-      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, eps_solute=ieee_value(1.0_wp, &
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, epsilon_solute=ieee_value(1.0_wp, &
          & ieee_quiet_nan), ctx=ctx)
       call check_moist_error(error, err)
       call ctx%delete()
@@ -914,7 +914,7 @@ contains
       type(model_continuum_component_nonlocal) :: pcm
 
       call new_context(ctx, verbosity=0)
-      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, eps_solute=ieee_value(1.0_wp, &
+      call new_component_nonlocal(pcm, 80.0_wp, 2.0_wp, 1.0_wp, err, epsilon_solute=ieee_value(1.0_wp, &
          & ieee_positive_inf), ctx=ctx)
       call check_moist_error(error, err)
       call ctx%delete()

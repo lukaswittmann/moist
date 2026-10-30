@@ -94,6 +94,7 @@ contains
       !> Initialised scratch
       type(dst4_work_type), intent(out) :: work
 
+      work = dst4_work_type()
    end subroutine dst4_plan_new_work
 
    !> Release the scratch; idempotent no-op with the current backend

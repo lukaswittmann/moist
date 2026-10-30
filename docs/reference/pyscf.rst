@@ -82,7 +82,7 @@ nuclear gradient. The normal derivative uses the same Gaussian potential as
 ``phi``; no separate host-defined normal-potential request is needed.
 
 All :doc:`PCM variants </models/components/pcm/index>`, PV and
-:doc:`GOSTSHYP </models/components/gostshyp>` components share the selected
+:doc:`GOSTSHYP </models/components/pressure/gostshyp>` components share the selected
 cavity. For example:
 
 .. code-block:: python

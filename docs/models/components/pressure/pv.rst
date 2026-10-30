@@ -1,5 +1,5 @@
-Pressure-Volume Component
-=========================
+Pressure-Volume (PV)
+====================
 
 The ``model_continuum_component_pv`` component adds a pressure-volume contribution :cite:p:`spooner2014compressed,zeller2025pressure`.
 

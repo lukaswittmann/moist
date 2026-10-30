@@ -424,7 +424,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(solvent_system_type) :: system
-      type(moz_potential_type) :: pot, partial
+      type(moz_potential_type) :: pot, partial, uncovered
       type(potential_sites_type) :: sites
       type(fixed_charges_type) :: first, rest
       type(structure_type) :: mol
@@ -462,9 +462,8 @@ contains
       if (allocated(error)) return
 
       ! Uncovered atoms without fallback: named build error
-      partial = moz_potential_type()
-      call partial%add(first, err)
-      if (.not. allocated(err)) call partial%update(mol, err)
+      call uncovered%add(first, err)
+      if (.not. allocated(err)) call uncovered%update(mol, err)
       call check(error, allocated(err), more="atoms without charges were accepted")
       if (allocated(error)) return
       call check(error, index(err%message, "No charges for atoms: O2") > 0, more=err%message)

@@ -14,8 +14,8 @@ module test_cavity_drop_cpcm
    use test_pcm_conductor_probe, only: &
       & probe_conductor_matrix_gradient, probe_conductor_bilinear_weights, &
       & probe_conductor_nuclear_gradient
-   use moist_model_continuum_component_pcm_electrostatics, only: &
-      & pcm_electrostatic_nuclear_gradient
+   use moist_model_continuum_component_pcm_elstat, only: &
+      & pcm_elstat_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: fd6_scalar, fd6_offsets, fill_legacy_radii
    use, intrinsic :: iso_fortran_env, only: error_unit
@@ -334,9 +334,9 @@ contains
          end do
       end do
 
-      call pcm_electrostatic_nuclear_gradient(cavity%xyz, cavity%sphxyz, &
-                                              cavity%xyz1_rA, surface_q, w_xyz, za, &
-                                              grad_ctr, cavity_error)
+      call pcm_elstat_nuclear_gradient(cavity%xyz, cavity%sphxyz, &
+                                       cavity%xyz1_rA, surface_q, w_xyz, za, &
+                                       grad_ctr, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -388,7 +388,7 @@ contains
                        grad_ctr(iaxis, iat), &
                        grad_num(iaxis, iat), &
                        thr_abs=POINTCHARGE_ATOL, thr_rel=POINTCHARGE_RTOL, &
-                       more="pcm_electrostatic_nuclear_gradient point-charge FD mismatch")
+                       more="pcm_elstat_nuclear_gradient point-charge FD mismatch")
             if (allocated(error)) return
          end do
       end do

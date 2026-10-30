@@ -4,7 +4,7 @@
 !> - Sides resolve into plain sites; the kernels see only those and the fields
 !> - Adjoint recipients: every term supplying a field or owning a charge, host-fed or not
 !> - Charge adjoint masked to the atoms a term owns; zero-sized when it owns none
-submodule(moist_model_moz_potential) moist_model_moz_potential_compute
+submodule(moist_model_moz_potential) moz_potential_compute
    use mctc_env, only: fatal_error
    use moist_channels_coupling, only: coupling_view_type, coupling_make_view, coupling_close_view
    use moist_math_packed_sym, only: packed_index, npair_from_ns
@@ -456,4 +456,4 @@ contains
       end if
    end subroutine term_charge_adjoint
 
-end submodule moist_model_moz_potential_compute
+end submodule moz_potential_compute

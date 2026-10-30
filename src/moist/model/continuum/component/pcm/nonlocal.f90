@@ -23,21 +23,21 @@ module moist_model_continuum_component_pcm_nonlocal
 
    !> Three-field nonlocal boundary system
    !>
-   !> - Physical inputs: eps_solvent, eps_inf, lambda and optional eps_solute
+   !> - Physical inputs: epsilon, epsilon_inf, lambda and optional epsilon_solute
    !> - Cavity positions, normals, principal curvatures and grid point areas
    !> - Gaussian charge widths and switching factors when available
    !> - Host potential and its spatial derivative at the surface points, ordinary unscaled values
-   !> - Energy is the physical reaction energy for interior permittivity eps_solute (classical solutes;
+   !> - Energy is the physical reaction energy for interior permittivity epsilon_solute (classical solutes;
    !>   1 for QM densities)
    !> - Host nuclear charges for gradients, with ECP core electrons removed
    type, extends(pcm_layer_base) :: model_continuum_component_nonlocal
       !> High-frequency solvent relative permittivity, dimensionless
-      real(wp) :: eps_inf = 1.0_wp
+      real(wp) :: epsilon_inf = 1.0_wp
       !> Relative permittivity inside the cavity, dimensionless
-      real(wp) :: eps_solute = 1.0_wp
+      real(wp) :: epsilon_solute = 1.0_wp
       !> Solvent polarization correlation length, bohr
       real(wp) :: lambda = 1.0_wp
-      !> Interior trace of eps_solute times the reaction potential, shape (ngrid)
+      !> Interior trace of epsilon_solute times the reaction potential, shape (ngrid)
       real(wp), allocatable :: u(:)
       !> Exterior auxiliary trace, shape (ngrid)
       real(wp), allocatable :: w_ext(:)
@@ -60,23 +60,23 @@ contains
    !>
    !> - Standalone computation requires ctx; model-owned components inherit the model context
    !>
-   !> @param[out] self         initialized nonlocal PCM component
-   !> @param[in]  eps_solvent  dimensionless static solvent relative permittivity, finite and >= 1
-   !> @param[in]  eps_inf      dimensionless high-frequency solvent relative permittivity, finite and >= 1
-   !> @param[in]  lambda       solvent polarization correlation length in bohr, finite and > 0
-   !> @param[out] error        allocated on invalid physical or numerical parameters
-   !> @param[in]  param        optional solver controls, compiled defaults when omitted
-   !> @param[in]  eps_solute   dimensionless relative permittivity inside the cavity, finite and >= 1; default 1
-   !> @param[in]  ctx          optional borrowed context, must outlive the component
-   subroutine new_component_nonlocal(self, eps_solvent, eps_inf, lambda, error, param, eps_solute, ctx)
+   !> @param[out] self            initialized nonlocal PCM component
+   !> @param[in]  epsilon         dimensionless static solvent relative permittivity, finite and >= 1
+   !> @param[in]  epsilon_inf     dimensionless high-frequency solvent relative permittivity, finite and >= 1
+   !> @param[in]  lambda          solvent polarization correlation length in bohr, finite and > 0
+   !> @param[out] error           allocated on invalid physical or numerical parameters
+   !> @param[in]  param           optional solver controls, compiled defaults when omitted
+   !> @param[in]  epsilon_solute  dimensionless relative permittivity inside the cavity, finite and >= 1; default 1
+   !> @param[in]  ctx             optional borrowed context, must outlive the component
+   subroutine new_component_nonlocal(self, epsilon, epsilon_inf, lambda, error, param, epsilon_solute, ctx)
       !> Nonlocal PCM component
       type(model_continuum_component_nonlocal), intent(out) :: self
       !> Borrowed run context; model context when omitted
       type(moist_context_type), intent(in), target, optional :: ctx
       !> Static solvent relative permittivity
-      real(wp), intent(in) :: eps_solvent
+      real(wp), intent(in) :: epsilon
       !> High-frequency solvent relative permittivity
-      real(wp), intent(in) :: eps_inf
+      real(wp), intent(in) :: epsilon_inf
       !> Solvent polarization correlation length
       real(wp), intent(in) :: lambda
       !> Construction error
@@ -84,29 +84,29 @@ contains
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
       !> Relative permittivity inside the cavity
-      real(wp), intent(in), optional :: eps_solute
+      real(wp), intent(in), optional :: epsilon_solute
       type(moist_pcm_parameters_type) :: settings
 
-      if (.not. ieee_is_finite(eps_solvent) .or. eps_solvent < 1.0_wp .or. &
-          & .not. ieee_is_finite(eps_inf) .or. eps_inf < 1.0_wp .or. &
+      if (.not. ieee_is_finite(epsilon) .or. epsilon < 1.0_wp .or. &
+          & .not. ieee_is_finite(epsilon_inf) .or. epsilon_inf < 1.0_wp .or. &
           & .not. ieee_is_finite(lambda) .or. lambda <= 0.0_wp) then
          call fatal_error(error, "Nonlocal PCM requires permittivities >= 1 and positive lambda")
          return
       end if
-      if (present(eps_solute)) then
-         if (.not. ieee_is_finite(eps_solute) .or. eps_solute < 1.0_wp) then
+      if (present(epsilon_solute)) then
+         if (.not. ieee_is_finite(epsilon_solute) .or. epsilon_solute < 1.0_wp) then
             call fatal_error(error, "Nonlocal PCM solute permittivity must be >= 1")
             return
          end if
-         self%eps_solute = eps_solute
+         self%epsilon_solute = epsilon_solute
       end if
       if (present(param)) settings = param
       call settings%validate(error)
       if (allocated(error)) return
       if (present(ctx)) self%ctx => ctx
-      self%epsilon = eps_solvent
-      self%feps = pcm_layer_feps(eps_solvent)
-      self%eps_inf = eps_inf
+      self%epsilon = epsilon
+      self%feps = pcm_layer_feps(epsilon)
+      self%epsilon_inf = epsilon_inf
       self%lambda = lambda
       self%param = settings
       self%needs_normal = .true.
@@ -125,8 +125,8 @@ contains
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv("Epsilon", self%epsilon)
-      call pp%kv("Epsilon (high-frequency)", self%eps_inf)
-      call pp%kv("Epsilon (solute)", self%eps_solute)
+      call pp%kv("Epsilon (high-frequency)", self%epsilon_inf)
+      call pp%kv("Epsilon (solute)", self%epsilon_solute)
       call pp%kv("Correlation length", self%lambda, "bohr")
 
    end subroutine nonlocal_print_inputs
@@ -148,13 +148,13 @@ contains
                call nonlocal_pcm_assemble(self%gauss, r, n, k1, k2, xi, f, a, error, solver)
             end associate
             if (allocated(error)) return
-            call nonlocal_pcm_medium(self%gauss, self%epsilon, self%eps_inf, &
-               & self%lambda, self%eps_solute, error)
+            call nonlocal_pcm_medium(self%gauss, self%epsilon, self%epsilon_inf, &
+               & self%lambda, self%epsilon_solute, error)
          else
             call nonlocal_pcm_point_assemble(self%point, r, n, k1, k2, a, error, solver)
             if (allocated(error)) return
-            call nonlocal_pcm_point_medium(self%point, self%epsilon, self%eps_inf, &
-               & self%lambda, self%eps_solute, error)
+            call nonlocal_pcm_point_medium(self%point, self%epsilon, self%epsilon_inf, &
+               & self%lambda, self%epsilon_solute, error)
          end if
       end associate
    end subroutine nonlocal_assemble_layer

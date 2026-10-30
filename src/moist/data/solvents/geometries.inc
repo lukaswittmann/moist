@@ -4749,12 +4749,23 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
    case (181)
       call new_structure(mol, &
                          [ &
+                         7, 1, 1, 1], &
+                         [character(len=2) :: &
+                          "N ", "H ", "H ", "H "], &
+                         reshape([ &
+                                 5.918879756e-05_wp, 1.4559e-10_wp, 0.01509520209621_wp, &
+                                 0.93303591493903_wp, -1.2206e-10_wp, -0.38604496701087_wp, &
+                                 -0.46654755193203_wp, 0.80789782302457_wp, -0.3860671175081_wp, &
+                                 -0.46654755180457_wp, -0.8078978230481_wp, -0.38606711757724_wp], shape=[3, 4]))
+   case (182)
+      call new_structure(mol, &
+                         [ &
                          18], &
                          [character(len=2) :: &
                           "Ar"], &
                          reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp], shape=[3, 1]))
-   case (182)
+   case (183)
       call new_structure(mol, &
                          [ &
                          35, 35], &
@@ -4763,7 +4774,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                          reshape([ &
                                  0.0_wp, 0.0_wp, 1.14055_wp, &
                                  0.0_wp, 0.0_wp, -1.14055_wp], shape=[3, 2]))
-   case (183)
+   case (184)
       call new_structure(mol, &
                          [ &
                          17, 1], &
@@ -4772,7 +4783,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                          reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 1.2746_wp], shape=[3, 2]))
-   case (184)
+   case (185)
       call new_structure(mol, &
                          [ &
                          2], &
@@ -4780,7 +4791,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                           "He"], &
                          reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp], shape=[3, 1]))
-   case (185)
+   case (186)
       call new_structure(mol, &
                          [ &
                          10], &
@@ -4788,7 +4799,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                           "Ne"], &
                          reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp], shape=[3, 1]))
-   case (186)
+   case (187)
       call new_structure(mol, &
                          [ &
                          36], &
@@ -4796,7 +4807,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                           "Kr"], &
                          reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp], shape=[3, 1]))
-   case (187)
+   case (188)
       call new_structure(mol, &
                          [ &
                          54], &

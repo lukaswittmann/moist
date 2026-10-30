@@ -3,7 +3,7 @@
 project(
   'moist',
   'c',
-  version: '1.2.0a',
+  version: '1.2.1a',
   license: 'MPL-2.0',
   meson_version: '>=0.55',
   default_options: [

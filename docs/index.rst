@@ -42,6 +42,7 @@ For PySCF support and upcoming ORCA and TURBOMOLE integrations, see :doc:`integr
 
    Models <models/index>
    Cavities <cavities/index>
+   Solvents <solvents/index>
    Integrations <integrations>
    Recipes <recipe/index>
    API Reference <reference/index>
