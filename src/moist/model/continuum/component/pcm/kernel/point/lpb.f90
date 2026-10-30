@@ -23114,69 +23114,97 @@ contains
       real(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), &
-                                     tmp7(:), tmp8(:), tmp9(:), tmp10(:), tmp11(:), tmp12(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            allocate (tmp11(self%npt))
-            allocate (tmp12(self%npt))
-            call gemv(self%c3, x, tmp1, trans="t")
-            tmp2 = self%a*tmp1
-            tmp3 = (-0.15915494309189535_wp)*tmp2
-            tmp4 = x + tmp3
-            call gemv(self%c2, tmp4, tmp5, trans="t")
-            tmp6 = self%c1*tmp5
-            call gemv(self%c5, x, tmp7, trans="t")
-            tmp8 = self%a*tmp7
-            call gemv(self%c6, tmp8, tmp9)
-            tmp10 = 0.15915494309189535_wp*tmp9
-            tmp11 = tmp7 + tmp10
-            tmp12 = self%c4*tmp11
-            y = tmp6 + tmp12
-         end block
+         call lpb_point_op2_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), &
-                                     tmp7(:), tmp8(:), tmp9(:), tmp10(:), tmp11(:), tmp12(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            allocate (tmp11(self%npt))
-            allocate (tmp12(self%npt))
-            call gemv(self%c2, x, tmp1)
-            tmp2 = self%a*tmp1
-            call gemv(self%c3, tmp2, tmp3)
-            tmp4 = (-0.15915494309189535_wp)*tmp3
-            tmp5 = tmp1 + tmp4
-            tmp6 = self%c1*tmp5
-            call gemv(self%c6, x, tmp7, trans="t")
-            tmp8 = self%a*tmp7
-            tmp9 = 0.15915494309189535_wp*tmp8
-            tmp10 = x + tmp9
-            call gemv(self%c5, tmp10, tmp11)
-            tmp12 = self%c4*tmp11
-            y = tmp6 + tmp12
-         end block
+         call lpb_point_op2_apply_n(self, x, y)
       end if
    end subroutine lpb_point_op2_apply
+
+   !> Apply the transpose of operator 2
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op2_apply_t(self, x, y)
+      !> Operator
+      class(lpb_point_op2), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), &
+                               tmp8(:), tmp9(:), tmp10(:), tmp11(:), tmp12(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      allocate (tmp11(self%npt))
+      allocate (tmp12(self%npt))
+      call gemv(self%c3, x, tmp1, trans="t")
+      tmp2 = self%a*tmp1
+      tmp3 = (-0.15915494309189535_wp)*tmp2
+      tmp4 = x + tmp3
+      call gemv(self%c2, tmp4, tmp5, trans="t")
+      tmp6 = self%c1*tmp5
+      call gemv(self%c5, x, tmp7, trans="t")
+      tmp8 = self%a*tmp7
+      call gemv(self%c6, tmp8, tmp9)
+      tmp10 = 0.15915494309189535_wp*tmp9
+      tmp11 = tmp7 + tmp10
+      tmp12 = self%c4*tmp11
+      y = tmp6 + tmp12
+   end subroutine lpb_point_op2_apply_t
+
+   !> Apply operator 2
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op2_apply_n(self, x, y)
+      !> Operator
+      class(lpb_point_op2), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), &
+                               tmp8(:), tmp9(:), tmp10(:), tmp11(:), tmp12(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      allocate (tmp11(self%npt))
+      allocate (tmp12(self%npt))
+      call gemv(self%c2, x, tmp1)
+      tmp2 = self%a*tmp1
+      call gemv(self%c3, tmp2, tmp3)
+      tmp4 = (-0.15915494309189535_wp)*tmp3
+      tmp5 = tmp1 + tmp4
+      tmp6 = self%c1*tmp5
+      call gemv(self%c6, x, tmp7, trans="t")
+      tmp8 = self%a*tmp7
+      tmp9 = 0.15915494309189535_wp*tmp8
+      tmp10 = x + tmp9
+      call gemv(self%c5, tmp10, tmp11)
+      tmp12 = self%c4*tmp11
+      y = tmp6 + tmp12
+   end subroutine lpb_point_op2_apply_n
 
    !> Form operator 2 as a dense matrix
    !>
@@ -23494,749 +23522,775 @@ contains
       real(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp9(:), tmp45(:), tmp46(:), tmp47(:), &
-                                     tmp48(:), tmp49(:), tmp54(:), tmp73(:), tmp74(:), tmp75(:), &
-                                     tmp81(:), tmp105(:), tmp106(:), tmp107(:), tmp135(:), &
-                                     tmp136(:), tmp137(:)
-            real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp50, tmp51, tmp52, tmp53, tmp76, &
-                        tmp77, tmp78, tmp79, tmp80
-            real(wp), allocatable :: tmp106_p(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp45(self%npt))
-            allocate (tmp46(self%npt))
-            allocate (tmp47(self%npt))
-            allocate (tmp48(self%npt))
-            allocate (tmp49(self%npt))
-            allocate (tmp54(self%npt))
-            allocate (tmp73(self%npt))
-            allocate (tmp74(self%npt))
-            allocate (tmp75(self%npt))
-            allocate (tmp81(self%npt))
-            allocate (tmp105(self%npt))
-            allocate (tmp106(self%npt))
-            allocate (tmp107(self%npt))
-            allocate (tmp135(self%npt))
-            allocate (tmp136(self%npt))
-            allocate (tmp137(self%npt))
-            do i = 1, self%npt
-               tmp3 = self%k1(i) + self%k2(i)
-               tmp4 = 1.0_wp/self%a(i)
-               tmp5 = 12.566370614359172_wp*tmp4
-               tmp6 = sqrt(tmp5)
-               tmp7 = tmp3*tmp6
-               tmp8 = (-0.26735_wp)*tmp7
-               tmp2(i) = tmp8
-            end do
-            tmp9 = tmp2*x
-            tmp1 = tmp9
-            block
-               real(wp) :: tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp18, tmp21, tmp25, &
-                           tmp10, tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28, tmp29, &
-                           tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, &
-                           tmp40, tmp41, tmp42, tmp43, tmp44
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp1, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp11 = x(j)
-                  tmp12 = self%n(1, j)
-                  tmp13 = self%r(1, j)
-                  tmp14 = self%r(2, j)
-                  tmp15 = self%n(2, j)
-                  tmp16 = self%r(3, j)
-                  tmp17 = self%n(3, j)
-                  tmp18 = -tmp13
-                  tmp21 = -tmp14
-                  tmp25 = -tmp16
-                  tmp10 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& reduction(+: tmp10)
-                  do i = 1, j - 1
-                     tmp19 = self%r(1, i) + tmp18
-                     tmp20 = tmp12*tmp19
-                     tmp22 = self%r(2, i) + tmp21
-                     tmp23 = tmp22*tmp15
-                     tmp24 = tmp20 + tmp23
-                     tmp26 = self%r(3, i) + tmp25
-                     tmp27 = tmp26*tmp17
-                     tmp28 = tmp24 + tmp27
-                     tmp29 = x(i)*tmp28
-                     tmp30 = tmp19**(2)
-                     tmp31 = tmp22**(2)
-                     tmp32 = tmp30 + tmp31
-                     tmp33 = tmp26**(2)
-                     tmp34 = tmp32 + tmp33
-                     tmp35 = 1.0_wp/sqrt(tmp34)
-                     tmp36 = tmp35**(3)
-                     tmp37 = tmp29*tmp36
-                     tmp38 = sqrt(tmp34)
-                     tmp39 = tmp38*self%kappa
-                     tmp40 = -tmp39
-                     tmp41 = exp(tmp40)
-                     tmp42 = tmp37*tmp41
-                     tmp43 = 1.0_wp + tmp39
-                     tmp44 = tmp42*tmp43
-                     tmp10 = tmp10 + tmp44
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& reduction(+: tmp10)
-                  do i = j + 1, self%npt
-                     tmp19 = self%r(1, i) + tmp18
-                     tmp20 = tmp12*tmp19
-                     tmp22 = self%r(2, i) + tmp21
-                     tmp23 = tmp22*tmp15
-                     tmp24 = tmp20 + tmp23
-                     tmp26 = self%r(3, i) + tmp25
-                     tmp27 = tmp26*tmp17
-                     tmp28 = tmp24 + tmp27
-                     tmp29 = x(i)*tmp28
-                     tmp30 = tmp19**(2)
-                     tmp31 = tmp22**(2)
-                     tmp32 = tmp30 + tmp31
-                     tmp33 = tmp26**(2)
-                     tmp34 = tmp32 + tmp33
-                     tmp35 = 1.0_wp/sqrt(tmp34)
-                     tmp36 = tmp35**(3)
-                     tmp37 = tmp29*tmp36
-                     tmp38 = sqrt(tmp34)
-                     tmp39 = tmp38*self%kappa
-                     tmp40 = -tmp39
-                     tmp41 = exp(tmp40)
-                     tmp42 = tmp37*tmp41
-                     tmp43 = 1.0_wp + tmp39
-                     tmp44 = tmp42*tmp43
-                     tmp10 = tmp10 + tmp44
-                  end do
-                  tmp1(j) = tmp1(j) + tmp10
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp45 = self%a*tmp1
-            tmp46 = (-0.15915494309189535_wp)*tmp45
-            tmp47 = x + tmp46
-            do i = 1, self%npt
-               tmp50 = 1.0_wp/self%a(i)
-               tmp51 = 12.566370614359172_wp*tmp50
-               tmp52 = sqrt(tmp51)
-               tmp53 = 1.0694_wp*tmp52
-               tmp49(i) = tmp53
-            end do
-            tmp54 = tmp49*tmp47
-            tmp48 = tmp54
-            block
-               real(wp) :: tmp56, tmp57, tmp58, tmp59, tmp60, tmp63, tmp67, tmp55, tmp61, tmp62, &
-                           tmp64, tmp65, tmp66, tmp68, tmp69, tmp70, tmp71, tmp72
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp47, tmp48) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp56 = self%r(1, j)
-                  tmp57 = self%r(2, j)
-                  tmp58 = self%r(3, j)
-                  tmp59 = tmp47(j)
-                  tmp60 = -tmp56
-                  tmp63 = -tmp57
-                  tmp67 = -tmp58
-                  tmp55 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
-                  !$omp& private(tmp71, tmp72) &
-                  !$omp& reduction(+: tmp55)
-                  do i = 1, j - 1
-                     tmp61 = self%r(1, i) + tmp60
-                     tmp62 = tmp61**(2)
-                     tmp64 = self%r(2, i) + tmp63
-                     tmp65 = tmp64**(2)
-                     tmp66 = tmp62 + tmp65
-                     tmp68 = self%r(3, i) + tmp67
-                     tmp69 = tmp68**(2)
-                     tmp70 = tmp66 + tmp69
-                     tmp71 = 1.0_wp/sqrt(tmp70)
-                     tmp72 = tmp71*tmp47(i)
-                     tmp55 = tmp55 + tmp72
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
-                  !$omp& private(tmp71, tmp72) &
-                  !$omp& reduction(+: tmp55)
-                  do i = j + 1, self%npt
-                     tmp61 = self%r(1, i) + tmp60
-                     tmp62 = tmp61**(2)
-                     tmp64 = self%r(2, i) + tmp63
-                     tmp65 = tmp64**(2)
-                     tmp66 = tmp62 + tmp65
-                     tmp68 = self%r(3, i) + tmp67
-                     tmp69 = tmp68**(2)
-                     tmp70 = tmp66 + tmp69
-                     tmp71 = 1.0_wp/sqrt(tmp70)
-                     tmp72 = tmp71*tmp47(i)
-                     tmp55 = tmp55 + tmp72
-                  end do
-                  tmp48(j) = tmp48(j) + tmp55
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp73 = self%c1*tmp48
-            do i = 1, self%npt
-               tmp76 = 1.0_wp/self%a(i)
-               tmp77 = 12.566370614359172_wp*tmp76
-               tmp78 = sqrt(tmp77)
-               tmp79 = 1.0694_wp*tmp78
-               tmp80 = tmp79 + self%c3
-               tmp75(i) = tmp80
-            end do
-            tmp81 = tmp75*x
-            tmp74 = tmp81
-            block
-               real(wp) :: tmp83, tmp84, tmp85, tmp86, tmp87, tmp90, tmp94, tmp82, tmp88, tmp89, &
-                           tmp91, tmp92, tmp93, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100, tmp101, &
-                           tmp102, tmp103, tmp104
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp74, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp83 = x(j)
-                  tmp84 = self%r(1, j)
-                  tmp85 = self%r(2, j)
-                  tmp86 = self%r(3, j)
-                  tmp87 = -tmp84
-                  tmp90 = -tmp85
-                  tmp94 = -tmp86
-                  tmp82 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
-                  !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
-                  !$omp& reduction(+: tmp82)
-                  do i = 1, j - 1
-                     tmp88 = self%r(1, i) + tmp87
-                     tmp89 = tmp88**(2)
-                     tmp91 = self%r(2, i) + tmp90
-                     tmp92 = tmp91**(2)
-                     tmp93 = tmp89 + tmp92
-                     tmp95 = self%r(3, i) + tmp94
-                     tmp96 = tmp95**(2)
-                     tmp97 = tmp93 + tmp96
-                     tmp98 = 1.0_wp/sqrt(tmp97)
-                     tmp99 = x(i)*tmp98
-                     tmp100 = sqrt(tmp97)
-                     tmp101 = tmp100*self%kappa
-                     tmp102 = -tmp101
-                     tmp103 = exp(tmp102)
-                     tmp104 = tmp99*tmp103
-                     tmp82 = tmp82 + tmp104
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
-                  !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
-                  !$omp& reduction(+: tmp82)
-                  do i = j + 1, self%npt
-                     tmp88 = self%r(1, i) + tmp87
-                     tmp89 = tmp88**(2)
-                     tmp91 = self%r(2, i) + tmp90
-                     tmp92 = tmp91**(2)
-                     tmp93 = tmp89 + tmp92
-                     tmp95 = self%r(3, i) + tmp94
-                     tmp96 = tmp95**(2)
-                     tmp97 = tmp93 + tmp96
-                     tmp98 = 1.0_wp/sqrt(tmp97)
-                     tmp99 = x(i)*tmp98
-                     tmp100 = sqrt(tmp97)
-                     tmp101 = tmp100*self%kappa
-                     tmp102 = -tmp101
-                     tmp103 = exp(tmp102)
-                     tmp104 = tmp99*tmp103
-                     tmp82 = tmp82 + tmp104
-                  end do
-                  tmp74(j) = tmp74(j) + tmp82
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp105 = self%a*tmp74
-            tmp107 = tmp2*tmp105
-            tmp106 = tmp107
-            block
-               real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp118, &
-                           tmp122, tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124, tmp125, &
-                           tmp126, tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp106_p) &
-               !$omp& shared(self, tmp105, tmp106) &
-               !$omp& default(private)
-               allocate (tmp106_p(self%npt))
-               tmp106_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp108 = self%n(1, j)
-                  tmp109 = self%r(1, j)
-                  tmp110 = self%r(2, j)
-                  tmp111 = self%n(2, j)
-                  tmp112 = self%r(3, j)
-                  tmp113 = self%n(3, j)
-                  tmp114 = tmp105(j)
-                  tmp115 = -tmp109
-                  tmp118 = -tmp110
-                  tmp122 = -tmp112
-                  !$omp simd &
-                  !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
-                  !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
-                  !$omp& private(tmp132, tmp133, tmp134)
-                  do i = 1, j - 1
-                     tmp116 = self%r(1, i) + tmp115
-                     tmp117 = tmp108*tmp116
-                     tmp119 = self%r(2, i) + tmp118
-                     tmp120 = tmp119*tmp111
-                     tmp121 = tmp117 + tmp120
-                     tmp123 = self%r(3, i) + tmp122
-                     tmp124 = tmp123*tmp113
-                     tmp125 = tmp121 + tmp124
-                     tmp126 = tmp116**(2)
-                     tmp127 = tmp119**(2)
-                     tmp128 = tmp126 + tmp127
-                     tmp129 = tmp123**(2)
-                     tmp130 = tmp128 + tmp129
-                     tmp131 = 1.0_wp/sqrt(tmp130)
-                     tmp132 = tmp131**(3)
-                     tmp133 = tmp125*tmp132
-                     tmp134 = tmp133*tmp114
-                     tmp106_p(i) = tmp106_p(i) + tmp134
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
-                  !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
-                  !$omp& private(tmp132, tmp133, tmp134)
-                  do i = j + 1, self%npt
-                     tmp116 = self%r(1, i) + tmp115
-                     tmp117 = tmp108*tmp116
-                     tmp119 = self%r(2, i) + tmp118
-                     tmp120 = tmp119*tmp111
-                     tmp121 = tmp117 + tmp120
-                     tmp123 = self%r(3, i) + tmp122
-                     tmp124 = tmp123*tmp113
-                     tmp125 = tmp121 + tmp124
-                     tmp126 = tmp116**(2)
-                     tmp127 = tmp119**(2)
-                     tmp128 = tmp126 + tmp127
-                     tmp129 = tmp123**(2)
-                     tmp130 = tmp128 + tmp129
-                     tmp131 = 1.0_wp/sqrt(tmp130)
-                     tmp132 = tmp131**(3)
-                     tmp133 = tmp125*tmp132
-                     tmp134 = tmp133*tmp114
-                     tmp106_p(i) = tmp106_p(i) + tmp134
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp106 = tmp106 + tmp106_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp106_p)
-               !$omp end parallel
-            end block
-            tmp135 = 0.15915494309189535_wp*tmp106
-            tmp136 = tmp74 + tmp135
-            tmp137 = self%c2*tmp136
-            y = tmp73 + tmp137
-         end block
+         call lpb_point_op4_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp7(:), tmp25(:), tmp26(:), tmp27(:), &
-                                     tmp34(:), tmp69(:), tmp70(:), tmp71(:), tmp72(:), tmp73(:), &
-                                     tmp102(:), tmp103(:), tmp104(:), tmp105(:), tmp106(:), &
-                                     tmp112(:), tmp135(:)
-            real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp107, &
-                        tmp108, tmp109, tmp110, tmp111
-            real(wp), allocatable :: tmp1_p(:), tmp26_p(:), tmp105_p(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp25(self%npt))
-            allocate (tmp26(self%npt))
-            allocate (tmp27(self%npt))
-            allocate (tmp34(self%npt))
-            allocate (tmp69(self%npt))
-            allocate (tmp70(self%npt))
-            allocate (tmp71(self%npt))
-            allocate (tmp72(self%npt))
-            allocate (tmp73(self%npt))
-            allocate (tmp102(self%npt))
-            allocate (tmp103(self%npt))
-            allocate (tmp104(self%npt))
-            allocate (tmp105(self%npt))
-            allocate (tmp106(self%npt))
-            allocate (tmp112(self%npt))
-            allocate (tmp135(self%npt))
-            do i = 1, self%npt
-               tmp3 = 1.0_wp/self%a(i)
-               tmp4 = 12.566370614359172_wp*tmp3
-               tmp5 = sqrt(tmp4)
-               tmp6 = 1.0694_wp*tmp5
-               tmp2(i) = tmp6
-            end do
-            tmp7 = tmp2*x
-            tmp1 = tmp7
-            block
-               real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp12, tmp15, tmp19, tmp13, tmp14, tmp16, &
-                           tmp17, tmp18, tmp20, tmp21, tmp22, tmp23, tmp24
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp1_p) &
-               !$omp& shared(self, tmp1, x) &
-               !$omp& default(private)
-               allocate (tmp1_p(self%npt))
-               tmp1_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp8 = x(j)
-                  tmp9 = self%r(1, j)
-                  tmp10 = self%r(2, j)
-                  tmp11 = self%r(3, j)
-                  tmp12 = -tmp9
-                  tmp15 = -tmp10
-                  tmp19 = -tmp11
-                  !$omp simd &
-                  !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
-                  !$omp& private(tmp23, tmp24)
-                  do i = 1, j - 1
-                     tmp13 = self%r(1, i) + tmp12
-                     tmp14 = tmp13**(2)
-                     tmp16 = self%r(2, i) + tmp15
-                     tmp17 = tmp16**(2)
-                     tmp18 = tmp14 + tmp17
-                     tmp20 = self%r(3, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp22 = tmp18 + tmp21
-                     tmp23 = 1.0_wp/sqrt(tmp22)
-                     tmp24 = tmp8*tmp23
-                     tmp1_p(i) = tmp1_p(i) + tmp24
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
-                  !$omp& private(tmp23, tmp24)
-                  do i = j + 1, self%npt
-                     tmp13 = self%r(1, i) + tmp12
-                     tmp14 = tmp13**(2)
-                     tmp16 = self%r(2, i) + tmp15
-                     tmp17 = tmp16**(2)
-                     tmp18 = tmp14 + tmp17
-                     tmp20 = self%r(3, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp22 = tmp18 + tmp21
-                     tmp23 = 1.0_wp/sqrt(tmp22)
-                     tmp24 = tmp8*tmp23
-                     tmp1_p(i) = tmp1_p(i) + tmp24
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp1 = tmp1 + tmp1_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp1_p)
-               !$omp end parallel
-            end block
-            tmp25 = self%a*tmp1
-            do i = 1, self%npt
-               tmp28 = self%k1(i) + self%k2(i)
-               tmp29 = 1.0_wp/self%a(i)
-               tmp30 = 12.566370614359172_wp*tmp29
-               tmp31 = sqrt(tmp30)
-               tmp32 = tmp28*tmp31
-               tmp33 = (-0.26735_wp)*tmp32
-               tmp27(i) = tmp33
-            end do
-            tmp34 = tmp27*tmp25
-            tmp26 = tmp34
-            block
-               real(wp) :: tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49, &
-                           tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52, tmp53, tmp54, &
-                           tmp55, tmp56, tmp57, tmp58, tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, &
-                           tmp65, tmp66, tmp67, tmp68
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp26_p) &
-               !$omp& shared(self, tmp25, tmp26) &
-               !$omp& default(private)
-               allocate (tmp26_p(self%npt))
-               tmp26_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp35 = tmp25(j)
-                  tmp36 = self%n(1, j)
-                  tmp37 = self%r(1, j)
-                  tmp38 = self%r(2, j)
-                  tmp39 = self%n(2, j)
-                  tmp40 = self%r(3, j)
-                  tmp41 = self%n(3, j)
-                  tmp42 = -tmp37
-                  tmp45 = -tmp38
-                  tmp49 = -tmp40
-                  !$omp simd &
-                  !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
-                  !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
-                  !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
-                  do i = 1, j - 1
-                     tmp43 = self%r(1, i) + tmp42
-                     tmp44 = tmp36*tmp43
-                     tmp46 = self%r(2, i) + tmp45
-                     tmp47 = tmp46*tmp39
-                     tmp48 = tmp44 + tmp47
-                     tmp50 = self%r(3, i) + tmp49
-                     tmp51 = tmp50*tmp41
-                     tmp52 = tmp48 + tmp51
-                     tmp53 = tmp35*tmp52
-                     tmp54 = tmp43**(2)
-                     tmp55 = tmp46**(2)
-                     tmp56 = tmp54 + tmp55
-                     tmp57 = tmp50**(2)
-                     tmp58 = tmp56 + tmp57
-                     tmp59 = 1.0_wp/sqrt(tmp58)
-                     tmp60 = tmp59**(3)
-                     tmp61 = tmp53*tmp60
-                     tmp62 = sqrt(tmp58)
-                     tmp63 = tmp62*self%kappa
-                     tmp64 = -tmp63
-                     tmp65 = exp(tmp64)
-                     tmp66 = tmp61*tmp65
-                     tmp67 = 1.0_wp + tmp63
-                     tmp68 = tmp66*tmp67
-                     tmp26_p(i) = tmp26_p(i) + tmp68
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
-                  !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
-                  !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
-                  do i = j + 1, self%npt
-                     tmp43 = self%r(1, i) + tmp42
-                     tmp44 = tmp36*tmp43
-                     tmp46 = self%r(2, i) + tmp45
-                     tmp47 = tmp46*tmp39
-                     tmp48 = tmp44 + tmp47
-                     tmp50 = self%r(3, i) + tmp49
-                     tmp51 = tmp50*tmp41
-                     tmp52 = tmp48 + tmp51
-                     tmp53 = tmp35*tmp52
-                     tmp54 = tmp43**(2)
-                     tmp55 = tmp46**(2)
-                     tmp56 = tmp54 + tmp55
-                     tmp57 = tmp50**(2)
-                     tmp58 = tmp56 + tmp57
-                     tmp59 = 1.0_wp/sqrt(tmp58)
-                     tmp60 = tmp59**(3)
-                     tmp61 = tmp53*tmp60
-                     tmp62 = sqrt(tmp58)
-                     tmp63 = tmp62*self%kappa
-                     tmp64 = -tmp63
-                     tmp65 = exp(tmp64)
-                     tmp66 = tmp61*tmp65
-                     tmp67 = 1.0_wp + tmp63
-                     tmp68 = tmp66*tmp67
-                     tmp26_p(i) = tmp26_p(i) + tmp68
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp26 = tmp26 + tmp26_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp26_p)
-               !$omp end parallel
-            end block
-            tmp69 = (-0.15915494309189535_wp)*tmp26
-            tmp70 = tmp1 + tmp69
-            tmp71 = self%c1*tmp70
-            tmp73 = tmp27*x
-            tmp72 = tmp73
-            block
-               real(wp) :: tmp75, tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp85, tmp89, &
-                           tmp74, tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92, tmp93, &
-                           tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100, tmp101
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp72, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp75 = x(j)
-                  tmp76 = self%n(1, j)
-                  tmp77 = self%r(1, j)
-                  tmp78 = self%r(2, j)
-                  tmp79 = self%n(2, j)
-                  tmp80 = self%r(3, j)
-                  tmp81 = self%n(3, j)
-                  tmp82 = -tmp77
-                  tmp85 = -tmp78
-                  tmp89 = -tmp80
-                  tmp74 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
-                  !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
-                  !$omp& private(tmp101) &
-                  !$omp& reduction(+: tmp74)
-                  do i = 1, j - 1
-                     tmp83 = self%r(1, i) + tmp82
-                     tmp84 = tmp76*tmp83
-                     tmp86 = self%r(2, i) + tmp85
-                     tmp87 = tmp86*tmp79
-                     tmp88 = tmp84 + tmp87
-                     tmp90 = self%r(3, i) + tmp89
-                     tmp91 = tmp90*tmp81
-                     tmp92 = tmp88 + tmp91
-                     tmp93 = x(i)*tmp92
-                     tmp94 = tmp83**(2)
-                     tmp95 = tmp86**(2)
-                     tmp96 = tmp94 + tmp95
-                     tmp97 = tmp90**(2)
-                     tmp98 = tmp96 + tmp97
-                     tmp99 = 1.0_wp/sqrt(tmp98)
-                     tmp100 = tmp99**(3)
-                     tmp101 = tmp93*tmp100
-                     tmp74 = tmp74 + tmp101
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
-                  !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
-                  !$omp& private(tmp101) &
-                  !$omp& reduction(+: tmp74)
-                  do i = j + 1, self%npt
-                     tmp83 = self%r(1, i) + tmp82
-                     tmp84 = tmp76*tmp83
-                     tmp86 = self%r(2, i) + tmp85
-                     tmp87 = tmp86*tmp79
-                     tmp88 = tmp84 + tmp87
-                     tmp90 = self%r(3, i) + tmp89
-                     tmp91 = tmp90*tmp81
-                     tmp92 = tmp88 + tmp91
-                     tmp93 = x(i)*tmp92
-                     tmp94 = tmp83**(2)
-                     tmp95 = tmp86**(2)
-                     tmp96 = tmp94 + tmp95
-                     tmp97 = tmp90**(2)
-                     tmp98 = tmp96 + tmp97
-                     tmp99 = 1.0_wp/sqrt(tmp98)
-                     tmp100 = tmp99**(3)
-                     tmp101 = tmp93*tmp100
-                     tmp74 = tmp74 + tmp101
-                  end do
-                  tmp72(j) = tmp72(j) + tmp74
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp102 = self%a*tmp72
-            tmp103 = 0.15915494309189535_wp*tmp102
-            tmp104 = x + tmp103
-            do i = 1, self%npt
-               tmp107 = 1.0_wp/self%a(i)
-               tmp108 = 12.566370614359172_wp*tmp107
-               tmp109 = sqrt(tmp108)
-               tmp110 = 1.0694_wp*tmp109
-               tmp111 = tmp110 + self%c3
-               tmp106(i) = tmp111
-            end do
-            tmp112 = tmp106*tmp104
-            tmp105 = tmp112
-            block
-               real(wp) :: tmp113, tmp114, tmp115, tmp116, tmp117, tmp120, tmp124, tmp118, tmp119, &
-                           tmp121, tmp122, tmp123, tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, &
-                           tmp131, tmp132, tmp133, tmp134
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp105_p) &
-               !$omp& shared(self, tmp104, tmp105) &
-               !$omp& default(private)
-               allocate (tmp105_p(self%npt))
-               tmp105_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp113 = self%r(1, j)
-                  tmp114 = self%r(2, j)
-                  tmp115 = self%r(3, j)
-                  tmp116 = tmp104(j)
-                  tmp117 = -tmp113
-                  tmp120 = -tmp114
-                  tmp124 = -tmp115
-                  !$omp simd &
-                  !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
-                  !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
-                  !$omp& private(tmp134)
-                  do i = 1, j - 1
-                     tmp118 = self%r(1, i) + tmp117
-                     tmp119 = tmp118**(2)
-                     tmp121 = self%r(2, i) + tmp120
-                     tmp122 = tmp121**(2)
-                     tmp123 = tmp119 + tmp122
-                     tmp125 = self%r(3, i) + tmp124
-                     tmp126 = tmp125**(2)
-                     tmp127 = tmp123 + tmp126
-                     tmp128 = 1.0_wp/sqrt(tmp127)
-                     tmp129 = sqrt(tmp127)
-                     tmp130 = tmp129*self%kappa
-                     tmp131 = -tmp130
-                     tmp132 = exp(tmp131)
-                     tmp133 = tmp128*tmp132
-                     tmp134 = tmp133*tmp116
-                     tmp105_p(i) = tmp105_p(i) + tmp134
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
-                  !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
-                  !$omp& private(tmp134)
-                  do i = j + 1, self%npt
-                     tmp118 = self%r(1, i) + tmp117
-                     tmp119 = tmp118**(2)
-                     tmp121 = self%r(2, i) + tmp120
-                     tmp122 = tmp121**(2)
-                     tmp123 = tmp119 + tmp122
-                     tmp125 = self%r(3, i) + tmp124
-                     tmp126 = tmp125**(2)
-                     tmp127 = tmp123 + tmp126
-                     tmp128 = 1.0_wp/sqrt(tmp127)
-                     tmp129 = sqrt(tmp127)
-                     tmp130 = tmp129*self%kappa
-                     tmp131 = -tmp130
-                     tmp132 = exp(tmp131)
-                     tmp133 = tmp128*tmp132
-                     tmp134 = tmp133*tmp116
-                     tmp105_p(i) = tmp105_p(i) + tmp134
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp105 = tmp105 + tmp105_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp105_p)
-               !$omp end parallel
-            end block
-            tmp135 = self%c2*tmp105
-            y = tmp71 + tmp135
-         end block
+         call lpb_point_op4_apply_n(self, x, y)
       end if
    end subroutine lpb_point_op4_apply
+
+   !> Apply the transpose of operator 4
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op4_apply_t(self, x, y)
+      !> Operator
+      class(lpb_point_op4), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp9(:), tmp45(:), tmp46(:), tmp47(:), tmp48(:), &
+                               tmp49(:), tmp54(:), tmp73(:), tmp74(:), tmp75(:), tmp81(:), &
+                               tmp105(:), tmp106(:), tmp107(:), tmp135(:), tmp136(:), tmp137(:)
+      real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp50, tmp51, tmp52, tmp53, tmp76, tmp77, &
+                  tmp78, tmp79, tmp80
+      real(wp), allocatable :: tmp106_p(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp45(self%npt))
+      allocate (tmp46(self%npt))
+      allocate (tmp47(self%npt))
+      allocate (tmp48(self%npt))
+      allocate (tmp49(self%npt))
+      allocate (tmp54(self%npt))
+      allocate (tmp73(self%npt))
+      allocate (tmp74(self%npt))
+      allocate (tmp75(self%npt))
+      allocate (tmp81(self%npt))
+      allocate (tmp105(self%npt))
+      allocate (tmp106(self%npt))
+      allocate (tmp107(self%npt))
+      allocate (tmp135(self%npt))
+      allocate (tmp136(self%npt))
+      allocate (tmp137(self%npt))
+      do i = 1, self%npt
+         tmp3 = self%k1(i) + self%k2(i)
+         tmp4 = 1.0_wp/self%a(i)
+         tmp5 = 12.566370614359172_wp*tmp4
+         tmp6 = sqrt(tmp5)
+         tmp7 = tmp3*tmp6
+         tmp8 = (-0.26735_wp)*tmp7
+         tmp2(i) = tmp8
+      end do
+      tmp9 = tmp2*x
+      tmp1 = tmp9
+      block
+         real(wp) :: tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp18, tmp21, tmp25, tmp10, &
+                     tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28, tmp29, tmp30, tmp31, &
+                     tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, &
+                     tmp43, tmp44
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp1, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp11 = x(j)
+            tmp12 = self%n(1, j)
+            tmp13 = self%r(1, j)
+            tmp14 = self%r(2, j)
+            tmp15 = self%n(2, j)
+            tmp16 = self%r(3, j)
+            tmp17 = self%n(3, j)
+            tmp18 = -tmp13
+            tmp21 = -tmp14
+            tmp25 = -tmp16
+            tmp10 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& reduction(+: tmp10)
+            do i = 1, j - 1
+               tmp19 = self%r(1, i) + tmp18
+               tmp20 = tmp12*tmp19
+               tmp22 = self%r(2, i) + tmp21
+               tmp23 = tmp22*tmp15
+               tmp24 = tmp20 + tmp23
+               tmp26 = self%r(3, i) + tmp25
+               tmp27 = tmp26*tmp17
+               tmp28 = tmp24 + tmp27
+               tmp29 = x(i)*tmp28
+               tmp30 = tmp19**(2)
+               tmp31 = tmp22**(2)
+               tmp32 = tmp30 + tmp31
+               tmp33 = tmp26**(2)
+               tmp34 = tmp32 + tmp33
+               tmp35 = 1.0_wp/sqrt(tmp34)
+               tmp36 = tmp35**(3)
+               tmp37 = tmp29*tmp36
+               tmp38 = sqrt(tmp34)
+               tmp39 = tmp38*self%kappa
+               tmp40 = -tmp39
+               tmp41 = exp(tmp40)
+               tmp42 = tmp37*tmp41
+               tmp43 = 1.0_wp + tmp39
+               tmp44 = tmp42*tmp43
+               tmp10 = tmp10 + tmp44
+            end do
+            !$omp simd &
+            !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& reduction(+: tmp10)
+            do i = j + 1, self%npt
+               tmp19 = self%r(1, i) + tmp18
+               tmp20 = tmp12*tmp19
+               tmp22 = self%r(2, i) + tmp21
+               tmp23 = tmp22*tmp15
+               tmp24 = tmp20 + tmp23
+               tmp26 = self%r(3, i) + tmp25
+               tmp27 = tmp26*tmp17
+               tmp28 = tmp24 + tmp27
+               tmp29 = x(i)*tmp28
+               tmp30 = tmp19**(2)
+               tmp31 = tmp22**(2)
+               tmp32 = tmp30 + tmp31
+               tmp33 = tmp26**(2)
+               tmp34 = tmp32 + tmp33
+               tmp35 = 1.0_wp/sqrt(tmp34)
+               tmp36 = tmp35**(3)
+               tmp37 = tmp29*tmp36
+               tmp38 = sqrt(tmp34)
+               tmp39 = tmp38*self%kappa
+               tmp40 = -tmp39
+               tmp41 = exp(tmp40)
+               tmp42 = tmp37*tmp41
+               tmp43 = 1.0_wp + tmp39
+               tmp44 = tmp42*tmp43
+               tmp10 = tmp10 + tmp44
+            end do
+            tmp1(j) = tmp1(j) + tmp10
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp45 = self%a*tmp1
+      tmp46 = (-0.15915494309189535_wp)*tmp45
+      tmp47 = x + tmp46
+      do i = 1, self%npt
+         tmp50 = 1.0_wp/self%a(i)
+         tmp51 = 12.566370614359172_wp*tmp50
+         tmp52 = sqrt(tmp51)
+         tmp53 = 1.0694_wp*tmp52
+         tmp49(i) = tmp53
+      end do
+      tmp54 = tmp49*tmp47
+      tmp48 = tmp54
+      block
+         real(wp) :: tmp56, tmp57, tmp58, tmp59, tmp60, tmp63, tmp67, tmp55, tmp61, tmp62, tmp64, &
+                     tmp65, tmp66, tmp68, tmp69, tmp70, tmp71, tmp72
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp47, tmp48) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp56 = self%r(1, j)
+            tmp57 = self%r(2, j)
+            tmp58 = self%r(3, j)
+            tmp59 = tmp47(j)
+            tmp60 = -tmp56
+            tmp63 = -tmp57
+            tmp67 = -tmp58
+            tmp55 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
+            !$omp& private(tmp71, tmp72) &
+            !$omp& reduction(+: tmp55)
+            do i = 1, j - 1
+               tmp61 = self%r(1, i) + tmp60
+               tmp62 = tmp61**(2)
+               tmp64 = self%r(2, i) + tmp63
+               tmp65 = tmp64**(2)
+               tmp66 = tmp62 + tmp65
+               tmp68 = self%r(3, i) + tmp67
+               tmp69 = tmp68**(2)
+               tmp70 = tmp66 + tmp69
+               tmp71 = 1.0_wp/sqrt(tmp70)
+               tmp72 = tmp71*tmp47(i)
+               tmp55 = tmp55 + tmp72
+            end do
+            !$omp simd &
+            !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
+            !$omp& private(tmp71, tmp72) &
+            !$omp& reduction(+: tmp55)
+            do i = j + 1, self%npt
+               tmp61 = self%r(1, i) + tmp60
+               tmp62 = tmp61**(2)
+               tmp64 = self%r(2, i) + tmp63
+               tmp65 = tmp64**(2)
+               tmp66 = tmp62 + tmp65
+               tmp68 = self%r(3, i) + tmp67
+               tmp69 = tmp68**(2)
+               tmp70 = tmp66 + tmp69
+               tmp71 = 1.0_wp/sqrt(tmp70)
+               tmp72 = tmp71*tmp47(i)
+               tmp55 = tmp55 + tmp72
+            end do
+            tmp48(j) = tmp48(j) + tmp55
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp73 = self%c1*tmp48
+      do i = 1, self%npt
+         tmp76 = 1.0_wp/self%a(i)
+         tmp77 = 12.566370614359172_wp*tmp76
+         tmp78 = sqrt(tmp77)
+         tmp79 = 1.0694_wp*tmp78
+         tmp80 = tmp79 + self%c3
+         tmp75(i) = tmp80
+      end do
+      tmp81 = tmp75*x
+      tmp74 = tmp81
+      block
+         real(wp) :: tmp83, tmp84, tmp85, tmp86, tmp87, tmp90, tmp94, tmp82, tmp88, tmp89, tmp91, &
+                     tmp92, tmp93, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100, tmp101, tmp102, &
+                     tmp103, tmp104
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp74, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp83 = x(j)
+            tmp84 = self%r(1, j)
+            tmp85 = self%r(2, j)
+            tmp86 = self%r(3, j)
+            tmp87 = -tmp84
+            tmp90 = -tmp85
+            tmp94 = -tmp86
+            tmp82 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
+            !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
+            !$omp& reduction(+: tmp82)
+            do i = 1, j - 1
+               tmp88 = self%r(1, i) + tmp87
+               tmp89 = tmp88**(2)
+               tmp91 = self%r(2, i) + tmp90
+               tmp92 = tmp91**(2)
+               tmp93 = tmp89 + tmp92
+               tmp95 = self%r(3, i) + tmp94
+               tmp96 = tmp95**(2)
+               tmp97 = tmp93 + tmp96
+               tmp98 = 1.0_wp/sqrt(tmp97)
+               tmp99 = x(i)*tmp98
+               tmp100 = sqrt(tmp97)
+               tmp101 = tmp100*self%kappa
+               tmp102 = -tmp101
+               tmp103 = exp(tmp102)
+               tmp104 = tmp99*tmp103
+               tmp82 = tmp82 + tmp104
+            end do
+            !$omp simd &
+            !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
+            !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
+            !$omp& reduction(+: tmp82)
+            do i = j + 1, self%npt
+               tmp88 = self%r(1, i) + tmp87
+               tmp89 = tmp88**(2)
+               tmp91 = self%r(2, i) + tmp90
+               tmp92 = tmp91**(2)
+               tmp93 = tmp89 + tmp92
+               tmp95 = self%r(3, i) + tmp94
+               tmp96 = tmp95**(2)
+               tmp97 = tmp93 + tmp96
+               tmp98 = 1.0_wp/sqrt(tmp97)
+               tmp99 = x(i)*tmp98
+               tmp100 = sqrt(tmp97)
+               tmp101 = tmp100*self%kappa
+               tmp102 = -tmp101
+               tmp103 = exp(tmp102)
+               tmp104 = tmp99*tmp103
+               tmp82 = tmp82 + tmp104
+            end do
+            tmp74(j) = tmp74(j) + tmp82
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp105 = self%a*tmp74
+      tmp107 = tmp2*tmp105
+      tmp106 = tmp107
+      block
+         real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp118, &
+                     tmp122, tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124, tmp125, &
+                     tmp126, tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp106_p) &
+         !$omp& shared(self, tmp105, tmp106) &
+         !$omp& default(private)
+         allocate (tmp106_p(self%npt))
+         tmp106_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp108 = self%n(1, j)
+            tmp109 = self%r(1, j)
+            tmp110 = self%r(2, j)
+            tmp111 = self%n(2, j)
+            tmp112 = self%r(3, j)
+            tmp113 = self%n(3, j)
+            tmp114 = tmp105(j)
+            tmp115 = -tmp109
+            tmp118 = -tmp110
+            tmp122 = -tmp112
+            !$omp simd &
+            !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
+            !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
+            !$omp& private(tmp132, tmp133, tmp134)
+            do i = 1, j - 1
+               tmp116 = self%r(1, i) + tmp115
+               tmp117 = tmp108*tmp116
+               tmp119 = self%r(2, i) + tmp118
+               tmp120 = tmp119*tmp111
+               tmp121 = tmp117 + tmp120
+               tmp123 = self%r(3, i) + tmp122
+               tmp124 = tmp123*tmp113
+               tmp125 = tmp121 + tmp124
+               tmp126 = tmp116**(2)
+               tmp127 = tmp119**(2)
+               tmp128 = tmp126 + tmp127
+               tmp129 = tmp123**(2)
+               tmp130 = tmp128 + tmp129
+               tmp131 = 1.0_wp/sqrt(tmp130)
+               tmp132 = tmp131**(3)
+               tmp133 = tmp125*tmp132
+               tmp134 = tmp133*tmp114
+               tmp106_p(i) = tmp106_p(i) + tmp134
+            end do
+            !$omp simd &
+            !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
+            !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
+            !$omp& private(tmp132, tmp133, tmp134)
+            do i = j + 1, self%npt
+               tmp116 = self%r(1, i) + tmp115
+               tmp117 = tmp108*tmp116
+               tmp119 = self%r(2, i) + tmp118
+               tmp120 = tmp119*tmp111
+               tmp121 = tmp117 + tmp120
+               tmp123 = self%r(3, i) + tmp122
+               tmp124 = tmp123*tmp113
+               tmp125 = tmp121 + tmp124
+               tmp126 = tmp116**(2)
+               tmp127 = tmp119**(2)
+               tmp128 = tmp126 + tmp127
+               tmp129 = tmp123**(2)
+               tmp130 = tmp128 + tmp129
+               tmp131 = 1.0_wp/sqrt(tmp130)
+               tmp132 = tmp131**(3)
+               tmp133 = tmp125*tmp132
+               tmp134 = tmp133*tmp114
+               tmp106_p(i) = tmp106_p(i) + tmp134
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp106 = tmp106 + tmp106_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp106_p)
+         !$omp end parallel
+      end block
+      tmp135 = 0.15915494309189535_wp*tmp106
+      tmp136 = tmp74 + tmp135
+      tmp137 = self%c2*tmp136
+      y = tmp73 + tmp137
+   end subroutine lpb_point_op4_apply_t
+
+   !> Apply operator 4
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op4_apply_n(self, x, y)
+      !> Operator
+      class(lpb_point_op4), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp7(:), tmp25(:), tmp26(:), tmp27(:), tmp34(:), &
+                               tmp69(:), tmp70(:), tmp71(:), tmp72(:), tmp73(:), tmp102(:), &
+                               tmp103(:), tmp104(:), tmp105(:), tmp106(:), tmp112(:), tmp135(:)
+      real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp107, &
+                  tmp108, tmp109, tmp110, tmp111
+      real(wp), allocatable :: tmp1_p(:), tmp26_p(:), tmp105_p(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp25(self%npt))
+      allocate (tmp26(self%npt))
+      allocate (tmp27(self%npt))
+      allocate (tmp34(self%npt))
+      allocate (tmp69(self%npt))
+      allocate (tmp70(self%npt))
+      allocate (tmp71(self%npt))
+      allocate (tmp72(self%npt))
+      allocate (tmp73(self%npt))
+      allocate (tmp102(self%npt))
+      allocate (tmp103(self%npt))
+      allocate (tmp104(self%npt))
+      allocate (tmp105(self%npt))
+      allocate (tmp106(self%npt))
+      allocate (tmp112(self%npt))
+      allocate (tmp135(self%npt))
+      do i = 1, self%npt
+         tmp3 = 1.0_wp/self%a(i)
+         tmp4 = 12.566370614359172_wp*tmp3
+         tmp5 = sqrt(tmp4)
+         tmp6 = 1.0694_wp*tmp5
+         tmp2(i) = tmp6
+      end do
+      tmp7 = tmp2*x
+      tmp1 = tmp7
+      block
+         real(wp) :: tmp8, tmp9, tmp10, tmp11, tmp12, tmp15, tmp19, tmp13, tmp14, tmp16, tmp17, &
+                     tmp18, tmp20, tmp21, tmp22, tmp23, tmp24
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp1_p) &
+         !$omp& shared(self, tmp1, x) &
+         !$omp& default(private)
+         allocate (tmp1_p(self%npt))
+         tmp1_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp8 = x(j)
+            tmp9 = self%r(1, j)
+            tmp10 = self%r(2, j)
+            tmp11 = self%r(3, j)
+            tmp12 = -tmp9
+            tmp15 = -tmp10
+            tmp19 = -tmp11
+            !$omp simd &
+            !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
+            !$omp& private(tmp23, tmp24)
+            do i = 1, j - 1
+               tmp13 = self%r(1, i) + tmp12
+               tmp14 = tmp13**(2)
+               tmp16 = self%r(2, i) + tmp15
+               tmp17 = tmp16**(2)
+               tmp18 = tmp14 + tmp17
+               tmp20 = self%r(3, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp22 = tmp18 + tmp21
+               tmp23 = 1.0_wp/sqrt(tmp22)
+               tmp24 = tmp8*tmp23
+               tmp1_p(i) = tmp1_p(i) + tmp24
+            end do
+            !$omp simd &
+            !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
+            !$omp& private(tmp23, tmp24)
+            do i = j + 1, self%npt
+               tmp13 = self%r(1, i) + tmp12
+               tmp14 = tmp13**(2)
+               tmp16 = self%r(2, i) + tmp15
+               tmp17 = tmp16**(2)
+               tmp18 = tmp14 + tmp17
+               tmp20 = self%r(3, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp22 = tmp18 + tmp21
+               tmp23 = 1.0_wp/sqrt(tmp22)
+               tmp24 = tmp8*tmp23
+               tmp1_p(i) = tmp1_p(i) + tmp24
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp1 = tmp1 + tmp1_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp1_p)
+         !$omp end parallel
+      end block
+      tmp25 = self%a*tmp1
+      do i = 1, self%npt
+         tmp28 = self%k1(i) + self%k2(i)
+         tmp29 = 1.0_wp/self%a(i)
+         tmp30 = 12.566370614359172_wp*tmp29
+         tmp31 = sqrt(tmp30)
+         tmp32 = tmp28*tmp31
+         tmp33 = (-0.26735_wp)*tmp32
+         tmp27(i) = tmp33
+      end do
+      tmp34 = tmp27*tmp25
+      tmp26 = tmp34
+      block
+         real(wp) :: tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49, tmp43, &
+                     tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52, tmp53, tmp54, tmp55, tmp56, &
+                     tmp57, tmp58, tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, &
+                     tmp68
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp26_p) &
+         !$omp& shared(self, tmp25, tmp26) &
+         !$omp& default(private)
+         allocate (tmp26_p(self%npt))
+         tmp26_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp35 = tmp25(j)
+            tmp36 = self%n(1, j)
+            tmp37 = self%r(1, j)
+            tmp38 = self%r(2, j)
+            tmp39 = self%n(2, j)
+            tmp40 = self%r(3, j)
+            tmp41 = self%n(3, j)
+            tmp42 = -tmp37
+            tmp45 = -tmp38
+            tmp49 = -tmp40
+            !$omp simd &
+            !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
+            !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
+            !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
+            do i = 1, j - 1
+               tmp43 = self%r(1, i) + tmp42
+               tmp44 = tmp36*tmp43
+               tmp46 = self%r(2, i) + tmp45
+               tmp47 = tmp46*tmp39
+               tmp48 = tmp44 + tmp47
+               tmp50 = self%r(3, i) + tmp49
+               tmp51 = tmp50*tmp41
+               tmp52 = tmp48 + tmp51
+               tmp53 = tmp35*tmp52
+               tmp54 = tmp43**(2)
+               tmp55 = tmp46**(2)
+               tmp56 = tmp54 + tmp55
+               tmp57 = tmp50**(2)
+               tmp58 = tmp56 + tmp57
+               tmp59 = 1.0_wp/sqrt(tmp58)
+               tmp60 = tmp59**(3)
+               tmp61 = tmp53*tmp60
+               tmp62 = sqrt(tmp58)
+               tmp63 = tmp62*self%kappa
+               tmp64 = -tmp63
+               tmp65 = exp(tmp64)
+               tmp66 = tmp61*tmp65
+               tmp67 = 1.0_wp + tmp63
+               tmp68 = tmp66*tmp67
+               tmp26_p(i) = tmp26_p(i) + tmp68
+            end do
+            !$omp simd &
+            !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
+            !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
+            !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
+            do i = j + 1, self%npt
+               tmp43 = self%r(1, i) + tmp42
+               tmp44 = tmp36*tmp43
+               tmp46 = self%r(2, i) + tmp45
+               tmp47 = tmp46*tmp39
+               tmp48 = tmp44 + tmp47
+               tmp50 = self%r(3, i) + tmp49
+               tmp51 = tmp50*tmp41
+               tmp52 = tmp48 + tmp51
+               tmp53 = tmp35*tmp52
+               tmp54 = tmp43**(2)
+               tmp55 = tmp46**(2)
+               tmp56 = tmp54 + tmp55
+               tmp57 = tmp50**(2)
+               tmp58 = tmp56 + tmp57
+               tmp59 = 1.0_wp/sqrt(tmp58)
+               tmp60 = tmp59**(3)
+               tmp61 = tmp53*tmp60
+               tmp62 = sqrt(tmp58)
+               tmp63 = tmp62*self%kappa
+               tmp64 = -tmp63
+               tmp65 = exp(tmp64)
+               tmp66 = tmp61*tmp65
+               tmp67 = 1.0_wp + tmp63
+               tmp68 = tmp66*tmp67
+               tmp26_p(i) = tmp26_p(i) + tmp68
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp26 = tmp26 + tmp26_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp26_p)
+         !$omp end parallel
+      end block
+      tmp69 = (-0.15915494309189535_wp)*tmp26
+      tmp70 = tmp1 + tmp69
+      tmp71 = self%c1*tmp70
+      tmp73 = tmp27*x
+      tmp72 = tmp73
+      block
+         real(wp) :: tmp75, tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp85, tmp89, tmp74, &
+                     tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, &
+                     tmp96, tmp97, tmp98, tmp99, tmp100, tmp101
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp72, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp75 = x(j)
+            tmp76 = self%n(1, j)
+            tmp77 = self%r(1, j)
+            tmp78 = self%r(2, j)
+            tmp79 = self%n(2, j)
+            tmp80 = self%r(3, j)
+            tmp81 = self%n(3, j)
+            tmp82 = -tmp77
+            tmp85 = -tmp78
+            tmp89 = -tmp80
+            tmp74 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
+            !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
+            !$omp& private(tmp101) &
+            !$omp& reduction(+: tmp74)
+            do i = 1, j - 1
+               tmp83 = self%r(1, i) + tmp82
+               tmp84 = tmp76*tmp83
+               tmp86 = self%r(2, i) + tmp85
+               tmp87 = tmp86*tmp79
+               tmp88 = tmp84 + tmp87
+               tmp90 = self%r(3, i) + tmp89
+               tmp91 = tmp90*tmp81
+               tmp92 = tmp88 + tmp91
+               tmp93 = x(i)*tmp92
+               tmp94 = tmp83**(2)
+               tmp95 = tmp86**(2)
+               tmp96 = tmp94 + tmp95
+               tmp97 = tmp90**(2)
+               tmp98 = tmp96 + tmp97
+               tmp99 = 1.0_wp/sqrt(tmp98)
+               tmp100 = tmp99**(3)
+               tmp101 = tmp93*tmp100
+               tmp74 = tmp74 + tmp101
+            end do
+            !$omp simd &
+            !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
+            !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
+            !$omp& private(tmp101) &
+            !$omp& reduction(+: tmp74)
+            do i = j + 1, self%npt
+               tmp83 = self%r(1, i) + tmp82
+               tmp84 = tmp76*tmp83
+               tmp86 = self%r(2, i) + tmp85
+               tmp87 = tmp86*tmp79
+               tmp88 = tmp84 + tmp87
+               tmp90 = self%r(3, i) + tmp89
+               tmp91 = tmp90*tmp81
+               tmp92 = tmp88 + tmp91
+               tmp93 = x(i)*tmp92
+               tmp94 = tmp83**(2)
+               tmp95 = tmp86**(2)
+               tmp96 = tmp94 + tmp95
+               tmp97 = tmp90**(2)
+               tmp98 = tmp96 + tmp97
+               tmp99 = 1.0_wp/sqrt(tmp98)
+               tmp100 = tmp99**(3)
+               tmp101 = tmp93*tmp100
+               tmp74 = tmp74 + tmp101
+            end do
+            tmp72(j) = tmp72(j) + tmp74
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp102 = self%a*tmp72
+      tmp103 = 0.15915494309189535_wp*tmp102
+      tmp104 = x + tmp103
+      do i = 1, self%npt
+         tmp107 = 1.0_wp/self%a(i)
+         tmp108 = 12.566370614359172_wp*tmp107
+         tmp109 = sqrt(tmp108)
+         tmp110 = 1.0694_wp*tmp109
+         tmp111 = tmp110 + self%c3
+         tmp106(i) = tmp111
+      end do
+      tmp112 = tmp106*tmp104
+      tmp105 = tmp112
+      block
+         real(wp) :: tmp113, tmp114, tmp115, tmp116, tmp117, tmp120, tmp124, tmp118, tmp119, &
+                     tmp121, tmp122, tmp123, tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, &
+                     tmp131, tmp132, tmp133, tmp134
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp105_p) &
+         !$omp& shared(self, tmp104, tmp105) &
+         !$omp& default(private)
+         allocate (tmp105_p(self%npt))
+         tmp105_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp113 = self%r(1, j)
+            tmp114 = self%r(2, j)
+            tmp115 = self%r(3, j)
+            tmp116 = tmp104(j)
+            tmp117 = -tmp113
+            tmp120 = -tmp114
+            tmp124 = -tmp115
+            !$omp simd &
+            !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
+            !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
+            !$omp& private(tmp134)
+            do i = 1, j - 1
+               tmp118 = self%r(1, i) + tmp117
+               tmp119 = tmp118**(2)
+               tmp121 = self%r(2, i) + tmp120
+               tmp122 = tmp121**(2)
+               tmp123 = tmp119 + tmp122
+               tmp125 = self%r(3, i) + tmp124
+               tmp126 = tmp125**(2)
+               tmp127 = tmp123 + tmp126
+               tmp128 = 1.0_wp/sqrt(tmp127)
+               tmp129 = sqrt(tmp127)
+               tmp130 = tmp129*self%kappa
+               tmp131 = -tmp130
+               tmp132 = exp(tmp131)
+               tmp133 = tmp128*tmp132
+               tmp134 = tmp133*tmp116
+               tmp105_p(i) = tmp105_p(i) + tmp134
+            end do
+            !$omp simd &
+            !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
+            !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
+            !$omp& private(tmp134)
+            do i = j + 1, self%npt
+               tmp118 = self%r(1, i) + tmp117
+               tmp119 = tmp118**(2)
+               tmp121 = self%r(2, i) + tmp120
+               tmp122 = tmp121**(2)
+               tmp123 = tmp119 + tmp122
+               tmp125 = self%r(3, i) + tmp124
+               tmp126 = tmp125**(2)
+               tmp127 = tmp123 + tmp126
+               tmp128 = 1.0_wp/sqrt(tmp127)
+               tmp129 = sqrt(tmp127)
+               tmp130 = tmp129*self%kappa
+               tmp131 = -tmp130
+               tmp132 = exp(tmp131)
+               tmp133 = tmp128*tmp132
+               tmp134 = tmp133*tmp116
+               tmp105_p(i) = tmp105_p(i) + tmp134
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp105 = tmp105 + tmp105_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp105_p)
+         !$omp end parallel
+      end block
+      tmp135 = self%c2*tmp105
+      y = tmp71 + tmp135
+   end subroutine lpb_point_op4_apply_n
 
    !> Form operator 4 of the points idx alone
    !>
@@ -24538,105 +24592,133 @@ contains
       complex(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp2(:), tmp3(:), tmp8(:), tmp9(:), tmp12(:), tmp13(:), &
-                                     tmp16(:), tmp17(:)
-            complex(wp), allocatable :: tmp1(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), tmp10(:), &
-                                        tmp11(:), tmp14(:), tmp15(:), tmp18(:), tmp19(:), tmp20(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            allocate (tmp11(self%npt))
-            allocate (tmp12(self%npt))
-            allocate (tmp13(self%npt))
-            allocate (tmp14(self%npt))
-            allocate (tmp15(self%npt))
-            allocate (tmp16(self%npt))
-            allocate (tmp17(self%npt))
-            allocate (tmp18(self%npt))
-            allocate (tmp19(self%npt))
-            allocate (tmp20(self%npt))
-            call gemv(self%c3, real(x, wp), tmp2, trans="t")
-            call gemv(self%c3, aimag(x), tmp3, trans="t")
-            tmp1 = cmplx(tmp2, tmp3, wp)
-            tmp4 = self%a*tmp1
-            tmp5 = (-0.15915494309189535_wp)*tmp4
-            tmp6 = x + tmp5
-            call gemv(self%c2, real(tmp6, wp), tmp8, trans="t")
-            call gemv(self%c2, aimag(tmp6), tmp9, trans="t")
-            tmp7 = cmplx(tmp8, tmp9, wp)
-            tmp10 = self%c1*tmp7
-            call gemv(self%c5, real(x, wp), tmp12, trans="t")
-            call gemv(self%c5, aimag(x), tmp13, trans="t")
-            tmp11 = cmplx(tmp12, tmp13, wp)
-            tmp14 = self%a*tmp11
-            call gemv(self%c6, real(tmp14, wp), tmp16)
-            call gemv(self%c6, aimag(tmp14), tmp17)
-            tmp15 = cmplx(tmp16, tmp17, wp)
-            tmp18 = 0.15915494309189535_wp*tmp15
-            tmp19 = tmp11 + tmp18
-            tmp20 = self%c4*tmp19
-            y = tmp10 + tmp20
-         end block
+         call lpb_point_op5_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp2(:), tmp3(:), tmp6(:), tmp7(:), tmp12(:), tmp13(:), &
-                                     tmp18(:), tmp19(:)
-            complex(wp), allocatable :: tmp1(:), tmp4(:), tmp5(:), tmp8(:), tmp9(:), tmp10(:), &
-                                        tmp11(:), tmp14(:), tmp15(:), tmp16(:), tmp17(:), tmp20(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            allocate (tmp11(self%npt))
-            allocate (tmp12(self%npt))
-            allocate (tmp13(self%npt))
-            allocate (tmp14(self%npt))
-            allocate (tmp15(self%npt))
-            allocate (tmp16(self%npt))
-            allocate (tmp17(self%npt))
-            allocate (tmp18(self%npt))
-            allocate (tmp19(self%npt))
-            allocate (tmp20(self%npt))
-            call gemv(self%c2, real(x, wp), tmp2)
-            call gemv(self%c2, aimag(x), tmp3)
-            tmp1 = cmplx(tmp2, tmp3, wp)
-            tmp4 = self%a*tmp1
-            call gemv(self%c3, real(tmp4, wp), tmp6)
-            call gemv(self%c3, aimag(tmp4), tmp7)
-            tmp5 = cmplx(tmp6, tmp7, wp)
-            tmp8 = (-0.15915494309189535_wp)*tmp5
-            tmp9 = tmp1 + tmp8
-            tmp10 = self%c1*tmp9
-            call gemv(self%c6, real(x, wp), tmp12, trans="t")
-            call gemv(self%c6, aimag(x), tmp13, trans="t")
-            tmp11 = cmplx(tmp12, tmp13, wp)
-            tmp14 = self%a*tmp11
-            tmp15 = 0.15915494309189535_wp*tmp14
-            tmp16 = x + tmp15
-            call gemv(self%c5, real(tmp16, wp), tmp18)
-            call gemv(self%c5, aimag(tmp16), tmp19)
-            tmp17 = cmplx(tmp18, tmp19, wp)
-            tmp20 = self%c4*tmp17
-            y = tmp10 + tmp20
-         end block
+         call lpb_point_op5_apply_n(self, x, y)
       end if
    end subroutine lpb_point_op5_apply
+
+   !> Apply the transpose of operator 5 (not conjugated)
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op5_apply_t(self, x, y)
+      !> Operator
+      class(lpb_point_op5), intent(in) :: self
+      !> Input vector
+      complex(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      complex(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp2(:), tmp3(:), tmp8(:), tmp9(:), tmp12(:), tmp13(:), tmp16(:), &
+                               tmp17(:)
+      complex(wp), allocatable :: tmp1(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), tmp10(:), tmp11(:), &
+                                  tmp14(:), tmp15(:), tmp18(:), tmp19(:), tmp20(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      allocate (tmp11(self%npt))
+      allocate (tmp12(self%npt))
+      allocate (tmp13(self%npt))
+      allocate (tmp14(self%npt))
+      allocate (tmp15(self%npt))
+      allocate (tmp16(self%npt))
+      allocate (tmp17(self%npt))
+      allocate (tmp18(self%npt))
+      allocate (tmp19(self%npt))
+      allocate (tmp20(self%npt))
+      call gemv(self%c3, real(x, wp), tmp2, trans="t")
+      call gemv(self%c3, aimag(x), tmp3, trans="t")
+      tmp1 = cmplx(tmp2, tmp3, wp)
+      tmp4 = self%a*tmp1
+      tmp5 = (-0.15915494309189535_wp)*tmp4
+      tmp6 = x + tmp5
+      call gemv(self%c2, real(tmp6, wp), tmp8, trans="t")
+      call gemv(self%c2, aimag(tmp6), tmp9, trans="t")
+      tmp7 = cmplx(tmp8, tmp9, wp)
+      tmp10 = self%c1*tmp7
+      call gemv(self%c5, real(x, wp), tmp12, trans="t")
+      call gemv(self%c5, aimag(x), tmp13, trans="t")
+      tmp11 = cmplx(tmp12, tmp13, wp)
+      tmp14 = self%a*tmp11
+      call gemv(self%c6, real(tmp14, wp), tmp16)
+      call gemv(self%c6, aimag(tmp14), tmp17)
+      tmp15 = cmplx(tmp16, tmp17, wp)
+      tmp18 = 0.15915494309189535_wp*tmp15
+      tmp19 = tmp11 + tmp18
+      tmp20 = self%c4*tmp19
+      y = tmp10 + tmp20
+   end subroutine lpb_point_op5_apply_t
+
+   !> Apply operator 5
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op5_apply_n(self, x, y)
+      !> Operator
+      class(lpb_point_op5), intent(in) :: self
+      !> Input vector
+      complex(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      complex(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp2(:), tmp3(:), tmp6(:), tmp7(:), tmp12(:), tmp13(:), tmp18(:), &
+                               tmp19(:)
+      complex(wp), allocatable :: tmp1(:), tmp4(:), tmp5(:), tmp8(:), tmp9(:), tmp10(:), tmp11(:), &
+                                  tmp14(:), tmp15(:), tmp16(:), tmp17(:), tmp20(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      allocate (tmp11(self%npt))
+      allocate (tmp12(self%npt))
+      allocate (tmp13(self%npt))
+      allocate (tmp14(self%npt))
+      allocate (tmp15(self%npt))
+      allocate (tmp16(self%npt))
+      allocate (tmp17(self%npt))
+      allocate (tmp18(self%npt))
+      allocate (tmp19(self%npt))
+      allocate (tmp20(self%npt))
+      call gemv(self%c2, real(x, wp), tmp2)
+      call gemv(self%c2, aimag(x), tmp3)
+      tmp1 = cmplx(tmp2, tmp3, wp)
+      tmp4 = self%a*tmp1
+      call gemv(self%c3, real(tmp4, wp), tmp6)
+      call gemv(self%c3, aimag(tmp4), tmp7)
+      tmp5 = cmplx(tmp6, tmp7, wp)
+      tmp8 = (-0.15915494309189535_wp)*tmp5
+      tmp9 = tmp1 + tmp8
+      tmp10 = self%c1*tmp9
+      call gemv(self%c6, real(x, wp), tmp12, trans="t")
+      call gemv(self%c6, aimag(x), tmp13, trans="t")
+      tmp11 = cmplx(tmp12, tmp13, wp)
+      tmp14 = self%a*tmp11
+      tmp15 = 0.15915494309189535_wp*tmp14
+      tmp16 = x + tmp15
+      call gemv(self%c5, real(tmp16, wp), tmp18)
+      call gemv(self%c5, aimag(tmp16), tmp19)
+      tmp17 = cmplx(tmp18, tmp19, wp)
+      tmp20 = self%c4*tmp17
+      y = tmp10 + tmp20
+   end subroutine lpb_point_op5_apply_n
 
    !> Form operator 5 as a dense matrix
    !>
@@ -24780,754 +24862,782 @@ contains
       complex(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp2(:), tmp49(:), tmp75(:)
-            real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp50, tmp51, tmp52, tmp53, tmp76, &
-                        tmp77, tmp78, tmp79, tmp80
-            complex(wp), allocatable :: tmp1(:), tmp9(:), tmp45(:), tmp46(:), tmp47(:), tmp48(:), &
-                                        tmp54(:), tmp73(:), tmp74(:), tmp81(:), tmp105(:), &
-                                        tmp106(:), tmp107(:), tmp135(:), tmp136(:), tmp137(:)
-            complex(wp), allocatable :: tmp106_p(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp45(self%npt))
-            allocate (tmp46(self%npt))
-            allocate (tmp47(self%npt))
-            allocate (tmp48(self%npt))
-            allocate (tmp49(self%npt))
-            allocate (tmp54(self%npt))
-            allocate (tmp73(self%npt))
-            allocate (tmp74(self%npt))
-            allocate (tmp75(self%npt))
-            allocate (tmp81(self%npt))
-            allocate (tmp105(self%npt))
-            allocate (tmp106(self%npt))
-            allocate (tmp107(self%npt))
-            allocate (tmp135(self%npt))
-            allocate (tmp136(self%npt))
-            allocate (tmp137(self%npt))
-            do i = 1, self%npt
-               tmp3 = self%k1(i) + self%k2(i)
-               tmp4 = 1.0_wp/self%a(i)
-               tmp5 = 12.566370614359172_wp*tmp4
-               tmp6 = sqrt(tmp5)
-               tmp7 = tmp3*tmp6
-               tmp8 = (-0.26735_wp)*tmp7
-               tmp2(i) = tmp8
-            end do
-            tmp9 = tmp2*x
-            tmp1 = tmp9
-            block
-               real(wp) :: tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp18, tmp21, tmp25, tmp19, &
-                           tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28, tmp30, tmp31, tmp32, &
-                           tmp33, tmp34, tmp35, tmp36, tmp38, tmp39, tmp40, tmp41, tmp43
-               complex(wp) :: tmp11, tmp10, tmp29, tmp37, tmp42, tmp44
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp1, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp11 = x(j)
-                  tmp12 = self%n(1, j)
-                  tmp13 = self%r(1, j)
-                  tmp14 = self%r(2, j)
-                  tmp15 = self%n(2, j)
-                  tmp16 = self%r(3, j)
-                  tmp17 = self%n(3, j)
-                  tmp18 = -tmp13
-                  tmp21 = -tmp14
-                  tmp25 = -tmp16
-                  tmp10 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& reduction(+: tmp10)
-                  do i = 1, j - 1
-                     tmp19 = self%r(1, i) + tmp18
-                     tmp20 = tmp12*tmp19
-                     tmp22 = self%r(2, i) + tmp21
-                     tmp23 = tmp22*tmp15
-                     tmp24 = tmp20 + tmp23
-                     tmp26 = self%r(3, i) + tmp25
-                     tmp27 = tmp26*tmp17
-                     tmp28 = tmp24 + tmp27
-                     tmp29 = x(i)*tmp28
-                     tmp30 = tmp19**(2)
-                     tmp31 = tmp22**(2)
-                     tmp32 = tmp30 + tmp31
-                     tmp33 = tmp26**(2)
-                     tmp34 = tmp32 + tmp33
-                     tmp35 = 1.0_wp/sqrt(tmp34)
-                     tmp36 = tmp35**(3)
-                     tmp37 = tmp29*tmp36
-                     tmp38 = sqrt(tmp34)
-                     tmp39 = tmp38*self%kappa
-                     tmp40 = -tmp39
-                     tmp41 = exp(tmp40)
-                     tmp42 = tmp37*tmp41
-                     tmp43 = 1.0_wp + tmp39
-                     tmp44 = tmp42*tmp43
-                     tmp10 = tmp10 + tmp44
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& reduction(+: tmp10)
-                  do i = j + 1, self%npt
-                     tmp19 = self%r(1, i) + tmp18
-                     tmp20 = tmp12*tmp19
-                     tmp22 = self%r(2, i) + tmp21
-                     tmp23 = tmp22*tmp15
-                     tmp24 = tmp20 + tmp23
-                     tmp26 = self%r(3, i) + tmp25
-                     tmp27 = tmp26*tmp17
-                     tmp28 = tmp24 + tmp27
-                     tmp29 = x(i)*tmp28
-                     tmp30 = tmp19**(2)
-                     tmp31 = tmp22**(2)
-                     tmp32 = tmp30 + tmp31
-                     tmp33 = tmp26**(2)
-                     tmp34 = tmp32 + tmp33
-                     tmp35 = 1.0_wp/sqrt(tmp34)
-                     tmp36 = tmp35**(3)
-                     tmp37 = tmp29*tmp36
-                     tmp38 = sqrt(tmp34)
-                     tmp39 = tmp38*self%kappa
-                     tmp40 = -tmp39
-                     tmp41 = exp(tmp40)
-                     tmp42 = tmp37*tmp41
-                     tmp43 = 1.0_wp + tmp39
-                     tmp44 = tmp42*tmp43
-                     tmp10 = tmp10 + tmp44
-                  end do
-                  tmp1(j) = tmp1(j) + tmp10
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp45 = self%a*tmp1
-            tmp46 = (-0.15915494309189535_wp)*tmp45
-            tmp47 = x + tmp46
-            do i = 1, self%npt
-               tmp50 = 1.0_wp/self%a(i)
-               tmp51 = 12.566370614359172_wp*tmp50
-               tmp52 = sqrt(tmp51)
-               tmp53 = 1.0694_wp*tmp52
-               tmp49(i) = tmp53
-            end do
-            tmp54 = tmp49*tmp47
-            tmp48 = tmp54
-            block
-               real(wp) :: tmp56, tmp57, tmp58, tmp60, tmp63, tmp67, tmp61, tmp62, tmp64, tmp65, &
-                           tmp66, tmp68, tmp69, tmp70, tmp71
-               complex(wp) :: tmp59, tmp55, tmp72
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp47, tmp48) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp56 = self%r(1, j)
-                  tmp57 = self%r(2, j)
-                  tmp58 = self%r(3, j)
-                  tmp59 = tmp47(j)
-                  tmp60 = -tmp56
-                  tmp63 = -tmp57
-                  tmp67 = -tmp58
-                  tmp55 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
-                  !$omp& private(tmp71, tmp72) &
-                  !$omp& reduction(+: tmp55)
-                  do i = 1, j - 1
-                     tmp61 = self%r(1, i) + tmp60
-                     tmp62 = tmp61**(2)
-                     tmp64 = self%r(2, i) + tmp63
-                     tmp65 = tmp64**(2)
-                     tmp66 = tmp62 + tmp65
-                     tmp68 = self%r(3, i) + tmp67
-                     tmp69 = tmp68**(2)
-                     tmp70 = tmp66 + tmp69
-                     tmp71 = 1.0_wp/sqrt(tmp70)
-                     tmp72 = tmp71*tmp47(i)
-                     tmp55 = tmp55 + tmp72
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
-                  !$omp& private(tmp71, tmp72) &
-                  !$omp& reduction(+: tmp55)
-                  do i = j + 1, self%npt
-                     tmp61 = self%r(1, i) + tmp60
-                     tmp62 = tmp61**(2)
-                     tmp64 = self%r(2, i) + tmp63
-                     tmp65 = tmp64**(2)
-                     tmp66 = tmp62 + tmp65
-                     tmp68 = self%r(3, i) + tmp67
-                     tmp69 = tmp68**(2)
-                     tmp70 = tmp66 + tmp69
-                     tmp71 = 1.0_wp/sqrt(tmp70)
-                     tmp72 = tmp71*tmp47(i)
-                     tmp55 = tmp55 + tmp72
-                  end do
-                  tmp48(j) = tmp48(j) + tmp55
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp73 = self%c1*tmp48
-            do i = 1, self%npt
-               tmp76 = 1.0_wp/self%a(i)
-               tmp77 = 12.566370614359172_wp*tmp76
-               tmp78 = sqrt(tmp77)
-               tmp79 = 1.0694_wp*tmp78
-               tmp80 = tmp79 + self%c3
-               tmp75(i) = tmp80
-            end do
-            tmp81 = tmp75*x
-            tmp74 = tmp81
-            block
-               real(wp) :: tmp84, tmp85, tmp86, tmp87, tmp90, tmp94, tmp88, tmp89, tmp91, tmp92, &
-                           tmp93, tmp95, tmp96, tmp97, tmp98, tmp100, tmp101, tmp102, tmp103
-               complex(wp) :: tmp83, tmp82, tmp99, tmp104
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp74, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp83 = x(j)
-                  tmp84 = self%r(1, j)
-                  tmp85 = self%r(2, j)
-                  tmp86 = self%r(3, j)
-                  tmp87 = -tmp84
-                  tmp90 = -tmp85
-                  tmp94 = -tmp86
-                  tmp82 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
-                  !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
-                  !$omp& reduction(+: tmp82)
-                  do i = 1, j - 1
-                     tmp88 = self%r(1, i) + tmp87
-                     tmp89 = tmp88**(2)
-                     tmp91 = self%r(2, i) + tmp90
-                     tmp92 = tmp91**(2)
-                     tmp93 = tmp89 + tmp92
-                     tmp95 = self%r(3, i) + tmp94
-                     tmp96 = tmp95**(2)
-                     tmp97 = tmp93 + tmp96
-                     tmp98 = 1.0_wp/sqrt(tmp97)
-                     tmp99 = x(i)*tmp98
-                     tmp100 = sqrt(tmp97)
-                     tmp101 = tmp100*self%kappa
-                     tmp102 = -tmp101
-                     tmp103 = exp(tmp102)
-                     tmp104 = tmp99*tmp103
-                     tmp82 = tmp82 + tmp104
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
-                  !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
-                  !$omp& reduction(+: tmp82)
-                  do i = j + 1, self%npt
-                     tmp88 = self%r(1, i) + tmp87
-                     tmp89 = tmp88**(2)
-                     tmp91 = self%r(2, i) + tmp90
-                     tmp92 = tmp91**(2)
-                     tmp93 = tmp89 + tmp92
-                     tmp95 = self%r(3, i) + tmp94
-                     tmp96 = tmp95**(2)
-                     tmp97 = tmp93 + tmp96
-                     tmp98 = 1.0_wp/sqrt(tmp97)
-                     tmp99 = x(i)*tmp98
-                     tmp100 = sqrt(tmp97)
-                     tmp101 = tmp100*self%kappa
-                     tmp102 = -tmp101
-                     tmp103 = exp(tmp102)
-                     tmp104 = tmp99*tmp103
-                     tmp82 = tmp82 + tmp104
-                  end do
-                  tmp74(j) = tmp74(j) + tmp82
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp105 = self%a*tmp74
-            tmp107 = tmp2*tmp105
-            tmp106 = tmp107
-            block
-               real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp115, tmp118, tmp122, &
-                           tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124, tmp125, tmp126, &
-                           tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133
-               complex(wp) :: tmp114, tmp134
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp106_p) &
-               !$omp& shared(self, tmp105, tmp106) &
-               !$omp& default(private)
-               allocate (tmp106_p(self%npt))
-               tmp106_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp108 = self%n(1, j)
-                  tmp109 = self%r(1, j)
-                  tmp110 = self%r(2, j)
-                  tmp111 = self%n(2, j)
-                  tmp112 = self%r(3, j)
-                  tmp113 = self%n(3, j)
-                  tmp114 = tmp105(j)
-                  tmp115 = -tmp109
-                  tmp118 = -tmp110
-                  tmp122 = -tmp112
-                  !$omp simd &
-                  !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
-                  !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
-                  !$omp& private(tmp132, tmp133, tmp134)
-                  do i = 1, j - 1
-                     tmp116 = self%r(1, i) + tmp115
-                     tmp117 = tmp108*tmp116
-                     tmp119 = self%r(2, i) + tmp118
-                     tmp120 = tmp119*tmp111
-                     tmp121 = tmp117 + tmp120
-                     tmp123 = self%r(3, i) + tmp122
-                     tmp124 = tmp123*tmp113
-                     tmp125 = tmp121 + tmp124
-                     tmp126 = tmp116**(2)
-                     tmp127 = tmp119**(2)
-                     tmp128 = tmp126 + tmp127
-                     tmp129 = tmp123**(2)
-                     tmp130 = tmp128 + tmp129
-                     tmp131 = 1.0_wp/sqrt(tmp130)
-                     tmp132 = tmp131**(3)
-                     tmp133 = tmp125*tmp132
-                     tmp134 = tmp133*tmp114
-                     tmp106_p(i) = tmp106_p(i) + tmp134
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
-                  !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
-                  !$omp& private(tmp132, tmp133, tmp134)
-                  do i = j + 1, self%npt
-                     tmp116 = self%r(1, i) + tmp115
-                     tmp117 = tmp108*tmp116
-                     tmp119 = self%r(2, i) + tmp118
-                     tmp120 = tmp119*tmp111
-                     tmp121 = tmp117 + tmp120
-                     tmp123 = self%r(3, i) + tmp122
-                     tmp124 = tmp123*tmp113
-                     tmp125 = tmp121 + tmp124
-                     tmp126 = tmp116**(2)
-                     tmp127 = tmp119**(2)
-                     tmp128 = tmp126 + tmp127
-                     tmp129 = tmp123**(2)
-                     tmp130 = tmp128 + tmp129
-                     tmp131 = 1.0_wp/sqrt(tmp130)
-                     tmp132 = tmp131**(3)
-                     tmp133 = tmp125*tmp132
-                     tmp134 = tmp133*tmp114
-                     tmp106_p(i) = tmp106_p(i) + tmp134
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp106 = tmp106 + tmp106_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp106_p)
-               !$omp end parallel
-            end block
-            tmp135 = 0.15915494309189535_wp*tmp106
-            tmp136 = tmp74 + tmp135
-            tmp137 = self%c2*tmp136
-            y = tmp73 + tmp137
-         end block
+         call lpb_point_op6_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp2(:), tmp27(:), tmp106(:)
-            real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp107, &
-                        tmp108, tmp109, tmp110, tmp111
-            complex(wp), allocatable :: tmp1(:), tmp7(:), tmp25(:), tmp26(:), tmp34(:), tmp69(:), &
-                                        tmp70(:), tmp71(:), tmp72(:), tmp73(:), tmp102(:), &
-                                        tmp103(:), tmp104(:), tmp105(:), tmp112(:), tmp135(:)
-            complex(wp), allocatable :: tmp1_p(:), tmp26_p(:), tmp105_p(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp25(self%npt))
-            allocate (tmp26(self%npt))
-            allocate (tmp27(self%npt))
-            allocate (tmp34(self%npt))
-            allocate (tmp69(self%npt))
-            allocate (tmp70(self%npt))
-            allocate (tmp71(self%npt))
-            allocate (tmp72(self%npt))
-            allocate (tmp73(self%npt))
-            allocate (tmp102(self%npt))
-            allocate (tmp103(self%npt))
-            allocate (tmp104(self%npt))
-            allocate (tmp105(self%npt))
-            allocate (tmp106(self%npt))
-            allocate (tmp112(self%npt))
-            allocate (tmp135(self%npt))
-            do i = 1, self%npt
-               tmp3 = 1.0_wp/self%a(i)
-               tmp4 = 12.566370614359172_wp*tmp3
-               tmp5 = sqrt(tmp4)
-               tmp6 = 1.0694_wp*tmp5
-               tmp2(i) = tmp6
-            end do
-            tmp7 = tmp2*x
-            tmp1 = tmp7
-            block
-               real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp15, tmp19, tmp13, tmp14, tmp16, tmp17, &
-                           tmp18, tmp20, tmp21, tmp22, tmp23
-               complex(wp) :: tmp8, tmp24
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp1_p) &
-               !$omp& shared(self, tmp1, x) &
-               !$omp& default(private)
-               allocate (tmp1_p(self%npt))
-               tmp1_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp8 = x(j)
-                  tmp9 = self%r(1, j)
-                  tmp10 = self%r(2, j)
-                  tmp11 = self%r(3, j)
-                  tmp12 = -tmp9
-                  tmp15 = -tmp10
-                  tmp19 = -tmp11
-                  !$omp simd &
-                  !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
-                  !$omp& private(tmp23, tmp24)
-                  do i = 1, j - 1
-                     tmp13 = self%r(1, i) + tmp12
-                     tmp14 = tmp13**(2)
-                     tmp16 = self%r(2, i) + tmp15
-                     tmp17 = tmp16**(2)
-                     tmp18 = tmp14 + tmp17
-                     tmp20 = self%r(3, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp22 = tmp18 + tmp21
-                     tmp23 = 1.0_wp/sqrt(tmp22)
-                     tmp24 = tmp8*tmp23
-                     tmp1_p(i) = tmp1_p(i) + tmp24
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
-                  !$omp& private(tmp23, tmp24)
-                  do i = j + 1, self%npt
-                     tmp13 = self%r(1, i) + tmp12
-                     tmp14 = tmp13**(2)
-                     tmp16 = self%r(2, i) + tmp15
-                     tmp17 = tmp16**(2)
-                     tmp18 = tmp14 + tmp17
-                     tmp20 = self%r(3, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp22 = tmp18 + tmp21
-                     tmp23 = 1.0_wp/sqrt(tmp22)
-                     tmp24 = tmp8*tmp23
-                     tmp1_p(i) = tmp1_p(i) + tmp24
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp1 = tmp1 + tmp1_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp1_p)
-               !$omp end parallel
-            end block
-            tmp25 = self%a*tmp1
-            do i = 1, self%npt
-               tmp28 = self%k1(i) + self%k2(i)
-               tmp29 = 1.0_wp/self%a(i)
-               tmp30 = 12.566370614359172_wp*tmp29
-               tmp31 = sqrt(tmp30)
-               tmp32 = tmp28*tmp31
-               tmp33 = (-0.26735_wp)*tmp32
-               tmp27(i) = tmp33
-            end do
-            tmp34 = tmp27*tmp25
-            tmp26 = tmp34
-            block
-               real(wp) :: tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49, tmp43, &
-                           tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52, tmp54, tmp55, tmp56, &
-                           tmp57, tmp58, tmp59, tmp60, tmp62, tmp63, tmp64, tmp65, tmp67
-               complex(wp) :: tmp35, tmp53, tmp61, tmp66, tmp68
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp26_p) &
-               !$omp& shared(self, tmp25, tmp26) &
-               !$omp& default(private)
-               allocate (tmp26_p(self%npt))
-               tmp26_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp35 = tmp25(j)
-                  tmp36 = self%n(1, j)
-                  tmp37 = self%r(1, j)
-                  tmp38 = self%r(2, j)
-                  tmp39 = self%n(2, j)
-                  tmp40 = self%r(3, j)
-                  tmp41 = self%n(3, j)
-                  tmp42 = -tmp37
-                  tmp45 = -tmp38
-                  tmp49 = -tmp40
-                  !$omp simd &
-                  !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
-                  !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
-                  !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
-                  do i = 1, j - 1
-                     tmp43 = self%r(1, i) + tmp42
-                     tmp44 = tmp36*tmp43
-                     tmp46 = self%r(2, i) + tmp45
-                     tmp47 = tmp46*tmp39
-                     tmp48 = tmp44 + tmp47
-                     tmp50 = self%r(3, i) + tmp49
-                     tmp51 = tmp50*tmp41
-                     tmp52 = tmp48 + tmp51
-                     tmp53 = tmp35*tmp52
-                     tmp54 = tmp43**(2)
-                     tmp55 = tmp46**(2)
-                     tmp56 = tmp54 + tmp55
-                     tmp57 = tmp50**(2)
-                     tmp58 = tmp56 + tmp57
-                     tmp59 = 1.0_wp/sqrt(tmp58)
-                     tmp60 = tmp59**(3)
-                     tmp61 = tmp53*tmp60
-                     tmp62 = sqrt(tmp58)
-                     tmp63 = tmp62*self%kappa
-                     tmp64 = -tmp63
-                     tmp65 = exp(tmp64)
-                     tmp66 = tmp61*tmp65
-                     tmp67 = 1.0_wp + tmp63
-                     tmp68 = tmp66*tmp67
-                     tmp26_p(i) = tmp26_p(i) + tmp68
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
-                  !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
-                  !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
-                  do i = j + 1, self%npt
-                     tmp43 = self%r(1, i) + tmp42
-                     tmp44 = tmp36*tmp43
-                     tmp46 = self%r(2, i) + tmp45
-                     tmp47 = tmp46*tmp39
-                     tmp48 = tmp44 + tmp47
-                     tmp50 = self%r(3, i) + tmp49
-                     tmp51 = tmp50*tmp41
-                     tmp52 = tmp48 + tmp51
-                     tmp53 = tmp35*tmp52
-                     tmp54 = tmp43**(2)
-                     tmp55 = tmp46**(2)
-                     tmp56 = tmp54 + tmp55
-                     tmp57 = tmp50**(2)
-                     tmp58 = tmp56 + tmp57
-                     tmp59 = 1.0_wp/sqrt(tmp58)
-                     tmp60 = tmp59**(3)
-                     tmp61 = tmp53*tmp60
-                     tmp62 = sqrt(tmp58)
-                     tmp63 = tmp62*self%kappa
-                     tmp64 = -tmp63
-                     tmp65 = exp(tmp64)
-                     tmp66 = tmp61*tmp65
-                     tmp67 = 1.0_wp + tmp63
-                     tmp68 = tmp66*tmp67
-                     tmp26_p(i) = tmp26_p(i) + tmp68
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp26 = tmp26 + tmp26_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp26_p)
-               !$omp end parallel
-            end block
-            tmp69 = (-0.15915494309189535_wp)*tmp26
-            tmp70 = tmp1 + tmp69
-            tmp71 = self%c1*tmp70
-            tmp73 = tmp27*x
-            tmp72 = tmp73
-            block
-               real(wp) :: tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp85, tmp89, tmp83, &
-                           tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92, tmp94, tmp95, tmp96, &
-                           tmp97, tmp98, tmp99, tmp100
-               complex(wp) :: tmp75, tmp74, tmp93, tmp101
-
-               !$omp parallel &
-               !$omp& private(i, j) &
-               !$omp& shared(self, tmp72, x) &
-               !$omp& default(private)
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp75 = x(j)
-                  tmp76 = self%n(1, j)
-                  tmp77 = self%r(1, j)
-                  tmp78 = self%r(2, j)
-                  tmp79 = self%n(2, j)
-                  tmp80 = self%r(3, j)
-                  tmp81 = self%n(3, j)
-                  tmp82 = -tmp77
-                  tmp85 = -tmp78
-                  tmp89 = -tmp80
-                  tmp74 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
-                  !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
-                  !$omp& private(tmp101) &
-                  !$omp& reduction(+: tmp74)
-                  do i = 1, j - 1
-                     tmp83 = self%r(1, i) + tmp82
-                     tmp84 = tmp76*tmp83
-                     tmp86 = self%r(2, i) + tmp85
-                     tmp87 = tmp86*tmp79
-                     tmp88 = tmp84 + tmp87
-                     tmp90 = self%r(3, i) + tmp89
-                     tmp91 = tmp90*tmp81
-                     tmp92 = tmp88 + tmp91
-                     tmp93 = x(i)*tmp92
-                     tmp94 = tmp83**(2)
-                     tmp95 = tmp86**(2)
-                     tmp96 = tmp94 + tmp95
-                     tmp97 = tmp90**(2)
-                     tmp98 = tmp96 + tmp97
-                     tmp99 = 1.0_wp/sqrt(tmp98)
-                     tmp100 = tmp99**(3)
-                     tmp101 = tmp93*tmp100
-                     tmp74 = tmp74 + tmp101
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
-                  !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
-                  !$omp& private(tmp101) &
-                  !$omp& reduction(+: tmp74)
-                  do i = j + 1, self%npt
-                     tmp83 = self%r(1, i) + tmp82
-                     tmp84 = tmp76*tmp83
-                     tmp86 = self%r(2, i) + tmp85
-                     tmp87 = tmp86*tmp79
-                     tmp88 = tmp84 + tmp87
-                     tmp90 = self%r(3, i) + tmp89
-                     tmp91 = tmp90*tmp81
-                     tmp92 = tmp88 + tmp91
-                     tmp93 = x(i)*tmp92
-                     tmp94 = tmp83**(2)
-                     tmp95 = tmp86**(2)
-                     tmp96 = tmp94 + tmp95
-                     tmp97 = tmp90**(2)
-                     tmp98 = tmp96 + tmp97
-                     tmp99 = 1.0_wp/sqrt(tmp98)
-                     tmp100 = tmp99**(3)
-                     tmp101 = tmp93*tmp100
-                     tmp74 = tmp74 + tmp101
-                  end do
-                  tmp72(j) = tmp72(j) + tmp74
-               end do
-               !$omp end do
-               !$omp end parallel
-            end block
-            tmp102 = self%a*tmp72
-            tmp103 = 0.15915494309189535_wp*tmp102
-            tmp104 = x + tmp103
-            do i = 1, self%npt
-               tmp107 = 1.0_wp/self%a(i)
-               tmp108 = 12.566370614359172_wp*tmp107
-               tmp109 = sqrt(tmp108)
-               tmp110 = 1.0694_wp*tmp109
-               tmp111 = tmp110 + self%c3
-               tmp106(i) = tmp111
-            end do
-            tmp112 = tmp106*tmp104
-            tmp105 = tmp112
-            block
-               real(wp) :: tmp113, tmp114, tmp115, tmp117, tmp120, tmp124, tmp118, tmp119, tmp121, &
-                           tmp122, tmp123, tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131, &
-                           tmp132, tmp133
-               complex(wp) :: tmp116, tmp134
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp105_p) &
-               !$omp& shared(self, tmp104, tmp105) &
-               !$omp& default(private)
-               allocate (tmp105_p(self%npt))
-               tmp105_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp113 = self%r(1, j)
-                  tmp114 = self%r(2, j)
-                  tmp115 = self%r(3, j)
-                  tmp116 = tmp104(j)
-                  tmp117 = -tmp113
-                  tmp120 = -tmp114
-                  tmp124 = -tmp115
-                  !$omp simd &
-                  !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
-                  !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
-                  !$omp& private(tmp134)
-                  do i = 1, j - 1
-                     tmp118 = self%r(1, i) + tmp117
-                     tmp119 = tmp118**(2)
-                     tmp121 = self%r(2, i) + tmp120
-                     tmp122 = tmp121**(2)
-                     tmp123 = tmp119 + tmp122
-                     tmp125 = self%r(3, i) + tmp124
-                     tmp126 = tmp125**(2)
-                     tmp127 = tmp123 + tmp126
-                     tmp128 = 1.0_wp/sqrt(tmp127)
-                     tmp129 = sqrt(tmp127)
-                     tmp130 = tmp129*self%kappa
-                     tmp131 = -tmp130
-                     tmp132 = exp(tmp131)
-                     tmp133 = tmp128*tmp132
-                     tmp134 = tmp133*tmp116
-                     tmp105_p(i) = tmp105_p(i) + tmp134
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
-                  !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
-                  !$omp& private(tmp134)
-                  do i = j + 1, self%npt
-                     tmp118 = self%r(1, i) + tmp117
-                     tmp119 = tmp118**(2)
-                     tmp121 = self%r(2, i) + tmp120
-                     tmp122 = tmp121**(2)
-                     tmp123 = tmp119 + tmp122
-                     tmp125 = self%r(3, i) + tmp124
-                     tmp126 = tmp125**(2)
-                     tmp127 = tmp123 + tmp126
-                     tmp128 = 1.0_wp/sqrt(tmp127)
-                     tmp129 = sqrt(tmp127)
-                     tmp130 = tmp129*self%kappa
-                     tmp131 = -tmp130
-                     tmp132 = exp(tmp131)
-                     tmp133 = tmp128*tmp132
-                     tmp134 = tmp133*tmp116
-                     tmp105_p(i) = tmp105_p(i) + tmp134
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp105 = tmp105 + tmp105_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp105_p)
-               !$omp end parallel
-            end block
-            tmp135 = self%c2*tmp105
-            y = tmp71 + tmp135
-         end block
+         call lpb_point_op6_apply_n(self, x, y)
       end if
    end subroutine lpb_point_op6_apply
+
+   !> Apply the transpose of operator 6 (not conjugated)
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op6_apply_t(self, x, y)
+      !> Operator
+      class(lpb_point_op6), intent(in) :: self
+      !> Input vector
+      complex(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      complex(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp2(:), tmp49(:), tmp75(:)
+      real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp7, tmp8, tmp50, tmp51, tmp52, tmp53, tmp76, tmp77, &
+                  tmp78, tmp79, tmp80
+      complex(wp), allocatable :: tmp1(:), tmp9(:), tmp45(:), tmp46(:), tmp47(:), tmp48(:), &
+                                  tmp54(:), tmp73(:), tmp74(:), tmp81(:), tmp105(:), tmp106(:), &
+                                  tmp107(:), tmp135(:), tmp136(:), tmp137(:)
+      complex(wp), allocatable :: tmp106_p(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp45(self%npt))
+      allocate (tmp46(self%npt))
+      allocate (tmp47(self%npt))
+      allocate (tmp48(self%npt))
+      allocate (tmp49(self%npt))
+      allocate (tmp54(self%npt))
+      allocate (tmp73(self%npt))
+      allocate (tmp74(self%npt))
+      allocate (tmp75(self%npt))
+      allocate (tmp81(self%npt))
+      allocate (tmp105(self%npt))
+      allocate (tmp106(self%npt))
+      allocate (tmp107(self%npt))
+      allocate (tmp135(self%npt))
+      allocate (tmp136(self%npt))
+      allocate (tmp137(self%npt))
+      do i = 1, self%npt
+         tmp3 = self%k1(i) + self%k2(i)
+         tmp4 = 1.0_wp/self%a(i)
+         tmp5 = 12.566370614359172_wp*tmp4
+         tmp6 = sqrt(tmp5)
+         tmp7 = tmp3*tmp6
+         tmp8 = (-0.26735_wp)*tmp7
+         tmp2(i) = tmp8
+      end do
+      tmp9 = tmp2*x
+      tmp1 = tmp9
+      block
+         real(wp) :: tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp18, tmp21, tmp25, tmp19, tmp20, &
+                     tmp22, tmp23, tmp24, tmp26, tmp27, tmp28, tmp30, tmp31, tmp32, tmp33, tmp34, &
+                     tmp35, tmp36, tmp38, tmp39, tmp40, tmp41, tmp43
+         complex(wp) :: tmp11, tmp10, tmp29, tmp37, tmp42, tmp44
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp1, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp11 = x(j)
+            tmp12 = self%n(1, j)
+            tmp13 = self%r(1, j)
+            tmp14 = self%r(2, j)
+            tmp15 = self%n(2, j)
+            tmp16 = self%r(3, j)
+            tmp17 = self%n(3, j)
+            tmp18 = -tmp13
+            tmp21 = -tmp14
+            tmp25 = -tmp16
+            tmp10 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& reduction(+: tmp10)
+            do i = 1, j - 1
+               tmp19 = self%r(1, i) + tmp18
+               tmp20 = tmp12*tmp19
+               tmp22 = self%r(2, i) + tmp21
+               tmp23 = tmp22*tmp15
+               tmp24 = tmp20 + tmp23
+               tmp26 = self%r(3, i) + tmp25
+               tmp27 = tmp26*tmp17
+               tmp28 = tmp24 + tmp27
+               tmp29 = x(i)*tmp28
+               tmp30 = tmp19**(2)
+               tmp31 = tmp22**(2)
+               tmp32 = tmp30 + tmp31
+               tmp33 = tmp26**(2)
+               tmp34 = tmp32 + tmp33
+               tmp35 = 1.0_wp/sqrt(tmp34)
+               tmp36 = tmp35**(3)
+               tmp37 = tmp29*tmp36
+               tmp38 = sqrt(tmp34)
+               tmp39 = tmp38*self%kappa
+               tmp40 = -tmp39
+               tmp41 = exp(tmp40)
+               tmp42 = tmp37*tmp41
+               tmp43 = 1.0_wp + tmp39
+               tmp44 = tmp42*tmp43
+               tmp10 = tmp10 + tmp44
+            end do
+            !$omp simd &
+            !$omp& private(tmp19, tmp20, tmp22, tmp23, tmp24, tmp26, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& reduction(+: tmp10)
+            do i = j + 1, self%npt
+               tmp19 = self%r(1, i) + tmp18
+               tmp20 = tmp12*tmp19
+               tmp22 = self%r(2, i) + tmp21
+               tmp23 = tmp22*tmp15
+               tmp24 = tmp20 + tmp23
+               tmp26 = self%r(3, i) + tmp25
+               tmp27 = tmp26*tmp17
+               tmp28 = tmp24 + tmp27
+               tmp29 = x(i)*tmp28
+               tmp30 = tmp19**(2)
+               tmp31 = tmp22**(2)
+               tmp32 = tmp30 + tmp31
+               tmp33 = tmp26**(2)
+               tmp34 = tmp32 + tmp33
+               tmp35 = 1.0_wp/sqrt(tmp34)
+               tmp36 = tmp35**(3)
+               tmp37 = tmp29*tmp36
+               tmp38 = sqrt(tmp34)
+               tmp39 = tmp38*self%kappa
+               tmp40 = -tmp39
+               tmp41 = exp(tmp40)
+               tmp42 = tmp37*tmp41
+               tmp43 = 1.0_wp + tmp39
+               tmp44 = tmp42*tmp43
+               tmp10 = tmp10 + tmp44
+            end do
+            tmp1(j) = tmp1(j) + tmp10
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp45 = self%a*tmp1
+      tmp46 = (-0.15915494309189535_wp)*tmp45
+      tmp47 = x + tmp46
+      do i = 1, self%npt
+         tmp50 = 1.0_wp/self%a(i)
+         tmp51 = 12.566370614359172_wp*tmp50
+         tmp52 = sqrt(tmp51)
+         tmp53 = 1.0694_wp*tmp52
+         tmp49(i) = tmp53
+      end do
+      tmp54 = tmp49*tmp47
+      tmp48 = tmp54
+      block
+         real(wp) :: tmp56, tmp57, tmp58, tmp60, tmp63, tmp67, tmp61, tmp62, tmp64, tmp65, tmp66, &
+                     tmp68, tmp69, tmp70, tmp71
+         complex(wp) :: tmp59, tmp55, tmp72
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp47, tmp48) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp56 = self%r(1, j)
+            tmp57 = self%r(2, j)
+            tmp58 = self%r(3, j)
+            tmp59 = tmp47(j)
+            tmp60 = -tmp56
+            tmp63 = -tmp57
+            tmp67 = -tmp58
+            tmp55 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
+            !$omp& private(tmp71, tmp72) &
+            !$omp& reduction(+: tmp55)
+            do i = 1, j - 1
+               tmp61 = self%r(1, i) + tmp60
+               tmp62 = tmp61**(2)
+               tmp64 = self%r(2, i) + tmp63
+               tmp65 = tmp64**(2)
+               tmp66 = tmp62 + tmp65
+               tmp68 = self%r(3, i) + tmp67
+               tmp69 = tmp68**(2)
+               tmp70 = tmp66 + tmp69
+               tmp71 = 1.0_wp/sqrt(tmp70)
+               tmp72 = tmp71*tmp47(i)
+               tmp55 = tmp55 + tmp72
+            end do
+            !$omp simd &
+            !$omp& private(tmp61, tmp62, tmp64, tmp65, tmp66, tmp68, tmp69, tmp70) &
+            !$omp& private(tmp71, tmp72) &
+            !$omp& reduction(+: tmp55)
+            do i = j + 1, self%npt
+               tmp61 = self%r(1, i) + tmp60
+               tmp62 = tmp61**(2)
+               tmp64 = self%r(2, i) + tmp63
+               tmp65 = tmp64**(2)
+               tmp66 = tmp62 + tmp65
+               tmp68 = self%r(3, i) + tmp67
+               tmp69 = tmp68**(2)
+               tmp70 = tmp66 + tmp69
+               tmp71 = 1.0_wp/sqrt(tmp70)
+               tmp72 = tmp71*tmp47(i)
+               tmp55 = tmp55 + tmp72
+            end do
+            tmp48(j) = tmp48(j) + tmp55
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp73 = self%c1*tmp48
+      do i = 1, self%npt
+         tmp76 = 1.0_wp/self%a(i)
+         tmp77 = 12.566370614359172_wp*tmp76
+         tmp78 = sqrt(tmp77)
+         tmp79 = 1.0694_wp*tmp78
+         tmp80 = tmp79 + self%c3
+         tmp75(i) = tmp80
+      end do
+      tmp81 = tmp75*x
+      tmp74 = tmp81
+      block
+         real(wp) :: tmp84, tmp85, tmp86, tmp87, tmp90, tmp94, tmp88, tmp89, tmp91, tmp92, tmp93, &
+                     tmp95, tmp96, tmp97, tmp98, tmp100, tmp101, tmp102, tmp103
+         complex(wp) :: tmp83, tmp82, tmp99, tmp104
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp74, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp83 = x(j)
+            tmp84 = self%r(1, j)
+            tmp85 = self%r(2, j)
+            tmp86 = self%r(3, j)
+            tmp87 = -tmp84
+            tmp90 = -tmp85
+            tmp94 = -tmp86
+            tmp82 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
+            !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
+            !$omp& reduction(+: tmp82)
+            do i = 1, j - 1
+               tmp88 = self%r(1, i) + tmp87
+               tmp89 = tmp88**(2)
+               tmp91 = self%r(2, i) + tmp90
+               tmp92 = tmp91**(2)
+               tmp93 = tmp89 + tmp92
+               tmp95 = self%r(3, i) + tmp94
+               tmp96 = tmp95**(2)
+               tmp97 = tmp93 + tmp96
+               tmp98 = 1.0_wp/sqrt(tmp97)
+               tmp99 = x(i)*tmp98
+               tmp100 = sqrt(tmp97)
+               tmp101 = tmp100*self%kappa
+               tmp102 = -tmp101
+               tmp103 = exp(tmp102)
+               tmp104 = tmp99*tmp103
+               tmp82 = tmp82 + tmp104
+            end do
+            !$omp simd &
+            !$omp& private(tmp88, tmp89, tmp91, tmp92, tmp93, tmp95, tmp96, tmp97) &
+            !$omp& private(tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104) &
+            !$omp& reduction(+: tmp82)
+            do i = j + 1, self%npt
+               tmp88 = self%r(1, i) + tmp87
+               tmp89 = tmp88**(2)
+               tmp91 = self%r(2, i) + tmp90
+               tmp92 = tmp91**(2)
+               tmp93 = tmp89 + tmp92
+               tmp95 = self%r(3, i) + tmp94
+               tmp96 = tmp95**(2)
+               tmp97 = tmp93 + tmp96
+               tmp98 = 1.0_wp/sqrt(tmp97)
+               tmp99 = x(i)*tmp98
+               tmp100 = sqrt(tmp97)
+               tmp101 = tmp100*self%kappa
+               tmp102 = -tmp101
+               tmp103 = exp(tmp102)
+               tmp104 = tmp99*tmp103
+               tmp82 = tmp82 + tmp104
+            end do
+            tmp74(j) = tmp74(j) + tmp82
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp105 = self%a*tmp74
+      tmp107 = tmp2*tmp105
+      tmp106 = tmp107
+      block
+         real(wp) :: tmp108, tmp109, tmp110, tmp111, tmp112, tmp113, tmp115, tmp118, tmp122, &
+                     tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124, tmp125, tmp126, &
+                     tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133
+         complex(wp) :: tmp114, tmp134
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp106_p) &
+         !$omp& shared(self, tmp105, tmp106) &
+         !$omp& default(private)
+         allocate (tmp106_p(self%npt))
+         tmp106_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp108 = self%n(1, j)
+            tmp109 = self%r(1, j)
+            tmp110 = self%r(2, j)
+            tmp111 = self%n(2, j)
+            tmp112 = self%r(3, j)
+            tmp113 = self%n(3, j)
+            tmp114 = tmp105(j)
+            tmp115 = -tmp109
+            tmp118 = -tmp110
+            tmp122 = -tmp112
+            !$omp simd &
+            !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
+            !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
+            !$omp& private(tmp132, tmp133, tmp134)
+            do i = 1, j - 1
+               tmp116 = self%r(1, i) + tmp115
+               tmp117 = tmp108*tmp116
+               tmp119 = self%r(2, i) + tmp118
+               tmp120 = tmp119*tmp111
+               tmp121 = tmp117 + tmp120
+               tmp123 = self%r(3, i) + tmp122
+               tmp124 = tmp123*tmp113
+               tmp125 = tmp121 + tmp124
+               tmp126 = tmp116**(2)
+               tmp127 = tmp119**(2)
+               tmp128 = tmp126 + tmp127
+               tmp129 = tmp123**(2)
+               tmp130 = tmp128 + tmp129
+               tmp131 = 1.0_wp/sqrt(tmp130)
+               tmp132 = tmp131**(3)
+               tmp133 = tmp125*tmp132
+               tmp134 = tmp133*tmp114
+               tmp106_p(i) = tmp106_p(i) + tmp134
+            end do
+            !$omp simd &
+            !$omp& private(tmp116, tmp117, tmp119, tmp120, tmp121, tmp123, tmp124) &
+            !$omp& private(tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131) &
+            !$omp& private(tmp132, tmp133, tmp134)
+            do i = j + 1, self%npt
+               tmp116 = self%r(1, i) + tmp115
+               tmp117 = tmp108*tmp116
+               tmp119 = self%r(2, i) + tmp118
+               tmp120 = tmp119*tmp111
+               tmp121 = tmp117 + tmp120
+               tmp123 = self%r(3, i) + tmp122
+               tmp124 = tmp123*tmp113
+               tmp125 = tmp121 + tmp124
+               tmp126 = tmp116**(2)
+               tmp127 = tmp119**(2)
+               tmp128 = tmp126 + tmp127
+               tmp129 = tmp123**(2)
+               tmp130 = tmp128 + tmp129
+               tmp131 = 1.0_wp/sqrt(tmp130)
+               tmp132 = tmp131**(3)
+               tmp133 = tmp125*tmp132
+               tmp134 = tmp133*tmp114
+               tmp106_p(i) = tmp106_p(i) + tmp134
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp106 = tmp106 + tmp106_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp106_p)
+         !$omp end parallel
+      end block
+      tmp135 = 0.15915494309189535_wp*tmp106
+      tmp136 = tmp74 + tmp135
+      tmp137 = self%c2*tmp136
+      y = tmp73 + tmp137
+   end subroutine lpb_point_op6_apply_t
+
+   !> Apply operator 6
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine lpb_point_op6_apply_n(self, x, y)
+      !> Operator
+      class(lpb_point_op6), intent(in) :: self
+      !> Input vector
+      complex(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      complex(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp2(:), tmp27(:), tmp106(:)
+      real(wp) :: tmp3, tmp4, tmp5, tmp6, tmp28, tmp29, tmp30, tmp31, tmp32, tmp33, tmp107, &
+                  tmp108, tmp109, tmp110, tmp111
+      complex(wp), allocatable :: tmp1(:), tmp7(:), tmp25(:), tmp26(:), tmp34(:), tmp69(:), &
+                                  tmp70(:), tmp71(:), tmp72(:), tmp73(:), tmp102(:), tmp103(:), &
+                                  tmp104(:), tmp105(:), tmp112(:), tmp135(:)
+      complex(wp), allocatable :: tmp1_p(:), tmp26_p(:), tmp105_p(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp25(self%npt))
+      allocate (tmp26(self%npt))
+      allocate (tmp27(self%npt))
+      allocate (tmp34(self%npt))
+      allocate (tmp69(self%npt))
+      allocate (tmp70(self%npt))
+      allocate (tmp71(self%npt))
+      allocate (tmp72(self%npt))
+      allocate (tmp73(self%npt))
+      allocate (tmp102(self%npt))
+      allocate (tmp103(self%npt))
+      allocate (tmp104(self%npt))
+      allocate (tmp105(self%npt))
+      allocate (tmp106(self%npt))
+      allocate (tmp112(self%npt))
+      allocate (tmp135(self%npt))
+      do i = 1, self%npt
+         tmp3 = 1.0_wp/self%a(i)
+         tmp4 = 12.566370614359172_wp*tmp3
+         tmp5 = sqrt(tmp4)
+         tmp6 = 1.0694_wp*tmp5
+         tmp2(i) = tmp6
+      end do
+      tmp7 = tmp2*x
+      tmp1 = tmp7
+      block
+         real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp15, tmp19, tmp13, tmp14, tmp16, tmp17, tmp18, &
+                     tmp20, tmp21, tmp22, tmp23
+         complex(wp) :: tmp8, tmp24
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp1_p) &
+         !$omp& shared(self, tmp1, x) &
+         !$omp& default(private)
+         allocate (tmp1_p(self%npt))
+         tmp1_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp8 = x(j)
+            tmp9 = self%r(1, j)
+            tmp10 = self%r(2, j)
+            tmp11 = self%r(3, j)
+            tmp12 = -tmp9
+            tmp15 = -tmp10
+            tmp19 = -tmp11
+            !$omp simd &
+            !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
+            !$omp& private(tmp23, tmp24)
+            do i = 1, j - 1
+               tmp13 = self%r(1, i) + tmp12
+               tmp14 = tmp13**(2)
+               tmp16 = self%r(2, i) + tmp15
+               tmp17 = tmp16**(2)
+               tmp18 = tmp14 + tmp17
+               tmp20 = self%r(3, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp22 = tmp18 + tmp21
+               tmp23 = 1.0_wp/sqrt(tmp22)
+               tmp24 = tmp8*tmp23
+               tmp1_p(i) = tmp1_p(i) + tmp24
+            end do
+            !$omp simd &
+            !$omp& private(tmp13, tmp14, tmp16, tmp17, tmp18, tmp20, tmp21, tmp22) &
+            !$omp& private(tmp23, tmp24)
+            do i = j + 1, self%npt
+               tmp13 = self%r(1, i) + tmp12
+               tmp14 = tmp13**(2)
+               tmp16 = self%r(2, i) + tmp15
+               tmp17 = tmp16**(2)
+               tmp18 = tmp14 + tmp17
+               tmp20 = self%r(3, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp22 = tmp18 + tmp21
+               tmp23 = 1.0_wp/sqrt(tmp22)
+               tmp24 = tmp8*tmp23
+               tmp1_p(i) = tmp1_p(i) + tmp24
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp1 = tmp1 + tmp1_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp1_p)
+         !$omp end parallel
+      end block
+      tmp25 = self%a*tmp1
+      do i = 1, self%npt
+         tmp28 = self%k1(i) + self%k2(i)
+         tmp29 = 1.0_wp/self%a(i)
+         tmp30 = 12.566370614359172_wp*tmp29
+         tmp31 = sqrt(tmp30)
+         tmp32 = tmp28*tmp31
+         tmp33 = (-0.26735_wp)*tmp32
+         tmp27(i) = tmp33
+      end do
+      tmp34 = tmp27*tmp25
+      tmp26 = tmp34
+      block
+         real(wp) :: tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp45, tmp49, tmp43, tmp44, &
+                     tmp46, tmp47, tmp48, tmp50, tmp51, tmp52, tmp54, tmp55, tmp56, tmp57, tmp58, &
+                     tmp59, tmp60, tmp62, tmp63, tmp64, tmp65, tmp67
+         complex(wp) :: tmp35, tmp53, tmp61, tmp66, tmp68
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp26_p) &
+         !$omp& shared(self, tmp25, tmp26) &
+         !$omp& default(private)
+         allocate (tmp26_p(self%npt))
+         tmp26_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp35 = tmp25(j)
+            tmp36 = self%n(1, j)
+            tmp37 = self%r(1, j)
+            tmp38 = self%r(2, j)
+            tmp39 = self%n(2, j)
+            tmp40 = self%r(3, j)
+            tmp41 = self%n(3, j)
+            tmp42 = -tmp37
+            tmp45 = -tmp38
+            tmp49 = -tmp40
+            !$omp simd &
+            !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
+            !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
+            !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
+            do i = 1, j - 1
+               tmp43 = self%r(1, i) + tmp42
+               tmp44 = tmp36*tmp43
+               tmp46 = self%r(2, i) + tmp45
+               tmp47 = tmp46*tmp39
+               tmp48 = tmp44 + tmp47
+               tmp50 = self%r(3, i) + tmp49
+               tmp51 = tmp50*tmp41
+               tmp52 = tmp48 + tmp51
+               tmp53 = tmp35*tmp52
+               tmp54 = tmp43**(2)
+               tmp55 = tmp46**(2)
+               tmp56 = tmp54 + tmp55
+               tmp57 = tmp50**(2)
+               tmp58 = tmp56 + tmp57
+               tmp59 = 1.0_wp/sqrt(tmp58)
+               tmp60 = tmp59**(3)
+               tmp61 = tmp53*tmp60
+               tmp62 = sqrt(tmp58)
+               tmp63 = tmp62*self%kappa
+               tmp64 = -tmp63
+               tmp65 = exp(tmp64)
+               tmp66 = tmp61*tmp65
+               tmp67 = 1.0_wp + tmp63
+               tmp68 = tmp66*tmp67
+               tmp26_p(i) = tmp26_p(i) + tmp68
+            end do
+            !$omp simd &
+            !$omp& private(tmp43, tmp44, tmp46, tmp47, tmp48, tmp50, tmp51, tmp52) &
+            !$omp& private(tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60) &
+            !$omp& private(tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68)
+            do i = j + 1, self%npt
+               tmp43 = self%r(1, i) + tmp42
+               tmp44 = tmp36*tmp43
+               tmp46 = self%r(2, i) + tmp45
+               tmp47 = tmp46*tmp39
+               tmp48 = tmp44 + tmp47
+               tmp50 = self%r(3, i) + tmp49
+               tmp51 = tmp50*tmp41
+               tmp52 = tmp48 + tmp51
+               tmp53 = tmp35*tmp52
+               tmp54 = tmp43**(2)
+               tmp55 = tmp46**(2)
+               tmp56 = tmp54 + tmp55
+               tmp57 = tmp50**(2)
+               tmp58 = tmp56 + tmp57
+               tmp59 = 1.0_wp/sqrt(tmp58)
+               tmp60 = tmp59**(3)
+               tmp61 = tmp53*tmp60
+               tmp62 = sqrt(tmp58)
+               tmp63 = tmp62*self%kappa
+               tmp64 = -tmp63
+               tmp65 = exp(tmp64)
+               tmp66 = tmp61*tmp65
+               tmp67 = 1.0_wp + tmp63
+               tmp68 = tmp66*tmp67
+               tmp26_p(i) = tmp26_p(i) + tmp68
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp26 = tmp26 + tmp26_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp26_p)
+         !$omp end parallel
+      end block
+      tmp69 = (-0.15915494309189535_wp)*tmp26
+      tmp70 = tmp1 + tmp69
+      tmp71 = self%c1*tmp70
+      tmp73 = tmp27*x
+      tmp72 = tmp73
+      block
+         real(wp) :: tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp85, tmp89, tmp83, tmp84, &
+                     tmp86, tmp87, tmp88, tmp90, tmp91, tmp92, tmp94, tmp95, tmp96, tmp97, tmp98, &
+                     tmp99, tmp100
+         complex(wp) :: tmp75, tmp74, tmp93, tmp101
+
+         !$omp parallel &
+         !$omp& private(i, j) &
+         !$omp& shared(self, tmp72, x) &
+         !$omp& default(private)
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp75 = x(j)
+            tmp76 = self%n(1, j)
+            tmp77 = self%r(1, j)
+            tmp78 = self%r(2, j)
+            tmp79 = self%n(2, j)
+            tmp80 = self%r(3, j)
+            tmp81 = self%n(3, j)
+            tmp82 = -tmp77
+            tmp85 = -tmp78
+            tmp89 = -tmp80
+            tmp74 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
+            !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
+            !$omp& private(tmp101) &
+            !$omp& reduction(+: tmp74)
+            do i = 1, j - 1
+               tmp83 = self%r(1, i) + tmp82
+               tmp84 = tmp76*tmp83
+               tmp86 = self%r(2, i) + tmp85
+               tmp87 = tmp86*tmp79
+               tmp88 = tmp84 + tmp87
+               tmp90 = self%r(3, i) + tmp89
+               tmp91 = tmp90*tmp81
+               tmp92 = tmp88 + tmp91
+               tmp93 = x(i)*tmp92
+               tmp94 = tmp83**(2)
+               tmp95 = tmp86**(2)
+               tmp96 = tmp94 + tmp95
+               tmp97 = tmp90**(2)
+               tmp98 = tmp96 + tmp97
+               tmp99 = 1.0_wp/sqrt(tmp98)
+               tmp100 = tmp99**(3)
+               tmp101 = tmp93*tmp100
+               tmp74 = tmp74 + tmp101
+            end do
+            !$omp simd &
+            !$omp& private(tmp83, tmp84, tmp86, tmp87, tmp88, tmp90, tmp91, tmp92) &
+            !$omp& private(tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, tmp99, tmp100) &
+            !$omp& private(tmp101) &
+            !$omp& reduction(+: tmp74)
+            do i = j + 1, self%npt
+               tmp83 = self%r(1, i) + tmp82
+               tmp84 = tmp76*tmp83
+               tmp86 = self%r(2, i) + tmp85
+               tmp87 = tmp86*tmp79
+               tmp88 = tmp84 + tmp87
+               tmp90 = self%r(3, i) + tmp89
+               tmp91 = tmp90*tmp81
+               tmp92 = tmp88 + tmp91
+               tmp93 = x(i)*tmp92
+               tmp94 = tmp83**(2)
+               tmp95 = tmp86**(2)
+               tmp96 = tmp94 + tmp95
+               tmp97 = tmp90**(2)
+               tmp98 = tmp96 + tmp97
+               tmp99 = 1.0_wp/sqrt(tmp98)
+               tmp100 = tmp99**(3)
+               tmp101 = tmp93*tmp100
+               tmp74 = tmp74 + tmp101
+            end do
+            tmp72(j) = tmp72(j) + tmp74
+         end do
+         !$omp end do
+         !$omp end parallel
+      end block
+      tmp102 = self%a*tmp72
+      tmp103 = 0.15915494309189535_wp*tmp102
+      tmp104 = x + tmp103
+      do i = 1, self%npt
+         tmp107 = 1.0_wp/self%a(i)
+         tmp108 = 12.566370614359172_wp*tmp107
+         tmp109 = sqrt(tmp108)
+         tmp110 = 1.0694_wp*tmp109
+         tmp111 = tmp110 + self%c3
+         tmp106(i) = tmp111
+      end do
+      tmp112 = tmp106*tmp104
+      tmp105 = tmp112
+      block
+         real(wp) :: tmp113, tmp114, tmp115, tmp117, tmp120, tmp124, tmp118, tmp119, tmp121, &
+                     tmp122, tmp123, tmp125, tmp126, tmp127, tmp128, tmp129, tmp130, tmp131, &
+                     tmp132, tmp133
+         complex(wp) :: tmp116, tmp134
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp105_p) &
+         !$omp& shared(self, tmp104, tmp105) &
+         !$omp& default(private)
+         allocate (tmp105_p(self%npt))
+         tmp105_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp113 = self%r(1, j)
+            tmp114 = self%r(2, j)
+            tmp115 = self%r(3, j)
+            tmp116 = tmp104(j)
+            tmp117 = -tmp113
+            tmp120 = -tmp114
+            tmp124 = -tmp115
+            !$omp simd &
+            !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
+            !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
+            !$omp& private(tmp134)
+            do i = 1, j - 1
+               tmp118 = self%r(1, i) + tmp117
+               tmp119 = tmp118**(2)
+               tmp121 = self%r(2, i) + tmp120
+               tmp122 = tmp121**(2)
+               tmp123 = tmp119 + tmp122
+               tmp125 = self%r(3, i) + tmp124
+               tmp126 = tmp125**(2)
+               tmp127 = tmp123 + tmp126
+               tmp128 = 1.0_wp/sqrt(tmp127)
+               tmp129 = sqrt(tmp127)
+               tmp130 = tmp129*self%kappa
+               tmp131 = -tmp130
+               tmp132 = exp(tmp131)
+               tmp133 = tmp128*tmp132
+               tmp134 = tmp133*tmp116
+               tmp105_p(i) = tmp105_p(i) + tmp134
+            end do
+            !$omp simd &
+            !$omp& private(tmp118, tmp119, tmp121, tmp122, tmp123, tmp125, tmp126) &
+            !$omp& private(tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133) &
+            !$omp& private(tmp134)
+            do i = j + 1, self%npt
+               tmp118 = self%r(1, i) + tmp117
+               tmp119 = tmp118**(2)
+               tmp121 = self%r(2, i) + tmp120
+               tmp122 = tmp121**(2)
+               tmp123 = tmp119 + tmp122
+               tmp125 = self%r(3, i) + tmp124
+               tmp126 = tmp125**(2)
+               tmp127 = tmp123 + tmp126
+               tmp128 = 1.0_wp/sqrt(tmp127)
+               tmp129 = sqrt(tmp127)
+               tmp130 = tmp129*self%kappa
+               tmp131 = -tmp130
+               tmp132 = exp(tmp131)
+               tmp133 = tmp128*tmp132
+               tmp134 = tmp133*tmp116
+               tmp105_p(i) = tmp105_p(i) + tmp134
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp105 = tmp105 + tmp105_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp105_p)
+         !$omp end parallel
+      end block
+      tmp135 = self%c2*tmp105
+      y = tmp71 + tmp135
+   end subroutine lpb_point_op6_apply_n
 
    !> Form operator 6 of the points idx alone
    !>

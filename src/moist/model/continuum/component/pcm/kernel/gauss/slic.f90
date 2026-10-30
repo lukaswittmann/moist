@@ -13130,63 +13130,91 @@ contains
       real(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), &
-                                     tmp7(:), tmp8(:), tmp9(:), tmp10(:), tmp11(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            allocate (tmp11(self%npt))
-            tmp1 = self%c1*x
-            call gemv(self%c2, tmp1, tmp2)
-            tmp3 = self%a*tmp2
-            tmp4 = 6.283185307179586_wp*tmp1
-            tmp5 = tmp3 + tmp4
-            tmp6 = -tmp5
-            tmp7 = self%c3*x
-            tmp8 = tmp6 + tmp7
-            call gemv(self%c2, x, tmp9)
-            tmp10 = self%a*tmp9
-            tmp11 = self%c4*tmp10
-            y = tmp8 + tmp11
-         end block
+         call slic_op1_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), &
-                                     tmp7(:), tmp8(:), tmp9(:), tmp10(:)
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp4(self%npt))
-            allocate (tmp5(self%npt))
-            allocate (tmp6(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp8(self%npt))
-            allocate (tmp9(self%npt))
-            allocate (tmp10(self%npt))
-            tmp1 = self%a*x
-            call gemv(self%c2, tmp1, tmp2, trans="t")
-            tmp3 = self%c1*tmp2
-            tmp4 = self%c1*x
-            tmp5 = 6.283185307179586_wp*tmp4
-            tmp6 = tmp3 + tmp5
-            tmp7 = -tmp6
-            tmp8 = self%c3*x
-            tmp9 = tmp7 + tmp8
-            tmp10 = self%c4*tmp2
-            y = tmp9 + tmp10
-         end block
+         call slic_op1_apply_n(self, x, y)
       end if
    end subroutine slic_op1_apply
+
+   !> Apply the transpose of operator 1
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine slic_op1_apply_t(self, x, y)
+      !> Operator
+      class(slic_op1), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), &
+                               tmp8(:), tmp9(:), tmp10(:), tmp11(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      allocate (tmp11(self%npt))
+      tmp1 = self%c1*x
+      call gemv(self%c2, tmp1, tmp2)
+      tmp3 = self%a*tmp2
+      tmp4 = 6.283185307179586_wp*tmp1
+      tmp5 = tmp3 + tmp4
+      tmp6 = -tmp5
+      tmp7 = self%c3*x
+      tmp8 = tmp6 + tmp7
+      call gemv(self%c2, x, tmp9)
+      tmp10 = self%a*tmp9
+      tmp11 = self%c4*tmp10
+      y = tmp8 + tmp11
+   end subroutine slic_op1_apply_t
+
+   !> Apply operator 1
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine slic_op1_apply_n(self, x, y)
+      !> Operator
+      class(slic_op1), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp4(:), tmp5(:), tmp6(:), tmp7(:), &
+                               tmp8(:), tmp9(:), tmp10(:)
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp4(self%npt))
+      allocate (tmp5(self%npt))
+      allocate (tmp6(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp8(self%npt))
+      allocate (tmp9(self%npt))
+      allocate (tmp10(self%npt))
+      tmp1 = self%a*x
+      call gemv(self%c2, tmp1, tmp2, trans="t")
+      tmp3 = self%c1*tmp2
+      tmp4 = self%c1*x
+      tmp5 = 6.283185307179586_wp*tmp4
+      tmp6 = tmp3 + tmp5
+      tmp7 = -tmp6
+      tmp8 = self%c3*x
+      tmp9 = tmp7 + tmp8
+      tmp10 = self%c4*tmp2
+      y = tmp9 + tmp10
+   end subroutine slic_op1_apply_n
 
    !> Form operator 1 as a dense matrix
    !>
@@ -13338,741 +13366,766 @@ contains
       real(wp), contiguous, intent(out) :: y(:)
 
       if (trans) then
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp7(:), tmp137(:), tmp138(:), &
-                                     tmp139(:), tmp140(:), tmp141(:), tmp142(:), tmp143(:), &
-                                     tmp144(:), tmp274(:), tmp275(:)
-            real(wp) :: tmp4, tmp5, tmp6
-            real(wp), allocatable :: tmp8(:), tmp2_p(:), tmp145(:), tmp143_p(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp137(self%npt))
-            allocate (tmp138(self%npt))
-            allocate (tmp139(self%npt))
-            allocate (tmp140(self%npt))
-            allocate (tmp141(self%npt))
-            allocate (tmp142(self%npt))
-            allocate (tmp143(self%npt))
-            allocate (tmp144(self%npt))
-            allocate (tmp274(self%npt))
-            allocate (tmp275(self%npt))
-            tmp1 = self%c1*x
-            do i = 1, self%npt
-               tmp4 = self%k1(i) + self%k2(i)
-               tmp5 = tmp4*self%xi(i)
-               tmp6 = (-0.19947114020071635_wp)*tmp5
-               tmp3(i) = tmp6
-            end do
-            tmp7 = tmp3*tmp1
-            tmp2 = tmp7
-            block
-               real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp18, tmp19, &
-                           tmp22, tmp26, tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28, &
-                           tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, &
-                           tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45, tmp46, tmp47, tmp48, &
-                           tmp49, tmp50, tmp51, tmp52, tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, &
-                           tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68, &
-                           tmp69, tmp70, tmp71, tmp72, tmp73, tmp74, tmp75, tmp76, tmp77, tmp78, &
-                           tmp79, tmp80, tmp81, tmp82, tmp83, tmp84, tmp85, tmp86, tmp87, tmp88, &
-                           tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, &
-                           tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp105, tmp106, tmp107, &
-                           tmp108
-               real(wp) :: tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, tmp117, &
-                           tmp118, tmp119, tmp120, tmp121, tmp122, tmp123, tmp124, tmp125, tmp126, &
-                           tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134, tmp135, &
-                           tmp136
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp8, tmp2_p) &
-               !$omp& shared(self, tmp1, tmp2) &
-               !$omp& default(private)
-               allocate (tmp8(self%npt))
-               allocate (tmp2_p(self%npt))
-               tmp2_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp9 = tmp1(j)
-                  tmp10 = self%xi(j)
-                  tmp11 = self%r(1, j)
-                  tmp12 = self%r(2, j)
-                  tmp13 = self%r(3, j)
-                  tmp14 = self%n(1, j)
-                  tmp15 = self%n(2, j)
-                  tmp16 = self%n(3, j)
-                  tmp18 = tmp10**(2)
-                  tmp19 = -tmp11
-                  tmp22 = -tmp12
-                  tmp26 = -tmp13
-                  !$omp simd &
-                  !$omp& private(tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& private(tmp45, tmp46)
-                  do i = 1, j - 1
-                     tmp20 = self%r(1, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp23 = self%r(2, i) + tmp22
-                     tmp24 = tmp23**(2)
-                     tmp25 = tmp21 + tmp24
-                     tmp27 = self%r(3, i) + tmp26
-                     tmp28 = tmp27**(2)
-                     tmp29 = tmp25 + tmp28
-                     tmp30 = tmp18*tmp29
-                     tmp31 = self%xi(i)**(2)
-                     tmp32 = tmp30*tmp31
-                     tmp33 = tmp31 + tmp18
-                     tmp34 = (-81.0_wp)*tmp33
-                     tmp35 = tmp32 + tmp34
-                     tmp17 = 0.5_wp + sign(0.5_wp, tmp35)
-                     tmp8(i) = tmp17
-                     tmp36 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp35))
-                     tmp37 = tmp29 + tmp36
-                     tmp38 = 1.0_wp/sqrt(tmp37)
-                     tmp39 = tmp38**(3)
-                     tmp40 = tmp14*tmp20
-                     tmp41 = tmp23*tmp15
-                     tmp42 = tmp40 + tmp41
-                     tmp43 = tmp27*tmp16
-                     tmp44 = tmp42 + tmp43
-                     tmp45 = tmp39*tmp44
-                     tmp46 = tmp45*tmp9
-                     tmp2_p(i) = tmp2_p(i) + tmp46*tmp17
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28) &
-                  !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
-                  !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
-                  !$omp& private(tmp45, tmp46)
-                  do i = j + 1, self%npt
-                     tmp20 = self%r(1, i) + tmp19
-                     tmp21 = tmp20**(2)
-                     tmp23 = self%r(2, i) + tmp22
-                     tmp24 = tmp23**(2)
-                     tmp25 = tmp21 + tmp24
-                     tmp27 = self%r(3, i) + tmp26
-                     tmp28 = tmp27**(2)
-                     tmp29 = tmp25 + tmp28
-                     tmp30 = tmp18*tmp29
-                     tmp31 = self%xi(i)**(2)
-                     tmp32 = tmp30*tmp31
-                     tmp33 = tmp31 + tmp18
-                     tmp34 = (-81.0_wp)*tmp33
-                     tmp35 = tmp32 + tmp34
-                     tmp17 = 0.5_wp + sign(0.5_wp, tmp35)
-                     tmp8(i) = tmp17
-                     tmp36 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp35))
-                     tmp37 = tmp29 + tmp36
-                     tmp38 = 1.0_wp/sqrt(tmp37)
-                     tmp39 = tmp38**(3)
-                     tmp40 = tmp14*tmp20
-                     tmp41 = tmp23*tmp15
-                     tmp42 = tmp40 + tmp41
-                     tmp43 = tmp27*tmp16
-                     tmp44 = tmp42 + tmp43
-                     tmp45 = tmp39*tmp44
-                     tmp46 = tmp45*tmp9
-                     tmp2_p(i) = tmp2_p(i) + tmp46*tmp17
-                  end do
-                  do i = 1, self%npt
-                     if (i == j) cycle
-                     if (tmp8(i) < 0.5_wp) then
-                        tmp47 = self%xi(i)**(2)
-                        tmp48 = tmp47 + tmp18
-                        tmp49 = 0.25_wp*tmp48
-                        tmp50 = self%r(1, i) + tmp19
-                        tmp51 = tmp50**(2)
-                        tmp52 = self%r(2, i) + tmp22
-                        tmp53 = tmp52**(2)
-                        tmp54 = tmp51 + tmp53
-                        tmp55 = self%r(3, i) + tmp26
-                        tmp56 = tmp55**(2)
-                        tmp57 = tmp54 + tmp56
-                        tmp58 = tmp18*tmp57
-                        tmp59 = tmp58*tmp47
-                        tmp60 = -tmp59
-                        tmp61 = tmp49 + tmp60
-                        if (tmp61 >= 0.0_wp) then
-                           tmp63 = tmp14*tmp50
-                           tmp64 = tmp52*tmp15
-                           tmp65 = tmp63 + tmp64
-                           tmp66 = tmp55*tmp16
-                           tmp67 = tmp65 + tmp66
-                           tmp68 = 1.0_wp/sqrt(tmp48)
-                           tmp69 = tmp68**(2)
-                           tmp70 = tmp58*tmp69
-                           tmp71 = tmp70*tmp47
-                           tmp72 = 1.7449553823426687e-10_wp*tmp71
-                           tmp73 = (-2.2614621755160987e-09_wp) + tmp72
-                           tmp74 = tmp71*tmp73
-                           tmp75 = 2.703922166377944e-08_wp + tmp74
-                           tmp76 = tmp58*tmp75
-                           tmp77 = tmp76*tmp69
-                           tmp78 = tmp77*tmp47
-                           tmp79 = (-2.961438563175843e-07_wp) + tmp78
-                           tmp80 = tmp70*tmp79
-                           tmp81 = tmp80*tmp47
-                           tmp82 = 2.9458520444222863e-06_wp + tmp81
-                           tmp83 = tmp18*tmp82
-                           tmp84 = tmp83*tmp57
-                           tmp85 = tmp84*tmp69
-                           tmp86 = tmp85*tmp47
-                           tmp87 = (-2.6339382985422794e-05_wp) + tmp86
-                           tmp88 = tmp18*tmp87
-                           tmp89 = tmp88*tmp57
-                           tmp90 = tmp89*tmp69
-                           tmp91 = tmp90*tmp47
-                           tmp92 = 0.00020895910501768752_wp + tmp91
-                           tmp93 = tmp58*tmp92
-                           tmp94 = tmp93*tmp69
-                           tmp95 = tmp94*tmp47
-                           tmp96 = (-0.0014466399578147598_wp) + tmp95
-                           tmp97 = tmp71*tmp96
-                           tmp98 = 0.008548327023450852_wp + tmp97
-                           tmp99 = tmp71*tmp98
-                           tmp100 = (-0.0417918210035375_wp) + tmp99
-                           tmp101 = tmp18*tmp100
-                           tmp102 = tmp101*tmp57
-                           tmp103 = tmp102*tmp69
-                           tmp104 = tmp103*tmp47
-                           tmp105 = 0.16119702387078752_wp + tmp104
-                           tmp106 = tmp71*tmp105
-                           tmp107 = (-0.45135166683820505_wp) + tmp106
-                           tmp108 = tmp70*tmp107
-                           tmp109 = tmp108*tmp47
-                           tmp110 = 0.7522527780636751_wp + tmp109
-                           tmp111 = tmp67*tmp110
-                           tmp112 = tmp68*self%xi(i)
-                           tmp113 = tmp112*tmp10
-                           tmp114 = tmp113**(3)
-                           tmp62 = tmp111*tmp114
-                        else
-                           tmp115 = tmp14*tmp50
-                           tmp116 = tmp52*tmp15
-                           tmp117 = tmp115 + tmp116
-                           tmp118 = tmp55*tmp16
-                           tmp119 = tmp117 + tmp118
-                           tmp120 = 1.0_wp/sqrt(tmp57)
-                           tmp121 = tmp120**(3)
-                           tmp122 = tmp119*tmp121
-                           tmp123 = 1.0_wp/sqrt(tmp48)
-                           tmp124 = tmp123*self%xi(i)
-                           tmp125 = sqrt(tmp57)
-                           tmp126 = tmp124*tmp125
-                           tmp127 = tmp126*tmp10
-                           tmp128 = erf(tmp127)
-                           tmp129 = tmp127**(2)
-                           tmp130 = -tmp129
-                           tmp131 = exp(tmp130)
-                           tmp132 = tmp126*tmp131
-                           tmp133 = tmp132*tmp10
-                           tmp134 = (-1.1283791670955126_wp)*tmp133
-                           tmp135 = tmp128 + tmp134
-                           tmp62 = tmp122*tmp135
-                        end if
-                        tmp136 = tmp9*tmp62
-                        tmp2_p(i) = tmp2_p(i) + tmp136
-                     end if
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp2 = tmp2 + tmp2_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp8)
-               deallocate (tmp2_p)
-               !$omp end parallel
-            end block
-            tmp137 = self%a*tmp2
-            tmp138 = 6.283185307179586_wp*tmp1
-            tmp139 = tmp137 + tmp138
-            tmp140 = -tmp139
-            tmp141 = self%c2*x
-            tmp142 = tmp140 + tmp141
-            tmp144 = tmp3*x
-            tmp143 = tmp144
-            block
-               real(wp) :: tmp146, tmp147, tmp148, tmp149, tmp150, tmp151, tmp152, tmp153, tmp155, &
-                           tmp156, tmp159, tmp163, tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, &
-                           tmp164, tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171, tmp172, &
-                           tmp173, tmp174, tmp175, tmp176, tmp177, tmp178, tmp179, tmp180, tmp181, &
-                           tmp182, tmp183, tmp184, tmp185, tmp186, tmp187, tmp188, tmp189, tmp190, &
-                           tmp191, tmp192, tmp193, tmp194, tmp195, tmp196, tmp197, tmp198, tmp199, &
-                           tmp200, tmp201, tmp202, tmp203, tmp204, tmp205, tmp206, tmp207, tmp208, &
-                           tmp209, tmp210, tmp211, tmp212, tmp213, tmp214, tmp215, tmp216, tmp217, &
-                           tmp218, tmp219, tmp220, tmp221, tmp222, tmp223, tmp224, tmp225, tmp226, &
-                           tmp227, tmp228, tmp229, tmp230, tmp231, tmp232, tmp233, tmp234, tmp235, &
-                           tmp236, tmp237, tmp238, tmp239, tmp240, tmp241, tmp242, tmp243, tmp244, &
-                           tmp245
-               real(wp) :: tmp246, tmp247, tmp248, tmp249, tmp250, tmp251, tmp252, tmp253, tmp254, &
-                           tmp255, tmp256, tmp257, tmp258, tmp259, tmp260, tmp261, tmp262, tmp263, &
-                           tmp264, tmp265, tmp266, tmp267, tmp268, tmp269, tmp270, tmp271, tmp272, &
-                           tmp273
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp145, tmp143_p) &
-               !$omp& shared(self, tmp143, x) &
-               !$omp& default(private)
-               allocate (tmp145(self%npt))
-               allocate (tmp143_p(self%npt))
-               tmp143_p = 0.0_wp
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp146 = x(j)
-                  tmp147 = self%xi(j)
-                  tmp148 = self%r(1, j)
-                  tmp149 = self%r(2, j)
-                  tmp150 = self%r(3, j)
-                  tmp151 = self%n(1, j)
-                  tmp152 = self%n(2, j)
-                  tmp153 = self%n(3, j)
-                  tmp155 = tmp147**(2)
-                  tmp156 = -tmp148
-                  tmp159 = -tmp149
-                  tmp163 = -tmp150
-                  !$omp simd &
-                  !$omp& private(tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, tmp164) &
-                  !$omp& private(tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171) &
-                  !$omp& private(tmp172, tmp173, tmp174, tmp175, tmp176, tmp177, tmp178) &
-                  !$omp& private(tmp179, tmp180, tmp181, tmp182, tmp183)
-                  do i = 1, j - 1
-                     tmp157 = self%r(1, i) + tmp156
-                     tmp158 = tmp157**(2)
-                     tmp160 = self%r(2, i) + tmp159
-                     tmp161 = tmp160**(2)
-                     tmp162 = tmp158 + tmp161
-                     tmp164 = self%r(3, i) + tmp163
-                     tmp165 = tmp164**(2)
-                     tmp166 = tmp162 + tmp165
-                     tmp167 = tmp155*tmp166
-                     tmp168 = self%xi(i)**(2)
-                     tmp169 = tmp167*tmp168
-                     tmp170 = tmp168 + tmp155
-                     tmp171 = (-81.0_wp)*tmp170
-                     tmp172 = tmp169 + tmp171
-                     tmp154 = 0.5_wp + sign(0.5_wp, tmp172)
-                     tmp145(i) = tmp154
-                     tmp173 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp172))
-                     tmp174 = tmp166 + tmp173
-                     tmp175 = 1.0_wp/sqrt(tmp174)
-                     tmp176 = tmp175**(3)
-                     tmp177 = tmp151*tmp157
-                     tmp178 = tmp160*tmp152
-                     tmp179 = tmp177 + tmp178
-                     tmp180 = tmp164*tmp153
-                     tmp181 = tmp179 + tmp180
-                     tmp182 = tmp176*tmp181
-                     tmp183 = tmp182*tmp146
-                     tmp143_p(i) = tmp143_p(i) + tmp183*tmp154
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, tmp164) &
-                  !$omp& private(tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171) &
-                  !$omp& private(tmp172, tmp173, tmp174, tmp175, tmp176, tmp177, tmp178) &
-                  !$omp& private(tmp179, tmp180, tmp181, tmp182, tmp183)
-                  do i = j + 1, self%npt
-                     tmp157 = self%r(1, i) + tmp156
-                     tmp158 = tmp157**(2)
-                     tmp160 = self%r(2, i) + tmp159
-                     tmp161 = tmp160**(2)
-                     tmp162 = tmp158 + tmp161
-                     tmp164 = self%r(3, i) + tmp163
-                     tmp165 = tmp164**(2)
-                     tmp166 = tmp162 + tmp165
-                     tmp167 = tmp155*tmp166
-                     tmp168 = self%xi(i)**(2)
-                     tmp169 = tmp167*tmp168
-                     tmp170 = tmp168 + tmp155
-                     tmp171 = (-81.0_wp)*tmp170
-                     tmp172 = tmp169 + tmp171
-                     tmp154 = 0.5_wp + sign(0.5_wp, tmp172)
-                     tmp145(i) = tmp154
-                     tmp173 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp172))
-                     tmp174 = tmp166 + tmp173
-                     tmp175 = 1.0_wp/sqrt(tmp174)
-                     tmp176 = tmp175**(3)
-                     tmp177 = tmp151*tmp157
-                     tmp178 = tmp160*tmp152
-                     tmp179 = tmp177 + tmp178
-                     tmp180 = tmp164*tmp153
-                     tmp181 = tmp179 + tmp180
-                     tmp182 = tmp176*tmp181
-                     tmp183 = tmp182*tmp146
-                     tmp143_p(i) = tmp143_p(i) + tmp183*tmp154
-                  end do
-                  do i = 1, self%npt
-                     if (i == j) cycle
-                     if (tmp145(i) < 0.5_wp) then
-                        tmp184 = self%xi(i)**(2)
-                        tmp185 = tmp184 + tmp155
-                        tmp186 = 0.25_wp*tmp185
-                        tmp187 = self%r(1, i) + tmp156
-                        tmp188 = tmp187**(2)
-                        tmp189 = self%r(2, i) + tmp159
-                        tmp190 = tmp189**(2)
-                        tmp191 = tmp188 + tmp190
-                        tmp192 = self%r(3, i) + tmp163
-                        tmp193 = tmp192**(2)
-                        tmp194 = tmp191 + tmp193
-                        tmp195 = tmp155*tmp194
-                        tmp196 = tmp195*tmp184
-                        tmp197 = -tmp196
-                        tmp198 = tmp186 + tmp197
-                        if (tmp198 >= 0.0_wp) then
-                           tmp200 = tmp151*tmp187
-                           tmp201 = tmp189*tmp152
-                           tmp202 = tmp200 + tmp201
-                           tmp203 = tmp192*tmp153
-                           tmp204 = tmp202 + tmp203
-                           tmp205 = 1.0_wp/sqrt(tmp185)
-                           tmp206 = tmp205**(2)
-                           tmp207 = tmp195*tmp206
-                           tmp208 = tmp207*tmp184
-                           tmp209 = 1.7449553823426687e-10_wp*tmp208
-                           tmp210 = (-2.2614621755160987e-09_wp) + tmp209
-                           tmp211 = tmp208*tmp210
-                           tmp212 = 2.703922166377944e-08_wp + tmp211
-                           tmp213 = tmp195*tmp212
-                           tmp214 = tmp213*tmp206
-                           tmp215 = tmp214*tmp184
-                           tmp216 = (-2.961438563175843e-07_wp) + tmp215
-                           tmp217 = tmp207*tmp216
-                           tmp218 = tmp217*tmp184
-                           tmp219 = 2.9458520444222863e-06_wp + tmp218
-                           tmp220 = tmp155*tmp219
-                           tmp221 = tmp220*tmp194
-                           tmp222 = tmp221*tmp206
-                           tmp223 = tmp222*tmp184
-                           tmp224 = (-2.6339382985422794e-05_wp) + tmp223
-                           tmp225 = tmp155*tmp224
-                           tmp226 = tmp225*tmp194
-                           tmp227 = tmp226*tmp206
-                           tmp228 = tmp227*tmp184
-                           tmp229 = 0.00020895910501768752_wp + tmp228
-                           tmp230 = tmp195*tmp229
-                           tmp231 = tmp230*tmp206
-                           tmp232 = tmp231*tmp184
-                           tmp233 = (-0.0014466399578147598_wp) + tmp232
-                           tmp234 = tmp208*tmp233
-                           tmp235 = 0.008548327023450852_wp + tmp234
-                           tmp236 = tmp208*tmp235
-                           tmp237 = (-0.0417918210035375_wp) + tmp236
-                           tmp238 = tmp155*tmp237
-                           tmp239 = tmp238*tmp194
-                           tmp240 = tmp239*tmp206
-                           tmp241 = tmp240*tmp184
-                           tmp242 = 0.16119702387078752_wp + tmp241
-                           tmp243 = tmp208*tmp242
-                           tmp244 = (-0.45135166683820505_wp) + tmp243
-                           tmp245 = tmp207*tmp244
-                           tmp246 = tmp245*tmp184
-                           tmp247 = 0.7522527780636751_wp + tmp246
-                           tmp248 = tmp204*tmp247
-                           tmp249 = tmp205*self%xi(i)
-                           tmp250 = tmp249*tmp147
-                           tmp251 = tmp250**(3)
-                           tmp199 = tmp248*tmp251
-                        else
-                           tmp252 = tmp151*tmp187
-                           tmp253 = tmp189*tmp152
-                           tmp254 = tmp252 + tmp253
-                           tmp255 = tmp192*tmp153
-                           tmp256 = tmp254 + tmp255
-                           tmp257 = 1.0_wp/sqrt(tmp194)
-                           tmp258 = tmp257**(3)
-                           tmp259 = tmp256*tmp258
-                           tmp260 = 1.0_wp/sqrt(tmp185)
-                           tmp261 = tmp260*self%xi(i)
-                           tmp262 = sqrt(tmp194)
-                           tmp263 = tmp261*tmp262
-                           tmp264 = tmp263*tmp147
-                           tmp265 = erf(tmp264)
-                           tmp266 = tmp264**(2)
-                           tmp267 = -tmp266
-                           tmp268 = exp(tmp267)
-                           tmp269 = tmp263*tmp268
-                           tmp270 = tmp269*tmp147
-                           tmp271 = (-1.1283791670955126_wp)*tmp270
-                           tmp272 = tmp265 + tmp271
-                           tmp199 = tmp259*tmp272
-                        end if
-                        tmp273 = tmp146*tmp199
-                        tmp143_p(i) = tmp143_p(i) + tmp273
-                     end if
-                  end do
-               end do
-               !$omp end do
-               !$omp critical (pcmgen_sum)
-               tmp143 = tmp143 + tmp143_p
-               !$omp end critical (pcmgen_sum)
-               deallocate (tmp145)
-               deallocate (tmp143_p)
-               !$omp end parallel
-            end block
-            tmp274 = self%a*tmp143
-            tmp275 = self%c3*tmp274
-            y = tmp142 + tmp275
-         end block
+         call slic_op2_apply_t(self, x, y)
       else
-         block
-            real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp7(:), tmp138(:), tmp139(:), &
-                                     tmp140(:), tmp141(:), tmp142(:), tmp143(:), tmp144(:), &
-                                     tmp145(:)
-            real(wp) :: tmp4, tmp5, tmp6
-            real(wp), allocatable :: tmp8(:)
-            integer :: i, j
-
-            allocate (tmp1(self%npt))
-            allocate (tmp2(self%npt))
-            allocate (tmp3(self%npt))
-            allocate (tmp7(self%npt))
-            allocate (tmp138(self%npt))
-            allocate (tmp139(self%npt))
-            allocate (tmp140(self%npt))
-            allocate (tmp141(self%npt))
-            allocate (tmp142(self%npt))
-            allocate (tmp143(self%npt))
-            allocate (tmp144(self%npt))
-            allocate (tmp145(self%npt))
-            tmp1 = self%a*x
-            do i = 1, self%npt
-               tmp4 = self%k1(i) + self%k2(i)
-               tmp5 = tmp4*self%xi(i)
-               tmp6 = (-0.19947114020071635_wp)*tmp5
-               tmp3(i) = tmp6
-            end do
-            tmp7 = tmp3*tmp1
-            tmp2 = tmp7
-            block
-               real(wp) :: tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp19, tmp20, &
-                           tmp23, tmp27, tmp9, tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, &
-                           tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, &
-                           tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45, tmp46, tmp47, tmp48, &
-                           tmp49, tmp50, tmp51, tmp52, tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, &
-                           tmp59, tmp60, tmp61, tmp62, tmp63, tmp64, tmp65, tmp66, tmp67, tmp68, &
-                           tmp69, tmp70, tmp71, tmp72, tmp73, tmp74, tmp75, tmp76, tmp77, tmp78, &
-                           tmp79, tmp80, tmp81, tmp82, tmp83, tmp84, tmp85, tmp86, tmp87, tmp88, &
-                           tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, tmp97, tmp98, &
-                           tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp105, tmp106, tmp107, &
-                           tmp108
-               real(wp) :: tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, tmp117, &
-                           tmp118, tmp119, tmp120, tmp121, tmp122, tmp123, tmp124, tmp125, tmp126, &
-                           tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134, tmp135, &
-                           tmp136, tmp137
-
-               !$omp parallel &
-               !$omp& private(i, j, tmp8) &
-               !$omp& shared(self, tmp1, tmp2) &
-               !$omp& default(private)
-               allocate (tmp8(self%npt))
-               !$omp do schedule(static)
-               do j = 1, self%npt
-                  tmp10 = tmp1(j)
-                  tmp11 = self%xi(j)
-                  tmp12 = self%r(1, j)
-                  tmp13 = self%r(2, j)
-                  tmp14 = self%r(3, j)
-                  tmp15 = self%n(1, j)
-                  tmp16 = self%n(2, j)
-                  tmp17 = self%n(3, j)
-                  tmp19 = tmp11**(2)
-                  tmp20 = -tmp12
-                  tmp23 = -tmp13
-                  tmp27 = -tmp14
-                  tmp9 = 0.0_wp
-                  !$omp simd &
-                  !$omp& private(tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, tmp29) &
-                  !$omp& private(tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37) &
-                  !$omp& private(tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45) &
-                  !$omp& private(tmp46, tmp47) &
-                  !$omp& reduction(+: tmp9)
-                  do i = 1, j - 1
-                     tmp21 = self%r(1, i) + tmp20
-                     tmp22 = tmp21**(2)
-                     tmp24 = self%r(2, i) + tmp23
-                     tmp25 = tmp24**(2)
-                     tmp26 = tmp22 + tmp25
-                     tmp28 = self%r(3, i) + tmp27
-                     tmp29 = tmp28**(2)
-                     tmp30 = tmp26 + tmp29
-                     tmp31 = tmp19*tmp30
-                     tmp32 = self%xi(i)**(2)
-                     tmp33 = tmp31*tmp32
-                     tmp34 = tmp32 + tmp19
-                     tmp35 = (-81.0_wp)*tmp34
-                     tmp36 = tmp33 + tmp35
-                     tmp18 = 0.5_wp + sign(0.5_wp, tmp36)
-                     tmp8(i) = tmp18
-                     tmp37 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp36))
-                     tmp38 = tmp30 + tmp37
-                     tmp39 = 1.0_wp/sqrt(tmp38)
-                     tmp40 = tmp39**(3)
-                     tmp41 = tmp15*tmp21
-                     tmp42 = tmp24*tmp16
-                     tmp43 = tmp41 + tmp42
-                     tmp44 = tmp28*tmp17
-                     tmp45 = tmp43 + tmp44
-                     tmp46 = tmp40*tmp45
-                     tmp47 = tmp46*tmp1(i)
-                     tmp9 = tmp9 + tmp47*tmp18
-                  end do
-                  !$omp simd &
-                  !$omp& private(tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, tmp29) &
-                  !$omp& private(tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37) &
-                  !$omp& private(tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45) &
-                  !$omp& private(tmp46, tmp47) &
-                  !$omp& reduction(+: tmp9)
-                  do i = j + 1, self%npt
-                     tmp21 = self%r(1, i) + tmp20
-                     tmp22 = tmp21**(2)
-                     tmp24 = self%r(2, i) + tmp23
-                     tmp25 = tmp24**(2)
-                     tmp26 = tmp22 + tmp25
-                     tmp28 = self%r(3, i) + tmp27
-                     tmp29 = tmp28**(2)
-                     tmp30 = tmp26 + tmp29
-                     tmp31 = tmp19*tmp30
-                     tmp32 = self%xi(i)**(2)
-                     tmp33 = tmp31*tmp32
-                     tmp34 = tmp32 + tmp19
-                     tmp35 = (-81.0_wp)*tmp34
-                     tmp36 = tmp33 + tmp35
-                     tmp18 = 0.5_wp + sign(0.5_wp, tmp36)
-                     tmp8(i) = tmp18
-                     tmp37 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp36))
-                     tmp38 = tmp30 + tmp37
-                     tmp39 = 1.0_wp/sqrt(tmp38)
-                     tmp40 = tmp39**(3)
-                     tmp41 = tmp15*tmp21
-                     tmp42 = tmp24*tmp16
-                     tmp43 = tmp41 + tmp42
-                     tmp44 = tmp28*tmp17
-                     tmp45 = tmp43 + tmp44
-                     tmp46 = tmp40*tmp45
-                     tmp47 = tmp46*tmp1(i)
-                     tmp9 = tmp9 + tmp47*tmp18
-                  end do
-                  do i = 1, self%npt
-                     if (i == j) cycle
-                     if (tmp8(i) < 0.5_wp) then
-                        tmp48 = self%xi(i)**(2)
-                        tmp49 = tmp48 + tmp19
-                        tmp50 = 0.25_wp*tmp49
-                        tmp51 = self%r(1, i) + tmp20
-                        tmp52 = tmp51**(2)
-                        tmp53 = self%r(2, i) + tmp23
-                        tmp54 = tmp53**(2)
-                        tmp55 = tmp52 + tmp54
-                        tmp56 = self%r(3, i) + tmp27
-                        tmp57 = tmp56**(2)
-                        tmp58 = tmp55 + tmp57
-                        tmp59 = tmp19*tmp58
-                        tmp60 = tmp59*tmp48
-                        tmp61 = -tmp60
-                        tmp62 = tmp50 + tmp61
-                        if (tmp62 >= 0.0_wp) then
-                           tmp64 = tmp15*tmp51
-                           tmp65 = tmp53*tmp16
-                           tmp66 = tmp64 + tmp65
-                           tmp67 = tmp56*tmp17
-                           tmp68 = tmp66 + tmp67
-                           tmp69 = 1.0_wp/sqrt(tmp49)
-                           tmp70 = tmp69**(2)
-                           tmp71 = tmp59*tmp70
-                           tmp72 = tmp71*tmp48
-                           tmp73 = 1.7449553823426687e-10_wp*tmp72
-                           tmp74 = (-2.2614621755160987e-09_wp) + tmp73
-                           tmp75 = tmp72*tmp74
-                           tmp76 = 2.703922166377944e-08_wp + tmp75
-                           tmp77 = tmp59*tmp76
-                           tmp78 = tmp77*tmp70
-                           tmp79 = tmp78*tmp48
-                           tmp80 = (-2.961438563175843e-07_wp) + tmp79
-                           tmp81 = tmp71*tmp80
-                           tmp82 = tmp81*tmp48
-                           tmp83 = 2.9458520444222863e-06_wp + tmp82
-                           tmp84 = tmp19*tmp83
-                           tmp85 = tmp84*tmp58
-                           tmp86 = tmp85*tmp70
-                           tmp87 = tmp86*tmp48
-                           tmp88 = (-2.6339382985422794e-05_wp) + tmp87
-                           tmp89 = tmp19*tmp88
-                           tmp90 = tmp89*tmp58
-                           tmp91 = tmp90*tmp70
-                           tmp92 = tmp91*tmp48
-                           tmp93 = 0.00020895910501768752_wp + tmp92
-                           tmp94 = tmp59*tmp93
-                           tmp95 = tmp94*tmp70
-                           tmp96 = tmp95*tmp48
-                           tmp97 = (-0.0014466399578147598_wp) + tmp96
-                           tmp98 = tmp72*tmp97
-                           tmp99 = 0.008548327023450852_wp + tmp98
-                           tmp100 = tmp72*tmp99
-                           tmp101 = (-0.0417918210035375_wp) + tmp100
-                           tmp102 = tmp19*tmp101
-                           tmp103 = tmp102*tmp58
-                           tmp104 = tmp103*tmp70
-                           tmp105 = tmp104*tmp48
-                           tmp106 = 0.16119702387078752_wp + tmp105
-                           tmp107 = tmp72*tmp106
-                           tmp108 = (-0.45135166683820505_wp) + tmp107
-                           tmp109 = tmp71*tmp108
-                           tmp110 = tmp109*tmp48
-                           tmp111 = 0.7522527780636751_wp + tmp110
-                           tmp112 = tmp68*tmp111
-                           tmp113 = tmp69*self%xi(i)
-                           tmp114 = tmp113*tmp11
-                           tmp115 = tmp114**(3)
-                           tmp63 = tmp112*tmp115
-                        else
-                           tmp116 = tmp15*tmp51
-                           tmp117 = tmp53*tmp16
-                           tmp118 = tmp116 + tmp117
-                           tmp119 = tmp56*tmp17
-                           tmp120 = tmp118 + tmp119
-                           tmp121 = 1.0_wp/sqrt(tmp58)
-                           tmp122 = tmp121**(3)
-                           tmp123 = tmp120*tmp122
-                           tmp124 = 1.0_wp/sqrt(tmp49)
-                           tmp125 = tmp124*self%xi(i)
-                           tmp126 = sqrt(tmp58)
-                           tmp127 = tmp125*tmp126
-                           tmp128 = tmp127*tmp11
-                           tmp129 = erf(tmp128)
-                           tmp130 = tmp128**(2)
-                           tmp131 = -tmp130
-                           tmp132 = exp(tmp131)
-                           tmp133 = tmp127*tmp132
-                           tmp134 = tmp133*tmp11
-                           tmp135 = (-1.1283791670955126_wp)*tmp134
-                           tmp136 = tmp129 + tmp135
-                           tmp63 = tmp123*tmp136
-                        end if
-                        tmp137 = tmp1(i)*tmp63
-                        tmp9 = tmp9 + tmp137
-                     end if
-                  end do
-                  tmp2(j) = tmp2(j) + tmp9
-               end do
-               !$omp end do
-               deallocate (tmp8)
-               !$omp end parallel
-            end block
-            tmp138 = self%c1*tmp2
-            tmp139 = self%c1*x
-            tmp140 = 6.283185307179586_wp*tmp139
-            tmp141 = tmp138 + tmp140
-            tmp142 = -tmp141
-            tmp143 = self%c2*x
-            tmp144 = tmp142 + tmp143
-            tmp145 = self%c3*tmp2
-            y = tmp144 + tmp145
-         end block
+         call slic_op2_apply_n(self, x, y)
       end if
    end subroutine slic_op2_apply
+
+   !> Apply the transpose of operator 2
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine slic_op2_apply_t(self, x, y)
+      !> Operator
+      class(slic_op2), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp7(:), tmp137(:), tmp138(:), &
+                               tmp139(:), tmp140(:), tmp141(:), tmp142(:), tmp143(:), tmp144(:), &
+                               tmp274(:), tmp275(:)
+      real(wp) :: tmp4, tmp5, tmp6
+      real(wp), allocatable :: tmp8(:), tmp2_p(:), tmp145(:), tmp143_p(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp137(self%npt))
+      allocate (tmp138(self%npt))
+      allocate (tmp139(self%npt))
+      allocate (tmp140(self%npt))
+      allocate (tmp141(self%npt))
+      allocate (tmp142(self%npt))
+      allocate (tmp143(self%npt))
+      allocate (tmp144(self%npt))
+      allocate (tmp274(self%npt))
+      allocate (tmp275(self%npt))
+      tmp1 = self%c1*x
+      do i = 1, self%npt
+         tmp4 = self%k1(i) + self%k2(i)
+         tmp5 = tmp4*self%xi(i)
+         tmp6 = (-0.19947114020071635_wp)*tmp5
+         tmp3(i) = tmp6
+      end do
+      tmp7 = tmp3*tmp1
+      tmp2 = tmp7
+      block
+         real(wp) :: tmp9, tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp18, tmp19, tmp22, &
+                     tmp26, tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28, tmp29, tmp30, &
+                     tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, &
+                     tmp42, tmp43, tmp44, tmp45, tmp46, tmp47, tmp48, tmp49, tmp50, tmp51, tmp52, &
+                     tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60, tmp61, tmp62, tmp63, &
+                     tmp64, tmp65, tmp66, tmp67, tmp68, tmp69, tmp70, tmp71, tmp72, tmp73, tmp74, &
+                     tmp75, tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp83, tmp84, tmp85, &
+                     tmp86, tmp87, tmp88, tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, &
+                     tmp97, tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp105, tmp106, &
+                     tmp107, tmp108
+         real(wp) :: tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, tmp117, &
+                     tmp118, tmp119, tmp120, tmp121, tmp122, tmp123, tmp124, tmp125, tmp126, &
+                     tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134, tmp135, &
+                     tmp136
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp8, tmp2_p) &
+         !$omp& shared(self, tmp1, tmp2) &
+         !$omp& default(private)
+         allocate (tmp8(self%npt))
+         allocate (tmp2_p(self%npt))
+         tmp2_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp9 = tmp1(j)
+            tmp10 = self%xi(j)
+            tmp11 = self%r(1, j)
+            tmp12 = self%r(2, j)
+            tmp13 = self%r(3, j)
+            tmp14 = self%n(1, j)
+            tmp15 = self%n(2, j)
+            tmp16 = self%n(3, j)
+            tmp18 = tmp10**(2)
+            tmp19 = -tmp11
+            tmp22 = -tmp12
+            tmp26 = -tmp13
+            !$omp simd &
+            !$omp& private(tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& private(tmp45, tmp46)
+            do i = 1, j - 1
+               tmp20 = self%r(1, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp23 = self%r(2, i) + tmp22
+               tmp24 = tmp23**(2)
+               tmp25 = tmp21 + tmp24
+               tmp27 = self%r(3, i) + tmp26
+               tmp28 = tmp27**(2)
+               tmp29 = tmp25 + tmp28
+               tmp30 = tmp18*tmp29
+               tmp31 = self%xi(i)**(2)
+               tmp32 = tmp30*tmp31
+               tmp33 = tmp31 + tmp18
+               tmp34 = (-81.0_wp)*tmp33
+               tmp35 = tmp32 + tmp34
+               tmp17 = 0.5_wp + sign(0.5_wp, tmp35)
+               tmp8(i) = tmp17
+               tmp36 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp35))
+               tmp37 = tmp29 + tmp36
+               tmp38 = 1.0_wp/sqrt(tmp37)
+               tmp39 = tmp38**(3)
+               tmp40 = tmp14*tmp20
+               tmp41 = tmp23*tmp15
+               tmp42 = tmp40 + tmp41
+               tmp43 = tmp27*tmp16
+               tmp44 = tmp42 + tmp43
+               tmp45 = tmp39*tmp44
+               tmp46 = tmp45*tmp9
+               tmp2_p(i) = tmp2_p(i) + tmp46*tmp17
+            end do
+            !$omp simd &
+            !$omp& private(tmp17, tmp20, tmp21, tmp23, tmp24, tmp25, tmp27, tmp28) &
+            !$omp& private(tmp29, tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36) &
+            !$omp& private(tmp37, tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44) &
+            !$omp& private(tmp45, tmp46)
+            do i = j + 1, self%npt
+               tmp20 = self%r(1, i) + tmp19
+               tmp21 = tmp20**(2)
+               tmp23 = self%r(2, i) + tmp22
+               tmp24 = tmp23**(2)
+               tmp25 = tmp21 + tmp24
+               tmp27 = self%r(3, i) + tmp26
+               tmp28 = tmp27**(2)
+               tmp29 = tmp25 + tmp28
+               tmp30 = tmp18*tmp29
+               tmp31 = self%xi(i)**(2)
+               tmp32 = tmp30*tmp31
+               tmp33 = tmp31 + tmp18
+               tmp34 = (-81.0_wp)*tmp33
+               tmp35 = tmp32 + tmp34
+               tmp17 = 0.5_wp + sign(0.5_wp, tmp35)
+               tmp8(i) = tmp17
+               tmp36 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp35))
+               tmp37 = tmp29 + tmp36
+               tmp38 = 1.0_wp/sqrt(tmp37)
+               tmp39 = tmp38**(3)
+               tmp40 = tmp14*tmp20
+               tmp41 = tmp23*tmp15
+               tmp42 = tmp40 + tmp41
+               tmp43 = tmp27*tmp16
+               tmp44 = tmp42 + tmp43
+               tmp45 = tmp39*tmp44
+               tmp46 = tmp45*tmp9
+               tmp2_p(i) = tmp2_p(i) + tmp46*tmp17
+            end do
+            do i = 1, self%npt
+               if (i == j) cycle
+               if (tmp8(i) < 0.5_wp) then
+                  tmp47 = self%xi(i)**(2)
+                  tmp48 = tmp47 + tmp18
+                  tmp49 = 0.25_wp*tmp48
+                  tmp50 = self%r(1, i) + tmp19
+                  tmp51 = tmp50**(2)
+                  tmp52 = self%r(2, i) + tmp22
+                  tmp53 = tmp52**(2)
+                  tmp54 = tmp51 + tmp53
+                  tmp55 = self%r(3, i) + tmp26
+                  tmp56 = tmp55**(2)
+                  tmp57 = tmp54 + tmp56
+                  tmp58 = tmp18*tmp57
+                  tmp59 = tmp58*tmp47
+                  tmp60 = -tmp59
+                  tmp61 = tmp49 + tmp60
+                  if (tmp61 >= 0.0_wp) then
+                     tmp63 = tmp14*tmp50
+                     tmp64 = tmp52*tmp15
+                     tmp65 = tmp63 + tmp64
+                     tmp66 = tmp55*tmp16
+                     tmp67 = tmp65 + tmp66
+                     tmp68 = 1.0_wp/sqrt(tmp48)
+                     tmp69 = tmp68**(2)
+                     tmp70 = tmp58*tmp69
+                     tmp71 = tmp70*tmp47
+                     tmp72 = 1.7449553823426687e-10_wp*tmp71
+                     tmp73 = (-2.2614621755160987e-09_wp) + tmp72
+                     tmp74 = tmp71*tmp73
+                     tmp75 = 2.703922166377944e-08_wp + tmp74
+                     tmp76 = tmp58*tmp75
+                     tmp77 = tmp76*tmp69
+                     tmp78 = tmp77*tmp47
+                     tmp79 = (-2.961438563175843e-07_wp) + tmp78
+                     tmp80 = tmp70*tmp79
+                     tmp81 = tmp80*tmp47
+                     tmp82 = 2.9458520444222863e-06_wp + tmp81
+                     tmp83 = tmp18*tmp82
+                     tmp84 = tmp83*tmp57
+                     tmp85 = tmp84*tmp69
+                     tmp86 = tmp85*tmp47
+                     tmp87 = (-2.6339382985422794e-05_wp) + tmp86
+                     tmp88 = tmp18*tmp87
+                     tmp89 = tmp88*tmp57
+                     tmp90 = tmp89*tmp69
+                     tmp91 = tmp90*tmp47
+                     tmp92 = 0.00020895910501768752_wp + tmp91
+                     tmp93 = tmp58*tmp92
+                     tmp94 = tmp93*tmp69
+                     tmp95 = tmp94*tmp47
+                     tmp96 = (-0.0014466399578147598_wp) + tmp95
+                     tmp97 = tmp71*tmp96
+                     tmp98 = 0.008548327023450852_wp + tmp97
+                     tmp99 = tmp71*tmp98
+                     tmp100 = (-0.0417918210035375_wp) + tmp99
+                     tmp101 = tmp18*tmp100
+                     tmp102 = tmp101*tmp57
+                     tmp103 = tmp102*tmp69
+                     tmp104 = tmp103*tmp47
+                     tmp105 = 0.16119702387078752_wp + tmp104
+                     tmp106 = tmp71*tmp105
+                     tmp107 = (-0.45135166683820505_wp) + tmp106
+                     tmp108 = tmp70*tmp107
+                     tmp109 = tmp108*tmp47
+                     tmp110 = 0.7522527780636751_wp + tmp109
+                     tmp111 = tmp67*tmp110
+                     tmp112 = tmp68*self%xi(i)
+                     tmp113 = tmp112*tmp10
+                     tmp114 = tmp113**(3)
+                     tmp62 = tmp111*tmp114
+                  else
+                     tmp115 = tmp14*tmp50
+                     tmp116 = tmp52*tmp15
+                     tmp117 = tmp115 + tmp116
+                     tmp118 = tmp55*tmp16
+                     tmp119 = tmp117 + tmp118
+                     tmp120 = 1.0_wp/sqrt(tmp57)
+                     tmp121 = tmp120**(3)
+                     tmp122 = tmp119*tmp121
+                     tmp123 = 1.0_wp/sqrt(tmp48)
+                     tmp124 = tmp123*self%xi(i)
+                     tmp125 = sqrt(tmp57)
+                     tmp126 = tmp124*tmp125
+                     tmp127 = tmp126*tmp10
+                     tmp128 = erf(tmp127)
+                     tmp129 = tmp127**(2)
+                     tmp130 = -tmp129
+                     tmp131 = exp(tmp130)
+                     tmp132 = tmp126*tmp131
+                     tmp133 = tmp132*tmp10
+                     tmp134 = (-1.1283791670955126_wp)*tmp133
+                     tmp135 = tmp128 + tmp134
+                     tmp62 = tmp122*tmp135
+                  end if
+                  tmp136 = tmp9*tmp62
+                  tmp2_p(i) = tmp2_p(i) + tmp136
+               end if
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp2 = tmp2 + tmp2_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp8)
+         deallocate (tmp2_p)
+         !$omp end parallel
+      end block
+      tmp137 = self%a*tmp2
+      tmp138 = 6.283185307179586_wp*tmp1
+      tmp139 = tmp137 + tmp138
+      tmp140 = -tmp139
+      tmp141 = self%c2*x
+      tmp142 = tmp140 + tmp141
+      tmp144 = tmp3*x
+      tmp143 = tmp144
+      block
+         real(wp) :: tmp146, tmp147, tmp148, tmp149, tmp150, tmp151, tmp152, tmp153, tmp155, &
+                     tmp156, tmp159, tmp163, tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, &
+                     tmp164, tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171, tmp172, &
+                     tmp173, tmp174, tmp175, tmp176, tmp177, tmp178, tmp179, tmp180, tmp181, &
+                     tmp182, tmp183, tmp184, tmp185, tmp186, tmp187, tmp188, tmp189, tmp190, &
+                     tmp191, tmp192, tmp193, tmp194, tmp195, tmp196, tmp197, tmp198, tmp199, &
+                     tmp200, tmp201, tmp202, tmp203, tmp204, tmp205, tmp206, tmp207, tmp208, &
+                     tmp209, tmp210, tmp211, tmp212, tmp213, tmp214, tmp215, tmp216, tmp217, &
+                     tmp218, tmp219, tmp220, tmp221, tmp222, tmp223, tmp224, tmp225, tmp226, &
+                     tmp227, tmp228, tmp229, tmp230, tmp231, tmp232, tmp233, tmp234, tmp235, &
+                     tmp236, tmp237, tmp238, tmp239, tmp240, tmp241, tmp242, tmp243, tmp244, &
+                     tmp245
+         real(wp) :: tmp246, tmp247, tmp248, tmp249, tmp250, tmp251, tmp252, tmp253, tmp254, &
+                     tmp255, tmp256, tmp257, tmp258, tmp259, tmp260, tmp261, tmp262, tmp263, &
+                     tmp264, tmp265, tmp266, tmp267, tmp268, tmp269, tmp270, tmp271, tmp272, &
+                     tmp273
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp145, tmp143_p) &
+         !$omp& shared(self, tmp143, x) &
+         !$omp& default(private)
+         allocate (tmp145(self%npt))
+         allocate (tmp143_p(self%npt))
+         tmp143_p = 0.0_wp
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp146 = x(j)
+            tmp147 = self%xi(j)
+            tmp148 = self%r(1, j)
+            tmp149 = self%r(2, j)
+            tmp150 = self%r(3, j)
+            tmp151 = self%n(1, j)
+            tmp152 = self%n(2, j)
+            tmp153 = self%n(3, j)
+            tmp155 = tmp147**(2)
+            tmp156 = -tmp148
+            tmp159 = -tmp149
+            tmp163 = -tmp150
+            !$omp simd &
+            !$omp& private(tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, tmp164) &
+            !$omp& private(tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171) &
+            !$omp& private(tmp172, tmp173, tmp174, tmp175, tmp176, tmp177, tmp178) &
+            !$omp& private(tmp179, tmp180, tmp181, tmp182, tmp183)
+            do i = 1, j - 1
+               tmp157 = self%r(1, i) + tmp156
+               tmp158 = tmp157**(2)
+               tmp160 = self%r(2, i) + tmp159
+               tmp161 = tmp160**(2)
+               tmp162 = tmp158 + tmp161
+               tmp164 = self%r(3, i) + tmp163
+               tmp165 = tmp164**(2)
+               tmp166 = tmp162 + tmp165
+               tmp167 = tmp155*tmp166
+               tmp168 = self%xi(i)**(2)
+               tmp169 = tmp167*tmp168
+               tmp170 = tmp168 + tmp155
+               tmp171 = (-81.0_wp)*tmp170
+               tmp172 = tmp169 + tmp171
+               tmp154 = 0.5_wp + sign(0.5_wp, tmp172)
+               tmp145(i) = tmp154
+               tmp173 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp172))
+               tmp174 = tmp166 + tmp173
+               tmp175 = 1.0_wp/sqrt(tmp174)
+               tmp176 = tmp175**(3)
+               tmp177 = tmp151*tmp157
+               tmp178 = tmp160*tmp152
+               tmp179 = tmp177 + tmp178
+               tmp180 = tmp164*tmp153
+               tmp181 = tmp179 + tmp180
+               tmp182 = tmp176*tmp181
+               tmp183 = tmp182*tmp146
+               tmp143_p(i) = tmp143_p(i) + tmp183*tmp154
+            end do
+            !$omp simd &
+            !$omp& private(tmp154, tmp157, tmp158, tmp160, tmp161, tmp162, tmp164) &
+            !$omp& private(tmp165, tmp166, tmp167, tmp168, tmp169, tmp170, tmp171) &
+            !$omp& private(tmp172, tmp173, tmp174, tmp175, tmp176, tmp177, tmp178) &
+            !$omp& private(tmp179, tmp180, tmp181, tmp182, tmp183)
+            do i = j + 1, self%npt
+               tmp157 = self%r(1, i) + tmp156
+               tmp158 = tmp157**(2)
+               tmp160 = self%r(2, i) + tmp159
+               tmp161 = tmp160**(2)
+               tmp162 = tmp158 + tmp161
+               tmp164 = self%r(3, i) + tmp163
+               tmp165 = tmp164**(2)
+               tmp166 = tmp162 + tmp165
+               tmp167 = tmp155*tmp166
+               tmp168 = self%xi(i)**(2)
+               tmp169 = tmp167*tmp168
+               tmp170 = tmp168 + tmp155
+               tmp171 = (-81.0_wp)*tmp170
+               tmp172 = tmp169 + tmp171
+               tmp154 = 0.5_wp + sign(0.5_wp, tmp172)
+               tmp145(i) = tmp154
+               tmp173 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp172))
+               tmp174 = tmp166 + tmp173
+               tmp175 = 1.0_wp/sqrt(tmp174)
+               tmp176 = tmp175**(3)
+               tmp177 = tmp151*tmp157
+               tmp178 = tmp160*tmp152
+               tmp179 = tmp177 + tmp178
+               tmp180 = tmp164*tmp153
+               tmp181 = tmp179 + tmp180
+               tmp182 = tmp176*tmp181
+               tmp183 = tmp182*tmp146
+               tmp143_p(i) = tmp143_p(i) + tmp183*tmp154
+            end do
+            do i = 1, self%npt
+               if (i == j) cycle
+               if (tmp145(i) < 0.5_wp) then
+                  tmp184 = self%xi(i)**(2)
+                  tmp185 = tmp184 + tmp155
+                  tmp186 = 0.25_wp*tmp185
+                  tmp187 = self%r(1, i) + tmp156
+                  tmp188 = tmp187**(2)
+                  tmp189 = self%r(2, i) + tmp159
+                  tmp190 = tmp189**(2)
+                  tmp191 = tmp188 + tmp190
+                  tmp192 = self%r(3, i) + tmp163
+                  tmp193 = tmp192**(2)
+                  tmp194 = tmp191 + tmp193
+                  tmp195 = tmp155*tmp194
+                  tmp196 = tmp195*tmp184
+                  tmp197 = -tmp196
+                  tmp198 = tmp186 + tmp197
+                  if (tmp198 >= 0.0_wp) then
+                     tmp200 = tmp151*tmp187
+                     tmp201 = tmp189*tmp152
+                     tmp202 = tmp200 + tmp201
+                     tmp203 = tmp192*tmp153
+                     tmp204 = tmp202 + tmp203
+                     tmp205 = 1.0_wp/sqrt(tmp185)
+                     tmp206 = tmp205**(2)
+                     tmp207 = tmp195*tmp206
+                     tmp208 = tmp207*tmp184
+                     tmp209 = 1.7449553823426687e-10_wp*tmp208
+                     tmp210 = (-2.2614621755160987e-09_wp) + tmp209
+                     tmp211 = tmp208*tmp210
+                     tmp212 = 2.703922166377944e-08_wp + tmp211
+                     tmp213 = tmp195*tmp212
+                     tmp214 = tmp213*tmp206
+                     tmp215 = tmp214*tmp184
+                     tmp216 = (-2.961438563175843e-07_wp) + tmp215
+                     tmp217 = tmp207*tmp216
+                     tmp218 = tmp217*tmp184
+                     tmp219 = 2.9458520444222863e-06_wp + tmp218
+                     tmp220 = tmp155*tmp219
+                     tmp221 = tmp220*tmp194
+                     tmp222 = tmp221*tmp206
+                     tmp223 = tmp222*tmp184
+                     tmp224 = (-2.6339382985422794e-05_wp) + tmp223
+                     tmp225 = tmp155*tmp224
+                     tmp226 = tmp225*tmp194
+                     tmp227 = tmp226*tmp206
+                     tmp228 = tmp227*tmp184
+                     tmp229 = 0.00020895910501768752_wp + tmp228
+                     tmp230 = tmp195*tmp229
+                     tmp231 = tmp230*tmp206
+                     tmp232 = tmp231*tmp184
+                     tmp233 = (-0.0014466399578147598_wp) + tmp232
+                     tmp234 = tmp208*tmp233
+                     tmp235 = 0.008548327023450852_wp + tmp234
+                     tmp236 = tmp208*tmp235
+                     tmp237 = (-0.0417918210035375_wp) + tmp236
+                     tmp238 = tmp155*tmp237
+                     tmp239 = tmp238*tmp194
+                     tmp240 = tmp239*tmp206
+                     tmp241 = tmp240*tmp184
+                     tmp242 = 0.16119702387078752_wp + tmp241
+                     tmp243 = tmp208*tmp242
+                     tmp244 = (-0.45135166683820505_wp) + tmp243
+                     tmp245 = tmp207*tmp244
+                     tmp246 = tmp245*tmp184
+                     tmp247 = 0.7522527780636751_wp + tmp246
+                     tmp248 = tmp204*tmp247
+                     tmp249 = tmp205*self%xi(i)
+                     tmp250 = tmp249*tmp147
+                     tmp251 = tmp250**(3)
+                     tmp199 = tmp248*tmp251
+                  else
+                     tmp252 = tmp151*tmp187
+                     tmp253 = tmp189*tmp152
+                     tmp254 = tmp252 + tmp253
+                     tmp255 = tmp192*tmp153
+                     tmp256 = tmp254 + tmp255
+                     tmp257 = 1.0_wp/sqrt(tmp194)
+                     tmp258 = tmp257**(3)
+                     tmp259 = tmp256*tmp258
+                     tmp260 = 1.0_wp/sqrt(tmp185)
+                     tmp261 = tmp260*self%xi(i)
+                     tmp262 = sqrt(tmp194)
+                     tmp263 = tmp261*tmp262
+                     tmp264 = tmp263*tmp147
+                     tmp265 = erf(tmp264)
+                     tmp266 = tmp264**(2)
+                     tmp267 = -tmp266
+                     tmp268 = exp(tmp267)
+                     tmp269 = tmp263*tmp268
+                     tmp270 = tmp269*tmp147
+                     tmp271 = (-1.1283791670955126_wp)*tmp270
+                     tmp272 = tmp265 + tmp271
+                     tmp199 = tmp259*tmp272
+                  end if
+                  tmp273 = tmp146*tmp199
+                  tmp143_p(i) = tmp143_p(i) + tmp273
+               end if
+            end do
+         end do
+         !$omp end do
+         !$omp critical (pcmgen_sum)
+         tmp143 = tmp143 + tmp143_p
+         !$omp end critical (pcmgen_sum)
+         deallocate (tmp145)
+         deallocate (tmp143_p)
+         !$omp end parallel
+      end block
+      tmp274 = self%a*tmp143
+      tmp275 = self%c3*tmp274
+      y = tmp142 + tmp275
+   end subroutine slic_op2_apply_t
+
+   !> Apply operator 2
+   !>
+   !> @param[in]  self  operator
+   !> @param[in]  x     input vector
+   !> @param[out] y     result vector
+   subroutine slic_op2_apply_n(self, x, y)
+      !> Operator
+      class(slic_op2), intent(in) :: self
+      !> Input vector
+      real(wp), contiguous, intent(in) :: x(:)
+      !> Result vector
+      real(wp), contiguous, intent(out) :: y(:)
+
+      real(wp), allocatable :: tmp1(:), tmp2(:), tmp3(:), tmp7(:), tmp138(:), tmp139(:), &
+                               tmp140(:), tmp141(:), tmp142(:), tmp143(:), tmp144(:), tmp145(:)
+      real(wp) :: tmp4, tmp5, tmp6
+      real(wp), allocatable :: tmp8(:)
+      integer :: i, j
+
+      allocate (tmp1(self%npt))
+      allocate (tmp2(self%npt))
+      allocate (tmp3(self%npt))
+      allocate (tmp7(self%npt))
+      allocate (tmp138(self%npt))
+      allocate (tmp139(self%npt))
+      allocate (tmp140(self%npt))
+      allocate (tmp141(self%npt))
+      allocate (tmp142(self%npt))
+      allocate (tmp143(self%npt))
+      allocate (tmp144(self%npt))
+      allocate (tmp145(self%npt))
+      tmp1 = self%a*x
+      do i = 1, self%npt
+         tmp4 = self%k1(i) + self%k2(i)
+         tmp5 = tmp4*self%xi(i)
+         tmp6 = (-0.19947114020071635_wp)*tmp5
+         tmp3(i) = tmp6
+      end do
+      tmp7 = tmp3*tmp1
+      tmp2 = tmp7
+      block
+         real(wp) :: tmp10, tmp11, tmp12, tmp13, tmp14, tmp15, tmp16, tmp17, tmp19, tmp20, tmp23, &
+                     tmp27, tmp9, tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, tmp29, tmp30, &
+                     tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37, tmp38, tmp39, tmp40, tmp41, &
+                     tmp42, tmp43, tmp44, tmp45, tmp46, tmp47, tmp48, tmp49, tmp50, tmp51, tmp52, &
+                     tmp53, tmp54, tmp55, tmp56, tmp57, tmp58, tmp59, tmp60, tmp61, tmp62, tmp63, &
+                     tmp64, tmp65, tmp66, tmp67, tmp68, tmp69, tmp70, tmp71, tmp72, tmp73, tmp74, &
+                     tmp75, tmp76, tmp77, tmp78, tmp79, tmp80, tmp81, tmp82, tmp83, tmp84, tmp85, &
+                     tmp86, tmp87, tmp88, tmp89, tmp90, tmp91, tmp92, tmp93, tmp94, tmp95, tmp96, &
+                     tmp97, tmp98, tmp99, tmp100, tmp101, tmp102, tmp103, tmp104, tmp105, tmp106, &
+                     tmp107, tmp108
+         real(wp) :: tmp109, tmp110, tmp111, tmp112, tmp113, tmp114, tmp115, tmp116, tmp117, &
+                     tmp118, tmp119, tmp120, tmp121, tmp122, tmp123, tmp124, tmp125, tmp126, &
+                     tmp127, tmp128, tmp129, tmp130, tmp131, tmp132, tmp133, tmp134, tmp135, &
+                     tmp136, tmp137
+
+         !$omp parallel &
+         !$omp& private(i, j, tmp8) &
+         !$omp& shared(self, tmp1, tmp2) &
+         !$omp& default(private)
+         allocate (tmp8(self%npt))
+         !$omp do schedule(static)
+         do j = 1, self%npt
+            tmp10 = tmp1(j)
+            tmp11 = self%xi(j)
+            tmp12 = self%r(1, j)
+            tmp13 = self%r(2, j)
+            tmp14 = self%r(3, j)
+            tmp15 = self%n(1, j)
+            tmp16 = self%n(2, j)
+            tmp17 = self%n(3, j)
+            tmp19 = tmp11**(2)
+            tmp20 = -tmp12
+            tmp23 = -tmp13
+            tmp27 = -tmp14
+            tmp9 = 0.0_wp
+            !$omp simd &
+            !$omp& private(tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, tmp29) &
+            !$omp& private(tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37) &
+            !$omp& private(tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45) &
+            !$omp& private(tmp46, tmp47) &
+            !$omp& reduction(+: tmp9)
+            do i = 1, j - 1
+               tmp21 = self%r(1, i) + tmp20
+               tmp22 = tmp21**(2)
+               tmp24 = self%r(2, i) + tmp23
+               tmp25 = tmp24**(2)
+               tmp26 = tmp22 + tmp25
+               tmp28 = self%r(3, i) + tmp27
+               tmp29 = tmp28**(2)
+               tmp30 = tmp26 + tmp29
+               tmp31 = tmp19*tmp30
+               tmp32 = self%xi(i)**(2)
+               tmp33 = tmp31*tmp32
+               tmp34 = tmp32 + tmp19
+               tmp35 = (-81.0_wp)*tmp34
+               tmp36 = tmp33 + tmp35
+               tmp18 = 0.5_wp + sign(0.5_wp, tmp36)
+               tmp8(i) = tmp18
+               tmp37 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp36))
+               tmp38 = tmp30 + tmp37
+               tmp39 = 1.0_wp/sqrt(tmp38)
+               tmp40 = tmp39**(3)
+               tmp41 = tmp15*tmp21
+               tmp42 = tmp24*tmp16
+               tmp43 = tmp41 + tmp42
+               tmp44 = tmp28*tmp17
+               tmp45 = tmp43 + tmp44
+               tmp46 = tmp40*tmp45
+               tmp47 = tmp46*tmp1(i)
+               tmp9 = tmp9 + tmp47*tmp18
+            end do
+            !$omp simd &
+            !$omp& private(tmp18, tmp21, tmp22, tmp24, tmp25, tmp26, tmp28, tmp29) &
+            !$omp& private(tmp30, tmp31, tmp32, tmp33, tmp34, tmp35, tmp36, tmp37) &
+            !$omp& private(tmp38, tmp39, tmp40, tmp41, tmp42, tmp43, tmp44, tmp45) &
+            !$omp& private(tmp46, tmp47) &
+            !$omp& reduction(+: tmp9)
+            do i = j + 1, self%npt
+               tmp21 = self%r(1, i) + tmp20
+               tmp22 = tmp21**(2)
+               tmp24 = self%r(2, i) + tmp23
+               tmp25 = tmp24**(2)
+               tmp26 = tmp22 + tmp25
+               tmp28 = self%r(3, i) + tmp27
+               tmp29 = tmp28**(2)
+               tmp30 = tmp26 + tmp29
+               tmp31 = tmp19*tmp30
+               tmp32 = self%xi(i)**(2)
+               tmp33 = tmp31*tmp32
+               tmp34 = tmp32 + tmp19
+               tmp35 = (-81.0_wp)*tmp34
+               tmp36 = tmp33 + tmp35
+               tmp18 = 0.5_wp + sign(0.5_wp, tmp36)
+               tmp8(i) = tmp18
+               tmp37 = 1.0_wp + (0.0_wp - 1.0_wp)*(0.5_wp + sign(0.5_wp, tmp36))
+               tmp38 = tmp30 + tmp37
+               tmp39 = 1.0_wp/sqrt(tmp38)
+               tmp40 = tmp39**(3)
+               tmp41 = tmp15*tmp21
+               tmp42 = tmp24*tmp16
+               tmp43 = tmp41 + tmp42
+               tmp44 = tmp28*tmp17
+               tmp45 = tmp43 + tmp44
+               tmp46 = tmp40*tmp45
+               tmp47 = tmp46*tmp1(i)
+               tmp9 = tmp9 + tmp47*tmp18
+            end do
+            do i = 1, self%npt
+               if (i == j) cycle
+               if (tmp8(i) < 0.5_wp) then
+                  tmp48 = self%xi(i)**(2)
+                  tmp49 = tmp48 + tmp19
+                  tmp50 = 0.25_wp*tmp49
+                  tmp51 = self%r(1, i) + tmp20
+                  tmp52 = tmp51**(2)
+                  tmp53 = self%r(2, i) + tmp23
+                  tmp54 = tmp53**(2)
+                  tmp55 = tmp52 + tmp54
+                  tmp56 = self%r(3, i) + tmp27
+                  tmp57 = tmp56**(2)
+                  tmp58 = tmp55 + tmp57
+                  tmp59 = tmp19*tmp58
+                  tmp60 = tmp59*tmp48
+                  tmp61 = -tmp60
+                  tmp62 = tmp50 + tmp61
+                  if (tmp62 >= 0.0_wp) then
+                     tmp64 = tmp15*tmp51
+                     tmp65 = tmp53*tmp16
+                     tmp66 = tmp64 + tmp65
+                     tmp67 = tmp56*tmp17
+                     tmp68 = tmp66 + tmp67
+                     tmp69 = 1.0_wp/sqrt(tmp49)
+                     tmp70 = tmp69**(2)
+                     tmp71 = tmp59*tmp70
+                     tmp72 = tmp71*tmp48
+                     tmp73 = 1.7449553823426687e-10_wp*tmp72
+                     tmp74 = (-2.2614621755160987e-09_wp) + tmp73
+                     tmp75 = tmp72*tmp74
+                     tmp76 = 2.703922166377944e-08_wp + tmp75
+                     tmp77 = tmp59*tmp76
+                     tmp78 = tmp77*tmp70
+                     tmp79 = tmp78*tmp48
+                     tmp80 = (-2.961438563175843e-07_wp) + tmp79
+                     tmp81 = tmp71*tmp80
+                     tmp82 = tmp81*tmp48
+                     tmp83 = 2.9458520444222863e-06_wp + tmp82
+                     tmp84 = tmp19*tmp83
+                     tmp85 = tmp84*tmp58
+                     tmp86 = tmp85*tmp70
+                     tmp87 = tmp86*tmp48
+                     tmp88 = (-2.6339382985422794e-05_wp) + tmp87
+                     tmp89 = tmp19*tmp88
+                     tmp90 = tmp89*tmp58
+                     tmp91 = tmp90*tmp70
+                     tmp92 = tmp91*tmp48
+                     tmp93 = 0.00020895910501768752_wp + tmp92
+                     tmp94 = tmp59*tmp93
+                     tmp95 = tmp94*tmp70
+                     tmp96 = tmp95*tmp48
+                     tmp97 = (-0.0014466399578147598_wp) + tmp96
+                     tmp98 = tmp72*tmp97
+                     tmp99 = 0.008548327023450852_wp + tmp98
+                     tmp100 = tmp72*tmp99
+                     tmp101 = (-0.0417918210035375_wp) + tmp100
+                     tmp102 = tmp19*tmp101
+                     tmp103 = tmp102*tmp58
+                     tmp104 = tmp103*tmp70
+                     tmp105 = tmp104*tmp48
+                     tmp106 = 0.16119702387078752_wp + tmp105
+                     tmp107 = tmp72*tmp106
+                     tmp108 = (-0.45135166683820505_wp) + tmp107
+                     tmp109 = tmp71*tmp108
+                     tmp110 = tmp109*tmp48
+                     tmp111 = 0.7522527780636751_wp + tmp110
+                     tmp112 = tmp68*tmp111
+                     tmp113 = tmp69*self%xi(i)
+                     tmp114 = tmp113*tmp11
+                     tmp115 = tmp114**(3)
+                     tmp63 = tmp112*tmp115
+                  else
+                     tmp116 = tmp15*tmp51
+                     tmp117 = tmp53*tmp16
+                     tmp118 = tmp116 + tmp117
+                     tmp119 = tmp56*tmp17
+                     tmp120 = tmp118 + tmp119
+                     tmp121 = 1.0_wp/sqrt(tmp58)
+                     tmp122 = tmp121**(3)
+                     tmp123 = tmp120*tmp122
+                     tmp124 = 1.0_wp/sqrt(tmp49)
+                     tmp125 = tmp124*self%xi(i)
+                     tmp126 = sqrt(tmp58)
+                     tmp127 = tmp125*tmp126
+                     tmp128 = tmp127*tmp11
+                     tmp129 = erf(tmp128)
+                     tmp130 = tmp128**(2)
+                     tmp131 = -tmp130
+                     tmp132 = exp(tmp131)
+                     tmp133 = tmp127*tmp132
+                     tmp134 = tmp133*tmp11
+                     tmp135 = (-1.1283791670955126_wp)*tmp134
+                     tmp136 = tmp129 + tmp135
+                     tmp63 = tmp123*tmp136
+                  end if
+                  tmp137 = tmp1(i)*tmp63
+                  tmp9 = tmp9 + tmp137
+               end if
+            end do
+            tmp2(j) = tmp2(j) + tmp9
+         end do
+         !$omp end do
+         deallocate (tmp8)
+         !$omp end parallel
+      end block
+      tmp138 = self%c1*tmp2
+      tmp139 = self%c1*x
+      tmp140 = 6.283185307179586_wp*tmp139
+      tmp141 = tmp138 + tmp140
+      tmp142 = -tmp141
+      tmp143 = self%c2*x
+      tmp144 = tmp142 + tmp143
+      tmp145 = self%c3*tmp2
+      y = tmp144 + tmp145
+   end subroutine slic_op2_apply_n
 
    !> Form operator 2 of the points idx alone
    !>
