@@ -14,7 +14,7 @@ module test_cavity_mt
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
+   use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_cavity_type, only: cavity_type
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, nuclear_charge_request_type
    use moist_channels_fields, only: field_query_type
@@ -227,7 +227,7 @@ contains
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: fine, coarse
       type(moist_cavity_mt_parameters_type) :: param
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: bump
+      type(moist_math_smoothstep_sigmoid_type) :: bump
       real(wp) :: xyz(3, 2), area
       integer :: i
 
@@ -247,7 +247,7 @@ contains
       call check(error, abs(fine%total_area/coarse%total_area - 1.0_wp) < 1.0e-10_wp, &
          & more="Switched area depends on the patch partition")
       if (allocated(error)) return
-      call new_swif_sigmoid_bump(bump, param%w_0ls_from, param%w_0ls_to, &
+      call new_smoothstep_sigmoid(bump, param%w_0ls_from, param%w_0ls_to, &
          & p_hi=param%w_0ls_p, p_lo=param%w_0ls_p, a_hi=param%w_0ls_a, a_lo=param%w_0ls_a)
       do i = 1, coarse%ngrid
          call switched_area(error, coarse, bump, coarse%patch_index(i), area)
@@ -268,7 +268,7 @@ contains
       !> Built cavity
       type(cavity_type_mt), intent(inout) :: cav
       !> Critical switch
-      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(in) :: bump
+      type(moist_math_smoothstep_sigmoid_type), intent(in) :: bump
       !> Patch index
       integer, intent(in) :: patch
       !> Switched area

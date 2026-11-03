@@ -7,9 +7,9 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
-                                          new_swif_smooth_step, moist_cavity_drop_swif_sigmoid_bump_type, &
-                                          new_swif_sigmoid_bump
+   use moist_math_smoothstep, only: moist_math_smoothstep_erf_type, &
+                                          new_smoothstep_erf, moist_math_smoothstep_sigmoid_type, &
+                                          new_smoothstep_sigmoid
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -588,7 +588,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol_base, mol_shift
       type(moist_cavity_drop_lsf_svdw_type) :: prim
-      type(moist_cavity_drop_swif_smooth_step_type) :: sw
+      type(moist_math_smoothstep_erf_type) :: sw
       real(wp), allocatable :: radii(:), points(:, :)
       real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
       integer :: icase, ipt, atom, axis
@@ -611,7 +611,7 @@ contains
          call get_test_points(mol_base, points)
          allocate (centers_base(ndim, mol_base%nat), centers_local(ndim, mol_base%nat))
          centers_base = mol_base%xyz
-         call new_swif_smooth_step(sw, -0.5_wp, 0.5_wp)
+         call new_smoothstep_erf(sw, -0.5_wp, 0.5_wp)
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
@@ -697,10 +697,10 @@ contains
    subroutine test_switching_endpoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: critical
+      type(moist_math_smoothstep_sigmoid_type) :: critical
       real(wp) :: value
       logical :: raised, previous
-      call new_swif_sigmoid_bump(critical, 0.0_wp, 1.0_wp, &
+      call new_smoothstep_sigmoid(critical, 0.0_wp, 1.0_wp, &
                                  p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
       call ieee_get_flag(ieee_divide_by_zero, previous)
       call ieee_set_flag(ieee_divide_by_zero, .false.)
@@ -743,7 +743,7 @@ contains
          case (4)
             param%proj_level = 0
          case (5)
-            param%proj_level = 10
+            param%proj_level = 5
          case default
             error stop "test_cavity_drop_primitives: unhandled icase"
          end select

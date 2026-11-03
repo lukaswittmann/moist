@@ -21,7 +21,7 @@ module moist_model_continuum_component_gostshyp
       & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
+   use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_utils_prettyprint, only: prettyprinter
 
    implicit none(type, external)
@@ -363,7 +363,7 @@ contains
       !> Trace switch S(|f|), its derivative, R(f) and R'(f) at one point
       real(wp) :: trace_switch, dtrace_switch, reciprocal, dreciprocal
       !> C-infinity trace switch rising from band_start to band_end
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: bump
+      type(moist_math_smoothstep_sigmoid_type) :: bump
       !> Area switch value and area derivative at one point
       real(wp) :: switch, dswitch
       !> Point index and evaluation diagnostics
@@ -392,7 +392,7 @@ contains
       stats = 0
       band_start = self%param%regularization_start
       band_end = self%param%regularization_end
-      call new_swif_sigmoid_bump(bump, band_start, band_end)
+      call new_smoothstep_sigmoid(bump, band_start, band_end)
       pressure = self%scale*self%pressure
       do i = 1, cavity%ngrid
          if (cavity%a(i) > 0.0_wp .and. omega(i) == 0.0_wp) stats(4) = stats(4) + 1
