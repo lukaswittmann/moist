@@ -117,7 +117,7 @@ jobs:
       - name: Build and test (cmake)
         if: matrix.build == 'cmake'
         run: |
-          meson subprojects download
+          meson subprojects download --num-processes 1
           cmake -B build -G Ninja -DMOIST_LAPACK=${{ matrix.lapack }}
           cmake --build build
           ctest --test-dir build --output-on-failure -j 4
@@ -167,7 +167,7 @@ jobs:
       - name: Build and test (cmake)
         if: matrix.build == 'cmake'
         run: |
-          meson subprojects download
+          meson subprojects download --num-processes 1
           cmake -B build -G Ninja -DMOIST_LAPACK=${{ matrix.lapack }}
           cmake --build build
           ctest --test-dir build --output-on-failure -j 4
@@ -211,7 +211,7 @@ jobs:
       - name: Build and test (cmake)
         if: matrix.build == 'cmake'
         run: |
-          meson subprojects download
+          meson subprojects download --num-processes 1
           cmake -B build -G Ninja -DMOIST_LAPACK=openblas
           cmake --build build
           ctest --test-dir build --output-on-failure -j 4
@@ -272,7 +272,7 @@ jobs:
       - name: Build and test (cmake)
         if: matrix.build == 'cmake'
         run: >-
-          meson subprojects download
+          meson subprojects download --num-processes 1
           && cmake -B build -G Ninja -DMOIST_LAPACK=mkl
           && cmake --build build
           && ctest --test-dir build --output-on-failure -j 4
