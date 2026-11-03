@@ -13,6 +13,10 @@ module moist_cavity_drop_parameters
    integer, parameter :: maxAtomicNumbers = 118
 
    public :: moist_cavity_drop_parameters_type
+   public :: proj_level_max
+
+   !> Highest projection level
+   integer, parameter :: proj_level_max = 9
    private
 
    !> Parameter container for DROP
@@ -44,6 +48,10 @@ module moist_cavity_drop_parameters
 
       !> Store anchor-to-projected-point displacement distances
       logical :: do_rho = .false.
+
+      !> Partition the area of each point among the atoms by the level set's
+      !> atomic shares; skipped with a warning by a level set without them
+      logical :: do_atomarea = .false.
 
       !* ---------------------------------- Tolerance --------------------------------- *!
 
@@ -263,6 +271,7 @@ contains
       self%do_normal = fresh%do_normal
       self%do_r_iI = fresh%do_r_iI
       self%do_rho = fresh%do_rho
+      self%do_atomarea = fresh%do_atomarea
       ! Tolerance (master; proj_tol, wleb_cut, branch_sep_cut are derived
       ! from this in compute_derived; LSF screening lives on the LSF concrete)
       self%tolerance = fresh%tolerance
@@ -322,7 +331,7 @@ contains
       real(wp) :: weight_floor
 
       if (self%tolerance <= 0.0_wp .or. self%rho_grid_h <= 0.0_wp .or. &
-          self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > 9) then
+          self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > proj_level_max) then
          call fatal_error(error, "Invalid DROP numerical parameters")
          return
       end if
@@ -382,6 +391,7 @@ contains
          self%do_normal = .true.
          self%do_r_iI = .true.
          self%do_rho = .true.
+         self%do_atomarea = .true.
       end if
 
       !> Derive weight switching bounds from level
@@ -439,6 +449,7 @@ contains
       call self%register_logical("do_normal", self%do_normal)
       call self%register_logical("do_r_iI", self%do_r_iI)
       call self%register_logical("do_rho", self%do_rho)
+      call self%register_logical("do_atomarea", self%do_atomarea)
       ! Grid
       call self%register_int_scalar("grid.num_leb", self%num_leb)
       ! Tolerance (master; wleb_cut, proj_tol, branch_sep are derived;
@@ -679,9 +690,9 @@ contains
          call pp%kv("Surface normals", self%do_normal)
          call pp%kv("r_iI distances", self%do_r_iI)
          call pp%kv("rho displacements", self%do_rho)
+         call pp%kv("Atom areas", self%do_atomarea)
          call pp%pop()
       end if
-      call pp%blank()
 
    end subroutine print_parameters
 

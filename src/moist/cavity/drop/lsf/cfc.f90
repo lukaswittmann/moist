@@ -146,6 +146,10 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: f4_rr_rArB => lsf_f4_rr_rArB
       !> Normalized level set f0 / ||f1_r|| and its nuclear derivative
       procedure, public :: normalized_f01_rA => lsf_normalized_f01_rA
+      !> CFC splits into atomic shares
+      procedure, public :: has_atom_partition => lsf_has_atom_partition
+      !> Add the atomic shares of PD at the prepared point
+      procedure, public :: atom_partition => lsf_atom_partition
       !> Directional nuclear derivative of the value
       procedure, public :: tangent_f0 => lsf_tangent_f0
       !> Directional nuclear derivative of the spatial gradient
@@ -848,6 +852,70 @@ contains
          deriv_rA(:, ia) = f1_rA*inv_g - f0*gd*inv_g3
       end do
    end subroutine lsf_normalized_f01_rA
+
+   !* ================================================================================= *!
+   !*                                 Atomic partition                                  *!
+   !* ================================================================================= *!
+
+   !> CFC splits into atomic shares
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_has_atom_partition(self) result(available)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Always available
+      logical :: available
+
+      available = .true.
+   end function lsf_has_atom_partition
+
+   !> Add the atomic shares of PD at the prepared point
+   !>
+   !> @param[inout] self  LSF instance
+   !> @param[in]    scale Weight of the point
+   !> @param[inout] acc   Per-atom accumulator, user space [ncenters]
+   subroutine lsf_atom_partition(self, scale, acc)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
+      !> Weight of the point
+      real(wp), intent(in) :: scale
+      !> Per-atom accumulator
+      real(wp), intent(inout) :: acc(:)
+
+      !> Atomic shares of PD, active-indexed
+      real(wp) :: pd_atom(self%n_active)
+      !> Value of one term, and its unused derivative accumulators
+      real(wp) :: t0, t1(ndim), t2(ndim, ndim), t3(ndim, ndim, ndim)
+      real(wp) :: t4(ndim, ndim, ndim, ndim)
+      integer :: i, j
+
+      if (self%n_active == 0) return
+      t1 = 0.0_wp
+      t2 = 0.0_wp
+      t3 = 0.0_wp
+      t4 = 0.0_wp
+
+      do i = 1, self%n_active
+         t0 = 0.0_wp
+         call cfc_atomic_term_eval(self%act_d(:, i), self%act_radius(i), &
+                                   self%param%a1, 0, t0, t1, t2, t3, t4)
+         pd_atom(i) = t0
+      end do
+      do i = 1, self%n_active
+         do j = i + 1, self%n_active
+            t0 = 0.0_wp
+            call cfc_pair_spatial_eval(self%act_d(:, i), self%act_d(:, j), &
+                                       self%act_radius(i), self%act_radius(j), &
+                                       self%param%a2, self%param%c, 0, t0, t1, t2, t3, t4)
+            pd_atom(i) = pd_atom(i) + 0.5_wp*t0
+            pd_atom(j) = pd_atom(j) + 0.5_wp*t0
+         end do
+      end do
+      pd_atom = pd_atom*(scale/sum(pd_atom))
+      do i = 1, self%n_active
+         acc(self%act_atom(i)) = acc(self%act_atom(i)) + pd_atom(i)
+      end do
+   end subroutine lsf_atom_partition
 
    !* ================================================================================= *!
    !*                          Two-nuclear-index derivatives                            *!

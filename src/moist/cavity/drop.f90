@@ -34,6 +34,7 @@ module moist_cavity_drop
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    use moist_cavity_drop_lsf_isodensity, only: &
       moist_cavity_drop_lsf_isodensity_internal_type, &
       moist_cavity_drop_lsf_isodensity_callback_type
@@ -129,6 +130,8 @@ module moist_cavity_drop
 
       !* ------------------------------------ Areas ----------------------------------- *!
 
+      !> Per-atom areas from the level set's atomic shares at each point (nsph)
+      real(wp), allocatable :: asph_partition(:)
       !> Per-gridpoint derivatives of the area (3, nsph, ngrid)
       real(wp), allocatable :: a_i1_rA(:, :, :)
       !> Accumulated gradient of per-atom areas w.r.t. nuclear coordinates (3, nsph, nsph_owner)
@@ -261,6 +264,8 @@ module moist_cavity_drop
 
       !> Compute surface area from projected grid
       procedure :: compute_area_volume
+      !> Partition the surface area among the atoms by the level set
+      procedure :: compute_atom_area
 
       !> Cache Lebedev grid for current num_leb
       procedure :: ensure_lebedev_cache
@@ -379,6 +384,13 @@ module moist_cavity_drop
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_area_volume
+
+      !> [properties.f90] Partition the surface area among the atoms by the level set
+      module subroutine compute_atom_area(self, error)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(inout) :: self
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine compute_atom_area
 
       !> [properties.f90] Compute mean and Gaussian curvature on the surface grid
       module subroutine compute_curvature(self, error)
@@ -719,6 +731,8 @@ contains
             call m%param%print(unit=iu)
          type is (moist_cavity_drop_lsf_cfc_type)
             call m%param%print(unit=iu)
+         type is (moist_cavity_drop_lsf_sses_type)
+            call m%param%print(unit=iu)
          type is (moist_cavity_drop_lsf_isodensity_internal_type)
             call m%param%print(unit=iu, level=lvl)
          type is (moist_cavity_drop_lsf_isodensity_callback_type)
@@ -756,6 +770,7 @@ contains
       if (allocated(self%k2)) deallocate (self%k2)
       if (allocated(self%KM)) deallocate (self%KM)
       if (allocated(self%KG)) deallocate (self%KG)
+      if (allocated(self%asph_partition)) deallocate (self%asph_partition)
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
@@ -858,6 +873,7 @@ contains
       if (allocated(self%w_f1_rA)) deallocate (self%w_f1_rA)
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
       if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
+      if (allocated(self%asph_partition)) deallocate (self%asph_partition)
 
       !> Refresh LSF geometry caches
       call self%lsf_model%update(self%mol, self%radii)
@@ -1019,6 +1035,17 @@ contains
          return
       end if
       call self%ctx%timer%stop("Area & Volume")
+
+      !> Partition the area among the atoms [optional diagnostic]
+      if (self%param%do_atomarea) then
+         call self%ctx%timer%start("Atom areas")
+         call self%compute_atom_area(error)
+         if (allocated(error)) then
+            call self%ctx%timer%unwind(d0)
+            return
+         end if
+         call self%ctx%timer%stop("Atom areas")
+      end if
 
       !> Compute Gaussian surface charge widths
       call self%ctx%timer%start("Gaussians")
@@ -1369,6 +1396,7 @@ contains
       ! Deallocate inherited allocatable components from base cavity_type
       if (allocated(self%mol)) deallocate (self%mol)
       if (allocated(self%asph)) deallocate (self%asph)
+      if (allocated(self%asph_partition)) deallocate (self%asph_partition)
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)
       if (allocated(self%radii)) deallocate (self%radii)

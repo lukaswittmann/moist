@@ -205,6 +205,10 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: f4_rr_rA_rad => lsf_f4_rr_rA_rad
       !> Normalized level set f0 / ||f1_r|| and its nuclear derivative
       procedure, public :: normalized_f01_rA => lsf_normalized_f01_rA
+      !> SvdW splits into atomic shares
+      procedure, public :: has_atom_partition => lsf_has_atom_partition
+      !> Add the atomic shares of Z at the prepared point
+      procedure, public :: atom_partition => lsf_atom_partition
       !> Directional nuclear derivative of the value
       procedure, public :: tangent_f0 => lsf_tangent_f0
       !> Directional nuclear derivative of the spatial gradient
@@ -1119,6 +1123,65 @@ contains
          deriv_rA(:, ia) = norm1_rA
       end do
    end subroutine lsf_normalized_f01_rA
+
+   !* ================================================================================= *!
+   !*                                 Atomic partition                                  *!
+   !* ================================================================================= *!
+
+   !> SvdW splits into atomic shares
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_has_atom_partition(self) result(available)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Always available
+      logical :: available
+
+      available = .true.
+   end function lsf_has_atom_partition
+
+   !> Add the atomic shares of Z at the prepared point
+   !>
+   !> @param[inout] self  LSF instance
+   !> @param[in]    scale Weight of the point
+   !> @param[inout] acc   Per-atom accumulator, user space [ncenters]
+   subroutine lsf_atom_partition(self, scale, acc)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
+      !> Weight of the point
+      real(wp), intent(in) :: scale
+      !> Per-atom accumulator
+      real(wp), intent(inout) :: acc(:)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Per-atom kind tensors, only order 0 read
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Atomic shares of Z, active-indexed
+      real(wp) :: z_atom(self%n_active)
+      !> Power sums p1, p2 and q, and p1 without the atom
+      real(wp) :: p1, p2, q, p1_other
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(0, "atom_partition")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      p1 = self%ps0(1)
+      p2 = self%ps0(2)
+      q = self%ps0(4)
+      do ia = 1, self%n_active
+         call atom_tensors(self, ia, 0, at0, at1, at2, at3, at4)
+         p1_other = p1 - at0(1)
+         z_atom(ia) = s_1*at0(3) + 0.5_wp*s_2*at0(4)*(q - at0(4)) &
+                      + s_3/6.0_wp*at0(1)*(p1_other*p1_other - (p2 - at0(2)))
+      end do
+      z_atom = z_atom*(scale/sum(z_atom))
+      do ia = 1, self%n_active
+         acc(self%act_atom(ia)) = acc(self%act_atom(ia)) + z_atom(ia)
+      end do
+   end subroutine lsf_atom_partition
 
    !* ================================================================================= *!
    !*                          Two-nuclear-index derivatives                            *!
