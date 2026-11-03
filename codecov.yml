@@ -48,7 +48,6 @@ ignore:
   - "src/moist/math/solver/fmin/"
   - "src/moist/math/solver/lbfgsb/"
   - "src/moist/math/solver/newton/"
-  - "src/moist/math/solver/slsqp/"
 
   # FFT backends
   - "src/moist/math/fft/ducc0/"
