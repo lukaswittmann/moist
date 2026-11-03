@@ -1,23 +1,23 @@
 
-
 !> fclap-based command line interface for moist
 module moist_cli
-   use, intrinsic :: iso_fortran_env, only : output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_lsf_sses_param, only: moist_cavity_drop_lsf_sses_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use moist_cavity_mc, only: moist_cavity_mc_parameters_type
    use moist_cavity_mt, only: moist_cavity_mt_parameters_type
    use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
-   use mctc_env, only : error_type, fatal_error, wp
-   use mctc_io_convert, only: aatoau
-   use mctc_io, only : get_filetype
-   use moist, only : get_moist_version
-   use moist_output_ascii, only : moist_header, moist_build_header
-   use moist_output_citations, only : print_citations
-   use moist_output_license, only : print_license
-   use fclap, only : ArgumentParser, Namespace, not_less_than
+   use mctc_env, only: error_type, fatal_error, wp
+   use mctc_io, only: get_filetype
+   use moist, only: get_moist_version
+   use moist_output_ascii, only: moist_header, moist_build_header
+   use moist_output_citations, only: print_citations
+   use moist_output_license, only: print_license
+   use fclap, only: ArgumentParser, Namespace, not_less_than
    implicit none(type, external)
    private
 
@@ -42,7 +42,6 @@ module moist_cli
    contains
       procedure :: init => subsubparser_spec_init
    end type subsubparser_spec
-
 
    !> Configuration data for running stand-alone calculations
    type :: run_config
@@ -90,6 +89,8 @@ module moist_cli
       !> Native level set settings (DROP, mc, mt)
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
+      !> SSES physical parameters in Bohr
+      type(moist_cavity_drop_lsf_sses_param_type) :: sses
 
       !> Write cavity files to disk (grid types: xyz/csv/pqr, marching cubes: obj/pqr)
       logical :: dump = .false.
@@ -98,803 +99,856 @@ module moist_cli
 
 contains
 
-
 !> Parse command line arguments and build run configuration
 !> @param[out] config Parsed runtime configuration for the driver
 !> @param[out] error  Allocated on command line validation failures
-subroutine get_arguments(config, error)
+   subroutine get_arguments(config, error)
 
-   !> Configuation data
-   type(run_config), intent(out) :: config
+      !> Configuation data
+      type(run_config), intent(out) :: config
 
-   !> Error handling
-   type(error_type), allocatable, intent(out) :: error
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-   type(ArgumentParser), save :: parser
-   type(ArgumentParser), save :: general_parent
-   type(ArgumentParser), save :: model_parser
-   type(ArgumentParser), save :: model_subparsers(1)
-   type(ArgumentParser), save :: cavity_parser
-   type(ArgumentParser), save :: cavity_subparsers(5)
-   type(ArgumentParser), save :: drop_parser
-   type(ArgumentParser), save :: drop_subparsers(2)
-   type(ArgumentParser), save :: mc_parser
-   type(ArgumentParser), save :: mc_subparsers(2)
-   type(ArgumentParser), save :: mt_parser
-   type(ArgumentParser), save :: mt_subparsers(2)
-   type(ArgumentParser), save :: solvent_parser
-   type(Namespace) :: args
-   type(subsubparser_spec) :: model_specs(1)
-   type(subsubparser_spec) :: cavity_specs(5)
+      type(ArgumentParser), save :: parser
+      type(ArgumentParser), save :: general_parent
+      type(ArgumentParser), save :: model_parser
+      type(ArgumentParser), save :: model_subparsers(1)
+      type(ArgumentParser), save :: cavity_parser
+      type(ArgumentParser), save :: cavity_subparsers(5)
+      type(ArgumentParser), save :: drop_parser
+      type(ArgumentParser), save :: drop_subparsers(3)
+      type(ArgumentParser), save :: mc_parser
+      type(ArgumentParser), save :: mc_subparsers(3)
+      type(ArgumentParser), save :: mt_parser
+      type(ArgumentParser), save :: mt_subparsers(3)
+      type(ArgumentParser), save :: solvent_parser
+      type(Namespace) :: args
+      type(subsubparser_spec) :: model_specs(1)
+      type(subsubparser_spec) :: cavity_specs(5)
 
-   character(len=:), allocatable :: version_string
-   character(len=32) :: command
-   character(len=256) :: str_tmp
-   integer :: verbose_count, quiet_count
-   logical :: show_citation, show_license
+      character(len=:), allocatable :: version_string
+      character(len=32) :: command
+      character(len=256) :: str_tmp
+      integer :: verbose_count, quiet_count
+      logical :: show_citation, show_license
 
-   call moist_header(output_unit)
-   call moist_build_header(output_unit)
+      call moist_header(output_unit)
+      call moist_build_header(output_unit)
 
-   call get_moist_version(string=version_string)
+      call get_moist_version(string=version_string)
 
-   call parser%init( &
-      prog="moist", &
-      description="Modular and Open-source Implicit Solvation Toolkit", &
-      epilog="For more information, see the documentation at https://github.com/lukaswittmann/moist", &
-      version="v"//version_string)
+      call parser%init( &
+         prog="moist", &
+         description="Modular and Open-source Implicit Solvation Toolkit", &
+         epilog="For more information, see the documentation at https://github.com/lukaswittmann/moist", &
+         version="v"//version_string)
 
-   call parser%add_argument("--citation", action="store_true", dest="citation", &
-      help="Print citation information and exit")
-   call parser%add_argument("--license", action="store_true", dest="license", &
-      help="Print full license information and exit")
+      call parser%add_argument("--citation", action="store_true", dest="citation", &
+                               help="Print citation information and exit")
+      call parser%add_argument("--license", action="store_true", dest="license", &
+                               help="Print full license information and exit")
 
-   call parser%add_subparsers(title="subcommands", dest="command")
+      call parser%add_subparsers(title="subcommands", dest="command")
 
-   call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
-      "Run the GEMS solvation model")
+      call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
+                               "Run the GEMS solvation model")
 
-   call cavity_specs(1)%init("numsa", "NUMSA cavity", "moist cavity numsa", &
-      "Construct NUMSA cavities")
-   call cavity_specs(2)%init("iswig", "ISWIG cavity", "moist cavity iswig", &
-      "Construct ISWIG cavities")
-   call cavity_specs(3)%init("drop", "DROP cavity", "moist cavity drop", &
-      "Construct DROP/DROP cavities")
-   call cavity_specs(4)%init("mc", "Marching cubes cavity", "moist cavity mc", &
-      "Integrate a level set isosurface with marching cubes")
-   call cavity_specs(5)%init("mt", "Marching tetrahedra cavity", "moist cavity mt", &
-      "Construct frozen near equal-area planar patches")
+      call cavity_specs(1)%init("numsa", "NUMSA cavity", "moist cavity numsa", &
+                                "Construct NUMSA cavities")
+      call cavity_specs(2)%init("iswig", "ISWIG cavity", "moist cavity iswig", &
+                                "Construct ISWIG cavities")
+      call cavity_specs(3)%init("drop", "DROP cavity", "moist cavity drop", &
+                                "Construct DROP/DROP cavities")
+      call cavity_specs(4)%init("mc", "Marching cubes cavity", "moist cavity mc", &
+                                "Integrate a level set isosurface with marching cubes")
+      call cavity_specs(5)%init("mt", "Marching tetrahedra cavity", "moist cavity mt", &
+                                "Construct frozen near equal-area planar patches")
 
-   call setup_general_parent(general_parent)
-   call setup_model_parser(model_parser, general_parent, model_specs, model_subparsers)
-   call setup_cavity_parser(cavity_parser, general_parent, cavity_specs, cavity_subparsers, &
-      drop_parser, drop_subparsers, mc_parser, mc_subparsers, mt_parser, mt_subparsers)
-   call setup_solvent_parser(solvent_parser, general_parent)
+      call setup_general_parent(general_parent)
+      call setup_model_parser(model_parser, general_parent, model_specs, model_subparsers)
+      call setup_cavity_parser(cavity_parser, general_parent, cavity_specs, cavity_subparsers, &
+                               drop_parser, drop_subparsers, mc_parser, mc_subparsers, mt_parser, mt_subparsers)
+      call setup_solvent_parser(solvent_parser, general_parent)
 
-   call parser%add_parser("model", model_parser, &
-      help_text="Run a full solvation model")
-   call parser%add_parser("cavity", cavity_parser, &
-      help_text="Construct a cavity (numsa, iswig, drop, mc, mt)")
-   call parser%add_parser("solvent", solvent_parser, &
-      help_text="Inspect solvent properties by name or alias")
+      call parser%add_parser("model", model_parser, &
+                             help_text="Run a full solvation model")
+      call parser%add_parser("cavity", cavity_parser, &
+                             help_text="Construct a cavity (numsa, iswig, drop, mc, mt)")
+      call parser%add_parser("solvent", solvent_parser, &
+                             help_text="Inspect solvent properties by name or alias")
 
-   args = parser%parse_args()
+      args = parser%parse_args()
 
-   show_citation = .false.
-   show_license = .false.
-   if (args%has_key("citation")) call args%get("citation", show_citation)
-   if (args%has_key("license")) call args%get("license", show_license)
+      show_citation = .false.
+      show_license = .false.
+      if (args%has_key("citation")) call args%get("citation", show_citation)
+      if (args%has_key("license")) call args%get("license", show_license)
 
-   if (show_citation) then
-      call print_citations(output_unit)
-      stop
-   end if
+      if (show_citation) then
+         call print_citations(output_unit)
+         stop
+      end if
 
-   if (show_license) then
-      call print_license(output_unit)
-      stop
-   end if
+      if (show_license) then
+         call print_license(output_unit)
+         stop
+      end if
 
-   if (.not. args%has_key("command")) then
-      call fatal_error(error, "Select one of: model, cavity, solvent subcommands")
-      return
-   end if
-
-   call args%get("command", command)
-
-   verbose_count = 0
-   quiet_count = 0
-   if (args%has_key("verbose")) call args%get("verbose", verbose_count)
-   if (args%has_key("quiet")) call args%get("quiet", quiet_count)
-   if (args%has_key("debug")) call args%get("debug", config%debug)
-   if (args%has_key("profile")) call args%get("profile", config%profile)
-   if (args%has_key("threads")) call args%get("threads", config%num_threads)
-   config%verbosity = config%verbosity + verbose_count - quiet_count
-
-   select case(trim(command))
-   case("model")
-      if (.not. args%has_key("model_mode")) then
-         call fatal_error(error, "Currently no model is available.")
+      if (.not. args%has_key("command")) then
+         call fatal_error(error, "Select one of: model, cavity, solvent subcommands")
          return
       end if
 
-      call args%get("model_mode", config%mode)
-      call args%get("input", config%input)
+      call args%get("command", command)
 
-      if (args%has_key("charge")) then
-         allocate(config%charge)
-         call args%get("charge", config%charge)
-      end if
+      verbose_count = 0
+      quiet_count = 0
+      if (args%has_key("verbose")) call args%get("verbose", verbose_count)
+      if (args%has_key("quiet")) call args%get("quiet", quiet_count)
+      if (args%has_key("debug")) call args%get("debug", config%debug)
+      if (args%has_key("profile")) call args%get("profile", config%profile)
+      if (args%has_key("threads")) call args%get("threads", config%num_threads)
+      config%verbosity = config%verbosity + verbose_count - quiet_count
 
-      if (args%has_key("solvent")) then
+      select case (trim(command))
+      case ("model")
+         if (.not. args%has_key("model_mode")) then
+            call fatal_error(error, "Currently no model is available.")
+            return
+         end if
+
+         call args%get("model_mode", config%mode)
+         call args%get("input", config%input)
+
+         if (args%has_key("charge")) then
+            allocate (config%charge)
+            call args%get("charge", config%charge)
+         end if
+
+         if (args%has_key("solvent")) then
+            call args%get("solvent", config%solvent)
+            config%solvent = trim(adjustl(config%solvent))
+         end if
+
+         if (args%has_key("temperature")) then
+            call args%get("temperature", config%temperature)
+         end if
+
+         if (args%has_key("pressure")) then
+            call args%get("pressure", config%pressure_si)
+         end if
+
+         if (args%has_key("numgrad")) then
+            call args%get("numgrad", config%numgrad)
+         end if
+         if (config%numgrad) config%grad = .true.
+
+         if (args%has_key("writeenergy")) then
+            call args%get("writeenergy", config%writeenergy)
+         end if
+
+         if (args%has_key("parameters_path")) then
+            call args%get("parameters_path", str_tmp)
+            config%parameters_path = trim(adjustl(str_tmp))
+            if (len_trim(config%parameters_path) > 0) config%read_parameters = .true.
+         end if
+
+      case ("cavity")
+         if (.not. args%has_key("cavity_mode")) then
+            call fatal_error(error, "Select one of: numsa, iswig, drop, mc, or mt cavity types")
+            return
+         end if
+
+         call args%get("cavity_mode", config%mode)
+         if (trim(config%mode) == "drop" .or. trim(config%mode) == "mc" .or. &
+             trim(config%mode) == "mt") then
+            if (.not. args%has_key("drop_variant")) then
+               call fatal_error(error, "Select one of: svdw, cfc, sses level set functions")
+               return
+            end if
+            call args%get("drop_variant", config%drop_variant)
+         end if
+         call args%get("input", config%input)
+
+         if (args%has_key("nleb")) then
+            select case (trim(config%mode))
+            case ("numsa")
+               call args%get("nleb", config%numsa%num_leb)
+            case ("iswig")
+               call args%get("nleb", config%iswig%num_leb)
+            case ("drop")
+               call args%get("nleb", config%drop%num_leb)
+            case default
+               call fatal_error(error, "Unknown cavity mode")
+               return
+            end select
+         end if
+
+         if (args%has_key("radii")) then
+            call args%get("radii", config%radii)
+         end if
+         config%radii = trim(adjustl(config%radii))
+
+         ! DROP
+         if (args%has_key("drop_tolerance")) call args%get("drop_tolerance", config%drop%tolerance)
+         if (args%has_key("drop_proj_level")) call args%get("drop_proj_level", config%drop%proj_level)
+         if (args%has_key("drop_wleb_prune_level")) call args%get("drop_wleb_prune_level", config%drop%wleb_prune_level)
+         if (args%has_key("drop_fine")) call args%get("drop_fine", config%drop%do_fine)
+
+         ! Marching cubes
+         if (args%has_key("mc_spacing")) call args%get("mc_spacing", config%mc%spacing)
+
+         ! Marching tetrahedron
+         if (args%has_key("mt_spacing")) call args%get("mt_spacing", config%mt%spacing)
+         if (args%has_key("mt_target_area")) call args%get("mt_target_area", config%mt%target_area)
+         if (args%has_key("mt_area_tolerance")) call args%get("mt_area_tolerance", config%mt%area_tolerance)
+         if (args%has_key("mt_gaussian_scale")) call args%get("mt_gaussian_scale", config%mt%gaussian_scale)
+         if (args%has_key("mt_weight_cutoff")) call args%get("mt_weight_cutoff", config%mt%weight_cutoff)
+
+         ! SvdW
+         if (args%has_key("svdw_blend_k")) call args%get("svdw_blend_k", config%svdw%blend_k)
+         if (args%has_key("svdw_blend_1b")) call args%get("svdw_blend_1b", config%svdw%blend_1b)
+         if (args%has_key("svdw_blend_2b")) call args%get("svdw_blend_2b", config%svdw%blend_2b)
+         if (args%has_key("svdw_blend_3b")) call args%get("svdw_blend_3b", config%svdw%blend_3b)
+
+         ! CFC
+         if (args%has_key("cfc_a1")) call args%get("cfc_a1", config%cfc%a1)
+         if (args%has_key("cfc_a2")) call args%get("cfc_a2", config%cfc%a2)
+         if (args%has_key("cfc_c")) call args%get("cfc_c", config%cfc%c)
+         if (args%has_key("cfc_m")) call args%get("cfc_m", config%cfc%m)
+
+         ! SSES lengths in Bohr
+         if (args%has_key("sses_probe_radius")) call args%get("sses_probe_radius", config%sses%probe_radius)
+         if (args%has_key("sses_smoothing_length")) call args%get("sses_smoothing_length", config%sses%smoothing_length)
+         if (args%has_key("sses_scale")) call args%get("sses_scale", config%sses%scale)
+         if (trim(config%drop_variant) == "sses") then
+            if (.not. all(ieee_is_finite([config%sses%probe_radius, config%sses%smoothing_length, config%sses%scale])) &
+                .or. config%sses%probe_radius < 0.0_wp .or. config%sses%smoothing_length <= 0.0_wp &
+                .or. config%sses%scale <= 0.0_wp) then
+               call fatal_error(error, "SSES requires finite probe radius >= 0, smoothing length > 0 and scale > 0")
+               return
+            end if
+         end if
+
+         if (args%has_key("grad")) then
+            call args%get("grad", config%grad)
+         end if
+
+         if (args%has_key("dump")) then
+            call args%get("dump", config%dump)
+         end if
+
+      case ("solvent")
          call args%get("solvent", config%solvent)
          config%solvent = trim(adjustl(config%solvent))
-      end if
+         config%mode = "solvent"
+         config%input = ""
 
-      if (args%has_key("temperature")) then
-         call args%get("temperature", config%temperature)
-      end if
-
-      if (args%has_key("pressure")) then
-         call args%get("pressure", config%pressure_si)
-      end if
-
-      if (args%has_key("numgrad")) then
-         call args%get("numgrad", config%numgrad)
-      end if
-      if (config%numgrad) config%grad = .true.
-
-      if (args%has_key("writeenergy")) then
-         call args%get("writeenergy", config%writeenergy)
-      end if
-
-      if (args%has_key("parameters_path")) then
-         call args%get("parameters_path", str_tmp)
-         config%parameters_path = trim(adjustl(str_tmp))
-         if (len_trim(config%parameters_path) > 0) config%read_parameters = .true.
-      end if
-
-   case("cavity")
-      if (.not. args%has_key("cavity_mode")) then
-         call fatal_error(error, "Select one of: numsa, iswig, drop, mc, or mt cavity types")
+      case default
+         call fatal_error(error, "Unknown subcommand selected")
          return
+      end select
+
+      config%mode = trim(config%mode)
+      config%drop_variant = trim(config%drop_variant)
+      config%input = trim(config%input)
+
+      if (trim(command) /= "solvent") then
+         config%input_format = get_filetype(trim(config%input))
       end if
 
-      call args%get("cavity_mode", config%mode)
-      if (trim(config%mode) == "drop" .or. trim(config%mode) == "mc" .or. &
-          trim(config%mode) == "mt") then
-         if (.not. args%has_key("drop_variant")) then
-            call fatal_error(error, "Select one of: svdw, cfc level set functions")
-            return
-         end if
-         call args%get("drop_variant", config%drop_variant)
-      end if
-      call args%get("input", config%input)
+   contains
 
-      if (args%has_key("nleb")) then
-         select case (trim(config%mode))
-         case ("numsa")
-            call args%get("nleb", config%numsa%num_leb)
-         case ("iswig")
-            call args%get("nleb", config%iswig%num_leb)
-         case ("drop")
-            call args%get("nleb", config%drop%num_leb)
-         case default
-            call fatal_error(error, "Unknown cavity mode")
-            return
-         end select
-      end if
+      !> Configure shared parent parser with global runtime options
+      !> @param[inout] parent Parent parser receiving shared options
+      subroutine setup_general_parent(parent)
+         type(ArgumentParser), intent(inout) :: parent
+         integer :: grp_general
 
-      if (args%has_key("radii")) then
-         call args%get("radii", config%radii)
-      end if
-      config%radii = trim(adjustl(config%radii))
+         call parent%init(add_help=.false.)
 
-      ! DROP
-      if (args%has_key("drop_tolerance")) call args%get("drop_tolerance", config%drop%tolerance)
-      if (args%has_key("drop_proj_level")) call args%get("drop_proj_level", config%drop%proj_level)
-      if (args%has_key("drop_wleb_prune_level"))  call args%get("drop_wleb_prune_level", config%drop%wleb_prune_level)
-      if (args%has_key("drop_fine")) call args%get("drop_fine", config%drop%do_fine)
+         grp_general = parent%add_argument_group("General settings", &
+                                                 "Shared runtime configuration")
 
-      ! Marching cubes
-      if (args%has_key("mc_spacing")) call args%get("mc_spacing", config%mc%spacing)
+         call parent%add_argument("-v", "--verbose", action="count", dest="verbose", &
+                                  help="Increase output verbosity (repeatable)", &
+                                  group_idx=grp_general)
 
-      ! Marching tetrahedron
-      if (args%has_key("mt_spacing")) call args%get("mt_spacing", config%mt%spacing)
-      if (args%has_key("mt_target_area")) call args%get("mt_target_area", config%mt%target_area)
-      if (args%has_key("mt_area_tolerance")) call args%get("mt_area_tolerance", config%mt%area_tolerance)
-      if (args%has_key("mt_gaussian_scale")) call args%get("mt_gaussian_scale", config%mt%gaussian_scale)
-      if (args%has_key("mt_weight_cutoff")) call args%get("mt_weight_cutoff", config%mt%weight_cutoff)
+         call parent%add_argument("-q", "--quiet", action="count", dest="quiet", &
+                                  help="Decrease output verbosity (repeatable)", &
+                                  group_idx=grp_general)
 
-      ! SvdW
-      if (args%has_key("svdw_blend_k")) call args%get("svdw_blend_k", config%svdw%blend_k)
-      if (args%has_key("svdw_blend_1b")) call args%get("svdw_blend_1b", config%svdw%blend_1b)
-      if (args%has_key("svdw_blend_2b")) call args%get("svdw_blend_2b", config%svdw%blend_2b)
-      if (args%has_key("svdw_blend_3b")) call args%get("svdw_blend_3b", config%svdw%blend_3b)
+         call parent%add_argument("-d", "--debug", action="store_true", dest="debug", &
+                                  help="Enable debug output (raises the verbosity to 6)", &
+                                  group_idx=grp_general)
 
-      ! CFC
-      if (args%has_key("cfc_a1")) call args%get("cfc_a1", config%cfc%a1)
-      if (args%has_key("cfc_a2")) call args%get("cfc_a2", config%cfc%a2)
-      if (args%has_key("cfc_c")) call args%get("cfc_c", config%cfc%c)
-      if (args%has_key("cfc_m")) call args%get("cfc_m", config%cfc%m)
+         call parent%add_argument("--profile", action="store_true", dest="profile", &
+                                  help="Record fine-grained profiling timers", &
+                                  group_idx=grp_general)
 
-      if (args%has_key("grad")) then
-         call args%get("grad", config%grad)
-      end if
+         call parent%add_argument("-t", "--threads", data_type="integer", &
+                                  action=not_less_than(0), &
+                                  dest="threads", metavar="INT", &
+                                  help="Number of OpenMP threads (default: system setting)", &
+                                  group_idx=grp_general)
+      end subroutine setup_general_parent
 
-      if (args%has_key("dump")) then
-         call args%get("dump", config%dump)
-      end if
+      !> Build and register a set of subsubparsers from declarative metadata
+      !> @param[inout] p               Parent parser receiving subsubparsers
+      !> @param[in]    parent          Parser providing shared parent arguments
+      !> @param[in]    subparser_title Title for the subsubparser help section
+      !> @param[in]    subparser_dest  Namespace key receiving selected subsubparser name
+      !> @param[in]    specs           Metadata table describing subsubparsers
+      !> @param[inout] subparsers      Storage for subsubparser parser instances
+      !> @param[in]    add_shared_args Callback adding arguments common to all entries
+      subroutine setup_subsubparsers(p, parent, subparser_title, subparser_dest, specs, subparsers, add_shared_args)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         character(len=*), intent(in) :: subparser_title, subparser_dest
+         type(subsubparser_spec), intent(in) :: specs(:)
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+         procedure(subsubparser_args_callback) :: add_shared_args
+         integer :: i, n
 
-   case("solvent")
-      call args%get("solvent", config%solvent)
-      config%solvent = trim(adjustl(config%solvent))
-      config%mode = "solvent"
-      config%input = ""
+         call p%add_subparsers(title=trim(subparser_title), dest=trim(subparser_dest))
 
-   case default
-      call fatal_error(error, "Unknown subcommand selected")
-      return
-   end select
-
-   config%mode = trim(config%mode)
-   config%drop_variant = trim(config%drop_variant)
-   config%input = trim(config%input)
-
-   if (trim(command) /= "solvent") then
-      config%input_format = get_filetype(trim(config%input))
-   end if
-
-contains
-
-   !> Configure shared parent parser with global runtime options
-   !> @param[inout] parent Parent parser receiving shared options
-   subroutine setup_general_parent(parent)
-      type(ArgumentParser), intent(inout) :: parent
-      integer :: grp_general
-
-      call parent%init(add_help=.false.)
-
-      grp_general = parent%add_argument_group("General settings", &
-         "Shared runtime configuration")
-
-      call parent%add_argument("-v", "--verbose", action="count", dest="verbose", &
-         help="Increase output verbosity (repeatable)", &
-         group_idx=grp_general)
-
-      call parent%add_argument("-q", "--quiet", action="count", dest="quiet", &
-         help="Decrease output verbosity (repeatable)", &
-         group_idx=grp_general)
-
-      call parent%add_argument("-d", "--debug", action="store_true", dest="debug", &
-         help="Enable debug output (raises the verbosity to 6)", &
-         group_idx=grp_general)
-
-      call parent%add_argument("--profile", action="store_true", dest="profile", &
-         help="Record fine-grained profiling timers", &
-         group_idx=grp_general)
-
-      call parent%add_argument("-t", "--threads", data_type="integer", &
-         action=not_less_than(0), &
-         dest="threads", metavar="INT", &
-         help="Number of OpenMP threads (default: system setting)", &
-         group_idx=grp_general)
-   end subroutine setup_general_parent
-
-
-   !> Build and register a set of subsubparsers from declarative metadata
-   !> @param[inout] p               Parent parser receiving subsubparsers
-   !> @param[in]    parent          Parser providing shared parent arguments
-   !> @param[in]    subparser_title Title for the subsubparser help section
-   !> @param[in]    subparser_dest  Namespace key receiving selected subsubparser name
-   !> @param[in]    specs           Metadata table describing subsubparsers
-   !> @param[inout] subparsers      Storage for subsubparser parser instances
-   !> @param[in]    add_shared_args Callback adding arguments common to all entries
-   subroutine setup_subsubparsers(p, parent, subparser_title, subparser_dest, specs, subparsers, add_shared_args)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      character(len=*), intent(in) :: subparser_title, subparser_dest
-      type(subsubparser_spec), intent(in) :: specs(:)
-      type(ArgumentParser), intent(inout) :: subparsers(:)
-      procedure(subsubparser_args_callback) :: add_shared_args
-      integer :: i, n
-
-      call p%add_subparsers(title=trim(subparser_title), dest=trim(subparser_dest))
-
-      n = min(size(specs), size(subparsers))
-      do i = 1, n
-         call subparsers(i)%init_with_parents([parent], &
-            prog=trim(specs(i)%prog), &
-            description=trim(specs(i)%description))
-
-         call add_shared_args(subparsers(i))
-         if (associated(specs(i)%add_specific_args)) then
-            call specs(i)%add_specific_args(subparsers(i))
-         end if
-
-         call p%add_parser(trim(specs(i)%name), subparsers(i), help_text=trim(specs(i)%help_text))
-      end do
-   end subroutine setup_subsubparsers
-
-
-   !> Configure the model subcommand parser
-   !> @param[inout] p          Model subcommand parser
-   !> @param[in]    parent     Parent parser providing shared options
-   !> @param[in]    specs      Model subsubparser metadata
-   !> @param[inout] subparsers Model subsubparser instances
-   subroutine setup_model_parser(p, parent, specs, subparsers)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      type(subsubparser_spec), intent(in) :: specs(:)
-      type(ArgumentParser), intent(inout) :: subparsers(:)
-
-      call p%init_with_parents([parent], &
-         prog="moist model", &
-         description="Run solvation models with model-specific subcommands")
-
-      call setup_subsubparsers(p, parent, "models", "model_mode", specs, subparsers, add_model_shared_arguments)
-   end subroutine setup_model_parser
-
-
-   !> Add model arguments shared by all model type subcommands
-   !> @param[inout] p Model type parser receiving shared options
-   subroutine add_model_shared_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      integer :: grp_system, grp_io, grp_advanced
-
-      grp_system = p%add_argument_group("System config", &
-         "Molecule and solvent thermodynamic settings")
-      grp_io = p%add_argument_group("Input/Output", &
-         "Input model and output behavior")
-      grp_advanced = p%add_argument_group("Advanced", &
-         "Advanced and developer options")
-      call p%add_argument("input", &
-         help="Input structure file", metavar="INPUT", &
-         group_idx=grp_io)
-
-      call p%add_argument("-c", "--charge", &
-         data_type="real", &
-         metavar="REAL", &
-         help="Molecular charge, overwrites .CHRG file", &
-         group_idx=grp_system)
-      call p%add_argument("-s", "--solvent", &
-         default_val="", &
-         print_default=.false., &
-         metavar="SOLVENT", &
-         help="Solvent name", &
-         group_idx=grp_system)
-      call p%add_argument("--temperature", &
-         default_val=298.15_wp, &
-         action=not_less_than(0.0_wp), &
-         data_type="real", &
-         metavar="REAL", &
-         help="Temperature in Kelvin", &
-         group_idx=grp_system)
-      call p%add_argument("--pressure", &
-         default_val=101325.0_wp, &
-         action=not_less_than(0.0_wp), &
-         data_type="real", dest="pressure", &
-         metavar="REAL", &
-         help="Pressure in Pascal", &
-         group_idx=grp_system)
-
-      call p%add_argument("-w", "--writeenergy", action="store_true", &
-         help="Write energy to .GSOLV file", &
-         group_idx=grp_io)
-      call p%add_argument("-p", "--parameters", &
-         default_val="", &
-         print_default=.false., &
-         dest="parameters_path", &
-         metavar="PATH", &
-         help="Path to custom model parameters file", &
-         group_idx=grp_io)
-
-      call p%add_argument("--numgrad", action="store_true", &
-         help="Calculate numerical gradients", &
-         group_idx=grp_advanced)
-   end subroutine add_model_shared_arguments
-
-
-   !> Configure the cavity subcommand parser
-   !> @param[inout] p               Cavity subcommand parser
-   !> @param[in]    parent          Parent parser providing shared options
-   !> @param[in]    specs           Cavity subsubparser metadata
-   !> @param[inout] subparsers      Cavity subsubparser instances
-   !> @param[inout] drop_parser     Nested DROP parser
-   !> @param[inout] drop_subparsers Nested DROP variant parsers
-   !> @param[inout] mc_parser       Nested marching-cubes parser
-   !> @param[inout] mc_subparsers   Nested marching-cubes level-set parsers
-   !> @param[inout] mt_parser       Nested marching-tetrahedra parser
-   !> @param[inout] mt_subparsers   Nested marching-tetrahedra level-set parsers
-   subroutine setup_cavity_parser(p, parent, specs, subparsers, drop_parser, drop_subparsers, &
-                                  mc_parser, mc_subparsers, mt_parser, mt_subparsers)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      type(subsubparser_spec), intent(in) :: specs(:)
-      type(ArgumentParser), intent(inout) :: subparsers(:)
-      type(ArgumentParser), intent(inout) :: drop_parser
-      type(ArgumentParser), intent(inout) :: drop_subparsers(:)
-      type(ArgumentParser), intent(inout) :: mc_parser
-      type(ArgumentParser), intent(inout) :: mc_subparsers(:)
-      type(ArgumentParser), intent(inout) :: mt_parser
-      type(ArgumentParser), intent(inout) :: mt_subparsers(:)
-      type(moist_cavity_numsa_parameters_type) :: numsa_defaults
-      type(moist_cavity_iswig_parameters_type) :: iswig_defaults
-      integer :: i, n
-
-      call p%init_with_parents([parent], &
-         prog="moist cavity", &
-         description="Run cavity-only workflows with cavity-type subcommands")
-
-      call p%add_subparsers(title="cavity types", dest="cavity_mode")
-
-      n = min(size(specs), size(subparsers))
-      do i = 1, n
-         if (trim(specs(i)%name) == "drop") then
-            call setup_drop_parser(drop_parser, parent, drop_subparsers)
-            call p%add_parser("drop", drop_parser, help_text=trim(specs(i)%help_text))
-         else if (trim(specs(i)%name) == "mc") then
-            call setup_mc_parser(mc_parser, parent, mc_subparsers)
-            call p%add_parser("mc", mc_parser, help_text=trim(specs(i)%help_text))
-         else if (trim(specs(i)%name) == "mt") then
-            call setup_mt_parser(mt_parser, parent, mt_subparsers)
-            call p%add_parser("mt", mt_parser, help_text=trim(specs(i)%help_text))
-         else
+         n = min(size(specs), size(subparsers))
+         do i = 1, n
             call subparsers(i)%init_with_parents([parent], &
-               prog=trim(specs(i)%prog), &
-               description=trim(specs(i)%description))
+                                                 prog=trim(specs(i)%prog), &
+                                                 description=trim(specs(i)%description))
 
-            if (trim(specs(i)%name) == "numsa") then
-               call add_cavity_shared_arguments(subparsers(i), nleb=numsa_defaults%num_leb)
-            else
-               call add_cavity_shared_arguments(subparsers(i), nleb=iswig_defaults%num_leb)
-            end if
+            call add_shared_args(subparsers(i))
             if (associated(specs(i)%add_specific_args)) then
                call specs(i)%add_specific_args(subparsers(i))
             end if
 
             call p%add_parser(trim(specs(i)%name), subparsers(i), help_text=trim(specs(i)%help_text))
+         end do
+      end subroutine setup_subsubparsers
+
+      !> Configure the model subcommand parser
+      !> @param[inout] p          Model subcommand parser
+      !> @param[in]    parent     Parent parser providing shared options
+      !> @param[in]    specs      Model subsubparser metadata
+      !> @param[inout] subparsers Model subsubparser instances
+      subroutine setup_model_parser(p, parent, specs, subparsers)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         type(subsubparser_spec), intent(in) :: specs(:)
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+
+         call p%init_with_parents([parent], &
+                                  prog="moist model", &
+                                  description="Run solvation models with model-specific subcommands")
+
+         call setup_subsubparsers(p, parent, "models", "model_mode", specs, subparsers, add_model_shared_arguments)
+      end subroutine setup_model_parser
+
+      !> Add model arguments shared by all model type subcommands
+      !> @param[inout] p Model type parser receiving shared options
+      subroutine add_model_shared_arguments(p)
+         type(ArgumentParser), intent(inout) :: p
+         integer :: grp_system, grp_io, grp_advanced
+
+         grp_system = p%add_argument_group("System config", &
+                                           "Molecule and solvent thermodynamic settings")
+         grp_io = p%add_argument_group("Input/Output", &
+                                       "Input model and output behavior")
+         grp_advanced = p%add_argument_group("Advanced", &
+                                             "Advanced and developer options")
+         call p%add_argument("input", &
+                             help="Input structure file", metavar="INPUT", &
+                             group_idx=grp_io)
+
+         call p%add_argument("-c", "--charge", &
+                             data_type="real", &
+                             metavar="REAL", &
+                             help="Molecular charge, overwrites .CHRG file", &
+                             group_idx=grp_system)
+         call p%add_argument("-s", "--solvent", &
+                             default_val="", &
+                             print_default=.false., &
+                             metavar="SOLVENT", &
+                             help="Solvent name", &
+                             group_idx=grp_system)
+         call p%add_argument("--temperature", &
+                             default_val=298.15_wp, &
+                             action=not_less_than(0.0_wp), &
+                             data_type="real", &
+                             metavar="REAL", &
+                             help="Temperature in Kelvin", &
+                             group_idx=grp_system)
+         call p%add_argument("--pressure", &
+                             default_val=101325.0_wp, &
+                             action=not_less_than(0.0_wp), &
+                             data_type="real", dest="pressure", &
+                             metavar="REAL", &
+                             help="Pressure in Pascal", &
+                             group_idx=grp_system)
+
+         call p%add_argument("-w", "--writeenergy", action="store_true", &
+                             help="Write energy to .GSOLV file", &
+                             group_idx=grp_io)
+         call p%add_argument("-p", "--parameters", &
+                             default_val="", &
+                             print_default=.false., &
+                             dest="parameters_path", &
+                             metavar="PATH", &
+                             help="Path to custom model parameters file", &
+                             group_idx=grp_io)
+
+         call p%add_argument("--numgrad", action="store_true", &
+                             help="Calculate numerical gradients", &
+                             group_idx=grp_advanced)
+      end subroutine add_model_shared_arguments
+
+      !> Configure the cavity subcommand parser
+      !> @param[inout] p               Cavity subcommand parser
+      !> @param[in]    parent          Parent parser providing shared options
+      !> @param[in]    specs           Cavity subsubparser metadata
+      !> @param[inout] subparsers      Cavity subsubparser instances
+      !> @param[inout] drop_parser     Nested DROP parser
+      !> @param[inout] drop_subparsers Nested DROP variant parsers
+      !> @param[inout] mc_parser       Nested marching-cubes parser
+      !> @param[inout] mc_subparsers   Nested marching-cubes level-set parsers
+      !> @param[inout] mt_parser       Nested marching-tetrahedra parser
+      !> @param[inout] mt_subparsers   Nested marching-tetrahedra level-set parsers
+      subroutine setup_cavity_parser(p, parent, specs, subparsers, drop_parser, drop_subparsers, &
+                                     mc_parser, mc_subparsers, mt_parser, mt_subparsers)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         type(subsubparser_spec), intent(in) :: specs(:)
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+         type(ArgumentParser), intent(inout) :: drop_parser
+         type(ArgumentParser), intent(inout) :: drop_subparsers(:)
+         type(ArgumentParser), intent(inout) :: mc_parser
+         type(ArgumentParser), intent(inout) :: mc_subparsers(:)
+         type(ArgumentParser), intent(inout) :: mt_parser
+         type(ArgumentParser), intent(inout) :: mt_subparsers(:)
+         type(moist_cavity_numsa_parameters_type) :: numsa_defaults
+         type(moist_cavity_iswig_parameters_type) :: iswig_defaults
+         integer :: i, n
+
+         call p%init_with_parents([parent], &
+                                  prog="moist cavity", &
+                                  description="Run cavity-only workflows with cavity-type subcommands")
+
+         call p%add_subparsers(title="cavity types", dest="cavity_mode")
+
+         n = min(size(specs), size(subparsers))
+         do i = 1, n
+            if (trim(specs(i)%name) == "drop") then
+               call setup_drop_parser(drop_parser, parent, drop_subparsers)
+               call p%add_parser("drop", drop_parser, help_text=trim(specs(i)%help_text))
+            else if (trim(specs(i)%name) == "mc") then
+               call setup_mc_parser(mc_parser, parent, mc_subparsers)
+               call p%add_parser("mc", mc_parser, help_text=trim(specs(i)%help_text))
+            else if (trim(specs(i)%name) == "mt") then
+               call setup_mt_parser(mt_parser, parent, mt_subparsers)
+               call p%add_parser("mt", mt_parser, help_text=trim(specs(i)%help_text))
+            else
+               call subparsers(i)%init_with_parents([parent], &
+                                                    prog=trim(specs(i)%prog), &
+                                                    description=trim(specs(i)%description))
+
+               if (trim(specs(i)%name) == "numsa") then
+                  call add_cavity_shared_arguments(subparsers(i), nleb=numsa_defaults%num_leb)
+               else
+                  call add_cavity_shared_arguments(subparsers(i), nleb=iswig_defaults%num_leb)
+               end if
+               if (associated(specs(i)%add_specific_args)) then
+                  call specs(i)%add_specific_args(subparsers(i))
+               end if
+
+               call p%add_parser(trim(specs(i)%name), subparsers(i), help_text=trim(specs(i)%help_text))
+            end if
+         end do
+      end subroutine setup_cavity_parser
+
+      !> Configure the nested DROP cavity parser
+      !> @param[inout] p          DROP parser receiving nested variants
+      !> @param[in]    parent     Parent parser providing shared options
+      !> @param[inout] subparsers DROP variant parser instances
+      subroutine setup_drop_parser(p, parent, subparsers)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+         type(moist_cavity_drop_parameters_type) :: defaults
+
+         call p%init_with_parents([parent], &
+                                  prog="moist cavity drop", &
+                                  description="Construct DROP/DROP cavities with variant-specific level sets")
+
+         call p%add_subparsers(title="DROP variants", dest="drop_variant")
+
+         call subparsers(1)%init_with_parents([parent], &
+                                              prog="moist cavity drop svdw", &
+                                              description="Construct DROP/DROP cavities with the SvdW level set")
+         call add_cavity_shared_arguments(subparsers(1), nleb=defaults%num_leb)
+         call add_cavity_drop_arguments(subparsers(1))
+         call add_cavity_drop_svdw_arguments(subparsers(1))
+         call p%add_parser("svdw", subparsers(1), help_text="SvdW DROP cavity")
+
+         call subparsers(2)%init_with_parents([parent], &
+                                              prog="moist cavity drop cfc", &
+                                              description="Construct DROP/DROP cavities with the CFC level set")
+         call add_cavity_shared_arguments(subparsers(2), nleb=defaults%num_leb)
+         call add_cavity_drop_arguments(subparsers(2))
+         call add_cavity_drop_cfc_arguments(subparsers(2))
+         call p%add_parser("cfc", subparsers(2), help_text="CFC DROP cavity")
+
+         call subparsers(3)%init_with_parents([parent], &
+                                              prog="moist cavity drop sses", &
+                                              description="Construct DROP cavities with the smooth SES-like level set")
+         call add_cavity_shared_arguments(subparsers(3), nleb=defaults%num_leb)
+         call add_cavity_drop_arguments(subparsers(3), proj_level=2)
+         call add_cavity_drop_sses_arguments(subparsers(3))
+         call p%add_parser("sses", subparsers(3), help_text="Smooth SES-like DROP cavity")
+      end subroutine setup_drop_parser
+
+      !> Configure the nested marching-cubes cavity parser
+      !>
+      !> Marching cubes integrates whichever level set function it is handed, so it
+      !> reuses the DROP level-set argument sets verbatim and shares their
+      !> `drop_variant` destination. `--nleb` is withheld: there is no angular grid.
+      !>
+      !> @param[inout] p          Marching-cubes parser receiving nested level sets
+      !> @param[in]    parent     Parent parser providing shared options
+      !> @param[inout] subparsers Level set parser instances
+      subroutine setup_mc_parser(p, parent, subparsers)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+
+         call p%init_with_parents([parent], &
+                                  prog="moist cavity mc", &
+                                  description="Integrate a level set isosurface with marching cubes")
+
+         call p%add_subparsers(title="level set functions", dest="drop_variant")
+
+         call subparsers(1)%init_with_parents([parent], &
+                                              prog="moist cavity mc svdw", &
+                                              description="Integrate the SvdW level set isosurface")
+         call add_cavity_shared_arguments(subparsers(1))
+         call add_cavity_mc_arguments(subparsers(1))
+         call add_cavity_drop_svdw_arguments(subparsers(1))
+         call p%add_parser("svdw", subparsers(1), help_text="SvdW level set")
+
+         call subparsers(2)%init_with_parents([parent], &
+                                              prog="moist cavity mc cfc", &
+                                              description="Integrate the CFC level set isosurface")
+         call add_cavity_shared_arguments(subparsers(2))
+         call add_cavity_mc_arguments(subparsers(2))
+         call add_cavity_drop_cfc_arguments(subparsers(2))
+         call p%add_parser("cfc", subparsers(2), help_text="CFC level set")
+         call subparsers(3)%init_with_parents([parent], &
+                                              prog="moist cavity mc sses", &
+                                              description="Integrate the smooth SES-like level set isosurface")
+         call add_cavity_shared_arguments(subparsers(3))
+         call add_cavity_mc_arguments(subparsers(3))
+         call add_cavity_drop_sses_arguments(subparsers(3))
+         call p%add_parser("sses", subparsers(3), help_text="Smooth SES-like level set")
+      end subroutine setup_mc_parser
+
+      !> Configure the nested marching-tetrahedra cavity parser
+      !>
+      !> Marching tetrahedra integrates whichever level set function it is handed, so it
+      !> reuses the DROP level-set argument sets verbatim and shares their
+      !> `drop_variant` destination. `--nleb` is withheld: there is no angular grid.
+      !>
+      !> @param[inout] p          Marching-tetrahedra parser receiving nested level sets
+      !> @param[in]    parent     Parent parser providing shared options
+      !> @param[inout] subparsers Level set parser instances
+      subroutine setup_mt_parser(p, parent, subparsers)
+         !> Parent marching-tetrahedra parser
+         type(ArgumentParser), intent(inout) :: p
+         !> Shared command-line options
+         type(ArgumentParser), intent(in) :: parent
+         !> SvdW, CFC and SSES parser instances
+         type(ArgumentParser), intent(inout) :: subparsers(:)
+
+         call p%init_with_parents([parent], &
+                                  prog="moist cavity mt", &
+                                  description="Integrate a level set isosurface with marching tetrahedra")
+
+         call p%add_subparsers(title="level set functions", dest="drop_variant")
+
+         call subparsers(1)%init_with_parents([parent], &
+                                              prog="moist cavity mt svdw", &
+                                              description="Integrate the SvdW level set isosurface")
+         call add_cavity_shared_arguments(subparsers(1))
+         call add_cavity_mt_arguments(subparsers(1))
+         call add_cavity_drop_svdw_arguments(subparsers(1))
+         call p%add_parser("svdw", subparsers(1), help_text="SvdW level set")
+
+         call subparsers(2)%init_with_parents([parent], &
+                                              prog="moist cavity mt cfc", &
+                                              description="Integrate the CFC level set isosurface")
+         call add_cavity_shared_arguments(subparsers(2))
+         call add_cavity_mt_arguments(subparsers(2))
+         call add_cavity_drop_cfc_arguments(subparsers(2))
+         call p%add_parser("cfc", subparsers(2), help_text="CFC level set")
+         call subparsers(3)%init_with_parents([parent], &
+                                              prog="moist cavity mt sses", &
+                                              description="Integrate the smooth SES-like level set isosurface")
+         call add_cavity_shared_arguments(subparsers(3))
+         call add_cavity_mt_arguments(subparsers(3))
+         call add_cavity_drop_sses_arguments(subparsers(3))
+         call p%add_parser("sses", subparsers(3), help_text="Smooth SES-like level set")
+      end subroutine setup_mt_parser
+
+      !> Add cavity arguments shared by all cavity type subcommands
+      !> @param[inout] p    Cavity type parser receiving shared options
+      !> @param[in]    nleb Native Lebedev default; cavity types without an angular
+      !>                    grid, such as marching cubes, omit it and offer no --nleb
+      subroutine add_cavity_shared_arguments(p, nleb)
+         type(ArgumentParser), intent(inout) :: p
+         integer, intent(in), optional :: nleb
+         integer :: grp_input, grp_technical
+
+         grp_input = p%add_argument_group("Input/Output", &
+                                          "Input cavity model and structure")
+         grp_technical = p%add_argument_group("Technical settings", &
+                                              "Cavity discretization and numerical control")
+
+         call p%add_argument("input", &
+                             help="Input coordinate file", metavar="COORD", &
+                             group_idx=grp_input)
+         if (present(nleb)) then
+            call p%add_argument("--nleb", data_type="integer", &
+                                action=not_less_than(1), &
+                                default_val=nleb, &
+                                metavar="INT", &
+                                help="Lebedev grid points per atom", &
+                                group_idx=grp_technical)
          end if
-      end do
-   end subroutine setup_cavity_parser
+         call p%add_argument("--radii", default_val="cpcm", &
+                             print_choices=.true., &
+                             choices=[character(len=5) :: "cpcm", "smd", "d3", "cosmo", "bondi"], &
+                             metavar="RADII", &
+                             help="Atomic radii", &
+                             group_idx=grp_technical)
+         call p%add_argument("-g", "--grad", action="store_true", &
+                             help="Calculate cavity gradients", &
+                             group_idx=grp_technical)
+         call p%add_argument("--dump", action="store_true", &
+                             dest="dump", &
+                             help="Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)", &
+                             group_idx=grp_input)
+      end subroutine add_cavity_shared_arguments
 
+      !> Add DROP/DROP arguments shared by all DROP variants
+      !>
+      !> @param[in,out] p DROP variant parser
+      !> @param[in] proj_level Variant-specific default projection level
+      subroutine add_cavity_drop_arguments(p, proj_level)
+         !> DROP variant parser
+         type(ArgumentParser), intent(inout) :: p
+         !> Variant-specific default projection level
+         integer, intent(in), optional :: proj_level
+         type(moist_cavity_drop_parameters_type) :: defaults
+         integer :: grp_technical
 
-   !> Configure the nested DROP cavity parser
-   !> @param[inout] p          DROP parser receiving nested variants
-   !> @param[in]    parent     Parent parser providing shared options
-   !> @param[inout] subparsers DROP variant parser instances
-   subroutine setup_drop_parser(p, parent, subparsers)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      type(ArgumentParser), intent(inout) :: subparsers(:)
-      type(moist_cavity_drop_parameters_type) :: defaults
+         if (present(proj_level)) defaults%proj_level = proj_level
 
-      call p%init_with_parents([parent], &
-         prog="moist cavity drop", &
-         description="Construct DROP/DROP cavities with variant-specific level sets")
+         grp_technical = p%add_argument_group("DROP settings", &
+                                              "DROP projection and property controls")
 
-      call p%add_subparsers(title="DROP variants", dest="drop_variant")
+         call p%add_argument("--tol", data_type="real", &
+                             default_val=defaults%tolerance, &
+                             action=not_less_than(0.0_wp), &
+                             dest="drop_tolerance", metavar="REAL", &
+                             help="Numerical tolerance", &
+                             group_idx=grp_technical)
+         call p%add_argument("--proj-level", data_type="integer", &
+                             default_val=defaults%proj_level, &
+                             action=not_less_than(1), &
+                             dest="drop_proj_level", metavar="INT", &
+                             help="Projection solver level", &
+                             choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
+                                      "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
+                                      "5=SLSQP-deflation", "6=Newton-deflation", &
+                                      "7=Multistart", "8=Fine multistart", &
+                                      "9=Octree coverage"], &
+                             print_choices=.true., &
+                             group_idx=grp_technical)
+         call p%add_argument("--wleb-switch", data_type="integer", &
+                             default_val=defaults%wleb_prune_level, &
+                             action=not_less_than(0), &
+                             dest="drop_wleb_prune_level", metavar="INT", &
+                             help="Smooth weight switching level (0=off, 1-4=increasing)", &
+                             choices=[character(len=26) :: "0=off", "1=1E-12/1E-10", &
+                                      "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4"], &
+                             print_choices=.true., &
+                             group_idx=grp_technical)
+         call p%add_argument("--fine", action="store_true", &
+                             dest="drop_fine", &
+                             help="Compute optional cavity properties (curvature, normals, etc.)", &
+                             group_idx=grp_technical)
+      end subroutine add_cavity_drop_arguments
 
-      call subparsers(1)%init_with_parents([parent], &
-         prog="moist cavity drop svdw", &
-         description="Construct DROP/DROP cavities with the SvdW level set")
-      call add_cavity_shared_arguments(subparsers(1), nleb=defaults%num_leb)
-      call add_cavity_drop_arguments(subparsers(1))
-      call add_cavity_drop_svdw_arguments(subparsers(1))
-      call p%add_parser("svdw", subparsers(1), help_text="SvdW DROP cavity")
+      !> Add marching-cubes arguments to a level set parser
+      !> @param[inout] p Marching-cubes level set parser
+      subroutine add_cavity_mc_arguments(p)
+         type(ArgumentParser), intent(inout) :: p
+         type(moist_cavity_mc_parameters_type) :: defaults
+         integer :: grp_technical
 
-      call subparsers(2)%init_with_parents([parent], &
-         prog="moist cavity drop cfc", &
-         description="Construct DROP/DROP cavities with the CFC level set")
-      call add_cavity_shared_arguments(subparsers(2), nleb=defaults%num_leb)
-      call add_cavity_drop_arguments(subparsers(2))
-      call add_cavity_drop_cfc_arguments(subparsers(2))
-      call p%add_parser("cfc", subparsers(2), help_text="CFC DROP cavity")
-   end subroutine setup_drop_parser
+         grp_technical = p%add_argument_group("Marching cubes settings", &
+                                              "Isosurface integration control")
 
+         call p%add_argument("--spacing", data_type="real", &
+                             default_val=defaults%spacing, &
+                             action=not_less_than(0.0_wp), &
+                             dest="mc_spacing", metavar="REAL", &
+                             help="Finest marching-cubes grid spacing in bohr", &
+                             group_idx=grp_technical)
+      end subroutine add_cavity_mc_arguments
 
-   !> Configure the nested marching-cubes cavity parser
-   !>
-   !> Marching cubes integrates whichever level set function it is handed, so it
-   !> reuses the DROP level-set argument sets verbatim and shares their
-   !> `drop_variant` destination. `--nleb` is withheld: there is no angular grid.
-   !>
-   !> @param[inout] p          Marching-cubes parser receiving nested level sets
-   !> @param[in]    parent     Parent parser providing shared options
-   !> @param[inout] subparsers Level set parser instances
-   subroutine setup_mc_parser(p, parent, subparsers)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      type(ArgumentParser), intent(inout) :: subparsers(:)
+      !> Add frozen marching-tetrahedra mesh and quadrature arguments
+      !>
+      !> @param[inout] p Level set parser
+      subroutine add_cavity_mt_arguments(p)
+         !> Parser receiving mesh and patch settings
+         type(ArgumentParser), intent(inout) :: p
+         !> Native defaults used by every interface
+         type(moist_cavity_mt_parameters_type) :: defaults
+         integer :: grp_technical
 
-      call p%init_with_parents([parent], &
-         prog="moist cavity mc", &
-         description="Integrate a level set isosurface with marching cubes")
+         grp_technical = p%add_argument_group("Marching tetrahedra settings", &
+                                              "Frozen geometry; spacing controls the mesh, target-area the quadrature")
+         call p%add_argument("--spacing", data_type="real", &
+                             default_val=defaults%spacing, dest="mt_spacing", metavar="REAL", &
+                             help="Maximum Cartesian surface-cell side in bohr", group_idx=grp_technical)
+         call p%add_argument("--target-area", data_type="real", &
+                             default_val=defaults%target_area, dest="mt_target_area", metavar="REAL", &
+                             help="Target planar patch area in bohr squared", group_idx=grp_technical)
+         call p%add_argument("--area-tolerance", data_type="real", &
+                             default_val=defaults%area_tolerance, dest="mt_area_tolerance", metavar="REAL", &
+                             help="Relative patch-area tolerance", group_idx=grp_technical)
+         call p%add_argument("--gaussian-scale", data_type="real", &
+                             default_val=defaults%gaussian_scale, dest="mt_gaussian_scale", metavar="REAL", &
+                             help="Gaussian width scale", group_idx=grp_technical)
+         call p%add_argument("--weight-cutoff", data_type="real", &
+                             default_val=defaults%weight_cutoff, dest="mt_weight_cutoff", metavar="REAL", &
+                             help="Minimum retained switch weight", group_idx=grp_technical)
+      end subroutine add_cavity_mt_arguments
 
-      call p%add_subparsers(title="level set functions", dest="drop_variant")
+      !> Add SvdW DROP arguments to a DROP variant parser
+      !> @param[inout] p SvdW DROP parser
+      subroutine add_cavity_drop_svdw_arguments(p)
+         type(ArgumentParser), intent(inout) :: p
+         type(moist_cavity_drop_lsf_svdw_param_type) :: defaults
+         integer :: grp_technical
 
-      call subparsers(1)%init_with_parents([parent], &
-         prog="moist cavity mc svdw", &
-         description="Integrate the SvdW level set isosurface")
-      call add_cavity_shared_arguments(subparsers(1))
-      call add_cavity_mc_arguments(subparsers(1))
-      call add_cavity_drop_svdw_arguments(subparsers(1))
-      call p%add_parser("svdw", subparsers(1), help_text="SvdW level set")
+         grp_technical = p%add_argument_group("SvdW settings", &
+                                              "SvdW level set smoothing controls")
 
-      call subparsers(2)%init_with_parents([parent], &
-         prog="moist cavity mc cfc", &
-         description="Integrate the CFC level set isosurface")
-      call add_cavity_shared_arguments(subparsers(2))
-      call add_cavity_mc_arguments(subparsers(2))
-      call add_cavity_drop_cfc_arguments(subparsers(2))
-      call p%add_parser("cfc", subparsers(2), help_text="CFC level set")
-   end subroutine setup_mc_parser
+         call p%add_argument("--blendk", data_type="real", &
+                             default_val=defaults%blend_k, &
+                             action=not_less_than(0.0_wp), &
+                             dest="svdw_blend_k", metavar="REAL", &
+                             help="SvdW smoothing sharpness k", &
+                             group_idx=grp_technical)
+         call p%add_argument("--blend1b", data_type="real", &
+                             default_val=defaults%blend_1b, &
+                             dest="svdw_blend_1b", metavar="REAL", &
+                             help="SvdW one-body contribution", &
+                             group_idx=grp_technical)
+         call p%add_argument("--blend2b", data_type="real", &
+                             default_val=defaults%blend_2b, &
+                             dest="svdw_blend_2b", metavar="REAL", &
+                             help="SvdW two-body contribution", &
+                             group_idx=grp_technical)
+         call p%add_argument("--blend3b", data_type="real", &
+                             default_val=defaults%blend_3b, &
+                             dest="svdw_blend_3b", metavar="REAL", &
+                             help="SvdW three-body contribution", &
+                             group_idx=grp_technical)
+      end subroutine add_cavity_drop_svdw_arguments
 
-   !> Configure the nested marching-tetrahedra cavity parser
-   !>
-   !> Marching tetrahedra integrates whichever level set function it is handed, so it
-   !> reuses the DROP level-set argument sets verbatim and shares their
-   !> `drop_variant` destination. `--nleb` is withheld: there is no angular grid.
-   !>
-   !> @param[inout] p          Marching-tetrahedra parser receiving nested level sets
-   !> @param[in]    parent     Parent parser providing shared options
-   !> @param[inout] subparsers Level set parser instances
-   subroutine setup_mt_parser(p, parent, subparsers)
-      !> Parent marching-tetrahedra parser
-      type(ArgumentParser), intent(inout) :: p
-      !> Shared command-line options
-      type(ArgumentParser), intent(in) :: parent
-      !> SvdW and CFC parser instances
-      type(ArgumentParser), intent(inout) :: subparsers(:)
+      !> Add CFC DROP arguments to a DROP variant parser
+      !> @param[inout] p CFC DROP parser
+      subroutine add_cavity_drop_cfc_arguments(p)
+         type(ArgumentParser), intent(inout) :: p
+         type(moist_cavity_drop_lsf_cfc_param_type) :: defaults
+         integer :: grp_technical
 
-      call p%init_with_parents([parent], &
-         prog="moist cavity mt", &
-         description="Integrate a level set isosurface with marching tetrahedra")
+         grp_technical = p%add_argument_group("CFC settings", &
+                                              "CFC level set controls")
 
-      call p%add_subparsers(title="level set functions", dest="drop_variant")
+         call p%add_argument("--a1", data_type="real", &
+                             default_val=defaults%a1, &
+                             dest="cfc_a1", metavar="REAL", &
+                             help="CFC atomic-term exponent", &
+                             group_idx=grp_technical)
+         call p%add_argument("--a2", data_type="real", &
+                             default_val=defaults%a2, &
+                             dest="cfc_a2", metavar="REAL", &
+                             help="CFC pair-term exponent", &
+                             group_idx=grp_technical)
+         call p%add_argument("--c", data_type="real", &
+                             default_val=defaults%c, &
+                             dest="cfc_c", metavar="REAL", &
+                             help="CFC pair-term coupling", &
+                             group_idx=grp_technical)
+         call p%add_argument("--m", data_type="integer", &
+                             default_val=defaults%m, &
+                             action=not_less_than(1), &
+                             dest="cfc_m", metavar="INT", &
+                             help="CFC pair-term power", &
+                             group_idx=grp_technical)
+      end subroutine add_cavity_drop_cfc_arguments
 
-      call subparsers(1)%init_with_parents([parent], &
-         prog="moist cavity mt svdw", &
-         description="Integrate the SvdW level set isosurface")
-      call add_cavity_shared_arguments(subparsers(1))
-      call add_cavity_mt_arguments(subparsers(1))
-      call add_cavity_drop_svdw_arguments(subparsers(1))
-      call p%add_parser("svdw", subparsers(1), help_text="SvdW level set")
+      !> Add SSES physical parameters in Bohr
+      !>
+      !> @param[in,out] p SSES variant parser
+      subroutine add_cavity_drop_sses_arguments(p)
+         !> SSES variant parser
+         type(ArgumentParser), intent(inout) :: p
+         type(moist_cavity_drop_lsf_sses_param_type) :: defaults
+         integer :: grp_technical
 
-      call subparsers(2)%init_with_parents([parent], &
-         prog="moist cavity mt cfc", &
-         description="Integrate the CFC level set isosurface")
-      call add_cavity_shared_arguments(subparsers(2))
-      call add_cavity_mt_arguments(subparsers(2))
-      call add_cavity_drop_cfc_arguments(subparsers(2))
-      call p%add_parser("cfc", subparsers(2), help_text="CFC level set")
-   end subroutine setup_mt_parser
+         grp_technical = p%add_argument_group("SSES settings", &
+                                              "Smooth SES-like probe and smoothing controls")
+         call p%add_argument("--probe-radius", data_type="real", &
+                             default_val=defaults%probe_radius, &
+                             action=not_less_than(0.0_wp), &
+                             dest="sses_probe_radius", metavar="REAL", &
+                             help="Solvent probe radius in Bohr", group_idx=grp_technical)
+         call p%add_argument("--smoothing-length", data_type="real", &
+                             default_val=defaults%smoothing_length, &
+                             action=not_less_than(0.0_wp), &
+                             dest="sses_smoothing_length", metavar="REAL", &
+                             help="Positive smoothing length in Bohr", group_idx=grp_technical)
+         call p%add_argument("--lsf-scale", data_type="real", &
+                             default_val=defaults%scale, action=not_less_than(0.0_wp), &
+                             dest="sses_scale", metavar="REAL", &
+                             help="Positive field multiplier for critical-gradient switching", group_idx=grp_technical)
+      end subroutine add_cavity_drop_sses_arguments
 
+      !> Configure the solvent subcommand parser
+      !> @param[inout] p      Solvent subcommand parser
+      !> @param[in]    parent Parent parser providing shared options
+      subroutine setup_solvent_parser(p, parent)
+         type(ArgumentParser), intent(inout) :: p
+         type(ArgumentParser), intent(in) :: parent
+         integer :: grp_system
 
-   !> Add cavity arguments shared by all cavity type subcommands
-   !> @param[inout] p    Cavity type parser receiving shared options
-   !> @param[in]    nleb Native Lebedev default; cavity types without an angular
-   !>                    grid, such as marching cubes, omit it and offer no --nleb
-   subroutine add_cavity_shared_arguments(p, nleb)
-      type(ArgumentParser), intent(inout) :: p
-      integer, intent(in), optional :: nleb
-      integer :: grp_input, grp_technical
+         call p%init_with_parents([parent], &
+                                  prog="moist solvent", &
+                                  description="Inspect solvent parameters by name/alias")
 
-      grp_input = p%add_argument_group("Input/Output", &
-         "Input cavity model and structure")
-      grp_technical = p%add_argument_group("Technical settings", &
-         "Cavity discretization and numerical control")
+         grp_system = p%add_argument_group("System config", &
+                                           "Solvent query settings")
 
-      call p%add_argument("input", &
-         help="Input coordinate file", metavar="COORD", &
-         group_idx=grp_input)
-      if (present(nleb)) then
-         call p%add_argument("--nleb", data_type="integer", &
-            action=not_less_than(1), &
-            default_val=nleb, &
-            metavar="INT", &
-            help="Lebedev grid points per atom", &
-            group_idx=grp_technical)
-      end if
-      call p%add_argument("--radii", default_val="cpcm", &
-         print_choices=.true., &
-         choices=[character(len=5) :: "cpcm", "smd", "d3", "cosmo", "bondi"], &
-         metavar="RADII", &
-         help="Atomic radii", &
-         group_idx=grp_technical)
-      call p%add_argument("-g", "--grad", action="store_true", &
-         help="Calculate cavity gradients", &
-         group_idx=grp_technical)
-      call p%add_argument("--dump", action="store_true", &
-         dest="dump", &
-         help="Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)", &
-         group_idx=grp_input)
-   end subroutine add_cavity_shared_arguments
+         call p%add_argument("solvent", help="Solvent name or alias", metavar="SOLVENT", &
+                             group_idx=grp_system)
+      end subroutine setup_solvent_parser
 
-
-   !> Add DROP/DROP arguments shared by all DROP variants
-   !> @param[inout] p DROP variant parser
-   subroutine add_cavity_drop_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      type(moist_cavity_drop_parameters_type) :: defaults
-      integer :: grp_technical
-
-      grp_technical = p%add_argument_group("DROP settings", &
-         "DROP projection and property controls")
-
-      call p%add_argument("--tol", data_type="real", &
-         default_val=defaults%tolerance, &
-         action=not_less_than(0.0_wp), &
-         dest="drop_tolerance", metavar="REAL", &
-         help="Numerical tolerance", &
-         group_idx=grp_technical)
-      call p%add_argument("--proj-level", data_type="integer", &
-         default_val=defaults%proj_level, &
-         action=not_less_than(1), &
-         dest="drop_proj_level", metavar="INT", &
-         help="Projection solver level", &
-         choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
-            "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
-            "5=SLSQP-deflation", "6=Newton-deflation", &
-            "7=Multistart", "8=Fine multistart", &
-            "9=Octree coverage"], &
-         print_choices=.true., &
-         group_idx=grp_technical)
-      call p%add_argument("--wleb-switch", data_type="integer", &
-         default_val=defaults%wleb_prune_level, &
-         action=not_less_than(0), &
-         dest="drop_wleb_prune_level", metavar="INT", &
-         help="Smooth weight switching level (0=off, 1-4=increasing)", &
-         choices=[character(len=26) :: "0=off", "1=1E-12/1E-10", &
-            "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4"], &
-         print_choices=.true., &
-         group_idx=grp_technical)
-      call p%add_argument("--fine", action="store_true", &
-         dest="drop_fine", &
-         help="Compute optional cavity properties (curvature, normals, etc.)", &
-         group_idx=grp_technical)
-   end subroutine add_cavity_drop_arguments
-
-
-   !> Add marching-cubes arguments to a level set parser
-   !> @param[inout] p Marching-cubes level set parser
-   subroutine add_cavity_mc_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      type(moist_cavity_mc_parameters_type) :: defaults
-      integer :: grp_technical
-
-      grp_technical = p%add_argument_group("Marching cubes settings", &
-         "Isosurface integration control")
-
-      call p%add_argument("--spacing", data_type="real", &
-         default_val=defaults%spacing, &
-         action=not_less_than(0.0_wp), &
-         dest="mc_spacing", metavar="REAL", &
-         help="Finest marching-cubes grid spacing in bohr", &
-         group_idx=grp_technical)
-   end subroutine add_cavity_mc_arguments
-
-
-   !> Add frozen marching-tetrahedra mesh and quadrature arguments
-   !>
-   !> @param[inout] p Level set parser
-   subroutine add_cavity_mt_arguments(p)
-      !> Parser receiving mesh and patch settings
-      type(ArgumentParser), intent(inout) :: p
-      !> Native defaults used by every interface
-      type(moist_cavity_mt_parameters_type) :: defaults
-      integer :: grp_technical
-
-      grp_technical = p%add_argument_group("Marching tetrahedra settings", &
-         "Frozen geometry; spacing controls the mesh, target-area the quadrature")
-      call p%add_argument("--spacing", data_type="real", &
-         default_val=defaults%spacing, dest="mt_spacing", metavar="REAL", &
-         help="Maximum Cartesian surface-cell side in bohr", group_idx=grp_technical)
-      call p%add_argument("--target-area", data_type="real", &
-         default_val=defaults%target_area, dest="mt_target_area", metavar="REAL", &
-         help="Target planar patch area in bohr squared", group_idx=grp_technical)
-      call p%add_argument("--area-tolerance", data_type="real", &
-         default_val=defaults%area_tolerance, dest="mt_area_tolerance", metavar="REAL", &
-         help="Relative patch-area tolerance", group_idx=grp_technical)
-      call p%add_argument("--gaussian-scale", data_type="real", &
-         default_val=defaults%gaussian_scale, dest="mt_gaussian_scale", metavar="REAL", &
-         help="Gaussian width scale", group_idx=grp_technical)
-      call p%add_argument("--weight-cutoff", data_type="real", &
-         default_val=defaults%weight_cutoff, dest="mt_weight_cutoff", metavar="REAL", &
-         help="Minimum retained switch weight", group_idx=grp_technical)
-   end subroutine add_cavity_mt_arguments
-
-
-   !> Add SvdW DROP arguments to a DROP variant parser
-   !> @param[inout] p SvdW DROP parser
-   subroutine add_cavity_drop_svdw_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      type(moist_cavity_drop_lsf_svdw_param_type) :: defaults
-      integer :: grp_technical
-
-      grp_technical = p%add_argument_group("SvdW settings", &
-         "SvdW level set smoothing controls")
-
-      call p%add_argument("--blendk", data_type="real", &
-         default_val=defaults%blend_k, &
-         action=not_less_than(0.0_wp), &
-         dest="svdw_blend_k", metavar="REAL", &
-         help="SvdW smoothing sharpness k", &
-         group_idx=grp_technical)
-      call p%add_argument("--blend1b", data_type="real", &
-         default_val=defaults%blend_1b, &
-         dest="svdw_blend_1b", metavar="REAL", &
-         help="SvdW one-body contribution", &
-         group_idx=grp_technical)
-      call p%add_argument("--blend2b", data_type="real", &
-         default_val=defaults%blend_2b, &
-         dest="svdw_blend_2b", metavar="REAL", &
-         help="SvdW two-body contribution", &
-         group_idx=grp_technical)
-      call p%add_argument("--blend3b", data_type="real", &
-         default_val=defaults%blend_3b, &
-         dest="svdw_blend_3b", metavar="REAL", &
-         help="SvdW three-body contribution", &
-         group_idx=grp_technical)
-   end subroutine add_cavity_drop_svdw_arguments
-
-
-   !> Add CFC DROP arguments to a DROP variant parser
-   !> @param[inout] p CFC DROP parser
-   subroutine add_cavity_drop_cfc_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      type(moist_cavity_drop_lsf_cfc_param_type) :: defaults
-      integer :: grp_technical
-
-      grp_technical = p%add_argument_group("CFC settings", &
-         "CFC level set controls")
-
-      call p%add_argument("--a1", data_type="real", &
-         default_val=defaults%a1, &
-         dest="cfc_a1", metavar="REAL", &
-         help="CFC atomic-term exponent", &
-         group_idx=grp_technical)
-      call p%add_argument("--a2", data_type="real", &
-         default_val=defaults%a2, &
-         dest="cfc_a2", metavar="REAL", &
-         help="CFC pair-term exponent", &
-         group_idx=grp_technical)
-      call p%add_argument("--c", data_type="real", &
-         default_val=defaults%c, &
-         dest="cfc_c", metavar="REAL", &
-         help="CFC pair-term coupling", &
-         group_idx=grp_technical)
-      call p%add_argument("--m", data_type="integer", &
-         default_val=defaults%m, &
-         action=not_less_than(1), &
-         dest="cfc_m", metavar="INT", &
-         help="CFC pair-term power", &
-         group_idx=grp_technical)
-   end subroutine add_cavity_drop_cfc_arguments
-
-
-   !> Configure the solvent subcommand parser
-   !> @param[inout] p      Solvent subcommand parser
-   !> @param[in]    parent Parent parser providing shared options
-   subroutine setup_solvent_parser(p, parent)
-      type(ArgumentParser), intent(inout) :: p
-      type(ArgumentParser), intent(in) :: parent
-      integer :: grp_system
-
-      call p%init_with_parents([parent], &
-         prog="moist solvent", &
-         description="Inspect solvent parameters by name/alias")
-
-      grp_system = p%add_argument_group("System config", &
-         "Solvent query settings")
-
-      call p%add_argument("solvent", help="Solvent name or alias", metavar="SOLVENT", &
-         group_idx=grp_system)
-   end subroutine setup_solvent_parser
-
-
-end subroutine get_arguments
-
+   end subroutine get_arguments
 
 !> Initialize one subsubparser specification entry
 !> @param[inout] self        Subsubparser metadata entry
@@ -902,21 +956,20 @@ end subroutine get_arguments
 !> @param[in]    help_text   Short help text for command listing
 !> @param[in]    prog        Full command name used in usage output
 !> @param[in]    description Description text for the subparser help page
-subroutine subsubparser_spec_init(self, name, help_text, prog, description)
-   class(subsubparser_spec), intent(inout) :: self
-   character(len=*), intent(in) :: name, help_text, prog, description
+   subroutine subsubparser_spec_init(self, name, help_text, prog, description)
+      class(subsubparser_spec), intent(inout) :: self
+      character(len=*), intent(in) :: name, help_text, prog, description
 
-   self%name = ""
-   self%help_text = ""
-   self%prog = ""
-   self%description = ""
-   nullify(self%add_specific_args)
+      self%name = ""
+      self%help_text = ""
+      self%prog = ""
+      self%description = ""
+      nullify (self%add_specific_args)
 
-   self%name = trim(name)
-   self%help_text = trim(help_text)
-   self%prog = trim(prog)
-   self%description = trim(description)
-end subroutine subsubparser_spec_init
-
+      self%name = trim(name)
+      self%help_text = trim(help_text)
+      self%prog = trim(prog)
+      self%description = trim(description)
+   end subroutine subsubparser_spec_init
 
 end module moist_cli

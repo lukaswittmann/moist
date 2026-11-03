@@ -10,6 +10,7 @@ module moist
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
+   use moist_cavity_drop_lsf_sses_param, only: moist_cavity_drop_lsf_sses_param_type
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_basis
    use mctc_io, only: structure_type, new
@@ -51,6 +52,7 @@ module moist
    public :: moist_pcm_parameters_type, moist_gostshyp_parameters_type
    public :: moist_cavity_drop_lsf_svdw_param_type
    public :: moist_cavity_drop_lsf_cfc_param_type
+   public :: moist_cavity_drop_lsf_sses_param_type
    public :: moist_cavity_drop_lsf_isodensity_param_type, moist_iso_basis
    public :: structure_type, new
    public :: error_type, fatal_error, wp

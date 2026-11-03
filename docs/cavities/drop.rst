@@ -17,6 +17,7 @@ DROP is independent of the particular surface definition; currently available:
  - :doc:`Electron-isodensity surface (ρ-DROP) <isodensity>`, a fully self-consistent and differentiable cavity based on the electron density and a chosen isodensity value.
  - :doc:`Smooth van der Waals surface (SvdW-DROP) <svdw>`, a fully differentiable molecular surface that recovers solvent-excluded-surface-like features while avoiding geometric singularities, crevices, and other discontinuous surface features.
  - :doc:`COSMO Fine Cavity (CFC-DROP) <cfc>`.
+ - :doc:`Smooth SES-like surface (SSES-DROP) <sses>`, an experimental optimized power-distance moment surface with a solvent probe radius and smoothing length.
 
 During the projection and weighting procedure, DROP applies smooth switching functions, handles multiple projection branches in concave regions, and uses spatial screening to keep the construction differentiable and efficient.
 This makes the cavity suitable for continuum-solvation models that require smooth surface areas, polarization energies, and gradients, such as CPCM and pressure-based cavity terms.
