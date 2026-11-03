@@ -163,6 +163,9 @@ contains
       plp = new_prettylistprinter([6, 6, 10, 10], &
                                   [character(len=9) :: "Num", "Sym", "R (A)", "R (bohr)"], &
                                   unit=unit)
+
+      write (plp%unit, "(a)") "Used radii:"
+      call plp%separator()
       call plp%print_header()
       call plp%separator()
 
