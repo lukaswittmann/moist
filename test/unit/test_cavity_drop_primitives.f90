@@ -1,4 +1,5 @@
 module test_cavity_drop_primitives
+   use, intrinsic :: ieee_exceptions, only: ieee_get_flag, ieee_set_flag, ieee_divide_by_zero
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -7,7 +8,8 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
-                                          new_swif_smooth_step
+                                          new_swif_smooth_step, moist_cavity_drop_swif_sigmoid_bump_type, &
+                                          new_swif_sigmoid_bump
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -38,6 +40,7 @@ contains
                   new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
                   new_unittest("phi_f012_r", test_phi_f012_r), &
                   new_unittest("switching_f1_ra", test_switching_f1_rA), &
+                  new_unittest("switching_endpoint", test_switching_endpoint), &
                   new_unittest("parameters_invalid", test_parameters_invalid) &
                   ]
    end subroutine collect_cavity_drop_primitives
@@ -689,6 +692,23 @@ contains
          deallocate (centers_base, centers_local)
       end do
    end subroutine test_switching_f1_rA
+
+   !> Near-endpoint switching avoids subtracting a rounded unit coordinate
+   subroutine test_switching_endpoint(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_swif_sigmoid_bump_type) :: critical
+      real(wp) :: value
+      logical :: raised, previous
+      call new_swif_sigmoid_bump(critical, 0.0_wp, 1.0_wp, &
+                                 p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
+      call ieee_get_flag(ieee_divide_by_zero, previous)
+      call ieee_set_flag(ieee_divide_by_zero, .false.)
+      value = critical%f0(1.0e-20_wp)
+      call ieee_get_flag(ieee_divide_by_zero, raised)
+      call ieee_set_flag(ieee_divide_by_zero, previous)
+      call check(error,.not. raised .and. value == 0.0_wp, "finite endpoint switching without divide by zero")
+   end subroutine test_switching_endpoint
 
    !> Derived DROP parameters refuse each out-of-range numerical control
    subroutine test_parameters_invalid(error)
