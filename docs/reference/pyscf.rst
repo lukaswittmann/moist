@@ -125,6 +125,8 @@ RHF, RKS, UHF and UKS are supported, including density fitting, nuclear gradient
 atom subsets, and energy/gradient scanners. Existing solver settings are
 preserved. ``copy()`` creates independent MOIST state; ``reset(mol)`` clears it.
 Geometry, basis and density changes invalidate the appropriate caches.
+For one-electron systems, use ``scf.uhf.UHF(mol)``: the ``HF1e`` object from
+``scf.UHF(mol)`` skips the SCF and is rejected.
 
 Attach MOIST once and combine terms in ``components``. ECPs, ROHF, existing
 solvent attachments, Newton SCF, stability, TDDFT, Hessians, post-HF methods and
