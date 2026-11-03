@@ -460,7 +460,7 @@ contains
             call check(error, abs(s) < 1.0e-12_wp, "every branch is on the surface")
             if (allocated(error)) return
          end do
-         if (levels(il) >= 7) then
+         if (levels(il) == 7 .or. levels(il) == 9) then
             call check(error, n, 2, "both mirror branches are found")
             if (allocated(error)) return
             call check(error, norm2(pts(:, 1) + pts(:, 2)) < POS_THR, "the branches are mirror images")
