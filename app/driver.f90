@@ -18,6 +18,7 @@ module moist_driver
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    use moist_radii, only: radius_type, new_radii
    use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type, new_context
@@ -88,7 +89,7 @@ contains
 ! !$       call mkl_set_num_threads(config%num_threads)
 ! #endif
 !$          if (ctx%verbosity(1)) then
-!$             write (ctx%unit, '(a,i0,a)') &
+!$             write (ctx%unit, '(a,i0)') &
 !$                "[Info] OpenMP threads set to ", config%num_threads, ""
 !$          end if
 !$       end if
@@ -165,13 +166,14 @@ contains
             ! Print header
             if (ctx%verbosity(1)) call cavity_header(output_unit, trim(config%mode))
 
+            call new_radii(config%radii, radius_model, error)
+            if (allocated(error)) return
+
             ! Instantiate the appropriate cavity type
             if (to_lower(config%mode) == "numsa") then
                block
                   type(cavity_type_numsa), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
-                  call new_radii(config%radii, radius_model, error)
-                  if (allocated(error)) return
                   call new_cavity_numsa(tmp_cavity, radii=radius_model, error=error, &
                      param=config%numsa, ctx=ctx)
                   if (allocated(error)) return
@@ -181,98 +183,77 @@ contains
                block
                   type(cavity_type_iswig), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
-                  call new_radii(config%radii, radius_model, error)
-                  if (allocated(error)) return
                   call new_cavity_iswig(tmp_cavity, radius_model=radius_model, error=error, &
                      param=config%iswig, ctx=ctx)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
-            else if (to_lower(config%mode) == "drop") then
+            else if (to_lower(config%mode) == "drop" .or. &
+                     to_lower(config%mode) == "mc" .or. &
+                     to_lower(config%mode) == "mt") then
                block
-                  type(cavity_type_drop), allocatable :: tmp_cavity
-                  allocate (tmp_cavity)
-                  call new_radii(config%radii, radius_model, error)
-                  if (allocated(error)) return
+                  class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
+
                   if (to_lower(config%drop_variant) == "svdw") then
                      block
                         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                        !> The cavity couples the LSF screening threshold to
-                        !> its own tolerance, so only the shape parameters go here
+                        !> Each cavity configures LSF screening, so only
+                        !> the shape parameters go here
                         call svdw_template%new(param=config%svdw)
-                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
-                           lsf_model=svdw_template, error=error, &
-                           param=config%drop, ctx=ctx)
+                        allocate (lsf_model, source=svdw_template)
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(param=config%cfc)
-                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
-                           lsf_model=cfc_template, error=error, &
-                           param=config%drop, ctx=ctx)
+                        allocate (lsf_model, source=cfc_template)
                      end block
-                  else
-                     call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
-                  end if
-                  if (allocated(error)) return
-                  call move_alloc(tmp_cavity, cavity)
-               end block
-            else if (to_lower(config%mode) == "mc") then
-               block
-                  type(cavity_type_mc), allocatable :: tmp_cavity
-                  allocate (tmp_cavity)
-                  call new_radii(config%radii, radius_model, error)
-                  if (allocated(error)) return
-                  !> Marching cubes writes its mesh while integrating, so the
-                  !> export paths have to be known before update runs.
-                  if (to_lower(config%drop_variant) == "svdw") then
+                  else if (to_lower(config%drop_variant) == "sses") then
                      block
-                        type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                        call svdw_template%new(param=config%svdw)
-                        call new_mc_cavity(tmp_cavity, ctx, radius_model, svdw_template, &
-                                           config%mc, config%dump, error)
-                     end block
-                  else if (to_lower(config%drop_variant) == "cfc") then
-                     block
-                        type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-                        call cfc_template%new(param=config%cfc)
-                        call new_mc_cavity(tmp_cavity, ctx, radius_model, cfc_template, &
-                                           config%mc, config%dump, error)
+                        type(moist_cavity_drop_lsf_sses_type) :: sses_template
+                        call sses_template%new(param=config%sses)
+                        allocate (lsf_model, source=sses_template)
                      end block
                   else
                      call fatal_error(error, "Unknown level set function: "//trim(config%drop_variant))
+                     return
                   end if
-                  if (allocated(error)) return
-                  call move_alloc(tmp_cavity, cavity)
-               end block
-            else if (to_lower(config%mode) == "mt") then
-               block
-                  type(cavity_type_mt), allocatable :: tmp_cavity
-                  allocate (tmp_cavity)
-                  call new_radii(config%radii, radius_model, error)
-                  if (allocated(error)) return
-                  if (to_lower(config%drop_variant) == "svdw") then
+
+                  if (to_lower(config%mode) == "drop") then
                      block
-                        type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                        call svdw_template%new(param=config%svdw)
-                        call new_cavity_mt(tmp_cavity, ctx=ctx, radius_model=radius_model, &
-                           lsf_model=svdw_template, param=config%mt, error=error)
+                        type(cavity_type_drop), allocatable :: tmp_cavity
+                        allocate (tmp_cavity)
+                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
+                                             lsf_model=lsf_model, error=error, param=config%drop, ctx=ctx)
+                        if (allocated(error)) return
+                        call move_alloc(tmp_cavity, cavity)
                      end block
-                  else if (to_lower(config%drop_variant) == "cfc") then
+                  else if (to_lower(config%mode) == "mc") then
                      block
-                        type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-                        call cfc_template%new(param=config%cfc)
-                        call new_cavity_mt(tmp_cavity, ctx=ctx, radius_model=radius_model, &
-                           lsf_model=cfc_template, param=config%mt, error=error)
+                        type(cavity_type_mc), allocatable :: tmp_cavity
+                        allocate (tmp_cavity)
+                        call new_mc_cavity(tmp_cavity, ctx, radius_model, lsf_model, &
+                                           config%mc, config%dump, error)
+                        if (allocated(error)) return
+                        call move_alloc(tmp_cavity, cavity)
                      end block
-                  else
-                     call fatal_error(error, "Unknown level set function: "//trim(config%drop_variant))
+                  else if (to_lower(config%mode) == "mt") then
+                     block
+                        type(cavity_type_mt), allocatable :: tmp_cavity
+                        allocate (tmp_cavity)
+                        call new_cavity_mt(tmp_cavity, ctx=ctx, radius_model=radius_model, &
+                                           lsf_model=lsf_model, param=config%mt, error=error)
+                        if (allocated(error)) return
+                        call move_alloc(tmp_cavity, cavity)
+                     end block
                   end if
-                  if (allocated(error)) return
-                  call move_alloc(tmp_cavity, cavity)
                end block
             end if
+
+            call radius_model%update(mol, error=error)
+            if (allocated(error)) return
+
+            if (ctx%verbosity(2)) call radius_model%print()
 
             ! Settings of the constructed cavity
             if (ctx%verbosity(1)) call cavity%print_parameters()
@@ -280,9 +261,6 @@ contains
             ! Use polymorphic cavity methods
             call cavity%update(mol, error=error)
             if (allocated(error)) return
-
-            ! Radii of the structure; the update itself prints none
-            if (ctx%verbosity(2)) call cavity%print_radii()
 
             ! Gradient if asked for
             if (config%grad) then
@@ -357,8 +335,7 @@ contains
    !> Construct a marching-cubes cavity, wiring up mesh export when --dump is set
    !>
    !> The integrator writes its triangle mesh during `update`, so the export paths
-   !> have to be decided at construction; this wrapper keeps that branch out of the
-   !> per-level-set blocks above.
+   !> have to be decided at construction
    !>
    !> @param[inout] cavity        Cavity instance to initialize
    !> @param[in]    ctx           Shared run context
