@@ -310,7 +310,7 @@ contains
          d2bump = 0.0_wp
       else
          u = (hi - x0)/width
-         one_minus_u = 1.0_wp - u
+         one_minus_u = (x0 - lo)/width
          g = -a_hi*u**(-p_hi) + a_lo*one_minus_u**(-p_lo)
 
          if (g >= g_cutoff) then
