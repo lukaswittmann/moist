@@ -92,6 +92,8 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
       procedure, public :: check_surface => lsf_check_surface
+      procedure, public :: has_atom_partition => lsf_has_atom_partition
+      procedure, public :: atom_partition => lsf_atom_partition
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
@@ -526,6 +528,39 @@ contains
       factor = -self%param%scale
       available = .true.
    end function lsf_density_adjoint_factor
+
+   !> The density splits into atomic shares
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_has_atom_partition(self) result(available)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> Always available
+      logical :: available
+
+      available = .true.
+   end function lsf_has_atom_partition
+
+   !> Add the Mulliken shares of the density at the prepared point
+   !>
+   !> @param[inout] self  LSF instance
+   !> @param[in]    scale Weight of the point
+   !> @param[inout] acc   Per-atom accumulator, user space [ncenters]
+   subroutine lsf_atom_partition(self, scale, acc)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
+      !> Weight of the point
+      real(wp), intent(in) :: scale
+      !> Per-atom accumulator
+      real(wp), intent(inout) :: acc(:)
+
+      !> Density, its unused gradient and its atomic shares
+      real(wp) :: rho, drho(ndim), rho_atom(self%ncenters)
+
+      rho_atom = 0.0_wp
+      call self%gto%eval(self%point, self%work, rho, drho, rho_atom=rho_atom)
+      rho = sum(rho_atom)
+      if (rho <= 0.0_wp) return
+      acc = acc + rho_atom*(scale/rho)
+   end subroutine lsf_atom_partition
 
    !> Reject projected surface points inside an ECP core fill
    !>

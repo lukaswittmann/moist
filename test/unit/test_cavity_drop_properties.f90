@@ -4,6 +4,7 @@
 !> - `rho_scal0` of isolated and overlapping atoms
 !> - curvatures, normals, point-to-center distances, area and volume of isolated spheres
 !> - `analyze_cavity` report against the cavity's own areas and curvatures
+!> - atom-partitioned areas of separated spheres and of a molecule
 module test_cavity_drop_properties
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -83,6 +84,12 @@ module test_cavity_drop_properties
    !>
    !> Observed worst case 4.2e-15
    real(wp), parameter :: IDENT_VOLUME_THR = 1.0e-10_wp
+   !> Relative tolerance of the sum of the partitioned areas, which is the total area by construction
+   real(wp), parameter :: PARTITION_SUM_THR = 1.0e-12_wp
+   !> Lower bound of the largest shift between partitioned and owner-summed areas of MB16-43 `16`, Bohr^2
+   !>
+   !> Observed 22.7 (Al), at 194 points and `blend_k = 1`
+   real(wp), parameter :: PARTITION_SHIFT_MIN = 1.0_wp
 
 contains
 
@@ -99,7 +106,8 @@ contains
                   new_unittest("curvature_single_sphere", test_curvature_single_sphere), &
                   new_unittest("sphere_geometry", test_sphere_geometry), &
                   new_unittest("analyze_cavity_output", test_analyze_cavity_output), &
-                  new_unittest("integral_identities", test_integral_identities) &
+                  new_unittest("integral_identities", test_integral_identities), &
+                  new_unittest("atom_area_partition", test_atom_area_partition) &
                   ]
    end subroutine collect_cavity_drop_properties
 
@@ -683,5 +691,64 @@ contains
          end do
       end do
    end subroutine test_integral_identities
+
+   !> Atom-partitioned areas of separated spheres and of a molecule
+   !>
+   !> - two atoms 60 bohr apart keep every point on its own sphere, so each atom
+   !>   carries `4 pi R^2`, as does the owner sum
+   !> - on MB16-43 `16` at `blend_k = 1` the partitioned areas sum to the total
+   !>   area, and the projection carries points onto surface shaped by other atoms,
+   !>   so they differ from the owner sums
+   subroutine test_atom_area_partition(error)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: radii(2) = [2.0_wp, 2.5_wp]
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      class(radius_type), allocatable :: radius_model
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(moist_cavity_drop_parameters_type) :: param
+      type(mctc_error), allocatable :: radius_error, cavity_error
+      real(wp) :: shift
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_svdw_lsf(lsf, 1.0_wp)
+      param = fixture_param(194, 1.0_wp, .false., .false.)
+      param%do_atomarea = .true.
+
+      call new(mol, [18, 18], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 60.0_wp], [3, 2]))
+      call new_radii_custom_atoms(radii, radius_model, radius_error)
+      if (allocated(radius_error)) then
+         call test_failed(error, "new_radii_custom_atoms failed: "//trim(radius_error%message))
+         return
+      end if
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 194, ctx, radius_model, lsf, cavity, cavity_error, param=param)
+      call fail_on_build(error, cavity_error)
+      if (allocated(error)) return
+      call check(error, maxval(abs(cavity%asph_partition - 4.0_wp*pi*radii**2)) < SPHERE_ABS_THR, &
+         "Partitioned area of separated spheres differs from 4 pi R^2")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cavity%asph - 4.0_wp*pi*radii**2)) < SPHERE_ABS_THR, &
+         "Owner-summed area of separated spheres differs from 4 pi R^2, the fixture is not isolated")
+      if (allocated(error)) return
+      deallocate (cavity)
+
+      call get_structure(mol, "MB16-43", "16")
+      radius_model = default_cpcm_radii()
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 194, ctx, radius_model, lsf, cavity, cavity_error, param=param)
+      call fail_on_build(error, cavity_error)
+      if (allocated(error)) return
+      call check(error, sum(cavity%asph_partition), cavity%total_area, thr=PARTITION_SUM_THR*cavity%total_area, &
+                 message="Partitioned areas do not sum to the total area")
+      if (allocated(error)) return
+      shift = maxval(abs(cavity%asph_partition - cavity%asph))
+      call check(error, shift > PARTITION_SHIFT_MIN, &
+         "Partitioned areas follow the owner sums, largest shift "//to_string(shift)//" Bohr^2")
+      if (allocated(error)) return
+   end subroutine test_atom_area_partition
 
 end module test_cavity_drop_properties

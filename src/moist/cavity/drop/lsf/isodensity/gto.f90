@@ -293,6 +293,8 @@ module moist_cavity_drop_lsf_isodensity_gto
       integer, allocatable :: run_off(:)
       !> Function count of each active run, size nshell
       integer, allocatable :: run_len(:)
+      !> Owner atom of each compact row of `phi`, size nfun
+      integer, allocatable :: row_atom(:)
    end type moist_iso_gto_work_type
 
 contains
@@ -875,6 +877,8 @@ contains
    !>   components only, then symmetrized
    !> - with screening disabled (huge cutoffs) every function is active and the
    !>   result is the exact dense contraction
+   !> - `rho_atom` adds the Mulliken split `phi_mu (D phi)_mu` of the value to the
+   !>   owner atom of each function, so it sums to `rho`
    !>
    !> @param[in]    self       Basis instance (read-only)
    !> @param[in]    point      Evaluation point in Bohr
@@ -886,7 +890,8 @@ contains
    !> @param[in]    cand_atoms Optional candidate owner-atom list; when present,
    !>                          only shells on these atoms are considered
    !> @param[out]   d4rho      Optional density fourth derivative (3, 3, 3, 3)
-   subroutine gto_eval(self, point, work, rho, drho, d2rho, d3rho, cand_atoms, d4rho)
+   !> @param[inout] rho_atom   Optional per-atom density accumulator (natom_grid)
+   subroutine gto_eval(self, point, work, rho, drho, d2rho, d3rho, cand_atoms, d4rho, rho_atom)
       !> Basis instance
       class(moist_iso_gto_type), intent(in) :: self
       !> Evaluation point in Bohr
@@ -905,11 +910,13 @@ contains
       integer, intent(in), optional :: cand_atoms(:)
       !> Optional density fourth derivative
       real(wp), intent(out), optional :: d4rho(3, 3, 3, 3)
+      !> Optional per-atom density accumulator
+      real(wp), intent(inout), optional :: rho_atom(:)
 
       !> Density-weighted AO derivatives of the active functions, contiguous
       real(wp), pointer, contiguous :: dphi(:, :)
       real(wp) :: gram(0:34, 0:9)
-      integer :: ka, aidx, idx, nslot, nrhs, nact, nrun, ndloc
+      integer :: ka, aidx, idx, nslot, nrhs, nact, nrun, ndloc, q
 
       ! The requested order is exactly the highest order the caller asked back
       ndloc = 1
@@ -954,6 +961,11 @@ contains
       if (present(d2rho)) call density_hessian(gram, d2rho)
       if (present(d3rho)) call density_third(gram, d3rho)
       if (present(d4rho)) call density_fourth(gram, d4rho)
+      if (present(rho_atom)) then
+         do q = 1, nact
+            rho_atom(work%row_atom(q)) = rho_atom(work%row_atom(q)) + work%phi(q, 0)*dphi(q, 0)
+         end do
+      end if
 
    contains
 
@@ -988,6 +1000,7 @@ contains
             work%phi(nact + 1:nact + nf, 0:nslot - 1) = 0.0_wp
             call gto_assemble_shell(self, sh, d, u, ndloc, work%phi(nact + 1:nact + nf, :))
          end if
+         if (present(rho_atom)) work%row_atom(nact + 1:nact + nf) = self%sh_atom(sh)
 
          off = self%sh_foff(sh)
          nact = nact + nf
@@ -1044,6 +1057,11 @@ contains
          if (size(work%run_off) /= self%nshell) deallocate (work%run_off, work%run_len)
       end if
       if (.not. allocated(work%run_off)) allocate (work%run_off(self%nshell), work%run_len(self%nshell))
+
+      if (allocated(work%row_atom)) then
+         if (size(work%row_atom) /= self%nfun) deallocate (work%row_atom)
+      end if
+      if (.not. allocated(work%row_atom)) allocate (work%row_atom(self%nfun))
    end subroutine size_work
 
    !> Accumulate one shell's cartesian AO-derivative contributions at a point

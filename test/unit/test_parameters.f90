@@ -301,7 +301,7 @@ contains
       type(moist_error), allocatable :: err
       !> Run context borrowed by every part
       type(moist_context_type), target :: ctx
-      !> DROP settings reaching the conditional octree and switching rows
+      !> DROP settings reaching the octree and switching rows
       type(moist_cavity_drop_parameters_type) :: param
       !> Level sets
       type(moist_cavity_drop_lsf_svdw_type) :: svdw
@@ -788,8 +788,8 @@ contains
       call check(error, param%proj_tol, -1.0_wp)
       if (allocated(error)) return
       call check(error, drop%param%do_grid_density .and. drop%param%do_curvature .and. &
-                 drop%param%do_normal .and. drop%param%do_r_iI .and. drop%param%do_rho, &
-                 more="do_fine did not switch every optional property on")
+                 drop%param%do_normal .and. drop%param%do_r_iI .and. drop%param%do_rho .and. &
+                 drop%param%do_atomarea, more="do_fine did not switch every optional property on")
       if (allocated(error)) return
       call check(error,.not. param%do_curvature, more="constructor changed the caller's settings")
       if (allocated(error)) return
@@ -801,7 +801,8 @@ contains
       call check(error, drop%param%num_leb, 194)
       if (allocated(error)) return
       call check(error,.not. (drop%param%do_grid_density .or. drop%param%do_curvature .or. &
-                              drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho), &
+                              drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho .or. &
+                              drop%param%do_atomarea), &
                  more="default DROP settings switch an optional property on")
       if (allocated(error)) return
       call new_cavity_iswig(iswig, default_cpcm_radii(), err, &
@@ -1261,13 +1262,15 @@ contains
                                     0.8_wp, 0.04_wp, 0.2_wp, 1.5_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
-                 drop%do_r_iI .and. drop%do_rho, more="do_fine from a file did not switch every property on")
+                 drop%do_r_iI .and. drop%do_rho .and. drop%do_atomarea, &
+                 more="do_fine from a file did not switch every property on")
       if (allocated(error)) return
       ! A single property flag stays single
       call configured(drop, '{"do_curvature":true}', error)
       if (allocated(error)) return
       call check(error, drop%do_curvature .and. .not. (drop%do_fine .or. drop%do_grid_density .or. &
-                                                       drop%do_normal .or. drop%do_r_iI .or. drop%do_rho), &
+                                                       drop%do_normal .or. drop%do_r_iI .or. drop%do_rho .or. &
+                                                       drop%do_atomarea), &
                  more="do_curvature from a file switched other properties")
       if (allocated(error)) return
       call configured(iswig, '{"num_leb":194,"cut_a":0.3,"cut_f":0.4}', error)

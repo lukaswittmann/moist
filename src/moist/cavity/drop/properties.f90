@@ -240,6 +240,95 @@ contains
    end subroutine compute_area_volume
 
    !* ================================================================================= *!
+   !*                              Atom-partitioned area                                *!
+   !* ================================================================================= *!
+
+   !> Partition the surface area among the atoms by the level set's atomic shares
+   !>
+   !> The owner of a grid point is the sphere of its anchor, while the projection
+   !> can carry the point onto surface shaped by other atoms; each area element
+   !> `a_i` therefore goes to the atoms by their shares of the level set at the
+   !> projected point (see [[moist_cavity_drop_lsf_type:atom_partition]])
+   !>
+   !> - the shares of one point sum to one, so the partitioned areas sum to the
+   !>   total area, which is checked
+   !> - a level set without atomic shares skips this with a warning
+   !> - printed per atom by [[analyze_cavity]]
+   !>
+   !> @param[inout] self  Cavity instance after `compute_area_volume`
+   !> @param[out]   error Error handling
+   module subroutine compute_atom_area(self, error)
+      class(cavity_type_drop), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Relative tolerance of the sum of the partitioned areas, above the
+      !> round-off of a threaded sum over many points
+      real(wp), parameter :: closure_tol = 1.0e-8_wp
+
+      type(drop_worker_slots_type) :: slots
+      !> Loop-wide abort latch and the LSF evaluation failure handed to it
+      type(drop_abort_latch_type) :: abort
+      type(error_type), allocatable :: lsf_error
+      !> Thread-local per-atom areas
+      real(wp), allocatable :: asph_local(:)
+      integer :: i, thread_slot
+
+      if (.not. self%lsf_model%has_atom_partition()) then
+         call self%ctx%warning("DROP atom areas skipped: the level set has no atomic partition")
+         return
+      end if
+
+      allocate (self%asph_partition(self%nsph), source=0.0_wp)
+
+      ! Only the value-level state of the LSF is read
+      call slots%init(self%ctx, self%lsf_model, 0)
+      call abort%reset()
+
+      !$omp parallel num_threads(slots%nthreads) default(shared) &
+      !$omp& private(i, thread_slot, asph_local, lsf_error)
+      allocate (asph_local(self%nsph), source=0.0_wp)
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
+
+      !$omp do schedule(dynamic)
+      do i = 1, self%ngrid
+         if (abort%requested) cycle
+         call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, i), lsf_error)
+         if (allocated(lsf_error)) then
+            call abort%latch_error(lsf_error, i)
+            cycle
+         end if
+         call slots%lsf(thread_slot)%lsf%atom_partition(self%a(i), asph_local)
+      end do
+      !$omp end do
+
+      !$omp critical (compute_atom_area_reduce)
+      self%asph_partition = self%asph_partition + asph_local
+      !$omp end critical (compute_atom_area_reduce)
+
+      deallocate (asph_local)
+      !$omp end parallel
+
+      if (abort%requested) then
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Atom area partition aborted. (unreachable in normal execution)")
+         end if
+         return
+      end if
+
+      ! A point without atomic shares would drop its area silently, so this is an
+      ! error and not a warning
+      if (abs(sum(self%asph_partition) - self%total_area) > closure_tol*abs(self%total_area)) then
+         call fatal_error(error, "DROP atom areas do not sum to the total area")
+         return
+      end if
+
+   end subroutine compute_atom_area
+
+   !* ================================================================================= *!
    !*                                     Curvature                                     *!
    !* ================================================================================= *!
 
@@ -399,6 +488,9 @@ contains
    !>  - ||grad_S||: LSF gradient norm (low values indicate blending ambiguity)
    !>  - cpjac_scal: closest-point Jacobian scaling
    !>
+   !> With `do_fine` and `do_atomarea`, also lists the owner-summed (naive) and
+   !> partitioned area of every atom
+   !>
    !> @param[inout] self   Cavity instance (after full update)
    !> @param[out]   error  Error handling structure
    module subroutine analyze_cavity(self, error)
@@ -433,6 +525,7 @@ contains
       real(wp) :: rp_amean, rp_harmonic, rp_min, rp_max, patch_area_total
       type(error_type), allocatable :: sort_error
       type(prettylistprinter) :: plp
+      integer :: iat
 
       ngrid = self%ngrid
 
@@ -712,6 +805,28 @@ contains
             end if
          end if
 
+      end if
+
+      !> Owner-summed against level-set-partitioned area per atom
+      if (self%param%do_atomarea .and. allocated(self%asph_partition)) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
+         call pp%blank()
+         call pp%push("Atom-resolved surface areas")
+         plp = new_prettylistprinter( &
+               [6, 6, 16, 16], &
+               [character(len=16) :: "Atom", "Sym", "Naive/Bohr^2", "Partition/Bohr^2"], &
+               unit=self%ctx%unit, offset=2, column_gap=2)
+         call plp%print_header()
+         call plp%separator()
+         do iat = 1, self%nsph
+            call plp%begin_row()
+            call plp%add(iat)
+            call plp%add(trim(self%mol%sym(self%mol%id(iat))))
+            call plp%add(self%asph(iat), fmt="f16.6")
+            call plp%add(self%asph_partition(iat), fmt="f16.6")
+            call plp%end_row()
+         end do
+         call pp%pop()
       end if
 
    end subroutine analyze_cavity

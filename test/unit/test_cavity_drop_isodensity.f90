@@ -3,9 +3,10 @@
 !>
 !> Three parts are covered:
 !>
-!>   * the bare evaluator [[moist_iso_gto_type]]: the assembled density against an
-!>     independent direct monomial evaluation, and each analytic derivative order
-!>     against a 4-point central FD of the analytic previous order (Richardson
+!>   * the bare evaluator [[moist_iso_gto_type]]: the assembled density and its
+!>     Mulliken split against an independent direct monomial evaluation, and each
+!>     analytic derivative order against a 4-point central FD of the analytic
+!>     previous order (Richardson
 !>     extrapolated for the third order); plus the radial screening, which must not
 !>     perturb any evaluated quantity beyond its own threshold
 !>
@@ -172,6 +173,7 @@ contains
 
       testsuite = [ &
                   new_unittest("gto_value_reference", test_gto_value_reference), &
+                  new_unittest("gto_mulliken_reference", test_gto_mulliken_reference), &
                   new_unittest("gto_grad_fd", test_gto_grad_fd), &
                   new_unittest("gto_hess_fd", test_gto_hess_fd), &
                   new_unittest("gto_third_fd", test_gto_third_fd), &
@@ -624,6 +626,90 @@ contains
          end do
       end do
    end subroutine test_gto_value_reference
+
+   !> Direct Mulliken split of the density, `rho_A = sum_{i on A} g_i (D g)_i`
+   !>
+   !> @param[in] gto   Basis
+   !> @param[in] dcart Host cartesian density matrix
+   !> @param[in] point Evaluation point in Bohr
+   !> @param[in] nat   Number of atoms
+   !> @returns         Atomic densities at the point
+   function rho_atom_reference(gto, dcart, point, nat) result(rho_atom)
+      !> Basis
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Host cartesian density matrix
+      real(wp), intent(in) :: dcart(:, :)
+      !> Evaluation point in Bohr
+      real(wp), intent(in) :: point(3)
+      !> Number of atoms
+      integer, intent(in) :: nat
+      real(wp) :: rho_atom(nat)
+
+      real(wp), allocatable :: g(:)
+      integer, allocatable :: comp_atom(:)
+      integer :: s, p, c, cbase, l, ncc, lx, ly, lz, i
+      real(wp) :: d(3), u, radial
+
+      allocate (g(gto%ncart), source=0.0_wp)
+      allocate (comp_atom(gto%ncart))
+      do s = 1, gto%nshell
+         l = gto%sh_l(s)
+         ncc = moist_iso_gto_ncart(l)
+         cbase = gto%sh_coff(s)
+         d = point - gto%center(:, s)
+         u = dot_product(d, d)
+         radial = 0.0_wp
+         do p = gto%sh_poff(s), gto%sh_poff(s + 1) - 1
+            radial = radial + gto%coeffs(p)*exp(-gto%exps(p)*u)
+         end do
+         do c = 1, ncc
+            lx = gto%comp_l(1, cbase + c)
+            ly = gto%comp_l(2, cbase + c)
+            lz = gto%comp_l(3, cbase + c)
+            g(cbase + c) = d(1)**lx*d(2)**ly*d(3)**lz*radial
+            comp_atom(cbase + c) = gto%sh_atom(s)
+         end do
+      end do
+
+      rho_atom = 0.0_wp
+      do i = 1, gto%ncart
+         rho_atom(comp_atom(i)) = rho_atom(comp_atom(i)) + g(i)*dot_product(dcart(i, :), g)
+      end do
+   end function rho_atom_reference
+
+   !> Mulliken split of the density matches the independent direct evaluation
+   !>
+   !> - the split sums to the density
+   !> - the spherical representation splits like the cartesian one, the
+   !>   transformation being block diagonal per shell
+   subroutine test_gto_mulliken_reference(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: gto
+      type(moist_iso_gto_work_type) :: work
+      type(structure_type) :: mol
+      real(wp), allocatable :: pts(:, :), dcart(:, :), rho_atom(:)
+      real(wp) :: rho, drho(3)
+      integer :: test, ip
+
+      do test = 1, ntests
+         call build_test(gto, test, error, mol, dcart)
+         if (allocated(error)) return
+         call get_test_points(mol, pts, 12)
+         allocate (rho_atom(mol%nat))
+         do ip = 1, size(pts, 2)
+            rho_atom = 0.0_wp
+            call gto%eval(pts(:, ip), work, rho, drho, rho_atom=rho_atom)
+            call check(error, maxval(abs(rho_atom - rho_atom_reference(gto, dcart, pts(:, ip), mol%nat))), &
+                       0.0_wp, thr=1.0e-12_wp, more="Mulliken split differs from the direct evaluation")
+            if (allocated(error)) return
+            call check(error, sum(rho_atom), rho, thr=1.0e-12_wp, more="Mulliken split does not sum to rho")
+            if (allocated(error)) return
+         end do
+         deallocate (rho_atom)
+      end do
+   end subroutine test_gto_mulliken_reference
 
    !> Analytic gradient matches a 4-point central FD of the density
    subroutine test_gto_grad_fd(error)
@@ -2410,8 +2496,8 @@ contains
    !>
    !> The single-SLSQP seed search (level 2) reaches the fill first, at first
    !> order; refining after that abort read second order from the first-order
-   !> cache and ended in an `error stop`. Level 9 exhausts its octree budget
-   !> before it reaches the fill
+   !> cache and ended in an `error stop`. The octree (level 9) exhausts its
+   !> budget before it reaches the fill
    subroutine test_core_fill_seed_abort(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2422,7 +2508,9 @@ contains
       class(radius_type), allocatable :: radii
       type(mctc_error), allocatable :: cavity_error
       character(len=8) :: label
-      integer :: level
+      !> Every level that is not an octree
+      integer, parameter :: levels(8) = [2, 1, 3, 4, 5, 6, 7, 8]
+      integer :: il, level
 
       ! One thread: the first anchor to fail decides where the abort is latched
       call new_context(ctx, nthreads=1, verbosity=0)
@@ -2432,7 +2520,8 @@ contains
          return
       end if
 
-      do level = 1, 8
+      do il = 1, size(levels)
+         level = levels(il)
          write (label, "(i0)") level
          call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error, rho_iso=0.4_wp)
          if (allocated(error)) return

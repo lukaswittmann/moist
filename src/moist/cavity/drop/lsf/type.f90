@@ -21,6 +21,17 @@
 !>     `vjp_f1_rad`, therefore aborts
 !>   - aborts rather than returns a zero the caller cannot tell from a real answer
 !>
+!> Atomic partition
+!> ----------------
+!> `atom_partition` splits the level set at a point into atomic shares summing to
+!> one, from the LSF's own atomic terms; `has_atom_partition` tells a caller
+!> whether the override exists
+!>
+!>   - SvdW and CFC share each one-, two- and three-body term equally among its
+!>     atoms
+!>   - internal isodensity splits the density Mulliken-wise
+!>   - callback isodensity has no atomic terms and keeps the aborting default
+!>
 !> Two geometric-bound queries
 !> ---------------------------
 !> Shared by both:
@@ -328,6 +339,13 @@ module moist_cavity_drop_lsf_base
       procedure :: f4_rr_rA_rad => lsf_base_f4_rr_rA_rad
       !> Normalized level set S/||grad S|| and its nuclear gradient
       procedure :: normalized_f01_rA => lsf_base_normalized_f01_rA
+
+      !* ------------------------------ Atomic partition ------------------------------ *!
+
+      !> Whether this level set splits into atomic shares (no by default)
+      procedure :: has_atom_partition => lsf_base_has_atom_partition
+      !> Add the atomic shares of the level set at the prepared point
+      procedure :: atom_partition => lsf_base_atom_partition
 
       !* ---------------------- Directional and adjoint products ---------------------- *!
 
@@ -1270,7 +1288,7 @@ contains
    !>   in less than that distance
    !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
    !>
-   !> What lets the octree surface coverage (`proj_level = 9`) discard boxes
+   !> What lets the octree surface coverage (projection levels 2-4) discard boxes
    !> within the search window: minima live on the surface, so a region proven
    !> free of surface holds no minimum
    !>
@@ -1324,6 +1342,31 @@ contains
       factor = 0.0_wp
       available = .false.
    end function lsf_base_density_adjoint_factor
+
+   !> Default: no atomic partition
+   !>
+   !> @param[in] self LSF instance
+   pure function lsf_base_has_atom_partition(self) result(available)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Whether `atom_partition` is implemented
+      logical :: available
+
+      available = .false.
+   end function lsf_base_has_atom_partition
+
+   !> Erroring default of the atomic partition
+   !>
+   !> @param[inout] self  LSF instance
+   !> @param[in]    scale Weight of the point
+   !> @param[inout] acc   Per-atom accumulator, user space [ncenters]
+   subroutine lsf_base_atom_partition(self, scale, acc)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      real(wp), intent(in) :: scale
+      real(wp), intent(inout) :: acc(:)
+
+      acc = acc + 0.0_wp*scale*self%ncenters
+      error stop "moist DROP LSF: Chosen level set has no atomic partition"
+   end subroutine lsf_base_atom_partition
 
    !> Default declaration: the level set reads nothing from the host
    !>

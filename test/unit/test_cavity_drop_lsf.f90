@@ -42,6 +42,10 @@
 !> SvdW-only:
 !>   * `body_order_scaling`                    1b/2b/3b weight reduction
 !>   * `point_on_nucleus_is_finite`            CFC has no on-nucleus singularity
+!>   * `atom_partition`                        shares vs `-dS/dR_a`
+!>
+!> CFC-only:
+!>   * `atom_partition`                        shares vs sub-structure pseudo-densities
 !>
 !> Structures: MB16-43/Heavy28/Amino20x4/But14diol/UPU23 via `get_test_structures`
 !> CPCM radii via `get_test_radii`; samples via `get_test_points`
@@ -85,6 +89,9 @@ module test_cavity_drop_lsf
    real(wp), parameter :: REL_THR = 1.0e-9_wp
    real(wp), parameter :: CFC_ABS_THR = 5.0e-9_wp
    real(wp), parameter :: CFC_REL_THR = 5.0e-8_wp
+
+   !> Tolerance of the atomic shares, which are O(1)
+   real(wp), parameter :: PARTITION_THR = 1.0e-12_wp
 
    !> FD sampling points per structure
    integer, parameter :: n_points_svdw = 4
@@ -157,7 +164,9 @@ contains
                   new_unittest("svdw_contracted_vs_pairwise", test_svdw_contracted), &
                   new_unittest("svdw_point_on_nucleus_is_finite", test_svdw_on_nucleus), &
                   new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling), &
+                  new_unittest("svdw_atom_partition", test_svdw_atom_partition), &
                   !> CFC-only
+                  new_unittest("cfc_atom_partition", test_cfc_atom_partition), &
                   new_unittest("cfc_f2_rarb", test_cfc_f2_rArB), &
                   new_unittest("cfc_f3_r_rarb", test_cfc_f3_r_rArB), &
                   new_unittest("cfc_f4_rrrr", test_cfc_f4_rrrr), &
@@ -4108,6 +4117,136 @@ contains
       expected = sum(d3)/3.0_wp
       call check(error, lsf0, expected, thr_abs=ABS_THR, thr_rel=REL_THR)
    end subroutine test_svdw_body_order_scaling
+
+   !* ================================================================================= *!
+   !*                                 Atomic partition                                  *!
+   !* ================================================================================= *!
+
+   !> SvdW shares against the radius gradient
+   !>
+   !> Z is homogeneous of degree three in the screening factors and
+   !> `du_A/dR_a = (k/3) u_A`, so the equal-split share `Z_A/Z` is `-dS/dR_a`;
+   !> checked over the blend sweep, where the shares also sum to one
+   subroutine test_svdw_atom_partition(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type), allocatable :: mols(:)
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :), shares(:), f1_rad(:), f3_rr_rad(:, :, :)
+      integer :: icase, ipt, iblend, igamma, nat
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         nat = mols(icase)%nat
+         call get_test_radii(mols(icase), radii)
+         call get_test_points(mols(icase), points, n_points_svdw)
+         allocate (shares(nat), f1_rad(nat), f3_rr_rad(ndim, ndim, nat))
+         do iblend = 1, n_svdw_blends
+            do igamma = 1, n_svdw_gammas
+               call init_lsf(lsf, mols(icase), radii, 2, "svdw", blend_k=svdw_blend_k_values(iblend), &
+                             blend_2b=svdw_2b_values(igamma), blend_3b=svdw_gamma_values(igamma))
+               do ipt = 1, size(points, 2)
+                  if (prepare_failed(lsf, points(:, ipt), error)) return
+                  call check_identity_active(error, lsf, nat)
+                  if (allocated(error)) return
+                  shares = 0.0_wp
+                  call lsf%atom_partition(1.0_wp, shares)
+                  call lsf%f3_rr_rad(lsf1_rad=f1_rad, lsf3_rr_rad=f3_rr_rad)
+                  call check(error, maxval(abs(shares + f1_rad)), 0.0_wp, thr=PARTITION_THR, &
+                             more="SvdW share differs from -dS/dR_a")
+                  if (allocated(error)) return
+                  call check(error, sum(shares), 1.0_wp, thr=PARTITION_THR, more="SvdW shares do not sum to one")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+         deallocate (shares, f1_rad, f3_rr_rad)
+      end do
+   end subroutine test_svdw_atom_partition
+
+   !> CFC shares against the pseudo-densities of sub-structures
+   !>
+   !> The atomic term of A is the pseudo-density of A alone and a pair term that of
+   !> the pair less both atomic terms, all read back as `exp(-S)` from the level set
+   !> itself; the share of A is its atomic term plus half of each of its pair terms
+   subroutine test_cfc_atom_partition(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Leading atoms of each test structure forming the fixture
+      integer, parameter :: nsub = 4
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: sub
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp) :: shares(nsub), expect(nsub), pd_atom(nsub), pd_pair, pd
+      integer :: icase, ipt, ia, ib
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         if (mols(icase)%nat < nsub) cycle
+         call new(sub, mols(icase)%num(mols(icase)%id(1:nsub)), mols(icase)%xyz(:, 1:nsub))
+         call get_test_radii(sub, radii)
+         call get_test_points(sub, points, n_points_svdw)
+         call init_lsf(lsf, sub, radii, 0, "cfc")
+         do ipt = 1, size(points, 2)
+            call cfc_pseudo_density(error, sub, radii, [1, 2, 3, 4], points(:, ipt), pd)
+            if (allocated(error)) return
+            do ia = 1, nsub
+               call cfc_pseudo_density(error, sub, radii, [ia], points(:, ipt), pd_atom(ia))
+               if (allocated(error)) return
+            end do
+            expect = pd_atom
+            do ia = 1, nsub
+               do ib = ia + 1, nsub
+                  call cfc_pseudo_density(error, sub, radii, [ia, ib], points(:, ipt), pd_pair)
+                  if (allocated(error)) return
+                  pd_pair = pd_pair - pd_atom(ia) - pd_atom(ib)
+                  expect(ia) = expect(ia) + 0.5_wp*pd_pair
+                  expect(ib) = expect(ib) + 0.5_wp*pd_pair
+               end do
+            end do
+
+            if (prepare_failed(lsf, points(:, ipt), error)) return
+            call check_identity_active(error, lsf, nsub)
+            if (allocated(error)) return
+            shares = 0.0_wp
+            call lsf%atom_partition(1.0_wp, shares)
+            call check(error, maxval(abs(shares - expect/pd)), 0.0_wp, thr=PARTITION_THR, &
+                       more="CFC share differs from its sub-structure terms")
+            if (allocated(error)) return
+            call check(error, sum(shares), 1.0_wp, thr=PARTITION_THR, more="CFC shares do not sum to one")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_cfc_atom_partition
+
+   !> Unscreened CFC pseudo-density `exp(-S)` of a subset of atoms
+   !>
+   !> @param[out] error Set when the preparation fails
+   !> @param[in]  mol   Structure the subset is taken from
+   !> @param[in]  radii Per-atom radii of `mol`
+   !> @param[in]  atoms Atoms of the subset
+   !> @param[in]  point Evaluation point
+   !> @param[out] pd    Pseudo-density of the subset at `point`
+   subroutine cfc_pseudo_density(error, mol, radii, atoms, point, pd)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type), intent(in) :: mol
+      real(wp), intent(in) :: radii(:)
+      integer, intent(in) :: atoms(:)
+      real(wp), intent(in) :: point(ndim)
+      real(wp), intent(out) :: pd
+
+      type(structure_type) :: part
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp) :: s
+
+      pd = 0.0_wp
+      call new(part, mol%num(mol%id(atoms)), mol%xyz(:, atoms))
+      call init_lsf(lsf, part, radii(atoms), 0, "cfc")
+      if (prepare_failed(lsf, point, error)) return
+      call lsf%f0(s)
+      pd = exp(-s)
+   end subroutine cfc_pseudo_density
 
    !* ================================================================================= *!
    !*                        Surface-free exclusion certificate                          *!
