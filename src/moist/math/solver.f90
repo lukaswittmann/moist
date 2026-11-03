@@ -16,10 +16,6 @@ module moist_math_solver
       & newton_bounds_vector, &
       & newton_bounds_wall
 
-   use moist_math_solver_slsqp, only: &
-      & moist_math_solver_slsqp_type, &
-      & new_slsqp_solver
-
    use moist_math_solver_lbfgsb, only: &
       & moist_math_solver_lbfgsb_type, &
       & new_lbfgsb_solver
@@ -41,10 +37,6 @@ module moist_math_solver
    public :: newton_linesearch_exact, newton_linesearch_fixedpoint
    public :: newton_bounds_ignore, newton_bounds_scalar
    public :: newton_bounds_vector, newton_bounds_wall
-
-   ! Re-export SLSQP solver
-   public :: moist_math_solver_slsqp_type
-   public :: new_slsqp_solver
 
    ! Re-export L-BFGS-B solver
    public :: moist_math_solver_lbfgsb_type
