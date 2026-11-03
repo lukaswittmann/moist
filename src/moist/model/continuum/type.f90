@@ -8,6 +8,7 @@ module moist_model_continuum_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
+   use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm
    use moist_model_type, only: solvation_model_type, model_build
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_fields, only: field_query_type
@@ -509,6 +510,7 @@ contains
    !> Declare cavity and component requests, then record the extents
    !>
    !> - calculations with matching inputs are shared between components
+   !> - PCM components on one cavity must use the same potential operator
    !> - until the model and its cavity are built only the cavity declares:
    !>   the requests of the build phase belong to its level set
    !>
@@ -527,13 +529,30 @@ contains
       integer :: i
       !> Counts the snapshot records; unallocated ones are absent
       integer, allocatable :: ngrid, natom
+      !> Potential operators used by this cavity's PCM components
+      logical :: gaussian_potential, point_potential
 
       call coupling_begin_registration(coupling)
       call coupling_set_scope(coupling, 0)
       call self%cavity%declare_coupling(coupling, error)
       if (allocated(error)) return
       if (self%is_built() .and. self%cavity%is_built()) then
+         gaussian_potential = .false.
+         point_potential = .false.
          do i = 1, size(self%components)
+            select type (component => self%components(i)%item)
+            class is (model_continuum_component_pcm)
+               if (component%uses_gaussian_potential(self%cavity)) then
+                  gaussian_potential = .true.
+               else
+                  point_potential = .true.
+               end if
+               if (gaussian_potential .and. point_potential) then
+                  call fatal_error(error, "PCM components on the same cavity must use the same potential operator; "// &
+                     & "mixed point_potential settings are not supported")
+                  return
+               end if
+            end select
             call coupling_set_scope(coupling, i)
             call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
             if (allocated(error)) return
