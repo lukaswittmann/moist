@@ -75,6 +75,7 @@ Integration, Fourier transforms, and model responses use this same array directl
 Cartesian grids default to 128 points per axis and a spacing of 0.6 bohr, with weights ``dr**3``.
 The periodic box follows the nuclear centroid; every nucleus must remain at least ``margin`` (default 10 bohr) from its faces.
 Molecular grids accept atomic recipes, partition settings, pruning thresholds, and reciprocal-grid settings.
+``raw_index(i)`` is the position of retained molecular point ``i`` among the unpruned points (atom, radial shell, angular point); for a fixed solute and atomic recipe it names the same atom-relative point at every structure, while pruning may retain other points.
 Choose ``kbuffer`` large enough for the expected motion: updates fail if the geometry outgrows the fixed reciprocal period.
 
 Gaussian widths are ``xi0_factor/dr`` for Cartesian grids and ``xi0_factor/w**(1/3)`` for molecular grids, which require positive retained weights.
@@ -112,3 +113,12 @@ Hessian methods provide grid curvature at fixed model adjoints; a complete energ
 Molecular Hessian calls require ``acc%w_xi == 0`` because Gaussian-width curvature is excluded.
 Hessian calls reject Becke stiffness-one samples exactly on nuclei and coincident elliptic centers, where the response is undefined.
 Power-coordinate partitions support coincident centers.
+
+Layouts and transfers
+---------------------
+
+A layout describes what a field on a grid needs to be stored, compared or moved onto another grid; checkpoints use it to restart on other grids (:ref:`moz-checkpoints`).
+
+* ``layout.f90``: ``moist_math_grid_layout_type`` (``moist_math_grid_layout``) with the kind (Cartesian box, radial nodes or points), shape, spacing, origin, points, weights and optional Fourier basis of a grid. ``grid%get_layout`` returns it for 3D and radial grids; ``validate`` checks it.
+* ``transfer.f90``: ``grid_transfer_type`` (``moist_math_grid_transfer``) moves fields from one layout onto another by ``copy``, ``fourier``, ``trilinear``, ``points`` or ``spline``; ``fit_rigid`` gives the rotation and translation that map one solute onto another.
+* ``transfer_points.f90``: the moving least squares stencils of the ``points`` transfer.

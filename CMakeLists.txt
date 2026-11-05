@@ -172,6 +172,7 @@ file(GLOB_RECURSE moist_srcs CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.f90"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.F90"
 )
+list(APPEND moist_srcs "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/utils/file.c")
 if(NOT MOIST_API)
   list(REMOVE_ITEM moist_srcs "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/api.f90")
 endif()
@@ -223,7 +224,8 @@ else()
 endif()
 
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(moist PRIVATE -ffree-line-length-none -fbacktrace -fopenmp-simd)
+  target_compile_options(moist PRIVATE
+    "$<$<COMPILE_LANGUAGE:Fortran>:-ffree-line-length-none;-fbacktrace;-fopenmp-simd>")
   # GCC 14+ heap trampolines; never libgcc_eh, whose unwinder aborts C++ exceptions
   find_library(MOIST_LIBHEAPT_W NAMES heapt_w
     HINTS ${CMAKE_Fortran_IMPLICIT_LINK_DIRECTORIES})
@@ -310,7 +312,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
-    api parameters moz_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded utils_binio
+    api parameters moz_input utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded utils_binio utils_file math_grid_transfer
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_packed_sym
@@ -318,7 +320,7 @@ if(MOIST_TESTS)
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
-    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_checkpoint moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response
+    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_checkpoint moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response moz_3d_guess
     moz_closure moz_closure_kernel moz_solver moz_1d_preconditioner moz_thermodynamics
     math_grid_3d_partition
     math_grid_3d_guards math_grid_3d_derivatives
@@ -374,8 +376,18 @@ if(MOIST_TESTS)
     coarse_matrix thread_independence setup_errors parameters evaluator_products
     damping_step solve_water solve_variants closure_ramp solve_refusals thermodynamics_reduction
     solve_outputs reference_values converged_field solve_replacement susceptibility_at)
+  # concurrent_claims needs its own OpenMP team, outside the suite's
+  set(moist_test_selected_utils_file
+    new_file_distinct new_file_refused replace exclusive_collision concurrent_claims
+    replace_missing_target replace_failed replace_missing_directory replace_preserves_other_files)
+  set(moist_test_selected_moz_3d_guess guess_full guess_partial guess_rejected guess_failed_warm ramp_switch_end)
   set(moist_test_selected_moz_checkpoint
-    file_round_trip file_candidates file_failed_save vv_reload vv_intermediate vv_ramp vv_unfitting uv1d_reload uv3d_reload)
+    file_round_trip file_candidates file_failed_save file_version tail_status blowup_candidates blowup_tail blowup_layout
+    file_save_no_origin file_save_field_shape memory_save_no_nodes memory_save_rows refused_save_keeps
+    layout_weights_size layout_kmodes_axes layout_box_dims layout_box_corner layout_box_overflow layout_corner_nan layout_radial_nodes layout_radial_order layout_points_nan layout_no_fields
+    points_restart blowup_overloads blowup_unbuilt_box ramp_switch_vv ramp_switch_uv1d vv_reload vv_intermediate vv_ramp vv_unfitting uv1d_reload uv3d_reload
+    points_compatible points_angular points_guess file_points uv3d_molecular memory_store memory_update memory_vv memory_uv1d
+    transfer_vv transfer_uv1d transfer_uv3d_box transfer_uv3d_finer transfer_uv3d_rotated transfer_molecular transfer_uv3d_points)
   set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
   set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
   set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)
@@ -402,7 +414,7 @@ if(MOIST_TESTS)
     spectral_identity spectral_filter spectral_thread_independence spectral_setup_errors kspace_block_inverse kspace_activation
     kspace_thread_independence kspace_update_errors kspace_reallocation kspace_singular_fallback kspace_release_guard kspace_block_query selection filters_damping filters_attach)
   set(moist_test_selected_moz_solver
-    factory parameters_file picard_update diis_extrapolation diis_convergence diis_stages
+    factory parameters_file rms_residual picard_update diis_extrapolation diis_convergence diis_stages
     diis_divergence_restart adjoint_solve adjoint_failures jfnk_nonlinear
     adjoint_shared_workspace adjoint_owner_controls adjoint_workspace_recovery
     jfnk_preconditioner jfnk_line_search jfnk_forcing jfnk_deflation

@@ -7,6 +7,7 @@ module moist_math_grid_3d_cartesian
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
       & check_trafo_blocks
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+   use moist_math_grid_layout, only: moist_math_grid_layout_type, layout_cartesian
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
    use, intrinsic :: iso_c_binding, only: c_int
@@ -84,6 +85,8 @@ module moist_math_grid_3d_cartesian
       procedure :: get_cell_volume => cartesian_get_cell_volume
       !> Periodic box volume, bohr**3
       procedure :: get_box_volume => cartesian_get_box_volume
+      !> Layout: box dimensions, spacing and corner
+      procedure :: get_layout => cartesian_get_layout
    end type moist_math_grid_3d_cartesian_type
 
    !> 3D Fourier transform engine for a Cartesian grid
@@ -681,6 +684,25 @@ contains
       real(wp) :: origin(3)
       origin = self%origin
    end function cartesian_get_origin
+
+   !> Layout of the updated box; the points follow from it, so none are copied
+   !>
+   !> - A box never updated has no points and is described without shape or origin
+   !>
+   !> @param[in]  self    updated grid
+   !> @param[out] layout  "cartesian" layout
+   subroutine cartesian_get_layout(self, layout)
+      !> Updated grid
+      class(moist_math_grid_3d_cartesian_type), intent(in) :: self
+      !> Layout
+      type(moist_math_grid_layout_type), intent(out) :: layout
+
+      layout%kind = layout_cartesian
+      if (self%ngrid < 1) return
+      layout%shape = [self%nx, self%ny, self%nz]
+      layout%spacing = self%dr
+      layout%origin = self%origin
+   end subroutine cartesian_get_layout
 
    !> Phase reference of the FFT, grid point (1, 1, 1)
    !>

@@ -17,7 +17,8 @@
 !> - Coupling scope of solute term i: i
 !> - Point grids only, by design: Gaussian widths give the tables nothing and cost more
 !> - Optional checkpoint store: initial guess of a solve without a reusable
-!>   field, saves during and after each UV solve
+!>   field, saves during and after each UV solve; a stored field seeds the points it
+!>   covers on any grid, the others start cold
 !> - The model does not watch its potential: update it again after a change
 module moist_model_moz_3d_type
    use mctc_env, only: wp, error_type, fatal_error
@@ -479,12 +480,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(solvent_vv_thermodynamics_type) :: bulk
       type(model_moz_3d_thermodynamics_type) :: thermo
-      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), guess(:, :)
+      real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), guess(:, :), tail_charges(:), solvent_charges(:)
+      logical, allocatable :: matched(:)
       complex(wp), allocatable :: uk_lr(:, :)
       type(prettyprinter) :: pp
       character(len=96) :: buf
       character(len=:), allocatable :: correction_label
-      real(wp) :: rmse, free_energy, moment, reported_energy, tail_charge
+      real(wp) :: rmse, free_energy, moment, reported_energy, tail_charge, tail_alpha
       integer :: nv, niter
       logical :: converged, reuse_guess
 
@@ -499,7 +501,8 @@ contains
          end if
       end if
       call self%potential%compute(self%grid, u_sr, ur_lr, uk_lr, error, &
-         & solvent=self%solvent%potential, coupling=coupling, net_charge=tail_charge)
+         & solvent=self%solvent%potential, coupling=coupling, net_charge=tail_charge, &
+         & tail_alpha=tail_alpha, tail_charges=tail_charges, solvent_charges=solvent_charges)
       if (allocated(error)) return
       call self%prepare_finite_size(tail_charge, error)
       if (allocated(error)) then
@@ -533,11 +536,17 @@ contains
       if (allocated(error)) return
       if (allocated(self%checkpoint)) then
          call set_checkpoint_header(self)
-         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess)
+         ! Branch instead of passing unallocated actuals to the optional charges
+         if (allocated(tail_charges) .and. allocated(solvent_charges)) then
+            call self%checkpoint%set_tail(ur_lr, tail_alpha, tail_charges, solvent_charges)
+         else
+            call self%checkpoint%set_tail(ur_lr, 0.0_wp)
+         end if
+         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess, matched)
       end if
       call self%ctx%timer%stop("Setup")
       call self%problem%solve(self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
-         & reuse_initial_guess=reuse_guess, guess=guess, checkpoint=self%checkpoint)
+         & reuse_initial_guess=reuse_guess, guess=guess, matched=matched, checkpoint=self%checkpoint)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged) then
@@ -663,8 +672,9 @@ contains
 
    !> Describe the states of the current UV solve in the store header
    !>
-   !> - Cartesian grids by their dimensions, spacing and origin; other point grids
-   !>   by their point count
+   !> - Grid layout: Cartesian box dimensions, spacing and corner; point grids by
+   !>   their points, weights and owners; molecular grids also by their unpruned
+   !>   point count, atomic grids, point positions and angular directions
    !> - Solvent and solute sites, solute coordinates, closure and temperature
    !>
    !> @param[inout] self  updated model with a store
@@ -676,16 +686,7 @@ contains
       solvent = self%solvent%structure()
       associate (header => self%checkpoint%header)
          header%kind = checkpoint_kind_uv3d
-         if (allocated(header%origin)) deallocate (header%origin)
-         select type (grid => self%grid)
-         class is (moist_math_grid_3d_cartesian_type)
-            header%grid_shape = [grid%nx, grid%ny, grid%nz]
-            header%spacing = grid%dr
-            header%origin = grid%get_origin()
-         class default
-            header%grid_shape = [self%grid%ngrid]
-            header%spacing = 0.0_wp
-         end select
+         call self%grid%get_layout(header%grid)
          header%solvent_sites = solvent%num(solvent%id)
          header%solute_sites = self%mol%num(self%mol%id)
          header%solute_xyz = self%mol%xyz

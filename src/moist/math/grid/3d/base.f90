@@ -6,6 +6,7 @@ module moist_math_grid_3d_base
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_integration, only: integrate_weighted_values
    use moist_math_grid_3d_kernel_integration, only: compensated_block_sum
+   use moist_math_grid_layout, only: moist_math_grid_layout_type, layout_points
 !$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    implicit none(type, external)
    private
@@ -14,6 +15,7 @@ module moist_math_grid_3d_base
    public :: moist_math_grid_3d_trafo_type
    public :: integrand_3d
    public :: check_trafo_blocks
+   public :: grid_points_layout
 
    !> Scalar-valued 3D integrand used by `integrate`
    abstract interface
@@ -98,6 +100,8 @@ module moist_math_grid_3d_base
       procedure :: integrate_field_block => grid_integrate_field_block
       !> Common storage cleanup used by concrete destroy methods
       procedure :: clear_geometry => grid_clear_geometry
+      !> Layout of the updated grid: point coordinates, weights and owners
+      procedure :: get_layout => grid_points_layout
    end type moist_math_grid_3d_type
 
    !> Abstract 3D Fourier transform engine
@@ -770,6 +774,28 @@ contains
       name = "generic"
 
    end function grid_kind_name_default
+
+   !> Layout of an updated point grid: coordinates, weights and owning atoms
+   !>
+   !> @param[in]  self    updated grid
+   !> @param[out] layout  "points" layout with `shape = [ngrid]`
+   subroutine grid_points_layout(self, layout)
+      !> Updated grid
+      class(moist_math_grid_3d_type), intent(in) :: self
+      !> Layout
+      type(moist_math_grid_layout_type), intent(out) :: layout
+
+      layout%kind = layout_points
+      layout%shape = [self%ngrid]
+      layout%spacing = 0.0_wp
+      if (allocated(self%xyz)) layout%xyz = self%xyz
+      if (allocated(self%w)) layout%w = self%w
+      if (allocated(self%owner)) then
+         layout%owner = self%owner
+      else
+         allocate (layout%owner(self%ngrid), source=0)
+      end if
+   end subroutine grid_points_layout
 
    !> Worker count for grid builds and transforms
    !>

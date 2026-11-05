@@ -252,8 +252,9 @@ Convergence is decided by that residual check, never by the file metadata; see
 - The automatic VV name is ``vv_rism_solvent_<id>_<theory>_<closure>.mbin`` in ``checkpoint.vv.directory``. When the file leaves that unset, the CLI takes the directory from ``MOIST_RISM_VV_OUTDIR``, so runs can share the bulk solution.
 - Without ``file`` and ``guess``, a VV solve with no file for its closure starts from the automatic file of another closure of the same theory (HNC, PSE4, PSE3, PSE2, KH, in that order).
 - ``guess`` replaces the file read at the start; ``file`` is still written.
-- Intermediate saves are marked unconverged. The final field is saved when the solve iterated and ended without an error, so an interrupted or unconverged run can be continued.
-- Fields of another grid shape or spacing, or of other solvent or solute atoms, are ignored with a warning and the solve starts cold, then overwrites the file.
+- Intermediate saves are marked unconverged. The final field is saved when the solve iterated on the requested closure and ended without an error, converged or not, so an unconverged run can be continued; with ``interval > 0`` a run stopped from outside continues from its last intermediate save.
+- A field of other solvent or solute atoms is ignored with a warning; the solve starts from the next candidate file, if any, or cold, and its saves replace the file.
+  A field of another grid is moved onto the current grid; points it does not cover start cold (see :ref:`moz-checkpoints`).
 
 Overrides and output
 --------------------

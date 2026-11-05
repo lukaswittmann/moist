@@ -4,6 +4,7 @@
 !> - Closure gives c_s(r), equation maps it back, R(t_s) = t_s - T(C(t_s)), at full coupling
 !> - Cold starts use T(c_s = 0) or t_s = 0
 !>   - Supplied guess or, when reuse is requested, the checked previous solution takes precedence
+!>   - A guess for part of the points starts from the cold field with the guess at those points
 !>   - Starting field meeting the tolerance is the solution, without iterations
 !>   - Failed warm attempt retries cold once
 !> - Optional checkpoint store receives intermediate and final fields
@@ -235,9 +236,12 @@ contains
    !> - Cold starts use t_s = T(0) (cs0, default) or t_s = 0 (ts0) and ramp the closure up from KH
    !> - Guesses are checked against the requested closure
    !> - A supplied guess, else a checked retained guess when requested, takes precedence
+   !> - With `matched`, the start is the selected cold field with the guess at the matched
+   !>   points; a mask matching no point starts cold
    !> - A usable starting field meeting the tolerance is the solution, without iterations
    !> - Infeasible guesses and failed warm solves use the selected cold path
-   !> - A rejected supplied guess, or a warm solve that failed with an error, warns
+   !> - A rejected supplied guess, or a warm solve that failed with an error, warns; a mask
+   !>   matching no point does not, and a failed cold field is reported by the cold path
    !> - Solver history is cleared for each attempt; plans and allocated workspace persist
    !> - A converged solve ends on a field whose residual was measured below the
    !>   tolerance, with cr = C(tr); rmse is the residual of that field
@@ -256,8 +260,9 @@ contains
    !> @param[in]    reuse_initial_guess  try the retained converged field; default false for standalone calls
    !> @param[in]    guess      initial short-range t_s(r), (ngrid, nv); takes precedence over reuse
    !> @param[inout] checkpoint store of the saved states, with its header set
+   !> @param[in]    matched    points the guess holds values for, (ngrid); default all
    subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, reuse_initial_guess, guess, &
-      & checkpoint)
+      & checkpoint, matched)
       !> Problem
       class(uv3d_problem_type), intent(inout), target :: self
       !> Tolerance
@@ -278,11 +283,14 @@ contains
       real(wp), intent(in), optional :: guess(:, :)
       !> Store of the saved states
       class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
+      !> Points the guess holds values for
+      logical, intent(in), optional :: matched(:)
       type(uv3d_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       type(error_type), allocatable :: guess_error
       integer :: attempt, attempted_steps, interval
+      logical :: stale
       logical :: warm
 
       converged = .false.
@@ -314,21 +322,7 @@ contains
       self%linearized = .false.
       warm = .false.
       if (present(guess)) then
-         ! A rejected caller guess falls back to the cold path and warns why
-         if (any(shape(guess) /= shape(self%tr))) then
-            call self%ctx%warning("3D UV: guess shape does not match the grid, ignoring guess")
-         else
-            call context%evaluator%residual(guess, context%residual, warm, guess_error)
-            warm = warm .and. .not. allocated(guess_error)
-            if (warm) then
-               self%tr = guess
-               self%cr = self%c_work
-            else if (allocated(guess_error)) then
-               call self%ctx%warning("3D UV: guess is infeasible, ignoring guess: "//guess_error%message)
-            else
-               call self%ctx%warning("3D UV: guess is infeasible, ignoring guess")
-            end if
-         end if
+         call seed_guess(self, context, guess, warm, matched)
       else if (present(reuse_initial_guess)) then
          if (reuse_initial_guess .and. self%has_guess) then
             call context%evaluator%residual(self%tr, context%residual, warm, guess_error)
@@ -342,13 +336,8 @@ contains
          if (converged) exit
          if (.not. warm) then
             call self%ramp%start(self%closure)
-            self%cr = 0.0_wp
-            if (self%cold_guess == "ts0") then
-               self%tr = 0.0_wp
-            else
-               call self%equation%map(self%cr, self%tr, error)
-               if (allocated(error)) exit
-            end if
+            call cold_start(self, error)
+            if (allocated(error)) exit
          end if
          call self%solver%begin_stage()
          if (associated(context%printer)) then
@@ -364,7 +353,13 @@ contains
          end if
          context%offset = niter
          call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
-            & converged, error)
+            & converged, error, switched_last=stale)
+         ! A stage ending on a ramp step measured its residual before it; converged only on
+         ! the requested closure
+         if (stale .and. .not. allocated(error)) then
+            call context%evaluator%rms_residual(context%evaluator%problem%tr, context%residual, rmse)
+            converged = rmse < tolerance .and. context%evaluator%problem%ramp%at_target()
+         end if
          niter = niter + attempted_steps
          if (associated(context%printer)) call printer%note(self%solver%stage_summary())
          if (converged .and. .not. allocated(error)) exit
@@ -825,6 +820,95 @@ contains
          call p%solver%begin_stage()
       end associate
    end subroutine iteration_ramp
+
+   !> Selected cold start: c_s = 0 with t_s = T(0) (cs0) or t_s = 0 (ts0)
+   !>
+   !> @param[inout] self   problem
+   !> @param[out]   error  map failure
+   subroutine cold_start(self, error)
+      !> Problem
+      type(uv3d_problem_type), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      self%cr = 0.0_wp
+      if (self%cold_guess == "ts0") then
+         self%tr = 0.0_wp
+      else
+         call self%equation%map(self%cr, self%tr, error)
+      end if
+   end subroutine cold_start
+
+   !> Make a supplied guess the starting field when it is usable
+   !>
+   !> - With `matched`, the start is the selected cold field with the guess at the
+   !>   matched points; values at the other points are not used
+   !> - A mask matching no point starts cold without a warning
+   !> - Wrong shapes, non-finite used values and infeasible starts warn and start cold
+   !>
+   !> @param[inout] self     problem
+   !> @param[inout] context  solve-local context; receives the residual of the start
+   !> @param[in]    guess    short-range t_s(r), (ngrid, nv)
+   !> @param[out]   warm     whether the start is the guess
+   !> @param[in]    matched  points the guess holds values for, (ngrid)
+   subroutine seed_guess(self, context, guess, warm, matched)
+      !> Problem, also reached through the context
+      type(uv3d_problem_type), intent(inout), target :: self
+      !> Solve-local context
+      type(uv3d_iteration_type), intent(inout) :: context
+      !> Short-range guess
+      real(wp), intent(in) :: guess(:, :)
+      !> Whether the start is the guess
+      logical, intent(out) :: warm
+      !> Points the guess holds values for
+      logical, intent(in), optional :: matched(:)
+      type(error_type), allocatable :: guess_error
+      integer :: col
+
+      warm = .false.
+      if (any(shape(guess) /= shape(self%tr))) then
+         call self%ctx%warning("3D UV: guess shape does not match the grid, ignoring guess")
+         return
+      end if
+      if (present(matched)) then
+         if (size(matched) /= size(self%tr, 1)) then
+            call self%ctx%warning("3D UV: guess mask does not match the grid, ignoring guess")
+            return
+         end if
+         if (.not. any(matched)) return
+         do col = 1, size(guess, 2)
+            if (.not. all(ieee_is_finite(guess(:, col)) .or. .not. matched)) then
+               call self%ctx%warning("3D UV: guess is not finite, ignoring guess")
+               return
+            end if
+         end do
+         if (all(matched)) then
+            self%tr = guess
+         else
+            ! The cold path reports a failing cold start
+            call cold_start(self, guess_error)
+            if (allocated(guess_error)) return
+            do col = 1, size(guess, 2)
+               where (matched) self%tr(:, col) = guess(:, col)
+            end do
+         end if
+      else
+         if (.not. all(ieee_is_finite(guess))) then
+            call self%ctx%warning("3D UV: guess is not finite, ignoring guess")
+            return
+         end if
+         self%tr = guess
+      end if
+      call context%evaluator%residual(self%tr, context%residual, warm, guess_error)
+      warm = warm .and. .not. allocated(guess_error)
+      if (warm) then
+         self%cr = self%c_work
+      else if (allocated(guess_error)) then
+         call self%ctx%warning("3D UV: guess is infeasible, ignoring guess: "//guess_error%message)
+      else
+         call self%ctx%warning("3D UV: guess is infeasible, ignoring guess")
+      end if
+   end subroutine seed_guess
 
    !> Accept a feasible starting field that already meets the tolerance
    !>

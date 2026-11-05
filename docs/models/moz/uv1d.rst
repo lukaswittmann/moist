@@ -47,7 +47,8 @@ and on the grid they name; the solvent of the caller is not touched.
   correction, preserving susceptibility symmetry and correlations between
   charge-neutral combinations of sites;
 * solves ``h = W c P`` with the closure, using the previous converged ``t_s`` as the starting
-  guess at the same structure and grids when available, otherwise starting from ``c_s = 0``; evaluates
+  guess at the same structure and grids when available, else a checkpoint when a store provides
+  one (:ref:`moz-checkpoints`), otherwise starting from ``c_s = 0``; evaluates
   ``dG = (1/beta) sum_ia rho_a int Phi(h_ia, c_ia) d^3r`` with physical ``h`` and ``c`` and adds it.
 
 The model caches the corrected solvent response by the accepted VV solution's
@@ -74,6 +75,7 @@ converged field, adjusting ``t_s`` by ``beta*(u_lr_old-u_lr_new)`` to preserve p
 ``t``. The guess is checked and solver history is reset. An unusable guess starts
 cold; a feasible warm attempt that fails retries once from ``c_s = 0``.
 ``convergence.reuse_initial_guess = false`` selects cold starts while retaining storage.
+A checkpoint store seeds every solve that reuses no field in memory, including these.
 A geometry update, changed grid pair, changed bulk or explicit invalidation rebuilds
 the problem. Standalone calls start cold unless ``guess`` or
 ``reuse_initial_guess=true`` is supplied. A standalone ``uv_problem_type`` takes the

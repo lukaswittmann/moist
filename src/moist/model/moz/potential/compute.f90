@@ -71,7 +71,8 @@ contains
       end if
    end subroutine potential_compute_1d
 
-   module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge)
+   module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge, &
+         & tail_alpha, tail_charges, solvent_charges)
       class(moz_potential_type), intent(in) :: self
       class(moist_math_grid_3d_type), intent(in) :: grid
       real(wp), allocatable, intent(out) :: u_sr(:, :)
@@ -81,9 +82,13 @@ contains
       class(moz_potential_type), intent(in), optional :: solvent
       class(coupling_type), intent(inout), target, optional :: coupling
       real(wp), intent(out), optional :: net_charge
+      real(wp), intent(out), optional :: tail_alpha
+      real(wp), allocatable, intent(out), optional :: tail_charges(:)
+      real(wp), allocatable, intent(out), optional :: solvent_charges(:)
       type(potential_sites_type) :: site_u, site_v
       real(wp), allocatable :: phi_u(:)
       if (present(net_charge)) net_charge = 0.0_wp
+      if (present(tail_alpha)) tail_alpha = 0.0_wp
       if (.not. present(solvent)) then
          call fatal_error(error, "3D tables are solute-solvent tables; pass the solvent potential")
          return
@@ -93,6 +98,12 @@ contains
       if (present(net_charge)) then
          if (allocated(site_u%q)) net_charge = sum(site_u%q)
       end if
+      ! The tables put Ng tails on the solute charges when the split is on
+      if (self%split .and. allocated(site_u%q)) then
+         if (present(tail_alpha)) tail_alpha = self%split_alpha
+         if (present(tail_charges)) tail_charges = site_u%q
+      end if
+      if (present(solvent_charges) .and. allocated(site_v%q)) solvent_charges = site_v%q
       if (site_u%has_field) then
          call field_3d(self, grid, phi_u, error, coupling)
          if (allocated(error)) return

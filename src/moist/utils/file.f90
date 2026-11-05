@@ -1,63 +1,101 @@
-!> File replacement and removal helpers
+!> Exclusive file creation, replacement and removal helpers
 !>
-!> - `replace_file` renames a finished file over its destination, so readers
-!>   see either the old or the new contents, never a partial write
-!> - Atomic on POSIX file systems for files in the same directory; Windows
-!>   refuses to rename over an existing file, so there the destination is
-!>   removed first
+!> - Temporary files are claimed through native exclusive creation, independent
+!>   of the Fortran runtime; interrupted files are left for the caller to remove
+!> - Replacement uses rename on POSIX and replace-existing moves on Windows,
+!>   without deleting or moving the previous file aside first
 module moist_utils_file
    use, intrinsic :: iso_c_binding, only: c_char, c_int, c_null_char
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: error_type, fatal_error
-   use mctc_env_system, only: is_windows
    implicit none(type, external)
    private
 
-   public :: replace_file, delete_file
+   public :: create_new_file, replace_file, delete_file
 
    interface
-      !> C library rename
+      !> Claim a path exclusively, leaving an empty file on success
       !>
-      !> @param[in] source  null-terminated path of the existing file
-      !> @param[in] target  null-terminated path of the destination
-      function c_rename(source, target) result(status) bind(C, name="rename")
+      !> @param[in] path Null-terminated path
+      function c_create_exclusive(path) result(status) bind(C, name="moist_file_create_exclusive")
          import :: c_char, c_int
          implicit none(type, external)
-         !> Existing file
+         !> Null-terminated path
+         ! allow(assumed-size): C strings carry no Fortran array descriptor
+         character(kind=c_char), intent(in) :: path(*)
+         !> Zero on success, one when the path exists, negative on another failure
+         integer(c_int) :: status
+      end function c_create_exclusive
+
+      !> Replace a destination without deleting it first
+      !>
+      !> @param[in] source Null-terminated path of the completed file
+      !> @param[in] target Null-terminated destination on the same filesystem
+      function c_replace(source, target) result(status) bind(C, name="moist_file_replace")
+         import :: c_char, c_int
+         implicit none(type, external)
+         !> Null-terminated completed file
+         ! allow(assumed-size): C strings carry no Fortran array descriptor
          character(kind=c_char), intent(in) :: source(*)
-         !> Destination
+         !> Null-terminated destination
+         ! allow(assumed-size): C strings carry no Fortran array descriptor
          character(kind=c_char), intent(in) :: target(*)
          !> Zero on success
          integer(c_int) :: status
-      end function c_rename
+      end function c_replace
    end interface
 
 contains
 
-   !> Rename a file over its destination
+   !> Claim an empty file `<stem>.<n>.tmp` that did not exist before
    !>
-   !> @param[in]  source  existing file, in the directory of `target`
-   !> @param[in]  target  destination, replaced when it exists
-   !> @param[out] error   failed rename; `source` is left in place
-   subroutine replace_file(source, target, error)
-      !> Existing file
-      character(len=*), intent(in) :: source
-      !> Destination
-      character(len=*), intent(in) :: target
-      !> Failed rename
+   !> - The clock spreads candidate names; native exclusive creation arbitrates
+   !>   collisions between threads and processes
+   !>
+   !> @param[in]  stem   path the name is built from
+   !> @param[out] path   claimed empty file; reopen as old, without replacement; not a
+   !>                    claimed file on error
+   !> @param[out] error  no name could be claimed
+   subroutine create_new_file(stem, path, error)
+      !> Path the name is built from
+      character(len=*), intent(in) :: stem
+      !> Claimed empty file
+      character(len=:), allocatable, intent(out) :: path
+      !> No name could be claimed
       type(error_type), allocatable, intent(out) :: error
+      integer, parameter :: max_attempts = 100
+      character(len=24) :: buf
+      integer(int64) :: start
       integer(c_int) :: status
-      logical :: exists
+      integer :: attempt
 
-      status = c_rename(source//c_null_char, target//c_null_char)
-      if (status /= 0 .and. is_windows()) then
-         inquire (file=target, exist=exists)
-         if (exists) then
-            call delete_file(target, error)
-            if (allocated(error)) return
-            status = c_rename(source//c_null_char, target//c_null_char)
-         end if
+      call system_clock(start)
+      do attempt = 0, max_attempts - 1
+         write (buf, "(i0)") mod(max(start, 0_int64), 10_int64**15) + attempt
+         path = stem//"."//trim(buf)//".tmp"
+         status = c_create_exclusive(path//c_null_char)
+         if (status == 0_c_int) return
+         if (status /= 1_c_int) exit
+      end do
+      call fatal_error(error, "Failed to create a temporary file next to "//stem)
+   end subroutine create_new_file
+
+   !> Rename a completed file over its destination on the same filesystem
+   !>
+   !> @param[in]  source  completed file
+   !> @param[in]  target  destination, replaced when it exists
+   !> @param[out] error   failed replacement; the previous destination is retained
+   subroutine replace_file(source, target, error)
+      !> Completed file
+      character(len=*), intent(in) :: source
+      !> Destination on the same filesystem
+      character(len=*), intent(in) :: target
+      !> Failed replacement
+      type(error_type), allocatable, intent(out) :: error
+
+      if (c_replace(source//c_null_char, target//c_null_char) /= 0_c_int) then
+         call fatal_error(error, "Failed to replace "//target//" by "//source)
       end if
-      if (status /= 0) call fatal_error(error, "Failed to replace "//target//" by "//source)
    end subroutine replace_file
 
    !> Delete a file when it exists; a missing file is not an error

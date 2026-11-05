@@ -84,7 +84,8 @@ contains
    !>
    !> - Failed attempts count as iterations but are not observed or checkpointed
    !> - A ramp step after observe changes the equations; that iterate is neither
-   !>   tested for convergence nor checkpointed
+   !>   tested for convergence nor checkpointed, and when it ends the stage,
+   !>   `switched_last` tells the driver that `rmse` is not measured under the new equations
    !> - Only advance is timed, on the context timer node `Iterations` under the
    !>   open node; observe receives the last interval
    !> - The node is open on the timer stack during advance, so the solver's
@@ -100,8 +101,10 @@ contains
    !> @param[out] converged Whether an accepted step met the tolerance
    !> @param[out] error Step or checkpoint failure information
    !> @param[in] checkpoint_before_convergence Also checkpoint converged steps; checkpoint failure takes precedence
+   !> @param[out] switched_last Whether the last accepted step was a ramp step, so `rmse` belongs
+   !>             to the equations before it
    recursive subroutine run_iterations(context, ctx, max_iter, tolerance, checkpoint_interval, &
-                                       rmse, niter, converged, error, checkpoint_before_convergence)
+                                       rmse, niter, converged, error, checkpoint_before_convergence, switched_last)
       !> Solve-local context; no field arrays are owned by the controller
       class(moist_model_moz_solver_iteration_type), intent(inout) :: context
       !> Run context whose timer records the advance time
@@ -120,13 +123,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Preserve drivers that checkpoint before testing convergence
       logical, optional, intent(in) :: checkpoint_before_convergence
+      !> Whether the last accepted step was a ramp step
+      logical, optional, intent(out) :: switched_last
       !> Stage-local iteration
       integer :: iter
       !> Advance timer node while it is open; 0 when the timer is inactive
       integer :: id
       !> Step feasibility, ramp step, convergence and checkpoint ordering flags
       logical :: feasible, switched, reached_tolerance, checkpoint_first
+      !> Whether the last accepted step changed the equations
+      logical :: stale
 
+      stale = .false.
       niter = 0
       converged = .false.
       checkpoint_first = .false.
@@ -140,9 +148,13 @@ contains
          call ctx%timer%stop("Iterations")
          if (allocated(error) .or. .not. feasible) exit
          call context%observe(iter, rmse, ctx%timer%last(id))
+         stale = .false.
          call context%ramp(rmse, switched, error)
          if (allocated(error)) exit
-         if (switched) cycle
+         if (switched) then
+            stale = .true.
+            cycle
+         end if
          reached_tolerance = rmse < tolerance
          ! Fortran does not guarantee short-circuit evaluation of logical AND
          if (checkpoint_interval > 0 .and. (.not. reached_tolerance .or. checkpoint_first)) then
@@ -156,6 +168,7 @@ contains
             exit
          end if
       end do
+      if (present(switched_last)) switched_last = stale
    end subroutine run_iterations
 
    !> Default ramp: the equations never change during a stage

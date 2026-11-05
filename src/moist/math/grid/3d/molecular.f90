@@ -13,6 +13,8 @@ module moist_math_grid_3d_molecular
       & moist_math_grid_atomic_recipe_override_type, element_override_index, &
       & default_molecular_recipe
    use moist_math_grid_atomic_grid, only: moist_math_grid_atomic_type, new_atomic_grid
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_generator_lebedev_type
+   use moist_math_grid_layout, only: moist_math_grid_layout_type
    use moist_math_grid_3d_kernel_base, only: moist_math_grid_3d_partition_type
    use moist_math_grid_3d_kernel_fourier, only: fourier_derivative_mode, fourier_measure_adjoint, &
       & fourier_position_adjoint
@@ -20,7 +22,7 @@ module moist_math_grid_3d_molecular
    use moist_math_grid_3d_kernel_ssf, only: ssf_partition_type
    use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type, default_power_width
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
-   use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
+   use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, grid_points_layout, &
                                       integrand_3d, check_trafo_blocks
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
@@ -116,6 +118,12 @@ module moist_math_grid_3d_molecular
       !> Atom i owns [atom_offset(i), atom_offset(i+1)-1]
       !> First offset 1; final offset ngrid+1
       integer, allocatable :: atom_offset(:)
+      !> Position of each retained point among the unpruned points, shape (ngrid)
+      !>
+      !> Unpruned order: atom, then radial shell, then angular table
+      !> Increasing; for a fixed solute and recipe, an index names the same
+      !> atom-relative point in every geometry
+      integer, allocatable :: raw_index(:)
       !> Per-atom requested radial shell count (before cutoffs), shape (nat)
       integer, allocatable :: nrad_per_atom(:)
       !> Per-atom largest angular point count over its shells, shape (nat)
@@ -216,6 +224,10 @@ module moist_math_grid_3d_molecular
       procedure :: get_kref => molecular_get_kref
       !> Whether the reciprocal grid is configured
       procedure :: has_reciprocal => molecular_has_reciprocal
+      !> Whether point positions use the built-in deterministic Lebedev tables
+      procedure :: has_lebedev_points => molecular_has_lebedev_points
+      !> Layout: points, weights, owners, Fourier basis and point identities
+      procedure :: get_layout => molecular_get_layout
    end type moist_math_grid_3d_molecular_type
 
    !> Fourier transform engine for a molecular grid
@@ -882,6 +894,7 @@ contains
       call move_alloc(source%xi0, dest%xi0)
       call move_alloc(source%atomic_w, dest%atomic_w)
       call move_alloc(source%atom_offset, dest%atom_offset)
+      call move_alloc(source%raw_index, dest%raw_index)
       call move_alloc(source%nrad_per_atom, dest%nrad_per_atom)
       call move_alloc(source%nang_per_atom, dest%nang_per_atom)
       call move_alloc(source%atom_shell_offset, dest%atom_shell_offset)
@@ -1218,7 +1231,7 @@ contains
 
    !> Compact the raw grid buffer into the candidate grid
    !>
-   !> Drop zero and `|w| < wthr` points; rebuild `atom_offset`
+   !> Drop zero and `|w| < wthr` points; rebuild `atom_offset`; record `raw_index`
    !>
    !> @param[out] self       Grid to fill
    !> @param[in]  nat        Number of atoms
@@ -1307,6 +1320,7 @@ contains
       if (stat == 0) allocate (self%owner(ngrid), stat=stat)
       if (stat == 0) allocate (self%atomic_w(ngrid), stat=stat)
       if (stat == 0) allocate (self%atom_offset(nat + 1), stat=stat)
+      if (stat == 0) allocate (self%raw_index(ngrid), stat=stat)
       if (stat == 0) allocate (self%nrad_per_atom(nat), stat=stat)
       if (stat == 0) allocate (self%nang_per_atom(nat), stat=stat)
       if (stat /= 0) then
@@ -1336,6 +1350,7 @@ contains
             self%w(ngrid) = raw_w(i)
             self%atomic_w(ngrid) = raw_atomic_w(i)
             self%owner(ngrid) = raw_atom(i)
+            self%raw_index(ngrid) = i
          end if
       end do
       ! Fill remaining (possibly empty) tail atoms
@@ -1415,6 +1430,78 @@ contains
       logical :: has
       has = self%has_kgrid
    end function molecular_has_reciprocal
+
+   !> Whether the current atoms use the built-in Lebedev directions and order
+   !>
+   !> Shell radii and point counts identify those tables. A custom generator,
+   !> including an extension that overrides selection, can change the directions
+   !> without changing the counts and cannot use those checkpoint identities.
+   !>
+   !> @param[in] self Updated molecular grid
+   pure logical function molecular_has_lebedev_points(self) result(has)
+      !> Updated molecular grid
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      integer :: i, z, idx
+
+      has = .false.
+      if (.not. allocated(self%molecule)) return
+      do i = 1, self%molecule%nat
+         z = self%molecule%num(self%molecule%id(i))
+         idx = element_override_index(z, self%overrides)
+         if (idx == 0) then
+            if (.not. built_in_lebedev(self%recipe)) return
+         else
+            if (.not. built_in_lebedev(self%overrides(idx)%recipe)) return
+         end if
+      end do
+      has = .true.
+   contains
+      !> Whether a recipe uses the built-in Lebedev generator
+      !>
+      !> - Exact type: extensions may override the direction table
+      !>
+      !> @param[in] recipe  atomic recipe
+      pure logical function built_in_lebedev(recipe) result(known)
+         !> Recipe whose angular directions are identified by their point count
+         type(moist_math_grid_atomic_recipe_type), intent(in) :: recipe
+         known = .false.
+         if (.not. allocated(recipe%angular)) return
+         select type (angular => recipe%angular)
+         type is (moist_math_grid_angular_generator_lebedev_type)
+            known = .true.
+         end select
+      end function built_in_lebedev
+   end function molecular_has_lebedev_points
+
+   !> Layout of the updated grid
+   !>
+   !> - Points, weights and owning atoms; `shape` is the unpruned point count
+   !> - Fourier basis of the configured reciprocal grid
+   !> - Position of each point among the unpruned points, the atomic shells and
+   !>   the angular directions ("lebedev" for the built-in tables, else "custom")
+   !>
+   !> @param[in]  self    updated grid
+   !> @param[out] layout  "points" layout
+   subroutine molecular_get_layout(self, layout)
+      !> Updated grid
+      class(moist_math_grid_3d_molecular_type), intent(in) :: self
+      !> Layout
+      type(moist_math_grid_layout_type), intent(out) :: layout
+
+      call grid_points_layout(self, layout)
+      if (allocated(self%shell_npts)) layout%shape = [sum(self%shell_npts)]
+      if (self%has_kgrid) then
+         layout%kmodes = self%get_kmodes()
+         layout%kspacing = self%get_kspacing()
+         layout%kref = self%get_kref()
+      end if
+      if (allocated(self%raw_index)) layout%point_index = self%raw_index
+      if (allocated(self%atom_shell_offset)) layout%shell_offset = self%atom_shell_offset
+      if (allocated(self%shell_r)) layout%shell_radius = self%shell_r
+      if (allocated(self%shell_npts)) layout%shell_points = self%shell_npts
+      layout%angular_grid = "custom"
+      if (self%has_lebedev_points()) layout%angular_grid = "lebedev"
+   end subroutine molecular_get_layout
 
    !> Gaussian width scale, `xi0 = xi0_factor/w**(1/3)`
    !>
@@ -1538,6 +1625,7 @@ contains
       if (allocated(self%atomic_w)) deallocate (self%atomic_w)
       if (allocated(self%molecule)) deallocate (self%molecule)
       if (allocated(self%atom_offset)) deallocate (self%atom_offset)
+      if (allocated(self%raw_index)) deallocate (self%raw_index)
       if (allocated(self%nrad_per_atom)) deallocate (self%nrad_per_atom)
       if (allocated(self%nang_per_atom)) deallocate (self%nang_per_atom)
       if (allocated(self%atom_shell_offset)) deallocate (self%atom_shell_offset)
@@ -2339,7 +2427,6 @@ contains
       !> FINUFFT failure
       type(error_type), allocatable, intent(out) :: error
       integer :: ier
-      external :: finufft_execute
 
       call finufft_execute(self%plan_r2k, self%cj, f_k, ier)
       if (ier /= 0) call fatal_error(error, "molecular trafo: FINUFFT execute (forward) failed")
@@ -2361,7 +2448,6 @@ contains
       !> FINUFFT failure
       type(error_type), allocatable, intent(out) :: error
       integer :: ier
-      external :: finufft_execute
 
       if (self%is_type12) then
          call finufft_execute(self%plan_k2r, self%cj, f_k, ier)

@@ -1,6 +1,7 @@
 srcs += files(
    'binio.f90',
    'env.f90',
+   'file.c',
    'file.f90',
    'mem.f90',
    'prettylistprint.f90',

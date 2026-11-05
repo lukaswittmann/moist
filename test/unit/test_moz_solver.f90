@@ -134,12 +134,15 @@ module test_moz_solver
    type, extends(moist_model_moz_solver_iteration_type) :: iteration_context_type
       integer :: nsteps = 0, nobserved = 0, ncheckpoints = 0, fail_at = 0
       logical :: fail_checkpoint = .false.
+      !> Switch the equations after the next observed step
+      logical :: switch_once = .false.
       !> Smallest observed advance time, s; huge before any observation
       real(wp) :: min_elapsed = huge(1.0_wp)
    contains
       procedure :: advance => context_advance
       procedure :: observe => context_observe
       procedure :: checkpoint => context_checkpoint
+      procedure :: ramp => context_ramp
    end type iteration_context_type
 
    real(wp), parameter :: soft_cubic = 0.2_wp
@@ -151,6 +154,7 @@ contains
       testsuite = [ &
          & new_unittest("factory", test_factory), &
          & new_unittest("parameters_file", test_parameters_file), &
+         & new_unittest("rms_residual", test_rms_residual), &
          & new_unittest("picard_update", test_picard_update), &
          & new_unittest("diis_extrapolation", test_diis_extrapolation), &
          & new_unittest("diis_convergence", test_diis_convergence), &
@@ -2026,7 +2030,7 @@ contains
       type(moist_context_type), target :: ctx
       real(wp) :: rmse
       integer :: niter
-      logical :: converged
+      logical :: converged, switched
 
       call new_context(ctx, nthreads=0, verbosity=0)
       rmse = 7.0_wp
@@ -2051,6 +2055,16 @@ contains
       call run_iterations(context, ctx, 10, 2.0_wp, 1, rmse, niter, converged, merr, &
          & checkpoint_before_convergence=.true.)
       call check(error, .not. converged .and. allocated(merr) .and. niter == 1)
+      if (allocated(error)) return
+      context = iteration_context_type(switch_once=.true.)
+      call run_iterations(context, ctx, 1, 2.0_wp, 1, rmse, niter, converged, merr, switched_last=switched)
+      call check(error, .not. allocated(merr) .and. .not. converged .and. niter == 1 .and. switched &
+         & .and. context%ncheckpoints == 0, "A stage ending on a ramp step reports it")
+      if (allocated(error)) return
+      context = iteration_context_type(switch_once=.true.)
+      call run_iterations(context, ctx, 2, 2.0_wp, 1, rmse, niter, converged, merr, switched_last=switched)
+      call check(error, .not. allocated(merr) .and. converged .and. niter == 2 .and. .not. switched &
+         & .and. rmse == 0.5_wp, "The step after a ramp step measures the new equations")
       call ctx%delete()
    end subroutine test_iteration_controller
 
@@ -2470,6 +2484,17 @@ contains
       self%ncheckpoints = self%ncheckpoints + 1
       if (self%fail_checkpoint) call fatal_error(error, "Deliberate checkpoint failure")
    end subroutine context_checkpoint
+
+   !> Change the test equations once, after the first observed step
+   subroutine context_ramp(self, rmse, switched, error)
+      class(iteration_context_type), intent(inout) :: self
+      real(wp), intent(in) :: rmse
+      logical, intent(out) :: switched
+      type(mctc_error), allocatable, intent(out) :: error
+      associate (r => rmse); end associate
+      switched = self%switch_once
+      self%switch_once = .false.
+   end subroutine context_ramp
 
    subroutine test_mgs_streaming(error)
       !> Test failure information.
@@ -2923,6 +2948,27 @@ contains
       call check(error, iterations == 1 .and. all(delta == 0.0_wp))
       call ctx%delete()
    end subroutine test_infeasible_jvp
+
+   !> RMS residual of the evaluator: the root mean square of a usable residual, huge
+   !> for an infeasible or failing one
+   subroutine test_rms_residual(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(identity_evaluator_type) :: identity
+      type(infeasible_evaluator_type) :: infeasible
+      type(linear_evaluator_type) :: failing
+      real(wp) :: gamma(2, 1), residual(2, 1), rmse
+
+      gamma(:, 1) = [3.0_wp, 4.0_wp]
+      call identity%rms_residual(gamma, residual, rmse)
+      call check(error, abs(rmse - sqrt(12.5_wp)) < 1.0e-14_wp .and. all(residual == gamma), "RMS of a usable residual")
+      if (allocated(error)) return
+      call infeasible%rms_residual(gamma, residual, rmse)
+      call check(error, rmse == huge(1.0_wp), "RMS of an infeasible residual")
+      if (allocated(error)) return
+      failing%residual_mode = 1
+      call failing%rms_residual(gamma, residual, rmse)
+      call check(error, rmse == huge(1.0_wp), "RMS of a failing residual")
+   end subroutine test_rms_residual
 
    subroutine identity_residual(self, gamma, residual, feasible, error)
       !> Test evaluator context.

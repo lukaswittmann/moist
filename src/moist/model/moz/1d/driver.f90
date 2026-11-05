@@ -245,9 +245,11 @@ contains
    !> - Starts from a usable t_s guess or t_s = T(0), with a fresh solver stage
    !> - Cold starts ramp the closure up from KH
    !> - A guess is checked against the requested closure and equation; an incompatible,
-   !>   non-finite or infeasible guess falls back to c_s = 0 with a warning; a failed
-   !>   feasible warm attempt retries that cold path once, with fresh solver history,
-   !>   and warns with the dropped error, if any
+   !>   non-finite or infeasible guess falls back to c_s = 0 with a warning; a mask
+   !>   matching no node, or a failed cold map at the uncovered nodes, drops the guess
+   !>   without one, and the cold path reports a failed map; a failed feasible warm
+   !>   attempt retries that cold path once, with fresh solver history, and warns with
+   !>   the dropped error, if any
    !> - A usable guess meeting the tolerance is the solution, without iterations
    !> - A converged solve ends on a field whose residual was measured below the
    !>   tolerance, with cr = C(tr); rmse is the residual of that field
@@ -267,8 +269,9 @@ contains
    !> @param[in]    guess      initial short-range t_s(r), (npts, nu nv); absent for a fresh start
    !> @param[in]    reuse_initial_guess Try the retained field when guess is absent; default false
    !> @param[inout] checkpoint store of the saved states, with its header set
+   !> @param[in]    matched    nodes the guess holds values for, (npts); default all; the others start from c_s = 0
    subroutine problem_solve(self, filters, tolerance, maxiter, converged, rmse, niter, error, guess, &
-      & reuse_initial_guess, checkpoint)
+      & reuse_initial_guess, checkpoint, matched)
       !> Problem
       class(uv_problem_type), intent(inout), target :: self
       !> Filters, built on the problem's radial pair
@@ -291,12 +294,16 @@ contains
       logical, intent(in), optional :: reuse_initial_guess
       !> Store of the saved states
       class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
+      !> Nodes the guess holds values for
+      logical, intent(in), optional :: matched(:)
       type(uv_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       type(error_type), allocatable :: guess_error
-      logical :: warm
-      integer :: attempt, attempted_steps, interval
+      real(wp), allocatable :: start(:, :)
+      logical :: warm, usable
+      integer :: attempt, attempted_steps, interval, col
+      logical :: stale
 
       converged = .false.
       rmse = huge(1.0_wp)
@@ -332,15 +339,44 @@ contains
       warm = .false.
       if (present(guess)) then
          ! A rejected caller guess falls back to c_s = 0 and warns why
+         usable = .true.
          if (any(shape(guess) /= shape(self%tr))) then
             call self%ctx%warning("1D UV: guess shape does not match the grid, ignoring guess")
-         else if (.not. all(ieee_is_finite(guess))) then
+            usable = .false.
+         else if (present(matched)) then
+            if (size(matched) /= size(self%tr, 1)) then
+               call self%ctx%warning("1D UV: guess mask does not match the grid, ignoring guess")
+               usable = .false.
+            else if (.not. any(matched)) then
+               usable = .false.
+            end if
+         end if
+         if (usable) then
+            start = guess
+            if (present(matched)) then
+               if (.not. all(matched)) then
+                  ! The cold field T(0) at the nodes the guess does not cover
+                  self%cr = 0.0_wp
+                  call self%equation%map(self%cr, self%tr, guess_error)
+                  usable = .not. allocated(guess_error)
+                  if (usable) then
+                     do col = 1, size(start, 2)
+                        where (.not. matched) start(:, col) = self%tr(:, col)
+                     end do
+                  end if
+                  if (allocated(guess_error)) deallocate (guess_error)
+               end if
+            end if
+         end if
+         if (.not. usable) then
+            continue
+         else if (.not. all(ieee_is_finite(start))) then
             call self%ctx%warning("1D UV: guess is not finite, ignoring guess")
          else
-            call context%evaluator%residual(guess, context%residual, warm, guess_error)
+            call context%evaluator%residual(start, context%residual, warm, guess_error)
             warm = warm .and. .not. allocated(guess_error)
             if (warm) then
-               self%tr = guess
+               self%tr = start
                self%cr = self%c_work
             else if (allocated(guess_error)) then
                call self%ctx%warning("1D UV: guess is infeasible, ignoring guess: "//guess_error%message)
@@ -378,7 +414,13 @@ contains
          end if
          context%offset = niter
          call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
-            & converged, error)
+            & converged, error, switched_last=stale)
+         ! A stage ending on a ramp step measured its residual before it; converged only on
+         ! the requested closure
+         if (stale .and. .not. allocated(error)) then
+            call context%evaluator%rms_residual(context%evaluator%problem%tr, context%residual, rmse)
+            converged = rmse < tolerance .and. context%evaluator%problem%ramp%at_target()
+         end if
          niter = niter + attempted_steps
          if (associated(context%printer)) call printer%note(self%solver%stage_summary())
          if (converged .and. .not. allocated(error)) exit

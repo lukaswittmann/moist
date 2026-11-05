@@ -616,8 +616,12 @@ module moist_model_moz_potential
       !> @param[out]    error      no solvent, not updated, host data on the solvent, coupling, category or input failure
       !> @param[in]     solvent    updated solvent potential; optional only for the generic, required here
       !> @param[in,out] coupling   optional coupling of the model; host-data term i reads scope i
-      !> @param[out]    net_charge  optional sum of the resolved solute tail charges, e
-      module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge)
+      !> @param[out]    net_charge  optional sum of the resolved solute charges, e, also without a tail
+      !> @param[out]    tail_alpha  optional Ng screening parameter of the tail, 1/bohr; 0 without a tail
+      !> @param[out]    tail_charges     optional solute tail charges, e (nat); unallocated without a tail
+      !> @param[out]    solvent_charges  optional solvent site charges, e (nv); unallocated without charges
+      module subroutine potential_compute_3d(self, grid, u_sr, ur_lr, uk_lr, error, solvent, coupling, net_charge, &
+            & tail_alpha, tail_charges, solvent_charges)
          implicit none(type, external)
          !> Updated solute potential
          class(moz_potential_type), intent(in) :: self
@@ -637,6 +641,12 @@ module moist_model_moz_potential
          class(coupling_type), intent(inout), target, optional :: coupling
          !> Net solute tail charge, from the same resolved data as the potential tables
          real(wp), intent(out), optional :: net_charge
+         !> Ng screening parameter of the tail
+         real(wp), intent(out), optional :: tail_alpha
+         !> Solute tail charges
+         real(wp), allocatable, intent(out), optional :: tail_charges(:)
+         !> Solvent site charges
+         real(wp), allocatable, intent(out), optional :: solvent_charges(:)
       end subroutine potential_compute_3d
 
       !> Reverse mode of the 1D UV tables

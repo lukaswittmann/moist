@@ -49,8 +49,9 @@ return an unsupported-operation error when a response or gradient requests them.
   interpolates the exported susceptibility between the VV grid's k nodes
   (see :ref:`moz-3d-susceptibility-convergence`);
 * solves ``h_a(k) = sum_g c_g(k) P_ga(|k|)`` with the closure, through the grid's forward and
-  backward transforms; the first solve uses the selected cold guess and subsequent fixed-geometry
-  host updates use the previous converged fields. The map is affine in ``c``, so Jacobian
+  backward transforms; the first solve starts from a checkpoint when a store provides one
+  (:ref:`moz-checkpoints`), else from the selected cold guess, and subsequent fixed-geometry host
+  updates use the previous converged fields. The map is affine in ``c``, so Jacobian
   products are exact;
 * adds ``dG = (1/beta) sum_a rho_a int Phi(h_a, c_a) dV`` by the grid's quadrature, plus the
   pressure correction the ``correction`` setting selects (:ref:`moz-3d-pressure-corrections`) and the
@@ -69,11 +70,12 @@ iterate is shifted by ``beta*(u_lr_old - u_lr_new)`` to preserve physical ``t = 
 The guess is checked with the new closure and equation. Every solve starts a fresh solver
 stage, clearing nonlinear history and Krylov recycling. An infeasible guess starts cold;
 a failed warm attempt retries cold once. Each attempt has its own ``convergence.maxiter``
-budget, and reported iterations include both attempts. Only converged fields can seed a
-later solve. Geometry updates and invalidation discard the problem and its previous guess.
+budget, and reported iterations include both attempts. Only converged fields are reused in
+memory. Geometry updates and invalidation discard the problem and its previous guess.
 Setting ``convergence.reuse_initial_guess = false`` starts each changed-input solve cold
-while still retaining fixed-grid resources. Identical-input calls continue to reuse the
-already converged solution.
+while still retaining fixed-grid resources. A checkpoint store seeds every solve that reuses no
+field in memory, including these (:ref:`moz-checkpoints`). Identical-input calls continue to
+reuse the already converged solution.
 
 ``convergence.cold_guess = "cs0"`` preserves the default cold start: set the short-range
 direct correlation ``c_s = 0`` and map it through OZ to initialize ``t_s``. The optional

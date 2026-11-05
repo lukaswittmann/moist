@@ -200,13 +200,18 @@ contains
    !>                         truncate an existing file); default "old"
    !> @param[in]     action   Access mode: "read"/"r", "write"/"w", or
    !>                         "readwrite"/"rw" (default: "readwrite")
-   !> @param[out]    error    Error handler
-   subroutine bin_open_file(self, filename, status, action, error)
+   !> @param[out]    error    Error handler: handle already open, unsupported action or
+   !>                         status, `initialize` without an existing writable empty file,
+   !>                         open failure, or a malformed container
+   !> @param[in]     initialize Initialize an existing empty file without replacing it; default false
+   subroutine bin_open_file(self, filename, status, action, error, initialize)
       class(binary_file), intent(inout) :: self
       character(*), intent(in) :: filename
       character(*), intent(in), optional :: status
       character(*), intent(in), optional :: action
       type(error_type), allocatable, intent(out), optional :: error
+      !> Initialize a file already claimed by native exclusive creation
+      logical, intent(in), optional :: initialize
 
       !> Normalized status string
       character(:), allocatable :: lstatus
@@ -216,6 +221,18 @@ contains
       integer :: stat
       !> Unit connected to the file
       integer :: unit
+      !> Size of an existing file before initialization
+      integer(int64) :: file_bytes
+      !> Whether an existing empty file is initialized rather than read
+      logical :: initializing
+
+      if (self%is_open) then
+         if (present(error)) call fatal_error(error, "Binary file handle is already open: "//self%filename)
+         return
+      end if
+
+      initializing = .false.
+      if (present(initialize)) initializing = initialize
 
       lstatus = "old"
       if (present(status)) lstatus = to_lower(status)
@@ -241,6 +258,13 @@ contains
          return
       end select
 
+      if (initializing) then
+         if (lstatus /= "old" .or. .not. self%writable) then
+            if (present(error)) call fatal_error(error, "Initialization needs an existing writable empty file")
+            return
+         end if
+      end if
+
       if (self%writable) then
          open (newunit=unit, file=filename, status=merge("replace", "old    ", lstatus /= "old"), &
                access="stream", form="unformatted", action="readwrite", iostat=stat)
@@ -259,6 +283,19 @@ contains
          return
       end if
 
+      if (initializing) then
+         inquire (unit=unit, size=file_bytes, iostat=stat)
+         if (stat == 0) then
+            if (file_bytes /= 0_int64) stat = -1
+         end if
+         if (stat /= 0) then
+            ! allow(unchecked-stat): the refused initialization is the reported error
+            close (unit, iostat=stat)
+            if (present(error)) call fatal_error(error, "Initialization needs an existing empty file: "//filename)
+            return
+         end if
+      end if
+
       self%unit = unit
       self%filename = filename
       self%prefix = ""
@@ -266,7 +303,7 @@ contains
       if (allocated(self%entries)) deallocate (self%entries)
       allocate (self%entries(16))
 
-      if (lstatus == "old") then
+      if (lstatus == "old" .and. .not. initializing) then
          call bin_read_index(self, error)
       else
          call bin_write_header(self, 0_int64, error)
@@ -277,6 +314,7 @@ contains
          if (allocated(error)) then
             !> The failure is already reported; drop the connection and leave
             !> the handle closed
+            ! allow(unchecked-stat): a close failure adds nothing to the reported error
             close (self%unit, iostat=stat)
             self%unit = -1
             return
@@ -488,11 +526,15 @@ contains
       if (ent%dtype /= type_string) then
          count = 1_int64
          do i = 1, int(ent%rank)
-            if (ent%dims(i) > 0_int64 .and. count > huge(count)/ent%dims(i)) return
+            ! Nested: .and. may evaluate the division for a zero extent
+            if (ent%dims(i) > 0_int64) then
+               if (count > huge(count)/ent%dims(i)) return
+            end if
             count = count*ent%dims(i)
          end do
       end if
-      if (count > huge(count)/width .or. ent%nbytes /= count*width) return
+      if (count > huge(count)/width) return
+      if (ent%nbytes /= count*width) return
 
       if (ent%nbytes > 0_int64) then
          if (ent%offset <= header_bytes .or. ent%offset > index_offset - ent%nbytes) return
@@ -558,6 +600,7 @@ contains
             return
          end if
          allocate (character(int(slen)) :: str)
+         ! allow(unchecked-stat): the caller checks stat after every string
          if (slen > 0_int32) read (unit, iostat=stat) str
       end subroutine read_string
 
@@ -652,13 +695,19 @@ contains
    !>
    !> Relative names are resolved against the currently open group
    !>
-   !> @param[in] self Container file instance
-   !> @param[in] name Dataset, group or attribute path
-   !> @return Absolute path with a leading slash and no trailing slash
-   function resolve_path(self, name) result(path)
+   !> A subroutine, not a function: gfortran keeps the length of a deferred-length
+   !> function result in static storage, which threads working on separate files share
+   !>
+   !> @param[in]  self Container file instance
+   !> @param[in]  name Dataset, group or attribute path
+   !> @param[out] path Absolute path with a leading slash and no trailing slash
+   subroutine resolve_path(self, name, path)
+      !> Container file instance
       class(binary_file), intent(in) :: self
+      !> Dataset, group or attribute path
       character(*), intent(in) :: name
-      character(:), allocatable :: path
+      !> Absolute path
+      character(:), allocatable, intent(out) :: path
 
       !> Last significant character of the name
       integer :: last
@@ -681,7 +730,25 @@ contains
          path = self%prefix//"/"//name(1:last)
       end if
 
-   end function resolve_path
+   end subroutine resolve_path
+
+   !> Index entry of a new group without attributes
+   !>
+   !> Built field by field: gfortran 13 miscompiles the structure constructor
+   !> with an empty attribute array
+   !>
+   !> @param[in] path Absolute path of the group
+   !> @return Group entry
+   function new_group(path) result(ent)
+      !> Absolute path of the group
+      character(*), intent(in) :: path
+      type(entry_type) :: ent
+
+      ent%path = path
+      ent%dtype = type_group
+      allocate (ent%attrs(0))
+
+   end function new_group
 
    !> Locate an index entry by absolute path
    !>
@@ -753,7 +820,7 @@ contains
          return
       end if
 
-      path = resolve_path(self, gname)
+      call resolve_path(self, gname, path)
       idx = find_entry(self, path)
       if (idx == 0) then
          if (present(error)) call fatal_error(error, "Failed to open group: "//gname)
@@ -797,10 +864,14 @@ contains
       logical, intent(out) :: exist
       type(error_type), allocatable, intent(out), optional :: error
 
+      !> Absolute path of the object
+      character(:), allocatable :: path
+
       exist = .false.
       if (.not. bin_require_open(self, "check existence", error)) return
 
-      exist = find_entry(self, resolve_path(self, name)) > 0
+      call resolve_path(self, name, path)
+      exist = find_entry(self, path) > 0
 
    end subroutine bin_exist
 
@@ -816,12 +887,15 @@ contains
       integer, allocatable, intent(out) :: dims(:)
       type(error_type), allocatable, intent(out), optional :: error
 
+      !> Absolute path of the dataset
+      character(:), allocatable :: path
       !> Index of the dataset entry
       integer :: idx
 
       if (.not. bin_require_open(self, "get a dataset shape", error)) return
 
-      idx = find_entry(self, resolve_path(self, dname))
+      call resolve_path(self, dname, path)
+      idx = find_entry(self, path)
       if (idx == 0) then
          if (present(error)) call fatal_error(error, "Failed to open dataset: "//dname)
          return
@@ -859,7 +933,7 @@ contains
 
       if (.not. bin_require_writable(self, "delete", error)) return
 
-      path = resolve_path(self, name)
+      call resolve_path(self, name, path)
       if (find_entry(self, path) == 0) then
          if (present(error)) call fatal_error(error, "Failed to delete: "//name)
          return
@@ -917,7 +991,7 @@ contains
             end if
             cycle
          end if
-         call push_entry(self, entry_type(path=path(1:sp - 1), attrs=[attribute_type ::]))
+         call push_entry(self, new_group(path(1:sp - 1)))
       end do
 
    end subroutine bin_ensure_parent_groups
@@ -941,7 +1015,7 @@ contains
 
       if (.not. bin_require_writable(self, "add a group", error)) return
 
-      path = resolve_path(self, gname)
+      call resolve_path(self, gname, path)
       call self%bin_ensure_parent_groups(path, error)
       if (present(error)) then
          if (allocated(error)) return
@@ -957,7 +1031,7 @@ contains
          return
       end if
 
-      call push_entry(self, entry_type(path=path, attrs=[attribute_type ::]))
+      call push_entry(self, new_group(path))
 
    end subroutine bin_add_group
 
@@ -990,7 +1064,7 @@ contains
       pos = 0_int64
       if (.not. bin_require_writable(self, "add a dataset", error)) return
 
-      path = resolve_path(self, dname)
+      call resolve_path(self, dname, path)
       call self%bin_ensure_parent_groups(path, error)
       if (present(error)) then
          if (allocated(error)) return
@@ -1061,10 +1135,14 @@ contains
       integer, intent(out) :: idx
       type(error_type), allocatable, intent(out), optional :: error
 
+      !> Absolute path of the dataset
+      character(:), allocatable :: path
+
       idx = 0
       if (.not. bin_require_open(self, "get a dataset", error)) return
 
-      idx = find_entry(self, resolve_path(self, dname))
+      call resolve_path(self, dname, path)
+      idx = find_entry(self, path)
       if (idx == 0) then
          if (present(error)) call fatal_error(error, "Failed to open dataset: "//dname)
          return
@@ -1108,10 +1186,13 @@ contains
       integer :: i
       !> Number of attributes already present
       integer :: nattr
+      !> Absolute path of the target entry
+      character(:), allocatable :: full
 
       if (.not. bin_require_writable(self, "add an attribute", error)) return
 
-      idx = find_entry(self, resolve_path(self, path))
+      call resolve_path(self, path, full)
+      idx = find_entry(self, full)
       if (idx == 0) then
          if (present(error)) call fatal_error(error, &
                                               "Failed to set attribute on missing path: "//path)
@@ -1152,10 +1233,13 @@ contains
       integer :: idx
       !> Loop index over attributes
       integer :: i
+      !> Absolute path of the target entry
+      character(:), allocatable :: full
 
       if (.not. bin_require_open(self, "get an attribute", error)) return
 
-      idx = find_entry(self, resolve_path(self, path))
+      call resolve_path(self, path, full)
+      idx = find_entry(self, full)
       if (idx > 0) then
          do i = 1, size(self%entries(idx)%attrs)
             if (self%entries(idx)%attrs(i)%name == name) then

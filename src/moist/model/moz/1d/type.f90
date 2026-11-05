@@ -413,6 +413,7 @@ contains
       type(solvent_vv_thermodynamics_type) :: bulk
       type(model_moz_1d_thermodynamics_type) :: thermo
       real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), guess(:, :)
+      logical, allocatable :: matched(:)
       type(prettyprinter) :: pp
       character(len=96) :: buf
       real(wp) :: rmse, free_energy, moment
@@ -463,11 +464,11 @@ contains
       if (allocated(error)) return
       if (allocated(self%checkpoint)) then
          call set_checkpoint_header(self)
-         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess)
+         if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess, matched)
       end if
       call self%ctx%timer%stop("Setup")
       call self%problem%solve(self%filters, self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
-         & guess=guess, reuse_initial_guess=reuse_guess, checkpoint=self%checkpoint)
+         & guess=guess, reuse_initial_guess=reuse_guess, checkpoint=self%checkpoint, matched=matched)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged) then
@@ -527,7 +528,7 @@ contains
 
    !> Describe the states of the current UV solve in the store header
    !>
-   !> - Radial grid, solvent and solute sites, solute coordinates, closure,
+   !> - Radial grid layout, solvent and solute sites, solute coordinates, closure,
    !>   bulk theory and temperature
    !>
    !> @param[inout] self  updated model with a store
@@ -539,8 +540,7 @@ contains
       solvent = self%solvent%structure()
       associate (header => self%checkpoint%header)
          header%kind = checkpoint_kind_uv1d
-         header%grid_shape = [self%rgrid%npts]
-         header%spacing = self%rgrid%spacing
+         call self%rgrid%get_layout(header%grid)
          header%solvent_sites = solvent%num(solvent%id)
          header%solute_sites = self%mol%num(self%mol%id)
          header%solute_xyz = self%mol%xyz

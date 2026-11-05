@@ -1,22 +1,29 @@
 !> Checkpoint store backed by binary container files (.mbin)
 !>
-!> - Saves write `<file>.tmp` and rename it over `file`, so an interrupted or
-!>   failed save keeps the previous checkpoint; an empty name saves nothing
+!> - Saves write a temporary file `<file>.<n>.tmp` of their own and rename it over
+!>   `file`, so an interrupted or failed save keeps the previous checkpoint and
+!>   concurrent saves never write into each other's file; an empty name saves nothing
 !> - Loads try `guesses` in order and take the first existing, readable file
 !>   that fits the header; missing files are skipped silently
 !> - Loads check the metadata and the extents of /tr against the header before
 !>   reading /tr
-!> - Layout (format version 1), lengths in bohr and temperatures in K:
+!> - Layout (format version 2), lengths in bohr and temperatures in K:
 !>   - /checkpoint/version, /checkpoint/kind
-!>   - /grid/shape, /grid/spacing, optional /grid/origin
+!>   - /grid/kind, /grid/shape, /grid/spacing; Cartesian /grid/origin; radial /grid/r,
+!>     /grid/weights; point grids /grid/xyz, /grid/weights, /grid/owner and the
+!>     Fourier basis /grid/kspace/modes, /grid/kspace/spacing, /grid/kspace/ref
+!>   - atom-centered grids: /grid/points, /grid/shells/offset, /grid/shells/radius,
+!>     /grid/shells/points, /grid/angular
 !>   - /sites/solvent, optional /sites/solute and /solute/coordinates
-!>   - /metadata/closure, /metadata/theory (optional), /metadata/temperature,
+!>   - 3D UV: /longrange/status ("known", "zero" or "unknown"); a known tail also
+!>     /longrange/alpha, /charges/solute, /charges/solvent
+!>   - /metadata/closure and /metadata/theory (both optional), /metadata/temperature,
 !>     /metadata/residual, /metadata/lambda, /metadata/iterations, /metadata/converged
 !>   - /tr: physical indirect correlation, (npoint, ncol)
 module moist_model_moz_checkpoint_file
    use mctc_env, only: wp, error_type, fatal_error
    use moist_utils_binio, only: binary_file
-   use moist_utils_file, only: replace_file, delete_file
+   use moist_utils_file, only: create_new_file, replace_file, delete_file
    use moist_model_moz_checkpoint, only: moz_checkpoint_type, moz_checkpoint_state_type
    implicit none(type, external)
    private
@@ -24,7 +31,7 @@ module moist_model_moz_checkpoint_file
    public :: moz_file_checkpoint_type, new_file_checkpoint
 
    !> Format version written into /checkpoint/version
-   integer, parameter :: format_version = 1
+   integer, parameter :: format_version = 2
 
    !> Store saving to one file and loading from candidate files
    type, extends(moz_checkpoint_type) :: moz_file_checkpoint_type
@@ -70,7 +77,9 @@ contains
    !>
    !> @param[inout] self   store
    !> @param[in]    state  state with fields
-   !> @param[out]   error  incomplete state, or open, write, close or rename failure
+   !> @param[out]   error  incomplete or inconsistent state, no temporary file, or open, write,
+   !>                       close or rename failure; a failed cleanup of the temporary file is
+   !>                       added to the message
    subroutine file_save(self, state, error)
       !> Store
       class(moz_file_checkpoint_type), intent(inout) :: self
@@ -84,14 +93,15 @@ contains
 
       if (.not. allocated(self%file)) return
       if (len(self%file) == 0) return
-      if (.not. allocated(state%kind) .or. .not. allocated(state%grid_shape) .or. &
-         & .not. allocated(state%solvent_sites) .or. .not. allocated(state%tr)) then
-         call fatal_error(error, "Checkpoint state needs a kind, grid shape, solvent sites and t(r)")
+      call state%check_complete(error)
+      if (allocated(error)) return
+      call create_new_file(self%file, partial, error)
+      if (allocated(error)) return
+      call binf%open(partial, status="old", action="w", error=error, initialize=.true.)
+      if (allocated(error)) then
+         call delete_file(partial, cleanup)
          return
       end if
-      partial = self%file//".tmp"
-      call binf%open(partial, status="replace", action="w", error=error)
-      if (allocated(error)) return
       call write_state(binf, state, error)
       if (allocated(error)) then
          call binf%close()
@@ -178,12 +188,29 @@ contains
 
       call binf%add("/checkpoint/version", format_version, error=error)
       if (.not. allocated(error)) call binf%add("/checkpoint/kind", state%kind, error=error)
-      if (.not. allocated(error)) call binf%add("/grid/shape", state%grid_shape, error=error)
-      if (.not. allocated(error)) call binf%add("/grid/spacing", state%spacing, error=error)
+      if (allocated(state%grid%kind) .and. .not. allocated(error)) then
+         call binf%add("/grid/kind", state%grid%kind, error=error)
+      end if
+      if (.not. allocated(error)) call binf%add("/grid/shape", state%grid%shape, error=error)
+      if (.not. allocated(error)) call binf%add("/grid/spacing", state%grid%spacing, error=error)
       if (.not. allocated(error)) call binf%adda("/grid/spacing", "units", "bohr", error=error)
-      if (allocated(state%origin) .and. .not. allocated(error)) then
-         call binf%add("/grid/origin", state%origin, error=error)
+      if (allocated(state%grid%origin) .and. .not. allocated(error)) then
+         call binf%add("/grid/origin", state%grid%origin, error=error)
          if (.not. allocated(error)) call binf%adda("/grid/origin", "units", "bohr", error=error)
+      end if
+      if (.not. allocated(error)) call write_points(binf, state, error)
+      if (allocated(state%grid%angular_grid) .and. .not. allocated(error)) then
+         call binf%add("/grid/angular", state%grid%angular_grid, error=error)
+      end if
+      if (allocated(state%grid%point_index) .and. .not. allocated(error)) then
+         call binf%add("/grid/points", state%grid%point_index, error=error)
+      end if
+      if (allocated(state%grid%shell_offset) .and. allocated(state%grid%shell_radius) .and. allocated(state%grid%shell_points) &
+         & .and. .not. allocated(error)) then
+         call binf%add("/grid/shells/offset", state%grid%shell_offset, error=error)
+         if (.not. allocated(error)) call binf%add("/grid/shells/radius", state%grid%shell_radius, error=error)
+         if (.not. allocated(error)) call binf%adda("/grid/shells/radius", "units", "bohr", error=error)
+         if (.not. allocated(error)) call binf%add("/grid/shells/points", state%grid%shell_points, error=error)
       end if
       if (.not. allocated(error)) call binf%add("/sites/solvent", state%solvent_sites, error=error)
       if (allocated(state%solute_sites) .and. .not. allocated(error)) then
@@ -192,6 +219,15 @@ contains
       if (allocated(state%solute_xyz) .and. .not. allocated(error)) then
          call binf%add("/solute/coordinates", state%solute_xyz, error=error)
          if (.not. allocated(error)) call binf%adda("/solute/coordinates", "units", "bohr", error=error)
+      end if
+      if (allocated(state%tail) .and. .not. allocated(error)) then
+         call binf%add("/longrange/status", state%tail, error=error)
+         if (allocated(state%solute_charges) .and. allocated(state%solvent_charges) .and. .not. allocated(error)) then
+            call binf%add("/longrange/alpha", state%alpha, error=error)
+            if (.not. allocated(error)) call binf%adda("/longrange/alpha", "units", "1/bohr", error=error)
+            if (.not. allocated(error)) call binf%add("/charges/solute", state%solute_charges, error=error)
+            if (.not. allocated(error)) call binf%add("/charges/solvent", state%solvent_charges, error=error)
+         end if
       end if
       if (allocated(state%closure) .and. .not. allocated(error)) then
          call binf%add("/metadata/closure", state%closure, error=error)
@@ -208,6 +244,41 @@ contains
       if (.not. allocated(error)) call binf%add("/tr", state%tr, error=error)
       if (.not. allocated(error)) call binf%adda("/tr", "description", "indirect_correlation_function", error=error)
    end subroutine write_state
+
+   !> Write the nodes, points, weights, owners and Fourier basis of a layout
+   !>
+   !> @param[inout] binf   container open for writing
+   !> @param[in]    state  state with its layout
+   !> @param[out]   error  first write failure
+   subroutine write_points(binf, state, error)
+      !> Container
+      type(binary_file), intent(inout) :: binf
+      !> State
+      type(moz_checkpoint_state_type), intent(in) :: state
+      !> First failure
+      type(error_type), allocatable, intent(out) :: error
+
+      associate (grid => state%grid)
+         if (allocated(grid%r)) then
+            call binf%add("/grid/r", grid%r, error=error)
+            if (.not. allocated(error)) call binf%adda("/grid/r", "units", "bohr", error=error)
+         end if
+         if (allocated(grid%xyz) .and. .not. allocated(error)) then
+            call binf%add("/grid/xyz", grid%xyz, error=error)
+            if (.not. allocated(error)) call binf%adda("/grid/xyz", "units", "bohr", error=error)
+         end if
+         if (allocated(grid%w) .and. .not. allocated(error)) call binf%add("/grid/weights", grid%w, error=error)
+         if (allocated(grid%owner) .and. .not. allocated(error)) call binf%add("/grid/owner", grid%owner, error=error)
+         if (allocated(grid%kmodes) .and. allocated(grid%kspacing) .and. allocated(grid%kref) &
+            & .and. .not. allocated(error)) then
+            call binf%add("/grid/kspace/modes", grid%kmodes, error=error)
+            if (.not. allocated(error)) call binf%add("/grid/kspace/spacing", grid%kspacing, error=error)
+            if (.not. allocated(error)) call binf%adda("/grid/kspace/spacing", "units", "1/bohr", error=error)
+            if (.not. allocated(error)) call binf%add("/grid/kspace/ref", grid%kref, error=error)
+            if (.not. allocated(error)) call binf%adda("/grid/kspace/ref", "units", "bohr", error=error)
+         end if
+      end associate
+   end subroutine write_points
 
    !> Read one state fitting a header from a file
    !>
@@ -259,8 +330,8 @@ contains
          if (version /= format_version) call fatal_error(error, "unsupported checkpoint format version")
       end if
       if (.not. allocated(error)) call binf%get("/checkpoint/kind", state%kind, error=error)
-      if (.not. allocated(error)) call binf%get("/grid/shape", state%grid_shape, error=error)
-      if (.not. allocated(error)) call binf%get("/grid/spacing", state%spacing, error=error)
+      if (.not. allocated(error)) call binf%get("/grid/shape", state%grid%shape, error=error)
+      if (.not. allocated(error)) call binf%get("/grid/spacing", state%grid%spacing, error=error)
       if (.not. allocated(error)) call binf%get("/sites/solvent", state%solvent_sites, error=error)
       if (.not. allocated(error)) call binf%get_shape("/tr", state%field_shape, error=error)
       if (.not. allocated(error)) call binf%get("/metadata/temperature", state%temperature, error=error)
@@ -287,11 +358,34 @@ contains
       !> First failure
       type(error_type), allocatable, intent(out) :: error
 
-      if (has(binf, "/grid/origin", error)) call binf%get("/grid/origin", state%origin, error=error)
+      if (has(binf, "/grid/kind", error)) call binf%get("/grid/kind", state%grid%kind, error=error)
+      if (has(binf, "/grid/origin", error)) call binf%get("/grid/origin", state%grid%origin, error=error)
+      if (has(binf, "/grid/r", error)) call binf%get("/grid/r", state%grid%r, error=error)
+      if (has(binf, "/grid/xyz", error)) call binf%get("/grid/xyz", state%grid%xyz, error=error)
+      if (has(binf, "/grid/weights", error)) call binf%get("/grid/weights", state%grid%w, error=error)
+      if (has(binf, "/grid/owner", error)) call binf%get("/grid/owner", state%grid%owner, error=error)
+      if (has(binf, "/grid/kspace/modes", error)) then
+         call binf%get("/grid/kspace/modes", state%grid%kmodes, error=error)
+         if (.not. allocated(error)) call binf%get("/grid/kspace/spacing", state%grid%kspacing, error=error)
+         if (.not. allocated(error)) call binf%get("/grid/kspace/ref", state%grid%kref, error=error)
+      end if
+      if (has(binf, "/grid/angular", error)) call binf%get("/grid/angular", state%grid%angular_grid, error=error)
+      if (has(binf, "/grid/points", error)) call binf%get("/grid/points", state%grid%point_index, error=error)
+      if (has(binf, "/grid/shells/offset", error)) then
+         call binf%get("/grid/shells/offset", state%grid%shell_offset, error=error)
+         if (.not. allocated(error)) call binf%get("/grid/shells/radius", state%grid%shell_radius, error=error)
+         if (.not. allocated(error)) call binf%get("/grid/shells/points", state%grid%shell_points, error=error)
+      end if
       if (has(binf, "/sites/solute", error)) call binf%get("/sites/solute", state%solute_sites, error=error)
       if (has(binf, "/solute/coordinates", error)) call binf%get("/solute/coordinates", state%solute_xyz, error=error)
       if (has(binf, "/metadata/closure", error)) call binf%get("/metadata/closure", state%closure, error=error)
       if (has(binf, "/metadata/theory", error)) call binf%get("/metadata/theory", state%theory, error=error)
+      if (has(binf, "/longrange/status", error)) call binf%get("/longrange/status", state%tail, error=error)
+      if (has(binf, "/longrange/alpha", error)) then
+         call binf%get("/longrange/alpha", state%alpha, error=error)
+         if (.not. allocated(error)) call binf%get("/charges/solute", state%solute_charges, error=error)
+         if (.not. allocated(error)) call binf%get("/charges/solvent", state%solvent_charges, error=error)
+      end if
    end subroutine read_optional
 
    !> Whether a container holds a path; false once an earlier read failed

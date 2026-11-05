@@ -29,6 +29,8 @@ module moist_model_moz_solver_core_evaluator
       !> Fill and factorize the coarse matrix of a deflation object at the last
       !> `linearize` point (default: not supported; the deflation stays inactive)
       procedure :: deflation_setup => moz_evaluator_deflation_setup_default
+      !> RMS residual at a field; huge(1.0_wp) when it cannot be evaluated
+      procedure :: rms_residual => moz_evaluator_rms_residual
    end type moist_model_moz_solver_evaluator_type
 
    !> Abstract interface of the deferred residual binding
@@ -164,5 +166,30 @@ contains
       feasible = .false.
       call fatal_error(error, "This evaluator does not provide a transpose Jacobian product")
    end subroutine moz_evaluator_adjoint_default
+
+   !> RMS residual at a field
+   !>
+   !> - A residual that is infeasible or fails gives huge(1.0_wp)
+   !>
+   !> @param[in]  self      evaluator
+   !> @param[in]  gamma     field (npts, npair)
+   !> @param[out] residual  residual R(gamma) (npts, npair)
+   !> @param[out] rmse      RMS residual
+   subroutine moz_evaluator_rms_residual(self, gamma, residual, rmse)
+      !> Evaluator
+      class(moist_model_moz_solver_evaluator_type), intent(in) :: self
+      !> Field
+      real(wp), intent(in) :: gamma(:, :)
+      !> Residual
+      real(wp), intent(out) :: residual(:, :)
+      !> RMS residual
+      real(wp), intent(out) :: rmse
+      type(error_type), allocatable :: error
+      logical :: feasible
+
+      call self%residual(gamma, residual, feasible, error)
+      rmse = huge(1.0_wp)
+      if (feasible .and. .not. allocated(error)) rmse = sqrt(sum(residual**2)/real(size(residual), wp))
+   end subroutine moz_evaluator_rms_residual
 
 end module moist_model_moz_solver_core_evaluator

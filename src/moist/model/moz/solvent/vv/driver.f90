@@ -235,7 +235,8 @@ contains
    !> @param[out]   error       map, residual, closure or preconditioner failure
    !> @param[in]    guess       short-range t_s(r), packed (npts, npair)
    !> @param[inout] checkpoint  store of the saved states, with its header set
-   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, guess, checkpoint)
+   !> @param[in]    matched     nodes the guess holds values for, (npts); default all
+   subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, guess, checkpoint, matched)
       !> Problem
       class(vv_problem_type), intent(inout), target :: self
       !> Tolerance
@@ -254,11 +255,14 @@ contains
       real(wp), intent(in), optional :: guess(:, :)
       !> Store of the saved states
       class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
+      !> Nodes the guess holds values for
+      logical, intent(in), optional :: matched(:)
       type(vv_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
       class(moist_model_moz_solver_preconditioner_type), pointer :: precond
       integer :: attempt, attempted_steps, interval
+      logical :: stale
       logical :: warm
 
       converged = .false.
@@ -295,7 +299,7 @@ contains
 
       self%linearized = .false.
       warm = .false.
-      if (present(guess)) call check_guess(context, guess, tolerance, warm, converged, rmse)
+      if (present(guess)) call check_guess(context, guess, tolerance, warm, converged, rmse, matched)
 
       do attempt = 1, 2
          if (converged) exit
@@ -318,7 +322,13 @@ contains
          end if
          context%offset = niter
          call run_iterations(context, self%ctx, maxiter, tolerance, interval, rmse, attempted_steps, &
-            & converged, error)
+            & converged, error, switched_last=stale)
+         ! A stage ending on a ramp step measured its residual before it; converged only on
+         ! the requested closure
+         if (stale .and. .not. allocated(error)) then
+            call context%evaluator%rms_residual(context%evaluator%problem%tr, context%residual, rmse)
+            converged = rmse < tolerance .and. context%evaluator%problem%ramp%at_target()
+         end if
          niter = niter + attempted_steps
          if (associated(context%printer)) call printer%note(self%solver%stage_summary())
          if (converged .and. .not. allocated(error)) exit
@@ -549,7 +559,8 @@ contains
    !> Check a guess at full coupling and accept it when it meets the tolerance
    !>
    !> - Feasible guesses become tr, with cr = C(tr)
-   !> - Rejected guesses warn and leave the cold start
+   !> - Rejected guesses warn and leave the cold start; a mask matching no node, or a
+   !>   failed cold map at the uncovered nodes, drops the guess without a warning
    !>
    !> @param[inout] context    solve-local context bound to the problem
    !> @param[in]    guess      short-range t_s(r), packed (npts, npair)
@@ -557,7 +568,8 @@ contains
    !> @param[out]   warm       whether the guess is feasible
    !> @param[out]   converged  whether the guess meets the tolerance
    !> @param[out]   rmse       RMS residual of a feasible guess, else huge
-   subroutine check_guess(context, guess, tolerance, warm, converged, rmse)
+   !> @param[in]    matched    nodes the guess holds values for; the others start from T(0)
+   subroutine check_guess(context, guess, tolerance, warm, converged, rmse, matched)
       !> Solve-local context
       type(vv_iteration_type), intent(inout) :: context
       !> Short-range guess
@@ -570,8 +582,12 @@ contains
       logical, intent(out) :: converged
       !> RMS residual of the guess
       real(wp), intent(out) :: rmse
+      !> Nodes the guess holds values for
+      logical, intent(in), optional :: matched(:)
       type(error_type), allocatable :: guess_error
+      real(wp), allocatable :: start(:, :)
       character(len=16) :: buf
+      integer :: col
 
       warm = .false.
       converged = .false.
@@ -581,7 +597,24 @@ contains
             call p%ctx%warning("1D VV: guess shape does not match the grid, ignoring guess")
             return
          end if
-         call context%evaluator%residual(guess, context%residual, warm, guess_error)
+         start = guess
+         if (present(matched)) then
+            if (size(matched) /= size(p%tr, 1)) then
+               call p%ctx%warning("1D VV: guess mask does not match the grid, ignoring guess")
+               return
+            end if
+            if (.not. any(matched)) return
+            if (.not. all(matched)) then
+               ! The cold field T(0) at the nodes the guess does not cover
+               p%cr = 0.0_wp
+               call p%equation%map(p%cr, p%tr, guess_error)
+               if (allocated(guess_error)) return
+               do col = 1, size(start, 2)
+                  where (.not. matched) start(:, col) = p%tr(:, col)
+               end do
+            end if
+         end if
+         call context%evaluator%residual(start, context%residual, warm, guess_error)
          warm = warm .and. .not. allocated(guess_error)
          if (.not. warm) then
             if (allocated(guess_error)) then
@@ -591,7 +624,7 @@ contains
             end if
             return
          end if
-         p%tr = guess
+         p%tr = start
          p%cr = p%c_work
          rmse = sqrt(sum(context%residual**2)/real(size(context%residual), wp))
          converged = rmse < tolerance

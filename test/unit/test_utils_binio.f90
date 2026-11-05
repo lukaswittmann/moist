@@ -1,9 +1,18 @@
 !> Binary container round trips, groups, attributes and refused operations
+!>
+!> - Creation, and initialization of a claimed empty file; a nonempty container is not
+!>   initialized, and a refused second open keeps the handle and the file
+!> - Round trips of scalars, strings, real and integer arrays of rank 1 to 3, also of zero
+!>   extent, attributes and shapes; groups, deletion and overwrites
+!> - Refused: mismatched types and ranks, new datasets in a container opened for reading,
+!>   missing paths, non-empty groups, a second open group, unopened handles and malformed
+!>   index records
 module test_utils_binio
    use, intrinsic :: iso_fortran_env, only: int32, int64
    use mctc_env, only: wp, moist_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_utils_binio, only: binary_file
+   use moist_utils_file, only: create_new_file
    implicit none(type, external)
    private
 
@@ -21,10 +30,14 @@ contains
 
       testsuite = [ &
          new_unittest("create_file", test_create_file), &
+         new_unittest("initialize_claimed", test_initialize_claimed), &
+         new_unittest("initialize_refused", test_initialize_refused), &
+         new_unittest("open_twice_preserves_file", test_open_twice_preserves_file), &
          new_unittest("write_read_scalar", test_write_read_scalar), &
          new_unittest("write_read_array1d", test_write_read_array1d), &
          new_unittest("write_read_array2d", test_write_read_array2d), &
          new_unittest("write_read_array3d", test_write_read_array3d), &
+         new_unittest("empty_arrays", test_empty_arrays), &
          new_unittest("write_read_string", test_write_read_string), &
          new_unittest("group_operations", test_group_operations), &
          new_unittest("integer_arrays", test_integer_arrays), &
@@ -145,6 +158,93 @@ contains
       call check(error, .not. removed, "binary file was not deleted")
    end subroutine test_create_file
 
+   !> A claimed empty file becomes a container without replacing its name
+   subroutine test_initialize_claimed(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(binary_file) :: binf
+      type(moist_error), allocatable :: ioerr
+      character(len=:), allocatable :: filename
+      real(wp) :: value
+
+      call create_new_file("moist-test-binio-claimed", filename, ioerr)
+      call check(error, .not. allocated(ioerr), "temporary file claim failed")
+      if (allocated(error)) return
+      call binf%open(filename, status="old", action="w", error=ioerr, initialize=.true.)
+      if (.not. allocated(ioerr)) call binf%add("/value", 2.5_wp, error=ioerr)
+      if (.not. allocated(ioerr)) call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%open(filename, status="old", action="r", error=ioerr)
+      if (.not. allocated(ioerr)) call binf%get("/value", value, error=ioerr)
+      if (.not. allocated(ioerr)) call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call remove_file(filename)
+      call check(error, value, 2.5_wp, more="claimed file did not become a readable container")
+   end subroutine test_initialize_claimed
+
+   !> Refused initialization preserves an existing nonempty container
+   subroutine test_initialize_refused(error)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), parameter :: filename = "moist-test-binio-initialize-refused.mbin"
+      type(binary_file) :: binf
+      type(moist_error), allocatable :: ioerr, refused, refused_mode
+      real(wp) :: value
+      logical :: left_open
+
+      call binf%open(filename, status="new", action="w", error=ioerr)
+      if (.not. allocated(ioerr)) call binf%add("/value", 3.5_wp, error=ioerr)
+      if (.not. allocated(ioerr)) call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%open(filename, status="new", action="w", error=refused_mode, initialize=.true.)
+      call binf%close()
+      call binf%open(filename, status="old", action="w", error=refused, initialize=.true.)
+      left_open = binf%is_open
+      call binf%close()
+      call binf%open(filename, status="old", action="r", error=ioerr)
+      if (.not. allocated(ioerr)) call binf%get("/value", value, error=ioerr)
+      if (.not. allocated(ioerr)) call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call remove_file(filename)
+      call require_error(error, refused_mode, "existing writable empty file")
+      if (allocated(error)) return
+      call require_error(error, refused, "existing empty file")
+      if (allocated(error)) return
+      call check(error, .not. left_open .and. value == 3.5_wp, "refused initialization changed the container")
+   end subroutine test_initialize_refused
+
+   !> Refusing a second open preserves the original handle, index and file
+   subroutine test_open_twice_preserves_file(error)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), parameter :: filename = "moist-test-binio-open-twice.mbin", &
+         & other = "moist-test-binio-open-twice-other.mbin"
+      type(binary_file) :: binf
+      type(moist_error), allocatable :: ioerr, refused
+      real(wp) :: value
+      logical :: created_other
+
+      call remove_file(other)
+      call binf%open(filename, status="new", action="w", error=ioerr)
+      if (.not. allocated(ioerr)) call binf%add("/kept", 4.5_wp, error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%open(other, status="new", action="w", error=refused)
+      call binf%close(error=ioerr)
+      if (.not. allocated(ioerr)) call binf%open(filename, status="old", action="r", error=ioerr)
+      if (.not. allocated(ioerr)) call binf%get("/kept", value, error=ioerr)
+      if (.not. allocated(ioerr)) call binf%close(error=ioerr)
+      inquire (file=other, exist=created_other)
+      call remove_file(other)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call remove_file(filename)
+      call require_error(error, refused, "already open")
+      if (allocated(error)) return
+      call check(error, .not. created_other .and. value == 4.5_wp, "the second open lost the original file")
+   end subroutine test_open_twice_preserves_file
+
    !> Real and integer scalars survive a round trip
    subroutine test_write_read_scalar(error)
       type(error_type), allocatable, intent(out) :: error
@@ -228,6 +328,47 @@ contains
       if (allocated(error)) return
       call check(error, all(abs(arr_out - arr_in) < thr), "array 1D read/write mismatch")
    end subroutine test_write_read_array1d
+
+   !> Arrays with a zero extent survive a round trip with their shape
+   subroutine test_empty_arrays(error)
+      type(error_type), allocatable, intent(out) :: error
+      character(*), parameter :: filename = "moist-test-binio-empty.mbin"
+      type(binary_file) :: binf
+      type(moist_error), allocatable :: ioerr
+      real(wp), allocatable :: vec_in(:), vec_out(:), mat_in(:, :), mat_out(:, :)
+
+      allocate (vec_in(0), mat_in(3, 0))
+      call binf%open(filename, status="new", action="w", error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%add("/empty_1d", vec_in, error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%add("/empty_2d", mat_in, error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+
+      call binf%open(filename, status="old", action="r", error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%get("/empty_1d", vec_out, error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%get("/empty_2d", mat_out, error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call binf%close(error=ioerr)
+      call require_ok(error, ioerr, binf, filename)
+      if (allocated(error)) return
+      call remove_file(filename)
+
+      call check(error, size(vec_out) == 0, "empty 1D array not empty")
+      if (allocated(error)) return
+      call check(error, all(shape(mat_out) == [3, 0]), "empty 2D array lost its shape")
+   end subroutine test_empty_arrays
 
    !> A real matrix survives a round trip with its shape
    subroutine test_write_read_array2d(error)
@@ -1055,7 +1196,7 @@ contains
       integer(int64) :: index_offset
       integer :: variant, unit
 
-      do variant = 1, 3
+      do variant = 1, 4
          call binf%open(filename, status="new", action="w", error=ioerr)
          if (.not. allocated(ioerr)) call binf%add("/x", [1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp], error=ioerr)
          if (.not. allocated(ioerr)) call binf%close(error=ioerr)
@@ -1074,6 +1215,10 @@ contains
             write (unit, pos=index_offset) huge(1_int32)
          case (3)
             write (unit, pos=index_offset + 36_int64) index_offset
+         case (4)
+            ! The element count fits int64 but its byte count would overflow
+            write (unit, pos=index_offset + 12_int64) huge(0_int64)/8_int64 + 1_int64
+            write (unit, pos=index_offset + 44_int64) 0_int64
          case default
             call require_error(error, ioerr, "invalid test variant")
             if (allocated(error)) return

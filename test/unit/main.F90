@@ -14,6 +14,8 @@ program tester
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_utils_prettylistprint_threaded, only: collect_utils_prettylistprint_threaded
    use test_utils_binio, only: collect_utils_binio
+   use test_utils_file, only: collect_utils_file
+   use test_math_grid_transfer, only: collect_math_grid_transfer
    use test_channels, only: collect_channels
    use test_moz_1d, only: collect_moz_1d
    use test_moz_3d, only: collect_moz_3d
@@ -31,6 +33,7 @@ program tester
    use test_moz_1d_gradient, only: collect_moz_1d_gradient
    use test_moz_3d_uv, only: collect_moz_3d_uv
    use test_moz_3d_response, only: collect_moz_3d_response
+   use test_moz_3d_guess, only: collect_moz_3d_guess
    use test_moz_closure, only: collect_moz_closure
    use test_moz_closure_kernel, only: collect_moz_closure_kernel
    use test_moz_solver, only: collect_moz_solver
@@ -120,6 +123,8 @@ program tester
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
       & new_testsuite("utils_prettylistprint_threaded", collect_utils_prettylistprint_threaded), &
       & new_testsuite("utils_binio", collect_utils_binio), &
+      & new_testsuite("utils_file", collect_utils_file), &
+      & new_testsuite("math_grid_transfer", collect_math_grid_transfer), &
       & new_testsuite("channels", collect_channels), &
       & new_testsuite("data", collect_data), &
       & new_testsuite("radii", collect_radii), &
@@ -165,6 +170,7 @@ program tester
       & new_testsuite("moz_1d_gradient", collect_moz_1d_gradient), &
       & new_testsuite("moz_3d_uv", collect_moz_3d_uv), &
       & new_testsuite("moz_3d_response", collect_moz_3d_response), &
+      & new_testsuite("moz_3d_guess", collect_moz_3d_guess), &
       & new_testsuite("moz_closure", collect_moz_closure), &
       & new_testsuite("moz_closure_kernel", collect_moz_closure_kernel), &
       & new_testsuite("moz_solver", collect_moz_solver), &

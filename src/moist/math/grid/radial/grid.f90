@@ -9,6 +9,7 @@ module moist_math_grid_radial_grid
    use mctc_io_constants, only: pi
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type
    use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type
+   use moist_math_grid_layout, only: moist_math_grid_layout_type, layout_radial
    implicit none(type, external)
    private
 
@@ -76,6 +77,8 @@ module moist_math_grid_radial_grid
       procedure :: integrate_field => radial_integrate_field
       !> Volume quadrature of an analytic radial integrand sampled at the nodes
       procedure :: integrate => radial_integrate
+      !> Layout: nodes, weights and the uniform spacing
+      procedure :: get_layout => radial_get_layout
    end type moist_math_grid_radial_type
 
 contains
@@ -306,5 +309,22 @@ contains
       end if
       total = updated
    end subroutine add_compensated
+
+   !> Layout of the grid: nodes, weights and the spacing of a uniform grid
+   !>
+   !> @param[in]  self    built grid
+   !> @param[out] layout  "radial" layout
+   subroutine radial_get_layout(self, layout)
+      !> Built grid
+      class(moist_math_grid_radial_type), intent(in) :: self
+      !> Layout
+      type(moist_math_grid_layout_type), intent(out) :: layout
+
+      layout%kind = layout_radial
+      layout%shape = [self%npts]
+      layout%spacing = self%spacing
+      if (allocated(self%r)) layout%r = self%r
+      if (allocated(self%w)) layout%w = self%w
+   end subroutine radial_get_layout
 
 end module moist_math_grid_radial_grid

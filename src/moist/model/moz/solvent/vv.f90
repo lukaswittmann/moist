@@ -294,6 +294,7 @@ contains
       real(wp), allocatable :: u_sr(:, :), ur_lr(:, :), uk_lr(:, :), wk(:, :), rho(:), hk(:, :)
       real(wp), allocatable :: cr_short(:, :), q(:), tail(:), wbar(:, :), zeta(:, :), zmat(:, :), zscaled(:, :)
       real(wp), allocatable :: guess(:, :)
+      logical, allocatable :: matched(:)
       type(prettyprinter) :: pp
       character(len=64) :: buf
       real(wp) :: rmse, alpha
@@ -341,10 +342,10 @@ contains
       call new_vv_problem(problem, self%ctx, rgrid, kgrid, wbar, u_sr, ur_lr, uk_lr, rho, self%beta(), params, &
          & error, h_offset=zeta)
       if (allocated(error)) return
-      if (allocated(self%checkpoint)) call load_guess(self, params, ur_lr, guess)
+      if (allocated(self%checkpoint)) call load_guess(self, params, rgrid, ur_lr, guess, matched)
       call self%ctx%timer%stop("Setup")
       call problem%solve(params%tolerance, params%maxiter, converged, rmse, niter, error, &
-         & guess=guess, checkpoint=self%checkpoint)
+         & guess=guess, checkpoint=self%checkpoint, matched=matched)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged .or. .not. ieee_is_finite(rmse) .or. rmse >= params%tolerance) then
@@ -411,28 +412,33 @@ contains
    !>
    !> @param[inout] self    solvent with a store and a constructed theory
    !> @param[in]    params  validated settings of the solve
+   !> @param[in]    rgrid   radial grid of the solve
    !> @param[in]    ur_lr   long-range real-space potential, Hartree, packed (npts, npair)
    !> @param[out]   guess   short-range t_s(r), packed (npts, npair); unallocated without a guess
-   subroutine load_guess(self, params, ur_lr, guess)
+   !> @param[out]   matched nodes the guess holds values for; unallocated without a guess
+   subroutine load_guess(self, params, rgrid, ur_lr, guess, matched)
       !> Solvent
       class(solvent_vv_type), intent(inout) :: self
       !> Settings of the solve
       type(solvent_vv_parameters_type), intent(in) :: params
+      !> Radial grid of the solve
+      type(moist_math_grid_radial_type), intent(in) :: rgrid
       !> Long-range real-space potential
       real(wp), intent(in) :: ur_lr(:, :)
       !> Short-range guess
       real(wp), allocatable, intent(out) :: guess(:, :)
+      !> Nodes the guess holds values for
+      logical, allocatable, intent(out) :: matched(:)
 
       associate (header => self%checkpoint%header)
          header%kind = checkpoint_kind_vv
-         header%grid_shape = [params%npts]
-         header%spacing = params%dr
+         call rgrid%get_layout(header%grid)
          header%solvent_sites = self%system%solv_mol%num(self%system%solv_mol%id)
          header%closure = trim(adjustl(params%closure))
          header%theory = trim(self%theory%name())
          header%temperature = self%temperature()
       end associate
-      call self%checkpoint%load_guess(self%ctx, self%beta(), ur_lr, 2, guess)
+      call self%checkpoint%load_guess(self%ctx, self%beta(), ur_lr, 2, guess, matched)
    end subroutine load_guess
 
    !> Attach a copy of a checkpoint store, or detach the store when absent
