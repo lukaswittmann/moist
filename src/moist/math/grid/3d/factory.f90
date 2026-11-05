@@ -13,7 +13,9 @@ module moist_math_grid_3d_factory
    use moist_math_grid_3d_kernel_pvoronoi, only: default_power_width
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, default_molecular_recipe, &
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy
-   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_handymod_type, new_handymod_mapping
+   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type, &
+      & moist_math_grid_radial_mapping_handymod_type, new_handymod_mapping, &
+      & moist_math_grid_radial_mapping_linear_type, new_linear_mapping
    implicit none(type, external)
    private
    public :: rism_grid_parameters_type, new_spatial_grid
@@ -24,6 +26,9 @@ module moist_math_grid_3d_factory
    !> Grid kinds, resolved from the case-insensitive name by grid_kind_id
    integer, parameter :: grid_kind_unknown = 0, grid_kind_radial = 1, grid_kind_cartesian = 2, &
       & grid_kind_molecular = 3
+
+   !> Molecular radial mappings, resolved from the case-insensitive name by radial_mapping_id
+   integer, parameter :: radial_mapping_unknown = 0, radial_mapping_handymod = 1, radial_mapping_linear = 2
 
    !> Uniform radial UV grid settings
    type, extends(moist_model_parameters_type) :: rism_radial_grid_parameters_type
@@ -55,7 +60,9 @@ module moist_math_grid_3d_factory
    type, extends(moist_model_parameters_type) :: rism_molecular_radial_parameters_type
       !> Radial shell count, at least one
       integer :: npts = 50
-      !> HandyMod outer radius, bohr, and positive mapping exponent
+      !> Mapping of the midpoint nodes onto [0, rmax]: handymod or linear
+      character(len=16) :: mapping = "handymod"
+      !> Outer radius, bohr, and positive HandyMod exponent
       real(wp) :: rmax = 10.0_wp, handymod_exponent = 2.0_wp
    contains
       procedure :: init_defaults => molecular_radial_defaults
@@ -141,7 +148,9 @@ contains
       type(moist_math_grid_3d_cartesian_type), allocatable :: cartesian
       type(moist_math_grid_3d_molecular_type), allocatable :: molecular
       type(moist_math_grid_atomic_recipe_type) :: recipe
-      type(moist_math_grid_radial_mapping_handymod_type) :: mapping
+      class(moist_math_grid_radial_mapping_type), allocatable :: mapping
+      type(moist_math_grid_radial_mapping_handymod_type) :: handymod
+      type(moist_math_grid_radial_mapping_linear_type) :: linear
       type(moist_math_grid_atomic_shell_constant_type) :: shells
       integer, allocatable :: becke_k
       real(wp), allocatable :: ssf_a, power_width
@@ -156,8 +165,17 @@ contains
       case (grid_kind_molecular)
          call default_molecular_recipe(recipe, error)
          if (allocated(error)) return
-         call new_handymod_mapping(mapping, 0.0_wp, params%molecular%radial%rmax, &
-            & params%molecular%radial%handymod_exponent, error)
+         select case (radial_mapping_id(params%molecular%radial%mapping))
+         case (radial_mapping_handymod)
+            call new_handymod_mapping(handymod, 0.0_wp, params%molecular%radial%rmax, &
+               & params%molecular%radial%handymod_exponent, error)
+            if (.not. allocated(error)) allocate (mapping, source=handymod)
+         case (radial_mapping_linear)
+            call new_linear_mapping(linear, 0.0_wp, params%molecular%radial%rmax, error)
+            if (.not. allocated(error)) allocate (mapping, source=linear)
+         case default
+            call fatal_error(error, "Unknown grid.molecular.radial.mapping: "//trim(params%molecular%radial%mapping))
+         end select
          if (.not. allocated(error)) call new_constant_shell_policy(shells, params%molecular%angular%degree, error)
          if (allocated(error)) return
          recipe%radial%npts = params%molecular%radial%npts
@@ -415,6 +433,7 @@ contains
       class(rism_molecular_radial_parameters_type), intent(inout) :: self
       type(rism_molecular_radial_parameters_type) :: defaults
       self%npts = defaults%npts
+      self%mapping = defaults%mapping
       self%rmax = defaults%rmax
       self%handymod_exponent = defaults%handymod_exponent
    end subroutine molecular_radial_defaults
@@ -426,21 +445,30 @@ contains
       !> Molecular radial settings
       class(rism_molecular_radial_parameters_type), intent(inout), target :: self
       call self%register_int_scalar("npts", self%npts, level=2)
+      call self%register_string("mapping", self%mapping, level=2)
       call self%register_real_scalar("rmax", self%rmax, level=2)
-      call self%register_real_scalar("handymod_exponent", self%handymod_exponent)
+      call self%register_real_scalar("handymod_exponent", self%handymod_exponent, &
+         & level=merge(3, print_hidden, radial_mapping_id(self%mapping) == radial_mapping_handymod))
    end subroutine molecular_radial_entries
 
    !> Check molecular radial count and mapping settings
    !>
-   !> @param[in,out] self Molecular radial settings
-   !> @param[out] error Invalid count, radius or exponent
+   !> @param[in,out] self Molecular radial settings, mapping name normalized to lower case
+   !> @param[out] error Unknown mapping, invalid count, radius or exponent
    subroutine molecular_radial_validate(self, error)
       !> Molecular radial settings
       class(rism_molecular_radial_parameters_type), intent(inout) :: self
-      !> Invalid count, radius or exponent
+      !> Unknown mapping, invalid count, radius or exponent
       type(error_type), allocatable, intent(out) :: error
-      if (self%npts < 1 .or. .not. positive(self%rmax) .or. .not. positive(self%handymod_exponent)) then
-         call fatal_error(error, "grid.molecular.radial needs npts >= 1, positive rmax (bohr) and positive handymod_exponent")
+      self%mapping = to_lower(trim(adjustl(self%mapping)))
+      if (radial_mapping_id(self%mapping) == radial_mapping_unknown) then
+         call fatal_error(error, "Unknown grid.molecular.radial.mapping: "//trim(self%mapping)// &
+            & " (choose handymod or linear)")
+      else if (self%npts < 1 .or. .not. positive(self%rmax)) then
+         call fatal_error(error, "grid.molecular.radial needs npts >= 1 and positive rmax (bohr)")
+      else if (radial_mapping_id(self%mapping) == radial_mapping_handymod .and. &
+         & .not. positive(self%handymod_exponent)) then
+         call fatal_error(error, "grid.molecular.radial needs a positive handymod_exponent")
       end if
    end subroutine molecular_radial_validate
 
@@ -494,6 +522,24 @@ contains
          id = 0
       end select
    end function partition_id
+
+   !> Radial mapping of a case-insensitive name; radial_mapping_unknown for anything else
+   !>
+   !> @param[in] name Mapping name
+   pure function radial_mapping_id(name) result(id)
+      !> Mapping name
+      character(len=*), intent(in) :: name
+      !> Mapping constant or radial_mapping_unknown
+      integer :: id
+      select case (to_lower(trim(adjustl(name))))
+      case ("handymod")
+         id = radial_mapping_handymod
+      case ("linear")
+         id = radial_mapping_linear
+      case default
+         id = radial_mapping_unknown
+      end select
+   end function radial_mapping_id
 
    !> Grid kind of a case-insensitive name; grid_kind_unknown for anything else
    !>

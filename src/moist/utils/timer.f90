@@ -34,6 +34,7 @@ module moist_utils_timer
    public :: timer_type, name_len
    public :: cat_none, cat_setup, cat_build, cat_energy, cat_potential, cat_gradient, &
              cat_hessian, cat_solve, cat_properties, cat_io, cat_host
+   public :: cat_preconditioner
 
    !> Moist internal timer categories
    integer, parameter :: cat_none = 0
@@ -48,15 +49,16 @@ module moist_utils_timer
    integer, parameter :: cat_io = 9
    !> Host-side timers
    integer, parameter :: cat_host = 10
+   integer, parameter :: cat_preconditioner = 11
 
    !> Number of named categories
-   integer, parameter :: ncat = 10
+   integer, parameter :: ncat = 11
 
    !> Human-readable category labels (index 0 = uncategorized, never in pivot)
-   character(len=12), parameter :: cat_label(0:ncat) = [character(len=12) :: &
+   character(len=14), parameter :: cat_label(0:ncat) = [character(len=14) :: &
                                                         "n/a", "Setup", "Build", "Energy", "Potential", &
                                                         "Gradient", "Hessian", "Solve", &
-                                                        "Properties", "I/O", "Host"]
+                                                        "Properties", "I/O", "Host", "Preconditioner"]
 
    !> Maximum stored length of a timer name
    integer, parameter :: name_len = 32
@@ -112,6 +114,8 @@ module moist_utils_timer
       logical, private :: verbose = .false.
       !> Whether the report separates the top-level groups with a blank line
       logical, private :: group_blanks = .true.
+      !> Categories shown only in the full report's category summary
+      logical, private :: summary_only(0:ncat) = .false.
       !> Output unit of `print`
       integer, private :: unit = output_unit
       !> Deepest node level `print` shows; negative silences `print`
@@ -157,6 +161,7 @@ module moist_utils_timer
       procedure :: reset => reset_timer
       procedure :: set_verbose
       procedure :: set_group_blanks
+      procedure :: set_category_summary
       procedure :: resolve
       procedure, private :: start_name
       procedure, private :: start_id
@@ -259,6 +264,7 @@ contains
       self%verbose = .false.
       self%unit = output_unit
       self%print_depth = huge(1)
+      self%summary_only = .false.
       if (allocated(self%names)) deallocate (self%names)
       if (allocated(self%parent)) deallocate (self%parent)
       if (allocated(self%category)) deallocate (self%category)
@@ -329,6 +335,23 @@ contains
       self%group_blanks = flag
 
    end subroutine set_group_blanks
+
+   !> Show a category only in the full report's summary, retaining its time in parents
+   !>
+   !> @param[inout] self      Timer instance
+   !> @param[in]    category  Named category, 1 through ncat
+   !> @param[in]    flag      Hide its tree rows when true
+   subroutine set_category_summary(self, category, flag)
+      !> Timer instance
+      class(timer_type), intent(inout) :: self
+      !> Named category
+      integer, intent(in) :: category
+      !> Whether the category appears only in the summary
+      logical, intent(in) :: flag
+
+      if (category < 1 .or. category > ncat) return
+      self%summary_only(category) = flag
+   end subroutine set_category_summary
 
    !> Return a stable node handle for (name, parent), creating the node if needed
    !>
@@ -847,6 +870,7 @@ contains
       prev_expanded = .false.
       do i = 1, self%n
          if (self%parent(i) /= 0) cycle
+         if (self%summary_only(self%category(i))) cycle
          if (self%ncalls(i) == 0 .and. .not. self%poisoned(i)) cycle
          ! separate top-level groups with a blank line, but only after a group that
          ! actually expanded into printed subcategories, so runs of bare one-line
@@ -1047,6 +1071,7 @@ contains
       character(len=32) :: numbuf
 
       ! skip nodes that were never measured (created via resolve but unused)
+      if (self%summary_only(self%category(id))) return
       if (self%ncalls(id) == 0 .and. .not. self%poisoned(id)) return
 
       sec = node_seconds(self, id)
@@ -1076,6 +1101,7 @@ contains
       allocate (kids(0))
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          kids = [kids, j]
       end do
@@ -1157,6 +1183,7 @@ contains
       character(len=13) :: cell
 
       ! skip nodes that were never measured (created via resolve but unused)
+      if (self%summary_only(self%category(id))) return
       if (self%ncalls(id) == 0 .and. .not. self%poisoned(id)) return
 
       if (self%running(id)) then
@@ -1215,6 +1242,7 @@ contains
       child_sum = 0.0_wp
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          nkids = nkids + 1
          if (.not. (self%poisoned(j) .or. self%running(j))) child_sum = child_sum + node_seconds(self, j)
@@ -1285,6 +1313,7 @@ contains
       if (id < 1 .or. id > self%n) return
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          has = .true.
          return

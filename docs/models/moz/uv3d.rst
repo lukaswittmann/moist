@@ -281,23 +281,76 @@ Settings
 ``model_moz_3d_parameters_type`` reads and writes JSON or TOML; the solver controls form the nested
 ``solver`` group and the bulk-solvent settings of :doc:`solvent` the nested ``solvent`` group.
 
-====================================  ==========  ==============================================
-Key                                   Default     Meaning
-====================================  ==========  ==============================================
-``closure``                           ``HNC``     HNC, KH or PSE2-4
-``correction``                        ``none``    Pressure correction added: none, PC or PC+
-``finite_size``                       ``none``    Leading charge correction: none or huenenberger
-``susceptibility``                    ``oz``      OZ reconstruction, direct transform, or linear sampling
-``convergence.tolerance``             1e-9        RMS residual of a converged solve
-``convergence.maxiter``               128         Outer iterations per attempt
-``convergence.closure_ramp``          true        Cold solves ramp the closure up from KH
-``convergence.closure_ramp_rmse``     1e-5        RMS residual that starts the next closure
-``convergence.reuse_initial_guess``    true        Previous converged fields at fixed geometry
-``convergence.cold_guess``             ``cs0``     Cold start: map c_s = 0, or set t_s = 0 with ts0
-``solver.name``                       ``JFNK``    PICARD, DIIS, JFNK or HYBRID
-``solver.jfnk.precond``                none        none
-``solvent.*``                         (see VV)    Settings of the solvent's VV solve
-====================================  ==========  ==============================================
+======================================  ==========  =======================================================
+Key                                     Default     Meaning
+======================================  ==========  =======================================================
+``closure``                             ``HNC``     HNC, KH or PSE2-4
+``correction``                          ``none``    Pressure correction added: none, PC or PC+
+``finite_size``                         ``none``    Leading charge correction: none or huenenberger
+``susceptibility``                      ``oz``      OZ reconstruction, direct transform, or linear sampling
+``convergence.tolerance``               1e-9        RMS residual of a converged solve
+``convergence.maxiter``                 128         Outer iterations per attempt
+``convergence.closure_ramp``            true        Cold solves ramp the closure up from KH
+``convergence.closure_ramp_rmse``       1e-5        RMS residual that starts the next closure
+``convergence.reuse_initial_guess``     true        Previous converged fields at fixed geometry
+``convergence.cold_guess``              ``cs0``     Cold start: map c_s = 0, or set t_s = 0 with ts0
+``solver.name``                         ``JFNK``    PICARD, DIIS, JFNK or HYBRID
+``solver.jfnk.precond``                 ``none``    none or cartesian-aux (see Preconditioner)
+``solver.jfnk.precond_aux_n``           64          cartesian-aux: lattice cells per axis
+``solver.jfnk.precond_coarse_n``        32          precond_aux_n/2: coarse lattice; precond_aux_n: none
+``solver.jfnk.precond_inner_max_iter``  2           Krylov steps of each lattice solve
+``solver.jfnk.precond_inner_rtol``      0.1         Residual reduction ending a lattice solve
+``solvent.*``                           (see VV)    Settings of the solvent's VV solve
+======================================  ==========  =======================================================
+
+Preconditioner
+--------------
+
+``solver.jfnk.precond = "cartesian-aux"`` preconditions the Newton-Krylov solve with an
+approximate inverse of its Jacobian, built from Fourier transforms on periodic Cartesian
+lattices. The residual, the Jacobian products and the convergence test stay those of the grid
+of the solve; the lattices only shape the Krylov directions.
+
+- Lattice: a cube of side L = 2 pi/min(dk) of the grid's Fourier modes (the longest box edge
+  of a Cartesian grid), centred on the box enclosing the grid points, with ``precond_aux_n``
+  cells per axis. More cells than L divided by the real-space step of the grid's Fourier
+  modes, 2 pi/(N dk) (the spacing of a Cartesian grid), rounded down to even, are not used;
+  the iteration table notes a capped size, and a grid with fewer than 4 such cells is refused.
+- Transfers: trilinear interpolation P from the cell centres to the points, and weighted
+  deposition R with the quadrature weights w, (R f)_a = sum_i w_i P_ia f_i / m_a with the cell
+  masses m_a = sum_i w_i P_ia; cells without mass receive 0. Every solvent site is moved alike.
+- Lattice Jacobian: J_L x = x - k2r[(P^T(k) - I) r2k(D x)], with the bulk response evaluated at
+  the lattice's own wavevectors and D = R c', the closure derivative of the current Newton step,
+  fixed during its linear solve.
+- ``precond_coarse_n = precond_aux_n/2`` adds a coarse lattice with half the cells of the fine
+  one after the cap (D averaged over 2x2x2 cells, the same Jacobian there) whose correction
+  preconditions the fine lattice solve; ``precond_coarse_n = precond_aux_n`` leaves it out, and
+  other values are refused. The default 32 fits the default ``precond_aux_n``, so another
+  ``precond_aux_n`` needs ``precond_coarse_n`` set too.
+- Each lattice solve is bounded GMRES started from the identity action, with at most
+  ``precond_inner_max_iter`` steps and the reduction ``precond_inner_rtol`` of its start
+  residual. A lattice solve is kept when its solution is finite and its recomputed residual does
+  not exceed the start residual (relative slack 1e-10); a rejected fine solve makes the action
+  the identity, a rejected coarse one drops the coarse correction. The action
+  on a Krylov vector v is v + P(z - R v) with z the lattice solution for R v, so components
+  that R does not see pass unchanged.
+- The inner solves make the action depend on v, so JFNK applies it on the right with flexible
+  GMRES :cite:p:`saad1993fgmres`. It needs the jfnk or hybrid solver with ``jfnk.use_exact_jvp = true`` and is refused
+  with ``jfnk.recycle > 0``; response and gradient solves run without it. Grids with quadrature
+  weights that are not positive are refused.
+- At verbosity 4 the solve reports its applications, lattice Krylov steps, lattice Jacobian
+  products and identity fallbacks. The full timing report gives one ``Preconditioner``
+  total in ``by category``, including setup, closure-derivative refreshes, grid transfers
+  and the fine and coarse solves. The tree retains inclusive times for each solver stage.
+
+.. code-block:: toml
+
+   [solver.jfnk]
+   precond = "cartesian-aux"
+   precond_aux_n = 64
+   precond_coarse_n = 32
+   precond_inner_max_iter = 2
+   precond_inner_rtol = 0.1
 
 Grids
 -----

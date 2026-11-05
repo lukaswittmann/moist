@@ -15,7 +15,7 @@ module moist_math_grid_3d_cartesian
    private
 
    public :: moist_math_grid_3d_cartesian_type
-   public :: new_cartesian_point_grid, new_cartesian_gaussian_grid
+   public :: new_cartesian_point_grid, new_cartesian_gaussian_grid, new_cartesian_box_grid
    public :: moist_math_grid_3d_cartesian_trafo_type
    public :: nk_x_from_nx
 
@@ -168,6 +168,40 @@ contains
 
       call configure_cartesian_grid(self, error, .true., nx, ny, nz, dr, xi0_factor, margin)
    end subroutine new_cartesian_gaussian_grid
+
+   !> Realize a cubic Cartesian point grid on a given box, without a solute
+   !>
+   !> - Point (i, j, k) sits at `origin + ([i, j, k] - 0.5)*dr`
+   !> - Carries no atoms: transforms work, nuclear derivatives and contractions refuse;
+   !>   `update` recentres it on a solute as for any Cartesian grid
+   !>
+   !> @param[in,out] self   Grid
+   !> @param[in]     n      Points per axis
+   !> @param[in]     dr     Spacing, bohr
+   !> @param[in]     origin Box corner, bohr
+   !> @param[out]    error  Invalid settings or allocation failure
+   subroutine new_cartesian_box_grid(self, n, dr, origin, error)
+      !> Grid
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: self
+      !> Points per axis
+      integer, intent(in) :: n
+      !> Spacing
+      real(wp), intent(in) :: dr
+      !> Box corner
+      real(wp), intent(in) :: origin(3)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Candidate grid
+      type(moist_math_grid_3d_cartesian_type), allocatable :: grid
+
+      call configure_cartesian_grid(self, error, .false., n, n, n, dr, margin=0.0_wp)
+      if (allocated(error)) return
+      allocate (grid)
+      call build_cartesian_grid(grid, n, n, n, dr, origin, error)
+      if (allocated(error)) return
+      call move_cartesian_geometry(grid, self)
+      self%center = origin + 0.5_wp*dr*real(n, wp)
+   end subroutine new_cartesian_box_grid
 
    !> Shared configuration reset for Cartesian variants
    !>

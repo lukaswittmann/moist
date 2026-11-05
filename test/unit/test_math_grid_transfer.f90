@@ -30,11 +30,16 @@
 !>   extrapolation not covered, mild extrapolation covered; coinciding source points;
 !>   the same values for any thread count and with stencils fitted again when applied;
 !>   the check of coverage that stops at the first stencil
+!> - Periodic deposition: interpolation keeps constants (also across the periodic faces)
+!>   and linear fields away from them; restriction keeps constants on cells with mass and
+!>   leaves empty cells at 0; adjointness under unequal weights; each refused input a test
+!>   of its own; the same stencils and values for any thread count
 module test_math_grid_transfer
+   !$ use omp_lib, only: omp_in_parallel
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
    use moist_math_grid_layout, only: moist_math_grid_layout_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_point_grid
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
@@ -43,7 +48,8 @@ module test_math_grid_transfer
       & transfer_fourier, has_fourier_basis, grid_transfer_type, grid_transfer_options_type, &
       & grid_transfer_report_type, copy_tolerance
    use moist_math_kdtree, only: moist_kdtree_type
-   use test_helpers, only: get_qc_handymod_recipe, check_moist_error
+   use moist_math_grid_deposit, only: grid_deposit_type
+   use test_helpers, only: get_qc_handymod_recipe, expect_moist_error, get_test_water
    implicit none(type, external)
    private
 
@@ -99,6 +105,10 @@ contains
          & new_unittest("apply_after_failed_prepare", test_apply_after_failed_prepare, should_fail=.true.), &
          & new_unittest("trilinear", test_trilinear), &
          & new_unittest("kdtree_brute", test_kdtree_brute), &
+         & new_unittest("kdtree_reach", test_kdtree_reach), &
+         & new_unittest("fit_atom_count", test_fit_atom_count, should_fail=.true.), &
+         & new_unittest("fourier_field_rows", test_fourier_field_rows, should_fail=.true.), &
+         & new_unittest("radial_no_method", test_radial_no_method), &
          & new_unittest("copy_points", test_copy_points), &
          & new_unittest("copy_duplicates", test_copy_duplicates), &
          & new_unittest("copy_mixed", test_copy_mixed), &
@@ -110,9 +120,114 @@ contains
          & new_unittest("points_threads", test_points_threads), &
          & new_unittest("points_check_only", test_points_check_only), &
          & new_unittest("points_duplicates", test_points_duplicates), &
-         & new_unittest("points_extrapolation", test_points_extrapolation) &
+         & new_unittest("points_extrapolation", test_points_extrapolation), &
+         & new_unittest("deposit_constants", test_deposit_constants), &
+         & new_unittest("deposit_linear", test_deposit_linear), &
+         & new_unittest("deposit_adjoint", test_deposit_adjoint), &
+         & new_unittest("deposit_empty", test_deposit_empty), &
+         & new_unittest("deposit_nan_weight", test_deposit_nan_weight, should_fail=.true.), &
+         & new_unittest("deposit_zero_weight", test_deposit_zero_weight, should_fail=.true.), &
+         & new_unittest("deposit_negative_weight", test_deposit_negative_weight, should_fail=.true.), &
+         & new_unittest("deposit_small_box", test_deposit_small_box, should_fail=.true.), &
+         & new_unittest("deposit_zero_cells", test_deposit_zero_cells, should_fail=.true.), &
+         & new_unittest("deposit_zero_side", test_deposit_zero_side, should_fail=.true.), &
+         & new_unittest("deposit_other_points", test_deposit_other_points, should_fail=.true.), &
+         & new_unittest("deposit_threads", test_deposit_threads) &
          & ]
    end subroutine collect_math_grid_transfer
+
+   !> Per-point reach queries agree with a brute-force search
+   !>
+   !> @param[out] error  test failure
+   subroutine test_kdtree_reach(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_kdtree_type) :: tree
+      real(wp), allocatable :: x(:, :), y(:, :), reach(:)
+      logical :: expected
+      integer :: i, j, ninside
+
+      call scattered_points(700, 6.0_wp, x)
+      call scattered_points(100, 8.0_wp, y)
+      y(:, 1:5) = x(:, 1:5)
+      y(:, 100) = 10.0_wp
+      reach = [(0.05_wp + 0.3_wp*modulo(0.37_wp*i, 1.0_wp), i=1, 700)]
+      call tree%build(x)
+      call check(error, .not. tree%within_reach(x(:, 1)), "a tree without reaches covered a point")
+      if (allocated(error)) return
+      call tree%set_reach(reach)
+      ninside = 0
+      do i = 1, size(y, 2)
+         expected = any([(sum((x(:, j) - y(:, i))**2) <= reach(j)**2, j=1, size(x, 2))])
+         call check(error, tree%within_reach(y(:, i)) .eqv. expected, "reach query differs from brute force")
+         if (allocated(error)) return
+         if (expected) ninside = ninside + 1
+      end do
+      call check(error, ninside >= 5 .and. ninside < size(y, 2), "reach fixture must cover and exclude points")
+      if (allocated(error)) return
+      call tree%build(reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call tree%set_reach([0.5_wp])
+      call check(error, tree%within_reach([0.5_wp, 0.0_wp, 0.0_wp]) .and. &
+         & .not. tree%within_reach([0.500001_wp, 0.0_wp, 0.0_wp]), "reach boundary is not inclusive")
+   end subroutine test_kdtree_reach
+
+   !> Refused: rigid fitting between different atom counts
+   !>
+   !> @param[out] error  expected refusal
+   subroutine test_fit_atom_count(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(rigid_fit_type) :: fit
+      real(wp) :: xyz(3, 2)
+
+      xyz = 0.0_wp
+      call fit_rigid(xyz, xyz(:, :1), fit, err)
+      call expect_moist_error(error, err, "same atoms on both sides")
+   end subroutine test_fit_atom_count
+
+   !> Refused: Fourier field rows differ from the stored point count
+   !>
+   !> @param[out] error  expected refusal
+   subroutine test_fourier_field_rows(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_math_grid_layout_type) :: layout
+      real(wp), allocatable :: g(:, :)
+      real(wp) :: f(3, 2)
+
+      call valid_points(layout)
+      f = 1.0_wp
+      call transfer_fourier(layout, f, layout%xyz, g, err)
+      call expect_moist_error(error, err, "stored columns do not match the stored points")
+   end subroutine test_fourier_field_rows
+
+   !> A singleton radial source copies its node and leaves other targets untouched
+   !>
+   !> @param[out] error  test failure
+   subroutine test_radial_no_method(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_math_grid_layout_type) :: old, target
+      type(grid_transfer_type) :: transfer
+      type(grid_transfer_report_type) :: report
+      logical, allocatable :: covered(:)
+      real(wp) :: f(1, 2), g(3, 2)
+
+      old%kind = "radial"
+      old%r = [1.0_wp]
+      target%kind = "radial"
+      target%r = [0.5_wp, 1.0_wp, 1.5_wp]
+      f(1, :) = [2.0_wp, -3.0_wp]
+      g = -7.0_wp
+      call transfer%prepare(old, target, err)
+      if (.not. allocated(err)) call transfer%apply(f, g, err, covered=covered, report=report)
+      call check(error, .not. allocated(err), "singleton transfer failed")
+      if (allocated(error)) return
+      call check(error, all(covered .eqv. [.false., .true., .false.]) .and. &
+         & all(g(2, :) == f(1, :)) .and. all(g(1, :) == -7.0_wp) .and. all(g(3, :) == -7.0_wp), &
+         & "a singleton source interpolated or failed to copy its node")
+      if (allocated(error)) return
+      call check(error, report%reason == "no method for these grids", "singleton source did not explain missing values")
+   end subroutine test_radial_no_method
 
    !> Malformed layouts are found by `validate`, give no Fourier basis and cover nothing
    subroutine test_layout_validate(error)
@@ -229,7 +344,7 @@ contains
       call malformed_points(good, variant, bad)
       allocate (f(4, 1), source=1.0_wp)
       call transfer_fourier(bad, f, good%xyz, g, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "needs a layout with a Fourier basis")
    end subroutine fourier_malformed
 
    !> Grid transfer prepared from a malformed point layout
@@ -244,11 +359,21 @@ contains
       type(moist_error), allocatable :: err
       type(moist_math_grid_layout_type) :: good, bad
       type(grid_transfer_type) :: transfer
+      !> Part of the expected refusal
+      character(len=:), allocatable :: expected
 
       call valid_points(good)
       call malformed_points(good, variant, bad)
+      select case (variant)
+      case (1:3)
+         expected = "the source layout: the Fourier basis is not described"
+      case (4)
+         expected = "the source layout: the weights do not match the points"
+      case default
+         expected = "the source layout: the points are not described"
+      end select
       call transfer%prepare(bad, good, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, expected)
    end subroutine prepare_malformed
 
    !> Refused: spectral transfer from a layout with two mode counts
@@ -333,7 +458,7 @@ contains
       call valid_points(good)
       allocate (f(4, 1), source=1.0_wp)
       call transfer_fourier(good, f, good%xyz(1:2, :), g, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "target points need three coordinates")
    end subroutine test_fourier_two_coordinates
 
    !> Refused: radial transfer from a NaN node
@@ -345,7 +470,7 @@ contains
 
       call transfer_radial([0.1_wp, ieee_value(1.0_wp, ieee_quiet_nan), 0.3_wp], &
          & reshape([1.0_wp, 2.0_wp, 3.0_wp], [3, 1]), [0.2_wp], fr, covered, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "finite, increasing, positive stored nodes")
    end subroutine test_radial_nan_node
 
    !> Smooth radial test function, even in r
@@ -370,14 +495,12 @@ contains
       call transfer_radial(r_stored, reshape([smooth(r_stored), 2.0_wp*smooth(r_stored)], [120, 2]), r, f, covered, err)
       call check(error, .not. allocated(err), "radial transfer failed")
       if (allocated(error)) return
-      call check(error, all(covered(:359)) .and. .not. any(covered(361:)), "coverage ends at the last stored node")
+      call check(error, all(covered(:359)) .and. .not. any(covered(360:)), "coverage ends at the last stored node")
       if (allocated(error)) return
       call check(error, maxval(abs(f(:359, 1) - smooth(r(:359)))) < 1.0e-5_wp &
          & .and. maxval(abs(f(:359, 2) - 2.0_wp*smooth(r(:359)))) < 2.0e-5_wp, "refined nodes off the function")
       if (allocated(error)) return
-      call check(error, maxval(abs(f(:3, 1) - smooth(r(:3)))) < 1.0e-5_wp, "nodes below the first stored node off")
-      if (allocated(error)) return
-      call check(error, all(f(361:, :) == 0.0_wp), "uncovered nodes not zero")
+      call check(error, all(f(360:, :) == 0.0_wp), "uncovered nodes not zero")
       if (allocated(error)) return
       r = [((real(i, wp) - 0.5_wp)*0.2_wp, i=1, 50)]
       call transfer_radial(r_stored, reshape(smooth(r_stored), [120, 1]), r, f, covered, err)
@@ -649,8 +772,9 @@ contains
       layout%spacing = 0.5_wp
       layout%origin = [-1.0_wp, -1.0_wp, 0.0_wp]
       call layout_covers(layout, reshape([0.0_wp, 0.0_wp, 0.5_wp, 0.99_wp, -0.99_wp, 0.01_wp, &
-         & 1.2_wp, 0.0_wp, 0.5_wp, 0.0_wp, 0.0_wp, 1.1_wp], [3, 4]), covered)
-      call check(error, all(covered .eqv. [.true., .true., .false., .false.]), "box coverage")
+         & 1.2_wp, 0.0_wp, 0.5_wp, 0.0_wp, 0.0_wp, 1.1_wp, &
+         & -1.01_wp, 0.0_wp, 0.5_wp, 0.0_wp, -1.01_wp, 0.5_wp, 0.0_wp, 0.0_wp, -0.01_wp], [3, 7]), covered)
+      call check(error, all(covered .eqv. [.true., .true., .false., .false., .false., .false., .false.]), "box coverage")
    end subroutine test_covers_box
 
    !> Periodic test field on the box [origin, origin + n dr], resolved by its lattice
@@ -1052,7 +1176,7 @@ contains
       call copy_only_fixture(transfer, f, g, err)
       if (allocated(err)) return
       call transfer%apply(f(:, 1:2), g, err, covered=covered)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "target field does not match the target layout")
    end subroutine test_apply_other_columns
 
    !> Refused: a source field of other rows than the source layout
@@ -1066,7 +1190,7 @@ contains
       call copy_only_fixture(transfer, f, g, err)
       if (allocated(err)) return
       call transfer%apply(f(2:, :), g, err, covered=covered)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "field does not match the source layout")
    end subroutine test_apply_other_rows
 
    !> Refused: a transfer from a 3D box onto radial nodes
@@ -1080,7 +1204,7 @@ contains
       radial%kind = "radial"
       radial%r = [0.5_wp, 1.0_wp]
       call transfer%prepare(old, radial, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "radial and 3D layouts cannot be mixed")
    end subroutine test_prepare_mixed_kinds
 
    !> Refused: an unknown method for Cartesian sources
@@ -1096,7 +1220,7 @@ contains
       new%xyz = inner_points(old, 10)
       options%cartesian = "cubic"
       call transfer%prepare(old, new, err, options=options)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "unknown method for Cartesian sources")
    end subroutine test_prepare_unknown_method
 
    !> Refused: a box without its corner
@@ -1111,7 +1235,7 @@ contains
       new%xyz = inner_points(old, 10)
       deallocate (old%origin)
       call transfer%prepare(old, new, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "the source layout: the box is not described")
    end subroutine test_prepare_box_without_corner
 
    !> Refused: applying a transfer whose prepare failed
@@ -1134,7 +1258,7 @@ contains
       if (.not. allocated(err)) return
       deallocate (err)
       call transfer%apply(f, g, err, covered=covered)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "grid transfer: not prepared")
    end subroutine test_apply_after_failed_prepare
 
    !> Cartesian sources: trilinear by default onto point targets, Fourier onto lattices,
@@ -1183,6 +1307,12 @@ contains
          & "affine field not reproduced between the lattice points")
       if (allocated(error)) return
       call check(error, all(g(41:50, :) == f(1:300:30, :)), "lattice points not copied")
+      if (allocated(error)) return
+      exact(55:55, :) = affine(reshape(max(hull_lo, min(hull_hi, y(:, 55))), [3, 1]))
+      call check(error, all(covered(51:55)) .and. .not. any(covered(56:60)), "upper-face coverage differs")
+      if (allocated(error)) return
+      call check(error, maxval(abs(g(51:55, :) - exact(51:55, :))) < 1.0e-12_wp, &
+         & "trilinear values near the face differ from the affine field or its clamped face value")
       if (allocated(error)) return
       ! Coverage equals the coverage of the Fourier transfer
       options%cartesian = "fourier"
@@ -1463,16 +1593,6 @@ contains
       end do
    end subroutine test_copy_tolerance
 
-   !> Water molecule, bohr
-   !>
-   !> @param[out] mol  molecule
-   subroutine water(mol)
-      !> Molecule
-      type(structure_type), intent(out) :: mol
-      call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.12_wp, 1.43_wp, 0.0_wp, -0.98_wp, &
-         & -1.43_wp, 0.0_wp, -0.98_wp], [3, 3]))
-   end subroutine water
-
    !> Molecular grid of a water molecule and its layout
    !>
    !> @param[in]  mol     molecule
@@ -1571,7 +1691,7 @@ contains
       character(len=96) :: text
       integer :: i
 
-      call water(mol)
+      call get_test_water(mol)
       call water_grid(mol, 24, 11, grid, err)
       if (.not. allocated(err)) call water_box(mol, 16, 0.75_wp, box, err)
       call check(error, .not. allocated(err), "grids not built")
@@ -1617,7 +1737,7 @@ contains
       logical, allocatable :: covered(:)
       integer :: it
 
-      call water(mol)
+      call get_test_water(mol)
       call water_grid(mol, 16, 11, grid, err)
       if (.not. allocated(err)) call water_box(mol, 12, 0.8_wp, targets(1), err)
       if (.not. allocated(err)) call water_grid(mol, 21, 7, targets(2), err)
@@ -1664,7 +1784,7 @@ contains
       real(wp) :: err_coarse, err_fine
       character(len=96) :: text
 
-      call water(mol)
+      call get_test_water(mol)
       call water_grid(mol, 12, 7, coarse, err)
       if (.not. allocated(err)) call water_grid(mol, 24, 17, fine, err)
       if (.not. allocated(err)) call water_box(mol, 10, 0.6_wp, targets, err)
@@ -1795,7 +1915,9 @@ contains
       logical, allocatable :: covered(:, :), mask(:)
       integer :: run
 
-      call water(mol)
+      call enter_threaded(error)
+      if (allocated(error)) return
+      call get_test_water(mol)
       call water_grid(mol, 16, 11, grid, err)
       if (.not. allocated(err)) call water_box(mol, 14, 0.7_wp, box, err)
       call check(error, .not. allocated(err), "grids not built")
@@ -1833,7 +1955,7 @@ contains
       real(wp), allocatable :: f(:, :), g(:, :)
       integer :: i, j, n
 
-      call water(mol)
+      call get_test_water(mol)
       call water_grid(mol, 16, 11, grid, err)
       if (.not. allocated(err)) call water_box(mol, 14, 0.7_wp, box, err)
       call check(error, .not. allocated(err), "grids not built")
@@ -1961,5 +2083,290 @@ contains
       if (allocated(error)) return
       call check(error, abs(g(1, 1) - (2.0_wp - 0.05_wp + 3.0_wp*0.75_wp)) < 1.0e-10_wp, "extrapolated affine value")
    end subroutine test_points_extrapolation
+
+   !> 400 scattered points in a 6 bohr box with unequal positive weights
+   !>
+   !> @param[out] x  points (3, 400)
+   !> @param[out] w  weights (400)
+   subroutine deposit_points(x, w)
+      !> Points (3, 400)
+      real(wp), allocatable, intent(out) :: x(:, :)
+      !> Weights (400)
+      real(wp), allocatable, intent(out) :: w(:)
+      integer :: i
+      call scattered_points(400, 6.0_wp, x)
+      allocate (w(size(x, 2)))
+      do i = 1, size(w)
+         w(i) = 0.01_wp + modulo(0.37_wp*real(i, wp), 1.0_wp)
+      end do
+   end subroutine deposit_points
+
+   !> Interpolation keeps constants, also when the box only just encloses the points and
+   !> stencils wrap around the faces; restriction keeps constants on cells with mass
+   subroutine test_deposit_constants(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: dep
+      real(wp), allocatable :: x(:, :), w(:), fc(:, :), fm(:, :)
+      real(wp) :: span
+
+      call deposit_points(x, w)
+      span = maxval(maxval(x, dim=2) - minval(x, dim=2))
+      call dep%build(x, w, 7, span, err, 1)
+      call check(error, .not. allocated(err), "deposit build failed")
+      if (allocated(error)) return
+      call check(error, any(any(modulo(dep%corner - 1, 7) == 0, dim=1) .and. any(modulo(dep%corner - 1, 7) == 6, dim=1)), &
+         & "no stencil wraps around the faces")
+      if (allocated(error)) return
+      allocate (fc(7**3, 2), fm(400, 2))
+      fc(:, 1) = 2.5_wp
+      fc(:, 2) = -0.75_wp
+      call dep%interpolate(fc, fm, 1)
+      call check(error, maxval(abs(fm(:, 1) - 2.5_wp)) <= 1.0e-14_wp .and. maxval(abs(fm(:, 2) + 0.75_wp)) <= 1.0e-14_wp, &
+         & "interpolation does not keep a constant")
+      if (allocated(error)) return
+      fm(:, 1) = -1.25_wp
+      fm(:, 2) = 3.0_wp
+      call dep%restrict(fm, fc, 1)
+      call check(error, maxval(abs(fc(:, 1) + 1.25_wp), mask=dep%mass > 0.0_wp) <= 1.0e-14_wp .and. &
+         & maxval(abs(fc(:, 2) - 3.0_wp), mask=dep%mass > 0.0_wp) <= 1.0e-14_wp, "restriction does not keep a constant")
+      if (allocated(error)) return
+      call check(error, abs(sum(dep%mass) - sum(w)) <= 1.0e-12_wp*sum(w), "cell masses do not sum to the point weights")
+   end subroutine test_deposit_constants
+
+   !> Interpolation reproduces a linear field of the cell centres at points whose stencil
+   !> does not wrap
+   subroutine test_deposit_linear(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: dep
+      real(wp), allocatable :: x(:, :), w(:), fc(:, :), fm(:, :), exact(:)
+      real(wp) :: centre(3)
+      integer :: i, j, k, n
+
+      call deposit_points(x, w)
+      n = 10
+      call dep%build(x, w, n, 10.0_wp, err, 1)
+      call check(error, .not. allocated(err), "deposit build failed")
+      if (allocated(error)) return
+      call check(error, all(modulo(dep%corner - 1, n) >= 1 .and. modulo(dep%corner - 1, n) <= n - 2 .and. &
+         & modulo((dep%corner - 1)/n, n) >= 1 .and. modulo((dep%corner - 1)/n, n) <= n - 2 .and. &
+         & (dep%corner - 1)/n**2 >= 1 .and. (dep%corner - 1)/n**2 <= n - 2), &
+         & "a stencil reaches the faces although the points lie 2 bohr inside")
+      if (allocated(error)) return
+      allocate (fc(n**3, 1), fm(400, 1))
+      do k = 1, n
+         do j = 1, n
+            do i = 1, n
+               centre = dep%origin + ([i, j, k] - 0.5_wp)*dep%spacing
+               fc(i + n*(j - 1 + n*(k - 1)), 1) = linear(centre)
+            end do
+         end do
+      end do
+      call dep%interpolate(fc, fm, 1)
+      allocate (exact(400))
+      do i = 1, 400
+         exact(i) = linear(x(:, i))
+      end do
+      call check(error, maxval(abs(fm(:, 1) - exact)) <= 1.0e-12_wp*maxval(abs(exact)), "linear field not reproduced")
+   contains
+      !> Affine field of the position
+      !>
+      !> @param[in] r  position
+      pure real(wp) function linear(r)
+         !> Position
+         real(wp), intent(in) :: r(3)
+         linear = 0.3_wp - 1.1_wp*r(1) + 0.4_wp*r(2) + 2.0_wp*r(3)
+      end function linear
+   end subroutine test_deposit_linear
+
+   !> With the cell masses as lattice weights, restriction is the adjoint of interpolation
+   !> for unequal point weights
+   subroutine test_deposit_adjoint(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: dep
+      real(wp), allocatable :: x(:, :), w(:), f(:, :), g(:, :), rf(:, :), pg(:, :)
+      real(wp) :: lhs, rhs
+      integer :: i
+
+      call deposit_points(x, w)
+      call dep%build(x, w, 6, 7.0_wp, err, 1)
+      call check(error, .not. allocated(err), "deposit build failed")
+      if (allocated(error)) return
+      allocate (f(400, 1), g(6**3, 1), rf(6**3, 1), pg(400, 1))
+      do i = 1, 400
+         f(i, 1) = sin(1.7_wp*real(i, wp)) + 0.2_wp
+      end do
+      do i = 1, 6**3
+         g(i, 1) = cos(0.9_wp*real(i, wp)) - 0.1_wp
+      end do
+      call dep%restrict(f, rf, 1)
+      call dep%interpolate(g, pg, 1)
+      lhs = sum(dep%mass*rf(:, 1)*g(:, 1))
+      rhs = sum(w*f(:, 1)*pg(:, 1))
+      call check(error, abs(lhs - rhs) <= 1.0e-12_wp*(abs(lhs) + abs(rhs)), "restriction is not the weighted adjoint")
+   end subroutine test_deposit_adjoint
+
+   !> Cells no point reaches have no mass and receive 0; the others the weighted mean
+   subroutine test_deposit_empty(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: dep
+      real(wp), allocatable :: fc(:, :), fm(:, :)
+      real(wp) :: x(3, 3), w(3)
+
+      x = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.5_wp, 0.2_wp, -0.3_wp, -0.4_wp, 0.1_wp, 0.6_wp], [3, 3])
+      w = [1.0_wp, 0.2_wp, 3.0_wp]
+      call dep%build(x, w, 8, 8.0_wp, err, 1)
+      call check(error, .not. allocated(err), "deposit build failed")
+      if (allocated(error)) return
+      call check(error, count(dep%mass > 0.0_wp) <= 24 .and. count(dep%mass > 0.0_wp) >= 8, "occupied cells")
+      if (allocated(error)) return
+      allocate (fc(8**3, 1), fm(3, 1))
+      fm(:, 1) = [1.0_wp, 1.0_wp, 1.0_wp]
+      call dep%restrict(fm, fc, 1)
+      call check(error, all(fc(:, 1) == 0.0_wp .eqv. dep%mass == 0.0_wp), "empty cells not at 0")
+      if (allocated(error)) return
+      call check(error, maxval(abs(fc(:, 1) - 1.0_wp), mask=dep%mass > 0.0_wp) <= 1.0e-14_wp, "occupied cells not at 1")
+   end subroutine test_deposit_empty
+
+   !> A deposition built from refused input
+   !>
+   !> - A refusal for another reason than the expected one returns no test error, so it
+   !>   shows as an unexpected pass
+   !>
+   !> @param[out] error    the refusal
+   !> @param[in]  variant  input: 1 NaN weight, 2 zero weight, 3 negative weight, 4 box
+   !>                      smaller than the points, 5 zero cells, 6 zero box side, 7 weights
+   !>                      of other points
+   subroutine deposit_refused(error, variant)
+      !> The refusal
+      type(error_type), allocatable, intent(out) :: error
+      !> Input
+      integer, intent(in) :: variant
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: dep
+      real(wp), allocatable :: x(:, :), w(:), bad(:)
+      character(len=:), allocatable :: expected
+
+      call deposit_points(x, w)
+      bad = w
+      select case (variant)
+      case (1)
+         bad(17) = ieee_value(1.0_wp, ieee_quiet_nan)
+         call dep%build(x, bad, 8, 8.0_wp, err, 1)
+         expected = "quadrature weights must be finite"
+      case (2)
+         bad(3) = 0.0_wp
+         call dep%build(x, bad, 8, 8.0_wp, err, 1)
+         expected = "quadrature weights must be positive"
+      case (3)
+         bad(3) = -0.1_wp
+         call dep%build(x, bad, 8, 8.0_wp, err, 1)
+         expected = "quadrature weights must be positive"
+      case (4)
+         call dep%build(x, w, 8, 5.0_wp, err, 1)
+         expected = "more than the box side"
+      case (5)
+         call dep%build(x, w, 0, 8.0_wp, err, 1)
+         expected = "cells per axis must lie in"
+      case (6)
+         call dep%build(x, w, 8, 0.0_wp, err, 1)
+         expected = "box side must be positive and finite"
+      case default
+         call dep%build(x(:, 1:10), w, 8, 8.0_wp, err, 1)
+         expected = "one weight per point"
+      end select
+      call expect_moist_error(error, err, expected)
+   end subroutine deposit_refused
+
+   !> Refused: a deposition from a NaN weight
+   subroutine test_deposit_nan_weight(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 1)
+   end subroutine test_deposit_nan_weight
+
+   !> Refused: a deposition from a zero weight
+   subroutine test_deposit_zero_weight(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 2)
+   end subroutine test_deposit_zero_weight
+
+   !> Refused: a deposition from a negative weight
+   subroutine test_deposit_negative_weight(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 3)
+   end subroutine test_deposit_negative_weight
+
+   !> Refused: a deposition from a box smaller than the points
+   subroutine test_deposit_small_box(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 4)
+   end subroutine test_deposit_small_box
+
+   !> Refused: a deposition from zero cells
+   subroutine test_deposit_zero_cells(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 5)
+   end subroutine test_deposit_zero_cells
+
+   !> Refused: a deposition from a zero box side
+   subroutine test_deposit_zero_side(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 6)
+   end subroutine test_deposit_zero_side
+
+   !> Refused: a deposition from weights of other points
+   subroutine test_deposit_other_points(error)
+      type(error_type), allocatable, intent(out) :: error
+      call deposit_refused(error, 7)
+   end subroutine test_deposit_other_points
+
+   !> Stencils, deposits and transferred values do not depend on the thread count
+   subroutine test_deposit_threads(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(grid_deposit_type) :: one, many
+      real(wp), allocatable :: x(:, :), w(:), fc1(:, :), fc4(:, :), fm1(:, :), fm4(:, :)
+      integer :: i
+
+      call enter_threaded(error)
+      if (allocated(error)) return
+      call deposit_points(x, w)
+      call one%build(x, w, 9, 7.5_wp, err, 1)
+      if (.not. allocated(err)) call many%build(x, w, 9, 7.5_wp, err, 4)
+      call check(error, .not. allocated(err), "deposit build failed")
+      if (allocated(error)) return
+      call check(error, all(one%corner == many%corner) .and. all(one%weight == many%weight) .and. &
+         & all(one%offset == many%offset) .and. all(one%point == many%point) .and. all(one%share == many%share) .and. &
+         & all(one%mass == many%mass), "stencils depend on the thread count")
+      if (allocated(error)) return
+      allocate (fm1(400, 2), fm4(400, 2), fc1(9**3, 2), fc4(9**3, 2))
+      do i = 1, 400
+         fm1(i, :) = [sin(real(i, wp)), cos(2.0_wp*real(i, wp))]
+      end do
+      call one%restrict(fm1, fc1, 1)
+      call many%restrict(fm1, fc4, 4)
+      call one%interpolate(fc1, fm1, 1)
+      call many%interpolate(fc4, fm4, 4)
+      call check(error, all(fc1 == fc4) .and. all(fm1 == fm4), "values depend on the thread count")
+   end subroutine test_deposit_threads
+
+   !> Skip thread comparisons without OpenMP or inside the suite team
+   !>
+   !> @param[out] error  skip reason when a separate OpenMP team cannot be used
+   subroutine enter_threaded(error)
+      type(error_type), allocatable, intent(out) :: error
+      logical :: has_omp, in_parallel
+
+      has_omp = .false.
+      in_parallel = .false.
+      !$ has_omp = .true.
+      !$ in_parallel = omp_in_parallel()
+      if (.not. has_omp .or. in_parallel) then
+         call skip_test(error, "Thread test needs OpenMP and must run as a selected test outside the suite team")
+      end if
+   end subroutine enter_threaded
 
 end module test_math_grid_transfer

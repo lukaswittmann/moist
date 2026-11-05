@@ -26,6 +26,8 @@ contains
       real(wp) :: phi_best
       logical :: expand_feasible
       logical :: gmres_feasible
+      !> Whether the lent preconditioner is flexible (right-applied by FGMRES)
+      logical :: flexible
       type(error_type), allocatable :: gmres_error
 
       feasible = .false.
@@ -88,8 +90,12 @@ contains
 
       ! Coarse-space deflation of this step's linear solve, with the exact products
       ! validate requires; a failed or singular coarse matrix solves undeflated
+      ! A lent flexible preconditioner turns deflation off, also on a step that runs plain
+      ! GMRES because the preconditioner is not ready
+      flexible = .false.
+      if (associated(self%precond)) flexible = self%precond%flexible()
       call self%deflation%deactivate()
-      if (self%params%deflation .and. rmse < self%params%deflation_rmse) then
+      if (self%params%deflation .and. rmse < self%params%deflation_rmse .and. .not. flexible) then
          call self%ctx%timer%start("Deflation setup")
          call residual_fn%deflation_setup(self%deflation, gmres_error)
          call self%ctx%timer%stop("Deflation setup")
@@ -116,11 +122,18 @@ contains
       !$omp end parallel do
 
       call self%ctx%timer%start("Krylov solve")
-      call self%linear_solve(residual_fn, gamma, self%workspace%ws_f_curr, &
-                             self%workspace%ws_rhs_flat, self%workspace%ws_delta_flat, &
-                             self%eta_current, self%precond_valid_state, &
-                             gmres_feasible, gmres_error, &
-                             gmres_iters=self%gmres_iters_last)
+      if (self%precond_valid_state .and. flexible) then
+         call self%flexible_solve(residual_fn, gamma, self%workspace%ws_f_curr, &
+                                  self%workspace%ws_rhs_flat, self%workspace%ws_delta_flat, &
+                                  self%eta_current, gmres_feasible, gmres_error, &
+                                  gmres_iters=self%gmres_iters_last)
+      else
+         call self%linear_solve(residual_fn, gamma, self%workspace%ws_f_curr, &
+                                self%workspace%ws_rhs_flat, self%workspace%ws_delta_flat, &
+                                self%eta_current, self%precond_valid_state, &
+                                gmres_feasible, gmres_error, &
+                                gmres_iters=self%gmres_iters_last)
+      end if
       call self%ctx%timer%stop("Krylov solve")
       self%gmres_iters_total = self%gmres_iters_total + self%gmres_iters_last
       self%nkrylov_total = self%nkrylov_total + self%gmres_iters_last

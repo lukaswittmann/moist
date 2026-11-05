@@ -284,7 +284,7 @@ contains
       uses = self%jfnk%uses_preconditioner()
    end function hybrid_uses_preconditioner
 
-   !> Borrow a left preconditioner for JFNK; omit to detach
+   !> Borrow a preconditioner for JFNK; omit to detach
    !>
    !> The target must outlive its attachment to this solver
    !>

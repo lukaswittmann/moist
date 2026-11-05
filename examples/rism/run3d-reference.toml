@@ -72,9 +72,10 @@ margin = 10.0            # Required minimum nucleus-to-face distance, bohr; >= 0
 
 # Radial part
 [grid.molecular.radial]
-npts = 50                # Bounded HandyMod radial shells per atom; integer >= 1
-rmax = 10.0              # Outer radius, bohr; > 0 and > 2**handymod_exponent - 1
-handymod_exponent = 2.0  # Mapping exponent; > 0 (values below 1 are allowed)
+npts = 50                # Radial shells per atom; integer >= 1
+mapping = "handymod"     # Shell placement on [0, rmax]: "handymod" or "linear" (even spacing)
+rmax = 10.0              # Outer radius, bohr; > 0, and > 2**handymod_exponent - 1 for handymod
+handymod_exponent = 2.0  # HandyMod exponent; > 0 (values below 1 are allowed)
 
 # Angular part
 [grid.molecular.angular]
@@ -191,14 +192,14 @@ switch_rmse = 1e-3       # Switch from DIIS to JFNK below this RMS residual; > 0
 restart = 50             # GMRES restart length; integer >= 1
 max_krylov = 50          # GMRES iterations per Newton update; integer >= 1
 cgs2 = false             # true: twice classical Gram-Schmidt; false: modified GS
-recycle = 0              # Recycled Krylov vectors; integer >= 0; 0 disables recycling
+recycle = 0              # Recycled Krylov vectors; integer >= 0; 0 disables recycling; 0 with cartesian-aux
 stagnation_tol = 0.0     # Restart-cycle relative decrease cutoff; [0,1); 0 disables
 eta0 = 0.5               # Forcing term for first two Newton steps; (0,1)
 eta_min = 1e-3           # Lower later forcing bound; (0,1), <= eta_max
 eta_max = 0.1            # Upper later forcing bound; (0,1)
 forcing_beta = 0.9       # Eisenstat-Walker forcing scale; (0,1]
 forcing_power = 2.0      # Eisenstat-Walker exponent; (1,2]
-use_exact_jvp = true     # Exact Jacobian-vector products; false: finite differences
+use_exact_jvp = true     # Exact Jacobian-vector products; false: finite differences; true with cartesian-aux
 fd_eps = 0.0             # Finite-difference displacement; >= 0; 0: automatic
 
 # Linesearch/stepsize
@@ -209,7 +210,11 @@ line_search_max_iter = 10        # Maximum backtracking trials; integer >= 1
 line_search_expand_ratio = 0.25  # Merit fraction above which to extend step; [0,1]
 alpha_max = 2.0                  # Longest Newton step; >= 1; 1 disables extension
 fallback_alpha = 0.25            # Initial Picard fallback step fraction; (0,1]
-precond = "none"                 # Only supported 3D UV preconditioner: "none"
+precond = "none"                 # 3D UV preconditioner: "none" or "cartesian-aux"
+precond_aux_n = 64               # cartesian-aux: lattice cells per axis; even, >= 4
+precond_coarse_n = 32            # cartesian-aux: coarse lattice, precond_aux_n/2; precond_aux_n: none
+precond_inner_max_iter = 2       # cartesian-aux: Krylov steps per lattice solve; integer >= 1
+precond_inner_rtol = 0.1         # cartesian-aux: residual reduction of a lattice solve; (0,1)
 
 [solver.jfnk.adjoint]
 restart = 50             # Transpose GMRES restart length; integer >= 1

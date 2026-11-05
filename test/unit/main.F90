@@ -34,6 +34,7 @@ program tester
    use test_moz_3d_uv, only: collect_moz_3d_uv
    use test_moz_3d_response, only: collect_moz_3d_response
    use test_moz_3d_guess, only: collect_moz_3d_guess
+   use test_moz_3d_preconditioner, only: collect_moz_3d_preconditioner
    use test_moz_closure, only: collect_moz_closure
    use test_moz_closure_kernel, only: collect_moz_closure_kernel
    use test_moz_solver, only: collect_moz_solver
@@ -171,6 +172,7 @@ program tester
       & new_testsuite("moz_3d_uv", collect_moz_3d_uv), &
       & new_testsuite("moz_3d_response", collect_moz_3d_response), &
       & new_testsuite("moz_3d_guess", collect_moz_3d_guess), &
+      & new_testsuite("moz_3d_preconditioner", collect_moz_3d_preconditioner), &
       & new_testsuite("moz_closure", collect_moz_closure), &
       & new_testsuite("moz_closure_kernel", collect_moz_closure_kernel), &
       & new_testsuite("moz_solver", collect_moz_solver), &

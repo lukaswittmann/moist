@@ -1,7 +1,8 @@
 !> Restarted GMRES inner solve with optional DEF1 coarse-space deflation
 submodule(moist_model_moz_solver_jfnk) moist_model_moz_solver_jfnk_gmres
    use moist_math_orthogonalization, only: orthogonalize_mgs => moist_orthogonalize_mgs
-   use moist_model_moz_solver_jfnk_kernels, only: blocked_dot, copy_vector, divide_vector, project_basis, update_basis
+   use moist_model_moz_solver_jfnk_kernels, only: blocked_dot, copy_vector, divide_vector, project_basis, update_basis, &
+      & generate_givens, apply_givens, upper_backsolve
    implicit none(type, external)
 
 contains
@@ -459,95 +460,5 @@ contains
       call self%deflation%coordinates(self%workspace%ws_w, y, nthreads=self%team_size())
       call self%deflation%expand(y, 1.0_wp, delta_flat, nthreads=self%team_size())
    end subroutine gmres_deflation_finish
-
-   !> Form a Givens rotation that removes b without an absolute scale cutoff
-   !>
-   !> @param[in] a First entry
-   !> @param[in] b Entry to eliminate
-   !> @param[out] c Rotation cosine
-   !> @param[out] s Rotation sine
-   subroutine generate_givens(a, b, c, s)
-      !> First entry
-      real(wp), intent(in) :: a
-      !> Entry to eliminate
-      real(wp), intent(in) :: b
-      !> Rotation cosine
-      real(wp), intent(out) :: c
-      !> Rotation sine
-      real(wp), intent(out) :: s
-      real(wp) :: r
-
-      if (b == 0.0_wp) then
-         c = 1.0_wp
-         s = 0.0_wp
-      else if (abs(b) > abs(a)) then
-         r = -a/b
-         s = 1.0_wp/sqrt(1.0_wp + r**2)
-         c = s*r
-      else
-         r = -b/a
-         c = 1.0_wp/sqrt(1.0_wp + r**2)
-         s = c*r
-      end if
-   end subroutine generate_givens
-
-   !> Apply a Givens rotation to the pair (a, b)
-   !>
-   !> - a := c*a - s*b
-   !> - b := s*a + c*b, with the old a
-   !>
-   !> @param[in]    c  rotation cosine
-   !> @param[in]    s  rotation sine
-   !> @param[inout] a  first component, rotated in place
-   !> @param[inout] b  second component, rotated in place
-   subroutine apply_givens(c, s, a, b)
-      !> Rotation cosine
-      real(wp), intent(in) :: c
-      !> Rotation sine
-      real(wp), intent(in) :: s
-      !> First component, rotated in place
-      real(wp), intent(inout) :: a
-      !> Second component, rotated in place
-      real(wp), intent(inout) :: b
-      real(wp) :: tmp
-
-      tmp = c*a - s*b
-      b = s*a + c*b
-      a = tmp
-   end subroutine apply_givens
-
-   !> Solve the small triangular Krylov system without dividing by a zero pivot
-   !>
-   !> @param[in] r Upper triangular matrix
-   !> @param[in] rhs Rotated least-squares right-hand side
-   !> @param[out] x Solution; only usable when feasible
-   !> @param[out] feasible Nonsingular finite system and finite solution
-   subroutine upper_backsolve(r, rhs, x, feasible)
-      !> Upper triangular matrix
-      real(wp), intent(in) :: r(:, :)
-      !> Rotated right-hand side
-      real(wp), intent(in) :: rhs(:)
-      !> Solution coefficients
-      real(wp), intent(out) :: x(:)
-      !> Whether the solution is usable
-      logical, intent(out) :: feasible
-
-      integer :: n, i, j
-      real(wp) :: sum_val
-
-      n = size(rhs)
-      feasible = .false.
-      if (.not. all(ieee_is_finite(r)) .or. .not. all(ieee_is_finite(rhs))) return
-      do i = n, 1, -1
-         if (r(i, i) == 0.0_wp) return
-         sum_val = rhs(i)
-         do j = i + 1, n
-            sum_val = sum_val - r(i, j)*x(j)
-         end do
-         x(i) = sum_val/r(i, i)
-         if (.not. ieee_is_finite(x(i))) return
-      end do
-      feasible = .true.
-   end subroutine upper_backsolve
 
 end submodule moist_model_moz_solver_jfnk_gmres

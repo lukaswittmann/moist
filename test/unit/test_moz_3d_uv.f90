@@ -164,6 +164,9 @@ contains
    !> - Defaults: HNC, no correction, OZ response, JFNK without preconditioner
    !> - TOML round trip, including the nested solver and solvent groups
    !> - Unknown response modes, preconditioners and corrections are refused
+   !> - cartesian-aux: accepted with its defaults, written and read back; invalid lattice
+   !>   sizes and inner controls, solvers without preconditioning, finite-difference
+   !>   products and recycling are refused
    subroutine check_parameters(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -246,6 +249,83 @@ contains
       copy%correction = "PC++"
       call copy%validate(err)
       call check(error, allocated(err), more="an unknown correction was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+
+      call copy%init_defaults()
+      call check(error, copy%precond_aux_n == 64 .and. copy%precond_coarse_n == 32 .and. &
+         & copy%precond_inner_max_iter == 2 .and. copy%precond_inner_rtol == 0.1_wp, more="cartesian-aux defaults")
+      if (allocated(error)) return
+      copy%precond = "Cartesian-Aux"
+      copy%precond_aux_n = 48
+      copy%precond_coarse_n = 48
+      copy%precond_inner_max_iter = 3
+      copy%precond_inner_rtol = 0.05_wp
+      call copy%validate(err)
+      copy%precond = "cartesian-aux"
+      if (.not. allocated(err)) call copy%write_file(parameter_file, err)
+      call params%init_defaults()
+      if (.not. allocated(err)) call params%read_file(parameter_file, err)
+      open (newunit=unit, file=parameter_file, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete")
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, params%precond == "cartesian-aux" .and. params%precond_aux_n == 48 .and. &
+         & params%precond_coarse_n == 48 .and. params%precond_inner_max_iter == 3 .and. &
+         & params%precond_inner_rtol == 0.05_wp, more="cartesian-aux settings changed in the TOML round trip")
+      if (allocated(error)) return
+      call refuse_aux(7, 7, 2, 0.1_wp, "JFNK", .true., 0, "odd lattice", "precond_aux_n must be even")
+      if (allocated(error)) return
+      call refuse_aux(64, 16, 2, 0.1_wp, "JFNK", .true., 0, "coarse lattice other than half", &
+         & "precond_coarse_n must be precond_aux_n/2")
+      if (allocated(error)) return
+      call refuse_aux(64, 32, 0, 0.1_wp, "JFNK", .true., 0, "no inner step", "precond_inner_max_iter must be at least 1")
+      if (allocated(error)) return
+      call refuse_aux(64, 32, 2, 1.0_wp, "JFNK", .true., 0, "inner tolerance 1", "precond_inner_rtol must lie in (0, 1)")
+      if (allocated(error)) return
+      call refuse_aux(64, 32, 2, 0.1_wp, "PICARD", .true., 0, "a solver without preconditioning", &
+         & "needs the jfnk or hybrid solver")
+      if (allocated(error)) return
+      call refuse_aux(64, 32, 2, 0.1_wp, "JFNK", .false., 0, "finite-difference products", "use_exact_jvp = true")
+      if (allocated(error)) return
+      call refuse_aux(64, 32, 2, 0.1_wp, "HYBRID", .true., 4, "recycling", "set jfnk.recycle = 0")
+   contains
+      !> cartesian-aux settings that validation must refuse
+      !>
+      !> @param[in] aux_n     fine cells per axis
+      !> @param[in] coarse_n  coarse cells per axis
+      !> @param[in] max_iter  inner steps
+      !> @param[in] rtol      inner residual reduction
+      !> @param[in] solver    solver name
+      !> @param[in] exact     exact Jacobian-vector products
+      !> @param[in] recycle   recycled Krylov vectors
+      !> @param[in] what      what makes the settings invalid, for the message
+      !> @param[in] expected  part of the expected refusal
+      subroutine refuse_aux(aux_n, coarse_n, max_iter, rtol, solver, exact, recycle, what, expected)
+         !> Cells per axis of both lattices, inner steps and recycled vectors
+         integer, intent(in) :: aux_n, coarse_n, max_iter, recycle
+         !> Inner residual reduction
+         real(wp), intent(in) :: rtol
+         !> Solver name, what makes the settings invalid and part of the expected refusal
+         character(len=*), intent(in) :: solver, what, expected
+         !> Exact Jacobian-vector products
+         logical, intent(in) :: exact
+         call copy%init_defaults()
+         copy%precond = "cartesian-aux"
+         copy%precond_aux_n = aux_n
+         copy%precond_coarse_n = coarse_n
+         copy%precond_inner_max_iter = max_iter
+         copy%precond_inner_rtol = rtol
+         copy%solver%name = solver
+         copy%solver%jfnk%use_exact_jvp = exact
+         copy%solver%jfnk%recycle = recycle
+         call copy%validate(err)
+         call check(error, allocated(err), more="cartesian-aux with "//what//" was accepted")
+         if (allocated(err)) then
+            call check(error, index(err%message, expected) > 0, more=what//": "//err%message)
+            deallocate (err)
+         end if
+      end subroutine refuse_aux
    end subroutine check_parameters
 
    !> Solved SPC/E water on a small VV grid

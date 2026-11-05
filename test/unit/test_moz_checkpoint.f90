@@ -25,6 +25,7 @@ module test_moz_checkpoint
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
+   use mctc_io_codata2018, only: Boltzmann_constant, atomic_unit_of_energy
    use testdrive, only: unittest_type, new_unittest, error_type, check
    use moist_context, only: moist_context_type, new_context
    use moist_model_type, only: solvation_model_type
@@ -46,14 +47,14 @@ module test_moz_checkpoint
    use moist_utils_binio, only: binary_file
    use moist_model_moz_checkpoint_file, only: moz_file_checkpoint_type, new_file_checkpoint
    use moist_model_moz_checkpoint_memory, only: moz_memory_checkpoint_type, new_memory_checkpoint
-   use moist_utils_file, only: create_new_file
+   use moist_utils_file, only: create_new_file, delete_file
    use moist_model_moz_solvent_vv, only: solvent_vv_type, solvent_vv_parameters_type, solvent_vv_thermodynamics_type
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
    use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_potential, only: lj_cspce, coulomb_spce
-   use test_helpers, only: check_moist_error, get_qc_handymod_recipe
+   use test_helpers, only: check_moist_error, expect_moist_error, get_qc_handymod_recipe, get_test_water
    use test_moz_fixtures, only: new_cspce_water_solvent
    implicit none(type, external)
    private
@@ -118,6 +119,7 @@ contains
          & new_unittest("tail_status", check_tail_status), &
          & new_unittest("blowup_candidates", check_blowup_candidates), &
          & new_unittest("blowup_tail", check_blowup_tail), &
+         & new_unittest("tail_values", check_tail_values), &
          & new_unittest("blowup_layout", check_blowup_layout), &
          & new_unittest("layout_weights_size", check_layout_weights_size, should_fail=.true.), &
          & new_unittest("layout_kmodes_axes", check_layout_kmodes_axes, should_fail=.true.), &
@@ -155,6 +157,7 @@ contains
          & new_unittest("transfer_uv3d_finer", check_transfer_uv3d_finer), &
          & new_unittest("transfer_uv3d_rotated", check_transfer_uv3d_rotated), &
          & new_unittest("transfer_molecular", check_transfer_molecular), &
+         & new_unittest("transfer_cartesian_molecular", check_transfer_cartesian_molecular), &
          & new_unittest("transfer_uv3d_points", check_transfer_uv3d_points)]
    end subroutine collect_moz_checkpoint
 
@@ -165,6 +168,8 @@ contains
    subroutine check_file_round_trip(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moz_file_checkpoint_type) :: store, quiet
       type(moz_checkpoint_state_type) :: state, loaded
@@ -180,7 +185,9 @@ contains
       if (allocated(error)) return
       store%header = header_of(state)
       call store%load(loaded, found, source, warning)
-      call delete_file(file_trip)
+      call delete_file(file_trip, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, found .and. .not. allocated(warning) .and. source == file_trip, more="saved state not found")
       if (allocated(error)) return
       call check(error, loaded%kind == state%kind .and. all(loaded%grid%shape == state%grid%shape) &
@@ -217,6 +224,8 @@ contains
    subroutine check_file_candidates(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moist_context_type), target :: ctx
       type(moz_file_checkpoint_type) :: store, writer
@@ -256,14 +265,24 @@ contains
       if (allocated(error)) return
       call check(error, allocated(warning), more="unreadable and unfitting candidates were skipped silently")
       if (allocated(error)) return
+      call check(error, index(warning%message, file_a) > 0 .and. index(warning%message, file_b) > 0 .and. &
+         & index(warning%message, file_d) > 0 .and. index(warning%message, file_c) == 0, &
+         & more="candidate warnings do not identify exactly the rejected files: "//warning%message)
+      if (allocated(error)) return
       call check(error, all(loaded%tr == state%tr), more="loaded the wrong fields")
       if (allocated(error)) return
 
       store%header = header_of(state)
       call store%load_guess(ctx, 1.0_wp, spread([0.0_wp, 0.0_wp], 1, 8), 4, guess)
-      call delete_file(file_a)
-      call delete_file(file_b)
-      call delete_file(file_d)
+      call delete_file(file_a, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
+      call delete_file(file_b, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
+      call delete_file(file_d, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, allocated(guess), more="the malformed candidate hid the fitting one from the guess")
       if (allocated(error)) return
       call check(error, all(guess == state%tr), more="the guess holds the wrong fields")
@@ -274,7 +293,9 @@ contains
       call check(error, .not. found .and. allocated(warning), more="a state of other sites was loaded")
       if (allocated(error)) return
 
-      call delete_file(file_c)
+      call delete_file(file_c, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       store%header = header_of(state)
       call store%load(loaded, found, source, warning)
       call check(error, .not. found .and. .not. allocated(warning), more="missing files were not skipped silently")
@@ -288,6 +309,8 @@ contains
    subroutine check_file_failed_save(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moz_file_checkpoint_type) :: store
       type(moz_checkpoint_state_type) :: state, incomplete, loaded
@@ -308,19 +331,27 @@ contains
       end if
       call check_moist_error(error, err)
       if (allocated(error)) then
-         call delete_file(file_save)
-         if (allocated(other)) call delete_file(other)
+         call delete_file(file_save, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
+         if (allocated(other)) call delete_file(other, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
          return
       end if
       inquire (file=other, exist=held, size=nbytes)
-      call delete_file(other)
+      call delete_file(other, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
 
       incomplete = state
       deallocate (incomplete%tr)
       incomplete%residual = 1.0_wp
       call store%save(incomplete, err)
       call store%load(loaded, found, source, warning)
-      call delete_file(file_save)
+      call delete_file(file_save, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, held .and. nbytes == 0, more="the temporary file of another save was changed")
       if (allocated(error)) return
       call check(error, allocated(err), more="an incomplete state was saved")
@@ -336,6 +367,8 @@ contains
    subroutine check_file_save_no_origin(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moz_file_checkpoint_type) :: store
       type(moz_checkpoint_state_type) :: state
@@ -344,8 +377,9 @@ contains
       deallocate (state%grid%origin)
       call new_file_checkpoint(store, file_no_origin)
       call store%save(state, err)
-      call delete_file(file_no_origin)
-      call check_moist_error(error, err)
+      call delete_file(file_no_origin, cleanup_error)
+      if (allocated(cleanup_error)) return
+      call expect_moist_error(error, err, "box is not described")
    end subroutine check_file_save_no_origin
 
    !> A file store refuses a state whose stored field shape differs from its t(r)
@@ -354,6 +388,8 @@ contains
    subroutine check_file_save_field_shape(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moz_file_checkpoint_type) :: store
       type(moz_checkpoint_state_type) :: state
@@ -362,8 +398,9 @@ contains
       state%field_shape = [8, 3]
       call new_file_checkpoint(store, file_field_shape)
       call store%save(state, err)
-      call delete_file(file_field_shape)
-      call check_moist_error(error, err)
+      call delete_file(file_field_shape, cleanup_error)
+      if (allocated(cleanup_error)) return
+      call expect_moist_error(error, err, "field shape differs")
    end subroutine check_file_save_field_shape
 
    !> A memory store refuses a radial state without its nodes
@@ -384,7 +421,7 @@ contains
       deallocate (state%grid%origin)
       call new_memory_checkpoint(store, slot)
       call store%save(state, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "radial nodes are not described")
    end subroutine check_memory_save_no_nodes
 
    !> A memory store refuses a t(r) with fewer rows than the points of its layout
@@ -402,7 +439,7 @@ contains
       state%tr = state%tr(:7, :)
       call new_memory_checkpoint(store, slot)
       call store%save(state, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "fields do not match the grid")
    end subroutine check_memory_save_rows
 
    !> A refused save keeps the previous state of either store loadable
@@ -411,6 +448,8 @@ contains
    subroutine check_refused_save_keeps(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moz_checkpoint_state_type), target :: slot
       type(moz_memory_checkpoint_type) :: memory
@@ -442,13 +481,17 @@ contains
       file%header = header_of(state)
       call file%save(state, err)
       if (allocated(err)) then
-         call delete_file(file_keep)
+         call delete_file(file_keep, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
          call check_moist_error(error, err, "file save")
          return
       end if
       call file%save(broken, err)
       call file%load(loaded, found, source, warning)
-      call delete_file(file_keep)
+      call delete_file(file_keep, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, allocated(err), more="a file store saved a box without its corner")
       if (allocated(error)) return
       call check(error, found .and. .not. allocated(warning), more="the refused save lost the file")
@@ -462,6 +505,8 @@ contains
    subroutine check_file_version(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moz_file_checkpoint_type) :: store
       type(moz_checkpoint_state_type) :: state, loaded
@@ -474,14 +519,18 @@ contains
       if (.not. allocated(err)) call binf%close(error=err)
       call check_moist_error(error, err)
       if (allocated(error)) then
-         call delete_file(file_version)
+         call delete_file(file_version, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
          return
       end if
       call synthetic_state(state)
       call new_file_checkpoint(store, file_version)
       store%header = header_of(state)
       call store%load(loaded, found, source, warning)
-      call delete_file(file_version)
+      call delete_file(file_version, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, .not. found .and. allocated(warning), more="a file of format version 1 was loaded")
       if (allocated(error)) return
       call check(error, index(warning%message, "format version") > 0, more="unexpected warning "//warning%message)
@@ -551,6 +600,8 @@ contains
    subroutine check_blowup_candidates(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(moz_file_checkpoint_type) :: store, writer
@@ -599,9 +650,15 @@ contains
       call new_file_checkpoint(store, file_blowup_b, files)
       store%header = header_of(state)
       call store%load_guess(ctx, 1.0_wp, spread([0.0_wp, 0.0_wp], 1, 8), 4, guess, matched)
-      call delete_file(file_blowup_a)
-      call delete_file(file_blowup_b)
-      call delete_file(file_blowup_c)
+      call delete_file(file_blowup_a, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
+      call delete_file(file_blowup_b, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
+      call delete_file(file_blowup_c, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, allocated(guess), more="the usable third candidate was not tried")
       if (allocated(error)) return
       call check(error, all(matched) .and. all(guess == state%tr), more="the third candidate was not copied")
@@ -651,6 +708,55 @@ contains
       call check(error, method == "fourier" .and. allocated(guess), more="a complete tail was not interpolated: "//reason)
       call ctx%delete()
    end subroutine check_blowup_tail
+
+   !> Interpolation removes the stored Ng tail and restores it at moved points by value
+   !>
+   !> @param[out] error  test failure
+   subroutine check_tail_values(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type), target :: ctx
+      type(moz_checkpoint_state_type) :: state, header
+      real(wp), allocatable :: x(:, :), y(:, :), f(:), current_lr(:, :), guess(:, :), expected(:, :)
+      logical, allocatable :: matched(:)
+      character(len=:), allocatable :: method, reason
+      real(wp) :: beta, shift(3), k
+      integer :: v
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call synthetic_state(state)
+      state%grid%shape = [8, 8, 8]
+      state%grid%origin = -2.0_wp*[1.0_wp, 1.0_wp, 1.0_wp]
+      state%solute_xyz = 0.0_wp*state%solute_xyz
+      call state%grid%points(x)
+      beta = 1.0_wp/(Boltzmann_constant/atomic_unit_of_energy*state%temperature)
+      k = 2.0_wp*atan(1.0_wp)
+      allocate (f(size(x, 2)))
+      call ng_real_tail(norm2(x, dim=1), state%alpha, f)
+      deallocate (state%tr)
+      allocate (state%tr(size(x, 2), 2))
+      do v = 1, 2
+         state%tr(:, v) = 0.3_wp*v + 0.2_wp*v*cos(k*x(1, :)) &
+            & + beta*state%solute_charges(1)*state%solvent_charges(v)*f
+      end do
+      header = header_of(state)
+      shift = [0.12_wp, -0.08_wp, 0.05_wp]
+      header%solute_xyz(:, 1) = shift
+      y = x - spread(shift, 2, size(x, 2))
+      call ng_real_tail(norm2(y, dim=1), state%alpha, f)
+      allocate (current_lr(size(x, 2), 2), expected(size(x, 2), 2))
+      do v = 1, 2
+         current_lr(:, v) = state%solute_charges(1)*state%solvent_charges(v)*f
+         expected(:, v) = 0.3_wp*v + 0.2_wp*v*cos(k*y(1, :))
+      end do
+      call moz_checkpoint_guess(state, header, ctx, beta, current_lr, guess, matched, method, reason)
+      call check(error, allocated(guess) .and. method == "fourier", more="tail transfer refused: "//reason)
+      if (allocated(error)) return
+      call check(error, all(matched), more="the moved points should all lie inside the source box")
+      if (allocated(error)) return
+      call check(error, maxval(abs(guess - expected)) < 1.0e-7_wp, &
+         & more="the interpolated short-range field contains a missing or interpolated Ng tail")
+      call ctx%delete()
+   end subroutine check_tail_values
 
    !> A point grid without atom-centered data restarts on itself
    !>
@@ -721,12 +827,10 @@ contains
       type(moist_math_grid_layout_type) :: layout_old, layout_new
       type(grid_transfer_options_type) :: options
       type(grid_transfer_report_type) :: report
-      real(wp), allocatable :: f(:, :), g_grid(:, :), g_layout(:, :)
+      real(wp), allocatable :: f(:, :), g_grid(:, :), g_layout(:, :), exact(:)
       logical, allocatable :: covered_grid(:), covered_layout(:)
-      integer :: i
 
-      call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.12_wp, 1.43_wp, 0.0_wp, -0.98_wp, &
-         & -1.43_wp, 0.0_wp, -0.98_wp], [3, 3]))
+      call get_test_water(mol)
       call new_cartesian_point_grid(small, err, 12, 12, 12, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call small%update(mol, err)
       if (.not. allocated(err)) call new_cartesian_point_grid(large, err, 20, 20, 20, 0.4_wp, margin=0.0_wp)
@@ -738,9 +842,8 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       allocate (f(small%ngrid, 2))
-      do i = 1, small%ngrid
-         f(i, 1) = exp(-0.5_wp*sum((small%xyz(:, i) - mol%xyz(:, 1))**2))
-      end do
+      call small%get_layout(layout_old)
+      f(:, 1) = periodic_field(small%xyz)
       f(:, 2) = -2.0_wp*f(:, 1)
       options%nthreads = 1
       ! Cartesian onto a larger and finer box
@@ -757,6 +860,13 @@ contains
       call check(error, report%ninterpolated > 0 .and. any(.not. covered_grid) .and. &
          & all(pack(g_grid, spread(.not. covered_grid, 2, 2)) == -3.0_wp), more="points beyond the old box")
       if (allocated(error)) return
+      exact = periodic_field(large%xyz)
+      call check(error, maxval(abs(pack(g_grid(:, 1) - exact, covered_grid))), 0.0_wp, thr=1.0e-8_wp, &
+         & more="blowup differs from the analytic periodic field on covered large points")
+      if (allocated(error)) return
+      call check(error, maxval(abs(pack(g_grid(:, 2) + 2.0_wp*g_grid(:, 1), covered_grid))) < 1.0e-12_wp, &
+         & more="blowup mixed the two field columns")
+      if (allocated(error)) return
       ! Cartesian onto a molecular grid
       deallocate (g_grid, g_layout)
       allocate (g_grid(molecular%ngrid, 2), g_layout(molecular%ngrid, 2), source=0.0_wp)
@@ -768,6 +878,13 @@ contains
       call check(error, all(g_grid == g_layout) .and. all(covered_grid .eqv. covered_layout) .and. any(covered_grid), &
          & more="grid and layout calls differ, molecular")
       if (allocated(error)) return
+      exact = periodic_field(molecular%xyz)
+      call check(error, maxval(abs(pack(g_grid(:, 1) - exact, covered_grid))) < 0.03_wp, &
+         & more="blowup differs from the analytic periodic field on covered molecular points")
+      if (allocated(error)) return
+      call check(error, maxval(abs(pack(g_grid(:, 2) + 2.0_wp*g_grid(:, 1), covered_grid))) < 1.0e-12_wp, &
+         & more="blowup mixed the two field columns")
+      if (allocated(error)) return
       ! Radial onto finer and longer nodes
       call new_uniform_radial_pair(coarse, kspace, 64, 0.1_wp, err)
       if (.not. allocated(err)) call new_uniform_radial_pair(fine, kspace, 256, 0.03_wp, err)
@@ -775,7 +892,7 @@ contains
       if (allocated(error)) return
       deallocate (f, g_grid, g_layout)
       allocate (f(64, 1), g_grid(256, 1), g_layout(256, 1), source=0.0_wp)
-      f(:, 1) = exp(-coarse%r)*cos(coarse%r)
+      f(:, 1) = exp(-coarse%r**2)*cos(coarse%r)
       call moz_blowup(coarse, f, fine, g_grid, err, covered=covered_grid, report=report)
       call coarse%get_layout(layout_old)
       call fine%get_layout(layout_new)
@@ -784,6 +901,25 @@ contains
       if (allocated(error)) return
       call check(error, all(g_grid == g_layout) .and. all(covered_grid .eqv. covered_layout) .and. &
          & any(.not. covered_grid) .and. index(report%method, "spline") > 0, more="grid and layout calls differ, radial")
+      if (allocated(error)) return
+      exact = exp(-fine%r**2)*cos(fine%r)
+      call check(error, maxval(abs(pack(g_grid(:, 1) - exact, covered_grid))) < 1.0e-4_wp, &
+         & more="radial blowup differs from the analytic field")
+   contains
+      !> A smooth field periodic on the source box
+      !>
+      !> @param[in] xyz  points (3, npoint), bohr
+      pure function periodic_field(xyz) result(values)
+         !> Evaluation points
+         real(wp), intent(in) :: xyz(:, :)
+         !> Analytic field at the points
+         real(wp) :: values(size(xyz, 2))
+         real(wp) :: k
+
+         k = 8.0_wp*atan(1.0_wp)/(real(small%nx, wp)*small%dr)
+         values = 1.0_wp + 0.2_wp*cos(k*(xyz(1, :) - layout_old%origin(1))) &
+            & + 0.1_wp*sin(k*(xyz(2, :) - layout_old%origin(2)))
+      end function periodic_field
    end subroutine check_blowup_overloads
 
    !> Refused: `moz_blowup` from a Cartesian grid that was never updated
@@ -923,6 +1059,8 @@ contains
       integer, intent(in) :: variant
       type(moist_error), allocatable :: err
       type(moz_checkpoint_state_type) :: state, header
+      !> Part of the expected refusal
+      character(len=:), allocatable :: expected
 
       select case (variant)
       case (1, 2, 9, 10)
@@ -937,28 +1075,39 @@ contains
       select case (variant)
       case (1)
          state%grid%w = state%grid%w(2:)
+         expected = "weights do not match"
       case (2)
          state%grid%kmodes = [4, 4]
+         expected = "Fourier basis is not described"
       case (3)
          state%grid%shape = [2, 2, 3]
+         expected = "fields do not match the grid"
       case (4)
          deallocate (state%grid%origin)
+         expected = "box is not described"
       case (5)
-         state%grid%shape = [huge(1), huge(1), 2]
+         ! The product wraps to the eight field rows without the overflow guard.
+         state%grid%shape = [2, 2, 1073741826]
+         expected = "box is not described"
       case (6)
          state%grid%origin(2) = ieee_value(1.0_wp, ieee_quiet_nan)
+         expected = "box is not described"
       case (7)
          deallocate (state%grid%r)
+         expected = "radial nodes are not described"
       case (8)
          state%grid%r = [1.0_wp, 0.5_wp, 1.5_wp, 2.0_wp, 2.5_wp, 3.0_wp]
+         expected = "radial nodes are not described"
       case (9)
          state%grid%xyz(2, 3) = ieee_value(1.0_wp, ieee_quiet_nan)
+         expected = "points are not described"
       case default
          deallocate (state%tr)
          if (allocated(state%field_shape)) deallocate (state%field_shape)
+         expected = "no indirect correlation"
       end select
       call state%check_compatible(header, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, expected)
    end subroutine stored_layout_refused
 
    !> Refused: weights of another size than the points
@@ -1068,6 +1217,7 @@ contains
       type(solvent_vv_parameters_type) :: params
       type(solvent_vv_type) :: solvent
       real(wp), parameter :: loose = 1.0e10_wp
+      real(wp) :: saved_residual
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call vv_settings(params)
@@ -1079,6 +1229,8 @@ contains
       call solve_vv(ctx, params, store, solvent, err)
       call check(error, allocated(err), more="a VV solve stopped on an intermediate closure succeeded")
       if (allocated(error)) return
+      call check(error, index(err%message, "1D VV solve did not converge") > 0, more=err%message)
+      if (allocated(error)) return
       call check(error, size(log%saved) == 0, more="a field of an intermediate closure was saved")
       if (allocated(error)) return
       params%maxiter = 3
@@ -1087,8 +1239,19 @@ contains
       if (allocated(error)) return
       call check(error, size(log%saved) == 1, more="the field after the switch to HNC was not saved")
       if (allocated(error)) return
-      call check(error, log%saved(1)%residual < loose .and. log%saved(1)%closure == "HNC", &
+      call check(error, log%saved(1)%residual > 1.0e-6_wp .and. log%saved(1)%residual < loose &
+         & .and. log%saved(1)%closure == "HNC", &
          & more="the saved residual is not that of HNC")
+      if (allocated(error)) return
+      saved_residual = log%saved(1)%residual
+      store%preset = log%saved(1)
+      call solve_vv(ctx, params, store, solvent, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, size(log%saved) == 1, more="the accepted ramp checkpoint iterated")
+      if (allocated(error)) return
+      call check(error, solvent%residual(), saved_residual, rel=.true., thr=1.0e-8_wp, &
+         & more="the saved ramp residual differs from the HNC residual of the reloaded field")
       call ctx%delete()
    end subroutine check_ramp_switch_vv
 
@@ -1106,6 +1269,7 @@ contains
       type(model_moz_1d_type) :: model
       real(wp) :: energy
       real(wp), parameter :: loose = 1.0e10_wp
+      real(wp) :: saved_residual
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call vv_settings(params%solvent)
@@ -1119,6 +1283,8 @@ contains
       if (.not. allocated(err)) call model_energy(model, energy, err)
       call check(error, allocated(err), more="a 1D UV solve stopped on an intermediate closure succeeded")
       if (allocated(error)) return
+      call check(error, index(err%message, "1D UV solve did not converge") > 0, more=err%message)
+      if (allocated(error)) return
       params%maxiter = 3
       energy = 0.0_wp
       call new_water_1d(ctx, params, store, model, err)
@@ -1127,8 +1293,29 @@ contains
       if (allocated(error)) return
       call check(error, size(log%saved) == 1, more="the field after the switch to HNC was not saved")
       if (allocated(error)) return
-      call check(error, log%saved(1)%residual < loose .and. log%saved(1)%closure == "HNC", &
+      call check(error, log%saved(1)%residual > 1.0e-6_wp .and. log%saved(1)%residual < loose &
+         & .and. log%saved(1)%closure == "HNC", &
          & more="the saved residual is not that of HNC")
+      if (allocated(error)) return
+      saved_residual = log%saved(1)%residual
+      store%preset = log%saved(1)
+      params%tolerance = 1.001_wp*saved_residual
+      call new_water_1d(ctx, params, store, model, err)
+      energy = 0.0_wp
+      if (.not. allocated(err)) call model_energy(model, energy, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, size(log%saved) == 1, more="the ramp checkpoint failed its looser HNC tolerance")
+      if (allocated(error)) return
+      params%tolerance = 0.999_wp*saved_residual
+      call new_water_1d(ctx, params, store, model, err)
+      energy = 0.0_wp
+      if (.not. allocated(err)) call model_energy(model, energy, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, size(log%saved) == 2, more="the ramp checkpoint met a tighter HNC tolerance without iterating")
+      if (allocated(error)) return
+      call check(error, log%saved(2)%iterations > 0, more="the tighter HNC tolerance took no steps")
       call ctx%delete()
    end subroutine check_ramp_switch_uv1d
 
@@ -1469,15 +1656,15 @@ contains
       if (allocated(error)) return
       other = state
       other%grid%point_index(3) = 1
-      call refused(other, "decreasing point positions")
+      call refused(other, "decreasing point positions", "point positions do not increase")
       if (allocated(error)) return
       other = state
       other%grid%point_index = other%grid%point_index(2:)
-      call refused(other, "point positions not matching the field")
+      call refused(other, "point positions not matching the field", "fields do not match the grid")
       if (allocated(error)) return
       other = state
       other%field_shape = [7, 3]
-      call refused(other, "another column count")
+      call refused(other, "another column count", "field shape differs")
       if (allocated(error)) return
       call ctx%delete()
    contains
@@ -1485,14 +1672,17 @@ contains
       !>
       !> @param[in] candidate  state to check
       !> @param[in] label      what is wrong with it
-      subroutine refused(candidate, label)
+      !> @param[in] expected   part of the expected refusal
+      subroutine refused(candidate, label, expected)
          !> State to check
          type(moz_checkpoint_state_type), intent(in) :: candidate
-         !> What is wrong
-         character(len=*), intent(in) :: label
+         !> What is wrong, and part of the expected refusal
+         character(len=*), intent(in) :: label, expected
          type(moist_error), allocatable :: err
          call candidate%check_compatible(header, err)
          call check(error, allocated(err), more=label//" accepted")
+         if (allocated(error)) return
+         call check(error, index(err%message, expected) > 0, more=label//": "//err%message)
       end subroutine refused
 
       !> Expect a state to be refused for the header, for want of a method, and to give no guess
@@ -1616,6 +1806,8 @@ contains
    subroutine check_file_points(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err, warning
       type(moz_file_checkpoint_type) :: store
       type(moz_checkpoint_state_type) :: state, loaded
@@ -1635,7 +1827,9 @@ contains
       call store%load(loaded, found, source, warning)
       call check(error, found .and. .not. allocated(warning), more="saved molecular state not found")
       if (allocated(error)) then
-         call delete_file(file_points)
+         call delete_file(file_points, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
          return
       end if
       call check(error, all(loaded%grid%point_index == state%grid%point_index) &
@@ -1648,14 +1842,18 @@ contains
          & .and. all(loaded%grid%kspacing == state%grid%kspacing) .and. all(loaded%grid%kref == state%grid%kref) &
          & .and. all(loaded%tr == state%tr), more="point positions or atomic grids changed")
       if (allocated(error)) then
-         call delete_file(file_points)
+         call delete_file(file_points, cleanup_error)
+         if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+         if (allocated(error)) return
          return
       end if
 
       deallocate (state%grid%point_index)
       call store%save(state, err)
       if (.not. allocated(err)) call store%load(loaded, found, source, warning)
-      call delete_file(file_points)
+      call delete_file(file_points, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check_moist_error(error, err)
       if (allocated(error)) return
       call check(error, found .and. .not. allocated(loaded%grid%point_index) .and. allocated(loaded%grid%xyz), &
@@ -1745,7 +1943,7 @@ contains
    !> A memory store saves into the slot of the caller and offers it back
    !>
    !> - Copies of the store share the slot, and each save replaces it
-   !> - An empty slot offers nothing; a slot of another grid is refused with a warning
+   !> - An empty slot offers nothing; a slot of another grid is offered for transfer
    !> - A slot filled by hand needs no field shape
    !> - A store without a slot saves and offers nothing
    !>
@@ -2180,6 +2378,8 @@ contains
    subroutine check_transfer_vv(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(store_log_type), target :: log, quiet_log
@@ -2210,7 +2410,15 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       splined = logged(logfile, "spline, 2047 of 2048 points") .and. warm_start(logfile)
-      call delete_file(logfile)
+      call check(error, size(log%saved) == 2 .and. size(quiet_log%saved) == 1, &
+         & more="expected exactly the source, warm and cold reference saves")
+      if (allocated(error)) return
+      call check(error, log%saved(2)%iterations < quiet_log%saved(1)%iterations, &
+         & more="the transferred guess did not reduce the cold iteration count")
+      if (allocated(error)) return
+      call delete_file(logfile, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, splined, more="the coarser VV state was not splined or not kept")
       if (allocated(error)) return
       call check(error, mu_warm, mu_cold, rel=.true., thr=1.0e-7_wp, more="warm VV chemical potential differs")
@@ -2226,6 +2434,8 @@ contains
    subroutine check_transfer_uv1d(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(store_log_type), target :: log, quiet_log
@@ -2262,7 +2472,15 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       partial = logged(logfile, "copy, ") .and. logged(logfile, "the others cold") .and. warm_start(logfile)
-      call delete_file(logfile)
+      call check(error, size(log%saved) == 2 .and. size(quiet_log%saved) == 1, &
+         & more="expected exactly the source, warm and cold reference saves")
+      if (allocated(error)) return
+      call check(error, log%saved(2)%iterations < quiet_log%saved(1)%iterations, &
+         & more="the transferred guess did not reduce the cold iteration count")
+      if (allocated(error)) return
+      call delete_file(logfile, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, partial, more="the shorter 1D UV state was not copied onto part of the longer grid")
       if (allocated(error)) return
       call check(error, e_warm, e_cold, thr=1.0e-8_wp, more="warm 1D UV energy differs")
@@ -2315,6 +2533,61 @@ contains
       call transfer_uv3d(error, grid, grid, 0.6_wp, "fourier", "moist-test-checkpoint-transfer-rotated.log")
    end subroutine check_transfer_uv3d_rotated
 
+   !> A Cartesian checkpoint seeds a molecular-grid solve through trilinear transfer
+   !>
+   !> @param[out] error  test failure
+   subroutine check_transfer_cartesian_molecular(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(store_log_type), target :: log
+      type(memory_store_type) :: store
+      type(model_moz_3d_parameters_type) :: params
+      type(model_moz_3d_type), target :: source, target
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(moist_math_grid_3d_molecular_type) :: molecular
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      real(wp) :: energy
+      logical :: transferred
+      character(len=*), parameter :: logfile = "moist-test-checkpoint-cartesian-molecular.log"
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call vv_settings(params%solvent)
+      params%closure = "KH"
+      call new_memory_store(store, log)
+      call new_cartesian_point_grid(cart, err, 24, 24, 24, 0.5_wp, margin=0.0_wp)
+      if (.not. allocated(err)) call new_water_3d(ctx, cart, params, store, 0.0_wp, source, err)
+      energy = 0.0_wp
+      if (.not. allocated(err)) call model_energy(source, energy, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, size(log%saved) == 1, more="the Cartesian reference checkpoint was not saved")
+      if (allocated(error)) return
+      store%preset = log%saved(1)
+      call ctx%delete()
+      call new_context(ctx, nthreads=0, verbosity=4, logfile=logfile)
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_point_grid(molecular, err, recipe=recipe, pruning_threshold=0.1_wp, &
+         & dr=1.1_wp)
+      ! This intentionally coarse molecular grid exercises seeding for one step.
+      params%maxiter = 1
+      if (.not. allocated(err)) call new_water_3d(ctx, molecular, params, store, 0.0_wp, target, err)
+      if (.not. allocated(err)) call model_energy(target, energy, err)
+      call ctx%delete()
+      call check(error, allocated(err), more="the one-step molecular solve unexpectedly converged")
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D UV solve did not converge") > 0, more=err%message)
+      if (allocated(error)) return
+      transferred = logged(logfile, "initial guess: memory") .and. logged(logfile, "trilinear") .and. &
+         & logged(logfile, "Initial guess: RMS residual") .and. .not. logged(logfile, "ignoring guess")
+      call delete_file(logfile, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
+      call check(error, transferred, more="the Cartesian checkpoint was not accepted on the molecular grid")
+   end subroutine check_transfer_cartesian_molecular
+
    !> A 3D UV state on a molecular grid seeds a Cartesian grid by moving least squares
    !>
    !> @param[out] error  test failure
@@ -2365,6 +2638,8 @@ contains
       class(moist_math_grid_3d_type), intent(in) :: grid
       !> Output of the seeded solve
       character(len=*), intent(in) :: logfile
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(store_log_type), target :: log
@@ -2388,6 +2663,10 @@ contains
       energy = 0.0_wp
       if (.not. allocated(err)) call model_energy(source, energy, err)
       call ctx%delete()
+      call check(error, allocated(err), more="the one-step 3D UV solve unexpectedly converged")
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D UV solve did not converge") > 0, more=err%message)
+      if (allocated(error)) return
       call check(error, size(log%saved) == 1, more="the molecular solve saved nothing")
       if (allocated(error)) return
       store%preset = log%saved(1)
@@ -2395,9 +2674,15 @@ contains
       call new_water_3d(ctx, grid, params, store, 0.0_wp, target, err)
       if (.not. allocated(err)) call model_energy(target, energy, err)
       call ctx%delete()
+      call check(error, allocated(err), more="the one-step 3D UV solve unexpectedly converged")
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D UV solve did not converge") > 0, more=err%message)
+      if (allocated(error)) return
       moved = logged(logfile, "initial guess: memory") .and. logged(logfile, ", points") .and. &
          & .not. logged(logfile, "ignoring guess")
-      call delete_file(logfile)
+      call delete_file(logfile, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, moved, more="the molecular state was not moved, or its guess was refused")
    end subroutine seed_from_molecular
 
@@ -2424,6 +2709,8 @@ contains
       character(len=*), intent(in) :: method
       !> Output of the reloaded solve
       character(len=*), intent(in) :: logfile
+      !> File-cleanup failure, separate from the result under test
+      type(moist_error), allocatable :: cleanup_error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(store_log_type), target :: log, quiet_log
@@ -2467,7 +2754,15 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       moved = logged(logfile, "initial guess: memory") .and. logged(logfile, method) .and. warm_start(logfile)
-      call delete_file(logfile)
+      call check(error, size(log%saved) == 2 .and. size(quiet_log%saved) == 1, &
+         & more="expected exactly the source, warm and cold reference saves")
+      if (allocated(error)) return
+      call check(error, log%saved(2)%iterations < quiet_log%saved(1)%iterations, &
+         & more="the transferred guess did not reduce the cold iteration count")
+      if (allocated(error)) return
+      call delete_file(logfile, cleanup_error)
+      if (allocated(cleanup_error)) call check_moist_error(error, cleanup_error)
+      if (allocated(error)) return
       call check(error, moved, more="the stored state was not moved by "//method//" or not kept")
       if (allocated(error)) return
       call check(error, e_warm, e_cold, thr=1.0e-7_wp, more="warm 3D UV energy differs")
@@ -2612,7 +2907,8 @@ contains
       type(moist_error), allocatable, intent(out) :: err
       type(binary_file) :: binf
 
-      call delete_file(file)
+      call delete_file(file, err)
+      if (allocated(err)) return
       call binf%open(file, status="new", action="w", error=err)
       if (allocated(err)) return
       call binf%add("/checkpoint/version", 2, error=err)
@@ -2636,20 +2932,6 @@ contains
          call binf%close(error=err)
       end if
    end subroutine write_bare_state
-
-   !> Delete a file when it exists
-   !>
-   !> @param[in] file  file name
-   subroutine delete_file(file)
-      !> File name
-      character(len=*), intent(in) :: file
-      integer :: unit, stat
-      logical :: exists
-      inquire (file=file, exist=exists)
-      if (.not. exists) return
-      open (newunit=unit, file=file, status="old", iostat=stat)
-      if (stat == 0) close (unit, status="delete")
-   end subroutine delete_file
 
    !> Append a state to the shared log
    !>

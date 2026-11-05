@@ -9,6 +9,9 @@
 !>   - Failed warm attempt retries cold once
 !> - Optional checkpoint store receives intermediate and final fields
 !> - Exact Jacobian products J v = v - T'(c' v), T affine
+!> - Optional Cartesian auxiliary-space preconditioner from `new_uv3d_preconditioner`, owned
+!>   by the caller and passed to each `solve`, which lends it to the solver and refreshes it
+!>   with c' at every linearization of that solve; required when cartesian-aux is selected
 !> - Solvation free energy dG = (1/beta) sum_a rho_a int Phi(h_a, c_a) dV
 !>   with physical h and c, by the grid's quadrature
 !>   - Coulomb tails of c cancel in the sum over the sites of a neutral solvent
@@ -21,6 +24,7 @@ module moist_model_moz_3d_driver
    use mctc_io_convert, only: autokcal
    use mctc_io_utils, only: to_lower
    use moist_context, only: moist_context_type
+   use moist_utils_timer, only: cat_preconditioner
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_integration, only: integration_block_size, integration_parallel_threshold
@@ -36,16 +40,19 @@ module moist_model_moz_3d_driver
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type
    use moist_model_moz_3d_equation, only: uv3d_equation_type
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type, cold_guess_modes
+   use moist_model_moz_3d_preconditioner, only: uv3d_aux_preconditioner_type, uv3d_aux_statistics_type, &
+      & uv3d_aux_solvent_source_type
+   use moist_model_moz_solvent_vv, only: solvent_vv_type
    use moist_model_moz_checkpoint, only: moz_checkpoint_type
    implicit none(type, external)
    private
 
-   public :: uv3d_problem_type, uv3d_evaluator_type, new_uv3d_problem
+   public :: uv3d_problem_type, uv3d_evaluator_type, new_uv3d_problem, new_uv3d_preconditioner
 
    !> Fixed 3D UV data, operators and the iterate of one solve
    !>
    !> - Do not copy a prepared problem with allocate(source=...)
-   !> - Bypasses the equation's assignment, can share transform plans and grid bindings
+   !> - Bypasses the equations' assignment, can share transform plans and grid bindings
    type :: uv3d_problem_type
       !> Run context, borrowed for the lifetime of the problem
       type(moist_context_type), pointer :: ctx => null()
@@ -67,6 +74,8 @@ module moist_model_moz_3d_driver
       real(wp), allocatable :: tr(:, :), cr(:, :)
       !> Closure derivative c'(t_s) of the last linearization and scratch, (ngrid, nv)
       real(wp), allocatable :: dcdt(:, :), c_work(:, :), dc(:, :), dt(:, :)
+      !> Selected preconditioner; cartesian-aux needs one passed to `solve`
+      character(len=16), private :: precond = "none"
       !> Whether dcdt holds a linearization
       logical :: linearized = .false.
       !> Whether tr can seed the next solve on the same grid
@@ -96,6 +105,8 @@ module moist_model_moz_3d_driver
    type, extends(moist_model_moz_solver_evaluator_type) :: uv3d_evaluator_type
       !> Problem whose workspaces the evaluator uses
       type(uv3d_problem_type), pointer :: problem => null()
+      !> Preconditioner lent to the solve, refreshed at each linearization; null without one
+      type(uv3d_aux_preconditioner_type), pointer :: aux => null()
    contains
       procedure :: residual => evaluator_residual
       procedure :: has_jvp => evaluator_has_jvp
@@ -164,6 +175,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       self%ctx => ctx
+      self%precond = to_lower(trim(adjustl(params%precond)))
       self%cold_guess = to_lower(trim(adjustl(params%cold_guess)))
       if (.not. any(self%cold_guess == cold_guess_modes)) then
          call fatal_error(error, "Unknown 3D MOZ cold guess: "//trim(params%cold_guess)//" (choose cs0 or ts0)")
@@ -193,6 +205,50 @@ contains
       allocate (self%tr, self%dcdt, self%c_work, self%dc, self%dt, mold=u_sr)
       allocate (self%cr(size(u_sr, 1), size(u_sr, 2)), source=0.0_wp)
    end subroutine new_uv3d_problem
+
+   !> Build the cartesian-aux preconditioner of problems on an updated grid
+   !>
+   !> - Lattices on the grid's Fourier box, the solvent's response at their k-points, the
+   !>   settings `precond_*` of `params`; included in the `Preconditioner` timing summary
+   !> - The caller owns it and passes it to every `solve` of these problems; a geometry update
+   !>   needs a new one
+   !>
+   !> @param[out]   precond  preconditioner
+   !> @param[in]    grid     updated grid with Fourier modes
+   !> @param[in]    solvent  solved bulk solvent, borrowed during the call
+   !> @param[in]    params   settings with cartesian-aux selected
+   !> @param[in]    beta     inverse thermal energy, 1/Hartree
+   !> @param[inout] ctx      run context, borrowed for the lifetime of the preconditioner
+   !> @param[out]   error    not selected, invalid settings, grid, weights or response
+   subroutine new_uv3d_preconditioner(precond, grid, solvent, params, beta, ctx, error)
+      !> Preconditioner
+      type(uv3d_aux_preconditioner_type), intent(out) :: precond
+      !> Updated grid
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Solved bulk solvent
+      type(solvent_vv_type), intent(in), target :: solvent
+      !> Settings
+      type(model_moz_3d_parameters_type), intent(in) :: params
+      !> Inverse thermal energy
+      real(wp), intent(in) :: beta
+      !> Run context; its timers run during the setup
+      type(moist_context_type), intent(inout), target :: ctx
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(uv3d_aux_solvent_source_type) :: source
+
+      if (to_lower(trim(adjustl(params%precond))) /= "cartesian-aux") then
+         call fatal_error(error, "3D UV: the settings do not select cartesian-aux")
+         return
+      end if
+      call ctx%timer%set_category_summary(cat_preconditioner, .true.)
+      call ctx%timer%start("Preconditioner", category=cat_preconditioner)
+      source%solvent => solvent
+      source%mode = params%susceptibility
+      call precond%setup(grid, source, beta, params%precond_aux_n, params%precond_coarse_n, &
+         & params%precond_inner_max_iter, params%precond_inner_rtol, ctx%get_num_threads(), error, ctx=ctx)
+      call ctx%timer%stop("Preconditioner")
+   end subroutine new_uv3d_preconditioner
 
    !> Replace host-dependent tables at fixed geometry, bulk, beta and solver settings
    !>
@@ -256,13 +312,17 @@ contains
    !> @param[out]   converged  whether the solve converged
    !> @param[out]   rmse       last RMS residual
    !> @param[out]   niter      outer iterations
-   !> @param[out]   error      map, residual or closure failure
+   !> @param[out]   error      map, residual or closure failure, a preconditioner not built or
+   !>                          built for another number of points or sites, or none passed
+   !>                          while cartesian-aux is selected
    !> @param[in]    reuse_initial_guess  try the retained converged field; default false for standalone calls
    !> @param[in]    guess      initial short-range t_s(r), (ngrid, nv); takes precedence over reuse
    !> @param[inout] checkpoint store of the saved states, with its header set
    !> @param[in]    matched    points the guess holds values for, (ngrid); default all
+   !> @param[inout] precond    preconditioner of this problem (`new_uv3d_preconditioner`), lent to the
+   !>                          solver for this solve; needed when cartesian-aux is selected
    subroutine problem_solve(self, tolerance, maxiter, converged, rmse, niter, error, reuse_initial_guess, guess, &
-      & checkpoint, matched)
+      & checkpoint, matched, precond)
       !> Problem
       class(uv3d_problem_type), intent(inout), target :: self
       !> Tolerance
@@ -285,17 +345,29 @@ contains
       class(moz_checkpoint_type), allocatable, intent(inout), optional, target :: checkpoint
       !> Points the guess holds values for
       logical, intent(in), optional :: matched(:)
+      !> Preconditioner lent for this solve
+      type(uv3d_aux_preconditioner_type), intent(inout), optional, target :: precond
       type(uv3d_iteration_type) :: context
       type(moist_model_moz_solver_printer_type), target :: printer
       type(moist_model_moz_solver_statistics_type) :: work0
+      type(uv3d_aux_statistics_type) :: aux0
       type(error_type), allocatable :: guess_error
       integer :: attempt, attempted_steps, interval
       logical :: stale
       logical :: warm
+      !> Whether the preconditioner is lent to the solver for this solve
+      logical :: lent
 
       converged = .false.
       rmse = huge(1.0_wp)
       niter = 0
+      if (present(precond)) then
+         call precond%check(size(self%tr, 1), size(self%tr, 2), error)
+         if (allocated(error)) return
+      else if (self%precond == "cartesian-aux") then
+         call fatal_error(error, "3D UV: cartesian-aux is selected; pass the preconditioner of new_uv3d_preconditioner")
+         return
+      end if
       context%evaluator%problem => self
       context%tolerance = tolerance
       allocate (context%gamma_new, context%residual, mold=self%tr)
@@ -318,6 +390,16 @@ contains
          end if
       end if
       work0 = self%solver%get_statistics()
+      lent = .false.
+      if (present(precond)) then
+         lent = self%solver%uses_preconditioner()
+         if (lent) then
+            call precond%attach()
+            call self%solver%set_preconditioner(precond)
+            context%evaluator%aux => precond
+            aux0 = precond%statistics()
+         end if
+      end if
 
       self%linearized = .false.
       warm = .false.
@@ -382,10 +464,39 @@ contains
          call printer%separator()
          call printer%blank()
          call self%solver%print_statistics(printer, since=work0)
+         if (lent) call print_aux_statistics(printer, precond, aux0)
+      end if
+      if (lent) then
+         call self%solver%set_preconditioner()
+         call precond%detach()
       end if
       converged = converged .and. .not. allocated(error)
       self%has_guess = converged
    end subroutine problem_solve
+
+   !> Work of the auxiliary-space preconditioner since a snapshot
+   !>
+   !> @param[inout] printer  iteration table of the solve
+   !> @param[in]    aux      preconditioner after the solve
+   !> @param[in]    since    statistics taken before the solve
+   subroutine print_aux_statistics(printer, aux, since)
+      !> Iteration table
+      type(moist_model_moz_solver_printer_type), intent(inout) :: printer
+      !> Preconditioner
+      type(uv3d_aux_preconditioner_type), intent(in) :: aux
+      !> Statistics before the solve
+      type(uv3d_aux_statistics_type), intent(in) :: since
+      type(uv3d_aux_statistics_type) :: now
+
+      now = aux%statistics()
+      call printer%note(aux%describe(0.0_wp))
+      call printer%stat_line("Preconditioner applies", int(now%napply - since%napply))
+      call printer%stat_line("Fine lattice steps", int(now%niteration(1) - since%niteration(1)))
+      if (aux%nested()) call printer%stat_line("Coarse lattice steps", int(now%niteration(2) - since%niteration(2)))
+      call printer%stat_line("Lattice Jacobian products", int(sum(now%nproduct - since%nproduct)))
+      call printer%stat_line("Identity fallbacks", int(sum(now%nfallback - since%nfallback)))
+      call printer%blank()
+   end subroutine print_aux_statistics
 
    !> Solvation free energy of the current iterate, Hartree
    !>
@@ -1044,6 +1155,8 @@ contains
          end if
          feasible = .true.
          p%linearized = .true.
+         ! The lent preconditioner freezes this derivative for the step's linear solve
+         if (associated(self%aux)) call self%aux%refresh(p%dcdt)
       end associate
    end subroutine evaluator_linearize
 

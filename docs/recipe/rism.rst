@@ -173,14 +173,18 @@ For an atom-centred 3D point grid, replace the Cartesian grid group with:
 
    [grid.molecular.radial]
    npts = 50
-   rmax = 10.0          # bohr; bounded HandyMod radial mapping
-   handymod_exponent = 2.0  # dimensionless; finite and positive
+   mapping = "handymod"     # "handymod" or "linear"
+   rmax = 10.0          # bohr; outer radius of the mapping
+   handymod_exponent = 2.0  # dimensionless; finite and positive; handymod only
 
    [grid.molecular.angular]
    degree = 35
 
-The bounded HandyMod mapping uses radial midpoint nodes and accepts a real
-``radial.handymod_exponent``, including values below one. A larger radial and
+The radial midpoint nodes are mapped onto [0, ``rmax``]. ``radial.mapping = "handymod"``
+(default) uses the bounded HandyMod map, which places the shells densely near the nucleus
+and accepts a real ``radial.handymod_exponent``, including values below one.
+``radial.mapping = "linear"`` spaces the shells evenly, r_i = (i - 1/2) ``rmax``/``npts``,
+and ignores ``handymod_exponent``. A larger radial and
 angular recipe uses ``radial.npts = 50``, ``angular.degree = 77`` (2030 Lebedev
 points per shell), ``radial.rmax = 16.0`` and ``radial.handymod_exponent = 0.34``.
 These paths are relative to ``grid.molecular``. Set the reciprocal spacing ``dr``
@@ -191,7 +195,7 @@ are ``1.25`` (smaller FFT and lower memory use, but wider spreading kernels) and
 ``2.0`` (larger FFT, narrower kernels and tighter achievable accuracy).
 This setting leaves the molecular points and requested reciprocal grid unchanged.
 FINUFFT reports an error if the chosen factor cannot achieve ``nufft_tolerance``.
-The mapping requires ``rmax > 2**handymod_exponent - 1`` in bohr; its constructor
+HandyMod requires ``rmax > 2**handymod_exponent - 1`` in bohr; its constructor
 rejects incompatible radial bounds.
 
 ``grid.kind`` is the only setting directly under ``[grid]``. Radial, Cartesian
@@ -271,7 +275,8 @@ CLI verbosity options and ``--threads`` for these controls.
 The CLI defaults to verbosity 4. Verbosity 2 prints the main input settings, the
 potential tables and, as the bulk solve runs once, the 1D VV iteration table and
 result block. 3 adds every setting and the UV result block, 4 the UV iteration
-tables, and 5 the inner Krylov rows and preconditioner/deflation diagnostics.
+tables (with ``cartesian-aux`` also its work summary), and 5 the inner Krylov rows and
+the preconditioner and deflation notes, printed on the first step and when they change.
 Solver and initial-guess details appear above the table headings.
 
 ``--grad`` evaluates the native analytical nuclear gradient with fixed atomic

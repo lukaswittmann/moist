@@ -7,15 +7,14 @@
 module test_moz_3d_guess
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type
-   use mctc_io, only: structure_type, new
    use testdrive, only: unittest_type, new_unittest, error_type, check
    use moist_context, only: moist_context_type, new_context
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
-   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_3d_driver, only: uv3d_problem_type, uv3d_evaluator_type, new_uv3d_problem
    use test_helpers, only: check_moist_error
+   use test_moz_fixtures, only: make_uv3d_grid, make_uv3d_data
    implicit none(type, external)
    private
    public :: collect_moz_3d_guess
@@ -35,17 +34,17 @@ contains
    subroutine collect_moz_3d_guess(testsuite)
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
-      testsuite = [new_unittest("guess_full", guess_full), &
-         & new_unittest("guess_partial", guess_partial), &
-         & new_unittest("guess_rejected", guess_rejected), &
-         & new_unittest("guess_failed_warm", guess_failed_warm), &
+      testsuite = [new_unittest("guess_full", check_full), &
+         & new_unittest("guess_partial", check_partial), &
+         & new_unittest("guess_rejected", check_rejected), &
+         & new_unittest("guess_failed_warm", check_failed_warm), &
          & new_unittest("ramp_switch_end", ramp_switch_end)]
    end subroutine collect_moz_3d_guess
 
    !> A converged field as the guess is the solution, without iterations
    !>
    !> @param[out] error  test failure
-   subroutine guess_full(error)
+   subroutine check_full(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -61,10 +60,10 @@ contains
       logical :: converged
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       call new_uv3d_problem(cold, ctx, grid, response, sr, lr, uk, rho, beta, params, err)
       if (.not. allocated(err)) call cold%solve(1.0e-12_wp, 128, converged, rmse, niter, err)
       call check_moist_error(error, err)
@@ -80,7 +79,7 @@ contains
       if (allocated(error)) return
       call check(error, all(warm%tr == cold%tr), more="accepted guess changed")
       call ctx%delete()
-   end subroutine guess_full
+   end subroutine check_full
 
    !> Unmatched points start from the selected cold field, in both cold modes
    !>
@@ -89,7 +88,7 @@ contains
    !> - A guess matching no point is a cold start
    !>
    !> @param[out] error  test failure
-   subroutine guess_partial(error)
+   subroutine check_partial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -106,10 +105,10 @@ contains
       logical :: converged
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       allocate (matched(grid%ngrid))
       do i = 1, grid%ngrid
          matched(i) = mod(i, 3) /= 0
@@ -174,14 +173,14 @@ contains
       end do
       call check_moist_error(error, err)
       call ctx%delete()
-   end subroutine guess_partial
+   end subroutine check_partial
 
    !> Guesses of the wrong shape or non-finite at a matched point start cold
    !>
    !> A non-finite value at an unmatched point is not used and does not reject the guess
    !>
    !> @param[out] error  test failure
-   subroutine guess_rejected(error)
+   subroutine check_rejected(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -198,10 +197,10 @@ contains
       logical :: converged
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       call new_uv3d_problem(problem, ctx, grid, response, sr, lr, uk, rho, beta, params, err)
       if (.not. allocated(err)) call problem%solve(1.0e-12_wp, 128, converged, rmse, cold_steps, err)
       call check_moist_error(error, err)
@@ -241,7 +240,7 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(problem%tr - reference)), 0.0_wp, thr=1.0e-10_wp, more="masked guess solution")
       call ctx%delete()
-   end subroutine guess_rejected
+   end subroutine check_rejected
 
    !> A failed warm attempt from a masked guess retries entirely cold in the selected mode
    !>
@@ -249,7 +248,7 @@ contains
    !> guess run out of iterations while the cold start converges
    !>
    !> @param[out] error  test failure
-   subroutine guess_failed_warm(error)
+   subroutine check_failed_warm(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -266,10 +265,10 @@ contains
       logical :: converged
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       response%values = 0.0_wp
       ! The far but feasible seed exercises an exhausted warm attempt, not HNC's
       ! immediate rejection of an overflowing exponential.
@@ -304,7 +303,7 @@ contains
          if (allocated(error)) return
       end do
       call ctx%delete()
-   end subroutine guess_failed_warm
+   end subroutine check_failed_warm
 
    !> A solve that stops on a closure switch converges only on the requested closure
    !>
@@ -334,10 +333,10 @@ contains
       real(wp), parameter :: loose = 1.0e10_wp
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       params%closure = "HNC"
       params%closure_ramp = .true.
       params%solver%name = "PICARD"
@@ -365,71 +364,5 @@ contains
          & more="the residual after the switch was not measured under HNC")
       call ctx%delete()
    end subroutine ramp_switch_end
-
-   !> Two-atom solute on a small Cartesian grid
-   !>
-   !> @param[out] grid  updated grid
-   !> @param[out] err   grid failure
-   subroutine make_grid(grid, err)
-      !> Updated grid
-      class(moist_math_grid_3d_type), allocatable, intent(out) :: grid
-      !> Grid failure
-      type(moist_error), allocatable, intent(out) :: err
-      type(structure_type) :: mol
-      type(moist_math_grid_3d_cartesian_type) :: cart
-
-      call new(mol, [1, 8], reshape([-0.4_wp, 0.2_wp, 0.1_wp, 0.9_wp, -0.1_wp, 0.3_wp], [3, 2]))
-      call new_cartesian_point_grid(cart, err, 9, 8, 7, 0.9_wp, margin=0.0_wp)
-      if (.not. allocated(err)) call cart%update(mol, err)
-      if (allocated(err)) return
-      allocate (grid, source=cart)
-      grid%nthreads = 2
-   end subroutine make_grid
-
-   !> Small nonsymmetric solvent response and smooth potential tables
-   !>
-   !> @param[in]  grid      updated grid
-   !> @param[out] response  two-site response on the k-points
-   !> @param[out] sr        short-range potential, (ngrid, 2)
-   !> @param[out] lr        long-range real-space potential, (ngrid, 2)
-   !> @param[out] uk        long-range reciprocal potential, (npts_k, 2)
-   subroutine make_data(grid, response, sr, lr, uk)
-      !> Updated grid
-      class(moist_math_grid_3d_type), intent(in) :: grid
-      !> Solvent response
-      type(uv3d_susceptibility_type), intent(out) :: response
-      !> Real-space potential tables
-      real(wp), allocatable, intent(out) :: sr(:, :), lr(:, :)
-      !> Reciprocal potential table
-      complex(wp), allocatable, intent(out) :: uk(:, :)
-      real(wp) :: r(3), k(3), k2
-      integer :: i, col
-
-      response%nv = 2
-      allocate (response%values(2, 2, grid%npts_k), response%index(grid%npts_k), response%radius(grid%npts_k))
-      allocate (response%charge_response(2, grid%npts_k))
-      response%charge = [-0.7_wp, 0.7_wp]
-      allocate (sr(grid%ngrid, 2), lr(grid%ngrid, 2), uk(grid%npts_k, 2))
-      do i = 1, grid%npts_k
-         k = grid%kpoint(i)
-         k2 = sum(k**2)
-         response%index(i) = i
-         response%radius(i) = sqrt(k2)
-         response%values(:, :, i) = reshape([0.04_wp, -0.02_wp, 0.03_wp, 0.06_wp], [2, 2])*exp(-k2)
-         response%values(1, 1, i) = response%values(1, 1, i) + 1.0_wp
-         response%values(2, 2, i) = response%values(2, 2, i) + 1.0_wp
-         response%charge_response(:, i) = [0.13_wp, -0.09_wp]/(1.0_wp + k2)
-         do col = 1, 2
-            uk(i, col) = cmplx(0.03_wp*col, 0.02_wp*k(1), wp)*exp(-k2)
-         end do
-      end do
-      do i = 1, grid%ngrid
-         r = grid%point(i)
-         do col = 1, 2
-            sr(i, col) = 0.08_wp*cos(r(1) + col)*exp(-sum(r**2)/8.0_wp)
-            lr(i, col) = 0.03_wp*sin(r(2) + col)/(1.0_wp + sum(r**2))
-         end do
-      end do
-   end subroutine make_data
 
 end module test_moz_3d_guess

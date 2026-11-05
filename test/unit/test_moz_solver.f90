@@ -1,7 +1,7 @@
 !> Numerical and lifecycle checks for the shared MOZ solvers
 module test_moz_solver
    !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan, ieee_is_finite
    use, intrinsic :: iso_c_binding, only: c_ptr, c_associated, c_null_ptr
    use mctc_env, only: wp, mctc_error => error_type, fatal_error
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -22,6 +22,7 @@ module test_moz_solver
       & diis_parameters => moist_model_moz_solver_diis_parameters_type
    use moist_model_moz_solver_core_preconditioner, only: check_preconditioner_name
    use moist_model_moz_solver_jfnk_workspace, only: moist_model_moz_solver_workspace_type
+   use moist_math_lapack, only: getrf, getrs
    implicit none(type, external)
    private
    public :: collect_moz_solver
@@ -131,6 +132,42 @@ module test_moz_solver
       procedure :: describe => matrix_describe
    end type matrix_preconditioner_type
 
+   !> Dense linear problem A (gamma - target) of n unknowns in one column, exact products
+   type, extends(moist_model_moz_solver_evaluator_type) :: banded_evaluator_type
+      !> Nonsymmetric banded matrix (n, n)
+      real(wp), allocatable :: matrix(:, :)
+      !> Exact root (n)
+      real(wp), allocatable :: target(:)
+   contains
+      procedure :: residual => banded_residual
+      procedure :: has_jvp => banded_has_jvp
+      procedure :: linearize => banded_linearize
+      procedure :: jvp => banded_jvp
+   end type banded_evaluator_type
+
+   !> Flexible operator: 0 the exact inverse, 1 two alternating diagonal scalings, times
+   !> `scale` and 1/`scale`, 2 always `scale` times the first unit vector, 3 NaN, 4 zero,
+   !> 5 the first unit vector three times, then `direction`, then the identity
+   type, extends(moist_model_moz_solver_preconditioner_type) :: flexible_preconditioner_type
+      !> Exact inverse of the test matrix
+      real(wp), allocatable :: inverse(:, :)
+      !> Fourth direction of action 5
+      real(wp), allocatable :: direction(:)
+      !> Action
+      integer :: mode = 0
+      !> Scale of actions 1 and 2
+      real(wp) :: scale = 1.0_wp
+      !> Whether the action is ready for this step
+      logical :: enabled = .true.
+      !> Applications
+      integer :: napplied = 0
+   contains
+      procedure :: ready => flexible_ready
+      procedure :: apply => flexible_apply
+      procedure :: describe => flexible_describe
+      procedure :: flexible => flexible_flag
+   end type flexible_preconditioner_type
+
    type, extends(moist_model_moz_solver_iteration_type) :: iteration_context_type
       integer :: nsteps = 0, nobserved = 0, ncheckpoints = 0, fail_at = 0
       logical :: fail_checkpoint = .false.
@@ -167,6 +204,11 @@ contains
          & new_unittest("adjoint_workspace_recovery", test_adjoint_workspace_recovery), &
          & new_unittest("jfnk_nonlinear", test_jfnk_nonlinear), &
          & new_unittest("jfnk_preconditioner", test_jfnk_preconditioner), &
+         & new_unittest("jfnk_flexible", test_jfnk_flexible), &
+         & new_unittest("jfnk_flexible_not_ready", test_jfnk_flexible_not_ready), &
+         & new_unittest("jfnk_flexible_rank", test_jfnk_flexible_rank), &
+         & new_unittest("jfnk_flexible_restart", test_jfnk_flexible_restart), &
+         & new_unittest("adjoint_flexible", test_adjoint_flexible), &
          & new_unittest("jfnk_line_search", test_jfnk_line_search), &
          & new_unittest("jfnk_forcing", test_jfnk_forcing), &
          & new_unittest("jfnk_deflation", test_jfnk_deflation), &
@@ -3278,5 +3320,398 @@ contains
       end do
       feasible = .true.
    end subroutine soft_jvp
+
+   !> Nonsymmetric banded test problem of 10 unknowns and the inverse of its matrix
+   !>
+   !> @param[out] evaluator  test problem
+   !> @param[out] inverse    inverse of its matrix (10, 10)
+   !> @param[out] error      reference inverse failure
+   subroutine banded_problem(evaluator, inverse, error)
+      !> Reference inverse failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Test problem
+      type(banded_evaluator_type), intent(out) :: evaluator
+      !> Inverse of its matrix (10, 10)
+      real(wp), allocatable, intent(out) :: inverse(:, :)
+      real(wp), allocatable :: lu(:, :)
+      integer, allocatable :: ipiv(:)
+      integer :: i, info
+      integer, parameter :: n = 10
+
+      allocate (evaluator%matrix(n, n), source=0.0_wp)
+      do i = 1, n
+         evaluator%matrix(i, i) = 3.0_wp + 0.2_wp*real(i, wp)
+         if (i < n) evaluator%matrix(i, i + 1) = -1.0_wp
+         if (i < n) evaluator%matrix(i + 1, i) = 0.5_wp
+      end do
+      evaluator%matrix(1, n) = 0.3_wp
+      evaluator%target = [(sin(real(i, wp)), i=1, n)]
+      lu = evaluator%matrix
+      allocate (ipiv(n))
+      allocate (inverse(n, n), source=0.0_wp)
+      do i = 1, n
+         inverse(i, i) = 1.0_wp
+      end do
+      call getrf(lu, ipiv, info)
+      call check(error, info == 0, "LAPACK banded reference inverse failed")
+      if (allocated(error)) return
+      call getrs(lu, inverse, ipiv, info)
+      call check(error, info == 0, "LAPACK banded reference inverse failed")
+      if (allocated(error)) return
+   end subroutine banded_problem
+
+   !> J = diag(1, 2, 3) with root (1, 1, 1)
+   !>
+   !> @param[out] evaluator  test problem
+   subroutine three_point_problem(evaluator)
+      !> Test problem
+      type(banded_evaluator_type), intent(out) :: evaluator
+      integer :: i
+
+      allocate (evaluator%matrix(3, 3), source=0.0_wp)
+      do i = 1, 3
+         evaluator%matrix(i, i) = real(i, wp)
+      end do
+      evaluator%target = [1.0_wp, 1.0_wp, 1.0_wp]
+   end subroutine three_point_problem
+
+   !> Flexible right preconditioning: an exact inverse takes one Krylov step; an action
+   !> that changes every step still solves exactly, also with directions 1e16 apart in
+   !> scale, also restarted every two steps with either orthogonalization, and meets a
+   !> loose forcing term in its true residual; NaN and zero directions are replaced by the
+   !> basis vector; a constant direction ends without an error; recycling is not used
+   subroutine test_jfnk_flexible(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      type(moist_model_moz_solver_jfnk_type) :: solver
+      type(banded_evaluator_type) :: evaluator
+      type(flexible_preconditioner_type), target :: precond
+      type(moist_context_type), target :: ctx
+      real(wp) :: gamma(10, 1), updated(10, 1), rmse, f0, f1
+      logical :: feasible
+      integer :: mode
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call banded_problem(evaluator, precond%inverse, error)
+      if (allocated(error)) return
+      gamma = 0.0_wp
+
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, eta0=1.0e-12_wp))
+      call solver%set_preconditioner(precond)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr) .and. solver%gmres_iters_last == 1 .and. &
+         & precond%napplied == 1, "an exact flexible inverse must take one Krylov step")
+      if (allocated(error)) return
+      call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-12_wp, "exact inverse: Newton step")
+      if (allocated(error)) return
+
+      precond%mode = 1
+      precond%napplied = 0
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, eta0=1.0e-13_wp))
+      call solver%set_preconditioner(precond)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr) .and. precond%napplied >= 2 .and. &
+         & solver%nreplaced_stage == 0, "alternating action: solve")
+      if (allocated(error)) return
+      call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-10_wp, &
+         & "an action that changes every step must still give the Newton step")
+      if (allocated(error)) return
+
+      do mode = 3, 4
+         precond%mode = mode
+         solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, eta0=1.0e-13_wp))
+         call solver%set_preconditioner(precond)
+         call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+         call check(error, feasible .and. .not. allocated(merr) .and. solver%nreplaced_stage > 0, &
+            & "unusable directions must be replaced, not fail the step")
+         if (allocated(error)) return
+         call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-10_wp, &
+            & "replaced directions: unpreconditioned Newton step")
+         if (allocated(error)) return
+         call check(error, index(solver%stage_summary(), "replaced") > 0, solver%stage_summary())
+         if (allocated(error)) return
+      end do
+
+      ! Directions 1e16 apart in scale: each column is judged against its own norm
+      precond%mode = 1
+      precond%scale = 1.0e8_wp
+      do mode = 1, 2
+         precond%napplied = 0
+         solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, eta0=1.0e-13_wp, &
+            & cgs2=(mode == 1)))
+         call solver%set_preconditioner(precond)
+         call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+         call check(error, feasible .and. .not. allocated(merr) .and. solver%nreplaced_stage == 0, &
+            & "scaled alternating action: solve")
+         if (allocated(error)) return
+         call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-10_wp, &
+            & "directions of very different scale must still give the Newton step")
+         if (allocated(error)) return
+      end do
+      precond%scale = 1.0_wp
+
+      precond%mode = 2
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=3, max_krylov=6, eta0=1.0e-13_wp))
+      call solver%set_preconditioner(precond)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr) .and. all(ieee_is_finite(updated)), &
+         & "a constant direction must not fail the step")
+      if (allocated(error)) return
+
+      precond%mode = 1
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, recycle=2, eta0=1.0e-12_wp))
+      call solver%set_preconditioner(precond)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr) .and. solver%nrecycled == 0, &
+         & "flexible solves keep no recycled vectors")
+      if (allocated(error)) return
+
+      ! Restarted every two steps, classical Gram-Schmidt twice (1) and modified (2)
+      do mode = 1, 2
+         precond%mode = 1
+         precond%napplied = 0
+         solver = new_jfnk_solver(ctx, jfnk_parameters(restart=2, max_krylov=200, eta0=1.0e-12_wp, cgs2=(mode == 1)))
+         call solver%set_preconditioner(precond)
+         call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+         call check(error, feasible .and. .not. allocated(merr) .and. solver%gmres_iters_last > 4 .and. &
+            & solver%ncapped_stage == 0, "restarted flexible solve")
+         if (allocated(error)) return
+         call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-9_wp, &
+            & "restarted flexible solve: Newton step")
+         if (allocated(error)) return
+         ! The true linear residual of the full step meets the requested forcing term
+         solver = new_jfnk_solver(ctx, jfnk_parameters(restart=2, max_krylov=200, eta0=1.0e-4_wp, alpha_max=1.0_wp, &
+            & cgs2=(mode == 1)))
+         call solver%set_preconditioner(precond)
+         call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+         f0 = norm2(matmul(evaluator%matrix, gamma(:, 1) - evaluator%target))
+         f1 = norm2(matmul(evaluator%matrix, updated(:, 1) - evaluator%target))
+         call check(error, feasible .and. .not. allocated(merr) .and. f1 > 0.0_wp .and. &
+            & f1 <= 1.0e-4_wp*f0*(1.0_wp + 1.0e-8_wp), "restarted flexible solve: true residual above the forcing term")
+         if (allocated(error)) return
+      end do
+      call ctx%delete()
+   end subroutine test_jfnk_flexible
+
+   !> Flexible GMRES drops a column whose image depends on the earlier ones up to rounding
+   !>
+   !> - J = diag(1, 2, 3), right-hand side J (1, 1, 1); the preconditioner returns the same
+   !>   direction twice, so the projected system is singular up to rounding
+   !> - The step is the least-squares step along that direction, the first unit vector, with
+   !>   either orthogonalization and the direction scaled by 1, 1e8 or 1e-8
+   subroutine test_jfnk_flexible_rank(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      type(moist_model_moz_solver_jfnk_type) :: solver
+      type(banded_evaluator_type) :: evaluator
+      type(flexible_preconditioner_type), target :: precond
+      type(moist_context_type), target :: ctx
+      real(wp), parameter :: scales(3) = [1.0_wp, 1.0e8_wp, 1.0e-8_wp]
+      real(wp) :: gamma(3, 1), f(3, 1), rhs(3), delta(3)
+      logical :: feasible
+      integer :: mode, i
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call three_point_problem(evaluator)
+      gamma = 0.0_wp
+      call evaluator%residual(gamma, f, feasible, merr)
+      rhs = -f(:, 1)
+      precond%mode = 2
+      do mode = 1, 2
+         do i = 1, size(scales)
+            precond%scale = scales(i)
+            solver = new_jfnk_solver(ctx, jfnk_parameters(restart=2, max_krylov=2, cgs2=(mode == 2)))
+            call solver%set_preconditioner(precond)
+            call solver%ensure_workspace(gamma)
+            solver%jvp_ready = .true.
+            call solver%flexible_solve(evaluator, gamma, f, rhs, delta, 1.0e-12_wp, feasible, merr)
+            call check(error, feasible .and. .not. allocated(merr), "repeated direction: solve")
+            if (allocated(error)) return
+            call check(error, maxval(abs(delta - [1.0_wp, 0.0_wp, 0.0_wp])) < 1.0e-12_wp, &
+               & "a dependent column must be dropped, not amplified")
+            if (allocated(error)) return
+         end do
+      end do
+      call ctx%delete()
+   end subroutine test_jfnk_flexible_rank
+
+   !> A restart after a dropped column measures the next cycle from the true residual
+   !>
+   !> - J = diag(1, 2, 3); the first cycle repeats the first unit vector and keeps one column,
+   !>   the second cuts the true residual by 3% with the first unit vector and a direction
+   !>   whose image is nearly orthogonal to the residual, later cycles use the identity
+   !> - With a stagnation tolerance of 1% the solve continues to the forcing term
+   subroutine test_jfnk_flexible_restart(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      type(moist_model_moz_solver_jfnk_type) :: solver
+      type(banded_evaluator_type) :: evaluator
+      type(flexible_preconditioner_type), target :: precond
+      type(moist_context_type), target :: ctx
+      !> Share of the residual (0, 2, 3) in the image of the chosen direction
+      real(wp), parameter :: c = 0.25_wp
+      real(wp) :: gamma(3, 1), f(3, 1), rhs(3), delta(3)
+      logical :: feasible
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call three_point_problem(evaluator)
+      gamma = 0.0_wp
+      call evaluator%residual(gamma, f, feasible, merr)
+      rhs = -f(:, 1)
+      precond%mode = 5
+      ! J d = (0, 3, -2) + c (0, 2, 3)
+      precond%direction = [0.0_wp, (3.0_wp + 2.0_wp*c)/2.0_wp, (-2.0_wp + 3.0_wp*c)/3.0_wp]
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=2, max_krylov=40, stagnation_tol=0.01_wp))
+      call solver%set_preconditioner(precond)
+      call solver%ensure_workspace(gamma)
+      solver%jvp_ready = .true.
+      call solver%flexible_solve(evaluator, gamma, f, rhs, delta, 1.0e-10_wp, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr), "restart after a dropped column: solve")
+      if (allocated(error)) return
+      call check(error, solver%nstagnated_stage == 0, &
+         & "a cycle that cuts the true residual by 3% is not stagnation")
+      if (allocated(error)) return
+      call check(error, norm2(rhs - matmul(evaluator%matrix, delta)) < 1.0e-9_wp*norm2(rhs), &
+         & "restart after a dropped column: true residual")
+      call ctx%delete()
+   end subroutine test_jfnk_flexible_restart
+
+   !> An unready flexible preconditioner uses plain GMRES with deflation disabled
+   !>
+   !> @param[out] error  test failure
+   subroutine test_jfnk_flexible_not_ready(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      type(moist_model_moz_solver_jfnk_type) :: solver
+      type(banded_evaluator_type) :: evaluator
+      type(flexible_preconditioner_type), target :: precond
+      type(moist_context_type), target :: ctx
+      real(wp) :: gamma(10, 1), updated(10, 1), rmse
+      logical :: feasible
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call banded_problem(evaluator, precond%inverse, error)
+      if (allocated(error)) return
+      precond%enabled = .false.
+      gamma = 0.0_wp
+      solver = new_jfnk_solver(ctx, jfnk_parameters(restart=10, max_krylov=10, eta0=1.0e-12_wp, &
+         & deflation=.true., deflation_rmse=10.0_wp))
+      call solver%set_preconditioner(precond)
+      call solver%outer_step(evaluator, gamma, updated, rmse, feasible, merr)
+      call check(error, feasible .and. .not. allocated(merr), "plain GMRES with an unready flexible action failed")
+      if (allocated(error)) return
+      call check(error, precond%napplied == 0 .and. solver%gmres_iters_last > 1, &
+         & "an unready preconditioner was applied or the plain solve did not iterate")
+      if (allocated(error)) return
+      call check(error, solver%nundeflated_stage == 0 .and. .not. solver%deflation%active, &
+         & "a flexible preconditioner allowed deflation while unready")
+      if (allocated(error)) return
+      call check(error, maxval(abs(updated(:, 1) - evaluator%target)) < 1.0e-10_wp, "plain GMRES Newton step differs")
+      call ctx%delete()
+   end subroutine test_jfnk_flexible_not_ready
+
+   !> A flexible preconditioner cannot precondition the transpose system
+   subroutine test_adjoint_flexible(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: merr
+      type(linear_evaluator_type) :: evaluator
+      type(flexible_preconditioner_type), target :: precond
+      type(moist_context_type), target :: ctx
+      real(wp) :: rhs(2, 1)
+      real(wp), allocatable :: solution(:, :)
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      rhs(:, 1) = [1.0_wp, -2.0_wp]
+      precond%mode = 1
+      call solve_adjoint(ctx, evaluator, rhs, solution, merr, preconditioner=precond)
+      call check(error, allocated(merr) .and. .not. allocated(solution), "a flexible adjoint preconditioner was used")
+      if (allocated(error)) return
+      call check(error, index(merr%message, "flexible") > 0, merr%message)
+      call ctx%delete()
+   end subroutine test_adjoint_flexible
+
+   subroutine banded_residual(self, gamma, residual, feasible, error)
+      class(banded_evaluator_type), intent(in) :: self
+      real(wp), intent(in) :: gamma(:, :)
+      real(wp), intent(out) :: residual(:, :)
+      logical, intent(out) :: feasible
+      type(mctc_error), allocatable, intent(out) :: error
+      residual(:, 1) = matmul(self%matrix, gamma(:, 1) - self%target)
+      feasible = .true.
+   end subroutine banded_residual
+
+   logical function banded_has_jvp(self) result(available)
+      class(banded_evaluator_type), intent(in) :: self
+      available = .true.
+   end function banded_has_jvp
+
+   subroutine banded_linearize(self, gamma, feasible, error)
+      class(banded_evaluator_type), intent(in) :: self
+      real(wp), intent(in) :: gamma(:, :)
+      logical, intent(out) :: feasible
+      type(mctc_error), allocatable, intent(out) :: error
+      feasible = .true.
+   end subroutine banded_linearize
+
+   subroutine banded_jvp(self, direction, jv, feasible, error)
+      class(banded_evaluator_type), intent(in) :: self
+      real(wp), intent(in) :: direction(:)
+      real(wp), intent(out) :: jv(:)
+      logical, intent(out) :: feasible
+      type(mctc_error), allocatable, intent(out) :: error
+      jv = matmul(self%matrix, direction)
+      feasible = .true.
+   end subroutine banded_jvp
+
+   logical function flexible_ready(self, rmse) result(usable)
+      class(flexible_preconditioner_type), intent(in) :: self
+      real(wp), intent(in) :: rmse
+      usable = self%enabled .and. rmse >= 0.0_wp
+   end function flexible_ready
+
+   subroutine flexible_apply(self, vflat)
+      class(flexible_preconditioner_type), intent(inout) :: self
+      real(wp), contiguous, target, intent(inout) :: vflat(:)
+      integer :: i
+      self%napplied = self%napplied + 1
+      select case (self%mode)
+      case (0)
+         vflat = matmul(self%inverse, vflat)
+      case (1)
+         do i = 1, size(vflat)
+            if (mod(self%napplied, 2) == 1) then
+               vflat(i) = self%scale*vflat(i)/(1.0_wp + 0.3_wp*real(i, wp))
+            else
+               vflat(i) = vflat(i)*(1.0_wp + 0.1_wp*real(mod(i, 3), wp))/self%scale
+            end if
+         end do
+      case (2)
+         vflat = 0.0_wp
+         vflat(1) = self%scale
+      case (3)
+         vflat = ieee_value(0.0_wp, ieee_quiet_nan)
+      case (5)
+         if (self%napplied <= 3) then
+            vflat = 0.0_wp
+            vflat(1) = 1.0_wp
+         else if (self%napplied == 4) then
+            vflat = self%direction
+         end if
+      case default
+         vflat = 0.0_wp
+      end select
+   end subroutine flexible_apply
+
+   function flexible_describe(self, rmse) result(text)
+      class(flexible_preconditioner_type), intent(in) :: self
+      real(wp), intent(in) :: rmse
+      character(len=:), allocatable :: text
+      text = "test flexible"
+   end function flexible_describe
+
+   pure logical function flexible_flag(self) result(flexible)
+      class(flexible_preconditioner_type), intent(in) :: self
+      flexible = .true.
+   end function flexible_flag
 
 end module test_moz_solver

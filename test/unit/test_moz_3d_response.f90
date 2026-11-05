@@ -1,4 +1,6 @@
-!> UV transpose, host response and geometry-gradient finite differences
+!> UV transpose, host response and geometry-gradient finite differences; cartesian-aux
+!> preconditioned solves give the same solution and energy as without, and a selected but
+!> unlent preconditioner is refused
 module test_moz_3d_response
    use, intrinsic :: iso_fortran_env, only: output_unit, int64
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
@@ -15,6 +17,8 @@ module test_moz_3d_response
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_3d_driver, only: uv3d_problem_type, uv3d_evaluator_type, new_uv3d_problem
+   use moist_model_moz_3d_preconditioner, only: uv3d_aux_statistics_type, uv3d_aux_response_source_type, &
+      & uv3d_aux_preconditioner_type
    use moist_model_moz_solver, only: moist_model_moz_solver_statistics_type
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_model_moz_solvent_vv, only: solvent_vv_type
@@ -25,9 +29,16 @@ module test_moz_3d_response
       & potential_adjoint_response_type
    use test_moz_fixtures, only: new_cspce_water_solvent
    use test_helpers, only: check_moist_error, get_qc_handymod_recipe
+   use test_moz_fixtures, only: make_uv3d_grid, make_uv3d_data
    implicit none(type, external)
    private
    public :: collect_moz_3d_response
+
+   !> Synthetic response of `make_data` at the k-points of the preconditioner's lattices
+   type, extends(uv3d_aux_response_source_type) :: lattice_source_type
+   contains
+      procedure :: tabulate => lattice_tabulate
+   end type lattice_source_type
 
 contains
 
@@ -56,76 +67,27 @@ contains
          & new_unittest("gradient_drism_cartesian", gradient_drism_cartesian), &
          & new_unittest("gradient_drism_charges", gradient_drism_charges), &
          & new_unittest("gradient_drism_molecular", gradient_drism_molecular), &
-         & new_unittest("gradient_drism_ec", gradient_drism_ec)]
+         & new_unittest("gradient_drism_ec", gradient_drism_ec), &
+         & new_unittest("aux_cartesian", aux_cartesian), &
+         & new_unittest("aux_molecular", aux_molecular), &
+         & new_unittest("aux_model", aux_model), &
+         & new_unittest("aux_unlent", aux_unlent, should_fail=.true.)]
    end subroutine collect_moz_3d_response
 
-   subroutine make_grid(kind, grid, err)
-      integer, intent(in) :: kind
-      class(moist_math_grid_3d_type), allocatable, intent(out) :: grid
-      type(moist_error), allocatable, intent(out) :: err
-      type(structure_type) :: mol
-      type(moist_math_grid_3d_cartesian_type) :: cart
-      type(moist_math_grid_3d_molecular_type) :: mole
-      type(moist_math_grid_atomic_recipe_type) :: recipe
-      integer :: i
 
-      call new(mol, [1, 8], reshape([-0.4_wp, 0.2_wp, 0.1_wp, 0.9_wp, -0.1_wp, 0.3_wp], [3, 2]))
-      if (kind == 1 .or. kind == 4) then
-         call new_cartesian_point_grid(cart, err, 9, 8, 7, 0.9_wp, margin=0.0_wp)
-         if (.not. allocated(err)) call cart%update(mol, err)
-         if (.not. allocated(err)) allocate (grid, source=cart)
-      else
-         call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=4.0_wp)
-         if (.not. allocated(err)) call new_molecular_point_grid(mole, err, recipe=recipe, &
-            & dr=1.1_wp, nufft_tol=1.0e-12_wp)
-         if (.not. allocated(err)) call mole%update(mol, err)
-         if (.not. allocated(err)) allocate (grid, source=mole)
-      end if
-      if (allocated(err)) return
-      grid%nthreads = 2
-      if (kind >= 3) then
-         do i = 1, grid%ngrid
-            grid%w(i) = grid%w(i)*(1.0_wp + 0.125_wp*real(mod(i, 5), wp))
-         end do
-      end if
-   end subroutine make_grid
 
-   !> Small nonsymmetric, nonconstant solvent response, including a stable tail.
-   !> This isolates reverse algebra from bulk convergence and molecular resolution.
-   subroutine make_data(grid, response, sr, lr, uk)
+   !> `make_uv3d_data` response for a lattice of the preconditioner
+   subroutine lattice_tabulate(self, grid, response, error)
+      class(lattice_source_type), intent(in) :: self
       class(moist_math_grid_3d_type), intent(in) :: grid
       type(uv3d_susceptibility_type), intent(out) :: response
-      real(wp), allocatable, intent(out) :: sr(:, :), lr(:, :)
-      complex(wp), allocatable, intent(out) :: uk(:, :)
-      real(wp) :: r(3), k(3), k2
-      integer :: i, col
+      type(moist_error), allocatable, intent(out) :: error
+      real(wp), allocatable :: sr(:, :), lr(:, :)
+      complex(wp), allocatable :: uk(:, :)
+      call make_uv3d_data(grid, response, sr, lr, uk)
+   end subroutine lattice_tabulate
 
-      response%nv = 2
-      allocate (response%values(2, 2, grid%npts_k), response%index(grid%npts_k), response%radius(grid%npts_k))
-      allocate (response%charge_response(2, grid%npts_k))
-      response%charge = [-0.7_wp, 0.7_wp]
-      allocate (sr(grid%ngrid, 2), lr(grid%ngrid, 2), uk(grid%npts_k, 2))
-      do i = 1, grid%npts_k
-         k = grid%kpoint(i)
-         k2 = sum(k**2)
-         response%index(i) = i
-         response%radius(i) = sqrt(k2)
-         response%values(:, :, i) = reshape([0.04_wp, -0.02_wp, 0.03_wp, 0.06_wp], [2, 2])*exp(-k2)
-         response%values(1, 1, i) = response%values(1, 1, i) + 1.0_wp
-         response%values(2, 2, i) = response%values(2, 2, i) + 1.0_wp
-         response%charge_response(:, i) = [0.13_wp, -0.09_wp]/(1.0_wp + k2)
-         do col = 1, 2
-            uk(i, col) = cmplx(0.03_wp*col, 0.02_wp*k(1), wp)*exp(-k2)
-         end do
-      end do
-      do i = 1, grid%ngrid
-         r = grid%point(i)
-         do col = 1, 2
-            sr(i, col) = 0.08_wp*cos(r(1) + col)*exp(-sum(r**2)/8.0_wp)
-            lr(i, col) = 0.03_wp*sin(r(2) + col)/(1.0_wp + sum(r**2))
-         end do
-      end do
-   end subroutine make_data
+
 
    subroutine equation_cartesian(error)
       type(error_type), allocatable, intent(out) :: error
@@ -158,10 +120,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(kind, grid, err)
+      call make_uv3d_grid(kind, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       regular = response
       deallocate (regular%charge_response)
       allocate (v, seed, jv, wc, tp, tm, mold=sr)
@@ -293,10 +255,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(kind, grid, err)
+      call make_uv3d_grid(kind, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       ! Keep the weighted Cartesian KH stencil local to its closure branch
       eps = 1.0e-4_wp
       if (kind == 4) eps = 1.0e-5_wp
@@ -450,10 +412,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(kind, grid, err)
+      call make_uv3d_grid(kind, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       params%tolerance = 1.0e-12_wp
       params%solver%jfnk%restart = 8
       params%solver%picard%damping = 0.5_wp
@@ -548,10 +510,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(1, grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       ! Identity chi makes T independent of c. The cold field has exactly zero residual.
       response%values = 0.0_wp
       do i = 1, size(response%values, 3)
@@ -620,10 +582,10 @@ contains
       params%solver%picard%damping = 0.5_wp
       params%solver%jfnk%restart = 8
       do kind = 1, 2
-         call make_grid(kind, grid, err)
+         call make_uv3d_grid(kind, grid, err)
          call check_moist_error(error, err)
          if (allocated(error)) return
-         call make_data(grid, response, sr, lr, uk)
+         call make_uv3d_data(grid, response, sr, lr, uk)
          do ic = 1, size(closures)
             params%closure = closures(ic)
             params%solver%name = solvers(ic)
@@ -698,10 +660,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(1, grid, err)
+      call make_uv3d_grid(1, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       response%values = 0.0_wp
       do i = 1, size(response%values, 3)
          response%values(1, 1, i) = 1.0_wp
@@ -801,7 +763,7 @@ contains
    end subroutine scf_host
 
    !> Real cSPCE-water solution, with fixed bulk shared across the FD perturbations.
-   subroutine host_model(ctx, correction, mode, model, solvent, err, reuse_initial_guess, drism, reuse_bulk)
+   subroutine host_model(ctx, correction, mode, model, solvent, err, reuse_initial_guess, drism, reuse_bulk, aux_n)
       type(moist_context_type), intent(in), target :: ctx
       character(len=*), intent(in) :: correction
       integer, intent(in) :: mode
@@ -812,6 +774,8 @@ contains
       logical, intent(in), optional :: drism
       !> Reuse a fixed bulk solution with matching settings across test cases
       logical, intent(in), optional :: reuse_bulk
+      !> Use the cartesian-aux preconditioner with this lattice and half of it nested
+      integer, intent(in), optional :: aux_n
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(model_moz_3d_parameters_type) :: params
       type(monopole_type) :: charges
@@ -830,6 +794,11 @@ contains
          if (drism) params%solvent%theory = "DRISM"
       end if
       params%correction = correction
+      if (present(aux_n)) then
+         params%precond = "cartesian-aux"
+         params%precond_aux_n = aux_n
+         params%precond_coarse_n = aux_n/2
+      end if
       if (present(reuse_initial_guess)) params%reuse_initial_guess = reuse_initial_guess
       keep_bulk = .false.
       if (present(reuse_bulk)) keep_bulk = reuse_bulk
@@ -1072,10 +1041,10 @@ contains
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, nthreads=2, verbosity=0)
-      call make_grid(kind, grid, err)
+      call make_uv3d_grid(kind, grid, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call make_data(grid, response, sr, lr, uk)
+      call make_uv3d_data(grid, response, sr, lr, uk)
       allocate (dx(3, grid%ngrid), dw(grid%ngrid))
       do i = 1, grid%ngrid
          dx(:, i) = [sin(0.13_wp*i), cos(0.17_wp*i), sin(0.23_wp*i)]
@@ -1431,5 +1400,313 @@ contains
          end do
       end do
    end subroutine analytic_host
+
+   !> Cubic Cartesian grid of the H-O test solute
+   !>
+   !> @param[out] grid  Cartesian grid
+   !> @param[out] err   error handling
+   subroutine cubic_grid(grid, err)
+      !> Cartesian grid
+      class(moist_math_grid_3d_type), allocatable, intent(out) :: grid
+      !> Error handling
+      type(moist_error), allocatable, intent(out) :: err
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: cart
+
+      call new(mol, [1, 8], reshape([-0.4_wp, 0.2_wp, 0.1_wp, 0.9_wp, -0.1_wp, 0.3_wp], [3, 2]))
+      call new_cartesian_point_grid(cart, err, 8, 8, 8, 0.9_wp, margin=0.0_wp)
+      if (.not. allocated(err)) call cart%update(mol, err)
+      if (.not. allocated(err)) allocate (grid, source=cart)
+      if (.not. allocated(err)) grid%nthreads = 2
+   end subroutine cubic_grid
+
+   !> cartesian-aux on a cubic Cartesian grid: the lattice is the grid, so with tight lattice
+   !> solves every Newton step takes one Krylov step; same solution and energy as without
+   subroutine aux_cartesian(error)
+      type(error_type), allocatable, intent(out) :: error
+      call aux_problem_case(1, error)
+   end subroutine aux_cartesian
+
+   !> cartesian-aux nested on a molecular grid with the default inner settings: same
+   !> solution and energy as without
+   subroutine aux_molecular(error)
+      type(error_type), allocatable, intent(out) :: error
+      call aux_problem_case(2, error)
+   end subroutine aux_molecular
+
+   !> Refused: a solve that selects cartesian-aux but is not lent a preconditioner
+   !>
+   !> - A failing fixture, a refusal for another reason, or a solve that iterated return no
+   !>   test error, so they show as an unexpected pass
+   subroutine aux_unlent(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(uv3d_susceptibility_type) :: response
+      type(uv3d_problem_type) :: pre
+      type(model_moz_3d_parameters_type) :: params
+      real(wp), allocatable :: sr(:, :), lr(:, :)
+      complex(wp), allocatable :: uk(:, :)
+      real(wp) :: rmse
+      integer :: n_pre
+      logical :: converged
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, nthreads=2, verbosity=0)
+      n_pre = -1
+      call cubic_grid(grid, err)
+      if (.not. allocated(err)) then
+         call make_uv3d_data(grid, response, sr, lr, uk)
+         params%closure = "KH"
+         params%solver%name = "JFNK"
+         params%precond = "cartesian-aux"
+         call new_uv3d_problem(pre, ctx, grid, response, sr, lr, uk, [0.01_wp, 0.014_wp], 1.7_wp, params, err)
+         if (.not. allocated(err)) call pre%solve(params%tolerance, params%maxiter, converged, rmse, n_pre, err)
+      end if
+      call ctx%delete()
+      if (allocated(err)) then
+         if (index(err%message, "new_uv3d_preconditioner") == 0 .or. n_pre /= 0) return
+      end if
+      call check_moist_error(error, err)
+   end subroutine aux_unlent
+
+   !> KH solves without and with the preconditioner on synthetic tables: same energy and t;
+   !> the response afterwards is the same and does not use it; new tables at the same
+   !> geometry reuse it; HYBRID lends it to its Newton stage; a solve stopped early returns
+   !> it for the next one
+   !>
+   !> @param[in]  kind   1 cubic Cartesian grid with tight lattice solves, 2 molecular grid
+   !>                    with a nested coarse lattice and the default inner settings
+   !> @param[out] error  test failure
+   subroutine aux_problem_case(kind, error)
+      !> Case
+      integer, intent(in) :: kind
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(uv3d_susceptibility_type) :: response
+      type(lattice_source_type) :: source
+      type(uv3d_aux_preconditioner_type) :: precond
+      type(uv3d_problem_type) :: plain, pre, hybrid
+      type(model_moz_3d_parameters_type) :: params
+      type(moist_model_moz_solver_statistics_type) :: stats_plain, stats_pre
+      type(uv3d_aux_statistics_type) :: aux, before
+      real(wp), allocatable :: sr(:, :), lr(:, :), wr_plain(:, :), wl_plain(:, :), lam_plain(:, :)
+      real(wp), allocatable :: wr_pre(:, :), wl_pre(:, :), lam_pre(:, :)
+      complex(wp), allocatable :: uk(:, :), wk_plain(:, :), wk_pre(:, :)
+      real(wp), parameter :: beta = 1.7_wp
+      real(wp) :: rmse, e_plain, e_pre, e_hybrid
+      integer :: n_plain, n_pre
+      logical :: converged
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, nthreads=2, verbosity=0)
+      if (kind == 1) then
+         call cubic_grid(grid, err)
+      else
+         call make_uv3d_grid(2, grid, err)
+      end if
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call make_uv3d_data(grid, response, sr, lr, uk)
+      params%closure = "KH"
+      params%tolerance = 1.0e-12_wp
+      params%solver%name = "JFNK"
+      params%solver%jfnk%restart = 20
+      call new_uv3d_problem(plain, ctx, grid, response, sr, lr, uk, [0.01_wp, 0.014_wp], beta, params, err)
+      if (.not. allocated(err)) call plain%solve(params%tolerance, params%maxiter, converged, rmse, n_plain, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, converged, more="unpreconditioned solve did not converge")
+      if (allocated(error)) return
+      stats_plain = plain%solver%get_statistics()
+
+      params%precond = "cartesian-aux"
+      call new_uv3d_problem(pre, ctx, grid, response, sr, lr, uk, [0.01_wp, 0.014_wp], beta, params, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      if (kind == 1) then
+         call precond%setup(grid, source, beta, 8, 8, 60, 1.0e-12_wp, 2, err, ctx=ctx)
+      else
+         call precond%setup(grid, source, beta, 16, 8, 2, 0.1_wp, 2, err, ctx=ctx)
+      end if
+      if (.not. allocated(err)) then
+         call pre%solve(params%tolerance, params%maxiter, converged, rmse, n_pre, err, precond=precond)
+      end if
+      if (.not. allocated(err)) call plain%free_energy(e_plain, err)
+      if (.not. allocated(err)) call pre%free_energy(e_pre, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, converged, more="preconditioned solve did not converge")
+      if (allocated(error)) return
+      stats_pre = pre%solver%get_statistics()
+      aux = precond%statistics()
+      call check(error, aux%napply > 0 .and. sum(aux%nfallback) == 0 .and. .not. precond%attached(), &
+         & more="preconditioner not used, fell back, or still lent")
+      if (allocated(error)) return
+      call check(error, e_pre, e_plain, thr=5.0e-12_wp, more="energies differ with the preconditioner")
+      if (allocated(error)) return
+      call check(error, maxval(abs(pre%tr - plain%tr)), 0.0_wp, thr=5.0e-10_wp, more="t fields differ")
+      if (allocated(error)) return
+      if (kind == 1) then
+         call check(error, stats_pre%nkrylov <= n_pre, &
+            & more="an exact lattice inverse must take one Krylov step per Newton step")
+      else
+         call check(error, precond%nested() .and. aux%niteration(2) > 0, more="coarse lattice not used")
+         if (allocated(error)) return
+         call check(error, stats_pre%nkrylov < stats_plain%nkrylov, &
+            & more="the molecular auxiliary preconditioner did not reduce Krylov steps")
+      end if
+      write (*, "(a,4i6)") "  Newton/Krylov without and with cartesian-aux:", n_plain, stats_plain%nkrylov, &
+         & n_pre, stats_pre%nkrylov
+
+      ! The response after a preconditioned solve is the one without, and leaves it alone
+      before = precond%statistics()
+      call plain%response(0.04_wp, 1.0e-11_wp, wr_plain, wl_plain, wk_plain, lam_plain, err)
+      if (.not. allocated(err)) call pre%response(0.04_wp, 1.0e-11_wp, wr_pre, wl_pre, wk_pre, lam_pre, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      aux = precond%statistics()
+      call check(error, maxval(abs(wr_pre - wr_plain)) <= 1.0e-7_wp*max(1.0_wp, maxval(abs(wr_plain))) .and. &
+         & maxval(abs(wl_pre - wl_plain)) <= 1.0e-7_wp*max(1.0_wp, maxval(abs(wl_plain))), &
+         & more="responses differ after a preconditioned solve")
+      if (allocated(error)) return
+      call check(error, aux%napply == before%napply .and. .not. precond%attached(), &
+         & more="the response used the preconditioner")
+      if (allocated(error)) return
+
+      ! New tables at the same geometry, as in an SCF cycle: the same preconditioner serves
+      sr = 1.2_wp*sr
+      lr = 0.8_wp*lr
+      uk = 0.8_wp*uk
+      before = aux
+      call plain%update_potential(sr, lr, uk, err)
+      if (.not. allocated(err)) call pre%update_potential(sr, lr, uk, err)
+      if (.not. allocated(err)) call plain%solve(params%tolerance, params%maxiter, converged, rmse, n_plain, err, &
+         & reuse_initial_guess=.true.)
+      if (.not. allocated(err)) call pre%solve(params%tolerance, params%maxiter, converged, rmse, n_pre, err, &
+         & reuse_initial_guess=.true., precond=precond)
+      if (.not. allocated(err)) call plain%free_energy(e_plain, err)
+      if (.not. allocated(err)) call pre%free_energy(e_pre, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      aux = precond%statistics()
+      call check(error, converged .and. aux%napply > before%napply, more="SCF update: preconditioned solve")
+      if (allocated(error)) return
+      call check(error, e_pre, e_plain, thr=5.0e-12_wp, more="SCF update: energies differ")
+      if (allocated(error)) return
+
+      ! HYBRID: MDIIS down to 1e-6, then JFNK with the preconditioner
+      params%solver%name = "HYBRID"
+      params%solver%hybrid%switch_rmse = 1.0e-6_wp
+      before = aux
+      call new_uv3d_problem(hybrid, ctx, grid, response, sr, lr, uk, [0.01_wp, 0.014_wp], beta, params, err)
+      if (.not. allocated(err)) then
+         call hybrid%solve(params%tolerance, params%maxiter, converged, rmse, n_pre, err, precond=precond)
+      end if
+      if (.not. allocated(err)) call hybrid%free_energy(e_hybrid, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      aux = precond%statistics()
+      call check(error, converged .and. aux%napply > before%napply .and. .not. precond%attached(), &
+         & more="HYBRID did not hand the preconditioner to its Newton stage")
+      if (allocated(error)) return
+      call check(error, e_hybrid, e_plain, thr=5.0e-12_wp, more="HYBRID: energy differs")
+      if (allocated(error)) return
+
+      ! A solve stopped after one iteration returns the preconditioner, which serves the next
+      before = aux
+      call pre%solve(params%tolerance, 1, converged, rmse, n_pre, err, precond=precond)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      aux = precond%statistics()
+      call check(error, .not. converged .and. .not. precond%attached() .and. aux%napply > before%napply, &
+         & more="an unconverged solve kept the preconditioner or did not use it")
+      if (allocated(error)) return
+      before = aux
+      call pre%solve(params%tolerance, params%maxiter, converged, rmse, n_pre, err, precond=precond)
+      if (.not. allocated(err)) call pre%free_energy(e_pre, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      aux = precond%statistics()
+      call check(error, converged .and. .not. precond%attached() .and. aux%napply > before%napply, &
+         & more="the preconditioner did not serve the solve after an unconverged one")
+      if (allocated(error)) return
+      call check(error, e_pre, e_plain, thr=5.0e-12_wp, more="after an unconverged solve: energy differs")
+      call ctx%delete()
+   end subroutine aux_problem_case
+
+   !> Weak solute in physical water on the compact molecular grid of the gradient tests,
+   !> through the model: the same energy with cartesian-aux, whose work the solve reports,
+   !> also after a geometry update, which builds the preconditioner again
+   subroutine aux_model(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_vv_type) :: solvent
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(structure_type) :: mol, moved
+      real(wp) :: energy(2), moved_energy(2)
+      character(len=200) :: line
+      integer :: variant, unit, stat, napply, pos, nreport, nused
+
+      open (newunit=unit, status="scratch", action="readwrite")
+      call new_context(ctx, nthreads=2, verbosity=4, unit=unit)
+      do variant = 1, 2
+         if (variant == 1) then
+            call host_model(ctx, "none", 3, model, solvent, err, reuse_bulk=.true.)
+         else
+            call host_model(ctx, "none", 3, model, solvent, err, reuse_bulk=.true., aux_n=16)
+         end if
+         if (.not. allocated(err)) then
+            mol = solvent%structure()
+            call get_qc_handymod_recipe(recipe, err, nrad=18, degree=7, rmax=6.0_wp)
+         end if
+         if (.not. allocated(err)) call new_molecular_point_grid(grid, err, recipe=recipe, dr=0.8_wp, &
+            & nufft_tol=1.0e-12_wp, weight_threshold=0.0_wp, pruning_threshold=0.0_wp)
+         if (.not. allocated(err)) call grid%update(mol, err)
+         if (.not. allocated(err)) then
+            if (allocated(model%grid)) deallocate (model%grid)
+            allocate (model%grid, source=grid)
+            model%grid%nthreads = 2
+            call model%update(mol, err)
+         end if
+         if (.not. allocated(err)) call host_energy(model, [0.0_wp], .false., energy(variant), err)
+         ! A geometry update drops the problem and its preconditioner; both are built again
+         if (.not. allocated(err)) then
+            moved = mol
+            moved%xyz(1, 1) = moved%xyz(1, 1) + 0.05_wp
+            call model%update(moved, err)
+         end if
+         if (.not. allocated(err)) call host_energy(model, [0.0_wp], .false., moved_energy(variant), err)
+         call check_moist_error(error, err)
+         if (allocated(error)) return
+      end do
+      call check(error, energy(2), energy(1), rel=.true., thr=1.0e-8_wp, more="energies differ with cartesian-aux")
+      if (allocated(error)) return
+      call check(error, moved_energy(2), moved_energy(1), rel=.true., thr=1.0e-8_wp, &
+         & more="energies differ with cartesian-aux after a geometry update")
+      if (allocated(error)) return
+      ! Each preconditioned solve reports its applications
+      nreport = 0
+      nused = 0
+      rewind (unit)
+      do
+         read (unit, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         pos = index(line, "Preconditioner applies")
+         if (pos == 0) cycle
+         nreport = nreport + 1
+         napply = -1
+         read (line(index(line, "...") + 3:), *, iostat=stat) napply
+         if (stat == 0 .and. napply > 0) nused = nused + 1
+      end do
+      call ctx%delete()
+      close (unit)
+      call check(error, nreport == 2 .and. nused == 2, more="two preconditioned solves must report their applications")
+   end subroutine aux_model
 
 end module test_moz_3d_response

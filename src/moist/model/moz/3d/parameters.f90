@@ -1,7 +1,7 @@
 !> Settings of the 3D MOZ (UV) solve
 !>
 !> JSON/TOML keys: closure, correction, finite_size, susceptibility, convergence.*, solver.* with
-!> the solver controls as a nested group plus solver.jfnk.precond,
+!> the solver controls as a nested group plus solver.jfnk.precond and its precond_* settings,
 !> and solvent.* with the settings of the 1D VV solve of the model's solvent copy
 !> Verbosity and thread count come from the run context
 module moist_model_moz_3d_parameters
@@ -19,7 +19,7 @@ module moist_model_moz_3d_parameters
    public :: model_moz_3d_parameters_type, preconditioners_3d_uv, susceptibility_modes, cold_guess_modes
 
    !> Preconditioners the 3D UV solve implements
-   character(len=*), parameter :: preconditioners_3d_uv(1) = [character(len=8) :: "none"]
+   character(len=*), parameter :: preconditioners_3d_uv(2) = [character(len=16) :: "none", "cartesian-aux"]
    !> Susceptibility modes: OZ reconstruction, direct transform, or linear interpolation
    character(len=*), parameter :: susceptibility_modes(3) = [character(len=8) :: "oz", "direct", "linear"]
    !> Cold starts: map c_s = 0 through OZ, or start with t_s = 0
@@ -50,8 +50,16 @@ module moist_model_moz_3d_parameters
       logical :: reuse_initial_guess = .true.
       !> Cold initial field: cs0 maps c_s = 0; ts0 sets t_s = 0 directly
       character(len=8) :: cold_guess = "cs0"
-      !> Preconditioner of the Newton-Krylov solves: none
-      character(len=8) :: precond = "none"
+      !> Preconditioner of the Newton-Krylov solves: none or cartesian-aux
+      character(len=16) :: precond = "none"
+      !> cartesian-aux: requested cells per axis of the auxiliary lattice, even, at least 4, capped by the grid
+      integer :: precond_aux_n = 64
+      !> cartesian-aux: precond_aux_n/2 adds a coarse lattice of half the capped fine cells, precond_aux_n none
+      integer :: precond_coarse_n = 32
+      !> cartesian-aux: most Krylov steps of each lattice solve, at least 1
+      integer :: precond_inner_max_iter = 2
+      !> cartesian-aux: residual reduction that ends a lattice solve, in (0, 1)
+      real(wp) :: precond_inner_rtol = 0.1_wp
       !> Solver controls of the UV solve
       type(moist_model_moz_solver_parameters_type) :: solver
       !> Settings of the VV solve of the model's solvent copy
@@ -86,6 +94,10 @@ contains
       self%reuse_initial_guess = defaults%reuse_initial_guess
       self%cold_guess = defaults%cold_guess
       self%precond = defaults%precond
+      self%precond_aux_n = defaults%precond_aux_n
+      self%precond_coarse_n = defaults%precond_coarse_n
+      self%precond_inner_max_iter = defaults%precond_inner_max_iter
+      self%precond_inner_rtol = defaults%precond_inner_rtol
       call self%solver%init_defaults()
       call self%solvent%init_defaults()
    end subroutine init_3d_defaults
@@ -110,6 +122,14 @@ contains
       call self%register_group("solver", self%solver)
       ! Preconditioner settings print with the JFNK controls
       call self%register_string("solver.jfnk.precond", self%precond, &
+         & level=self%solver%group_level("jfnk", 3))
+      call self%register_int_scalar("solver.jfnk.precond_aux_n", self%precond_aux_n, &
+         & level=self%solver%group_level("jfnk", 3))
+      call self%register_int_scalar("solver.jfnk.precond_coarse_n", self%precond_coarse_n, &
+         & level=self%solver%group_level("jfnk", 3))
+      call self%register_int_scalar("solver.jfnk.precond_inner_max_iter", self%precond_inner_max_iter, &
+         & level=self%solver%group_level("jfnk", 3))
+      call self%register_real_scalar("solver.jfnk.precond_inner_rtol", self%precond_inner_rtol, &
          & level=self%solver%group_level("jfnk", 3))
       call self%register_group("solvent", self%solvent)
    end subroutine register_3d_entries
@@ -147,6 +167,10 @@ contains
       end if
       call check_preconditioner_name(self%precond, preconditioners_3d_uv, "3D UV", error)
       if (allocated(error)) return
+      if (to_lower(trim(adjustl(self%precond))) == "cartesian-aux") then
+         call check_cartesian_aux(self, error)
+         if (allocated(error)) return
+      end if
       if (self%solver%runs("jfnk") .and. self%solver%jfnk%deflation) then
          call fatal_error(error, "jfnk.deflation is only available for the 1D VV solve")
          return
@@ -158,6 +182,39 @@ contains
          if (.not. allocated(error)) call self%solvent%validate(error)
       end if
    end subroutine validate_3d_parameters
+
+   !> Settings the cartesian-aux preconditioner needs
+   !>
+   !> - Lattice sizes and inner controls in range
+   !> - A solver that applies preconditioners (jfnk or hybrid), with exact Jacobian
+   !>   products for the closure derivative and without recycling, which assumes a
+   !>   fixed preconditioner
+   !>
+   !> @param[in]  self   parameter values
+   !> @param[out] error  first invalid setting
+   subroutine check_cartesian_aux(self, error)
+      !> Parameter values
+      class(model_moz_3d_parameters_type), intent(in) :: self
+      !> First invalid setting
+      type(error_type), allocatable, intent(out) :: error
+
+      if (self%precond_aux_n < 4 .or. mod(self%precond_aux_n, 2) /= 0) then
+         call fatal_error(error, "cartesian-aux: jfnk.precond_aux_n must be even and at least 4")
+      else if (self%precond_coarse_n /= self%precond_aux_n .and. 2*self%precond_coarse_n /= self%precond_aux_n) then
+         call fatal_error(error, "cartesian-aux: jfnk.precond_coarse_n must be precond_aux_n/2, "// &
+            & "or precond_aux_n without a coarse lattice")
+      else if (self%precond_inner_max_iter < 1) then
+         call fatal_error(error, "cartesian-aux: jfnk.precond_inner_max_iter must be at least 1")
+      else if (.not. positive(self%precond_inner_rtol) .or. self%precond_inner_rtol >= 1.0_wp) then
+         call fatal_error(error, "cartesian-aux: jfnk.precond_inner_rtol must lie in (0, 1)")
+      else if (.not. self%solver%runs("jfnk")) then
+         call fatal_error(error, "cartesian-aux needs the jfnk or hybrid solver")
+      else if (.not. self%solver%jfnk%use_exact_jvp) then
+         call fatal_error(error, "cartesian-aux needs jfnk.use_exact_jvp = true")
+      else if (self%solver%jfnk%recycle > 0) then
+         call fatal_error(error, "cartesian-aux changes with each application; set jfnk.recycle = 0")
+      end if
+   end subroutine check_cartesian_aux
 
    !> Finite positive value
    !>

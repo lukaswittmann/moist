@@ -34,14 +34,16 @@ contains
    !>
    !> - Uses the shared GMRES through a linear JFNK evaluator
    !> - Tolerance is an absolute RMS of the unpreconditioned transpose residual
-   !> - A supplied left preconditioner acts on the transpose system and stays fixed per inner solve
+   !> - A supplied left preconditioner acts on the transpose system and stays fixed per inner solve;
+   !>   a flexible one is refused
    !> - A guess, e.g. the solution of a nearby system, replaces the zero start
    !>
    !> @param[in]    ctx              run context; verbosity and OpenMP team size of the inner solver
    !> @param[in]    evaluator        frozen primal operator, borrowed for this call
    !> @param[in]    rhs              Euclidean right-hand side (npts, ncol)
    !> @param[out]   solution         solution (npts, ncol); allocated only on success
-   !> @param[out]   error            invalid operator, controls or failure to converge
+   !> @param[out]   error            invalid operator, controls, a flexible preconditioner or
+   !>                                 failure to converge
    !> @param[in]    tolerance        positive absolute RMS threshold; default 1e-10
    !> @param[in]    max_iter         maximum linear refinement steps; default 32
    !> @param[inout] preconditioner   borrowed left preconditioner for J**T
@@ -106,6 +108,12 @@ contains
       if (.not. evaluator%has_adjoint()) then
          call fatal_error(error, "Adjoint solve requires an exact transpose operator")
          return
+      end if
+      if (present(preconditioner)) then
+         if (preconditioner%flexible()) then
+            call fatal_error(error, "A flexible preconditioner cannot precondition the transpose system")
+            return
+         end if
       end if
       if (size(rhs) == 0 .or. .not. all(ieee_is_finite(rhs)) .or. .not. ieee_is_finite(tol)) then
          call fatal_error(error, "Adjoint RHS must be nonempty and finite, with finite tolerance")

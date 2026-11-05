@@ -112,14 +112,20 @@ replaces the controls.
 Preconditioners
 ---------------
 
-JFNK accepts a left preconditioner (``ready``, ``apply``, ``describe``) that the
-model owns and lends for a solve; the operator must be linear and fixed during
-each inner solve, and it is also applied to the transpose system. The model
-key ``solver.jfnk.precond`` selects it:
+JFNK accepts a preconditioner (``ready``, ``apply``, ``describe``, ``flexible``) that the
+model owns and lends for a solve. A fixed one (``flexible`` false, the default) acts on the
+left: the operator must be linear and fixed during each inner solve, and it is also applied to
+the transpose system. A flexible one may change from one application to the next, e.g. when it
+runs inner iterations; JFNK then solves with flexible GMRES :cite:p:`saad1993fgmres`, which
+applies it on the right, keeps every preconditioned direction and measures the forcing term on
+the unpreconditioned residual, without recycling or deflation, and the transpose solve refuses
+it. The model key
+``solver.jfnk.precond`` selects it:
 
 - 1D UV: ``none`` or ``spectral`` (radial small-k filter, default);
 - 1D VV: ``none``, ``spectral`` (default) or ``kspace`` (block inverse in k space);
-- 3D UV: ``none``.
+- 3D UV: ``none`` (default) or ``cartesian-aux`` (flexible, lattice approximate inverse; see
+  :doc:`uv3d`).
 
 The spectral filter also smooths JFNK's Picard fallback step.
 
@@ -134,4 +140,5 @@ is retried cold, or too few site pairs for ``kspace``. A kept guess that is
 infeasible, or a warm start that ends unconverged without an error, falls back
 to the cold guess without a warning. Recoveries inside a stage (Picard
 fallbacks, inner solves capped at ``max_krylov``, skipped deflation or
-recycling) are summarized in one note after each stage of the iteration table.
+recycling, unusable directions of a flexible preconditioner) are summarized in
+one note after each stage of the iteration table.

@@ -43,7 +43,8 @@ module moist_model_moz_3d_type
       & thermo_list_type, accumulate_solvation_adjoint, huenenberger_correction_type, new_huenenberger_correction
    use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_model_moz_3d_susceptibility, only: uv3d_susceptibility_type, new_uv3d_susceptibility
-   use moist_model_moz_3d_driver, only: uv3d_problem_type, new_uv3d_problem
+   use moist_model_moz_3d_preconditioner, only: uv3d_aux_preconditioner_type
+   use moist_model_moz_3d_driver, only: uv3d_problem_type, new_uv3d_problem, new_uv3d_preconditioner
    use moist_model_moz_checkpoint, only: moz_checkpoint_type, checkpoint_kind_uv3d
    implicit none(type, external)
    private
@@ -88,6 +89,8 @@ module moist_model_moz_3d_type
       type(huenenberger_correction_type), allocatable, private :: finite_size
       !> Latest UV problem, kept for reuse
       type(uv3d_problem_type), allocatable, private :: problem
+      !> Preconditioner of the problem, lent to its solves; built and dropped with the problem
+      type(uv3d_aux_preconditioner_type), allocatable, private :: aux
       !> Potential tables of the kept solution
       real(wp), allocatable, private :: u_sr(:, :), ur_lr(:, :)
       !> Long-range reciprocal potential of the kept solution, (npts_k, nv)
@@ -198,7 +201,7 @@ contains
       self%solved = .false.
       self%response_ready = .false.
       if (allocated(self%lambda)) deallocate (self%lambda)
-      if (allocated(self%problem)) deallocate (self%problem)
+      call drop_problem(self)
       if (allocated(self%finite_size)) deallocate (self%finite_size)
       self%box_lengths = 0.0_wp
    end subroutine moz_3d_invalidate
@@ -495,7 +498,7 @@ contains
          if (.not. self%response%matches(self%grid, self%solvent, self%params%susceptibility)) then
             self%response_ready = .false.
             self%solved = .false.
-            if (allocated(self%problem)) deallocate (self%problem)
+            call drop_problem(self)
             if (allocated(self%lambda)) deallocate (self%lambda)
             if (allocated(self%finite_size)) deallocate (self%finite_size)
          end if
@@ -524,7 +527,7 @@ contains
 
       nv = self%solvent%nsite()
       if (allocated(self%problem)) then
-         if (.not. self%problem%equation%ready()) deallocate (self%problem)
+         if (.not. self%problem%equation%ready()) call drop_problem(self)
       end if
       if (allocated(self%problem)) then
          call self%problem%update_potential(u_sr, ur_lr, uk_lr, error)
@@ -532,6 +535,9 @@ contains
          allocate (self%problem)
          call new_uv3d_problem(self%problem, self%ctx, self%grid, self%response, u_sr, ur_lr, uk_lr, &
             & spread(self%solvent%density(), 1, nv), self%solvent%beta(), self%params, error)
+         if (.not. allocated(error)) call setup_preconditioner(self, error)
+         ! A problem without its requested preconditioner is not kept for later solves
+         if (allocated(error)) call drop_problem(self)
       end if
       if (allocated(error)) return
       if (allocated(self%checkpoint)) then
@@ -545,8 +551,10 @@ contains
          if (.not. reuse_guess) call self%checkpoint%load_guess(self%ctx, self%problem%beta, ur_lr, 4, guess, matched)
       end if
       call self%ctx%timer%stop("Setup")
+      ! An unallocated preconditioner is an absent argument
       call self%problem%solve(self%params%tolerance, self%params%maxiter, converged, rmse, niter, error, &
-         & reuse_initial_guess=reuse_guess, guess=guess, matched=matched, checkpoint=self%checkpoint)
+         & reuse_initial_guess=reuse_guess, guess=guess, matched=matched, checkpoint=self%checkpoint, &
+         & precond=self%aux)
       if (allocated(error)) return
       write (buf, "(i0,' iterations, RMS residual ',es9.2)") niter, rmse
       if (.not. converged) then
@@ -608,6 +616,35 @@ contains
          call pp%blank()
       end if
    end subroutine solve_uv_tables
+
+   !> Build the selected preconditioner of a new problem
+   !>
+   !> - cartesian-aux: `new_uv3d_preconditioner` on the model's grid and solvent
+   !> - Nothing for `none`
+   !>
+   !> @param[in,out] self   model with a new problem and a solved solvent
+   !> @param[out]    error  layout, response or build failure
+   subroutine setup_preconditioner(self, error)
+      !> Model
+      class(model_moz_3d_type), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (allocated(self%aux)) deallocate (self%aux)
+      if (to_lower(trim(adjustl(self%params%precond))) /= "cartesian-aux") return
+      allocate (self%aux)
+      call new_uv3d_preconditioner(self%aux, self%grid, self%solvent, self%params, self%problem%beta, self%ctx, error)
+   end subroutine setup_preconditioner
+
+   !> Drop the problem and the preconditioner built with it
+   !>
+   !> @param[in,out] self  model
+   subroutine drop_problem(self)
+      !> Model
+      class(model_moz_3d_type), intent(inout) :: self
+      if (allocated(self%problem)) deallocate (self%problem)
+      if (allocated(self%aux)) deallocate (self%aux)
+   end subroutine drop_problem
 
    !> Copies of the physical correlations of the latest UV solve, (ngrid, nv)
    !>

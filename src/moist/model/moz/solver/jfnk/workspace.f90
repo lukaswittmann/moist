@@ -29,6 +29,10 @@ module moist_model_moz_solver_jfnk_workspace
       real(wp), allocatable :: ws_rhs_flat(:), ws_delta_flat(:), ws_r(:), ws_w(:)
       !> Optional deflation work vector (nflat)
       real(wp), allocatable :: ws_z(:)
+      !> Preconditioned directions of flexible GMRES (nflat, restart)
+      !>
+      !> - Allocated only when a flexible preconditioner is applied
+      real(wp), allocatable :: ws_zbasis(:, :)
       !> Arnoldi basis (nflat, capacity + 1) and Hessenberg matrix (capacity + 1, capacity)
       !>
       !> - Capacity follows the requested restart, not the number of steps actually taken
@@ -49,6 +53,7 @@ module moist_model_moz_solver_jfnk_workspace
       procedure :: ensure => workspace_ensure
       procedure :: ensure_recycle => workspace_ensure_recycle
       procedure :: ensure_fd => workspace_ensure_fd
+      procedure :: ensure_flexible => workspace_ensure_flexible
       procedure :: field_shape => workspace_field_shape
       procedure :: capacity => workspace_capacity
       procedure :: recycle_capacity => workspace_recycle_capacity
@@ -184,6 +189,29 @@ contains
       if (allocated(self%ws_gamma_pert)) return
       allocate (self%ws_gamma_pert(npts, npair), self%ws_f_pert(npts, npair))
    end subroutine workspace_ensure_fd
+
+   !> Allocate the preconditioned directions of flexible GMRES unless they fit
+   !>
+   !> - Directions are overwritten before use, so they are not initialized
+   !> - The allocation stamp is kept: the other arrays are unchanged
+   !>
+   !> @param[inout] self   owned scratch
+   !> @param[in]    nflat  vector length
+   !> @param[in]    m      directions per cycle
+   subroutine workspace_ensure_flexible(self, nflat, m)
+      !> Owned scratch
+      class(moist_model_moz_solver_workspace_type), intent(inout) :: self
+      !> Vector length
+      integer, intent(in) :: nflat
+      !> Directions per cycle
+      integer, intent(in) :: m
+
+      if (allocated(self%ws_zbasis)) then
+         if (size(self%ws_zbasis, 1) == nflat .and. size(self%ws_zbasis, 2) == m) return
+         deallocate (self%ws_zbasis)
+      end if
+      allocate (self%ws_zbasis(nflat, m))
+   end subroutine workspace_ensure_flexible
 
    !> Deallocate every array and restore default components
    !>

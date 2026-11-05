@@ -1,13 +1,16 @@
-!> Abstract left preconditioner for Newton-Krylov linear solves
+!> Abstract preconditioner for Newton-Krylov linear solves
 !>
 !> - Model drivers own the operators and lend them to the solver
-!> - Operator used inside GMRES is linear, nonsingular and fixed during the inner solve, restarts included
+!> - Default: a left preconditioner; the operator used inside GMRES is linear, nonsingular
+!>   and fixed during the inner solve, restarts included, and also preconditions the
+!>   transpose system
+!> - Flexible (`flexible` true): the action may change between applications, e.g. when it
+!>   runs an inner iteration; the solver applies it on the right with flexible GMRES, which
+!>   keeps every preconditioned direction; the transpose solve refuses it
 !> - Scratch and counters may change
 !> - Fallback filters share this interface but act outside the inner solve
-!> - Concrete 1D operators live in model/moz/1d/preconditioner
-!> - TODO: port the 3D operators
-!> - Coarse-grid Jacobian implementation needs transfers between the grids, a fixed linear coarse solve
-!>   and treatment of the remaining fine-grid modes
+!> - Concrete 1D operators live in model/moz/1d/preconditioner, the 3D one in
+!>   model/moz/3d/preconditioner.f90
 module moist_model_moz_solver_core_preconditioner
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_utils, only: to_lower
@@ -15,12 +18,15 @@ module moist_model_moz_solver_core_preconditioner
    private
    public :: moist_model_moz_solver_preconditioner_type, check_preconditioner_name
 
-   !> Left preconditioner lent to a Krylov solver for the duration of a solve
+   !> Preconditioner lent to a Krylov solver for the duration of a solve; applied on the
+   !> left, or on the right when `flexible`
    type, abstract :: moist_model_moz_solver_preconditioner_type
    contains
       procedure(ready_interface), deferred :: ready
       procedure(apply_interface), deferred :: apply
       procedure(describe_interface), deferred :: describe
+      !> Whether the action may change between applications; false unless overridden
+      procedure :: flexible => preconditioner_fixed
    end type moist_model_moz_solver_preconditioner_type
 
    !> Abstract interfaces of the deferred preconditioner bindings
@@ -78,6 +84,15 @@ module moist_model_moz_solver_core_preconditioner
    end interface
 
 contains
+
+   !> A fixed linear operator, the default
+   !>
+   !> @param[in] self  preconditioner
+   pure logical function preconditioner_fixed(self) result(flexible)
+      !> Preconditioner
+      class(moist_model_moz_solver_preconditioner_type), intent(in) :: self
+      flexible = .false.
+   end function preconditioner_fixed
 
    !> Reject a preconditioner name the model does not implement
    !>

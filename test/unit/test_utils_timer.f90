@@ -3,7 +3,7 @@ module test_utils_timer
    use mctc_env, only: wp, i8
    use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
-   use moist_utils_timer, only: timer_type, cat_setup, cat_gradient
+   use moist_utils_timer, only: timer_type, cat_setup, cat_gradient, cat_solve, cat_preconditioner
    implicit none(type, external)
    private
 
@@ -33,7 +33,8 @@ contains
          new_unittest("growth_preserves_tree", test_growth_preserves_tree), &
          new_unittest("reset_open_and_poisoned", test_reset_open_and_poisoned), &
          new_unittest("handle_and_mismatch_contracts", test_handle_and_mismatch_contracts), &
-         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers) &
+         new_unittest("report_leaves_open_timers", test_report_leaves_open_timers), &
+         new_unittest("category_summary", test_category_summary) &
          ]
 
    end subroutine collect_utils_timer
@@ -42,11 +43,17 @@ contains
    !>
    !> Ends only after the timer's clock has ticked; ifx on Windows ticks too
    !> coarsely for the loop alone
-   subroutine busy()
+   !>
+   !> @param[in] minimum  minimum elapsed seconds, default one clock tick
+   subroutine busy(minimum)
+      !> Minimum elapsed seconds
+      real(wp), optional, intent(in) :: minimum
       integer :: k
-      integer(i8) :: c0, c
-      real(wp) :: x
-      call system_clock(c0)
+      integer(i8) :: c0, c, rate
+      real(wp) :: x, duration
+      duration = 0.0_wp
+      if (present(minimum)) duration = minimum
+      call system_clock(c0, rate)
       x = 0.0_wp
       do k = 1, 50000
          x = x + sqrt(real(k, wp))
@@ -54,7 +61,7 @@ contains
       if (x < 0.0_wp) error stop
       do
          call system_clock(c)
-         if (c /= c0) exit
+         if (c /= c0 .and. real(c - c0, wp) >= duration*real(rate, wp)) exit
       end do
    end subroutine busy
 
@@ -634,5 +641,80 @@ contains
       call check(error, .not. ieee_is_nan(t%get("open/inner")), "a report leaves a nested open timer measuring")
       call t%delete()
    end subroutine test_report_leaves_open_timers
+
+   !> A summary category combines disjoint stages once and preserves the wall-time partition
+   subroutine test_category_summary(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(timer_type) :: t
+      character(len=14), parameter :: stages(3) = [character(len=14) :: "Setup", "Linearization", "Krylov solve"]
+      integer, parameter :: categories(3) = [cat_setup, cat_solve, cat_solve]
+      integer :: i, iu, stat, nsummary
+      real(wp) :: expected, reported, value, category_total
+      logical :: in_summary, detail_visible
+      character(len=256) :: line
+
+      call t%new()
+      call t%set_category_summary(cat_preconditioner, .true.)
+      call t%start("total", category=cat_solve)
+      expected = 0.0_wp
+      do i = 1, size(stages)
+         call t%start(trim(stages(i)), category=categories(i))
+         call t%start("detail", category=cat_preconditioner)
+         call busy(0.005_wp)
+         call t%stop()
+         expected = expected + t%get("total/"//trim(stages(i))//"/detail")
+         call t%stop()
+      end do
+      call t%stop()
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit for the summary report opens")
+      if (allocated(error)) return
+      call t%write(iu)
+      rewind (iu)
+      in_summary = .false.
+      detail_visible = .false.
+      nsummary = 0
+      reported = -1.0_wp
+      category_total = 0.0_wp
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "detail") > 0) detail_visible = .true.
+         if (index(line, "by category") > 0) in_summary = .true.
+         if (.not. in_summary) cycle
+         if (index(line, "====") > 0) exit
+         read (line(28:), *, iostat=stat) value
+         if (stat /= 0) cycle
+         category_total = category_total + value
+         if (trim(adjustl(line(1:27))) == "Preconditioner") then
+            nsummary = nsummary + 1
+            reported = value
+         end if
+      end do
+      close (iu)
+
+      call check(error, .not. detail_visible, "summary category has no detail rows in the tree")
+      if (allocated(error)) return
+      call check(error, nsummary == 1, "summary category appears once across all stages")
+      if (allocated(error)) return
+      call check(error, abs(reported - expected) <= 5.1e-5_wp, "summary includes every measured phase")
+      if (allocated(error)) return
+      call check(error, abs(category_total - t%get("total")) <= 2.0e-4_wp, "categories do not count time twice")
+      if (allocated(error)) return
+
+      open (newunit=iu, status="scratch", action="readwrite")
+      call t%write_simple(iu)
+      rewind (iu)
+      detail_visible = .false.
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "detail") > 0) detail_visible = .true.
+      end do
+      close (iu)
+      call check(error, .not. detail_visible, "simple report also folds summary categories into parents")
+      call t%delete()
+   end subroutine test_category_summary
 
 end module test_utils_timer

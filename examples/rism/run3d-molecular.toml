@@ -48,6 +48,12 @@ tolerance = 1e-9
 [solver]
 name = "jfnk"
 
+# Optional: approximate inverse of the Jacobian on periodic Cartesian lattices
+# [solver.jfnk]
+# precond = "cartesian-aux"
+# precond_aux_n = 64
+# precond_coarse_n = 32
+
 [solvent]
 name = "water"
 temperature = 298.15  # K

@@ -8,7 +8,7 @@
 module test_utils_file
    use, intrinsic :: iso_c_binding, only: c_char, c_int, c_null_char
    use mctc_env, only: moist_error => error_type
-   use test_helpers, only: check_moist_error
+   use test_helpers, only: expect_moist_error
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_utils_file, only: create_new_file, replace_file, delete_file
    implicit none(type, external)
@@ -91,7 +91,7 @@ contains
       character(len=:), allocatable :: path
 
       call create_new_file("moist-test-missing-directory/file", path, err)
-      call check_moist_error(error, err)
+      call expect_moist_error(error, err, "Failed to create a temporary file")
    end subroutine test_new_file_refused
 
    !> Rename replaces an existing destination

@@ -152,12 +152,16 @@ module moist_model_moz_solver_jfnk
       !>
       !> - Newton steps that took the Picard fallback, and those that returned a zero step
       !> - Inner solves capped at max_krylov short of their tolerance, and stagnation exits
-      !> - Steps whose requested deflation stayed inactive, and deflated solves that skipped recycling
+      !> - Steps whose requested deflation stayed inactive, not counting those with a lent
+      !>   flexible preconditioner, and deflated solves that skipped recycling
       integer :: nfallback_stage = 0, nzero_stage = 0, ncapped_stage = 0, nstagnated_stage = 0
       integer :: nundeflated_stage = 0, nunrecycled_stage = 0
+      !> Flexible solves: preconditioned directions that were zero or not finite and
+      !> replaced by the basis vector, in the current stage
+      integer :: nreplaced_stage = 0
       !> Pointer to the outer iteration printer (set by driver, nullified after use)
       type(moist_model_moz_solver_printer_type), pointer :: iter_printer => null()
-      !> Left preconditioner lent by the driver for the current solve, if any
+      !> Preconditioner lent by the driver for the current solve, if any; left unless flexible
       class(moist_model_moz_solver_preconditioner_type), pointer :: precond => null()
       !> Filter lent by the driver to smooth the Picard fallback step, if any
       class(moist_model_moz_solver_preconditioner_type), pointer :: smoother => null()
@@ -182,6 +186,7 @@ module moist_model_moz_solver_jfnk
       procedure :: release_workspace => jfnk_release_workspace
       procedure :: exchange_workspace => jfnk_exchange_workspace
       procedure :: linear_solve => gmres_linear_solve
+      procedure :: flexible_solve => fgmres_linear_solve
       procedure :: apply_precond => jfnk_apply_precond
       procedure :: apply_jacobian => jfnk_apply_jacobian
       procedure :: recycle_dim => gmres_recycle_dim
@@ -270,7 +275,8 @@ module moist_model_moz_solver_jfnk
       !*                        GMRES and deflation (gmres.f90)                         *!
       !* ============================================================================== *!
 
-      !> Inexact Newton linear solve J delta = F by left-preconditioned GMRES
+      !> Inexact Newton linear solve J delta = F by left-preconditioned GMRES, for fixed
+      !> preconditioners (see `fgmres_linear_solve` for flexible ones)
       !>
       !> Restarted GMRES(m) with modified Gram-Schmidt (or CGS2) Arnoldi
       !>
@@ -332,6 +338,59 @@ module moist_model_moz_solver_jfnk
          !> Arnoldi iterations plus recycled-image products
          integer, intent(out), optional :: gmres_iters
       end subroutine gmres_linear_solve
+
+      !> Inexact Newton linear solve J delta = F by flexible right-preconditioned GMRES
+      !>
+      !> For a lent preconditioner whose action may change between applications
+      !> (`flexible`), e.g. one that runs inner iterations
+      !>
+      !> - Restarted FGMRES(m) (Saad, SIAM J Sci Comput 14, 461 (1993)): every
+      !>   z_j = M^{-1} v_j is kept, the Arnoldi relation J Z_k = V_{k+1} H_k holds for
+      !>   any sequence of actions, and delta = Z y
+      !> - Tolerance eta*|F| on the unpreconditioned residual; restarts from b - J delta
+      !>   without the preconditioner
+      !> - Modified Gram-Schmidt or CGS2 as configured
+      !> - A z_j that is zero or not finite is replaced by v_j and counted
+      !> - At each cycle end, trailing columns whose pivot is at most 10 eps times the norm
+      !>   of their column are dropped from the least-squares solve; the solve restarts from
+      !>   the true residual unless the estimate met the tolerance with every column kept,
+      !>   and ends when no column is left
+      !> - No recycling and no deflation
+      !>
+      !> @param[inout] self          Solver (workspace)
+      !> @param[in]    residual_cb   Residual evaluator
+      !> @param[in]    gamma_curr    Current Newton point
+      !> @param[in]    f_curr        Residual at the current Newton point
+      !> @param[in]    rhs_flat      Right-hand side F (flat)
+      !> @param[out]   delta_flat    Newton direction (flat)
+      !> @param[in]    eta           Forcing term (relative tolerance)
+      !> @param[out]   feasible      Whether every product was usable
+      !> @param[out]   error         Error handle
+      !> @param[out]   gmres_iters   Arnoldi iterations
+      module subroutine fgmres_linear_solve(self, residual_cb, gamma_curr, f_curr, rhs_flat, delta_flat, &
+                                            eta, feasible, error, gmres_iters)
+         implicit none(type, external)
+         !> Solver (workspace)
+         class(moist_model_moz_solver_jfnk_type), intent(inout) :: self
+         !> Residual evaluator
+         class(moist_model_moz_solver_evaluator_type), intent(in) :: residual_cb
+         !> Current Newton point (npts, npair)
+         real(wp), intent(in) :: gamma_curr(:, :)
+         !> Residual at the current Newton point (npts, npair)
+         real(wp), intent(in) :: f_curr(:, :)
+         !> Right-hand side F, flat (npts*npair)
+         real(wp), intent(in) :: rhs_flat(:)
+         !> Newton direction, flat (npts*npair)
+         real(wp), intent(out) :: delta_flat(:)
+         !> Forcing term (relative tolerance)
+         real(wp), intent(in) :: eta
+         !> Whether every product was usable
+         logical, intent(out) :: feasible
+         !> Error handle
+         type(error_type), allocatable, intent(out) :: error
+         !> Arnoldi iterations
+         integer, intent(out), optional :: gmres_iters
+      end subroutine fgmres_linear_solve
 
       !> Deflate a residual in place, vec := (I - J Q) vec
       !>
@@ -609,6 +668,7 @@ contains
       self%nstagnated_stage = 0
       self%nundeflated_stage = 0
       self%nunrecycled_stage = 0
+      self%nreplaced_stage = 0
    end subroutine jfnk_begin_stage
 
    !> Note on the fallbacks of the current stage, for the iteration table
@@ -617,6 +677,7 @@ contains
    !> - Inner solves capped at max_krylov short of their tolerance, and stagnation exits
    !> - Steps left undeflated by a failed or singular coarse matrix, and deflated
    !>   solves that skipped recycling
+   !> - Flexible solves: preconditioned directions replaced by their basis vector
    !> - Empty when no step or inner solve fell back
    !>
    !> @param[in] self Solver after a stage
@@ -654,6 +715,10 @@ contains
       if (self%nunrecycled_stage > 0) then
          write (part, "(i0,1x,a,' skipped recycling under deflation')") self%nunrecycled_stage, &
             & inner_solves(self%nunrecycled_stage)
+         call append_part(text, trim(part))
+      end if
+      if (self%nreplaced_stage > 0) then
+         write (part, "(i0,' unusable preconditioned directions replaced')") self%nreplaced_stage
          call append_part(text, trim(part))
       end if
       if (len(text) > 0) text = self%name()//": "//text
@@ -726,7 +791,7 @@ contains
       uses = .true.
    end function jfnk_uses_preconditioner
 
-   !> Lend or detach the left preconditioner of the linear solves
+   !> Lend or detach the preconditioner of the linear solves: left, or right when flexible
    !>
    !> @param[inout] self Solver to configure
    !> @param[inout] precond Target must outlive the attachment; omit to detach

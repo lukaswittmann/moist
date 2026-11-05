@@ -320,7 +320,7 @@ if(MOIST_TESTS)
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
-    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_checkpoint moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response moz_3d_guess
+    moz_potential_kernel moz_potential_electrostatic moz_potential_ec moz_potential_lj moz_potential_oplsaa moz_solvent moz_solvent_vv moz_checkpoint moz_response moz_drism moz_1d_uv moz_1d_gradient moz_3d_uv moz_3d_response moz_3d_guess moz_3d_preconditioner
     moz_closure moz_closure_kernel moz_solver moz_1d_preconditioner moz_thermodynamics
     math_grid_3d_partition
     math_grid_3d_guards math_grid_3d_derivatives
@@ -381,22 +381,43 @@ if(MOIST_TESTS)
     new_file_distinct new_file_refused replace exclusive_collision concurrent_claims
     replace_missing_target replace_failed replace_missing_directory replace_preserves_other_files)
   set(moist_test_selected_moz_3d_guess guess_full guess_partial guess_rejected guess_failed_warm ramp_switch_end)
+  set(moist_test_selected_math_grid_transfer
+    radial_spline radial_nonuniform fit_rotation fit_translation
+    fit_collinear fit_opposite fit_axes fit_bent_straight
+    covers_box layout_validate fourier_malformed_modes fourier_malformed_kspacing
+    fourier_malformed_kref fourier_malformed_weights fourier_malformed_xyz fourier_malformed_owner
+    prepare_malformed_modes prepare_malformed_kspacing prepare_malformed_kref prepare_malformed_weights
+    prepare_malformed_xyz prepare_malformed_owner fourier_two_coordinates radial_nan_node
+    fourier_cartesian transfer_coverage transfer_columns transfer_kept_geometry
+    transfer_radial radial_negative lattice_ambiguous transfer_copy_only
+    apply_other_columns apply_other_rows prepare_mixed_kinds prepare_unknown_method
+    prepare_box_without_corner apply_after_failed_prepare trilinear kdtree_brute
+    kdtree_reach fit_atom_count fourier_field_rows radial_no_method
+    copy_points copy_duplicates copy_mixed copy_tolerance
+    points_molecular points_affine points_refinement points_uncovered
+    points_threads points_check_only points_duplicates points_extrapolation
+    deposit_constants deposit_linear deposit_adjoint deposit_empty
+    deposit_nan_weight deposit_zero_weight deposit_negative_weight deposit_small_box
+    deposit_zero_cells deposit_zero_side deposit_other_points deposit_threads)
   set(moist_test_selected_moz_checkpoint
-    file_round_trip file_candidates file_failed_save file_version tail_status blowup_candidates blowup_tail blowup_layout
+    file_round_trip file_candidates file_failed_save file_version tail_status blowup_candidates blowup_tail tail_values blowup_layout
     file_save_no_origin file_save_field_shape memory_save_no_nodes memory_save_rows refused_save_keeps
     layout_weights_size layout_kmodes_axes layout_box_dims layout_box_corner layout_box_overflow layout_corner_nan layout_radial_nodes layout_radial_order layout_points_nan layout_no_fields
     points_restart blowup_overloads blowup_unbuilt_box ramp_switch_vv ramp_switch_uv1d vv_reload vv_intermediate vv_ramp vv_unfitting uv1d_reload uv3d_reload
     points_compatible points_angular points_guess file_points uv3d_molecular memory_store memory_update memory_vv memory_uv1d
-    transfer_vv transfer_uv1d transfer_uv3d_box transfer_uv3d_finer transfer_uv3d_rotated transfer_molecular transfer_uv3d_points)
+    transfer_vv transfer_uv1d transfer_uv3d_box transfer_uv3d_finer transfer_uv3d_rotated transfer_molecular transfer_cartesian_molecular transfer_uv3d_points)
   set(moist_test_selected_moz_response cubic_accuracy oz_limits charge_screening bulk_neutrality bulk_response cache_invalidation)
   set(moist_test_selected_moz_drism parameters correction_reference rotation dielectric_limits native_products charge_moment bulk_state model_selection)
   set(moist_test_selected_moz_1d_gradient intramolecular equation_geometry problem_geometry gradient_fixed gradient_host gradient_drism_fixed gradient_drism_host)
   set(moist_test_selected_moz_3d_response equation_cartesian equation_molecular tables_cartesian tables_molecular tables_weighted_cartesian tables_weighted_molecular
     scf_tables_cartesian scf_tables_molecular scf_fallback scf_host cold_guesses
     host_charges host_field fixed_terms geometry_cartesian geometry_molecular gradient_cartesian gradient_charges gradient_molecular gradient_ec
-    gradient_drism_cartesian gradient_drism_charges gradient_drism_molecular gradient_drism_ec)
+    gradient_drism_cartesian gradient_drism_charges gradient_drism_molecular gradient_drism_ec
+    aux_cartesian aux_molecular aux_model aux_unlent)
   set(moist_test_selected_math_grid_3d_transform_adjoint optional_derivatives cartesian_even cartesian_odd molecular_type12 molecular_type3
     geometry_cartesian geometry_type12 geometry_type3)
+  set(moist_test_selected_moz_3d_preconditioner krylov_dense krylov_flexible krylov_bounded krylov_identity krylov_breakdown krylov_rejected dense_direct dense_nested identity_derivative unseen_modes fallback size_cap
+    refused_odd_cells refused_coarse_size refused_inner_steps refused_inner_rtol refused_negative_weight refused_no_modes refused_unbuilt_grid)
   set(moist_test_selected_moz_3d_uv
     parameters susceptibility_cartesian susceptibility_molecular susceptibility_refusals
     equation_map equation_copy equation_setup_errors
@@ -417,7 +438,7 @@ if(MOIST_TESTS)
     factory parameters_file rms_residual picard_update diis_extrapolation diis_convergence diis_stages
     diis_divergence_restart adjoint_solve adjoint_failures jfnk_nonlinear
     adjoint_shared_workspace adjoint_owner_controls adjoint_workspace_recovery
-    jfnk_preconditioner jfnk_line_search jfnk_forcing jfnk_deflation
+    jfnk_preconditioner jfnk_flexible jfnk_flexible_not_ready jfnk_flexible_rank jfnk_flexible_restart adjoint_flexible jfnk_line_search jfnk_forcing jfnk_deflation
     jfnk_deflation_warnings jfnk_recycle_warnings jfnk_stage_summary
     jfnk_exact_newton jfnk_exact_required jfnk_validate
     hybrid_switch hybrid_convergence hybrid_lifecycle solver_failures jfnk_callback_errors

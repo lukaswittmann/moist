@@ -35,6 +35,7 @@ contains
          & new_unittest("strict_keys", check_strict_keys), &
          & new_unittest("grid_groups", check_grid_groups), &
          & new_unittest("molecular_partitions", check_molecular_partitions), &
+         & new_unittest("radial_mappings", check_radial_mappings), &
          & new_unittest("invalid_grids", check_invalid_grids), &
          & new_unittest("water_presets", check_water_presets), &
          & new_unittest("construction", check_construction), &
@@ -162,7 +163,7 @@ contains
             & "[grid.radial]", "npts = 64", "dr = 0.2", &
             & "[grid.cartesian]", "nx = 12", "ny = 14", "nz = 16", "dr = 0.9", "margin = 3.0", &
             & "[grid.molecular]", "dr = 1.1", 'partition = "SSF"', "nufft_upsampfac = 1.5", &
-            & "[grid.molecular.radial]", "npts = 24", "rmax = 8.0", "handymod_exponent = 0.7", &
+            & "[grid.molecular.radial]", "npts = 24", "rmax = 8.0", "handymod_exponent = 0.7", 'mapping = "Linear"', &
             & "[grid.molecular.angular]", "degree = 31"
          call check(error, stat, 0)
          if (allocated(error)) return
@@ -183,6 +184,7 @@ contains
             & .and. input%grid%cartesian%margin == 3.0_wp &
             & .and. input%grid%molecular%radial%npts == 24 .and. input%grid%molecular%radial%rmax == 8.0_wp &
             & .and. input%grid%molecular%radial%handymod_exponent == 0.7_wp &
+            & .and. input%grid%molecular%radial%mapping == "linear" &
             & .and. input%grid%molecular%angular%degree == 31 .and. input%grid%molecular%dr == 1.1_wp &
             & .and. input%grid%molecular%nufft_upsampfac == 1.5_wp &
             & .and. input%grid%molecular%partition == "ssf", "Grid groups lost their independent settings")
@@ -193,6 +195,7 @@ contains
             & .and. input%grid%molecular%dr == 0.6_wp .and. input%grid%molecular%partition == "pvoronoi" &
             & .and. input%grid%molecular%radial%npts == 50 .and. input%grid%molecular%radial%rmax == 10.0_wp &
             & .and. input%grid%molecular%radial%handymod_exponent == 2.0_wp &
+            & .and. input%grid%molecular%radial%mapping == "handymod" &
             & .and. input%grid%molecular%nufft_upsampfac == 0.0_wp &
             & .and. input%grid%molecular%angular%degree == 35, &
             & "Grid defaults retained earlier input values")
@@ -280,6 +283,70 @@ contains
       end do
    end subroutine check_molecular_partitions
 
+   !> Place the radial shells by each mapping: midpoint nodes x_i mapped onto [0, rmax]
+   !>
+   !> @param[out] error Test failure
+   subroutine check_radial_mappings(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(model_moz_3d_input_type) :: input
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(structure_type) :: mol
+      integer :: unit, stat, variant, i, first
+      integer, parameter :: npts = 8
+      real(wp), parameter :: rmax = 4.0_wp, m = 1.0_wp
+      real(wp) :: expected(npts), x, u, a, c
+      character(len=8), parameter :: names(2) = ["HandyMod", "LINEAR  "], stored(2) = ["handymod", "linear  "]
+      character(len=*), parameter :: path = "moist-test-moz-input-radial-mappings.toml"
+
+      call new(mol, [1, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.5_wp, 0.0_wp, 0.0_wp], [3, 2]))
+      do variant = 1, size(names)
+         open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         write (unit, "(a)", iostat=stat) "[potential]", 'charges = "none"', &
+            & "[grid]", 'kind = "molecular"', "[grid.molecular.radial]", "npts = 8", "rmax = 4.0", &
+            & "handymod_exponent = 1.0", 'mapping = "'//trim(names(variant))//'"', &
+            & "[grid.molecular.angular]", "degree = 17"
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         close (unit, iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         call input%read_file(path, err, strict=.true.)
+         call remove_input(path)
+         if (.not. allocated(err)) call new_spatial_grid(input%grid, grid, err)
+         if (.not. allocated(err)) call grid%update(mol, err)
+         call check_moist_error(error, err)
+         if (allocated(error)) return
+         call check(error, input%grid%molecular%radial%mapping == trim(stored(variant)), &
+            & "Radial mapping name was not normalized")
+         if (allocated(error)) return
+
+         ! HandyMod with d = rmax, c = 2**m, a = c*(1 - c + d): r = d*u/(a - u*(d - c)), u = (1 + x)**m
+         c = 2.0_wp**m
+         a = c*(1.0_wp - c + rmax)
+         do i = 1, npts
+            x = -1.0_wp + real(2*i - 1, wp)/real(npts, wp)
+            u = (1.0_wp + x)**m
+            expected(i) = merge(rmax*u/(a - u*(rmax - c)), 0.5_wp*rmax*(1.0_wp + x), variant == 1)
+         end do
+         select type (grid)
+         type is (moist_math_grid_3d_molecular_type)
+            first = grid%atom_shell_offset(1)
+            call check(error, grid%atom_shell_offset(2) - first, npts)
+            if (allocated(error)) return
+            call check(error, maxval(abs(grid%shell_r(first:first + npts - 1) - expected)) < 1.0e-12_wp, &
+               & "Radial shells of "//trim(stored(variant))//" are not at the mapped midpoint nodes")
+         class default
+            call check(error, .false., "Molecular input constructed another grid kind")
+         end select
+         if (allocated(error)) return
+         deallocate (grid)
+      end do
+   end subroutine check_radial_mappings
+
    !> Reject invalid partition controls, grid sizes, thresholds and obsolete flat keys
    !>
    !> @param[out] error Test failure
@@ -290,7 +357,7 @@ contains
       type(model_moz_3d_input_type) :: input
       integer :: unit, stat, i
       character(len=*), parameter :: path = "moist-test-moz-input-invalid-grids.toml"
-      character(len=40), parameter :: bad(31) = [character(len=40) :: &
+      character(len=40), parameter :: bad(32) = [character(len=40) :: &
          & 'partition = "unknown"', "npts = 0", "degree = -1", "rmax = -1.0", &
          & "handymod_exponent = 0.0", "dr = 0.0", "kbuffer = -1.0", "nufft_tolerance = 0.0", &
          & "becke_k = 0", "ssf_a = 0.0", "ssf_a = 1.1", "power_width = 0.0", &
@@ -299,14 +366,15 @@ contains
          & "nrad = 50", "angular_degree = 17", "rmax = 10.0", "handymod_exponent = 2.0", &
          & "weight_threshold = 1e-14", "pruning_threshold = 0.0", &
          & "nufft_upsampfac = -1.0", "nufft_upsampfac = 0.5", "nufft_upsampfac = 1.0", &
-         & "nufft_upsampfac = nan", "nufft_upsampfac = inf", "nufft_upsampfac = -inf"]
+         & "nufft_upsampfac = nan", "nufft_upsampfac = inf", "nufft_upsampfac = -inf", &
+         & 'mapping = "logarithmic"']
 
       do i = 1, size(bad)
          open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
          select case (i)
-         case (2, 4, 5)
+         case (2, 4, 5, 32)
             write (unit, "(a)", iostat=stat) "[grid.molecular.radial]", trim(bad(i))
          case (3)
             write (unit, "(a)", iostat=stat) "[grid.molecular.angular]", trim(bad(i))

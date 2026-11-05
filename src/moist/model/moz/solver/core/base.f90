@@ -177,7 +177,7 @@ contains
       uses = .false.
    end function solver_uses_preconditioner
 
-   !> Borrow a left preconditioner whose target outlives the attachment; omit to detach
+   !> Borrow a preconditioner whose target outlives the attachment; omit to detach
    !>
    !> @param[inout] self Solver to configure; the default ignores preconditioning
    !> @param[inout] precond Borrowed operator and its scratch
