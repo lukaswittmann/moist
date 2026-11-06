@@ -21,7 +21,7 @@
 module test_model_component_pcm_solvers
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
    use, intrinsic :: iso_fortran_env, only: int64
-   use mctc_env, only: wp, sp
+   use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_env_error, only: moist_error_type => error_type
    use test_helpers, only: check_moist_error
@@ -42,8 +42,6 @@ module test_model_component_pcm_solvers
    integer, parameter :: nr = 60
    !> Relative residual threshold after a direct solve of a well-conditioned system
    real(wp), parameter :: thr = 1.0e-13_wp
-   !> Relative residual threshold for single precision
-   real(sp), parameter :: thr_sp = 1.0e-5_sp
 
    !> Operator backed by a dense matrix; the default assemble forms it from apply
    type, extends(pcm_operator) :: dense_test_operator
@@ -103,7 +101,6 @@ contains
 
       testsuite = [ &
          & new_unittest("lapack_sytrf_sytrs", test_lapack_sytrf_sytrs), &
-         & new_unittest("lapack_sytrf_sytrs_sp", test_lapack_sytrf_sytrs_sp), &
          & new_unittest("operator_apply", test_operator_apply_matches_matrix), &
          & new_unittest("operator_assemble_wrong_shape", test_operator_assemble_wrong_shape, &
          & should_fail=.true.), &
@@ -434,28 +431,6 @@ contains
       call sytrf(f, ipiv, info, uplo="l")
       call check(error, info > 0, "sytrf reports a singular matrix")
    end subroutine test_lapack_sytrf_sytrs
-
-   !> Single precision sytrf/sytrs wrappers
-   subroutine test_lapack_sytrf_sytrs_sp(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      real(sp), parameter :: a(3, 3) = reshape([0.0_sp, 1.0_sp, 2.0_sp, 1.0_sp, 0.0_sp, &
-                                                3.0_sp, 2.0_sp, 3.0_sp, 0.0_sp], [3, 3])
-      real(sp), parameter :: x_ref(3, 1) = reshape([1.0_sp, -2.0_sp, 0.5_sp], [3, 1])
-      real(sp) :: f(3, 3), x(3, 1)
-      integer :: ipiv(3), info
-
-      f = a
-      call sytrf(f, ipiv, info, uplo="l")
-      call check(error, info, 0, "ssytrf info")
-      if (allocated(error)) return
-      x = matmul(a, x_ref)
-      call sytrs(f, x, ipiv, info, uplo="l")
-      call check(error, info, 0, "ssytrs info")
-      if (allocated(error)) return
-      call check(error, maxval(abs(x - x_ref)) < thr_sp, "ssytrs solution")
-   end subroutine test_lapack_sytrf_sytrs_sp
 
    !> The test operator applies its matrix and transpose consistently with assemble
    subroutine test_operator_apply_matches_matrix(error)

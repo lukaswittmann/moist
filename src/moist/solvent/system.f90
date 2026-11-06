@@ -1,6 +1,7 @@
 
 !> Solvent at a thermodynamic state, with its geometry
 module moist_solvent_system
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use mctc_io, only: structure_type
@@ -73,8 +74,8 @@ contains
       if (.not. present(temperature)) then
          self%temperature = 298.15_wp ! Default temperature: 25 degrees Celsius
       else
-         if (temperature <= 0.0_wp) then
-            call fatal_error(error, "Temperature must be positive.")
+         if (.not. ieee_is_finite(temperature) .or. temperature <= 0.0_wp) then
+            call fatal_error(error, "Temperature must be finite and positive.")
             return
          else
             self%temperature = temperature
@@ -84,8 +85,8 @@ contains
       if (.not. present(pressure_si)) then
          self%pressure_si = 101325.0_wp ! Default pressure: 1 atm in Pa
       else
-         if (pressure_si < 0.0_wp) then
-            call fatal_error(error, "Pressure must be non-negative.")
+         if (.not. ieee_is_finite(pressure_si) .or. pressure_si < 0.0_wp) then
+            call fatal_error(error, "Pressure must be finite and non-negative.")
             return
          else
             self%pressure_si = pressure_si

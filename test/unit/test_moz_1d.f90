@@ -5,6 +5,7 @@ module test_moz_1d
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_1d_type, only: model_moz_1d_type, new_moz_1d_model
+   use moist_model_moz_1d_parameters, only: model_moz_1d_parameters_type
    use moist_solvent_system, only: solvent_system_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential, only: moz_potential_type, ec_charges_type
@@ -44,7 +45,7 @@ contains
    !> Drive a 1D MOZ model through the coupling protocol
    !>
    !> - Host charges: new coupling and atomic_charges request through coupling protocol
-   !> - Theory-pending error after all mandatory answers
+   !> - Primal convergence error after all mandatory answers
    !> - Wrong-shape answer rejected first
    subroutine check_moz_1d(error)
       !> Test error
@@ -104,11 +105,12 @@ contains
       call check(error, .not. coupling%next(), more="atomic_charges is the only request")
       if (allocated(error)) return
 
+      ! The test model allows one VV iteration: the energy fails in the solvent solve
       energy = 7.0_wp
       call model%get_energy(coupling, energy, err)
       call check(error, allocated(err) .and. energy == 7.0_wp)
       if (allocated(error)) return
-      call check(error, index(err%message, "1D MOZ energy") > 0)
+      call check(error, index(err%message, "did not converge") > 0, more=err%message)
       if (allocated(error)) return
 
       call model%prepare_gradient(coupling, err)
@@ -120,7 +122,7 @@ contains
       call model%get_gradient(coupling, response, gradient, err)
       call check(error, allocated(err) .and. all(gradient == 3.0_wp))
       if (allocated(error)) return
-      call check(error, index(err%message, "1D MOZ gradient") > 0)
+      call check(error, index(err%message, "did not converge") > 0, more=err%message)
       if (allocated(error)) return
 
       call model%release_coupling(coupling)
@@ -518,12 +520,13 @@ contains
       end do
    end subroutine walk_summary
 
-   !> Getter guards precede pending theory and preserve caller outputs
+   !> Getter guards precede the theory and preserve caller outputs
    !>
    !> Every getter meets a foreign coupling, a model that is not updated, an
    !> unstaged coupling, missing charges, the wrong staging and, past every
-   !> guard, the pending theory; each refusal is named and leaves the energy,
-   !> the gradient and the seeded response untouched
+   !> guard, the theory: every getter fails in the one-iteration VV
+   !> solve of the test model; each refusal is named and
+   !> leaves the energy, the gradient and the seeded response untouched
    subroutine check_getter_guards(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -534,15 +537,15 @@ contains
       type(coupling_type), pointer :: coupling, other
       type(response_type) :: response
       type(atomic_charge_adjoint_response_type) :: seed
-      real(wp) :: energy, gradient(3, 2)
+      real(wp) :: energy, gradient(3, 2), bad_gradient(3, 1)
       integer :: phase, scenario
       !> Getter and scenario of the current case for diagnostics
       character(len=64) :: label
       character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
       !> Refusal each scenario must name
-      character(len=40), parameter :: reasons(6) = [character(len=40) :: &
+      character(len=40), parameter :: reasons(7) = [character(len=40) :: &
          & "different model", "updated first", "not staged", "missing required outputs", &
-         & "staged for the", "is not implemented"]
+         & "staged for the", "did not converge", "shape mismatch"]
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_updated_model(ctx, model, err)
@@ -556,7 +559,8 @@ contains
       call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
       seed%dg_dq = [4.0_wp, -2.0_wp]
       do phase = 1, 3
-         do scenario = 1, 6
+         do scenario = 1, size(reasons)
+            if (scenario == 7 .and. phase /= 3) cycle
             label = trim(phases(phase))//" getter, case '"//trim(reasons(scenario))//"'"
             ! Every case starts from an updated model; the update ends every walk
             call model%update(mol, err)
@@ -567,7 +571,7 @@ contains
             select case (scenario)
             case (2)
                call model%invalidate()
-            case (4, 6)
+            case (4, 6, 7)
                select case (phase)
                case (1)
                   call model%prepare_energy(coupling, err)
@@ -589,7 +593,7 @@ contains
                call test_failed(error, err%message)
                return
             end if
-            if (scenario == 6) then
+            if (scenario >= 6) then
                call check(error, coupling%next(), more=trim(label)//": charges not pending")
                if (allocated(error)) return
                call coupling%answer("q", [0.3_wp, -0.3_wp], err)
@@ -605,7 +609,12 @@ contains
             end if
             energy = 7.0_wp
             gradient = 3.0_wp
-            if (scenario == 1) then
+            bad_gradient = 3.0_wp
+            if (scenario == 7) then
+               call model%get_gradient(coupling, response, bad_gradient, err)
+               call check(error, all(bad_gradient == 3.0_wp), more="shape refusal wrote the gradient")
+               if (allocated(error)) return
+            else if (scenario == 1) then
                call invoke_getter(model, other, phase, response, energy, gradient, err)
             else
                call invoke_getter(model, coupling, phase, response, energy, gradient, err)
@@ -615,11 +624,6 @@ contains
             call check(error, index(err%message, trim(reasons(scenario))) > 0, &
                & more=trim(label)//": "//err%message)
             if (allocated(error)) return
-            if (scenario == 6) then
-               call check(error, index(err%message, "1D MOZ "//trim(phases(phase))) > 0, &
-                  & more=trim(label)//": "//err%message)
-               if (allocated(error)) return
-            end if
             call check(error, energy == 7.0_wp .and. all(gradient == 3.0_wp), &
                & more=trim(label)//": the refusal wrote the energy or gradient")
             if (allocated(error)) return
@@ -748,10 +752,15 @@ contains
       type(moist_error), allocatable, intent(out) :: err
       type(solvent_vv_type) :: solvent
       type(moist_math_grid_radial_type) :: rgrid, kgrid
+      type(model_moz_1d_parameters_type) :: params
+      ! A small VV grid and a single VV iteration keep energies fast and failing
+      params%solvent%npts = 256
+      params%solvent%dr = 0.05_wp
+      params%solvent%maxiter = 1
       call new_water_solvent(ctx, solvent, err)
       if (.not. allocated(err)) call new_radial_pair(rgrid, kgrid, err)
       if (allocated(err)) return
-      call new_moz_1d_model(model, ctx, rgrid, kgrid, solvent, err)
+      call new_moz_1d_model(model, ctx, rgrid, kgrid, solvent, err, params)
    end subroutine new_model
 
    !> Construct a 1D MOZ model with a host charges term

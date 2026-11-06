@@ -6,7 +6,7 @@
 !> - Hydrogen-bond term outside the DREIDING LJ term
 !> - `lj_set_tm`: fourteen transition metals, former GAFF element fallback
 !> - Elements absent from table: atoms left for later terms
-!> - Mixing rule chosen on solvent
+!> - Mixing rule chosen by the potential on which compute is called
 module moist_model_moz_potential_lj_element
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type

@@ -1,6 +1,7 @@
 !> Fixed per-atom point charges of the MOZ potential layer
 !>
 !> - Explicit charges at construction, for either side
+!> - Neutral variant: zero charges sized to the structure at update
 !> - Tail charges and kernel-built point-charge field
 !> - Optional mask for atoms left to later charge terms
 !> - No host data; all derivatives from kernels
@@ -18,7 +19,7 @@ module moist_model_moz_potential_electrostatic_fixed
    implicit none(type, external)
    private
 
-   public :: fixed_charges_type, new_fixed_charges
+   public :: fixed_charges_type, new_fixed_charges, new_neutral_charges
 
    !> Potential term of fixed per-atom point charges
    type, extends(potential_term_type) :: fixed_charges_type
@@ -26,6 +27,8 @@ module moist_model_moz_potential_electrostatic_fixed
       real(wp), allocatable :: q(:)
       !> Whether each atom takes its charge from this term (natom)
       logical, allocatable :: covered(:)
+      !> Whether update sets zero charges on every atom of the structure
+      logical, private :: neutral = .false.
    contains
       procedure :: name => fixed_charges_name
       procedure :: update => fixed_charges_update
@@ -75,6 +78,15 @@ contains
       self%q = merge(q, 0.0_wp, self%covered)
    end subroutine new_fixed_charges
 
+   !> Zero charges on every atom, sized to the structure at update
+   !>
+   !> @param[out] self  term
+   subroutine new_neutral_charges(self)
+      !> Term
+      type(fixed_charges_type), intent(out) :: self
+      self%neutral = .true.
+   end subroutine new_neutral_charges
+
    !> Diagnostic name
    !>
    !> @param[in] self  term
@@ -101,12 +113,23 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Unused; the charges are explicit
       integer, intent(in), optional :: solvent_id
+      character(len=16) :: nq, nat
+      if (self%neutral) then
+         if (allocated(self%q)) deallocate (self%q)
+         if (allocated(self%covered)) deallocate (self%covered)
+         allocate (self%q(mol%nat), source=0.0_wp)
+         allocate (self%covered(mol%nat), source=.true.)
+         return
+      end if
       if (.not. allocated(self%q)) then
          call fatal_error(error, "Fixed charges are not set; construct the term with new_fixed_charges")
          return
       end if
       if (size(self%q) /= mol%nat) then
-         call fatal_error(error, "Fixed charges do not match the number of atoms of the structure")
+         write (nq, "(i0)") size(self%q)
+         write (nat, "(i0)") mol%nat
+         call fatal_error(error, "Custom charges q have "//trim(nq)//" values, but the structure has "// &
+            & trim(nat)//" atoms")
       end if
    end subroutine fixed_charges_update
 
@@ -149,7 +172,7 @@ contains
       end if
    end function fixed_charges_covered
 
-   !> Charge-source label
+   !> Charge-source label: none for the neutral variant, else custom
    !>
    !> @param[in] self  term
    pure function fixed_charges_label(self) result(label)
@@ -157,7 +180,8 @@ contains
       class(fixed_charges_type), intent(in) :: self
       !> Label
       character(len=charge_label_len) :: label
-      label = "fixed"
+      label = "custom"
+      if (self%neutral) label = "none"
    end function fixed_charges_label
 
    !> Leave radial adjoints unchanged; fixed charges independent of geometry and host data

@@ -1,5 +1,5 @@
 module moist_math_lapack_type
-   use mctc_env, only: sp, dp, error_type
+   use mctc_env, only: dp, error_type
    implicit none(type, external)
    private
 
@@ -8,22 +8,13 @@ module moist_math_lapack_type
    !> Abstract base class for general solvers
    type, abstract :: eigen_solver_type
    contains
-      generic :: solve => solve_sp, solve_dp
-      procedure(solve_sp), deferred :: solve_sp
-      procedure(solve_dp), deferred :: solve_dp
+      !> Solve the generalized eigenvalue problem
+      procedure(solve), deferred :: solve
    end type eigen_solver_type
 
    abstract interface
-      subroutine solve_sp(self, hmat, smat, eval, error)
-         import :: eigen_solver_type, error_type, sp
-         implicit none(type, external)
-         class(eigen_solver_type), intent(inout) :: self
-         real(sp), contiguous, intent(inout) :: hmat(:, :)
-         real(sp), contiguous, intent(in) :: smat(:, :)
-         real(sp), contiguous, intent(inout) :: eval(:)
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine solve_sp
-      subroutine solve_dp(self, hmat, smat, eval, error)
+      !> Solve the generalized eigenvalue problem
+      subroutine solve(self, hmat, smat, eval, error)
          import :: eigen_solver_type, error_type, dp
          implicit none(type, external)
          class(eigen_solver_type), intent(inout) :: self
@@ -31,7 +22,7 @@ module moist_math_lapack_type
          real(dp), contiguous, intent(in) :: smat(:, :)
          real(dp), contiguous, intent(inout) :: eval(:)
          type(error_type), allocatable, intent(out) :: error
-      end subroutine solve_dp
+      end subroutine solve
    end interface
 
    !> Abstract base class for creating solver instances

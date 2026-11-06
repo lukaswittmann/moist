@@ -1,21 +1,25 @@
 !> Tests of the MOZ bulk solvent: moz_solvent
 module test_moz_solvent
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_convert, only: aatoau
+   use mctc_io_codata2018, only: Boltzmann_constant, atomic_unit_of_energy
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_solvent_system, only: solvent_system_type, new_solvent_system
    use moist_math_packed_sym, only: packed_index, npair_from_ns
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
-   use moist_model_moz_potential, only: moz_potential_type
+   use moist_model_moz_solvent_water, only: new_spce_water_geometry
+   use moist_model_moz_potential, only: moz_potential_type, potential_sites_type, lj_uff, solvent_charges_type
+   use moist_data_solvents, only: get_solvent_id
    use moist_model_moz_potential_lj_base, only: lj_mixing_lorentz_berthelot, lj_mixing_geometric
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
    use moist_model_moz_potential_lj_custom, only: custom_lj_type, new_custom_lj
    use test_helpers, only: check_moist_error
    use test_moz_fixtures, only: water_id, water_sigma, water_epsilon, water_charges, new_water_system, &
-      & new_water_solvent
+      & new_water_solvent, new_cspce_water_solvent
    implicit none(type, external)
    private
    public :: collect_moz_solvent
@@ -28,16 +32,59 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
+         & new_unittest("water_geometry", check_water_geometry), &
          & new_unittest("construct_from_table", check_construct_from_table), &
          & new_unittest("construct_custom_system", check_construct_custom), &
          & new_unittest("density_derivation", check_density_derivation), &
          & new_unittest("host_fed_refused", check_host_fed_refused), &
          & new_unittest("empty_potential_update", check_empty_potential_update), &
+         & new_unittest("neutral_bulk_charges", check_neutral_bulk), &
          & new_unittest("packed_site_pairs", check_site_pairs), &
          & new_unittest("vv_potential_tables", check_potential_tables), &
          & new_unittest("vv_tables_geometric_mixing", check_geometric_tables), &
-         & new_unittest("solve_pending", check_solve_pending)]
+         & new_unittest("solve_requires_update", check_solve_requires_update), &
+         & new_unittest("state_point", check_state_point), &
+         & new_unittest("cspce_water", check_cspce_water), &
+         & new_unittest("stale_solution", check_stale_solution)]
    end subroutine collect_moz_solvent
+
+   !> Check canonical water bonds and angle, and preservation of supplied library geometry
+   !>
+   !> @param[out] error Test failure
+   subroutine check_water_geometry(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol, supplied
+      type(solvent_system_type) :: system
+      type(solvent_vv_type) :: solvent
+      real(wp) :: bond1(3), bond2(3), angle
+
+      call new_spce_water_geometry(mol)
+      call check(error, mol%nat == 3 .and. all(mol%num(mol%id) == [8, 1, 1]) .and. mol%charge == 0.0_wp)
+      if (allocated(error)) return
+      bond1 = mol%xyz(:, 2) - mol%xyz(:, 1)
+      bond2 = mol%xyz(:, 3) - mol%xyz(:, 1)
+      call check(error, norm2(bond1)/aatoau, 1.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, norm2(bond2)/aatoau, 1.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      angle = acos(dot_product(bond1, bond2)/(norm2(bond1)*norm2(bond2)))*180.0_wp/acos(-1.0_wp)
+      call check(error, angle, 109.47_wp, thr=1.0e-12_wp)
+      if (allocated(error)) return
+
+      call new_context(ctx, nthreads=1, verbosity=0)
+      call new_water_system(system, err)
+      supplied = mol
+      supplied%xyz = 1.1_wp*supplied%xyz
+      system%solv_mol = supplied
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      mol = solvent%structure()
+      call check(error, all(mol%xyz == supplied%xyz), "Library construction must preserve explicitly supplied geometry")
+   end subroutine check_water_geometry
 
    !> Check table water construction and invalid state points
    !>
@@ -241,6 +288,32 @@ contains
       call check(error, index(err%message, "has no terms") > 0, more=err%message)
    end subroutine check_empty_potential_update
 
+   !> Check the update shifts table charges that miss bulk neutrality
+   subroutine check_neutral_bulk(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_system_type) :: system
+      type(solvent_vv_type) :: solvent
+      type(potential_sites_type) :: sites
+      integer :: id
+
+      ! Methanol Hirshfeld charges sum to about 2e-6 e
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call get_solvent_id("methanol", id, err)
+      if (.not. allocated(err)) call new_solvent_system(system, id, error=err)
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      if (.not. allocated(err)) call solvent%potential%add(lj_uff, err)
+      if (.not. allocated(err)) call solvent%potential%add(solvent_charges_type(environment="solvent", &
+         & model="hirshfeld"), err)
+      if (.not. allocated(err)) call solvent%update(err)
+      if (.not. allocated(err)) call solvent%potential%sites(sites, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, abs(sum(sites%q)) < 1.0e-12_wp, more="the bulk charges were not neutralized")
+   end subroutine check_neutral_bulk
+
    !> Check packed VV upper-triangle pairs
    !>
    !> - Column packed_index(i, j): [i, j], i <= j, every pair once
@@ -375,26 +448,143 @@ contains
       call check_moist_error(error, err)
    end subroutine check_geometric_tables
 
-   !> Check pending VV solve and unsolved state
-   subroutine check_solve_pending(error)
+   !> Check that the VV solve needs a constructed, updated solvent
+   !>
+   !> - Unconstructed and constructed but not updated solvents are refused
+   !> - A refused solve leaves the solvent unsolved
+   subroutine check_solve_requires_update(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_system_type) :: system
+      type(solvent_vv_type) :: solvent
+
+      call solvent%solve(err)
+      call check(error, allocated(err), more="an unconstructed solvent was solved")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Construct") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_water_system(system, err)
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call solvent%solve(err)
+      call check(error, allocated(err), more="a solvent without an updated potential was solved")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Update") > 0, more=err%message)
+      if (allocated(error)) return
+      call check(error, .not. solvent%is_solved(), more="a refused solve marked the solvent solved")
+   end subroutine check_solve_requires_update
+
+   !> Check the state-point accessors
+   !>
+   !> - Zero before construction
+   !> - Temperature and density of the system
+   !> - beta = 1/(kB T) in 1/Hartree
+   subroutine check_state_point(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_system_type) :: system
+      type(solvent_vv_type) :: solvent
+
+      call check(error, solvent%temperature() == 0.0_wp .and. solvent%beta() == 0.0_wp .and. &
+         & solvent%density() == 0.0_wp, &
+         & more="an unconstructed solvent reports a state point")
+      if (allocated(error)) return
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_solvent_system(system, water_id, temperature=350.0_wp, error=err)
+      if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, solvent%temperature(), 350.0_wp)
+      if (allocated(error)) return
+      call check(error, solvent%beta(), atomic_unit_of_energy/(Boltzmann_constant*350.0_wp), rel=.true., &
+         & thr=1.0e-14_wp, more="beta is not 1/(kB T) in 1/Hartree")
+      if (allocated(error)) return
+      call check(error, solvent%density(), system%solvent%number_density_au)
+   end subroutine check_state_point
+
+   !> Check the SPC/E water fixture
+   !>
+   !> - Updated with three sites
+   !> - SPC/E charges, LJ on every site
+   subroutine check_cspce_water(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_context_type), target :: ctx
       type(solvent_vv_type) :: solvent
+      type(potential_sites_type) :: sites
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call new_water_solvent(ctx, solvent, err)
-      if (allocated(err)) then
-         call test_failed(error, err%message)
-         return
-      end if
-      call solvent%solve(err)
-      call check(error, allocated(err), more="the pending VV solve succeeded")
+      call new_cspce_water_solvent(ctx, solvent, err)
+      if (.not. allocated(err)) call solvent%potential%sites(sites, err)
+      call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, index(err%message, "1D VV solve is pending") > 0, more=err%message)
+      call check(error, solvent%potential%is_updated() .and. sites%natom == 3, &
+         & more="cSPC/E water is not updated with three sites")
       if (allocated(error)) return
-      call check(error, .not. solvent%is_solved(), more="a failed solve marked the solvent solved")
-   end subroutine check_solve_pending
+      call check(error, allocated(sites%q) .and. allocated(sites%pair), more="cSPC/E water lacks charges or LJ")
+      if (allocated(error)) return
+      call check(error, maxval(abs(sites%q - [-0.8476_wp, 0.4238_wp, 0.4238_wp])), 0.0_wp, &
+         & more="SPC/E charges differ")
+      if (allocated(error)) return
+      call check(error, all(sites%pair%sigma > 0.0_wp) .and. all(sites%pair%epsilon > 0.0_wp), &
+         & more="cSPC/E LJ is missing on a site")
+   end subroutine check_cspce_water
+
+   !> Check that changes to the potential make a VV solution stale
+   !>
+   !> - Generation increases on add, update, Ng split and mixing changes
+   !> - A refused setting leaves it unchanged
+   !> - The model copy carries the generation
+   subroutine check_stale_solution(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(solvent_vv_type) :: solvent
+      type(solvent_vv_type), allocatable :: copy
+      integer(int64) :: generation
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_cspce_water_solvent(ctx, solvent, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      generation = solvent%potential%generation()
+      call solvent%potential%set_mixing(lj_mixing_geometric, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, solvent%potential%generation() > generation, more="a mixing change kept the generation")
+      if (allocated(error)) return
+      generation = solvent%potential%generation()
+      call solvent%potential%set_ng_split(.true., 0.5_wp, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, solvent%potential%generation() > generation, more="an Ng split change kept the generation")
+      if (allocated(error)) return
+      generation = solvent%potential%generation()
+      call solvent%potential%set_mixing(0, err)
+      call check(error, allocated(err), more="an unknown mixing rule was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+      call check(error, solvent%potential%generation(), generation, more="a refused setting changed the generation")
+      if (allocated(error)) return
+      call solvent%update(err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check(error, solvent%potential%generation() > generation, more="an update kept the generation")
+      if (allocated(error)) return
+      call check(error, .not. solvent%is_solved(), more="an unsolved solvent reports a solution")
+      if (allocated(error)) return
+      allocate (copy, source=solvent)
+      call check(error, copy%potential%generation(), solvent%potential%generation(), &
+         & more="the copy lost the generation")
+   end subroutine check_stale_solution
 
 end module test_moz_solvent

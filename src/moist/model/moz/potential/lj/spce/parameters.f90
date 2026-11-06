@@ -1,10 +1,9 @@
 ! SPDX-License-Identifier: MPL-2.0 AND BSD-3-Clause
 ! Lookup implementation: MPL-2.0; parameter source: BSD-3-Clause
 !
-!> Legacy modified SPC/E-style water Lennard-Jones parameters
+!> Standard SPC/E water Lennard-Jones parameters; hydrogen LJ is inactive
 !>
 !> Berendsen et al., J. Phys. Chem. 91, 6269 (1987), doi:10.1021/j100308a038
-!> Hydrogen LJ modification: Luchko et al., J. Chem. Theory Comput. 6, 607-624 (2010), doi:10.1021/ct900460m
 module moist_model_moz_potential_lj_spce_parameters
    use mctc_env, only: wp
    use mctc_io_convert, only: aatoau, kjtoau
@@ -13,13 +12,12 @@ module moist_model_moz_potential_lj_spce_parameters
 
    public :: lookup_spce_lj
 
-   ! Permissive reference: VeloxChem src/pymodule/waterparameters.py, cspce entry
+   ! Permissive reference: VeloxChem src/pymodule/waterparameters.py, spce entry
    ! https://github.com/VeloxChem/VeloxChem/blob/d4290334938fb5cab7e2e9954bd6dea5865d7b1c/src/pymodule/waterparameters.py
    ! Source revision: d4290334938fb5cab7e2e9954bd6dea5865d7b1c
-   ! Source sigma (ow, hw): 0.31658, 0.11658 nm
-   ! Source epsilon (ow, hw): 0.649775, 0.064978 kJ/mol
-   ! Local legacy values retained, including epsilon_hw = 0.1*epsilon_ow
-   ! Nonzero hydrogen LJ terms distinguish this table from original SPC/E
+   ! Source oxygen sigma: 0.31658 nm; epsilon: 0.649775 kJ/mol
+   ! Local oxygen precision retained, shared with the cSPC/E table
+   ! Hydrogen sigma is zero because epsilon is zero; the site remains covered
    !
    ! Copyright 2018-2025 VeloxChem developers
    !
@@ -49,11 +47,11 @@ module moist_model_moz_potential_lj_spce_parameters
    !> Oxygen sigma, nm
    real(wp), parameter :: spce_sigma_ow_nm = 0.316572_wp
    !> Hydrogen sigma, nm
-   real(wp), parameter :: spce_sigma_hw_nm = 0.116572_wp
+   real(wp), parameter :: spce_sigma_hw_nm = 0.0_wp
    !> Oxygen epsilon, kJ/mol
    real(wp), parameter :: spce_epsilon_ow_kj = 0.6497752516070757_wp
    !> Hydrogen epsilon, kJ/mol
-   real(wp), parameter :: spce_epsilon_hw_kj = 0.06497752516070757_wp
+   real(wp), parameter :: spce_epsilon_hw_kj = 0.0_wp
 
 contains
 

@@ -13,7 +13,8 @@
 !> Molecular grid assembly
 !>
 !> - Every scheme selects, prunes and repartitions the molecular grid
-!> - Updates translate fixed local grids, as an independent reconstruction
+!> - Updates translate fixed local grids, as an independent reconstruction;
+!>   retained points record their unpruned positions
 !> - Atom-count changes match a fresh grid
 !> - Element overrides assign each atom its local grid; sector policies
 !>   report the largest retained angular rule
@@ -744,6 +745,8 @@ contains
    !> batched partition weights, weight `w_local*partition`, kept if
    !> `|w| >= 1e-14` and the partition weight reaches the threshold; at two
    !> geometries, the second crossing the threshold
+   !>
+   !> Every retained point records its position among the unpruned points
    subroutine test_fixed_local_quadrature(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -757,7 +760,7 @@ contains
       type(becke_partition_type) :: becke
       real(wp), allocatable :: points(:, :), bw(:)
       real(wp) :: x(3), w, scale
-      integer :: step, iat, i, j, k, count_before, numbers(3)
+      integer :: step, iat, i, j, k, count_before, numbers(3), base
       character(len=120) :: msg
 
       call make_water(mol)
@@ -776,6 +779,7 @@ contains
          call check_moist_error(error, merr, "update")
          if (allocated(error)) return
          j = 0
+         base = 0
          do iat = 1, mol%nat
             associate (atom => local(merge(1, 2, iat == 1)))
                allocate (points(3, atom%npts), bw(atom%npts))
@@ -795,6 +799,8 @@ contains
                   write (msg, "(a,i0,a,i0,a,i0)") "step ", step, ", atom ", iat, ", local point ", i
                   call check(error, grid%owner(j) == iat .and. abs(grid%w(j) - w) <= 1.0e-14_wp*abs(w), trim(msg))
                   if (allocated(error)) return
+                  call check(error, grid%raw_index(j) == base + i, trim(msg)//": unpruned position")
+                  if (allocated(error)) return
                   scale = 1.0_wp + maxval(abs(x))
                   do k = 1, 3
                      call check(error, ieee_is_finite(x(k)), "reference point is not finite")
@@ -804,9 +810,12 @@ contains
                   end do
                end do
                deallocate (points, bw)
+               base = base + atom%npts
             end associate
          end do
          call check(error, j == grid%ngrid, "retained points differ from the reconstruction")
+         if (allocated(error)) return
+         call check(error, size(grid%raw_index) == grid%ngrid, "one unpruned position per retained point")
          if (allocated(error)) return
          if (step == 1) then
             count_before = grid%ngrid
@@ -854,6 +863,8 @@ contains
          if (allocated(error)) return
          call check(error, all(grid%xyz == fresh%xyz) .and. all(grid%w == fresh%w), &
             & trim(label)//": points and weights")
+         if (allocated(error)) return
+         call check(error, all(grid%raw_index == fresh%raw_index), trim(label)//": unpruned positions")
          if (allocated(error)) return
       end do
    end subroutine test_update_atom_count
