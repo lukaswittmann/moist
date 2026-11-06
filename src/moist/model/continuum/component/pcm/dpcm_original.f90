@@ -36,7 +36,7 @@ module moist_model_continuum_component_pcm_dpcm_original
       procedure :: assemble_layer => dpcm_original_assemble_layer
       procedure :: solve_layer => dpcm_original_solve_layer
       procedure :: layer_weights => dpcm_original_layer_weights
-      procedure :: get_parameter_adjoint => dpcm_original_get_parameter_adjoint
+      procedure :: get_parameter_adjoint => dpcm_original_param_adjoint
       procedure :: layer_tangent => dpcm_original_layer_tangent
    end type model_continuum_component_dpcm_original
 
@@ -228,7 +228,7 @@ contains
    !> @param[in,out] self  dpcm_original component with current charges
    !> @param[out]    item  parameter derivatives
    !> @param[out]    error allocated on failure
-   subroutine dpcm_original_get_parameter_adjoint(self, item, error)
+   subroutine dpcm_original_param_adjoint(self, item, error)
       !> Component with current charges
       class(model_continuum_component_dpcm_original), intent(inout) :: self
       !> Parameter derivatives
@@ -246,6 +246,6 @@ contains
       allocate (item%dg_deps, source=0.0_wp)
       if (ieee_is_finite(self%epsilon)) item%dg_deps = w_eps
 
-   end subroutine dpcm_original_get_parameter_adjoint
+   end subroutine dpcm_original_param_adjoint
 
 end module moist_model_continuum_component_pcm_dpcm_original

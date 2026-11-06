@@ -1,5 +1,5 @@
-DPCM
-=====
+Dielectric Polarizable Continuum Model (DPCM)
+=============================================
 
 The dielectric PCM (D-PCM) :cite:p:`miertus1981dpcm` finds the surface charges from the normal derivative of the solute potential; the potential itself enters only the energy.
 Two component types solve the same discretized equation with different row scalings: the area-scaled form and the original form as published.

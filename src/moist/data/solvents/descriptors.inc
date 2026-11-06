@@ -1758,7 +1758,7 @@ subroutine get_solvent_table(ids, names, aliases, permittivity, refractive_index
    &     "n-butyronitrile",                                &
    &     "n-propyl cyanide",                               &
    &     "n-butanitrile",                                  &
-   &     "hsdb 5013",                                      &
+   &     "butanonitrile",                                  &
    &     "einecs 203-700-6",                               &
    &     "unii-o3v36v0w0m",                                &
    &     "un2411",                                         &
@@ -3692,8 +3692,8 @@ subroutine get_solvent_table(ids, names, aliases, permittivity, refractive_index
    &     "cyanoethane",                                    &
    &     "propylnitrile",                                  &
    &     "propionic nitrile",                              &
-   &     "ether cyanatus",                                 &
-   &     "hydrocyanic ether",                              &
+   &     "propanonitrile",                                 &
+   &     "propanenitrile",                                 &
    &     "propannitril"                                    /
 
 
@@ -4176,6 +4176,31 @@ subroutine get_solvent_table(ids, names, aliases, permittivity, refractive_index
    &     "108-95-2",                                       &
    &     "",                                               &
    &     "",                                               &
+   &     "",                                               &
+   &     "",                                               &
+   &     ""                                                /
+
+   !AMMONIA
+   !--------------------------------------
+   ! Liquid at the normal boiling point: g and rho at 239.83 K (NIST WebBook),
+   ! eps and refr from the ORCA CPCM solvent list; not in the Minnesota
+   ! database, A and B from Abraham et al., New J. Chem. 33, 1685 (2009)
+   data id_list(181) / 181 /
+   data name_list(181) / "Ammonia" /
+   data eps(181) / 22.399999999999999_wp /
+   data refr(181) / 1.330000000000000_wp /
+   data A(181) / 0.160000000000000_wp /
+   data B(181) / 0.560000000000000_wp /
+   data g(181) / 34.141100000000002_wp /
+   data rho(181) / 681.634999999999991_wp /
+   data alias_list(:,181) / &
+   &     "ammonia",                                        &
+   &     "7664-41-7",                                      &
+   &     "nh3",                                            &
+   &     "azane",                                          &
+   &     "liquid ammonia",                                 &
+   &     "anhydrous ammonia",                              &
+   &     "r-717",                                          &
    &     "",                                               &
    &     "",                                               &
    &     ""                                                /

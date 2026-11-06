@@ -1,33 +1,49 @@
-GOSTSHYP
-========
+Gaussians On Surface Tesserae Simulating HYdrostatic Pressure (GOSTSHYP)
+========================================================================
 
-GOSTSHYP (Gaussians On Surface Tesserae Simulating HYdrostatic Pressure) :cite:p:`scheurer2021gostshyp,pausch2025gostshyp` applies pressure through Gaussian potentials on the cavity surface.
+GOSTSHYP :cite:p:`scheurer2021gostshyp,pausch2025gostshyp` applies pressure through Gaussian potentials on the cavity surface.
 Their amplitudes depend on the electron density and the requested pressure.
 
-For each surface point with position :math:`\mathbf C_i`, area :math:`a_i` and normal :math:`\mathbf n_i`,
+Each surface point :math:`i` of the cavity has a position :math:`\mathbf C_i`, an area :math:`a_i` and an outward unit normal :math:`\mathbf n_i`.
+On it sits a unit-integral Gaussian
 
 .. math::
 
-   G_i(\mathbf r) &= \left(\frac{\omega_i}{\pi}\right)^{3/2}
+   G_i(\mathbf r) = \left(\frac{\omega_i}{\pi}\right)^{3/2}
       \exp[-\omega_i |\mathbf r-\mathbf C_i|^2],
-   \qquad \omega_i = \frac{\pi\ln 2}{a_i}, \\
-   g_i &= \int \rho(\mathbf r)G_i(\mathbf r)\,d\mathbf r, \\
-   f_i &= \int \rho(\mathbf r)\,\mathbf n_i\cdot\nabla_{\mathbf r}G_i(\mathbf r)\,d\mathbf r,
+   \qquad \omega_i = \frac{\pi\ln 2}{a_i}.
+
+Two moments of the electron density :math:`\rho` enter the energy:
 
 .. math::
 
-   E_\mathrm{GOSTSHYP} = \sum_i p\,a_i g_i R(f_i),
+   g_i &= \int \rho(\mathbf r)\,G_i(\mathbf r)\,d\mathbf r, \\
+   f_i &= \int \rho(\mathbf r)\,\mathbf n_i\cdot\nabla_{\mathbf r}G_i(\mathbf r)\,d\mathbf r.
+
+The overlap :math:`g_i` (bohr\ :sup:`-3`) is the density seen by the Gaussian.
+The normal-gradient trace :math:`f_i` (bohr\ :sup:`-4`) measures how strongly the density changes along the normal under the Gaussian; density inside the cavity contributes positively, so :math:`f_i` is normally positive.
+
+A potential :math:`c_i G_i` exerts the normal force :math:`-c_i f_i` on the density.
+Requiring this force to push the density inward with the applied pressure :math:`p` on the area :math:`a_i`,
+:math:`c_i f_i = p\,a_i`, fixes the amplitude :math:`c_i = p\,a_i/f_i`, and the energy :math:`c_i g_i` of all points is
+
+.. math::
+
+   E_\mathrm{GOSTSHYP} = \sum_i s(a_i)\,p\,a_i\,g_i\,R(f_i),
    \qquad
    R(f) = \frac{S(|f|)}{f}.
 
+:math:`R` is the regularized reciprocal of the trace and :math:`s(a_i)` switches off narrow Gaussians, both described below.
+Because the amplitude depends on the density through :math:`f_i`, the Fock matrix and the gradients differentiate through both moments.
+
 The unit-integral normalization follows Pausch's normalized surface Gaussian convention.
-All moments and matching host AO integrals use that normalization. 
+All moments and matching host AO integrals use that normalization.
 The switch :math:`S` is the C-infinity partition-of-unity bump of the DROP switching module.
 It is zero for :math:`|f| \le` ``regularization_start`` and one for :math:`|f| \ge` ``regularization_end``.
 Above the end the energy is exactly the pressure constraint :math:`p a_i g_i/f_i`; below the start a point is off.
 
-Narrow Gaussians are switched off smoothly by area.
-The energy of a point is multiplied by a C2 polynomial :math:`s(a_i)` that is one for :math:`\omega_i \le 10^3` bohr^-2 and zero for :math:`\omega_i \ge 10^4` bohr^-2 (areas below about ``2.2e-4 bohr^2``).
+Narrow Gaussians are switched off smoothly by area, before host integrals lose precision.
+:math:`s(a_i)` is a C2 polynomial that is one for :math:`\omega_i \le 10^3` bohr\ :sup:`-2` and zero for :math:`\omega_i \ge 10^4` bohr\ :sup:`-2` (areas below about ``2.2e-4 bohr^2``).
 
 Negative pressure amplitudes are retained by default.
 Enabling ``suppress_negative_amplitudes`` sets that branch to zero within the calculation;

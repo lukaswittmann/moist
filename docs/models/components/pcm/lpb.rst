@@ -1,5 +1,5 @@
-LPB
-===
+Linearized Poisson–Boltzmann (LPB)
+==================================
 
 The linearized Poisson–Boltzmann model :cite:p:`juffer1991lpb` includes ionic screening, in the integral-equation form  for ionic solutions :cite:p:`mennucci1997ief,cances1998ionic`.
 The inputs are the solvent dielectric constant ``epsilon`` and the inverse Debye length ``kappa`` in bohr⁻¹. ``kappa`` must be nonnegative.

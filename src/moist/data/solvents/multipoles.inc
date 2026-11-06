@@ -1,5 +1,9 @@
 ! Solvent atomic charges and MBIS Cartesian multipoles
 ! Source: solvent_data_final.zip, dataset.json schema_version 1.0
+! IDs 182 to 188 are the archive's 181 to 187
+! Except ID 181 and the ID 180 solvent environment: same inputs, ORCA 6.1.1;
+! the archive ran ID 180 with eps 2.2705, here 12.4. ID 181 geometry is a
+! r2SCAN-3c TightOpt in CPCM conductor, like the archive's added geometries
 !
 ! All single-point calculations:
 ! wB97M-V, def2-TZVPP/def2/J, RIJCOSX, TightSCF, DEFGRID3
@@ -38915,62 +38919,62 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
                                           -0.001466_wp, 7e-06_wp, 0.00117_wp, 3.5e-05_wp, -0.001193_wp], [10, 13])
          case ("solvent")
             multipoles%monopole = [ &
-                                  -0.616513_wp, 0.425101_wp, -0.369635_wp, -0.059213_wp, -0.226814_wp, &
-                                  -0.078431_wp, -0.314544_wp, 0.468132_wp, 0.16702_wp, 0.137426_wp, &
-                                  0.15193_wp, 0.140221_wp, 0.175321_wp]
+                                  -0.636367_wp, 0.427124_wp, -0.373029_wp, -0.066761_wp, -0.235946_wp, &
+                                  -0.084329_wp, -0.328211_wp, 0.487135_wp, 0.179782_wp, 0.145092_wp, &
+                                  0.158497_wp, 0.14693_wp, 0.180082_wp]
             multipoles%dipole = reshape([ &
-                                        -0.065986_wp, 0.084858_wp, 5.8e-05_wp, 0.12529_wp, 0.020897_wp, &
-                                        0.000614_wp, -0.04862_wp, -0.02152_wp, -0.000205_wp, 0.032415_wp, &
-                                        0.022652_wp, 0.000204_wp, 0.029496_wp, 0.003166_wp, 0.000135_wp, &
-                                        0.020817_wp, -0.026416_wp, 2.5e-05_wp, -0.015874_wp, 0.012027_wp, &
-                                        -8e-06_wp, 0.010731_wp, -0.020705_wp, -3.5e-05_wp, 0.014427_wp, &
-                                        -0.046965_wp, -4.7e-05_wp, -0.02841_wp, -0.04941_wp, -0.000249_wp, &
-                                        -0.052732_wp, 0.001361_wp, -0.000229_wp, -0.026468_wp, 0.049817_wp, &
-                                        1.3e-05_wp, 0.025566_wp, 0.042218_wp, 0.000217_wp], [3, 13])
+                                        -0.069586_wp, 0.082382_wp, 3.4e-05_wp, 0.126549_wp, 0.019179_wp, &
+                                        0.000607_wp, -0.0474_wp, -0.019696_wp, -0.000206_wp, 0.032563_wp, &
+                                        0.024005_wp, 0.000204_wp, 0.030993_wp, 0.00261_wp, 0.000138_wp, &
+                                        0.022638_wp, -0.027715_wp, 2.5e-05_wp, -0.018964_wp, 0.012663_wp, &
+                                        -2.5e-05_wp, 0.010341_wp, -0.020905_wp, -3.6e-05_wp, 0.016471_wp, &
+                                        -0.047423_wp, -4.2e-05_wp, -0.028598_wp, -0.050075_wp, -0.000252_wp, &
+                                        -0.053244_wp, 0.001234_wp, -0.000232_wp, -0.026783_wp, 0.050394_wp, &
+                                        1.3e-05_wp, 0.024853_wp, 0.042849_wp, 0.000216_wp], [3, 13])
             multipoles%quadrupole = reshape([ &
-                                            -4.37928_wp, -4.394608_wp, -4.47263_wp, -0.047549_wp, 0.000205_wp, &
-                                            9.8e-05_wp, -3.616548_wp, -3.798948_wp, -3.561074_wp, 0.028138_wp, &
-                                            -9.3e-05_wp, -0.000481_wp, -5.168608_wp, -5.071821_wp, -4.917377_wp, &
-                                            -0.040816_wp, -0.001133_wp, -0.000572_wp, -4.567997_wp, -4.507826_wp, &
-                                            -4.355374_wp, 0.043867_wp, -0.00079_wp, -0.000195_wp, -4.796188_wp, &
-                                            -4.925129_wp, -4.69049_wp, -0.004621_wp, -0.000466_wp, -0.000612_wp, &
-                                            -4.61457_wp, -4.547841_wp, -4.391376_wp, -0.044792_wp, -0.001063_wp, &
-                                            -0.000594_wp, -4.95472_wp, -4.959082_wp, -4.788208_wp, 0.045265_wp, &
-                                            -0.000578_wp, -0.000251_wp, -0.235206_wp, -0.243088_wp, -0.248652_wp, &
-                                            0.003683_wp, 6.7e-05_wp, 3.9e-05_wp, -0.464638_wp, -0.466763_wp, &
-                                            -0.476738_wp, 0.00963_wp, 8e-05_wp, 6.5e-05_wp, -0.478065_wp, &
-                                            -0.489701_wp, -0.500689_wp, -0.010097_wp, 7.4e-05_wp, -1.6e-05_wp, &
-                                            -0.48419_wp, -0.461689_wp, -0.490123_wp, 0.000469_wp, 2.8e-05_wp, &
-                                            7.4e-05_wp, -0.474821_wp, -0.487343_wp, -0.496906_wp, 0.00954_wp, &
-                                            0.00012_wp, 6.6e-05_wp, -0.447683_wp, -0.455102_wp, -0.466186_wp, &
-                                            -0.010489_wp, 5.2e-05_wp, -1.6e-05_wp], [6, 13])
+                                            -4.408542_wp, -4.429323_wp, -4.501789_wp, -0.048593_wp, 0.000203_wp, &
+                                            7e-05_wp, -3.616601_wp, -3.797886_wp, -3.566867_wp, 0.025059_wp, &
+                                            -7.9e-05_wp, -0.000476_wp, -5.164084_wp, -5.076195_wp, -4.923028_wp, &
+                                            -0.042064_wp, -0.0011_wp, -0.000569_wp, -4.583476_wp, -4.523425_wp, &
+                                            -4.376909_wp, 0.04299_wp, -0.000768_wp, -0.000182_wp, -4.817445_wp, &
+                                            -4.945689_wp, -4.720834_wp, -0.00402_wp, -0.000426_wp, -0.000585_wp, &
+                                            -4.627514_wp, -4.560896_wp, -4.413717_wp, -0.043922_wp, -0.00102_wp, &
+                                            -0.000566_wp, -4.991516_wp, -4.989652_wp, -4.830847_wp, 0.043883_wp, &
+                                            -0.000558_wp, -0.000223_wp, -0.219754_wp, -0.226332_wp, -0.232208_wp, &
+                                            0.003252_wp, 6.2e-05_wp, 3.7e-05_wp, -0.449238_wp, -0.451931_wp, &
+                                            -0.462451_wp, 0.008362_wp, 8.1e-05_wp, 6.1e-05_wp, -0.469662_wp, &
+                                            -0.480464_wp, -0.492576_wp, -0.009576_wp, 7.6e-05_wp, -1.1e-05_wp, &
+                                            -0.476139_wp, -0.454662_wp, -0.483408_wp, 0.000473_wp, 3.3e-05_wp, &
+                                            7.5e-05_wp, -0.467337_wp, -0.47934_wp, -0.490114_wp, 0.009076_wp, &
+                                            0.000122_wp, 6.7e-05_wp, -0.443277_wp, -0.449588_wp, -0.461771_wp, &
+                                            -0.010292_wp, 5.3e-05_wp, -1.2e-05_wp], [6, 13])
             multipoles%octupole = reshape([ &
-                                          0.097393_wp, 0.258186_wp, -0.001841_wp, 0.017596_wp, 0.002046_wp, &
-                                          -0.202587_wp, -0.000116_wp, -0.189167_wp, -0.000131_wp, 0.036473_wp, &
-                                          -0.157413_wp, 0.063764_wp, 0.001407_wp, 0.05424_wp, -0.001199_wp, &
-                                          0.236618_wp, 0.000538_wp, 0.092836_wp, 0.001146_wp, 0.017309_wp, &
-                                          0.128307_wp, -0.093847_wp, -0.000165_wp, 0.070208_wp, 0.001457_wp, &
-                                          -0.359324_wp, -0.000706_wp, -0.066865_wp, -0.001954_wp, 0.058179_wp, &
-                                          -0.216048_wp, 0.010971_wp, 0.001756_wp, 0.005271_wp, -0.001632_wp, &
-                                          0.294719_wp, 0.000171_wp, 0.084555_wp, 0.000882_wp, 0.08611_wp, &
-                                          0.34054_wp, 0.027092_wp, 0.001926_wp, -0.015968_wp, 0.000164_wp, &
-                                          -0.270007_wp, -0.001159_wp, 0.146747_wp, -0.001153_wp, 0.008361_wp, &
-                                          -0.239794_wp, -0.060462_wp, -3e-05_wp, 0.019134_wp, -0.001436_wp, &
-                                          0.281038_wp, 0.001071_wp, 0.053355_wp, 0.001557_wp, -0.095744_wp, &
-                                          0.324193_wp, 0.073752_wp, -0.000823_wp, -0.08229_wp, 0.001482_wp, &
-                                          -0.317689_wp, -0.000776_wp, -0.026727_wp, -0.000736_wp, -0.074674_wp, &
-                                          0.001955_wp, 0.000231_wp, -6.9e-05_wp, 0.000165_wp, 3.8e-05_wp, &
-                                          -0.000421_wp, 1.8e-05_wp, -0.00378_wp, 5e-06_wp, -0.001683_wp, &
-                                          -0.01773_wp, -0.028212_wp, -8.6e-05_wp, -0.008917_wp, -2.8e-05_wp, &
-                                          -0.009314_wp, -2.9e-05_wp, -0.0068_wp, -8.4e-05_wp, -0.00354_wp, &
-                                          -0.017585_wp, -0.023993_wp, -2.1e-05_wp, -0.007699_wp, -9.7e-05_wp, &
-                                          0.00455_wp, -1.1e-05_wp, 0.00019_wp, -2.9e-05_wp, -0.002566_wp, &
-                                          -0.015506_wp, 0.00174_wp, -2.2e-05_wp, 5.6e-05_wp, -5.4e-05_wp, &
-                                          -0.014645_wp, -3.5e-05_wp, -0.001653_wp, -6.4e-05_wp, 0.000602_wp, &
-                                          -0.018343_wp, 0.022169_wp, 8e-06_wp, 0.008175_wp, -5.4e-05_wp, &
-                                          0.004282_wp, 3.9e-05_wp, -0.00046_wp, 6.5e-05_wp, 0.001866_wp, &
-                                          0.008342_wp, 0.016913_wp, 1.4e-05_wp, 0.003711_wp, 4.3e-05_wp, &
-                                          -0.00154_wp, 9e-06_wp, 0.000626_wp, 3.8e-05_wp, 0.000174_wp], [10, 13])
+                                          0.092021_wp, 0.232822_wp, -0.002025_wp, 0.009396_wp, 0.002032_wp, &
+                                          -0.211758_wp, -0.00012_wp, -0.193907_wp, -0.000178_wp, 0.025373_wp, &
+                                          -0.156289_wp, 0.053134_wp, 0.001345_wp, 0.049057_wp, -0.001241_wp, &
+                                          0.238399_wp, 0.000538_wp, 0.095573_wp, 0.001146_wp, 0.011262_wp, &
+                                          0.152659_wp, -0.106163_wp, -0.000188_wp, 0.058568_wp, 0.001432_wp, &
+                                          -0.351936_wp, -0.000727_wp, -0.057908_wp, -0.001943_wp, 0.05111_wp, &
+                                          -0.222904_wp, 0.002236_wp, 0.001713_wp, 0.002787_wp, -0.001675_wp, &
+                                          0.293775_wp, 0.000166_wp, 0.084186_wp, 0.000855_wp, 0.084538_wp, &
+                                          0.331948_wp, 0.0256_wp, 0.001898_wp, -0.016635_wp, 0.000111_wp, &
+                                          -0.275694_wp, -0.001167_wp, 0.147712_wp, -0.001174_wp, 0.005565_wp, &
+                                          -0.243998_wp, -0.050924_wp, -2.7e-05_wp, 0.023145_wp, -0.001473_wp, &
+                                          0.28267_wp, 0.001087_wp, 0.055799_wp, 0.001581_wp, -0.095379_wp, &
+                                          0.313797_wp, 0.090758_wp, -0.000919_wp, -0.084564_wp, 0.001468_wp, &
+                                          -0.322291_wp, -0.000789_wp, -0.032244_wp, -0.000731_wp, -0.072768_wp, &
+                                          0.002201_wp, -0.002636_wp, -6.9e-05_wp, -0.000721_wp, 3.2e-05_wp, &
+                                          -8.2e-05_wp, 1.7e-05_wp, -0.003246_wp, 2e-06_wp, -0.002388_wp, &
+                                          -0.011289_wp, -0.030438_wp, -7.2e-05_wp, -0.010103_wp, -2.5e-05_wp, &
+                                          -0.007013_wp, -3e-05_wp, -0.004543_wp, -7.7e-05_wp, -0.004491_wp, &
+                                          -0.018746_wp, -0.026794_wp, -3.5e-05_wp, -0.008586_wp, -0.000101_wp, &
+                                          0.003732_wp, -1.2e-05_wp, -0.000265_wp, -3.5e-05_wp, -0.003497_wp, &
+                                          -0.018478_wp, 0.001491_wp, -3.5e-05_wp, -1.8e-05_wp, -6e-05_wp, &
+                                          -0.015248_wp, -3.4e-05_wp, -0.002508_wp, -6.6e-05_wp, 0.000421_wp, &
+                                          -0.019303_wp, 0.024825_wp, 9e-06_wp, 0.00907_wp, -5.3e-05_wp, &
+                                          0.003538_wp, 3.8e-05_wp, -0.000896_wp, 6.4e-05_wp, 0.002806_wp, &
+                                          0.006677_wp, 0.019512_wp, 1.4e-05_wp, 0.004581_wp, 4.3e-05_wp, &
+                                          -0.001696_wp, 9e-06_wp, 0.000135_wp, 3.9e-05_wp, 0.001059_wp], [10, 13])
          case ("conductor")
             multipoles%monopole = [ &
                                   -0.64105_wp, 0.427557_wp, -0.373581_wp, -0.068489_wp, -0.238144_wp, &
@@ -39036,6 +39040,77 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
+                                  -1.052162_wp, 0.350745_wp, 0.350708_wp, 0.350708_wp]
+            multipoles%dipole = reshape([ &
+                                        3.9e-05_wp, 0.0_wp, 0.118664_wp, 0.030008_wp, 0.0_wp, &
+                                        0.005156_wp, -0.015014_wp, 0.025981_wp, 0.005148_wp, -0.015014_wp, &
+                                        -0.025981_wp, 0.005148_wp], [3, 4])
+            multipoles%quadrupole = reshape([ &
+                                            -5.557082_wp, -5.557065_wp, -6.097619_wp, 0.0_wp, 3.3e-05_wp, &
+                                            0.0_wp, -0.329438_wp, -0.312895_wp, -0.336786_wp, 0.0_wp, &
+                                            0.001429_wp, 0.0_wp, -0.317062_wp, -0.325339_wp, -0.336819_wp, &
+                                            0.007164_wp, -0.000714_wp, 0.001235_wp, -0.317062_wp, -0.325339_wp, &
+                                            -0.336819_wp, -0.007164_wp, -0.000714_wp, -0.001235_wp], [6, 4])
+            multipoles%octupole = reshape([ &
+                                          -0.359367_wp, 0.0_wp, 0.408764_wp, 0.0_wp, 0.372831_wp, &
+                                          0.359545_wp, 0.0_wp, 3e-06_wp, 0.372765_wp, 0.0_wp, &
+                                          0.01215_wp, 0.0_wp, 0.035821_wp, 0.0_wp, 0.01373_wp, &
+                                          0.007095_wp, -0.0_wp, 0.006007_wp, 0.018653_wp, 0.0_wp, &
+                                          -0.009514_wp, 0.012492_wp, 0.03581_wp, 0.004163_wp, 0.01742_wp, &
+                                          -0.000123_wp, 0.002132_wp, -0.003009_wp, 0.014958_wp, 0.005199_wp, &
+                                          -0.009513_wp, -0.012492_wp, 0.03581_wp, -0.004163_wp, 0.01742_wp, &
+                                          -0.000123_wp, -0.002132_wp, -0.003009_wp, 0.014958_wp, -0.005199_wp], [10, 4])
+         case ("solvent")
+            multipoles%monopole = [ &
+                                  -1.173884_wp, 0.391326_wp, 0.391279_wp, 0.391279_wp]
+            multipoles%dipole = reshape([ &
+                                        3.7e-05_wp, 0.0_wp, 0.071919_wp, 0.027046_wp, 0.0_wp, &
+                                        0.000201_wp, -0.013536_wp, 0.023414_wp, 0.00019_wp, -0.013536_wp, &
+                                        -0.023414_wp, 0.00019_wp], [3, 4])
+            multipoles%quadrupole = reshape([ &
+                                            -5.777975_wp, -5.778049_wp, -6.329798_wp, 0.0_wp, 6.3e-05_wp, &
+                                            0.0_wp, -0.289668_wp, -0.275827_wp, -0.294715_wp, 0.0_wp, &
+                                            0.00043_wp, 0.0_wp, -0.279324_wp, -0.286254_wp, -0.294756_wp, &
+                                            0.005994_wp, -0.000213_wp, 0.000367_wp, -0.279324_wp, -0.286254_wp, &
+                                            -0.294756_wp, -0.005994_wp, -0.000213_wp, -0.000367_wp], [6, 4])
+            multipoles%octupole = reshape([ &
+                                          -0.391209_wp, 0.0_wp, -0.011743_wp, 0.0_wp, 0.264729_wp, &
+                                          0.391401_wp, 0.0_wp, -4e-06_wp, 0.26463_wp, 0.0_wp, &
+                                          0.012649_wp, 0.0_wp, 0.01851_wp, 0.0_wp, 0.007804_wp, &
+                                          0.006469_wp, -0.0_wp, 0.004856_wp, 0.011445_wp, 0.0_wp, &
+                                          -0.008875_wp, 0.012405_wp, 0.018491_wp, 0.004134_wp, 0.01053_wp, &
+                                          -0.000704_wp, 0.001577_wp, -0.002434_wp, 0.008709_wp, 0.004199_wp, &
+                                          -0.008875_wp, -0.012405_wp, 0.018491_wp, -0.004134_wp, 0.01053_wp, &
+                                          -0.000704_wp, -0.001577_wp, -0.002434_wp, 0.008709_wp, -0.004199_wp], [10, 4])
+         case ("conductor")
+            multipoles%monopole = [ &
+                                  -1.180463_wp, 0.393519_wp, 0.393472_wp, 0.393472_wp]
+            multipoles%dipole = reshape([ &
+                                        3.7e-05_wp, 0.0_wp, 0.068776_wp, 0.026882_wp, 0.0_wp, &
+                                        -6.3e-05_wp, -0.013454_wp, 0.023271_wp, -7.4e-05_wp, -0.013454_wp, &
+                                        -0.023271_wp, -7.4e-05_wp], [3, 4])
+            multipoles%quadrupole = reshape([ &
+                                            -5.790064_wp, -5.790142_wp, -6.342209_wp, 0.0_wp, 6.4e-05_wp, &
+                                            0.0_wp, -0.287604_wp, -0.273892_wp, -0.29252_wp, 0.0_wp, &
+                                            0.000382_wp, 0.0_wp, -0.277356_wp, -0.284222_wp, -0.292561_wp, &
+                                            0.005937_wp, -0.000189_wp, 0.000326_wp, -0.277356_wp, -0.284222_wp, &
+                                            -0.292561_wp, -0.005937_wp, -0.000189_wp, -0.000326_wp], [6, 4])
+            multipoles%octupole = reshape([ &
+                                          -0.392922_wp, 0.0_wp, -0.038637_wp, 0.0_wp, 0.257561_wp, &
+                                          0.393116_wp, 0.0_wp, -4e-06_wp, 0.257459_wp, 0.0_wp, &
+                                          0.012636_wp, 0.0_wp, 0.017658_wp, 0.0_wp, 0.007511_wp, &
+                                          0.006425_wp, -0.0_wp, 0.00479_wp, 0.011089_wp, 0.0_wp, &
+                                          -0.008824_wp, 0.012368_wp, 0.017638_wp, 0.004122_wp, 0.01019_wp, &
+                                          -0.000727_wp, 0.00155_wp, -0.002401_wp, 0.0084_wp, 0.004143_wp, &
+                                          -0.008824_wp, -0.012368_wp, 0.017638_wp, -0.004122_wp, 0.01019_wp, &
+                                          -0.000727_wp, -0.00155_wp, -0.002401_wp, 0.0084_wp, -0.004143_wp], [10, 4])
+         case default
+            call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
+         end select
+      case (182)
+         select case (trim(adjustl(to_lower(environment))))
+         case ("gas")
+            multipoles%monopole = [ &
                                   0.0_wp]
             multipoles%dipole = reshape([ &
                                         1e-06_wp, -0.0_wp, -0.0_wp], [3, 1])
@@ -39070,7 +39145,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (182)
+      case (183)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
@@ -39120,7 +39195,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (183)
+      case (184)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
@@ -39170,7 +39245,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (184)
+      case (185)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
@@ -39208,7 +39283,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (185)
+      case (186)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
@@ -39246,7 +39321,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (186)
+      case (187)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &
@@ -39284,7 +39359,7 @@ subroutine get_solvent_multipoles(solvent_id, environment, model, multipoles, er
          case default
             call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
          end select
-      case (187)
+      case (188)
          select case (trim(adjustl(to_lower(environment))))
          case ("gas")
             multipoles%monopole = [ &

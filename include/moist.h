@@ -473,8 +473,8 @@ moist_new_slic_component(moist_error error, moist_context context, double epsilo
                           double beta, double gamma, double mu, double phi_static,
                           const moist_pcm_options *options) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_nonlocal_component(moist_error error, moist_context context, double eps_solvent, double eps_inf,
-                              double lambda, double eps_solute,
+moist_new_nonlocal_component(moist_error error, moist_context context, double epsilon, double epsilon_inf,
+                              double lambda, double epsilon_solute,
                               const moist_pcm_options *options) moist_API_SUFFIX__V_1_0;
 
 /*

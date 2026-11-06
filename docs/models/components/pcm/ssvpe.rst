@@ -1,5 +1,5 @@
-SS(V)PE
-========
+Surface and Simulation of Volume Polarization for Electrostatics (SS(V)PE)
+==========================================================================
 
 The surface and simulation of volume polarization equation :cite:p:`chipman2000ssvpe` is a dielectric
 boundary formulation, the symmetrized counterpart of IEF-PCM :cite:p:`lange2011symmetric`, that uses the solute's surface potential alone.

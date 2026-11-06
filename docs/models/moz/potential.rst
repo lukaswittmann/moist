@@ -209,7 +209,8 @@ Terms
      - cSPC/E for neutral water; nonzero hydrogen LJ from the Luchko modification.
    * - ``coulomb_<model>_<environment>``
      - Solvents with tabulated charges: ``hirshfeld``, ``resp``, ``mbis`` or
-       ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation.
+       ``chelpg`` from a ``gas``, ``solvent`` or ``conductor`` calculation
+       (:ref:`solvent-charges`).
    * - ``coulomb_spce``, ``coulomb_cspce``
      - Identical SPC/E charges of neutral water; the cSPC/E name shares the same implementation.
    * - ``monopole_type``

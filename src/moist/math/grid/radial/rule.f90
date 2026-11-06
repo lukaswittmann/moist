@@ -170,6 +170,8 @@ contains
    pure subroutine new_chebyshev2_rule(rule)
       !> New rule
       type(moist_math_grid_radial_rule_chebyshev2_type), intent(out) :: rule
+
+      rule = moist_math_grid_radial_rule_chebyshev2_type()
    end subroutine new_chebyshev2_rule
 
    !> Generate n Chebyshev second-kind nodes (descending) and dx weights
@@ -222,6 +224,8 @@ contains
    pure subroutine new_midpoint_rule(rule)
       !> New rule
       type(moist_math_grid_radial_rule_midpoint_type), intent(out) :: rule
+
+      rule = moist_math_grid_radial_rule_midpoint_type()
    end subroutine new_midpoint_rule
 
    !> Generate n midpoint nodes (ascending) and dx weights
@@ -276,6 +280,8 @@ contains
    pure subroutine new_gauss_legendre_rule(rule)
       !> New rule
       type(moist_math_grid_radial_rule_gauss_legendre_type), intent(out) :: rule
+
+      rule = moist_math_grid_radial_rule_gauss_legendre_type()
    end subroutine new_gauss_legendre_rule
 
    !> Generate n Gauss-Legendre nodes (ascending) and dx weights

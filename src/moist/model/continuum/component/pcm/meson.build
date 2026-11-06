@@ -11,5 +11,5 @@ srcs += files(
   'lpb.f90',
   'slic.f90',
   'nonlocal.f90',
-  'electrostatics.f90',
+  'elstat.f90',
 )

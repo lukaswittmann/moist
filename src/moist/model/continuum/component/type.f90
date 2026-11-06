@@ -66,7 +66,7 @@ module moist_model_continuum_component_type
       !> Accumulate the host's direct trace-geometry surface adjoint weights
       procedure :: get_host_surface_weights => get_component_host_surface_weights_default
       !> Accumulate the surface adjoint weights the *nuclear gradient* needs
-      procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
+      procedure :: get_gradient_surface_weights => get_component_gradient_weights_default
       !> Accumulate nuclear-gradient terms that do not flow through the surface
       procedure :: get_direct_gradient => get_component_direct_gradient_default
       !> Declare the host requests this component reads (none by default)
@@ -320,7 +320,7 @@ contains
    !> @param[in]    cavity   Cavity data
    !> @param[in,out] acc      Cavity-specific surface-adjoint accumulator
    !> @param[out]   error    Error object
-   subroutine get_component_gradient_surface_weights_default(self, coupling, cavity, acc, error)
+   subroutine get_component_gradient_weights_default(self, coupling, cavity, acc, error)
       !> Solvation component
       class(model_continuum_component_type), intent(inout) :: self
       !> Wavefunction data
@@ -334,7 +334,7 @@ contains
 
       call self%get_surface_weights(coupling, cavity, acc, error)
 
-   end subroutine get_component_gradient_surface_weights_default
+   end subroutine get_component_gradient_weights_default
 
    !> Default no-op hook for nuclear-gradient terms outside the surface
    !>

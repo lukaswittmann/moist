@@ -63,7 +63,7 @@ PCM choices are ``ModelComponentCPCM``, ``ModelComponentCOSMO``,
 ``ModelComponentDPCMOriginal``, ``ModelComponentLPB``, ``ModelComponentSLIC``
 and ``ModelComponentNonlocal``. The first six take ``epsilon``. LPB also takes
 ``kappa`` in bohr⁻¹. SLIC takes ``epsilon, alpha, beta, gamma, mu,
-phi_static``; nonlocal takes ``eps_solvent, eps_inf, lambda_, eps_solute``.
+phi_static``; nonlocal takes ``epsilon, epsilon_inf, lambda_, epsilon_solute``.
 All accept keyword-only ``parameters=PCMParameters(...)`` and optional
 ``context=...``. Its controls are
 ``solver`` (``PCMSolver.DENSE`` or ``ITERATIVE``), ``solver_tol``,

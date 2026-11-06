@@ -362,7 +362,8 @@ contains
       integer :: i, itest, nat, iat, iat_ref
       real(wp) :: rand_val, distance, min_dist, vdw_radius
       logical :: too_close
-      integer :: seed_array(8)
+      integer, allocatable :: seed_array(:)
+      integer :: seed_size
       character(len=:), allocatable :: test_xyz_path
       character(len=:), allocatable :: issues_dir
       type(mctc_error), allocatable :: cavity_error
@@ -396,6 +397,8 @@ contains
       call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Initialize random seed for reproducibility
+      call random_seed(size=seed_size)
+      allocate (seed_array(seed_size))
       seed_array = SEED_VALUE
       call random_seed(put=seed_array)
 

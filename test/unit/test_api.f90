@@ -3067,7 +3067,7 @@ contains
       character(len=104), parameter :: needles(3) = [character(len=104) :: &
          & "[moist_get_cavity_field_info] Field name exceeds MOIST_FIELD_NAME_MAX", &
          & "[moist_contract_pcm_nuclear_gradient] Null array pointer provided", &
-         & "[moist_contract_pcm_nuclear_gradient] pcm_electrostatic_nuclear_gradient: "// &
+         & "[moist_contract_pcm_nuclear_gradient] pcm_elstat_nuclear_gradient: "// &
          & "array shape mismatch"]
       integer :: icase
 

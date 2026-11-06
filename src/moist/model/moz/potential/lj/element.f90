@@ -42,12 +42,13 @@ module moist_model_moz_potential_lj_element
 
    ! ifx workaround: protected, not parameter; ifx 2025.1-2025.3 fails copies of derived-type
    ! constants with allocatable components (forrtl 189); TODO: revert to parameter once ifx is fixed
+   ! gfortran 9.4 workaround: explicit pair=null(); the implicit default of pair fails to compile
    !> UFF element rows
-   type(lj_element_type), protected :: lj_uff = lj_element_type(set=lj_set_uff)
+   type(lj_element_type), protected :: lj_uff = lj_element_type(pair=null(), set=lj_set_uff)
    !> DREIDING element rows
-   type(lj_element_type), protected :: lj_dreiding = lj_element_type(set=lj_set_dreiding)
+   type(lj_element_type), protected :: lj_dreiding = lj_element_type(pair=null(), set=lj_set_dreiding)
    !> Transition-metal element rows
-   type(lj_element_type), protected :: lj_tm = lj_element_type(set=lj_set_tm)
+   type(lj_element_type), protected :: lj_tm = lj_element_type(pair=null(), set=lj_set_tm)
 
 contains
 

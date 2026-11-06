@@ -10,15 +10,15 @@
 !> `w_xyz_i = dE_host/dr_i = w_phi_i grad phi(r_i)` (nuclear plus electronic);
 !> MOIST forms only the first, the nuclear charges moving under the fixed
 !> surface
-module moist_model_continuum_component_pcm_electrostatics
+module moist_model_continuum_component_pcm_elstat
    use mctc_env, only: wp, error_type, fatal_error
    use moist_context, only: resolve_num_threads
    implicit none(type, external)
    private
 
-   public :: pcm_electrostatic_nuclear_gradient
-   public :: pcm_electrostatic_direct_gradient
-   public :: pcm_electrostatic_normal_direct_gradient
+   public :: pcm_elstat_nuclear_gradient
+   public :: pcm_elstat_direct_gradient
+   public :: pcm_elstat_normal_direct_gradient
 
 contains
 
@@ -26,7 +26,7 @@ contains
    !>
    !> The Gaussian branch differentiates Z*erf(xi*r)/r, matching the potential
    !> used by the host. Omitting xi selects the point-charge potential.
-   subroutine pcm_electrostatic_normal_direct_gradient(xyz, sphxyz, w_grad, za, grad_rA, error, xi)
+   subroutine pcm_elstat_normal_direct_gradient(xyz, sphxyz, w_grad, za, grad_rA, error, xi)
       real(wp), intent(in) :: xyz(:, :)
       real(wp), intent(in) :: sphxyz(:, :)
       real(wp), intent(in) :: w_grad(:, :)
@@ -42,13 +42,13 @@ contains
       nsph = size(za)
       if (size(w_grad, 1) /= 3 .or. size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
           size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
-          any(shape(grad_rA) /= [3, nsph])) then
-         call fatal_error(error, "pcm_electrostatic_normal_direct_gradient: array shape mismatch")
+          size(grad_rA, 1) /= 3 .or. size(grad_rA, 2) /= nsph) then
+         call fatal_error(error, "pcm_elstat_normal_direct_gradient: array shape mismatch")
          return
       end if
       if (present(xi)) then
          if (size(xi) /= ngrid) then
-            call fatal_error(error, "pcm_electrostatic_normal_direct_gradient: width shape mismatch")
+            call fatal_error(error, "pcm_elstat_normal_direct_gradient: width shape mismatch")
             return
          end if
       end if
@@ -82,7 +82,7 @@ contains
                & *(c0*w_grad(:, i) + c1*projection*rvec)
          end do
       end do
-   end subroutine pcm_electrostatic_normal_direct_gradient
+   end subroutine pcm_elstat_normal_direct_gradient
 
    !> Nuclear gradient of the electrostatic surface coupling at fixed surface
    !>
@@ -91,7 +91,7 @@ contains
    !> `grad_rA = sum_i w_phi_i Z_A (r_i - R_A)/|r_i - R_A|^3`. This is the only
    !> nuclear term MOIST forms itself; the surface-position term is the host
    !> total `w_xyz_i = dE_host/dr_i`, which the cavity contracts in reverse
-   !> mode or [[pcm_electrostatic_nuclear_gradient]] contracts in forward mode
+   !> mode or [[pcm_elstat_nuclear_gradient]] contracts in forward mode
    !>
    !> @param[in]  xyz        Surface positions (3, ngrid)
    !> @param[in]  sphxyz     Atomic sphere centers (3, nsph)
@@ -100,7 +100,7 @@ contains
    !> @param[out] grad_rA    Direct nuclear gradient at fixed surface (3, nsph)
    !> @param[in] xi         Optional Gaussian inverse lengths (ngrid)
    !> @param[out] error      Error handling
-   subroutine pcm_electrostatic_direct_gradient(xyz, sphxyz, w_phi, za, grad_rA, error, xi)
+   subroutine pcm_elstat_direct_gradient(xyz, sphxyz, w_phi, za, grad_rA, error, xi)
       !> Surface positions and sphere centers
       real(wp), intent(in) :: xyz(:, :)
       !> Sphxyz
@@ -129,13 +129,13 @@ contains
       if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
           size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
           size(grad_rA, 1) /= 3 .or. size(grad_rA, 2) /= nsph) then
-         call fatal_error(error, "pcm_electrostatic_direct_gradient: array shape mismatch")
+         call fatal_error(error, "pcm_elstat_direct_gradient: array shape mismatch")
          return
       end if
 
       if (present(xi)) then
          if (size(xi) /= ngrid) then
-            call fatal_error(error, "pcm_electrostatic_direct_gradient: width shape mismatch")
+            call fatal_error(error, "pcm_elstat_direct_gradient: width shape mismatch")
             return
          end if
       end if
@@ -163,11 +163,11 @@ contains
          end do
       end do
 
-   end subroutine pcm_electrostatic_direct_gradient
+   end subroutine pcm_elstat_direct_gradient
 
    !> Forward-mode nuclear gradient of the electrostatic surface coupling
    !>
-   !> The direct term of [[pcm_electrostatic_direct_gradient]] plus the host
+   !> The direct term of [[pcm_elstat_direct_gradient]] plus the host
    !> total surface-position weight contracted with the surface's response to
    !> nuclear motion: `grad_rA += sum_i xyz1_rA(:, :, A, i)^T w_xyz(:, i)`
    !>
@@ -184,8 +184,8 @@ contains
    !> @param[in] xi          Optional Gaussian inverse lengths (ngrid)
    !> @param[out] error       Error handling
    !> @param[in]  nthreads    OpenMP team size; absent takes omp_get_max_threads
-   subroutine pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
-                                                 w_phi, w_xyz, za, grad_rA, error, xi, nthreads)
+   subroutine pcm_elstat_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
+                                          w_phi, w_xyz, za, grad_rA, error, xi, nthreads)
       !> Surface positions, sphere centers, and surface-position derivatives
       real(wp), intent(in) :: xyz(:, :)
       !> Sphxyz
@@ -221,11 +221,11 @@ contains
           size(xyz1_rA, 3) /= nsph .or. size(xyz1_rA, 4) /= ngrid .or. &
           size(w_xyz, 1) /= 3 .or. size(w_xyz, 2) /= ngrid .or. &
           size(grad_rA, 1) /= 3 .or. size(grad_rA, 2) /= nsph) then
-         call fatal_error(error, "pcm_electrostatic_nuclear_gradient: array shape mismatch")
+         call fatal_error(error, "pcm_elstat_nuclear_gradient: array shape mismatch")
          return
       end if
 
-      call pcm_electrostatic_direct_gradient(xyz, sphxyz, w_phi, za, grad_rA, error, xi)
+      call pcm_elstat_direct_gradient(xyz, sphxyz, w_phi, za, grad_rA, error, xi)
       if (allocated(error)) return
       acc = 0.0_wp
       nt = resolve_num_threads(nthreads)
@@ -246,6 +246,6 @@ contains
       !$omp end parallel do
 
       grad_rA(:, :) = grad_rA + acc
-   end subroutine pcm_electrostatic_nuclear_gradient
+   end subroutine pcm_elstat_nuclear_gradient
 
-end module moist_model_continuum_component_pcm_electrostatics
+end module moist_model_continuum_component_pcm_elstat

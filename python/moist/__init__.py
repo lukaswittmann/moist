@@ -141,6 +141,9 @@ __all__ = [
 
 def _pep440(version: str) -> str:
     """Map the native ``1.0.0-alpha.1`` style tag to PEP 440 (``1.0.0a1``)."""
+    # A mocked native library (Sphinx autodoc) returns no string
+    if not isinstance(version, str):
+        return version
     match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-(alpha|beta|rc)\.?(\d+))?", version)
     if match is None:
         return version

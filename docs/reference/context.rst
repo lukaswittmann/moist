@@ -38,7 +38,8 @@ A host calls MOIST in every SCF iteration and geometry step, so each level also 
 6  debug          everything; the debug stream itself needs ``debug``
 == ============== ===========================================================
 
-Level 2 suits a production calculation.
+Level 2 is the default of the Fortran, C and Python context and suits a production calculation.
+It prints nothing inside the host's SCF iterations, only once per run and once per geometry.
 It shows what is needed to report and reproduce a result, such as the radii, the solvent potential of a MOZ model or the PCM solver, and leaves out numerical internals such as the DROP switching parameters.
 
 Messages go to standard output; a Fortran host can redirect them to a unit or a file.

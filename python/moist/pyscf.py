@@ -1358,6 +1358,8 @@ def moist_for_scf(mf, *, cavity, components, context):
     Use ``DROP(lsf=SvdW(...))``, ``DROP(lsf=CFC(...))``,
     ``DROP(lsf=Isodensity(...))`` or ``ISwiG(...)``. ``context`` is the
     :class:`~moist.Context` the cavity and model run on.
+    One-electron ``scf.UHF(mol)`` objects are rejected: PySCF's shortcut never
+    calls the MOIST potential. Use ``scf.uhf.UHF(mol)`` instead.
     Importing :mod:`moist.pyscf` also registers this function as ``mf.MOIST``.
     """
     from pyscf import lib, scf
@@ -1367,6 +1369,11 @@ def moist_for_scf(mf, *, cavity, components, context):
         raise ValueError("MOIST is already attached; combine terms in components")
     if isinstance(mf, (scf.rohf.ROHF, _CIAH_SOSCF)) or not isinstance(mf, (scf.hf.RHF, scf.uhf.UHF)):
         raise NotImplementedError("MOIST supports RHF, RKS, UHF and UKS calculations")
+    # One-electron shortcut diagonalizes hcore and never calls the MOIST potential
+    if isinstance(mf, (scf.uhf.HF1e, scf.uhf_symm.HF1e)):
+        raise NotImplementedError(
+            "one-electron scf.UHF(mol) skips the SCF iterations; "
+            "use scf.uhf.UHF(mol) or scf.uhf_symm.UHF(mol)")
     if getattr(mf, "with_solvent", None) is not None:
         raise ValueError("Cannot attach MOIST to a calculation with an existing solvent")
     if mf.mol.has_ecp():

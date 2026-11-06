@@ -1,5 +1,9 @@
 ! Solvent atomic charges and MBIS Cartesian multipoles
 ! Source: solvent_data_final.zip, dataset.json schema_version 1.0
+! IDs 182 to 188 are the archive's 181 to 187
+! Except ID 181 and the ID 180 solvent environment: same inputs, ORCA 6.1.1;
+! the archive ran ID 180 with eps 2.2705, here 12.4. ID 181 geometry is a
+! r2SCAN-3c TightOpt in CPCM conductor, like the archive's added geometries
 !
 ! All single-point calculations:
 ! wB97M-V, def2-TZVPP/def2/J, RIJCOSX, TightSCF, DEFGRID3
@@ -15662,24 +15666,24 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
          select case (trim(adjustl(to_lower(model))))
          case ("hirshfeld")
             charges = [ &
-                      -0.210092_wp, 0.080114_wp, -0.064757_wp, -0.035488_wp, -0.057759_wp, &
-                      -0.033905_wp, -0.05879_wp, 0.179278_wp, 0.040536_wp, 0.041047_wp, &
-                      0.036161_wp, 0.041493_wp, 0.042161_wp]
+                      -0.216263_wp, 0.076916_wp, -0.064127_wp, -0.037741_wp, -0.061286_wp, &
+                      -0.037582_wp, -0.06391_wp, 0.187491_wp, 0.047295_wp, 0.044246_wp, &
+                      0.038353_wp, 0.043963_wp, 0.042644_wp]
          case ("resp")
             charges = [ &
-                      -0.615293_wp, 0.45795_wp, -0.384006_wp, -0.054053_wp, -0.231485_wp, &
-                      -0.103025_wp, -0.286221_wp, 0.434523_wp, 0.176558_wp, 0.135722_wp, &
-                      0.147829_wp, 0.141507_wp, 0.179994_wp]
+                      -0.642577_wp, 0.470441_wp, -0.392412_wp, -0.059845_wp, -0.244871_wp, &
+                      -0.107058_wp, -0.305338_wp, 0.457048_wp, 0.190136_wp, 0.143498_wp, &
+                      0.155758_wp, 0.148925_wp, 0.186295_wp]
          case ("mbis")
             charges = [ &
-                      -0.616511_wp, 0.425096_wp, -0.369626_wp, -0.059217_wp, -0.226812_wp, &
-                      -0.078432_wp, -0.314543_wp, 0.46813_wp, 0.167018_wp, 0.137426_wp, &
-                      0.151929_wp, 0.140221_wp, 0.175321_wp]
+                      -0.636365_wp, 0.427132_wp, -0.373039_wp, -0.066753_wp, -0.235956_wp, &
+                      -0.084321_wp, -0.32822_wp, 0.487134_wp, 0.179783_wp, 0.145093_wp, &
+                      0.158498_wp, 0.146931_wp, 0.180082_wp]
          case ("chelpg")
             charges = [ &
-                      -0.619817_wp, 0.480751_wp, -0.406538_wp, -0.034632_wp, -0.249491_wp, &
-                      -0.085361_wp, -0.307123_wp, 0.434934_wp, 0.180863_wp, 0.132465_wp, &
-                      0.15106_wp, 0.138722_wp, 0.184166_wp]
+                      -0.647079_wp, 0.493048_wp, -0.414669_wp, -0.040756_wp, -0.262584_wp, &
+                      -0.089637_wp, -0.326035_wp, 0.457456_wp, 0.194392_wp, 0.140312_wp, &
+                      0.158934_wp, 0.146182_wp, 0.190435_wp]
          case default
             call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
          end select
@@ -15712,6 +15716,62 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
          call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
       end select
    case (181)
+      select case (trim(adjustl(to_lower(environment))))
+      case ("gas")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
+                      -0.280482_wp, 0.093502_wp, 0.09349_wp, 0.09349_wp]
+         case ("resp")
+            charges = [ &
+                      -0.903927_wp, 0.300363_wp, 0.301742_wp, 0.301821_wp]
+         case ("mbis")
+            charges = [ &
+                      -1.052162_wp, 0.350745_wp, 0.350708_wp, 0.350708_wp]
+         case ("chelpg")
+            charges = [ &
+                      -0.904568_wp, 0.300577_wp, 0.301956_wp, 0.302035_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case ("solvent")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
+                      -0.309752_wp, 0.103263_wp, 0.103244_wp, 0.103244_wp]
+         case ("resp")
+            charges = [ &
+                      -1.095367_wp, 0.364261_wp, 0.365502_wp, 0.365604_wp]
+         case ("mbis")
+            charges = [ &
+                      -1.173886_wp, 0.391327_wp, 0.39128_wp, 0.39128_wp]
+         case ("chelpg")
+            charges = [ &
+                      -1.096014_wp, 0.364477_wp, 0.365718_wp, 0.36582_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case ("conductor")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
+                      -0.311373_wp, 0.103804_wp, 0.103785_wp, 0.103785_wp]
+         case ("resp")
+            charges = [ &
+                      -1.106447_wp, 0.367959_wp, 0.369192_wp, 0.369295_wp]
+         case ("mbis")
+            charges = [ &
+                      -1.180466_wp, 0.39352_wp, 0.393473_wp, 0.393473_wp]
+         case ("chelpg")
+            charges = [ &
+                      -1.107093_wp, 0.368175_wp, 0.369408_wp, 0.369511_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case default
+         call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
+      end select
+   case (182)
       select case (trim(adjustl(to_lower(environment))))
       case ("gas")
          select case (trim(adjustl(to_lower(model))))
@@ -15767,7 +15827,7 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
       case default
          call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
       end select
-   case (182)
+   case (183)
       select case (trim(adjustl(to_lower(environment))))
       case ("gas")
          select case (trim(adjustl(to_lower(model))))
@@ -15823,7 +15883,7 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
       case default
          call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
       end select
-   case (183)
+   case (184)
       select case (trim(adjustl(to_lower(environment))))
       case ("gas")
          select case (trim(adjustl(to_lower(model))))
@@ -15873,62 +15933,6 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
          case ("chelpg")
             charges = [ &
                       -0.281537_wp, 0.281537_wp]
-         case default
-            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
-         end select
-      case default
-         call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
-      end select
-   case (184)
-      select case (trim(adjustl(to_lower(environment))))
-      case ("gas")
-         select case (trim(adjustl(to_lower(model))))
-         case ("hirshfeld")
-            charges = [ &
-                      0.0_wp]
-         case ("resp")
-            charges = [ &
-                      0.0_wp]
-         case ("mbis")
-            charges = [ &
-                      0.0_wp]
-         case ("chelpg")
-            charges = [ &
-                      0.0_wp]
-         case default
-            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
-         end select
-      case ("solvent")
-         select case (trim(adjustl(to_lower(model))))
-         case ("hirshfeld")
-            charges = [ &
-                      0.0_wp]
-         case ("resp")
-            charges = [ &
-                      0.0_wp]
-         case ("mbis")
-            charges = [ &
-                      0.0_wp]
-         case ("chelpg")
-            charges = [ &
-                      0.0_wp]
-         case default
-            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
-         end select
-      case ("conductor")
-         select case (trim(adjustl(to_lower(model))))
-         case ("hirshfeld")
-            charges = [ &
-                      0.0_wp]
-         case ("resp")
-            charges = [ &
-                      0.0_wp]
-         case ("mbis")
-            charges = [ &
-                      0.0_wp]
-         case ("chelpg")
-            charges = [ &
-                      0.0_wp]
          case default
             call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
          end select
@@ -15997,6 +16001,62 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
          select case (trim(adjustl(to_lower(model))))
          case ("hirshfeld")
             charges = [ &
+                      0.0_wp]
+         case ("resp")
+            charges = [ &
+                      0.0_wp]
+         case ("mbis")
+            charges = [ &
+                      0.0_wp]
+         case ("chelpg")
+            charges = [ &
+                      0.0_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case ("solvent")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
+                      0.0_wp]
+         case ("resp")
+            charges = [ &
+                      0.0_wp]
+         case ("mbis")
+            charges = [ &
+                      0.0_wp]
+         case ("chelpg")
+            charges = [ &
+                      0.0_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case ("conductor")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
+                      0.0_wp]
+         case ("resp")
+            charges = [ &
+                      0.0_wp]
+         case ("mbis")
+            charges = [ &
+                      0.0_wp]
+         case ("chelpg")
+            charges = [ &
+                      0.0_wp]
+         case default
+            call fatal_error(error, message="Unknown solvent charge model: "//trim(model))
+         end select
+      case default
+         call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
+      end select
+   case (187)
+      select case (trim(adjustl(to_lower(environment))))
+      case ("gas")
+         select case (trim(adjustl(to_lower(model))))
+         case ("hirshfeld")
+            charges = [ &
                       -0.0_wp]
          case ("resp")
             charges = [ &
@@ -16047,7 +16107,7 @@ subroutine get_solvent_charges(solvent_id, environment, model, charges, error)
       case default
          call fatal_error(error, message="Unknown solvent environment: "//trim(environment))
       end select
-   case (187)
+   case (188)
       select case (trim(adjustl(to_lower(environment))))
       case ("gas")
          select case (trim(adjustl(to_lower(model))))

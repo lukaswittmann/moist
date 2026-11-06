@@ -113,6 +113,26 @@ def test_scf_energy_fock_and_spin_contract(mol, method, cavity):
     assert mf.scf_summary["e_moist"] == result.energy
 
 
+@pytest.mark.parametrize("symmetry", [False, True], ids=("c1", "symm"))
+def test_one_electron_uhf_shortcut_is_rejected(symmetry):
+    # scf.UHF(mol) returns the hcore-only HF1e shortcut for one electron (issue #36)
+    from pyscf import scf
+
+    mol = gto.M(atom="H 0 0 0; H 0 0 2", unit="bohr", basis="sto-3g",
+                charge=1, spin=1, symmetry=symmetry, verbose=0)
+    full = scf.uhf_symm.UHF if symmetry else scf.uhf.UHF
+    components = [ModelComponentCPCM(78.39, parameters=DENSE)]
+    for base in (mol.UHF(), mol.UHF().density_fit()):
+        with pytest.raises(NotImplementedError, match="one-electron"):
+            attach(base, "iswig", components)
+    gas = mol.UHF().kernel()
+    mf = attach(full(mol), "iswig", components)
+    mf.conv_tol, mf.conv_tol_grad = 1e-12, 1e-9
+    energy = mf.kernel()
+    assert mf.converged and mf.scf_summary["e_moist"] < 0
+    assert energy < gas - 0.1
+
+
 @pytest.mark.parametrize("cavity,builds", [("svdw-drop", 1), ("rho-drop", 2)])
 def test_cache_by_density_value_and_geometry(mol, monkeypatch, cavity, builds):
     # A geometric cavity is built once per geometry, an isodensity one per density

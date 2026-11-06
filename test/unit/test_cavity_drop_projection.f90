@@ -687,7 +687,7 @@ contains
                                                       -3.000_wp, -3.000_wp, -3.000_wp], [3, 8]))
 
       call check_cluster_branches(error, "cube_8C (a=6 bohr)", &
-                                  mol, 110, 1.0_wp)
+                                  mol, 50, 1.0_wp)
    end subroutine test_cube
 
    !> Check the pentagon fixture from the deflation comparison

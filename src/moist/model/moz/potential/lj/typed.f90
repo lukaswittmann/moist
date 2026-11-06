@@ -53,10 +53,11 @@ module moist_model_moz_potential_lj_typed
 
    ! ifx workaround: protected, not parameter; ifx 2025.1-2025.3 fails copies of derived-type
    ! constants with allocatable components (forrtl 189); TODO: revert to parameter once ifx is fixed
+   ! gfortran 9.4 workaround: explicit pair=null(); the implicit default of pair fails to compile
    !> GAFF2 by approximate GAFF typing
-   type(lj_typed_type), protected :: lj_gaff = lj_typed_type(set=lj_set_gaff)
+   type(lj_typed_type), protected :: lj_gaff = lj_typed_type(pair=null(), set=lj_set_gaff)
    !> OPLS-AA by environment rules on the bond graph
-   type(lj_typed_type), protected :: lj_oplsaa = lj_typed_type(set=lj_set_oplsaa)
+   type(lj_typed_type), protected :: lj_oplsaa = lj_typed_type(pair=null(), set=lj_set_oplsaa)
 
 contains
 

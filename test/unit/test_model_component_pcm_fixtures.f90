@@ -222,7 +222,7 @@ contains
                & err, param, mu=phys%slic_mu, phi_static=phys%slic_phi_static, ctx=ctx)
          type is (model_continuum_component_nonlocal)
             call new_component_nonlocal(pcm, eps, phys%eps_inf, phys%lambda, err, param, &
-               & eps_solute=phys%eps_solute, ctx=ctx)
+               & epsilon_solute=phys%eps_solute, ctx=ctx)
          end select
       end associate
       call check_moist_error(error, err, "component setup")

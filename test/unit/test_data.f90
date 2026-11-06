@@ -73,6 +73,8 @@ contains
                   new_unittest("solvent_system_validates_input", test_solvent_system_validation), &
                   new_unittest("solvent_system_all_ids", test_solvent_system_all_ids), &
                   new_unittest("solvent_descriptors_water", test_solvent_descriptors_water), &
+                  new_unittest("solvent_descriptors_ammonia", test_solvent_descriptors_ammonia), &
+                  new_unittest("solvent_nitrile_aliases", test_solvent_nitrile_aliases), &
                   new_unittest("solvent_descriptors_match_system", test_solvent_descriptors_match_system), &
                   new_unittest("solvent_descriptors_reject_unknown", test_solvent_descriptors_unknown), &
                   new_unittest("solvent_descriptors_print", test_solvent_descriptors_print), &
@@ -889,6 +891,75 @@ contains
       call check(error, alias%epsilon, water%epsilon, thr=thr, more="'h2o' permittivity")
    end subroutine test_solvent_descriptors_water
 
+   !> Ammonia resolves by name and by ID to its own table values and geometry,
+   !> and the molecular-data-only IDs after it have no descriptors
+   subroutine test_solvent_descriptors_ammonia(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvent_descriptors_type) :: ammonia, by_id
+      type(solvent_system_type) :: system
+      type(moist_error_type), allocatable :: err
+
+      call get_solvent_descriptors("NH3", ammonia, err)
+      if (allocated(err)) then
+         call test_failed(error, "'NH3' did not resolve: "//trim(err%message))
+         return
+      end if
+      call check(error, ammonia%id, 181, more="ammonia id")
+      if (allocated(error)) return
+      call check(error, ammonia%name, "ammonia", more="canonical name")
+      if (allocated(error)) return
+      call check(error, ammonia%epsilon, 22.4_wp, thr=thr, more="ammonia permittivity")
+      if (allocated(error)) return
+      call check(error, ammonia%mass_density_si, 681.635_wp, thr=thr, more="ammonia density")
+      if (allocated(error)) return
+      call check(error, ammonia%molar_mass_si, 0.017031_wp, thr=1.0e-5_wp, more="ammonia molar mass")
+      if (allocated(error)) return
+
+      call get_solvent_descriptors_by_id(181, by_id, err)
+      if (allocated(err)) then
+         call test_failed(error, "ID 181 did not resolve: "//trim(err%message))
+         return
+      end if
+      call check(error, by_id%abraham_beta, ammonia%abraham_beta, thr=thr, more="ID 181 HB basicity")
+      if (allocated(error)) return
+
+      ! Argon has a geometry but no descriptors
+      call get_solvent_descriptors_by_id(182, by_id, err)
+      call check(error, allocated(err), more="ID 182 has no descriptors but was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+
+      call new_solvent_system(system, 181, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "ammonia system failed to build: "//trim(err%message))
+         return
+      end if
+      call check(error, system%solv_mol%nat, 4, more="ammonia atom count")
+   end subroutine test_solvent_descriptors_ammonia
+
+   !> The systematic nitrile names resolve to propionitrile and butyronitrile
+   subroutine test_solvent_nitrile_aliases(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=*), parameter :: aliases(4) = [character(len=14) :: &
+         "propanonitrile", "propanenitrile", "butanonitrile", "butanenitrile"]
+      integer, parameter :: ids(4) = [159, 159, 75, 75]
+
+      type(moist_error_type), allocatable :: err
+      integer :: i, id
+
+      do i = 1, size(aliases)
+         call get_solvent_id(aliases(i), id, err)
+         if (allocated(err)) then
+            call test_failed(error, "'"//trim(aliases(i))//"' did not resolve: "//trim(err%message))
+            return
+         end if
+         call check(error, id, ids(i), more="'"//trim(aliases(i))//"' resolved elsewhere")
+         if (allocated(error)) return
+      end do
+   end subroutine test_solvent_nitrile_aliases
+
    !> Every ID gives the values new_solvent_system stores, every alias the
    !> descriptors of its ID, and every canonical name fits the C struct. An
    !> entry without a geometry keeps its table values, with NaN derived ones
@@ -1039,7 +1110,7 @@ contains
       character(len=9), parameter :: models(4) = [character(len=9) :: &
          "hirshfeld", "resp", "mbis", "chelpg"]
 
-      do id = 1, 187
+      do id = 1, 188
          if (id == 94) cycle
          do ienv = 1, size(environments)
             call get_solvent_multipoles(id, environments(ienv), "mbis", multipoles, err)

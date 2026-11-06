@@ -36,10 +36,11 @@ module moist_model_moz_potential_lj_solvent
 
    ! ifx workaround: protected, not parameter; ifx 2025.1-2025.3 fails copies of derived-type
    ! constants with allocatable components (forrtl 189); TODO: revert to parameter once ifx is fixed
+   ! gfortran 9.4 workaround: explicit pair=null(); the implicit default of pair fails to compile
    !> Standard SPC/E water sites
-   type(lj_solvent_type), protected :: lj_spce = lj_solvent_type(set=lj_set_spce)
+   type(lj_solvent_type), protected :: lj_spce = lj_solvent_type(pair=null(), set=lj_set_spce)
    !> cSPC/E water sites
-   type(lj_solvent_type), protected :: lj_cspce = lj_solvent_type(set=lj_set_cspce)
+   type(lj_solvent_type), protected :: lj_cspce = lj_solvent_type(pair=null(), set=lj_set_cspce)
 
 contains
 

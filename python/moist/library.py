@@ -559,9 +559,9 @@ def new_slic_component(epsilon: float, alpha: float, beta: float, gamma: float,
     return _new_pcm_component("slic", (epsilon, alpha, beta, gamma, mu, phi_static), parameters, context=context)
 
 
-def new_nonlocal_component(eps_solvent: float, eps_inf: float, lambda_: float,
-                           eps_solute: float, parameters, *, context=None) -> ComponentHandle:
-    return _new_pcm_component("nonlocal", (eps_solvent, eps_inf, lambda_, eps_solute), parameters, context=context)
+def new_nonlocal_component(epsilon: float, epsilon_inf: float, lambda_: float,
+                           epsilon_solute: float, parameters, *, context=None) -> ComponentHandle:
+    return _new_pcm_component("nonlocal", (epsilon, epsilon_inf, lambda_, epsilon_solute), parameters, context=context)
 
 
 def new_pv_component(pressure: float, *, context=None) -> ComponentHandle:

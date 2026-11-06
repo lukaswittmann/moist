@@ -17,7 +17,7 @@ module test_model_component_gostshyp
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type
-   use moist_channels_response, only: response_type, gaussian_amplitude_response_type
+   use moist_channels_response, only: response_type, gaussian_amplitude_response_type, response_clear
    use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -1347,7 +1347,7 @@ contains
          end do
          call check(error, energy, expected, thr=1.0e-12_wp)
          if (allocated(error)) return
-         response = response_type()
+         call response_clear(response)
          call component%get_response(component_view(coupling), cavity, response, err)
          call check(error, .not. allocated(err))
          if (allocated(error)) return
@@ -1378,7 +1378,7 @@ contains
                call component%get_energy(component_view(coupling), cavity, energies(sample), err)
                call check(error, .not. allocated(err))
                if (allocated(error)) return
-               response = response_type()
+               call response_clear(response)
                call component%get_response(component_view(coupling), cavity, response, err)
                call check(error, .not. allocated(err))
                if (allocated(error)) return
