@@ -565,7 +565,6 @@ contains
       if (allocated(error)) return
 
       ! A map built by hand turns by its rotation: 90 degrees about z takes x to y
-      fit = rigid_fit_type()
       fit%rot = reshape([0.0_wp, 1.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
       fit%c_target = [1.0_wp, 0.0_wp, 0.0_wp]
       fit%c_stored = [0.0_wp, 2.0_wp, 0.0_wp]
@@ -1407,8 +1406,19 @@ contains
                end do
                order(j + 1) = t
             end do
-            call check(error, all(nearest == order(1:k)) .and. all(dist2 == d2(order(1:k))), &
+            ! The tree's squared distances may differ from these in the last bits (fused
+            ! multiply-adds on some targets), so neighbours are compared by brute-force distance
+            call check(error, all(nearest > 0), "k-d tree neighbours missing")
+            if (allocated(error)) return
+            call check(error, all(abs(dist2 - d2(order(1:k))) <= 1.0e-12_wp*d2(order(1:k))) .and. &
+               & all(abs(d2(nearest) - d2(order(1:k))) <= 1.0e-12_wp*d2(order(1:k))), &
                & "k-d tree neighbours differ from brute force")
+            if (allocated(error)) return
+            do i = 1, k - 1
+               if (any(nearest(i + 1:) == nearest(i))) exit
+               if (dist2(i) == dist2(i + 1) .and. nearest(i) > nearest(i + 1)) exit
+            end do
+            call check(error, i == k, "k-d tree neighbours repeated, or equal distances not ordered by index")
             if (allocated(error)) return
          end do
          deallocate (nearest, dist2)
