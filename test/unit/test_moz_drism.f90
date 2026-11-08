@@ -132,7 +132,10 @@ contains
             end do
          end do
       end do
-      call check(error, worst < 2.0e-12_wp, more="DRISM differs from independent Bessel reference")
+      ! Relative to the largest element: sin and cos one ULP off already move zeta by up to 5e-13,
+      ! through the cancellation in j1(x)/x just above the series range
+      call check(error, worst < 1.0e-12_wp*maxval(abs(reference)), &
+         & more="DRISM differs from independent Bessel reference")
    end subroutine correction_reference
 
    !> Arbitrary rigid rotations, translations and water hydrogen exchange
@@ -171,7 +174,9 @@ contains
       if (allocated(error)) return
       call moved%correction_at(1.1_wp, other, other_scaled)
       worst = max(worst, maxval(abs(zeta - other([1, 3, 2], [1, 3, 2]))))
-      call check(error, worst < 2.0e-12_wp, more="DRISM changed under a rigid motion or hydrogen exchange")
+      ! Relative to the largest element, as in correction_reference
+      call check(error, worst < 1.0e-12_wp*maxval(abs(zeta)), &
+         & more="DRISM changed under a rigid motion or hydrogen exchange")
    end subroutine rotation
 
    !> Dielectric screening independently fixes the low-k charge coefficient

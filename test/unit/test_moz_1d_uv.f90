@@ -1745,7 +1745,9 @@ contains
          & -0.25_wp, -0.29_wp, 0.43_wp, 0.43_wp, -0.01_wp, 0.43_wp]
       real(wp) :: energy
 
-      call new_context(ctx, nthreads=0, verbosity=0)
+      ! One thread: the energies do not depend on it (thread_independence), and the solves pass
+      ! hundreds of thousands of team barriers, each slow when concurrent tests share the cores
+      call new_context(ctx, nthreads=1, verbosity=0)
       system%solvent%id = 0
       system%temperature = 298.0_wp
       system%solvent%number_density_au = 0.0334_wp/aatoau**3

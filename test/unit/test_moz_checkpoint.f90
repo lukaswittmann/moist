@@ -1379,6 +1379,7 @@ contains
       type(memory_store_type) :: store
       type(solvent_vv_parameters_type) :: params
       type(solvent_vv_type) :: cold, warm
+      type(moz_checkpoint_state_type) :: restart
       real(wp) :: mu_cold, mu_warm, dh
       integer :: n, i, cold_iterations
 
@@ -1402,9 +1403,12 @@ contains
       if (allocated(error)) return
       cold_iterations = log%saved(n)%iterations
 
-      store%preset = log%saved(n - 2)
-      deallocate (log%saved)
-      allocate (log%saved(0))
+      ! A new store and empty log, as for the cold solve: ifort 2021 at -O2 otherwise keeps the
+      ! size of a log emptied here across the solve that saves into it
+      restart = log%saved(n - 2)
+      call new_memory_store(store, log)
+      store%interval = 1
+      store%preset = restart
       call solve_vv(ctx, params, store, warm, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -2945,11 +2949,18 @@ contains
       type(moz_checkpoint_state_type), intent(in) :: state
       !> Store without a log
       type(moist_error), allocatable, intent(out) :: error
+      type(moz_checkpoint_state_type), allocatable :: saved(:)
+      integer :: n
       if (.not. associated(self%log)) then
          call fatal_error(error, "memory store has no log")
          return
       end if
-      self%log%saved = [self%log%saved, state]
+      ! Appended without an array constructor, on which ifort 2021 aborts for these states
+      n = size(self%log%saved)
+      allocate (saved(n + 1))
+      saved(:n) = self%log%saved
+      saved(n + 1) = state
+      call move_alloc(saved, self%log%saved)
    end subroutine memory_save
 
    !> Offer the preset state when it fits the header

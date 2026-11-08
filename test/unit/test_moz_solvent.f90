@@ -12,7 +12,7 @@ module test_moz_solvent
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_solvent_water, only: new_spce_water_geometry
-   use moist_model_moz_potential, only: moz_potential_type, potential_sites_type, lj_uff, solvent_charges_type
+   use moist_model_moz_potential, only: moz_potential_type, potential_sites_type, lj_uff, coulomb_hirshfeld_solvent
    use moist_data_solvents, only: get_solvent_id
    use moist_model_moz_potential_lj_base, only: lj_mixing_lorentz_berthelot, lj_mixing_geometric
    use moist_model_moz_potential_electrostatic_monopole, only: monopole_type
@@ -305,8 +305,7 @@ contains
       if (.not. allocated(err)) call new_solvent_system(system, id, error=err)
       if (.not. allocated(err)) call new_vv_solvent(solvent, ctx, system, err)
       if (.not. allocated(err)) call solvent%potential%add(lj_uff, err)
-      if (.not. allocated(err)) call solvent%potential%add(solvent_charges_type(environment="solvent", &
-         & model="hirshfeld"), err)
+      if (.not. allocated(err)) call solvent%potential%add(coulomb_hirshfeld_solvent, err)
       if (.not. allocated(err)) call solvent%update(err)
       if (.not. allocated(err)) call solvent%potential%sites(sites, err)
       call check_moist_error(error, err)

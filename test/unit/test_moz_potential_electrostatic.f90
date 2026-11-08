@@ -28,7 +28,8 @@ module test_moz_potential_electrostatic
    use moist_model_moz_potential_electrostatic_ec, only: ec_charges_type
    use moist_model_moz_potential_electrostatic_multipole, only: multipole_type
    use moist_model_moz_potential_electrostatic_solvent, only: solvent_charges_type, solvent_multipoles_type, &
-      & solvent_model_charges_type, coulomb_resp_solvent, coulomb_spce, coulomb_cspce, multipoles_mbis_gas
+      & solvent_model_charges_type, coulomb_resp_solvent, coulomb_hirshfeld_solvent, coulomb_spce, coulomb_cspce, &
+      & multipoles_mbis_gas
    use moist_data_solvents, only: get_solvent_charges, get_solvent_id
    use test_moz_fixtures, only: water_id, new_water_system
    use moist_solvent_system, only: solvent_system_type, new_solvent_system
@@ -581,7 +582,7 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       mol = system%solv_mol
-      call pot%add(solvent_charges_type(environment="solvent", model="hirshfeld"), err)
+      call pot%add(coulomb_hirshfeld_solvent, err)
       if (.not. allocated(err)) call pot%update(mol, err, id)
       if (.not. allocated(err)) call pot%sites(sites, err)
       call check_moist_error(error, err)
