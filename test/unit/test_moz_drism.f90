@@ -117,25 +117,24 @@ contains
          & -3.26401786272691865e1_wp, 2.25994333629925173e1_wp, 2.25994333629925173e1_wp, &
          & 4.28460458504181076e1_wp, 9.10965065491509485e0_wp, 1.93683532301464845e0_wp, &
          & 9.10965065491509485e0_wp, 1.93683532301464845e0_wp, 1.93683532301464845e0_wp], [6, 3])
-      real(wp) :: zeta(3, 3), scaled(3, 3), worst
+      real(wp) :: zeta(3, 3), scaled(3, 3)
+      character(len=96) :: label
       integer :: ik, i, j
       call new_bulk_theory(theory, "DRISM", xyz, q, rho, beta, 78.44_wp, smear, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
       call lut%init(3)
-      worst = 0.0_wp
       do ik = 1, size(k)
          call theory%correction_at(k(ik), zeta, scaled)
          do j = 1, 3
             do i = 1, j
-               worst = max(worst, abs(zeta(i, j) - reference(lut%idx(i, j), ik)))
+               write (label, "(a, i0, a, i0, a, f4.2)") "DRISM differs from independent Bessel reference at (", &
+                  & i, ",", j, "), k = ", k(ik)
+               call check(error, zeta(i, j), reference(lut%idx(i, j), ik), thr=2.0e-12_wp, more=trim(label))
+               if (allocated(error)) return
             end do
          end do
       end do
-      ! Relative to the largest element: sin and cos one ULP off already move zeta by up to 5e-13,
-      ! through the cancellation in j1(x)/x just above the series range
-      call check(error, worst < 1.0e-12_wp*maxval(abs(reference)), &
-         & more="DRISM differs from independent Bessel reference")
    end subroutine correction_reference
 
    !> Arbitrary rigid rotations, translations and water hydrogen exchange
@@ -174,8 +173,7 @@ contains
       if (allocated(error)) return
       call moved%correction_at(1.1_wp, other, other_scaled)
       worst = max(worst, maxval(abs(zeta - other([1, 3, 2], [1, 3, 2]))))
-      ! Relative to the largest element, as in correction_reference
-      call check(error, worst < 1.0e-12_wp*maxval(abs(zeta)), &
+      call check(error, worst, 0.0_wp, thr=2.0e-12_wp, &
          & more="DRISM changed under a rigid motion or hydrogen exchange")
    end subroutine rotation
 
