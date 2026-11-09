@@ -2,9 +2,11 @@
 module test_moz_3d
    use mctc_env, only: wp, moist_error => error_type
    use mctc_io, only: structure_type, new
+   use mctc_io_convert, only: aatoau
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
+   use moist_model_moz_3d_parameters, only: model_moz_3d_parameters_type
    use moist_solvent_system, only: solvent_system_type
    use moist_model_moz_solvent_vv, only: solvent_vv_type, new_vv_solvent
    use moist_model_moz_potential_term, only: potential_term_type
@@ -52,7 +54,7 @@ contains
    !>
    !> - Owned copy of configured point grid
    !> - EC term: point_potential request through coupling protocol
-   !> - Theory-pending error after all mandatory answers
+   !> - Solve refusal after all mandatory answers in the minimal test model
    !> - Wrong-shape answer rejected first
    subroutine check_moz_3d(error)
       !> Test error
@@ -70,7 +72,8 @@ contains
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
       integer :: i
-      potential%exclusion_radius = 0.1_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) then
@@ -87,7 +90,7 @@ contains
       template%ny = 2
       template%nz = 2
       template%dr = 0.5_wp
-      call new_moz_3d_model(model, ctx, template, solvent, err)
+      call new_moz_3d_model(model, ctx, template, solvent, err, failing_params())
       if (.not. allocated(err)) call model%potential%add(potential, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
@@ -133,14 +136,15 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call check(error, .not. coupling%next(), more="point_potential is the only request")
+      call check(error,.not. coupling%next(), more="point_potential is the only request")
       if (allocated(error)) return
 
+      ! The test model allows one VV iteration: the energy fails in the solvent solve
       energy = 9.0_wp
       call model%get_energy(coupling, energy, err)
       call check(error, allocated(err) .and. energy == 9.0_wp)
       if (allocated(error)) return
-      call check(error, index(err%message, "3D MOZ energy") > 0)
+      call check(error, index(err%message, "did not converge") > 0, more=err%message)
       if (allocated(error)) return
 
       call model%prepare_response(coupling, err)
@@ -151,7 +155,7 @@ contains
       call model%get_response(coupling, response, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      call check(error, index(err%message, "3D MOZ response") > 0)
+      call check(error, index(err%message, "did not converge") > 0, more=err%message)
       if (allocated(error)) return
 
       call model%release_coupling(coupling)
@@ -214,7 +218,7 @@ contains
          model_grid => model%grid
          call check(error, model_grid%natom, 1)
          if (allocated(error)) return
-         call check(error, .not. allocated(model_grid%xi0), more="a point grid carries Gaussian widths")
+         call check(error,.not. allocated(model_grid%xi0), more="a point grid carries Gaussian widths")
          if (allocated(error)) return
          call check_grid_fields(error, model)
          if (allocated(error)) return
@@ -268,7 +272,8 @@ contains
       character(len=96) :: walks(3)
       integer :: kind
 
-      potential%exclusion_radius = 0.1_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
@@ -360,7 +365,8 @@ contains
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
 
-      potential%exclusion_radius = 0.1_wp
+      potential%inner_scale = 0.1_wp/(1.32_wp*aatoau)
+      potential%switch_width = 0.1_wp
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
@@ -448,7 +454,7 @@ contains
       call model%potential%add(charges, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, .not. model%potential%is_updated(), more="adding a term kept the potential updated")
+      call check(error,.not. model%potential%is_updated(), more="adding a term kept the potential updated")
       if (allocated(error)) return
       call check(error, model%potential%n_terms(), 2)
    end subroutine check_solvent_copy
@@ -682,7 +688,7 @@ contains
       type(structure_type) :: mol
       call new_water_solvent(ctx, solvent, err)
       if (allocated(err)) return
-      call new_moz_3d_model(model, ctx, grid, solvent, err)
+      call new_moz_3d_model(model, ctx, grid, solvent, err, failing_params())
       if (allocated(err)) return
       if (present(term)) then
          call model%potential%add(term, err)
@@ -694,13 +700,24 @@ contains
       call model%update(mol, err)
    end subroutine new_updated_model
 
+   !> Settings whose VV solve stops after one iteration on a small grid
+   !>
+   !> Energies of such a model fail fast in the solvent solve, past every guard
+   function failing_params() result(params)
+      !> Settings
+      type(model_moz_3d_parameters_type) :: params
+      params%solvent%npts = 256
+      params%solvent%dr = 0.05_wp
+      params%solvent%maxiter = 1
+   end function failing_params
 
-   !> Getter guards precede pending theory and preserve caller outputs
+   !> Getter guards precede the theory and preserve caller outputs
    !>
    !> Every getter meets a foreign coupling, a model that is not updated, an
    !> unstaged coupling, missing charges, the wrong staging and, past every
-   !> guard, the pending theory; each refusal is named and leaves the energy,
-   !> the gradient and the seeded response untouched
+   !> guard, the theory: the energy fails in the one-iteration VV solve of the
+   !> test model; response and gradient fail in the same VV solve. Each refusal is named and
+   !> leaves the energy, the gradient and the seeded response untouched
    subroutine check_getter_guards(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -713,14 +730,15 @@ contains
       type(response_type) :: response
       type(atomic_charge_adjoint_response_type) :: seed
       real(wp) :: energy, gradient(3, 1)
+      real(wp) :: wrong_gradient(2, 1)
       integer :: phase, scenario
       !> Getter and scenario of the current case for diagnostics
       character(len=64) :: label
       character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
       !> Refusal each scenario must name
-      character(len=40), parameter :: reasons(6) = [character(len=40) :: &
+      character(len=40), parameter :: reasons(7) = [character(len=40) :: &
          & "different model", "updated first", "not staged", "missing required outputs", &
-         & "staged for the", "is not implemented"]
+         & "staged for the", "did not converge", "shape mismatch"]
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_point_grid(cart, err, 2, 2, 2, 0.5_wp, margin=0.0_wp)
@@ -735,7 +753,7 @@ contains
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       seed%dg_dq = [4.0_wp]
       do phase = 1, 3
-         do scenario = 1, 6
+         do scenario = 1, 6 + merge(1, 0, phase == 3)
             label = trim(phases(phase))//" getter, case '"//trim(reasons(scenario))//"'"
             ! Every case starts from an updated model; the update ends every walk
             call model%update(mol, err)
@@ -746,7 +764,7 @@ contains
             select case (scenario)
             case (2)
                call model%invalidate()
-            case (4, 6)
+            case (4, 6, 7)
                select case (phase)
                case (1)
                   call model%prepare_energy(coupling, err)
@@ -768,7 +786,7 @@ contains
                call test_failed(error, err%message)
                return
             end if
-            if (scenario == 6) then
+            if (scenario >= 6) then
                call check(error, coupling%next(), more=trim(label)//": charges not pending")
                if (allocated(error)) return
                call coupling%answer("q", [0.3_wp], err)
@@ -784,25 +802,27 @@ contains
             end if
             energy = 7.0_wp
             gradient = 3.0_wp
+            wrong_gradient = 3.0_wp
             if (scenario == 1) then
                call invoke_getter(model, other, phase, response, energy, gradient, err)
+            else if (scenario == 7) then
+               call model%get_gradient(coupling, response, wrong_gradient, err)
             else
                call invoke_getter(model, coupling, phase, response, energy, gradient, err)
             end if
             call check(error, allocated(err), more=trim(label)//": accepted")
             if (allocated(error)) return
-            call check(error, index(err%message, trim(reasons(scenario))) > 0, &
-               & more=trim(label)//": "//err%message)
-            if (allocated(error)) return
             if (scenario == 6) then
-               call check(error, index(err%message, "3D MOZ "//trim(phases(phase))) > 0, &
+               call check(error, index(err%message, "did not converge") > 0, more=trim(label)//": "//err%message)
+            else
+               call check(error, index(err%message, trim(reasons(scenario))) > 0, &
                   & more=trim(label)//": "//err%message)
-               if (allocated(error)) return
             end if
-            call check(error, energy == 7.0_wp .and. all(gradient == 3.0_wp), &
+            if (allocated(error)) return
+            call check(error, energy == 7.0_wp .and. all(gradient == 3.0_wp) .and. all(wrong_gradient == 3.0_wp), &
                & more=trim(label)//": the refusal wrote the energy or gradient")
             if (allocated(error)) return
-            ! A rejected request, including pending theory, keeps the seeded response
+            ! A rejected request keeps the seeded response
             call check(error, response%next(), &
                & more=trim(label)//": the refusal cleared the response")
             if (allocated(error)) return
@@ -814,7 +834,7 @@ contains
                call test_failed(error, trim(label)//": the refusal replaced the response type")
             end select
             if (allocated(error)) return
-            call check(error, .not. response%next(), &
+            call check(error,.not. response%next(), &
                & more=trim(label)//": the refusal appended a response item")
             if (allocated(error)) return
             deallocate (err)
@@ -827,7 +847,7 @@ contains
       end do
       call model%release_coupling(coupling)
       call foreign%release_coupling(other)
-      call check(error, .not. associated(coupling) .and. .not. associated(other))
+      call check(error,.not. associated(coupling) .and. .not. associated(other))
    end subroutine check_getter_guards
 
    !> Invoke one model getter for a common guard table
@@ -877,7 +897,7 @@ contains
 
       call check(error, model%atom_count(), 0)
       if (allocated(error)) return
-      call check(error, .not. model%is_updated())
+      call check(error,.not. model%is_updated())
       if (allocated(error)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call model%update(mol, err)
@@ -895,7 +915,7 @@ contains
       ! q stays unanswered; the full pass rewinds, so a staged walk offers it again
       call check(error, coupling%next(), more="atomic_charges must be pending")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="atomic_charges is the only request")
+      call check(error,.not. coupling%next(), more="atomic_charges is the only request")
       if (allocated(error)) return
       call new(mol, [integer ::], reshape([real(wp) ::], [3, 0]))
       call model%update(mol, err)
@@ -903,12 +923,12 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "at least one solute atom") > 0, more=err%message)
       if (allocated(error)) return
-      call check(error, .not. model%is_updated(), more="failed update kept valid status")
+      call check(error,.not. model%is_updated(), more="failed update kept valid status")
       if (allocated(error)) return
-      call check(error, .not. coupling%next(), more="failed update kept the staged walk")
+      call check(error,.not. coupling%next(), more="failed update kept the staged walk")
       if (allocated(error)) return
       call model%release_coupling(coupling)
-      call check(error, .not. associated(coupling))
+      call check(error,.not. associated(coupling))
    end subroutine check_update_guards
 
    !> Named model fields match the owned domain in both concrete grid types
@@ -927,7 +947,7 @@ contains
          call query%fetch(trim(names(i)))
          call model%list_fields(query)
          if (i == 5 .and. .not. allocated(model%grid%xi0)) then
-            call check(error, .not. query%found, more="unallocated xi0 was declared")
+            call check(error,.not. query%found, more="unallocated xi0 was declared")
             if (allocated(error)) return
             cycle
          end if

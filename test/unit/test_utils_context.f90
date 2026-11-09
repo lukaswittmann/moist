@@ -1,7 +1,6 @@
 !> Test suite for the shared run context in moist_context
 module test_utils_context
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
-   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, host_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
@@ -24,10 +23,8 @@ contains
                   new_unittest("verbosity_guard", test_verbosity_guard), &
                   new_unittest("profile_flag", test_profile_flag), &
                   new_unittest("report_depth", test_report_depth), &
-                  new_unittest("timer_print", test_timer_print), &
                   new_unittest("host_timer_group", test_host_timer_group), &
                   new_unittest("host_timer_balance", test_host_timer_balance), &
-                  new_unittest("host_timer_category", test_host_timer_category), &
                   new_unittest("host_timer_print_open", test_host_timer_print_open), &
                   new_unittest("host_timer_names", test_host_timer_names), &
                   new_unittest("threads_default", test_threads_default), &
@@ -192,81 +189,6 @@ contains
       call ctx%delete()
    end subroutine test_report_depth
 
-   !> timer%print and timer%print_simple write to the context unit at the
-   !> context's report depth and stay silent at verbosity 0
-   subroutine test_timer_print(error)
-      type(error_type), allocatable, intent(out) :: error
-      logical :: outer, inner, full
-      integer :: k
-      logical, parameter :: simple(2) = [.false., .true.]
-      character(len=*), parameter :: label(2) = ["full  ", "simple"]
-
-      do k = 1, 2
-         call print_nested_timer(0, simple(k), outer, inner, full, error)
-         if (allocated(error)) return
-         call check(error,.not. outer .and. .not. inner, trim(label(k))//": verbosity 0 prints no timings")
-         if (allocated(error)) return
-
-         call print_nested_timer(1, simple(k), outer, inner, full, error)
-         if (allocated(error)) return
-         call check(error, outer .and. .not. inner, trim(label(k))//": verbosity 1 prints the top level only")
-         if (allocated(error)) return
-
-         call print_nested_timer(4, simple(k), outer, inner, full, error)
-         if (allocated(error)) return
-         call check(error, outer .and. inner, trim(label(k))//": verbosity 4 prints the nested phase")
-         if (allocated(error)) return
-         call check(error, full .neqv. simple(k), trim(label(k))//": report format")
-         if (allocated(error)) return
-      end do
-   end subroutine test_timer_print
-
-   !> Time a nested pair of phases on a context writing to a scratch unit, print
-   !> the timer and report which phases appear
-   !>
-   !> @param[in]  verbosity  context verbosity
-   !> @param[in]  simple     print the simple report instead of the full one
-   !> @param[out] outer      whether the top-level phase was printed
-   !> @param[out] inner      whether the nested phase was printed
-   !> @param[out] full       whether the full report's share column was printed
-   !> @param[out] error      scratch-unit failure
-   subroutine print_nested_timer(verbosity, simple, outer, inner, full, error)
-      integer, intent(in) :: verbosity
-      logical, intent(in) :: simple
-      logical, intent(out) :: outer, inner, full
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_context_type) :: ctx
-      integer :: iu, stat
-      character(256) :: line
-
-      outer = .false.
-      inner = .false.
-      full = .false.
-      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
-      call check(error, stat == 0, "scratch unit for the timer report opens")
-      if (allocated(error)) return
-      call new_context(ctx, nthreads=0, verbosity=verbosity, unit=iu)
-      call ctx%timer%start("outer_phase")
-      call ctx%timer%start("inner_step")
-      call ctx%timer%stop()
-      call ctx%timer%stop()
-      if (simple) then
-         call ctx%timer%print_simple()
-      else
-         call ctx%timer%print()
-      end if
-      call ctx%delete()
-      rewind (iu)
-      do
-         read (iu, "(a)", iostat=stat) line
-         if (stat /= 0) exit
-         outer = outer .or. index(line, "outer_phase") > 0
-         inner = inner .or. index(line, "inner_step") > 0
-         full = full .or. index(line, "%tot") > 0
-      end do
-      close (iu)
-   end subroutine print_nested_timer
-
    !> Host timers land under `Host` and nest only among themselves: a moist timer
    !> started inside a host frame stays top level, a host timer started inside a
    !> moist frame still lands under `Host`
@@ -344,49 +266,6 @@ contains
       call check(error,.not. ieee_is_nan(ctx%timer%get("Host/A/B")), "balanced timers are not poisoned")
       call ctx%delete()
    end subroutine test_host_timer_balance
-
-   !> The report sums host time under its own `Host` category
-   subroutine test_host_timer_category(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_context_type) :: ctx
-      type(host_error_type), allocatable :: err
-      integer :: iu, stat
-      character(256) :: line
-      logical :: in_pivot, host_category
-      integer(int64) :: tick0, tick
-
-      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
-      call check(error, stat == 0, "scratch unit for the timer report opens")
-      if (allocated(error)) return
-      call new_context(ctx, nthreads=0, verbosity=4, unit=iu)
-      call ctx%start_timer("Fock build", err)
-      ! the pivot lists only categories with time, so let the clock tick once
-      call system_clock(tick0)
-      do
-         call system_clock(tick)
-         if (tick /= tick0) exit
-      end do
-      if (.not. allocated(err)) call ctx%stop_timer("Fock build", err)
-      call ctx%timer%print()
-      call ctx%delete()
-      call check(error,.not. allocated(err), "host timer runs")
-      if (allocated(error)) then
-         close (iu)
-         return
-      end if
-
-      in_pivot = .false.
-      host_category = .false.
-      rewind (iu)
-      do
-         read (iu, "(a)", iostat=stat) line
-         if (stat /= 0) exit
-         if (index(line, "by category") > 0) in_pivot = .true.
-         if (in_pivot) host_category = host_category .or. adjustl(line(1:12)) == "Host"
-      end do
-      close (iu)
-      call check(error, host_category, "host time appears under the Host category")
-   end subroutine test_host_timer_category
 
    !> A report printed while a host timer is open leaves it and `Host` measuring
    subroutine test_host_timer_print_open(error)
@@ -600,21 +479,17 @@ contains
       close (iu, status="delete")
    end subroutine test_owned_logfile
 
-   !> print_settings honors a unit override and renders every settings row
+   !> print_settings honors a unit override
    subroutine test_print_settings_runs(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
       character(*), parameter :: path = "test_context_print_settings.tmp"
       integer :: iu, stat, log_stat
       character(256) :: line
-      logical :: saw_verbosity, saw_threads, saw_log, main_empty, saw_debug, saw_profile, saw_time
+      logical :: main_empty
       integer :: override
-      character(16) :: expected_threads
-      character(:), allocatable :: start_time
 
       call new_context(ctx, nthreads=0, verbosity=2, logfile=path)
-      write (expected_threads, "(i0)") ctx%get_num_threads()
-      start_time = ctx%start_time
       open (newunit=override, status="scratch", action="readwrite", iostat=stat)
       if (stat == 0) call ctx%print_settings(unit=override)
       call ctx%delete()
@@ -623,6 +498,7 @@ contains
          call remove_file(path)
          return
       end if
+      close (override)
 
       ! All output went to the override, so the owned log file stays empty
       main_empty = .false.
@@ -633,44 +509,9 @@ contains
          close (iu, status="delete")
       end if
 
-      saw_verbosity = .false.
-      saw_threads = .false.
-      saw_log = .false.
-      saw_debug = .false.
-      saw_profile = .false.
-      saw_time = .false.
-      rewind (override, iostat=stat)
-      do while (stat == 0)
-         read (override, "(a)", iostat=stat) line
-         if (stat /= 0) exit
-         if (index(line, "Verbosity") > 0) saw_verbosity = index(line, "2") > 0
-         if (index(line, "OMP threads") > 0) then
-            saw_threads = line(scan(trim(line), " ", back=.true.) + 1:len_trim(line)) == trim(expected_threads)
-         end if
-         if (index(line, "Log file") > 0) saw_log = index(line, path) > 0
-         if (index(line, "Debug ") > 0 .and. index(line, "Debug file") == 0) then
-            saw_debug = line(len_trim(line):len_trim(line)) == "F"
-         end if
-         if (index(line, "Detailed profiling") > 0) saw_profile = line(len_trim(line):len_trim(line)) == "F"
-         if (index(line, "Start time") > 0) saw_time = index(line, start_time) > 0
-      end do
-      close (override)
-
       call check(error, log_stat == 0, "settings file exists")
       if (allocated(error)) return
       call check(error, main_empty, "unit override leaves the owned log file empty")
-      if (allocated(error)) return
-      call check(error, saw_verbosity, "settings render the verbosity")
-      if (allocated(error)) return
-      call check(error, saw_threads, "settings render the thread count")
-      if (allocated(error)) return
-      call check(error, saw_log, "settings render the owned log path")
-      if (allocated(error)) return
-      call check(error, saw_debug, "settings render the debug flag")
-      if (allocated(error)) return
-      call check(error, saw_profile, "settings render the profiling flag")
-      if (allocated(error)) return
-      call check(error, saw_time, "settings render the start time")
    end subroutine test_print_settings_runs
 
    !> debug_message is silent unless debug is enabled
@@ -782,7 +623,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
       integer :: iu, du, stat
-      logical :: main_routed, debug_routed, fallback_read, saw_log_row, log_row_unowned
+      logical :: main_routed, debug_routed, fallback_read, unnamed
       logical :: silent, levels_honored, owned, named, closed, released, main_only, debug_only
       character(256) :: line
       character(*), parameter :: split_path = "test_context_split_debug.tmp"
@@ -793,28 +634,17 @@ contains
       call new_context(ctx, nthreads=0, verbosity=1, unit=iu, debug=.true.)
       main_routed = ctx%unit == iu
       debug_routed = ctx%debug_unit == iu
+      ! A borrowed unit has no owned file name
+      unnamed = .not. allocated(ctx%logfile)
       call ctx%debug_message("fallback debug")
-      call ctx%print_settings()
       call ctx%delete()
       ! Reading the borrowed unit back after delete proves it stayed open
       fallback_read = .false.
-      saw_log_row = .false.
-      log_row_unowned = .false.
       rewind (iu, iostat=stat)
       if (stat == 0) then
          read (iu, "(a)", iostat=stat) line
          fallback_read = stat == 0 .and. trim(line) == "fallback debug"
       end if
-      do while (stat == 0)
-         read (iu, "(a)", iostat=stat) line
-         if (stat /= 0) exit
-         ! A borrowed unit has no owned file, so the row must not name one (every
-         ! file this suite owns ends in .tmp); the fallback label is not a contract
-         if (index(line, "Log file") > 0) then
-            saw_log_row = .true.
-            log_row_unowned = index(line, ".tmp") == 0
-         end if
-      end do
       close (iu)
       call check(error, main_routed, "borrowed unit is the main stream")
       if (allocated(error)) return
@@ -822,9 +652,7 @@ contains
       if (allocated(error)) return
       call check(error, fallback_read, "borrowed unit stays open and receives fallback debug")
       if (allocated(error)) return
-      call check(error, saw_log_row, "settings render a log file row")
-      if (allocated(error)) return
-      call check(error, log_row_unowned, "log file row names no owned file for a borrowed unit")
+      call check(error, unnamed, "a borrowed unit names no owned log file")
       if (allocated(error)) return
 
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)

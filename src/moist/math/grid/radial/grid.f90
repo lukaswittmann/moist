@@ -9,6 +9,7 @@ module moist_math_grid_radial_grid
    use mctc_io_constants, only: pi
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type
    use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type
+   use moist_math_grid_layout, only: moist_math_grid_layout_type, layout_radial
    implicit none(type, external)
    private
 
@@ -76,6 +77,8 @@ module moist_math_grid_radial_grid
       procedure :: integrate_field => radial_integrate_field
       !> Volume quadrature of an analytic radial integrand sampled at the nodes
       procedure :: integrate => radial_integrate
+      !> Layout: nodes, weights and the uniform spacing
+      procedure :: get_layout => radial_get_layout
    end type moist_math_grid_radial_type
 
 contains
@@ -227,7 +230,7 @@ contains
       kgrid%spacing = dk
    end subroutine new_uniform_radial_pair
 
-   !> Volume quadrature of tabulated values: sum_i 4*pi*r_i^2*w_i*f_i
+   !> Compensated volume quadrature: sum_i 4*pi*r_i^2*w_i*f_i
    !>
    !> @param[in]  self    Grid instance
    !> @param[in]  f       Per-node field values, shape (npts); any other length is an error
@@ -244,18 +247,21 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: i
+      real(wp) :: correction
 
       result = 0.0_wp
+      correction = 0.0_wp
       if (size(f) /= self%npts) then
          call fatal_error(error, "radial grid: integrate_field needs one value per node")
          return
       end if
       do i = 1, self%npts
-         result = result + four_pi*self%r(i)*self%r(i)*self%w(i)*f(i)
+         call add_compensated(four_pi*self%r(i)*self%r(i)*self%w(i)*f(i), result, correction)
       end do
+      result = result + correction
    end subroutine radial_integrate_field
 
-   !> Volume quadrature of an analytic integrand: sum_i 4*pi*r_i^2*w_i*f(r_i)
+   !> Compensated volume quadrature: sum_i 4*pi*r_i^2*w_i*f(r_i)
    !>
    !> @param[in]  self    Grid instance
    !> @param[in]  f       Radial integrand f(r)
@@ -269,11 +275,56 @@ contains
       real(wp), intent(out) :: result
 
       integer :: i
+      real(wp) :: correction
 
       result = 0.0_wp
+      correction = 0.0_wp
       do i = 1, self%npts
-         result = result + four_pi*self%r(i)*self%r(i)*self%w(i)*f(self%r(i))
+         call add_compensated(four_pi*self%r(i)*self%r(i)*self%w(i)*f(self%r(i)), result, correction)
       end do
+      result = result + correction
    end subroutine radial_integrate
+
+   !> Neumaier update retaining rounding loss from either addend
+   !>
+   !> @param[in] value            next weighted contribution
+   !> @param[in,out] total        running sum
+   !> @param[in,out] correction   accumulated rounding correction
+   pure subroutine add_compensated(value, total, correction)
+      !> Next weighted contribution
+      real(wp), intent(in) :: value
+      !> Running sum
+      real(wp), intent(inout) :: total
+      !> Accumulated rounding correction
+      real(wp), intent(inout) :: correction
+      real(wp) :: updated
+
+      ! TODO: possibly test double-compensated summation, SumK, or Floating-point expansions
+
+      updated = total + value
+      if (abs(total) >= abs(value)) then
+         correction = correction + ((total - updated) + value)
+      else
+         correction = correction + ((value - updated) + total)
+      end if
+      total = updated
+   end subroutine add_compensated
+
+   !> Layout of the grid: nodes, weights and the spacing of a uniform grid
+   !>
+   !> @param[in]  self    built grid
+   !> @param[out] layout  "radial" layout
+   subroutine radial_get_layout(self, layout)
+      !> Built grid
+      class(moist_math_grid_radial_type), intent(in) :: self
+      !> Layout
+      type(moist_math_grid_layout_type), intent(out) :: layout
+
+      layout%kind = layout_radial
+      layout%shape = [self%npts]
+      layout%spacing = self%spacing
+      if (allocated(self%r)) layout%r = self%r
+      if (allocated(self%w)) layout%w = self%w
+   end subroutine radial_get_layout
 
 end module moist_math_grid_radial_grid

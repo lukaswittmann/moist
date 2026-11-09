@@ -29,7 +29,10 @@
 !>   * `stage_model_point_charge_energy(error, model, qat, mol, coupling)`
 !>                                       - the same for a continuum model
 !>   * `get_test_cross(mol)` - five-carbon cross with concave seams
+!>   * `get_test_water(mol)` - water molecule in the xz plane, bohr
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
+!>   * `expect_moist_error(error, err, expected)` - the expected refusal of a
+!>                                         `should_fail` test, or no error
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h, df, error)` - 4-point central FD formula,
 !>                                         fails on a nonfinite derivative
 !>   * `fd4_offsets` - the matching stencil offsets, in units of h
@@ -47,8 +50,6 @@
 !>   * `get_becke_recipe(recipe, nrad, radius_factor, degree, error, ...)` -
 !>                                         Chebyshev-II x Becke recipe, constant
 !>                                         degree, positive-weight rules
-!>   * `read_printout(unit, lines, nline)` - lines written to a scratch unit
-!>   * `printed_entry(lines, key, value)` - whether a `key ... value` line was printed
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
@@ -121,13 +122,14 @@ module test_helpers
    public :: stage_point_charge_energy
    public :: stage_model_point_charge_energy
    public :: get_test_cross
-   public :: read_printout, printed_entry
+   public :: get_test_water
    public :: fd4_scalar
    public :: fd4_offsets
    public :: fd6_scalar
    public :: fd6_offsets
    public :: rel_deviation
    public :: check_moist_error
+   public :: expect_moist_error
    public :: fill_legacy_radii
    public :: build_numbering_map
    public :: cavity_xi0
@@ -929,6 +931,16 @@ contains
 
    !* ------------------------- Geometry and numeric utilities ------------------------ *!
 
+   !> Water molecule in the xz plane, bohr
+   !>
+   !> @param[out] mol  water molecule
+   subroutine get_test_water(mol)
+      !> Water molecule
+      type(structure_type), intent(out) :: mol
+      call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.12_wp, 1.43_wp, 0.0_wp, -0.98_wp, &
+         & -1.43_wp, 0.0_wp, -0.98_wp], [3, 3]))
+   end subroutine get_test_water
+
    !> Five-carbon cross, converted to bohr
    !>
    !> Deliberately concave seams between the four outer atoms: at the
@@ -976,6 +988,27 @@ contains
          call test_failed(error, trim(err%message))
       end if
    end subroutine check_moist_error
+
+   !> Report the expected refusal of a `should_fail` test
+   !>
+   !> - Fails the test only when `err` carries `expected`; no error, or another
+   !>   message, leaves `error` unallocated, which shows as an unexpected pass
+   !> - Callers return without an error when their own setup fails, for the same reason
+   !>
+   !> @param[out] error     Test failure, allocated only for the expected refusal
+   !> @param[in]  err       Moist error of the refused call
+   !> @param[in]  expected  Part of the expected message
+   subroutine expect_moist_error(error, err, expected)
+      !> Test failure; allocated only for the expected refusal
+      type(error_type), allocatable, intent(out) :: error
+      !> Moist error of the refused call
+      type(moist_error_type), allocatable, intent(in) :: err
+      !> Part of the expected message
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, trim(err%message))
+   end subroutine expect_moist_error
 
    !> 4-point central finite-difference formula:
    !>   f'(x) ~ (-f(x+2h) + 8 f(x+h) - 8 f(x-h) + f(x-2h)) / (12 h)
@@ -1544,63 +1577,4 @@ contains
       allocate (recipe%angular, source=generator)
       allocate (recipe%shells, source=shells)
    end subroutine assemble_recipe
-
-   !* ------------------------------- Printout helpers -------------------------------- *!
-
-   !> Rewind a formatted scratch unit and read back the lines written to it
-   !>
-   !> @param[in]  unit  Open scratch unit
-   !> @param[out] lines Lines in order, blank-padded
-   !> @param[out] nline Number of lines read, at most `size(lines)`
-   subroutine read_printout(unit, lines, nline)
-      !> Open scratch unit
-      integer, intent(in) :: unit
-      !> Lines in order
-      ! allow(assumed-size-character-intent): caller-sized line buffers, longer lines are cut
-      character(len=*), intent(out) :: lines(:)
-      !> Number of lines read
-      integer, intent(out) :: nline
-      !> I/O status
-      integer :: stat
-
-      lines = ""
-      nline = 0
-      rewind (unit)
-      do while (nline < size(lines))
-         read (unit, "(a)", iostat=stat) lines(nline + 1)
-         if (stat /= 0) exit
-         nline = nline + 1
-      end do
-   end subroutine read_printout
-
-   !> Whether a pretty-printed `key ... value` line is among `lines`
-   !>
-   !> The key must open the line after its indentation and be followed by a
-   !> blank; the value may appear anywhere after it
-   !>
-   !> @param[in] lines Printed lines
-   !> @param[in] key   Entry label
-   !> @param[in] value Expected value text, including any unit
-   logical function printed_entry(lines, key, value) result(found)
-      !> Printed lines
-      character(len=*), intent(in) :: lines(:)
-      !> Entry label
-      character(len=*), intent(in) :: key
-      !> Expected value text
-      character(len=*), intent(in) :: value
-      !> Line index
-      integer :: i
-      !> Line without its indentation
-      character(len=len(lines)) :: line
-
-      found = .false.
-      do i = 1, size(lines)
-         line = adjustl(lines(i))
-         if (index(line, key//" ") /= 1) cycle
-         if (index(line(len(key) + 1:), value) > 0) then
-            found = .true.
-            return
-         end if
-      end do
-   end function printed_entry
 end module test_helpers

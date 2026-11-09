@@ -2,7 +2,7 @@
 !>
 !> - Resolved plain data for kernels: merged LJ parameters, tail charges and field-presence flag
 !> - Per-atom data from owning terms
-!> - Field passed separately from sites (3D only)
+!> - Radial or volume field passed separately from sites
 !> - Whole-side field term owns every charge; tail charges for Ng tails only
 !> - No point-charge field beside a supplied field
 module moist_model_moz_potential_sites

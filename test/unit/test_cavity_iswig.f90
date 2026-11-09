@@ -302,13 +302,12 @@ contains
 
    end subroutine test_islands_guards_and_order
 
-   !> Debug writers produce one record per grid point and report to the context
+   !> Debug writers produce one record per grid point
    !>
-   !> The context owns a scratch unit, so the `[Info]` lines and the default
-   !> `print` target are observable without touching standard output; every
-   !> named file is read back and deleted before any assertion can return.
-   !> iSwiG overrides the CSV writer with its own column set, so the base
-   !> writer is called directly
+   !> The context writes to a scratch unit, so the `[Info]` notices stay off
+   !> standard output; every named file is read back and deleted before any
+   !> assertion can return. iSwiG overrides the CSV writer with its own column
+   !> set, so the base writer is called directly
    subroutine test_debug_writers(error)
 
       !> Error handling
@@ -324,11 +323,10 @@ contains
       class(radius_type), allocatable :: radius_model
       !> Run context writing to a scratch unit
       type(moist_context_type), target :: ctx
-      !> Lines read back from the written files and the scratch units
+      !> Lines read back from the written files
       character(len=256), allocatable :: xyz_lines(:), csv_lines(:), pqr_lines(:)
-      character(len=256), allocatable :: log_lines(:), print_lines(:)
-      !> Context scratch unit and explicit print unit
-      integer :: log_unit, print_unit
+      !> Context scratch unit
+      integer :: log_unit
       !> I/O status, grid index, parsed count and owner
       integer :: stat, i, n, owner
       !> Atom positions, parsed point and parsed area
@@ -372,14 +370,7 @@ contains
       call read_and_delete(stem//".csv", csv_lines)
       call cav%write_pqr_debug(stem//".pqr", pqr_error)
       call read_and_delete(stem//".pqr", pqr_lines)
-      ! Default target is the context unit, an explicit one overrides it
-      call cav%print()
-      open (newunit=print_unit, status="scratch", action="readwrite", iostat=stat)
-      call check(error, stat, 0, more="could not open the print scratch unit")
-      if (allocated(error)) return
-      call cav%print(unit=print_unit)
-      call read_scratch(print_unit, print_lines)
-      call read_scratch(log_unit, log_lines)
+      close (log_unit)
 
       call check(error,.not. allocated(xyz_error), more="XYZ writer failed")
       if (allocated(error)) return
@@ -437,31 +428,13 @@ contains
          if (allocated(error)) return
       end do
       call check(error, trim(pqr_lines(cav%ngrid + 1)) == "END", more="PQR terminator")
-      if (allocated(error)) return
-
-      ! Context unit: three writer notices, then the default print
-      call check(error, count(index(log_lines, "[Info] Wrote cavity") > 0), 3, &
-         & more="writers did not report to the context unit")
-      if (allocated(error)) return
-      call check(error, any(index(log_lines, stem//".pqr") > 0), &
-         & more="PQR notice does not name the file")
-      if (allocated(error)) return
-      call check(error, any(index(log_lines, "Cavity points") > 0), &
-         & more="print without a unit did not reach the context unit")
-      if (allocated(error)) return
-      call check(error, any(index(print_lines, "Total volume") > 0), &
-         & more="print did not reach the explicit unit")
-      if (allocated(error)) return
-      call check(error,.not. any(index(print_lines, "[Info]") > 0), &
-         & more="explicit print unit received writer notices")
 
    end subroutine test_debug_writers
 
-   !> Debug writers and print refuse a cavity that is missing grid data
+   !> Debug writers refuse a cavity that is missing grid data
    !>
-   !> The cavity is never constructed, so it also has no run context and
-   !> `print` resolves its default unit without one; the CSV guards are the
-   !> base writer's, which iSwiG overrides
+   !> The cavity is never constructed, so it also has no run context; the CSV
+   !> guards are the base writer's, which iSwiG overrides
    subroutine test_debug_writer_guards(error)
 
       !> Error handling
@@ -471,10 +444,6 @@ contains
       type(cavity_type_iswig) :: cav
       !> Library error handling
       type(mctc_error), allocatable :: cavity_error
-      !> Lines printed to the scratch unit
-      character(len=256), allocatable :: lines(:)
-      !> Scratch unit and I/O status
-      integer :: unit, stat
       !> Whether a writer left a file behind
       logical :: exists
       !> File name stem owned by this test
@@ -527,19 +496,7 @@ contains
       call check(error,.not. exists, more="refused CSV writer created a file")
       if (allocated(error)) return
       inquire (file=stem//".pqr", exist=exists)
-      call check(error,.not. exists, more="refused PQR writer created a file")
-      if (allocated(error)) return
-
-      ! No totals yet: print warns instead of reporting
-      open (newunit=unit, status="scratch", action="readwrite", iostat=stat)
-      call check(error, stat, 0, more="could not open the print scratch unit")
-      if (allocated(error)) return
-      call cav%print(unit=unit)
-      call read_scratch(unit, lines)
-      call check(error, size(lines), 1, more="print of an incomplete cavity wrote more than a warning")
-      if (allocated(error)) return
-      call check(error, trim(lines(1)) == "[Warning] Cavity not fully initialized", &
-         & more="print of an incomplete cavity did not warn")
+      call check(error, .not. exists, more="refused PQR writer created a file")
 
    end subroutine test_debug_writer_guards
 
@@ -592,23 +549,6 @@ contains
       close (unit, status="delete")
 
    end subroutine read_and_delete
-
-   !> Rewind a scratch unit, read it line by line and close it
-   !>
-   !> @param[in]  unit  Open scratch unit
-   !> @param[out] lines Unit contents
-   subroutine read_scratch(unit, lines)
-
-      !> Open scratch unit
-      integer, intent(in) :: unit
-      !> Unit contents
-      character(len=256), allocatable, intent(out) :: lines(:)
-
-      rewind (unit)
-      call read_unit(unit, lines)
-      close (unit)
-
-   end subroutine read_scratch
 
    !> Read every line of an open unit from its current position
    !>

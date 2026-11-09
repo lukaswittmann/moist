@@ -35,6 +35,7 @@ module moist_utils_prettylistprint
       character(:), allocatable :: fmt_logical
    contains
       procedure :: header
+      procedure :: centered
       procedure :: print_header
       procedure :: separator
       procedure :: blank
@@ -88,6 +89,21 @@ contains
       end if
       write (self%unit, "(A)") line
    end subroutine header
+
+   !> Print a line of text centered on the table width
+   !>
+   !> @param[inout] self  Pretty list printer instance
+   !> @param[in]    text  Line text; longer text starts at the table edge
+   subroutine centered(self, text)
+      !> Pretty list printer instance
+      class(prettylistprinter), intent(inout) :: self
+      !> Line text
+      character(*), intent(in) :: text
+      integer :: nleft
+
+      nleft = max(0, (table_width(self) - len_trim(adjustl(text)))/2)
+      write (self%unit, "(A)") repeat(" ", max(0, self%offset) + nleft)//trim(adjustl(text))
+   end subroutine centered
 
    !> Construct a pretty list printer with fixed column widths and headers
    !>

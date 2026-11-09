@@ -11,6 +11,7 @@ module moist_math_lapack
    use moist_math_lapack_gesv, only: lapack_gesv
    use moist_math_lapack_gesvd, only: lapack_gesvd
    use moist_math_lapack_gels, only: lapack_gels
+   use moist_math_lapack_ggev, only: lapack_ggev
    implicit none(type, external)
    public
 end module moist_math_lapack

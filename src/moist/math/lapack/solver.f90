@@ -5,8 +5,7 @@ module moist_math_lapack_solver
    use moist_math_lapack_type, only: eigen_solver_type, context_solver
    use moist_math_lapack_sygvd, only: sygvd_solver, new_sygvd
    use moist_math_lapack_sygvr, only: sygvr_solver, new_sygvr
-   use mctc_env, only: sp, dp, error_type
-   implicit none(type, external)
+      implicit none(type, external)
    private
 
    public :: eigen_solver_type, lapack_algorithm

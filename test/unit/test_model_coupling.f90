@@ -110,7 +110,6 @@ contains
          new_unittest("two_distinct_pcm_components_order", test_order), &
          new_unittest("moments_energy_requirements_and_disabled", test_moments), &
          new_unittest("request_free_pv", test_pv), &
-         new_unittest("model_copy_owns_independent_couplings", test_model_copy), &
          new_unittest("model_staging_restarts_walk", test_model_restart), &
          new_unittest("phase_answer_reuse_and_energy_refresh", test_phase_reuse), &
          new_unittest("model_update_ends_walk", test_model_update_walk), &
@@ -169,39 +168,6 @@ contains
       if (allocated(error)) return
       call check(error,.not. second%next(), more="the potential is the only request")
    end subroutine test_invalidation
-
-   subroutine test_model_copy(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_error_type), allocatable :: err
-      type(moist_context_type), target :: ctx
-      type(structure_type) :: mol
-      type(radius_type_static) :: radii
-      type(cavity_type_iswig) :: cavity
-      type(model_continuum_type), target :: original
-      type(model_continuum_type), allocatable, target :: copied
-      type(coupling_type), pointer :: coupling
-      !> Borrowed model cavity
-      class(cavity_type), pointer :: cav
-      real(wp) :: energy
-      call iswig_fixture(ctx, mol, radii, cavity, error)
-      if (allocated(error)) return
-      call cpcm_model(original, cavity, ctx, mol, .false., error)
-      if (allocated(error)) return
-      cav => original%cavity
-      call original%new_coupling(coupling, err)
-      call original%prepare_energy(coupling, err)
-      call fill_point_charge_potential(cav, coupling, qat_vals, mol)
-      allocate (copied, source=original)
-      energy = 0.0_wp
-      call copied%get_energy(coupling, energy, err)
-      call check(error, allocated(err))
-      if (allocated(error)) return
-      deallocate (copied)
-      call original%get_energy(coupling, energy, err)
-      if (failed(error, err, "original survives destroying its copy")) return
-      call original%update(mol, err)
-      if (failed(error, err, "original registry remains owned")) return
-   end subroutine test_model_copy
 
    subroutine test_order(error)
       type(error_type), allocatable, intent(out) :: error

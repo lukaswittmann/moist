@@ -4,8 +4,8 @@ Origin: **FINUFFT** (Flatiron Institute Nonuniform Fast Fourier Transform) by th
 Institute / Simons Foundation: https://github.com/flatironinstitute/finufft
 Commit: `0e9c10409580c482656b3f840c9d875f98c3a066` (2.6.0-dev, the FINUFFT revision this pin
 matches in `subprojects/finufft.wrap`'s former `revision` field before that wrap was removed).
-Every file below is a byte-for-byte copy of the upstream path at that commit, except the two
-patched headers listed under "Local modifications". Relative paths under `include/`, `src/` and `fortran/` are kept identical to upstream
+Every file below is a byte-for-byte copy of the upstream path at that commit, except the five
+patched files listed under "Local modifications". Relative paths under `include/`, `src/` and `fortran/` are kept identical to upstream
 so the sources' own `#include` directives resolve unchanged.
 
 ## License
@@ -28,9 +28,7 @@ The three ducc0 infra translation units (`threading.cc`, `mav.cc`, `string_utils
 ever compiled once, by `moist_fft`; FINUFFT links against that library rather than recompiling
 them (see the ducc0 `PROVENANCE.md` in the sibling directory).
 
-Mirroring upstream's `src/CMakeLists.txt` / `src/common/CMakeLists.txt`, the precision-dependent
-sources are compiled twice (once with `FINUFFT_SINGLE` defined, once without) and the
-precision-independent sources once.
+Moist only uses the double-precision interface; every source here is only compiled once, without `FINUFFT_SINGLE`.
 
 ## Files
 
@@ -60,20 +58,20 @@ precision-independent sources once.
 | `include/finufft_common/safe_call.h` | header | - |
 | `include/finufft_common/spread_opts.h` | header | - |
 | `include/finufft_common/utils.h` | header | - |
-| `src/makeplan.cpp` | yes | both (twice) |
-| `src/setpts.cpp` | yes | both (twice) |
-| `src/execute.cpp` | yes | both (twice) |
-| `src/spreadinterp.cpp` | yes | both (twice) |
-| `src/spreadinterp_1d.cpp` | yes | both (twice) |
-| `src/spreadinterp_2d.cpp` | yes | both (twice) |
-| `src/spreadinterp_3d.cpp` | yes | both (twice) |
-| `src/fft.cpp` | yes | once (precision-templated internally) |
-| `src/c_interface.cpp` | yes | once |
+| `src/makeplan.cpp` | yes | double |
+| `src/setpts.cpp` | yes | double |
+| `src/execute.cpp` | yes | double |
+| `src/spreadinterp.cpp` | yes | double |
+| `src/spreadinterp_1d.cpp` | yes | double |
+| `src/spreadinterp_2d.cpp` | yes | double |
+| `src/spreadinterp_3d.cpp` | yes | double |
+| `src/fft.cpp` | yes | double (float instantiations removed) |
+| `src/c_interface.cpp` | yes | double (float entry points removed) |
 | `src/utils.cpp` | yes | once |
 | `src/common/kernel.cpp` | yes | once |
 | `src/common/pswf.cpp` | yes | once |
 | `src/common/utils.cpp` | yes | once |
-| `fortran/finufftfort.cpp` | yes | once |
+| `fortran/finufftfort.cpp` | yes | double (float entry points removed) |
 | `LICENSE` | license text | - |
 | `NOTICE` | license text | - |
 
@@ -97,3 +95,5 @@ uncomputed. Both loops now work-share the chunks with `omp for schedule(static, 
 are unchanged, since each chunk's arithmetic does not depend on the thread. The changes carry a
 "moist patch" comment and a header notice (Apache-2.0 section 4(b)); `diff` against upstream
 `0e9c104` shows them. Unfixed upstream as of 2026-09-29; drop the patch once upstream fixes it.
+
+`src/fft.cpp`, `src/c_interface.cpp` and `fortran/finufftfort.cpp` drop single precision.

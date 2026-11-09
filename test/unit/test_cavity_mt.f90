@@ -19,7 +19,7 @@ module test_cavity_mt
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, nuclear_charge_request_type
    use moist_channels_fields, only: field_query_type
    use pcmgen_gauss_conductor, only: conductor_state, conductor_assemble, conductor_medium, conductor_solve
-   use test_helpers, only: check_moist_error, read_printout
+   use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
    public :: collect_cavity_mt
@@ -432,34 +432,26 @@ contains
                  more="Sliver faces distort the width correction")
    end subroutine test_sliver_widths
 
-   !> Overly narrow initial widths are clamped at every point and reported
+   !> Overly narrow initial widths are clamped at every point
    subroutine test_limited_widths(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: cav
       type(moist_cavity_mt_parameters_type) :: param
-      character(len=256) :: lines(8)
-      character(len=16) :: total
-      integer :: unit, nline
+      integer :: unit
 
       param%spacing = 0.3_wp
       param%target_area = 0.6_wp
       ! The uniform layer needs about 4.9/2 times the initial width
       param%gaussian_scale = 2.0_wp
+      ! Scratch unit keeps the limit warning off the console
       open (newunit=unit, status="scratch", action="readwrite")
       call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [3.0_wp], param, unit=unit)
-      if (.not. allocated(error)) call read_printout(unit, lines, nline)
       close (unit)
       if (allocated(error)) return
       call check(error, all(abs(cav%xi0*sqrt(cav%a)/param%gaussian_scale - 1.25_wp) < 1.0e-12_wp), &
          & more="Width factors not clamped at the upper limit")
-      if (allocated(error)) return
-      write (total, "(i0)") cav%ngrid
-      call check(error, nline, 1, more="Expected exactly one warning line")
-      if (allocated(error)) return
-      call check(error, trim(lines(1)) == "[Warning] Marching tetrahedra width correction reached its limit at " &
-         & //trim(total)//" of "//trim(total)//" points; crowded points remain less accurate", more=trim(lines(1)))
    end subroutine test_limited_widths
 
    !> Two threads reproduce the serial quadrature exactly

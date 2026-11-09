@@ -1,0 +1,34 @@
+# moist model rism1d examples/rism/chloride.xyz --charge -1 -p examples/rism/run1d.toml
+closure = "KH"
+
+[potential]
+lj = "uff"
+charges = "custom"
+q = [-1.0]  # electrons, one value per atom
+
+[grid]
+kind = "radial"
+
+[grid.radial]
+npts = 8192
+dr = 0.015  # bohr
+
+[convergence]
+tolerance = 1e-7
+
+[solver]
+name = "JFNK"
+
+[solvent]
+name = "water"
+temperature = 298.15  # K
+theory = "RISM"
+closure = "KH"
+
+[solvent.convergence]
+tolerance = 1e-11
+
+[solvent.potential]
+# First covering choice wins: SPC/E models for water, tables and generic LJ otherwise
+lj = ["cspce", "gaff2", "uff", "tm"]
+charges = ["spce", "resp-solvent"]

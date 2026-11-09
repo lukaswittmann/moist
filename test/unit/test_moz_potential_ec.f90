@@ -3,12 +3,13 @@ module test_moz_potential_ec
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
+   use mctc_io_convert, only: aatoau
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_request_type, &
       & coupling_begin_registration, coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate, &
       & coupling_make_view, coupling_close_view, moist_phase_energy, moist_phase_response, moist_phase_gradient
    use moist_channels_response, only: response_type, response_item_type, potential_adjoint_response_type
-   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_point_grid
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type
    use moist_model_moz_potential, only: moz_potential_type, ec_charges_type, custom_lj_type, new_custom_lj
@@ -19,8 +20,6 @@ module test_moz_potential_ec
    private
    public :: collect_moz_potential_ec
 
-   ! TODO: this should be covered better by tests.
-
 contains
 
    !> Register EC tests
@@ -30,7 +29,9 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("requirements_and_refresh", check_requirements), &
-         & new_unittest("long_range_and_restraints", check_restraints), &
+         & new_unittest("fit_shell", check_fit_shell), &
+         & new_unittest("restraints", check_restraints), &
+         & new_unittest("tail_dipole", check_tail_dipole), &
          & new_unittest("fit_adjoint_fd", check_adjoint), &
          & new_unittest("active_constraint_adjoint_fd", check_active_adjoint), &
          & new_unittest("bounds_and_release_fit", check_bounds_fit), &
@@ -63,6 +64,93 @@ contains
          & 0.2_wp, 6.0_wp, -2.0_wp, -0.3_wp, -6.0_wp, 1.0_wp], [3, 12])
       grid%w = [(0.3_wp + 0.1_wp*real(i, wp), i=1, 12)]
    end subroutine fixture
+
+   !> Configure a fit shell of uniform radii
+   !>
+   !> @param[in,out] ec     term
+   !> @param[in]     natom  number of atoms
+   !> @param[in]     start  radius where each inner switch starts, bohr
+   !> @param[in]     width  switch width, bohr
+   !> @param[in]     outer  optional distance beyond the radii where the shell ends, bohr; far away by default
+   subroutine set_shell(ec, natom, start, width, outer)
+      !> Term
+      type(ec_charges_type), intent(inout) :: ec
+      !> Number of atoms
+      integer, intent(in) :: natom
+      !> Radius where each inner switch starts
+      real(wp), intent(in) :: start
+      !> Switch width
+      real(wp), intent(in) :: width
+      !> Optional distance beyond the radii where the shell ends
+      real(wp), intent(in), optional :: outer
+      ec%radii = spread(start, 1, natom)
+      ec%inner_scale = 1.0_wp
+      ec%switch_width = width
+      ec%outer_distance = 100.0_wp
+      if (present(outer)) ec%outer_distance = outer
+   end subroutine set_shell
+
+   !> Check default shell weights against an explicitly weighted fit and refuse invalid shells
+   !>
+   !> - Two hydrogens: default 1.2-scaled Bondi radius, inner and outer switch midpoints
+   !> - Mask: zero inside the inner switch, one in the shell, zero beyond the outer switch
+   !>
+   !> @param[out] error Test failure
+   subroutine check_fit_shell(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid, weighted
+      type(ec_charges_type) :: ec, control
+      type(moist_error), allocatable :: err
+      real(wp), allocatable :: q(:), expected(:)
+      real(wp) :: phi(5), settings(4, 6), radius
+      integer :: i
+
+      call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, -2.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
+      radius = 1.32_wp*aatoau
+      grid%ngrid = 5
+      allocate (grid%xyz(3, 5), source=0.0_wp)
+      grid%xyz(1, :) = [1.0_wp, radius + 0.5_wp, 4.5_wp, radius + 4.5_wp, 9.0_wp]
+      grid%w = [1.0_wp, 1.0_wp, 1.0_wp, 1.0_wp, 1.0_wp]
+      phi = [100.0_wp, 0.3_wp, -0.1_wp, 0.2_wp, 100.0_wp]
+      ec%charge_penalty = 0.0_wp
+      call check(error, ec%inner_scale == 1.0_wp .and. ec%outer_distance == 5.0_wp .and. ec%switch_width == 1.0_wp &
+         & .and. ec%restraint_strength == 1.0e-4_wp, more="EC shell defaults changed")
+      if (allocated(error)) return
+      call fit_values(ec, mol, grid, phi, q, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      weighted = grid
+      weighted%w = [0.0_wp, 0.5_wp, 1.0_wp, 0.5_wp, 0.0_wp]
+      control = ec
+      call set_shell(control, mol%nat, 1.0e-3_wp, 1.0e-3_wp)
+      call fit_values(control, mol, weighted, phi, expected, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      call check_close(error, q, expected, 1.0e-12_wp, "EC default shell weights")
+      if (allocated(error)) return
+
+      ! Columns: inner_scale, outer_distance, switch_width, restraint_strength
+      settings = reshape([0.0_wp, 5.0_wp, 1.0_wp, 1.0e-4_wp, 1.0_wp, -1.0_wp, 1.0_wp, 1.0e-4_wp, &
+         & 1.0_wp, 5.0_wp, 0.0_wp, 1.0e-4_wp, 1.0_wp, 5.0_wp, 1.0_wp, 0.0_wp, &
+         & ieee_value(1.0_wp, ieee_quiet_nan), 5.0_wp, 1.0_wp, 1.0e-4_wp, &
+         & 1.0_wp, 5.0_wp, 1.0_wp, 1.0e-4_wp], [4, 6])
+      do i = 1, size(settings, 2)
+         ec%inner_scale = settings(1, i)
+         ec%outer_distance = settings(2, i)
+         ec%switch_width = settings(3, i)
+         ec%restraint_strength = settings(4, i)
+         ! Last case: valid shell, invalid radii
+         if (i == size(settings, 2)) ec%radii = [1.0_wp, -1.0_wp]
+         call ec%update(mol, err)
+         call check(error, allocated(err), more="EC accepted an invalid shell setting")
+         if (allocated(error)) return
+      end do
+      ec%radii = [1.0_wp, 1.0_wp, 1.0_wp]
+      call ec%update(mol, err)
+      call check(error, allocated(err), more="EC accepted radii of the wrong length")
+   end subroutine check_fit_shell
 
    !> Analytic host potential with nonzero fit residuals
    !>
@@ -179,6 +267,7 @@ contains
       real(wp), allocatable :: phi(:), dphi(:, :), q(:), q_old(:), got(:)
       integer :: phase
       call fixture(mol, grid)
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp)
       call host_field(grid, phi, dphi)
       call check(error,.not. allocated(ec%reference_charges), more="default EC requires no supplied charges")
       if (allocated(error)) return
@@ -200,10 +289,10 @@ contains
          if (allocated(error)) return
          item = coupling%request()
          call check(error, item%name() == "point_potential" .and. item%is_missing("phi"), &
-            more="wrong potential request")
+                    more="wrong potential request")
          if (allocated(error)) return
          call check(error, item%is_missing("dphi_dr") .eqv. (phase == moist_phase_gradient), &
-            more="wrong derivative phase")
+                    more="wrong derivative phase")
          if (allocated(error)) return
          call check(error,.not. coupling%next(), more="EC registered an extra request")
          if (allocated(error)) return
@@ -288,38 +377,40 @@ contains
       end do
    end subroutine charge_field
 
-   !> Check distant-sample priority, reference restraint and element penalty thresholds
+   !> Check the reference restraint, its weight-scale invariance and element penalty thresholds
    subroutine check_restraints(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(structure_type) :: mol
-      type(moist_math_grid_3d_cartesian_type) :: grid
+      type(moist_math_grid_3d_cartesian_type) :: grid, scaled
       type(ec_charges_type) :: ec
       real(wp), allocatable :: phi(:), q(:), baseline(:)
       integer :: species, z
       call new(mol, [6, 6], reshape([-1.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
       grid%ngrid = 4
-      grid%xyz = reshape([-2.2_wp, 0.0_wp, 0.0_wp, 2.2_wp, 0.0_wp, 0.0_wp, &
-         & -8.0_wp, 0.0_wp, 0.0_wp, 8.0_wp, 0.0_wp, 0.0_wp], [3, 4])
+      grid%xyz = reshape([-2.2_wp, 0.0_wp, 0.0_wp, 2.2_wp, 0.3_wp, 0.0_wp, &
+         & -8.0_wp, 0.0_wp, 0.5_wp, 8.0_wp, 0.0_wp, 0.0_wp], [3, 4])
       grid%w = [1.0_wp, 1.0_wp, 512.0_wp, 512.0_wp]
-      ec%exclusion_radius = 0.1_wp
-      ec%restraint_strength = 1.0e-8_wp
+      call set_shell(ec, mol%nat, 0.1_wp, 0.1_wp)
+      ec%restraint_strength = 0.1_wp
       ec%charge_penalty = 0.0_wp
-      ec%long_range_bias = 0.0_wp
+      ec%reference_charges = [0.1_wp, -0.1_wp]
       call charge_field(mol, grid, [0.3_wp, -0.3_wp], phi)
       phi(3:4) = phi(3:4)*3.0_wp
       call fit_values(ec, mol, grid, phi, baseline, err)
-      if (.not. allocated(err)) then
-         ec%long_range_bias = 10.0_wp
-         call fit_values(ec, mol, grid, phi, q, err)
-      end if
+      ! Uniformly scaled quadrature weights leave the relative restraint and the charges unchanged
+      scaled = grid
+      scaled%w = 1.0e3_wp*grid%w
+      if (.not. allocated(err)) call fit_values(ec, mol, scaled, phi, q, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
-      call check(error, q(1) > baseline(1) + 0.01_wp, more="distant samples did not receive greater weight")
+      call check_close(error, q, baseline, 1.0e-12_wp, "EC fit under scaled quadrature weights")
       if (allocated(error)) return
-      ec%reference_charges = [0.2_wp, -0.2_wp]
-      ec%restraint_strength = 1.0e6_wp
+      call check(error, maxval(abs(baseline - ec%reference_charges)) > 1.0e-2_wp, &
+         & more="relative restraint pinned the charges to the reference")
+      if (allocated(error)) return
+      ec%restraint_strength = 1.0e8_wp
       call fit_values(ec, mol, grid, phi, q, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -347,6 +438,54 @@ contains
          if (allocated(error)) return
       end do
    end subroutine check_restraints
+
+   !> Check that the default fit keeps the solute dipole in the tail charges
+   !>
+   !> - Host potential of point charges and axial point dipoles, so the charges cannot fit it exactly
+   !> - Default shell and restraint on a Cartesian grid covering the shell
+   !> - Tail dipole within 1 % of the host dipole and stable over a decade of restraint
+   subroutine check_tail_dipole(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_cartesian_type) :: grid
+      type(ec_charges_type) :: ec
+      real(wp), allocatable :: phi(:), q(:), q_weak(:)
+      real(wp) :: source(3), dipole(3, 3), host(3), tail(3), weak(3), d(3)
+      integer :: g, a
+      ! HCN, bohr
+      call new(mol, [1, 6, 7], reshape([0.0_wp, 0.0_wp, -2.015_wp, 0.0_wp, 0.0_wp, 0.0_wp, &
+         & 0.0_wp, 0.0_wp, 2.185_wp], [3, 3]))
+      call new_cartesian_point_grid(grid, err, nx=40, ny=40, nz=40, dr=0.6_wp, margin=0.0_wp)
+      if (.not. allocated(err)) call grid%update(mol, err)
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      source = [0.25_wp, 0.05_wp, -0.30_wp]
+      dipole = reshape([0.0_wp, 0.0_wp, 0.05_wp, 0.0_wp, 0.0_wp, -0.1_wp, 0.0_wp, 0.0_wp, -0.3_wp], [3, 3])
+      allocate (phi(grid%ngrid), source=0.0_wp)
+      do g = 1, grid%ngrid
+         do a = 1, mol%nat
+            d = grid%xyz(:, g) - mol%xyz(:, a)
+            phi(g) = phi(g) + source(a)/max(0.1_wp, norm2(d)) + dot_product(dipole(:, a), d)/max(0.1_wp, norm2(d))**3
+         end do
+      end do
+      host = matmul(mol%xyz, source) + sum(dipole, dim=2)
+      ec%charge_penalty = 0.0_wp
+      call fit_values(ec, mol, grid, phi, q, err)
+      if (.not. allocated(err)) then
+         ec%restraint_strength = 1.0e-5_wp
+         call fit_values(ec, mol, grid, phi, q_weak, err)
+      end if
+      call check_moist_error(error, err)
+      if (allocated(error)) return
+      tail = matmul(mol%xyz, q)
+      weak = matmul(mol%xyz, q_weak)
+      call check(error, norm2(tail - host) < 1.0e-2_wp*norm2(host), more="EC tail charges lost the host dipole")
+      if (allocated(error)) return
+      call check(error, norm2(tail - weak) < 1.0e-2_wp*norm2(host), &
+         & more="EC tail dipole depends on the restraint strength")
+   end subroutine check_tail_dipole
 
    !> Scalar functional of the full potential and fitted charges
    !>
@@ -385,6 +524,12 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
+      call set_shell(ec, 3, 1.0_wp, 1.7_wp, 4.0_wp)
+      call adjoint_case(error, ec, 0)
+      if (allocated(error)) return
+      ! Strong restraint off the fitted charges: the derivative of lambda through trace(H_data)
+      ec%restraint_strength = 0.3_wp
+      ec%reference_charges = [0.4_wp, -0.2_wp, 0.3_wp]
       call adjoint_case(error, ec, 0)
    end subroutine check_adjoint
 
@@ -394,6 +539,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
       ! Lower bounds, negative kinks, releases and the all-fixed branch: check_bound_adjoint, check_bounds_fit
+      call set_shell(ec, 3, 1.0_wp, 1.0_wp)
       ec%charge_penalty = 0.0_wp
       ec%upper_bounds = [0.03_wp, 10.0_wp, 10.0_wp]
       call adjoint_case(error, ec, 1)
@@ -416,6 +562,7 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(ec_charges_type) :: ec, bounded
       real(wp), allocatable :: phi(:), free(:), q(:)
+      call set_shell(ec, 3, 1.0_wp, 1.0_wp)
       call fixture(mol, grid)
       call charge_field(mol, grid, [2.0_wp, -1.0_wp, -0.5_wp], phi)
       ec%charge_penalty = 0.0_wp
@@ -573,6 +720,7 @@ contains
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(ec_charges_type) :: ec
+      call set_shell(ec, 3, 1.0_wp, 1.0_wp)
       ec%charge_penalty = 0.0_wp
       ec%lower_bounds = [-10.0_wp, -0.2_wp, -10.0_wp]
       call adjoint_case(error, ec, 1, 2, -0.2_wp)
@@ -742,6 +890,7 @@ contains
       type(coupling_type) :: coupling
       real(wp), allocatable :: phi(:), q(:)
       call fixture(mol, grid)
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp)
       call ec%update_grid(grid, err)
       call check(error, allocated(err), more="unupdated EC term built a fit")
       if (allocated(error)) return
@@ -775,13 +924,13 @@ contains
       call check(error, allocated(err), more="negative quadrature weights accepted")
       if (allocated(error)) return
       grid%w = 1.0_wp
-      ec%exclusion_radius = 100.0_wp
+      ec%inner_scale = 100.0_wp
       call ec%update(mol, err)
       if (.not. allocated(err)) call ec%update_grid(grid, err)
       call check(error, allocated(err), more="fully excluded fit accepted")
       if (allocated(error)) return
-      ec%exclusion_radius = 1.0_wp
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp)
       mol%charge = 0.7_wp
       phi = grid%xyz(1, :)*0.1_wp
       call fit_values(ec, mol, grid, phi, q, err)
@@ -826,6 +975,7 @@ contains
       type(coupling_type), target :: coupling
       real(wp), allocatable :: sr(:, :), lr(:, :)
       complex(wp), allocatable :: uk(:, :)
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp, 2.0_wp)
       call new_custom_lj(lj, sigma_u, eps_u, err)
       if (.not. allocated(err)) call pot%add(lj, err)
       if (.not. allocated(err)) call pot%add(ec, err)
@@ -869,6 +1019,7 @@ contains
       character(len=80) :: label
       integer :: probe(3), a, c, s, ip, g, route
       call make_solute(mol)
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp, 2.0_wp)
       mol%charge = 0.5_wp
       call make_solvent(solvent_mol)
       call make_grid(grid, mol, err)
@@ -910,7 +1061,7 @@ contains
          call check(error, .false., more="EC pushed an item other than the potential adjoint")
          return
       end select
-      call check(error, .not. response%next(), more="the potential pushed more than the EC potential adjoint")
+      call check(error,.not. response%next(), more="the potential pushed more than the EC potential adjoint")
       if (allocated(error)) return
 
       ! Nuclear gradient, every component
@@ -1002,6 +1153,7 @@ contains
       real(wp), allocatable :: phi(:), dphi(:, :), q(:), w_phi(:)
       real(wp) :: w_q(3)
       call fixture(mol, grid)
+      call set_shell(ec, mol%nat, 1.0_wp, 1.0_wp)
       call host_field(grid, phi, dphi)
       w_phi = 0.02_wp*grid%xyz(2, :)
       w_q = [0.7_wp, -0.4_wp, 0.2_wp]
@@ -1066,9 +1218,9 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ec%exclusion_radius = ieee_value(1.0_wp, ieee_quiet_nan)
+      ec%outer_distance = ieee_value(1.0_wp, ieee_quiet_nan)
       call ec%update(mol, err)
-      call check(error, allocated(err), more="EC accepted a nonfinite exclusion radius")
+      call check(error, allocated(err), more="EC accepted a nonfinite shell distance")
       if (allocated(error)) return
       call check(error, err%message, "EC fit settings must be finite")
    end subroutine check_stale_guards

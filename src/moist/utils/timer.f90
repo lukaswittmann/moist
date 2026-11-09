@@ -22,7 +22,7 @@
 !> timer that is still running as `running` and leaves it measuring
 !>
 !> FIXME: TODO: the timer is NOT thread-safe; inside OpenMP regions gate
-!> start/stop to a single thread (see cavity/drop/gradient.f90)
+!> start/stop to a single thread (see cavity/drop/derivatives/forward.f90)
 module moist_utils_timer
    use mctc_env, only: wp, int64 => i8
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -34,6 +34,7 @@ module moist_utils_timer
    public :: timer_type, name_len
    public :: cat_none, cat_setup, cat_build, cat_energy, cat_potential, cat_gradient, &
              cat_hessian, cat_solve, cat_properties, cat_io, cat_host
+   public :: cat_preconditioner
 
    !> Moist internal timer categories
    integer, parameter :: cat_none = 0
@@ -48,15 +49,16 @@ module moist_utils_timer
    integer, parameter :: cat_io = 9
    !> Host-side timers
    integer, parameter :: cat_host = 10
+   integer, parameter :: cat_preconditioner = 11
 
    !> Number of named categories
-   integer, parameter :: ncat = 10
+   integer, parameter :: ncat = 11
 
    !> Human-readable category labels (index 0 = uncategorized, never in pivot)
-   character(len=12), parameter :: cat_label(0:ncat) = [character(len=12) :: &
+   character(len=14), parameter :: cat_label(0:ncat) = [character(len=14) :: &
                                                         "n/a", "Setup", "Build", "Energy", "Potential", &
                                                         "Gradient", "Hessian", "Solve", &
-                                                        "Properties", "I/O", "Host"]
+                                                        "Properties", "I/O", "Host", "Preconditioner"]
 
    !> Maximum stored length of a timer name
    integer, parameter :: name_len = 32
@@ -112,6 +114,8 @@ module moist_utils_timer
       logical, private :: verbose = .false.
       !> Whether the report separates the top-level groups with a blank line
       logical, private :: group_blanks = .true.
+      !> Categories shown only in the full report's category summary
+      logical, private :: summary_only(0:ncat) = .false.
       !> Output unit of `print`
       integer, private :: unit = output_unit
       !> Deepest node level `print` shows; negative silences `print`
@@ -127,6 +131,8 @@ module moist_utils_timer
       integer, private, allocatable :: ncalls(:)
       !> Accumulated wall time in clock ticks
       integer(int64), private, allocatable :: t_acc(:)
+      !> Last closed interval in clock ticks, 0 if never stopped
+      integer(int64), private, allocatable :: t_last(:)
       !> Start tick while running
       integer(int64), private, allocatable :: t0(:)
       !> Whether the node is currently open
@@ -155,6 +161,7 @@ module moist_utils_timer
       procedure :: reset => reset_timer
       procedure :: set_verbose
       procedure :: set_group_blanks
+      procedure :: set_category_summary
       procedure :: resolve
       procedure, private :: start_name
       procedure, private :: start_id
@@ -180,6 +187,7 @@ module moist_utils_timer
       procedure :: node_name
       procedure :: node_depth
       procedure :: node_time
+      procedure :: last
       !> Currently-open node (top of the nesting stack), 0 if none
       !>
       !> - lets a handle-based hot loop attach its fine timers under whatever
@@ -226,6 +234,7 @@ contains
       allocate (self%category(self%cap), source=cat_none)
       allocate (self%ncalls(self%cap), source=0)
       allocate (self%t_acc(self%cap), source=0_int64)
+      allocate (self%t_last(self%cap), source=0_int64)
       allocate (self%t0(self%cap), source=0_int64)
       allocate (self%running(self%cap), source=.false.)
       allocate (self%poisoned(self%cap), source=.false.)
@@ -255,11 +264,13 @@ contains
       self%verbose = .false.
       self%unit = output_unit
       self%print_depth = huge(1)
+      self%summary_only = .false.
       if (allocated(self%names)) deallocate (self%names)
       if (allocated(self%parent)) deallocate (self%parent)
       if (allocated(self%category)) deallocate (self%category)
       if (allocated(self%ncalls)) deallocate (self%ncalls)
       if (allocated(self%t_acc)) deallocate (self%t_acc)
+      if (allocated(self%t_last)) deallocate (self%t_last)
       if (allocated(self%t0)) deallocate (self%t0)
       if (allocated(self%running)) deallocate (self%running)
       if (allocated(self%poisoned)) deallocate (self%poisoned)
@@ -283,6 +294,7 @@ contains
 
       if (self%n > 0) then
          self%t_acc(1:self%n) = 0_int64
+         self%t_last(1:self%n) = 0_int64
          self%t0(1:self%n) = 0_int64
          self%ncalls(1:self%n) = 0
          self%running(1:self%n) = .false.
@@ -323,6 +335,23 @@ contains
       self%group_blanks = flag
 
    end subroutine set_group_blanks
+
+   !> Show a category only in the full report's summary, retaining its time in parents
+   !>
+   !> @param[inout] self      Timer instance
+   !> @param[in]    category  Named category, 1 through ncat
+   !> @param[in]    flag      Hide its tree rows when true
+   subroutine set_category_summary(self, category, flag)
+      !> Timer instance
+      class(timer_type), intent(inout) :: self
+      !> Named category
+      integer, intent(in) :: category
+      !> Whether the category appears only in the summary
+      logical, intent(in) :: flag
+
+      if (category < 1 .or. category > ncat) return
+      self%summary_only(category) = flag
+   end subroutine set_category_summary
 
    !> Return a stable node handle for (name, parent), creating the node if needed
    !>
@@ -387,6 +416,7 @@ contains
          self%category(id) = cat_none
       end if
       self%t_acc(id) = 0_int64
+      self%t_last(id) = 0_int64
       self%t0(id) = 0_int64
       self%running(id) = .false.
       self%poisoned(id) = .false.
@@ -538,7 +568,8 @@ contains
 
       call system_clock(c)
       if (self%running(id)) then
-         self%t_acc(id) = self%t_acc(id) + (c - self%t0(id))
+         self%t_last(id) = c - self%t0(id)
+         self%t_acc(id) = self%t_acc(id) + self%t_last(id)
          self%running(id) = .false.
       else
          self%poisoned(id) = .true.
@@ -733,6 +764,30 @@ contains
 
    end function node_time
 
+   !> Seconds of the last closed interval by index
+   !>
+   !> - set by every stop of a running node; balance state is not checked
+   !> - 0 for an invalid index or a node never stopped
+   !>
+   !> @param[in] self  Timer instance
+   !> @param[in] id    Node index (1..num_nodes)
+   !> @return    Seconds
+   pure function last(self, id) result(sec)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Node index
+      integer, intent(in) :: id
+      !> Seconds
+      real(wp) :: sec
+
+      if (id < 1 .or. id > self%n) then
+         sec = 0.0_wp
+      else
+         sec = real(self%t_last(id), wp)/real(self%rate, wp)
+      end if
+
+   end function last
+
    !> Write a single named timer line to `iunit`
    !>
    !> @param[inout] self     Timer instance
@@ -815,6 +870,7 @@ contains
       prev_expanded = .false.
       do i = 1, self%n
          if (self%parent(i) /= 0) cycle
+         if (self%summary_only(self%category(i))) cycle
          if (self%ncalls(i) == 0 .and. .not. self%poisoned(i)) cycle
          ! separate top-level groups with a blank line, but only after a group that
          ! actually expanded into printed subcategories, so runs of bare one-line
@@ -1015,6 +1071,7 @@ contains
       character(len=32) :: numbuf
 
       ! skip nodes that were never measured (created via resolve but unused)
+      if (self%summary_only(self%category(id))) return
       if (self%ncalls(id) == 0 .and. .not. self%poisoned(id)) return
 
       sec = node_seconds(self, id)
@@ -1044,6 +1101,7 @@ contains
       allocate (kids(0))
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          kids = [kids, j]
       end do
@@ -1125,6 +1183,7 @@ contains
       character(len=13) :: cell
 
       ! skip nodes that were never measured (created via resolve but unused)
+      if (self%summary_only(self%category(id))) return
       if (self%ncalls(id) == 0 .and. .not. self%poisoned(id)) return
 
       if (self%running(id)) then
@@ -1183,6 +1242,7 @@ contains
       child_sum = 0.0_wp
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          nkids = nkids + 1
          if (.not. (self%poisoned(j) .or. self%running(j))) child_sum = child_sum + node_seconds(self, j)
@@ -1253,6 +1313,7 @@ contains
       if (id < 1 .or. id > self%n) return
       do j = 1, self%n
          if (self%parent(j) /= id) cycle
+         if (self%summary_only(self%category(j))) cycle
          if (self%ncalls(j) == 0 .and. .not. self%poisoned(j)) cycle
          has = .true.
          return
@@ -1423,6 +1484,10 @@ contains
       allocate (lbuf(newcap), source=0_int64)
       lbuf(1:m) = self%t_acc(1:m)
       call move_alloc(lbuf, self%t_acc)
+
+      allocate (lbuf(newcap), source=0_int64)
+      lbuf(1:m) = self%t_last(1:m)
+      call move_alloc(lbuf, self%t_last)
 
       allocate (lbuf(newcap), source=0_int64)
       lbuf(1:m) = self%t0(1:m)
