@@ -118,7 +118,7 @@ contains
          & 4.28460458504181076e1_wp, 9.10965065491509485e0_wp, 1.93683532301464845e0_wp, &
          & 9.10965065491509485e0_wp, 1.93683532301464845e0_wp, 1.93683532301464845e0_wp], [6, 3])
       real(wp) :: zeta(3, 3), scaled(3, 3)
-      character(len=96) :: label
+      character(len=4000) :: label
       integer :: ik, i, j
       call new_bulk_theory(theory, "DRISM", xyz, q, rho, beta, 78.44_wp, smear, err)
       call check_moist_error(error, err)
@@ -130,6 +130,9 @@ contains
             do i = 1, j
                write (label, "(a, i0, a, i0, a, f4.2)") "DRISM differs from independent Bessel reference at (", &
                   & i, ",", j, "), k = ", k(ik)
+               if (abs(zeta(i, j) - reference(lut%idx(i, j), ik)) > 2.0e-12_wp) then
+                  label = trim(label)//new_line("a")//drism_probe(theory, k(ik))
+               end if
                call check(error, zeta(i, j), reference(lut%idx(i, j), ik), thr=2.0e-12_wp, more=trim(label))
                if (allocated(error)) return
             end do
@@ -143,8 +146,9 @@ contains
       type(moist_error), allocatable :: err
       class(bulk_theory_type), allocatable :: original, moved
       real(wp) :: zeta(3, 3), scaled(3, 3), other(3, 3), other_scaled(3, 3), matrix(3, 3)
-      real(wp) :: coords(3, 3), angle, axis(3), cross(3, 3), worst
-      integer :: it, i
+      real(wp) :: coords(3, 3), angle, axis(3), cross(3, 3), worst, worst_zeta(3, 3), worst_other(3, 3)
+      character(len=4000) :: label
+      integer :: it, i, worst_it
       call new_bulk_theory(original, "DRISM", xyz, q, rho, beta, 78.44_wp, smear, err)
       call check_moist_error(error, err)
       if (allocated(error)) return
@@ -153,6 +157,9 @@ contains
       cross = reshape([0.0_wp, axis(3), -axis(2), -axis(3), 0.0_wp, axis(1), &
          & axis(2), -axis(1), 0.0_wp], [3, 3])
       worst = 0.0_wp
+      worst_it = -1
+      worst_zeta = 0.0_wp
+      worst_other = 0.0_wp
       do it = 0, 12
          angle = 0.37_wp*it
          matrix = (1.0_wp - cos(angle))*spread(axis, 2, 3)*spread(axis, 1, 3) + sin(angle)*cross
@@ -165,6 +172,11 @@ contains
          if (allocated(error)) return
          call original%correction_at(1.1_wp, zeta, scaled)
          call moved%correction_at(1.1_wp, other, other_scaled)
+         if (maxval(abs(zeta - other)) > worst) then
+            worst_it = it
+            worst_zeta = zeta
+            worst_other = other
+         end if
          worst = max(worst, maxval(abs(zeta - other)))
       end do
       coords = xyz(:, [1, 3, 2])
@@ -172,10 +184,44 @@ contains
       call check_moist_error(error, err)
       if (allocated(error)) return
       call moved%correction_at(1.1_wp, other, other_scaled)
+      if (maxval(abs(zeta - other([1, 3, 2], [1, 3, 2]))) > worst) then
+         ! 13 is the hydrogen exchange
+         worst_it = 13
+         worst_zeta = zeta
+         worst_other = other([1, 3, 2], [1, 3, 2])
+      end if
       worst = max(worst, maxval(abs(zeta - other([1, 3, 2], [1, 3, 2]))))
-      call check(error, worst, 0.0_wp, thr=2.0e-12_wp, &
-         & more="DRISM changed under a rigid motion or hydrogen exchange")
+      write (label, "(a, i0, a, 9es24.16, a, 9es24.16)") "DRISM changed under a rigid motion or hydrogen exchange; "// &
+         & "worst rotation ", worst_it, new_line("a")//"original", worst_zeta, new_line("a")//"moved   ", worst_other
+      if (worst > 2.0e-12_wp) label = trim(label)//new_line("a")//drism_probe(original, 1.1_wp)
+      call check(error, worst, 0.0_wp, thr=2.0e-12_wp, more=trim(label))
    end subroutine rotation
+
+   !> Values around a failing DRISM correction, for platforms that cannot be run locally
+   function drism_probe(theory, k) result(text)
+      class(bulk_theory_type), intent(in) :: theory
+      real(wp), intent(in) :: k
+      character(len=:), allocatable :: text
+      real(wp), parameter :: sweep(4) = [0.15_wp, 0.18_wp, 0.19_wp, 0.25_wp]
+      real(wp) :: zeta(3, 3), scaled(3, 3), again(3, 3), again_scaled(3, 3), corner(4)
+      real(wp), volatile :: x
+      character(len=3000) :: line
+      integer :: is
+      do is = 1, size(sweep)
+         call theory%correction_at(sweep(is), zeta, scaled)
+         corner(is) = zeta(1, 1)
+      end do
+      call theory%correction_at(k, zeta, scaled)
+      call theory%correction_at(k, again, again_scaled)
+      x = 0.55_wp*k
+      write (line, "(a, 4es24.16, 4(a, 9es24.16), a, 4es24.16)") &
+         & "zeta(1,1) at k = 0.15, 0.18, 0.19, 0.25:", corner, &
+         & new_line("a")//"zeta    ", zeta, new_line("a")//"zeta/k2 ", scaled, &
+         & new_line("a")//"again   ", again, new_line("a")//"again/k2", again_scaled, &
+         & new_line("a")//"x = 0.55 k: sin, cos, sin/x, (sin/x - cos)/x^2", &
+         & sin(x), cos(x), sin(x)/x, (sin(x)/x - cos(x))/x**2
+      text = trim(line)
+   end function drism_probe
 
    !> Dielectric screening independently fixes the low-k charge coefficient
    subroutine dielectric_limits(error)
