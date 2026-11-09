@@ -69,9 +69,18 @@ contains
          call fatal_error(error, "DRISM requires a polar solvent with a nonzero site dipole")
          return
       end if
-      centre = matmul(xyz, abs(q))/qabs
-      centred = xyz - spread(centre, 2, size(q))
-      dipole = matmul(centred, q)
+      ! Explicit sums: ifx 2025.1 on Windows left the centre at zero when written with matmul and spread
+      centre = 0.0_wp
+      do i = 1, size(q)
+         centre = centre + abs(q(i))*xyz(:, i)
+      end do
+      centre = centre/qabs
+      allocate (centred(3, size(q)))
+      dipole = 0.0_wp
+      do i = 1, size(q)
+         centred(:, i) = xyz(:, i) - centre
+         dipole = dipole + q(i)*centred(:, i)
+      end do
       mu = norm2(dipole)
       ! RISMiCal's dipole floor, e bohr; excludes nonpolar models
       if (mu < 1.0e-4_wp) then
