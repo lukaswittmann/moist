@@ -234,17 +234,15 @@ contains
 
    !> Evaluate and cache callback data at one point
    !>
-   !> - never unreached: `status = 0`
+   !> - never unreached
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    point  Evaluation point in Bohr
    !> @param[out]   error  Host callback failure at this point
-   !> @param[out]   status Always 0 (optional)
-   subroutine lsf_prepare(self, point, error, status)
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
-      integer, intent(out), optional :: status
 
       procedure(isodensity_lsf_callback), pointer :: callback
       real(c_double) :: c_point(3), c_rho, c_drho(3)
@@ -257,7 +255,6 @@ contains
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       integer :: inside
 
-      if (present(status)) status = 0
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
       p_hess = c_null_ptr
@@ -319,17 +316,14 @@ contains
    !> @param[in]    point             Evaluation point in Bohr
    !> @param[in]    candidate_indices Ignored atom candidates
    !> @param[out]   error             Host callback failure at this point
-   !> @param[out]   status            Always 0 (optional)
-   subroutine lsf_prepare_subset(self, point, candidate_indices, error, status)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
       if (size(candidate_indices) < 0) return
-      call self%prepare(point, error, status)
+      call self%prepare(point, error)
    end subroutine lsf_prepare_subset
 
    !> Record requested derivative order
@@ -462,12 +456,12 @@ contains
    !> - the shape and `candidate_indices` checks of the default, so the same bad
    !>   arguments `error stop` ([[lsf_vjp_batch_shape_message]],
    !>   [[lsf_sorted_candidates]]); the list only sizes `res`
-   !> - never unreached: `status = 0` for every column
+   !> - never unreached: `unreached(column)` false for every column
    !> - a host failure or an ECP core-fill refusal is not raised, as no density is
    !>   evaluated; a consumer sees it from the `evaluate_batch` / `prepare` it runs
    !>   on the same points
    !> - no callback bound: `error` "vjp_f1_rA_batch failed at point 1: ...", no
-   !>   column written, `status` 2; `np = 0` returns after the argument checks
+   !>   column written; `np = 0` returns after the argument checks
    !>
    !> @param[inout] self              LSF instance
    !> @param[in]    points            Evaluation points (3, np)
@@ -475,19 +469,15 @@ contains
    !> @param[in]    w1                Adjoint weights of the gradient (3, np)
    !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
    !> @param[out]   res               Contracted nuclear gradient (3, ncand, np), zero
-   !> @param[out]   status            Per-column status (np), 0, or 2 on the refusal
-   !>                                 (optional)
    !> @param[out]   error             No callback bound
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
-   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, status, error, &
-                                  candidate_indices)
+   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, error, candidate_indices)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in), contiguous :: points(:, :)
       real(wp), intent(in), contiguous :: w0(:)
       real(wp), intent(in), contiguous :: w1(:, :)
       real(wp), intent(in), contiguous :: w2(:, :)
       real(wp), intent(out), contiguous :: res(:, :, :)
-      integer, intent(out), optional, contiguous :: status(:)
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: candidate_indices(:)
 
@@ -500,27 +490,21 @@ contains
       np = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      if (present(status)) then
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, &
-                                           status)
-      else
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
-      end if
+      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
       if (len(msg) > 0) error stop msg
       if (present(candidate_indices)) then
          allocate (sorted(ncand))
          call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
       end if
+      call self%begin_batch(np)
       if (np == 0) return
       if (.not. c_associated(self%callback_ptr)) then
          call fatal_error(error, "vjp_f1_rA_batch failed at point 1: "// &
                           "no density callback bound ("//self%name//")")
-         if (present(status)) status(1:np) = 2
          return
       end if
 
       res(:, :, 1:np) = 0.0_wp
-      if (present(status)) status(1:np) = 0
    end subroutine lsf_vjp_f1_rA_batch
 
    !> Density callback is globally evaluable; no atom-specific reach is needed

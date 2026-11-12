@@ -153,24 +153,20 @@ contains
 
    !> Prepare the spatial Taylor jet
    !>
-   !> Unbounded support: never unreached, `status = 0`
+   !> Unbounded support: never unreached
    !>
    !> @param[in,out] self Level set instance
    !> @param[in] point Evaluation point in Bohr
    !> @param[out] error Invalid parameters, geometry or numerical accessibility
-   !> @param[out] status Always 0 (optional)
-   subroutine prepare(self, point, error, status)
+   subroutine prepare(self, point, error)
       !> Level set instance
       class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
       !> Evaluation point in Bohr
       real(wp), intent(in) :: point(3)
       !> Invalid parameters, geometry or numerical accessibility
       type(error_type), allocatable, intent(out) :: error
-      !> Always 0
-      integer, intent(out), optional :: status
       logical :: valid
 
-      if (present(status)) status = 0
       self%prepared_deriv = -1
       if (self%ncenters <= 0 .or. .not. allocated(self%radii)) then
          call fatal_error(error, "SSES: update with nonempty geometry before prepare")
@@ -213,8 +209,7 @@ contains
    !> @param[in] point Evaluation point
    !> @param[in] candidate_indices Caller candidates, unused with unbounded support
    !> @param[out] error Evaluation failure
-   !> @param[out] status Always 0 (optional)
-   subroutine prepare_subset(self, point, candidate_indices, error, status)
+   subroutine prepare_subset(self, point, candidate_indices, error)
       !> Level set instance
       class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
       !> Evaluation point
@@ -223,12 +218,9 @@ contains
       integer, intent(in) :: candidate_indices(:)
       !> Evaluation failure
       type(error_type), allocatable, intent(out) :: error
-      !> Always 0
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
       if (size(candidate_indices) < 0) return
-      call self%prepare(point, error, status)
+      call self%prepare(point, error)
    end subroutine prepare_subset
 
    !> Set the spatial derivative order

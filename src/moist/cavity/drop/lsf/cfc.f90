@@ -34,14 +34,14 @@
 !> Not handled
 !> -----------
 !> - point on a nucleus: both kernels divide by `||r - R_A||`, finite value but non-finite
-!>   derivatives (cusp of the atom's term)
-!>   - batch: cusp kept in the nucleus lane, sub-strip lifted as is, column unreached
-!>     (status 1, NaN) from order 1
-!>   - per point: `prepare` reports unreached from `max_deriv = 1`
-!>   - batched nuclear vjp: column unreached (status 1, NaN), strip-mates re-run without it
+!>   derivatives (cusp of the atom's term); a jet not finite inside, an `error`, never unreached
+!>   - batch: cusp kept in the nucleus lane, sub-strip lifted as is, `error` naming the
+!>     column from order 1
+!>   - per point: `prepare` returns an `error` from `max_deriv = 1`
+!>   - batched nuclear vjp: `error` naming the column
 module moist_cavity_drop_lsf_cfc
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_is_nan, ieee_value, &
-                                              ieee_quiet_nan
+                                              ieee_quiet_nan, ieee_positive_inf
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
@@ -507,62 +507,81 @@ contains
 
    !> Screen every atom at the evaluation point and refresh the caches
    !>
-   !> - unreached ([[lsf_cfc_screen]]): `status = 1`, or `error` without
-   !>   `status`; the cache stays readable-but-unreached, accessors abort
+   !> - unreached ([[lsf_cfc_screen]]): no `error`, `unreached()` reports it; the
+   !>   cache stays readable-but-unreached, accessors abort
+   !> - a jet not finite inside (on a nucleus from `max_deriv = 1`): `error`,
+   !>   the cache invalidated ([[report_singular]])
    !> - `error stop` before `update`
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    point  Evaluation point (3,)
    !> @param[out]   error  Invalid fade band, or parameters changed since `update`
-   !>                      ([[check_point]]); or an unreached point without `status`
-   !> @param[out]   status 0 ok, 1 unreached (optional)
-   subroutine lsf_prepare(self, point, error, status)
+   !>                      ([[check_point]]); or a jet not finite inside
+   subroutine lsf_prepare(self, point, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Evaluation point
       real(wp), intent(in) :: point(3)
-      !> Invalid fade band, or parameters changed since `update`
+      !> Invalid fade band, parameters changed since `update`, or a jet not finite inside
       type(error_type), allocatable, intent(out) :: error
-      !> 0 ok, 1 unreached
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
+      !> Jet not finite inside
+      logical :: singular
+
       if (.not. allocated(self%cand_screen)) error stop "moist DROP LSF: prepare before update"
       call check_point(self, error)
       if (allocated(error)) return
-      call lsf_cfc_screen(self, point, self%full_scan_cand)
-      call self%report_unreached(error, status)
+      call lsf_cfc_screen(self, point, self%full_scan_cand, singular)
+      if (singular) call report_singular(self, error)
    end subroutine lsf_prepare
 
    !> Screen a caller-provided candidate list and refresh the caches
    !>
-   !> - unreached and before `update` as in [[lsf_prepare]]
+   !> - unreached, a jet not finite inside and before `update` as in [[lsf_prepare]]
    !>
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point (3,)
    !> @param[in]    candidate_indices Atom ids in the base's sorted candidate space
    !> @param[out]   error             Invalid fade band, or parameters changed since `update`;
-   !>                                 or an unreached point without `status`
-   !> @param[out]   status            0 ok, 1 unreached (optional)
-   subroutine lsf_prepare_subset(self, point, candidate_indices, error, status)
+   !>                                 or a jet not finite inside
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Evaluation point
       real(wp), intent(in) :: point(3)
       !> Candidate ids in the sorted candidate space
       integer, intent(in) :: candidate_indices(:)
-      !> Invalid fade band, or parameters changed since `update`
+      !> Invalid fade band, parameters changed since `update`, or a jet not finite inside
       type(error_type), allocatable, intent(out) :: error
-      !> 0 ok, 1 unreached
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
+      !> Jet not finite inside
+      logical :: singular
+
       if (.not. allocated(self%cand_screen)) error stop "moist DROP LSF: prepare before update"
       call check_point(self, error)
       if (allocated(error)) return
-      call lsf_cfc_screen(self, point, candidate_indices)
-      call self%report_unreached(error, status)
+      call lsf_cfc_screen(self, point, candidate_indices, singular)
+      if (singular) call report_singular(self, error)
    end subroutine lsf_prepare_subset
+
+   !> Refuse a prepared point whose jet is not finite inside
+   !>
+   !> - a point on a nucleus from `max_deriv = 1` (cusp of the atom's term); the
+   !>   value is finite and negative, so the point is no unreached exterior
+   !> - the per-point cache invalidated (`prepared_deriv = -1`): accessors abort
+   !>
+   !> @param[inout] self  LSF instance after [[lsf_cfc_screen]]
+   !> @param[out]   error Refusal
+   subroutine report_singular(self, error)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
+      !> Refusal
+      type(error_type), allocatable, intent(out) :: error
+
+      self%prepared_deriv = -1
+      call fatal_error(error, "prepare: level-set jet not finite with atoms in reach and "// &
+                       "S <= 0, e.g. on a nucleus from derivative order 1 ("//self%name//")")
+   end subroutine report_singular
 
    !> Refuse the per-point path while it cannot evaluate the configured model
    !>
@@ -663,9 +682,12 @@ contains
    !> Pass five lifts the spatial jet at `max_deriv` into the cache (`jet*`)
    !>
    !> Unreached (`prepared_unreached`): no survivor, `PD` not positive (the lift
-   !> divides by it), or any lifted output through `max_deriv` non-finite (a
-   !> tiny positive `PD` far out with screening off, a point on a nucleus from
-   !> order 1), the per-point twin of the batch's [[poison_unreached]]
+   !> divides by it), or a lifted output through `max_deriv` non-finite without
+   !> `S <= 0` (a tiny positive `PD` far out with screening off), the per-point
+   !> twin of the batch's [[poison_unreached]]
+   !>
+   !> Singular (`singular`): a lifted output non-finite with `S <= 0`,
+   !> e.g. a point on a nucleus from order 1; not unreached
    !>
    !> - cannot be made linear (see the module header)
    !> - what it can be, and is, is a single kernel call per pair yielding both
@@ -675,13 +697,16 @@ contains
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point [ndim]
    !> @param[in]    candidate_indices Candidate ids in the sorted candidate space
-   subroutine lsf_cfc_screen(self, point, candidate_indices)
+   !> @param[out]   singular          Jet not finite with `S <= 0`
+   subroutine lsf_cfc_screen(self, point, candidate_indices, singular)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Evaluation point
       real(wp), intent(in) :: point(ndim)
       !> Candidate ids in the sorted candidate space
       integer, intent(in) :: candidate_indices(:)
+      !> Jet not finite with `S <= 0`
+      logical, intent(out) :: singular
 
       !> Loop counters, candidate id, survivor count
       integer :: i, j, c, n
@@ -690,6 +715,7 @@ contains
       !> Fade band in sigma
       real(wp) :: fs, fw
 
+      singular = .false.
       self%n_active = 0
       self%prepared_deriv = self%max_deriv
       self%prepared_unreached = .true.
@@ -761,8 +787,13 @@ contains
       if (.not. (self%pd0 > 0.0_wp)) return
       call cfc_spatial_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, self%pd4_rrrr, md, &
                             self%jet0, self%jet1_r, self%jet2_rr, self%jet3_rrr, self%jet4_rrrr)
-      self%prepared_unreached = .not. jet_finite(md, self%jet0, self%jet1_r, self%jet2_rr, &
-                                                 self%jet3_rrr, self%jet4_rrrr)
+      if (jet_finite(md, self%jet0, self%jet1_r, self%jet2_rr, self%jet3_rrr, &
+                     self%jet4_rrrr)) then
+         self%prepared_unreached = .false.
+      else
+         self%prepared_unreached = .not. self%jet0 <= 0.0_wp
+         singular = .not. self%prepared_unreached
+      end if
    end subroutine lsf_cfc_screen
 
    !> Whether every output of the dense jet through `order` is finite
@@ -926,27 +957,28 @@ contains
    !>   `candidates_in_box` over its bounding box, a superset of every point's
    !>   active set, the kernel's per-point gate mask making the result the full
    !>   screen per point
-   !> - unreached column: `status = 1`, or `error` naming the column when
-   !>   `status` is absent; every output of the column through `order` holds a
-   !>   quiet NaN, so it cannot pass for a surface point; status 1 means
+   !> - unreached column (`unreached(column)`): `lsf0` the finite `S` where only a
+   !>   derivative overflowed, `+Inf` otherwise, every derivative through `order` a
+   !>   quiet NaN ([[poison_unreached]]); unreached means
    !>   - `PD <= 0` after stage 1, every atom of the list masked by the gate (no
    !>     atom within reach); its sums are patched to `PD = 1` so the lift
    !>     stays finite, its derivative sums are exact zeros already
-   !>   - or any non-finite output through `order` after the lift (the lift
-   !>     divides by `PD`), e.g. a point on a nucleus, or a tiny `PD` whose
-   !>     reciprocal powers overflow at the higher orders
+   !>   - or a non-finite output through `order` after the lift (the lift
+   !>     divides by `PD`) with `S > 0` or NaN, a tiny `PD` whose reciprocal powers
+   !>     overflow at the higher orders
    !>   - with screening off the inline exp clamp keeps `PD >= exp(-708)` per
    !>     atom, so a far point has a large finite value, its higher orders
    !>     possibly not
-   !> - `status = 2` only on a refusal of the whole batch, never per column
+   !> - a non-finite output with `S <= 0` (on a nucleus from order 1):
+   !>   `error` naming the lowest such column of the strip
    !> - on-nucleus sub-strip (stage 1's `n_zero > 0`): lifted as is, the strip
    !>   kernel keeping the cusp in the nucleus lane; that column keeps its finite
-   !>   value at order 0 and comes back unreached from order 1, every other
-   !>   column of the sub-strip is unaffected
+   !>   value at order 0 and is an `error` from order 1, every other column of
+   !>   the sub-strip is unaffected
    !> - the per-point cache is invalidated (`prepared_deriv = -1`)
-   !> - refused with `error`, no column written, `status` 2 ([[check_batch]]):
-   !>   `m /= 4`, invalid fade band, parameters changed since `update`, exponents
-   !>   outside the kernel's range
+   !> - refused with `error`, no column written ([[check_batch]]): `m /= 4`,
+   !>   invalid fade band, parameters changed since `update`, exponents outside
+   !>   the kernel's range
    !> - the single-point cache is unspecified after the call
    !>
    !> @param[inout] self              LSF instance
@@ -958,12 +990,11 @@ contains
    !>                                 written for order >= 2
    !> @param[out]   lsf3_rrr          Packed third derivatives (10, n), written for order >= 3
    !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n), written for order 4
-   !> @param[out]   status            Per column 0 ok, 1 unreached, 2 refused (optional)
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
-   !> @param[out]   error             Refused configuration, or first unreached column
-   !>                                 when `status` is absent
+   !> @param[out]   error             Refused configuration, or first column whose jet is
+   !>                                 not finite with `S <= 0`
    subroutine lsf_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
-                                 lsf4_rrrr, status, candidate_indices, error)
+                                 lsf4_rrrr, candidate_indices, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Evaluation points
@@ -980,18 +1011,16 @@ contains
       real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
       !> Packed fourth derivatives
       real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
-      !> Per-column status
-      integer, intent(out), optional, contiguous :: status(:)
       !> Shared atom list
       integer, intent(in), optional :: candidate_indices(:)
-      !> Refused configuration or first unreached column
+      !> Refused configuration or first column with a jet not finite at `S <= 0`
       type(error_type), allocatable, intent(out) :: error
 
       !> Lift outputs of one strip in sub-strip order, packed
       real(wp) :: t0(max_strip), t1(ndim, max_strip), t2(np2, max_strip)
       real(wp) :: t3(np3, max_strip), t4(np4, max_strip)
-      !> Column reached at least one atom, sub-strip order
-      logical :: reached(max_strip)
+      !> Column has a finite jet, column jet not finite at `S <= 0`, sub-strip order
+      logical :: reached(max_strip), singular(max_strip)
       !> Points of one sub-strip, gathered
       real(wp) :: pbuf(ndim, max_strip)
       !> Strip column of each sub-strip slot, sub-strip starts and lengths
@@ -1012,16 +1041,14 @@ contains
 
       n = size(points, 2)
       call lsf_batch_require_outputs("CFC", points, order, lsf0, lsf1_r, lsf2_rr_packed, &
-                                     lsf3_rrr, lsf4_rrrr, status)
+                                     lsf3_rrr, lsf4_rrrr)
+      call self%begin_batch(n)
       if (n == 0) return
       if (.not. allocated(self%cand_screen)) then
          error stop "moist DROP LSF CFC: evaluate_batch before update"
       end if
       call check_batch(self, error)
-      if (allocated(error)) then
-         if (present(status)) status(1:n) = 2
-         return
-      end if
+      if (allocated(error)) return
       ! The batch leaves the per-point cache alone but stale: accessors abort until `prepare`
       self%prepared_deriv = -1
 
@@ -1058,7 +1085,7 @@ contains
             call strip_eval(self, order, m, pbuf, nc, t0(q0:q1), t1(:, q0:q1), t2(:, q0:q1), &
                             t3(:, q0:q1), t4(:, q0:q1), reached(q0:q1), n_zero)
          end do
-         call poison_unreached(order, np, t0, t1, t2, t3, t4, reached)
+         call poison_unreached(order, np, t0, t1, t2, t3, t4, reached, singular)
 
          do j = 1, np
             i = s0 - 1 + perm(j)
@@ -1067,32 +1094,27 @@ contains
             if (order >= 2) lsf2_rr_packed(:, i) = t2(:, j)
             if (order >= 3) lsf3_rrr(:, i) = t3(:, j)
             if (order >= 4) lsf4_rrrr(:, i) = t4(:, j)
+            self%batch_unreached(i) = .not. (reached(j) .or. singular(j))
          end do
 
-         if (present(status)) then
-            do j = 1, np
-               status(s0 - 1 + perm(j)) = merge(0, 1, reached(j))
-            end do
-         else if (.not. all(reached(1:np))) then
+         if (any(singular(1:np))) then
             i = n + 1
             do j = 1, np
-               if (.not. reached(j)) i = min(i, s0 - 1 + perm(j))
+               if (singular(j)) i = min(i, s0 - 1 + perm(j))
             end do
             write (col, "(i0)") i
             write (ncol, "(i0)") nc
             call fatal_error(error, "evaluate_batch: point "//trim(col)// &
-                             " is unreached, no atom within the screening reach or PD "// &
-                             "underflowed (CFC, "//trim(ncol)//" candidates "// &
+                             " has a level-set jet not finite with S <= 0 (CFC, "// &
+                             trim(ncol)//" candidates "// &
                              merge("given   ", "from box", present(candidate_indices))//")")
             ! Name the cusp when the column sits on a nucleus; error path only, O(ncenters)
-            if (order >= 1) then
-               do c = 1, self%ncenters
-                  dc = points(:, i) - self%cand_screen(1:ndim, c)
-                  if (dc(1)*dc(1) + dc(2)*dc(2) + dc(3)*dc(3) /= 0.0_wp) cycle
-                  error%message = error%message//" (on-nucleus column at order >= 1)"
-                  exit
-               end do
-            end if
+            do c = 1, self%ncenters
+               dc = points(:, i) - self%cand_screen(1:ndim, c)
+               if (dc(1)*dc(1) + dc(2)*dc(2) + dc(3)*dc(3) /= 0.0_wp) cycle
+               error%message = error%message//" (on-nucleus column at order >= 1)"
+               exit
+            end do
             return
          end if
       end do
@@ -1245,8 +1267,8 @@ contains
    !>
    !> - `n_zero > 0` (a point on a nucleus): lifted all the same; stage 1 keeps
    !>   the cusp in the nucleus lane, whose non-finite derivative sums give
-   !>   non-finite outputs for [[poison_unreached]] (its value is finite), every
-   !>   other lane untouched
+   !>   non-finite outputs [[poison_unreached]] marks singular (its value is
+   !>   finite and negative), every other lane untouched
    !> - columns with `PD <= 0` marked unreached and patched to `PD = 1` before
    !>   the lift
    !>
@@ -1348,23 +1370,27 @@ contains
       end select
    end subroutine strip_eval
 
-   !> Mark non-finite columns unreached and fill every unreached column with NaN
+   !> Classify the non-finite columns and fill every unreached column with the exterior limit
    !>
-   !> - a reached column whose outputs through `order` are not all finite
-   !>   becomes unreached
-   !> - every output through `order` of an unreached column becomes a quiet NaN,
-   !>   so a caller ignoring `status` cannot read it as a surface point
+   !> - a reached column whose outputs through `order` are not all finite becomes
+   !>   singular when `S <= 0` (e.g. on a nucleus), unreached otherwise (`S > 0`,
+   !>   `+Inf`, or NaN from `PD <= 0` by round-off); `reached` false for both
+   !> - every unreached column: every derivative through `order` a quiet NaN; `S` kept
+   !>   where finite (`> 0`, only a derivative overflowed), else `+Inf` (`-log 0`, also
+   !>   for a column with no atom in reach); a singular column is left as lifted
    !> - outputs above `order` are left alone
    !>
-   !> @param[in]    order   Highest spatial order (0..4)
-   !> @param[in]    np      Points in the strip
-   !> @param[inout] l0      Values [np]
-   !> @param[inout] l1      Gradients [ndim, np]
-   !> @param[inout] l2      Packed Hessians [6, np]
-   !> @param[inout] l3      Packed third derivatives [10, np]
-   !> @param[inout] l4      Packed fourth derivatives [15, np]
-   !> @param[inout] reached Column reached at least one atom [np]
-   pure subroutine poison_unreached(order, np, l0, l1, l2, l3, l4, reached)
+   !> @param[in]    order    Highest spatial order (0..4)
+   !> @param[in]    np       Points in the strip
+   !> @param[inout] l0       Values [np]
+   !> @param[inout] l1       Gradients [ndim, np]
+   !> @param[inout] l2       Packed Hessians [6, np]
+   !> @param[inout] l3       Packed third derivatives [10, np]
+   !> @param[inout] l4       Packed fourth derivatives [15, np]
+   !> @param[inout] reached  Column reached at least one atom on entry, has a finite jet
+   !>                        on exit [np]
+   !> @param[out]   singular Column jet not finite with `S <= 0` [np]
+   pure subroutine poison_unreached(order, np, l0, l1, l2, l3, l4, reached, singular)
       !> Highest spatial order
       integer, intent(in) :: order
       !> Points in the strip
@@ -1379,18 +1405,24 @@ contains
       real(wp), intent(inout) :: l3(np3, np)
       !> Packed fourth derivatives
       real(wp), intent(inout) :: l4(np4, np)
-      !> Column reached at least one atom
+      !> Column reached at least one atom on entry, has a finite jet on exit
       logical, intent(inout) :: reached(np)
+      !> Column jet not finite with `S <= 0`
+      logical, intent(out) :: singular(np)
 
       !> Quiet NaN
       real(wp) :: qnan
       !> Point index
       integer :: p
+      !> Column keeps its finite `S`
+      logical :: keep
       !> Every output of the column through `order` is finite
       logical :: finite
 
       qnan = ieee_value(qnan, ieee_quiet_nan)
       do p = 1, np
+         singular(p) = .false.
+         keep = .false.
          if (reached(p)) then
             finite = ieee_is_finite(l0(p))
             if (order >= 1) finite = finite .and. all(ieee_is_finite(l1(:, p)))
@@ -1398,9 +1430,11 @@ contains
             if (order >= 3) finite = finite .and. all(ieee_is_finite(l3(:, p)))
             if (order >= 4) finite = finite .and. all(ieee_is_finite(l4(:, p)))
             reached(p) = finite
+            singular(p) = .not. finite .and. l0(p) <= 0.0_wp
+            keep = ieee_is_finite(l0(p))
          end if
-         if (reached(p)) cycle
-         l0(p) = qnan
+         if (reached(p) .or. singular(p)) cycle
+         if (.not. keep) l0(p) = ieee_value(qnan, ieee_positive_inf)
          if (order >= 1) l1(:, p) = qnan
          if (order >= 2) l2(:, p) = qnan
          if (order >= 3) l3(:, p) = qnan
@@ -1427,20 +1461,18 @@ contains
    !> - list present, already ascending and the strip one sub-strip: the kernel writes
    !>   the tile columns in place; any other case scatters the sub-strip result into
    !>   the caller's positions after zeroing the column
-   !> - `max_deriv` is not read on the strip path, `qn*` are never formed; the on-nucleus
-   !>   fallback sets 3 for its duration and restores it
-   !> - unreached column (`PD <= 0` after stage 1, a non-finite value, gradient or
-   !>   Hessian of the order-2 lift, or a non-finite result column, which catches an
-   !>   adjoint that overflows where the lift does not): NaN in `res(:, :, p)` and
-   !>   `status = 1`, or `error` naming the column when `status` is absent; the other
-   !>   columns are computed
-   !> - on-nucleus column (stage 1's `n_zero > 0`): the sub-strip is discarded, the
-   !>   column is unreached ([[nucleus_unreached]]: the cusp makes the per-point jet
-   !>   non-finite from order 1) and the remaining columns are re-run as a sub-strip of
-   !>   their own, so they match the tile without the on-nucleus columns bit for bit
-   !> - refused with `error` "vjp_f1_rA_batch failed at point 1: ...", no column written,
-   !>   `status` 2 ([[check_batch]]): `m /= 4`, invalid fade band, parameters changed
-   !>   since `update`, exponents outside the kernel's range
+   !> - `max_deriv` is not read on the strip path, `qn*` are never formed
+   !> - unreached column (`unreached(column)`: `PD <= 0` after stage 1, or with `S > 0`
+   !>   a non-finite value, gradient or Hessian of the order-2 lift or a non-finite
+   !>   result column, which catches an adjoint that overflows where the lift does
+   !>   not): NaN in `res(:, :, p)`; the other columns are computed
+   !> - on-nucleus column (stage 1's `n_zero > 0`): `error` naming an on-nucleus
+   !>   column, the cusp makes the jet non-finite from order 1
+   !> - any other non-finite lift or result column with `S <= 0` (powers of `1/d` of
+   !>   a point within about 1e-60 Bohr of a nucleus): `error` as `evaluate_batch`
+   !> - refused with `error` "vjp_f1_rA_batch failed at point 1: ...", no column written
+   !>   ([[check_batch]]): `m /= 4`, invalid fade band, parameters changed since
+   !>   `update`, exponents outside the kernel's range
    !> - the per-point cache is invalidated (`prepared_deriv = -1`)
    !>
    !> @param[inout] self              LSF instance
@@ -1449,13 +1481,9 @@ contains
    !> @param[in]    w1                Adjoint weights of the gradient (3, np)
    !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
    !> @param[out]   res               Contracted nuclear gradient (3, ncand, np)
-   !> @param[out]   status            Per-column status (np), 0 ok, 1 unreached, 2 refused
-   !>                                 (optional)
-   !> @param[out]   error             Refused configuration, or first unreached column
-   !>                                 when `status` is absent
+   !> @param[out]   error             Refused configuration, or first on-nucleus column
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
-   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, status, error, &
-                                  candidate_indices)
+   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, error, candidate_indices)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Evaluation points
@@ -1468,9 +1496,7 @@ contains
       real(wp), intent(in), contiguous :: w2(:, :)
       !> Contracted nuclear gradient
       real(wp), intent(out), contiguous :: res(:, :, :)
-      !> Per-column status
-      integer, intent(out), optional, contiguous :: status(:)
-      !> Refused configuration or first unreached column
+      !> Refused configuration or first on-nucleus column
       type(error_type), allocatable, intent(out) :: error
       !> Shared atom list
       integer, intent(in), optional :: candidate_indices(:)
@@ -1478,29 +1504,26 @@ contains
       !> Sub-strip points and seeds, gathered in sub-strip order
       real(wp) :: pb(ndim, vjp_strip), b0(vjp_strip), b1(ndim, vjp_strip)
       real(wp) :: b2(np2, vjp_strip)
-      !> Sub-strip points and seeds without the on-nucleus columns
-      real(wp) :: cp(ndim, vjp_strip), c0(vjp_strip), c1(ndim, vjp_strip)
-      real(wp) :: c2(np2, vjp_strip)
       !> Sub-strip bounding box and fill of an unreached column
       real(wp) :: lo(ndim), hi(ndim), nan
-      !> Column reached at least one atom: strip slots, sub-strip, reduced sub-strip
-      logical :: reached(vjp_strip), rsub(vjp_strip), rc(vjp_strip)
+      !> Column reached at least one atom: strip slots, sub-strip
+      logical :: reached(vjp_strip), rsub(vjp_strip)
       !> Column holds a point on a nucleus
       logical :: nuc(vjp_strip)
+      !> Sub-strip column not finite with `S <= 0`
+      logical :: ssing(vjp_strip)
       !> Write the tile columns in place (list ascending), and for this strip
       logical :: direct, in_place
       !> List absent: the box query `bat_cand` is its own tile position
       logical :: box
       !> Strip column of each sub-strip slot, sub-strip starts and lengths
       integer :: perm(vjp_strip), seg0(vjp_strip), segn(vjp_strip)
-      !> Sub-strip column of each reduced column
-      integer :: lane(vjp_strip)
       !> Point count, list sizes, strip bounds and size
       integer :: n, ncand, nc, s0, s1, np
-      !> Sub-strip count, index, first slot and size, reduced size
-      integer :: nseg, k, q0, m, nk
-      !> Sub-strip column, tile column, list atom, zero-distance pair counts
-      integer :: j, i, a, n_zero, n_zero_c
+      !> Sub-strip count, index, first slot and size
+      integer :: nseg, k, q0, m
+      !> Sub-strip column, tile column, list atom, zero-distance pair count
+      integer :: j, i, a, n_zero
       !> Column label for the error message
       character(len=16) :: col
       character(len=:), allocatable :: msg
@@ -1508,12 +1531,7 @@ contains
       n = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      if (present(status)) then
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, &
-                                           status)
-      else
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
-      end if
+      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
       if (len(msg) > 0) error stop msg
       if (n == 0) return
       if (.not. allocated(self%cand_screen)) then
@@ -1522,11 +1540,11 @@ contains
       call check_batch(self, error)
       if (allocated(error)) then
          error%message = "vjp_f1_rA_batch failed at point 1: "//error%message
-         if (present(status)) status(1:n) = 2
          return
       end if
       ! The batch overwrites the per-point cache: accessors abort until `prepare`
       self%prepared_deriv = -1
+      call self%begin_batch(n)
       call grow_vjp_scratch(self)
       nan = ieee_value(0.0_wp, ieee_quiet_nan)
 
@@ -1579,51 +1597,34 @@ contains
 
             if (in_place) then
                call strip_vjp_pass(self, m, pb, b0, b1, b2, nc, res(:, :, s0:s1), rsub, &
-                                   n_zero)
+                                   ssing, n_zero)
             else
                call strip_vjp_pass(self, m, pb, b0, b1, b2, nc, self%vjp_res, rsub, &
-                                   n_zero)
+                                   ssing, n_zero)
             end if
 
             if (n_zero > 0) then
-               ! On-nucleus columns apart, the rest re-run as a sub-strip of its own
+               ! The cusp makes the jet non-finite from order 1: no value, not unreached
                call nucleus_columns(m, nc, pb, self%bat_center, nuc)
-               nk = 0
+               i = n + 1
                do j = 1, m
-                  if (nuc(j)) cycle
-                  nk = nk + 1
-                  lane(nk) = j
-                  cp(:, nk) = pb(:, j)
-                  c0(nk) = b0(j)
-                  c1(:, nk) = b1(:, j)
-                  c2(:, nk) = b2(:, j)
+                  if (nuc(j)) i = min(i, s0 - 1 + perm(q0 + j - 1))
                end do
-               if (nk > 0) then
-                  call strip_vjp_pass(self, nk, cp, c0, c1, c2, nc, self%vjp_res, rc, &
-                                      n_zero_c)
-                  if (n_zero_c > 0) then
-                     error stop "moist DROP LSF CFC: vjp_f1_rA_batch nucleus left"
-                  end if
-               end if
-               rsub = .false.
-               do a = 1, nk
-                  j = lane(a)
-                  rsub(j) = rc(a)
-                  if (.not. rsub(j)) cycle
-                  i = s0 - 1 + perm(q0 + j - 1)
-                  if (box) then
-                     call scatter_column(nc, self%bat_cand, self%vjp_res(3*nc*(a - 1) + 1), &
-                                         res(:, :, i))
-                  else
-                     call scatter_column(nc, self%vjp_apos, self%vjp_res(3*nc*(a - 1) + 1), &
-                                         res(:, :, i))
-                  end if
-               end do
+               write (col, "(i0)") i
+               call fatal_error(error, "vjp_f1_rA_batch: point "//trim(col)// &
+                                " lies on a nucleus, the level-set jet is not finite there ("// &
+                                self%name//")")
+               return
+            else if (any(ssing(1:m))) then
+               i = n + 1
                do j = 1, m
-                  if (.not. nuc(j)) cycle
-                  i = s0 - 1 + perm(q0 + j - 1)
-                  call nucleus_unreached(self, points(:, i), nc)
+                  if (ssing(j)) i = min(i, s0 - 1 + perm(q0 + j - 1))
                end do
+               write (col, "(i0)") i
+               call fatal_error(error, "vjp_f1_rA_batch: point "//trim(col)// &
+                                " has a level-set jet not finite with S <= 0 ("// &
+                                self%name//")")
+               return
             else if (.not. in_place) then
                do j = 1, m
                   if (.not. rsub(j)) cycle
@@ -1641,22 +1642,11 @@ contains
          end do
 
          do j = 1, np
-            if (.not. reached(j)) res(:, :, s0 - 1 + perm(j)) = nan
+            if (reached(j)) cycle
+            i = s0 - 1 + perm(j)
+            res(:, :, i) = nan
+            self%batch_unreached(i) = .true.
          end do
-         if (present(status)) then
-            do j = 1, np
-               status(s0 - 1 + perm(j)) = merge(0, 1, reached(j))
-            end do
-         else if (.not. all(reached(1:np))) then
-            i = n + 1
-            do j = 1, np
-               if (.not. reached(j)) i = min(i, s0 - 1 + perm(j))
-            end do
-            write (col, "(i0)") i
-            call fatal_error(error, "vjp_f1_rA_batch: point "//trim(col)// &
-                             " is unreached, no atom within reach ("//self%name//")")
-            return
-         end if
       end do
    end subroutine lsf_vjp_f1_rA_batch
 
@@ -1690,14 +1680,16 @@ contains
    !> - `n_zero > 0` (a point on a nucleus): returns after stage 1, `reached` false,
    !>   `rs` undefined
    !> - the order-2 lift decides `reached` as [[lsf_evaluate_batch]]: `PD <= 0`, or a
-   !>   non-finite value, gradient or Hessian
+   !>   non-finite value, gradient or Hessian; a non-finite lift with `S <= 0` is
+   !>   `singular` instead (as [[poison_unreached]])
    !> - substitute of an unreached column before the adjoint: `PD = 1`, derivative sums
    !>   zero; `lam` is then finite and the lift never divides by a non-positive `PD`
    !>   (`cfc_strip_lift_vjp` requires `PD > 0`), the column's `rs` is the caller's to
    !>   discard
    !> - the adjoint carries one more power of `1/PD` than the lift (`2/PD^3`), so it
    !>   overflows for `PD` in about 1e-154 to 1e-103 where the lift is finite: a column
-   !>   whose final `rs` is not finite becomes unreached, whatever the cause
+   !>   whose final `rs` is not finite becomes unreached with `S > 0`, singular with
+   !>   `S <= 0` (powers of `1/d` within about 1e-60 Bohr of a nucleus)
    !>
    !> Stage buffers live in fixed arrays of the strip width; the explicit-shape
    !> kernel dummies see them as `(np, ...)` by sequence association
@@ -1710,9 +1702,10 @@ contains
    !> @param[in]    w2      Packed symmetric Hessian seeds [6, np]
    !> @param[in]    nc      Length of the shared list
    !> @param[out]   rs      Nuclear gradient per list atom and point [ndim, nc, np]
-   !> @param[out]   reached Column reached at least one atom, lift and `rs` finite [np]
-   !> @param[out]   n_zero  Point-atom pairs at zero distance
-   subroutine strip_vjp_pass(self, np, points, w0, w1, w2, nc, rs, reached, n_zero)
+   !> @param[out]   reached  Column reached at least one atom, lift and `rs` finite [np]
+   !> @param[out]   singular Column lift or `rs` not finite with `S <= 0` [np]
+   !> @param[out]   n_zero   Point-atom pairs at zero distance
+   subroutine strip_vjp_pass(self, np, points, w0, w1, w2, nc, rs, reached, singular, n_zero)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Points in the sub-strip
@@ -1731,6 +1724,8 @@ contains
       real(wp), intent(out) :: rs(ndim, nc, np)
       !> Column reached at least one atom, lift and result finite
       logical, intent(out) :: reached(np)
+      !> Column lift or `rs` not finite with `S <= 0`
+      logical, intent(out) :: singular(np)
       !> Point-atom pairs at zero distance
       integer, intent(out) :: n_zero
 
@@ -1750,6 +1745,7 @@ contains
          call cfc_strip_powersums_o2(np, points, nc, c, r, q, a1, a2, cp, fs, fw, pd0, &
                                      pd1, pd2, n_zero, self%strip_geo, self%bat_sv, &
                                      self%bat_reach)
+         singular = .false.
          if (n_zero > 0) then
             reached = .false.
             return
@@ -1764,6 +1760,7 @@ contains
             if (.not. reached(p)) cycle
             reached(p) = ieee_is_finite(l0(p)) .and. all(ieee_is_finite(l1(:, p))) .and. &
                          all(ieee_is_finite(l2(:, p)))
+            singular(p) = .not. reached(p) .and. l0(p) <= 0.0_wp
          end do
          call clear_unreached(np, reached, pd0, pd1, pd2)
 
@@ -1775,7 +1772,9 @@ contains
       n_zero = n_zero3
       ! The adjoint can overflow where the lift does not: the result decides
       do p = 1, np
-         if (reached(p)) reached(p) = all(ieee_is_finite(rs(:, :, p)))
+         if (.not. reached(p)) cycle
+         reached(p) = all(ieee_is_finite(rs(:, :, p)))
+         singular(p) = .not. reached(p) .and. l0(p) <= 0.0_wp
       end do
    end subroutine strip_vjp_pass
 
@@ -1873,40 +1872,6 @@ contains
          out(:, apos(j)) = rs(:, j)
       end do
    end subroutine scatter_column
-
-   !> On-nucleus column of the batched vjp, checked on the guarded per-point path
-   !>
-   !> - [[lsf_cfc_screen]] over the sub-strip's list at `max_deriv = 3`: the cusp makes
-   !>   the per-point jet non-finite from order 1, so the column is unreached and has
-   !>   no value to return
-   !> - `error stop` if the point comes back reached, never the case for a point on a
-   !>   nucleus
-   !> - `max_deriv` restored and the per-point cache invalidated on exit
-   !>
-   !> @param[inout] self  LSF instance with `bat_cand(1:nc)` set
-   !> @param[in]    point Evaluation point [ndim]
-   !> @param[in]    nc    Length of the shared list
-   subroutine nucleus_unreached(self, point, nc)
-      !> LSF instance
-      class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
-      !> Evaluation point
-      real(wp), intent(in) :: point(ndim)
-      !> Length of the shared list
-      integer, intent(in) :: nc
-
-      !> Caller's order
-      integer :: md_saved
-
-      md_saved = self%max_deriv
-      self%max_deriv = 3
-      ! `bat_cand` aliases a component of `self`: legal as the screen never touches it
-      call lsf_cfc_screen(self, point, self%bat_cand(1:nc))
-      if (.not. self%prepared_unreached) then
-         error stop "moist DROP LSF CFC: vjp_f1_rA_batch on-nucleus column reached"
-      end if
-      self%max_deriv = md_saved
-      self%prepared_deriv = -1
-   end subroutine nucleus_unreached
 
    !* ================================================================================= *!
    !*                          One-nuclear-index derivatives                            *!
@@ -3883,8 +3848,8 @@ contains
    !>   while the constants are stale ([[cfc_certificate_type]]); raw `|S|/L`
    !>   over-claims inside a band
    !>
-   !> A NaN value (an unreached batch column) or `-Inf` certifies nothing in both
-   !> modes, `+Inf` nothing with the fade off
+   !> A NaN value or `-Inf` certifies nothing in both modes; `+Inf` (`PD`/`Z` zero, the
+   !> value of an unreached batch column without a finite `S`) nothing with the fade off
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point
@@ -3927,11 +3892,10 @@ contains
    !>   point with no atom within the band end has `d_A >= R_A (x_on + delta)`
    !>   for every atom, and `d_A` is 1-Lipschitz
    !> - `r_cap`: `tau(+Inf)` of the reached certificate, valid where `PD_f = 0`
-   !> - status 1 means no atom within the band end OR a non-finite lift; the
-   !>   certificate covers the first, which every status-1 column is at order 0
-   !>   (the octree's probe; `w_A` underflowing to zero needs the last ~1e-60 of
-   !>   a band); from order 1 a column on a nucleus is status 1 too and is not
-   !>   covered
+   !> - unreached means no atom within the band end OR a non-finite lift with
+   !>   `S > 0`; the certificate covers the first, which every unreached column
+   !>   is at order 0 (the octree's probe; `w_A` underflowing to zero needs the
+   !>   last ~1e-60 of a band)
    !> - per-point path: every point with an empty active list
    !> - zero with the fade off (no reach, no such bound), outside the guards of
    !>   [[certificate_setup]] (`F_n(50) > 1` included), or while the constants
