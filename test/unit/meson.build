@@ -64,7 +64,7 @@ tests = [
   'cavity_drop_nuclear_adjoint',
   'cavity_drop_potential',
   'cavity_drop_integration',
-  'cavity_drop_filter',
+  'cavity_drop_anchor',
   'cavity_drop_projector',
   'cavity_drop_projection',
   'cavity_drop_cpcm',

@@ -543,7 +543,7 @@ contains
       real(wp), parameter :: blend_k = 5.5_wp
       real(wp), parameter :: blend_2b = 0.0_wp
       real(wp), parameter :: blend_3b = 3.0_wp
-      integer, parameter :: proj_level = 2
+      integer, parameter :: proj_level = 1
 
       character(len=20) :: struct_names(n_struct)
       !> Display labels (indented by tree depth) and top-level flags, enumerated

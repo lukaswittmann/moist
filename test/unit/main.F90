@@ -68,7 +68,7 @@ program tester
    use test_math_solvers, only: collect_math_solvers
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
    use test_cavity_reference, only: collect_cavity_reference
-   use test_cavity_drop_filter, only: collect_cavity_drop_filter
+   use test_cavity_drop_anchor, only: collect_cavity_drop_anchor
    use test_cavity_drop_projector, only: collect_cavity_drop_projector
    use test_cavity_drop_projection, only: collect_cavity_drop_projection
    use test_cavity_drop_properties, only: collect_cavity_drop_properties
@@ -152,7 +152,7 @@ program tester
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
       & new_testsuite("cavity_drop_potential", collect_cavity_drop_potential), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
-      & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
+      & new_testsuite("cavity_drop_anchor", collect_cavity_drop_anchor), &
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
       & new_testsuite("cavity_drop_projection", collect_cavity_drop_projection), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
