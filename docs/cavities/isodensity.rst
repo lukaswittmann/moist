@@ -19,6 +19,22 @@ level set.
 ``scale`` is not independent of ``rho_iso``: the normalized form :math:`S=1-\rho/\rho_\mathrm{iso}` holds only
 while :math:`\alpha=1/\rho_\mathrm{iso}`, so both should be changed together.
 
+.. subfigure:: AB
+   :layout-sm: A|B
+   :subcaptions: below
+   :gap: 8px
+   :name: fig-isodensity-lsf
+
+   .. image:: /_static/figures/lsf/isodensity_no_circles.svg
+      :alt: (a) Level set with contour lines
+
+   .. image:: /_static/figures/lsf/isodensity_no_lsf_lines.svg
+      :alt: (b) Cavity surface against the van der Waals surface (dashed)
+
+   Isodensity level set of a model molecule. The shading is the electron
+   density :math:`\rho`; the black line is the cavity surface,
+   :math:`\rho=\rho_\mathrm{iso}` (:math:`S=0`), and the dots are the atom centers.
+
 .. Note::
 
    :math:`\rho`-DROP requires a QM host's density; see :ref:`coupling-build` for rebuilding at each density change.
@@ -29,22 +45,25 @@ while :math:`\alpha=1/\rho_\mathrm{iso}`, so both should be changed together.
 Implementations
 ---------------
 
-Two implementations are available:
+Two implementations are available; the internal one should always be preferred due to its more efficient implementation.
+
+**Internal**, preferred (``moist_cavity_drop_lsf_isodensity_internal_type``)
+   The QM host supplies the GTO basis at construction and the current density matrix through the :ref:`coupling-build` at each SCF step.
+   MOIST evaluates the density and its spatial derivatives internally, including shell and spatial screening.
+   The screening cutoffs follow the LSF screening threshold that DROP derives from its ``tolerance``; points are evaluated in batches, one basis-function contraction per tile of nearby points.
+
+   ``basis`` selects the representation the density is contracted in:
+   - ``cartesian`` (default) works for every host.
+   - ``spherical`` contracts over the :math:`2l+1` harmonic polynomials of each shell instead of the :math:`(l+1)(l+2)/2` monomials, which is exact for a host with spherical basis functions.
+   It is set as ``basis=moist_iso_basis%spherical`` (Fortran, ``use moist, only: moist_iso_basis``), ``options.basis = moist_isodensity_basis_spherical`` (C) or ``IsodensityParameters(basis="spherical")`` (Python).
+
+   For a low-rank density matrix, such as an SCF density for larger basis sets (e.g. triple- or quadruple-zeta basis), MOIST factors the density matrix once per SCF step, :math:`\mathbf D=\mathbf L\mathbf L^\mathrm{T}` (pivoted Cholesky), and contracts through :math:`\mathbf L` to reduce the cost of the density contraction.
 
 **Callback** (``moist_cavity_drop_lsf_isodensity_callback_type``)
    The QM host evaluates the electron density and its spatial derivatives at points requested by MOIST: the host returns :math:`\rho`.
    The density and its gradient are always requested; the Hessian and third derivative arrive as NULL pointers whenever DROP does not need them, and the callee must (should) skip computing them.
    The third derivative is needed for the cavity response and for analytic nuclear derivatives.
    This route is the slower one: per-point call overhead and no vectorization across points.
-
-**Internal** (``moist_cavity_drop_lsf_isodensity_internal_type``)
-   The QM host supplies the GTO basis at construction and the current density matrix through the :ref:`coupling-build` at each SCF step.
-   MOIST evaluates the density and its spatial derivatives internally, including shell and spatial screening.
-
-   ``basis`` selects the representation the density is contracted in:
-   - ``cartesian`` (default) works for every host.
-   - ``spherical`` contracts over the :math:`2l+1` harmonic polynomials of each shell instead of the :math:`(l+1)(l+2)/2` monomials, which is exact for a host with spherical basis functions.
-   It is set as ``basis=moist_iso_basis%spherical`` (Fortran, ``use moist, only: moist_iso_basis``), ``options.basis = moist_isodensity_basis_spherical`` (C) or ``IsodensityParameters(basis="spherical")`` (Python).
 
 Both implementations share ``moist_cavity_drop_lsf_isodensity_param_type`` and build the same :math:`S` from it.
 

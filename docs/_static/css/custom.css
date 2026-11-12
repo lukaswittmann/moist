@@ -1,0 +1,13 @@
+/* Equal subfigure columns, image fills its column */
+.sphinx-subfigure-grid {
+  grid-auto-columns: minmax(0, 1fr);
+}
+.sphinx-subfigure-area img {
+  width: 100%;
+  height: auto;
+}
+
+/* Top-align subfigure panels */
+.sphinx-subfigure-area {
+  justify-content: flex-start !important;
+}

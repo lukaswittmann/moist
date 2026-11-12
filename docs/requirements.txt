@@ -6,4 +6,5 @@ sphinx>=7.0.1
 sphinx_book_theme
 sphinx_copybutton
 sphinx_design
+sphinx-subfigure
 sphinxcontrib-bibtex

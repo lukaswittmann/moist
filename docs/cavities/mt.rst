@@ -32,7 +32,6 @@ Width correction
 
 Normals are analytic LSF gradients at the patch points, or the switched mesh normal where the gradient vanishes.
 Each point belongs to its nearest atom.
-LSF screening is disabled while meshing, since its zero exterior sentinel would look like another isosurface.
 
 Accuracy
 --------

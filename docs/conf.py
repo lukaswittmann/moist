@@ -22,7 +22,11 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx.ext.napoleon",
     "sphinxcontrib.bibtex",
+    "sphinx_subfigure",
 ]
+
+# Number captioned figures, so :numref: works
+numfig = True
 
 # Global bibliography (sphinxcontrib-bibtex)
 bibtex_bibfiles = ["_static/references.bib"]
@@ -50,6 +54,7 @@ html_theme_options = {
 html_sidebars = {}
 
 html_static_path = ["_static"]
+html_css_files = ["css/custom.css"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build"]
 

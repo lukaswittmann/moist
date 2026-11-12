@@ -25,7 +25,7 @@ pressure, separate from numerical settings:
    cavity = CavityDROP(
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
-       parameters=DROPParameters(nleb=194, proj_level=3),
+       parameters=DROPParameters(nleb=194, proj_level=2),
    )
    model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
@@ -140,8 +140,9 @@ Array and accumulator contracts
 Python uses C-contiguous row-major arrays, with reversed native Fortran dimensions.
 Positions and nuclear gradients have shape ``(natoms,3)``; grid vectors have shape
 ``(ngrid,3)``. Potential second derivatives and Hessian weights have shape ``(ngrid,3,3)`` with indices
-``[point,b,a]`` corresponding to native ``(a,b,point)``. These weights need not be
-symmetric. Full diagnostic derivative tensors follow the same exact reversal.
+``[point,b,a]`` corresponding to native ``(a,b,point)``. The density Hessian weights
+``w_hess_rho`` are symmetric, off-diagonals not doubled; potential second derivatives
+need not be. Full diagnostic derivative tensors follow the same exact reversal.
 
 ``get_energy(coupling, energy)`` adds into a writable float64 scalar array such as
 ``np.array(0.0)``. ``get_gradient(coupling, gradient)`` adds into a writable,
