@@ -5,12 +5,10 @@ module test_cavity_drop_timings
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
-   use mctc_io_convert, only: aatoau
    use mstore, only: get_structure
    use moist_data_radii_legacy, only: get_radius_func
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
-   use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_radii, only: default_cpcm_radii
    use moist_radii_static, only: radius_type_static
    use moist_cavity_mc, only: integrate_surface_mc
@@ -33,9 +31,8 @@ contains
    subroutine collect_cavity_drop_timings(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-                  ! new_unittest("timing_drop_proj_levels", test_timing_drop_proj_levels), &
-                  ! new_unittest("timing_cell_fraction_benchmark", test_timing_cell_fraction_benchmark), &
                   new_unittest("timing_drop_scaling", test_timing_drop_scaling), &
+                  ! new_unittest("timing_drop_proj_levels", test_timing_drop_proj_levels), &
                   new_unittest("timing_mc_scaling", test_timing_mc_scaling), &
                   new_unittest("timing_iswig_scaling", test_timing_iswig_scaling), &
                   new_unittest("timing_lsf_accessors", test_timing_lsf_accessors), &
@@ -116,7 +113,8 @@ contains
 
    end subroutine test_timing_cavity_build
 
-   !> Split `prepare` into its screening and accumulation halves
+   !> Split `prepare` into its screening and accumulation halves, and time the
+   !> batched entry over the same points
    !>
    !> `prepare` does two things: reject candidates that cannot contribute
    !> (`screen_candidates`, one squared-distance compare per candidate) and
@@ -130,16 +128,18 @@ contains
    !> points twice with different candidate-list lengths:
    !>
    !>   `prepare`         screens all `N` atoms       t_full = a*N     + acc
-   !>   `prepare_subset`  screens the grid candidates t_grid = a*ncand + acc
+   !>   `prepare_subset`  screens the point's cell    t_cell = a*ncand + acc
    !>
    !> `acc` is identical in the two because the surviving set is the same, so
    !> the pair determines both unknowns. `a` must come out independent of the
    !> derivative order (screening does no derivative work), which is printed as
    !> a consistency check on the model rather than assumed
    !>
-   !> The cell grid is built exactly as `setup_mol_cell_grid` builds it, and the
-   !> query is timed separately so the grid lookup is not charged to screening
-   !> SvdW only: CFC does not remap the cell grid into its candidate space
+   !> The per-point list is the LSF's own `candidates_in_sphere` at radius 0,
+   !> the cell list `evaluate_batch` queries per strip; the query is timed
+   !> separately so the lookup is not charged to screening. `batch` is one
+   !> `evaluate_batch` call over all points (screen, accumulate and write the
+   !> jet), the path the projection runs
    subroutine test_timing_prepare_split(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -150,7 +150,6 @@ contains
       integer, parameter :: n_struct = 6
       !> Mirrors moist_cavity_drop_parameters defaults
       integer, parameter :: full_scan_below = 200
-      real(wp), parameter :: cell_fraction = 0.25_wp
       real(wp), parameter :: screen_thr = 1.0e-11_wp
       real(wp), parameter :: blend_k = 5.5_wp, blend_2b = 0.0_wp, blend_3b = 3.0_wp
 
@@ -160,13 +159,14 @@ contains
 
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(moist_cell_grid_type) :: cell_grid
       type(mctc_error), allocatable :: lsf_err
-      real(wp), allocatable :: radii(:), r_eff(:), points(:, :)
-      real(wp) :: t_full(0:max_lvl), t_grid(0:max_lvl), t_query
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: v0(:), v1(:, :), v2(:, :), v3(:, :)
+      integer, allocatable :: cand(:)
+      real(wp) :: t_full(0:max_lvl), t_cell(0:max_lvl), t_batch(0:max_lvl), t_query
       real(wp) :: a_screen(0:max_lvl), t_acc(0:max_lvl)
       real(wp) :: ncand_mean, nact_mean
-      integer :: istruct, ilvl, ipt, start, ncand, cand_sum, act_sum
+      integer :: istruct, ilvl, ipt, ncand, cand_sum, act_sum
       integer :: nat
       real :: c0, c1
 
@@ -174,51 +174,39 @@ contains
       write (*, "(a)") "=================================================================="
       write (*, "(a)") "Benchmark: SvdW prepare split (screening vs accumulation)"
       write (*, "(a,i0)") "points/system: ", npts
-      write (*, "(a,i0,a,f5.2)") "cell grid: full_scan_below=", full_scan_below, &
-         "  cell_fraction=", cell_fraction
+      write (*, "(a,i0)") "candidate cell list: full_scan_below=", full_scan_below
       write (*, "(a)") "=================================================================="
       write (*, "(a)") ""
-      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)") &
-         "Structure", "N_at", "ncand", "n_act", "d", "full(us)", "grid(us)", &
-         "screen/cand", "accum(us)"
-      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)") &
+      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11,a11)") &
+         "Structure", "N_at", "ncand", "n_act", "d", "full(us)", "cell(us)", &
+         "screen/cand", "accum(us)", "batch(us)"
+      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11,a11)") &
          "-----------", "-----", "--------", "--------", "---", &
-         "----------", "----------", "----------", "----------"
+         "----------", "----------", "----------", "----------", "----------"
 
+      allocate (points(ndim, npts), v0(npts), v1(ndim, npts), v2(6, npts), v3(10, npts))
       do istruct = 1, n_struct
          call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
          nat = mol%nat
          call fill_cpcm_radii(mol, radii, error)
          if (allocated(error)) return
-         radii = radii*aatoau
-         allocate (r_eff(nat), points(ndim, npts))
+         allocate (cand(nat))
          call build_lsf_shell_points(mol, radii, points)
 
          call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
             blend_3b=blend_3b))
          lsf%screening_threshold = screen_thr
+         call lsf%set_full_scan_below(full_scan_below)
          call lsf%update(mol, radii)
-
-         ! Same construction as setup_mol_cell_grid, then relabel the candidate
-         ! ids into the LSF's internal (sorted) atom ordering
-         do ipt = 1, nat
-            r_eff(ipt) = radii(ipt) + lsf%neighbor_cutoff(radii(ipt))
-         end do
-         call cell_grid%build(mol%xyz, r_eff, full_scan_below=full_scan_below, &
-                              cell_fraction=cell_fraction)
-         if (allocated(cell_grid%cell_nlat)) then
-            call lsf%remap_candidate_grid(cell_grid%cell_nlat)
-         end if
 
          !> Candidate and active counts (both fixed across derivative levels)
          call lsf%set_max_deriv(0)
          cand_sum = 0
          act_sum = 0
          do ipt = 1, npts
-            call cell_grid%query(points(:, ipt), start, ncand)
+            call lsf%candidates_in_sphere(points(:, ipt), 0.0_wp, cand, ncand)
             cand_sum = cand_sum + ncand
-            call lsf%prepare_subset(points(:, ipt), &
-                                    cell_grid%cell_nlat(start + 1:start + ncand), lsf_err)
+            call lsf%prepare_subset(points(:, ipt), cand(1:ncand), lsf_err)
             if (allocated(lsf_err)) then
                call test_failed(error, "prepare_subset failed: "//lsf_err%message)
                return
@@ -228,10 +216,10 @@ contains
          ncand_mean = real(cand_sum, wp)/real(npts, wp)
          nact_mean = real(act_sum, wp)/real(npts, wp)
 
-         !> Grid query alone, so the lookup is not charged to screening
+         !> Cell query alone, so the lookup is not charged to screening
          call cpu_time(c0)
          do ipt = 1, npts
-            call cell_grid%query(points(:, ipt), start, ncand)
+            call lsf%candidates_in_sphere(points(:, ipt), 0.0_wp, cand, ncand)
          end do
          call cpu_time(c1)
          t_query = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp
@@ -248,19 +236,28 @@ contains
 
             call cpu_time(c0)
             do ipt = 1, npts
-               call cell_grid%query(points(:, ipt), start, ncand)
-               call lsf%prepare_subset(points(:, ipt), &
-                                       cell_grid%cell_nlat(start + 1:start + ncand), lsf_err)
+               call lsf%candidates_in_sphere(points(:, ipt), 0.0_wp, cand, ncand)
+               call lsf%prepare_subset(points(:, ipt), cand(1:ncand), lsf_err)
             end do
             call cpu_time(c1)
-            t_grid(ilvl) = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp - t_query
+            t_cell(ilvl) = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp - t_query
 
-            ! t_full = a*N + acc, t_grid = a*ncand + acc. Below
-            ! `full_scan_below` the grid is a single cell, so the two
+            call cpu_time(c0)
+            call lsf%evaluate_batch(points, ilvl, v0, v1, lsf3_rrr=v3, lsf2_rr_packed=v2, &
+                                    error=lsf_err)
+            call cpu_time(c1)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "evaluate_batch failed: "//lsf_err%message)
+               return
+            end if
+            t_batch(ilvl) = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp
+
+            ! t_full = a*N + acc, t_cell = a*ncand + acc. Below
+            ! `full_scan_below` the cell list is a single cell, so the two
             ! measurements coincide and the split is not determined
             if (real(nat, wp) - ncand_mean > 1.0_wp) then
-               a_screen(ilvl) = (t_full(ilvl) - t_grid(ilvl))/(real(nat, wp) - ncand_mean)
-               t_acc(ilvl) = t_grid(ilvl) - a_screen(ilvl)*ncand_mean
+               a_screen(ilvl) = (t_full(ilvl) - t_cell(ilvl))/(real(nat, wp) - ncand_mean)
+               t_acc(ilvl) = t_cell(ilvl) - a_screen(ilvl)*ncand_mean
             else
                a_screen(ilvl) = -1.0_wp
                t_acc(ilvl) = -1.0_wp
@@ -269,26 +266,28 @@ contains
 
          do ilvl = 0, max_lvl
             if (ilvl == 0) then
-               write (*, "(2x,a12,i6,f9.1,f9.1,i4,4f11.4)") &
+               write (*, "(2x,a12,i6,f9.1,f9.1,i4,5f11.4)") &
                   trim(struct_names(istruct)), nat, ncand_mean, nact_mean, ilvl, &
-                  t_full(ilvl), t_grid(ilvl), a_screen(ilvl), t_acc(ilvl)
+                  t_full(ilvl), t_cell(ilvl), a_screen(ilvl), t_acc(ilvl), t_batch(ilvl)
             else
-               write (*, "(2x,a12,a6,a9,a9,i4,4f11.4)") &
+               write (*, "(2x,a12,a6,a9,a9,i4,5f11.4)") &
                   "", "", "", "", ilvl, &
-                  t_full(ilvl), t_grid(ilvl), a_screen(ilvl), t_acc(ilvl)
+                  t_full(ilvl), t_cell(ilvl), a_screen(ilvl), t_acc(ilvl), t_batch(ilvl)
             end if
          end do
 
-         call cell_grid%destroy()
-         deallocate (radii, r_eff, points)
+         deallocate (radii, cand)
       end do
 
       write (*, "(a)") ""
-      write (*, "(a)") "full  = prepare (screens every atom), grid = prepare_subset"
-      write (*, "(a)") "        (screens the cell-grid candidates), query excluded"
-      write (*, "(a)") "accum = grid - screen/cand * ncand: the point-dependent half"
-      write (*, "(a)") '  "-1" = grid is a single cell (N_at < full_scan_below),'
-      write (*, "(a)") "        so full and grid coincide and the split is undetermined"
+      write (*, "(a)") "full  = prepare (screens every atom), cell = prepare_subset"
+      write (*, "(a)") "        (screens the point's cell candidates), query excluded"
+      write (*, "(a)") "accum = cell - screen/cand * ncand: the point-dependent half"
+      write (*, "(a)") '  "-1" = one cell (N_at < full_scan_below),'
+      write (*, "(a)") "        so full and cell coincide and the split is undetermined"
+      write (*, "(a)") "batch = evaluate_batch per point: strip candidate lists, screen,"
+      write (*, "(a)") "        accumulate and the jet through order d; consecutive shell"
+      write (*, "(a)") "        points hop across the molecule, so every strip box is wide"
       write (*, "(a)") ""
 
       call sweep_screening_threshold(error)
@@ -302,9 +301,9 @@ contains
    !> `-3 ln(thr)/k` Bohr that is the same for every atom. The gate is therefore
    !> phrased in a *one-body* quantity, while the error it controls is the shift
    !> in `S = -(1/k) ln Z` -- and `Z` is not 1 away from the surface. This sweep
-   !> measures what the absolute gate buys and costs: active count, `prepare`
-   !> cost, and the resulting error in `S` against an effectively unscreened
-   !> reference, over the shell points where a cavity surface would sit
+   !> measures what the absolute gate buys and costs: active count, batched
+   !> evaluation cost, and the resulting error in `S` against an effectively
+   !> unscreened reference, over the shell points where a cavity surface would sit
    !>
    !> `dS` is reported in absolute terms on purpose. The projection solves
    !> `S = 0`, so a shift in `S` displaces the surface by `dS/|grad S|`; a
@@ -321,15 +320,15 @@ contains
       real(wp), parameter :: thr_ref = 1.0e-15_wp
       real(wp), parameter :: blend_k = 5.5_wp, blend_2b = 0.0_wp, blend_3b = 3.0_wp
       integer, parameter :: full_scan_below = 200
-      real(wp), parameter :: cell_fraction = 0.25_wp
 
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(moist_cell_grid_type) :: cell_grid
       type(mctc_error), allocatable :: lsf_err
-      real(wp), allocatable :: radii(:), r_eff(:), points(:, :), s_ref(:)
-      real(wp) :: t_prep, nact_mean, ncand_mean, ds_max, ds_mean, offset, val
-      integer :: ithr, ipt, start, ncand, act_sum, cand_sum, nat
+      real(wp), allocatable :: radii(:), points(:, :), s_ref(:)
+      real(wp), allocatable :: v0(:), v1(:, :), v2(:, :)
+      integer, allocatable :: cand(:)
+      real(wp) :: t_batch, nact_mean, ncand_mean, ds_max, ds_mean, offset
+      integer :: ithr, ipt, ncand, act_sum, cand_sum, nat
       real :: c0, c1
 
       write (*, "(a)") "=================================================================="
@@ -341,8 +340,8 @@ contains
       nat = mol%nat
       call fill_cpcm_radii(mol, radii, error)
       if (allocated(error)) return
-      radii = radii*aatoau
-      allocate (r_eff(nat), points(ndim, npts), s_ref(npts))
+      allocate (points(ndim, npts), s_ref(npts), cand(nat))
+      allocate (v0(npts), v1(ndim, npts), v2(6, npts))
       call build_lsf_shell_points(mol, radii, points)
 
       !> Reference S at a threshold far below any of the sweep values
@@ -356,63 +355,56 @@ contains
          call lsf%f0(s_ref(ipt))
       end do
 
-      write (*, "(2x,a10,a10,a9,a9,a12,a13,a13)") &
-         "threshold", "reach", "ncand", "n_act", "prep_d2(us)", "max|dS|", "mean|dS|"
-      write (*, "(2x,a10,a10,a9,a9,a12,a13,a13)") &
-         "---------", "--------", "--------", "--------", "-----------", &
+      write (*, "(2x,a10,a10,a9,a9,a13,a13,a13)") &
+         "threshold", "reach", "ncand", "n_act", "batch_d2(us)", "max|dS|", "mean|dS|"
+      write (*, "(2x,a10,a10,a9,a9,a13,a13,a13)") &
+         "---------", "--------", "--------", "--------", "------------", &
          "------------", "------------"
 
       do ithr = 1, n_thr
          call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
             blend_3b=blend_3b))
          lsf%screening_threshold = thr_list(ithr)
+         call lsf%set_full_scan_below(full_scan_below)
          call lsf%update(mol, radii)
          offset = lsf%screening_offset(radii(1))
 
-         do ipt = 1, nat
-            r_eff(ipt) = radii(ipt) + lsf%neighbor_cutoff(radii(ipt))
-         end do
-         call cell_grid%build(mol%xyz, r_eff, full_scan_below=full_scan_below, &
-                              cell_fraction=cell_fraction)
-         if (allocated(cell_grid%cell_nlat)) then
-            call lsf%remap_candidate_grid(cell_grid%cell_nlat)
-         end if
-
-         !> Counts and accuracy
+         !> Counts on the per-point cell list
          call lsf%set_max_deriv(0)
          act_sum = 0
          cand_sum = 0
-         ds_max = 0.0_wp
-         ds_mean = 0.0_wp
          do ipt = 1, npts
-            call cell_grid%query(points(:, ipt), start, ncand)
+            call lsf%candidates_in_sphere(points(:, ipt), 0.0_wp, cand, ncand)
             cand_sum = cand_sum + ncand
-            call lsf%prepare_subset(points(:, ipt), &
-                                    cell_grid%cell_nlat(start + 1:start + ncand), lsf_err)
+            call lsf%prepare_subset(points(:, ipt), cand(1:ncand), lsf_err)
             act_sum = act_sum + lsf%active_count()
-            call lsf%f0(val)
-            ds_max = max(ds_max, abs(val - s_ref(ipt)))
-            ds_mean = ds_mean + abs(val - s_ref(ipt))
          end do
          nact_mean = real(act_sum, wp)/real(npts, wp)
          ncand_mean = real(cand_sum, wp)/real(npts, wp)
+
+         !> Accuracy and cost of the batched entry at the projection's Newton order
+         call cpu_time(c0)
+         call lsf%evaluate_batch(points, 2, v0, v1, lsf2_rr_packed=v2, error=lsf_err)
+         call cpu_time(c1)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "evaluate_batch failed: "//lsf_err%message)
+            return
+         end if
+         t_batch = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp
+         ds_max = 0.0_wp
+         ds_mean = 0.0_wp
+         do ipt = 1, npts
+            if (lsf%unreached(ipt)) then
+               call test_failed(error, "evaluate_batch left a shell point unreached")
+               return
+            end if
+            ds_max = max(ds_max, abs(v0(ipt) - s_ref(ipt)))
+            ds_mean = ds_mean + abs(v0(ipt) - s_ref(ipt))
+         end do
          ds_mean = ds_mean/real(npts, wp)
 
-         !> prepare cost at the order the projection's Newton runs at
-         call lsf%set_max_deriv(2)
-         call cpu_time(c0)
-         do ipt = 1, npts
-            call cell_grid%query(points(:, ipt), start, ncand)
-            call lsf%prepare_subset(points(:, ipt), &
-                                    cell_grid%cell_nlat(start + 1:start + ncand), lsf_err)
-         end do
-         call cpu_time(c1)
-         t_prep = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp
-
-         write (*, "(2x,es10.1,f10.2,f9.1,f9.1,f12.4,es13.3,es13.3)") &
-            thr_list(ithr), offset, ncand_mean, nact_mean, t_prep, ds_max, ds_mean
-
-         call cell_grid%destroy()
+         write (*, "(2x,es10.1,f10.2,f9.1,f9.1,f13.4,es13.3,es13.3)") &
+            thr_list(ithr), offset, ncand_mean, nact_mean, t_batch, ds_max, ds_mean
       end do
 
       write (*, "(a)") ""
@@ -476,7 +468,6 @@ contains
          if (allocated(radii)) deallocate (radii)
          call fill_cpcm_radii(mol, radii, error)
          if (allocated(error)) return
-         radii = radii*aatoau
 
          do ilevel = 1, n_proj_levels
             proj_level = proj_levels(ilevel)
@@ -527,239 +518,6 @@ contains
 
    end subroutine test_timing_drop_proj_levels
 
-   !> Generate categorized test points: surface, interior, and exterior
-   !>
-   !> Surface points are placed near atomic sphere surfaces where screening is
-   !> least effective (many active atoms). Interior points sit deep inside where
-   !> screening rapidly culls. Exterior points lie well outside the molecule
-   !>
-   !> @param[in]  mol           Molecular structure
-   !> @param[in]  radii         Atomic radii [n_atoms]
-   !> @param[out] points        Output points [ndim, n_total]
-   !> @param[in]  n_surface     Number of surface-proximate points
-   !> @param[in]  n_interior    Number of interior points
-   !> @param[in]  n_exterior    Number of exterior points
-   subroutine generate_categorized_points(mol, radii, points, n_surface, n_interior, n_exterior)
-      type(structure_type), intent(in) :: mol
-      real(wp), intent(in) :: radii(:)
-      real(wp), intent(out) :: points(:, :)
-      integer, intent(in) :: n_surface, n_interior, n_exterior
-
-      real(wp) :: rmin(ndim), rmax(ndim), random_vec(ndim), dir(ndim), dnorm
-      real(wp) :: offset, r_max
-      integer :: ipt, iat, idim, idx
-
-      if (n_surface + n_interior + n_exterior > size(points, 2)) then
-         error stop "generate_categorized_points: output array too small"
-      end if
-
-      points = 0.0_wp
-
-      ! Compute bounding box
-      rmin = mol%xyz(:, 1) - radii(1)
-      rmax = mol%xyz(:, 1) + radii(1)
-      do iat = 2, mol%nat
-         do idim = 1, ndim
-            rmin(idim) = min(rmin(idim), mol%xyz(idim, iat) - radii(iat))
-            rmax(idim) = max(rmax(idim), mol%xyz(idim, iat) + radii(iat))
-         end do
-      end do
-      r_max = maxval(radii)
-
-      ! --- Surface points: atom center + radius * (1 + small_offset) * random_direction ---
-      idx = 0
-      do ipt = 1, n_surface
-         ! Pick a random atom
-         call random_number(offset)
-         iat = 1 + int(offset*real(mol%nat, wp))
-         iat = min(iat, mol%nat)
-         ! Random unit direction
-         call random_number(dir)
-         dir = dir - 0.5_wp
-         dnorm = norm2(dir)
-         if (dnorm > 0.0_wp) dir = dir/dnorm
-         ! Place at radius * (1 + small offset in [-0.1, 0.15])
-         call random_number(offset)
-         offset = -0.1_wp + offset*0.25_wp
-         idx = idx + 1
-         points(:, idx) = mol%xyz(:, iat) + radii(iat)*(1.0_wp + offset)*dir
-      end do
-
-      ! --- Interior points: atom center + radius * 0.3..0.6 * random_direction ---
-      do ipt = 1, n_interior
-         call random_number(offset)
-         iat = 1 + int(offset*real(mol%nat, wp))
-         iat = min(iat, mol%nat)
-         call random_number(dir)
-         dir = dir - 0.5_wp
-         dnorm = norm2(dir)
-         if (dnorm > 0.0_wp) dir = dir/dnorm
-         call random_number(offset)
-         offset = 0.3_wp + offset*0.3_wp
-         idx = idx + 1
-         points(:, idx) = mol%xyz(:, iat) + radii(iat)*offset*dir
-      end do
-
-      ! --- Exterior points: bounding box expanded by 2 * r_max ---
-      do ipt = 1, n_exterior
-         call random_number(random_vec)
-         idx = idx + 1
-         points(:, idx) = (rmin - 2.0_wp*r_max) &
-                          + random_vec*((rmax + 2.0_wp*r_max) - (rmin - 2.0_wp*r_max))
-      end do
-   end subroutine generate_categorized_points
-
-   !> Benchmark cell_fraction impact on cell-grid-screened SSD + LSF evaluation
-   !>
-   !> For each structure, compares:
-   !>   - Full SSD compute (no cell grid, brute-force baseline)
-   !>   - Cell-grid-screened SSD + LSF with cell_fraction = 1.0, 0.5, 0.25
-   !>
-   !> Reports per-call timings, average candidates per query, and speedup
-   !> relative to the unscreened baseline
-   subroutine test_timing_cell_fraction_benchmark(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf_prim
-      type(moist_cell_grid_type) :: cell_grid
-      real(wp), allocatable :: radii(:), r_eff(:)
-      real(wp) :: point(ndim)
-      real(wp) :: lsf_val, lsf_grad(ndim), lsf_hess(ndim, ndim)
-      type(mctc_error), allocatable :: lsf_err
-
-      integer, parameter :: n_structs = 6
-      character(len=20), parameter :: struct_sets(n_structs) = &
-                                      [character(len=20) :: "AMYLOSE", "AMYLOSE", "AMYLOSE", &
-                                                             "POLYALANINE", "POLYALANINE", "POLYALANINE"]
-      character(len=20), parameter :: struct_names(n_structs) = &
-                                      [character(len=20) :: "Amylose16", "Amylose32", "Amylose64", &
-                                                             "polyala_28", "polyala_52", "polyala_100"]
-
-      integer, parameter :: n_fractions = 6
-      real(wp), parameter :: fractions(n_fractions) = [1.0_wp, 0.5_wp, 0.25_wp, 0.125_wp, 0.0625_wp, 0.03125_wp]
-
-      integer, parameter :: n_surface = 1500
-      integer, parameter :: n_interior = 500
-      integer, parameter :: n_pts = n_surface + n_interior
-      integer, parameter :: n_iter = 50
-      real(wp), parameter :: blend_k = 4.0_wp
-      real(wp), parameter :: blend_3b = 1.0_wp
-      real(wp), parameter :: threshold = 1.0e-12_wp
-
-      real(wp) :: all_points(ndim, n_pts)
-      real :: t0, t1
-      real(wp) :: t_full, t_screened, t_build, cand_sum
-      integer :: istruct, ipt, iter, ifrac, n_calls
-      integer :: start, n_cand
-      real(wp) :: delta
-      character(len=8) :: frac_str
-
-      ! Screening shell: exp(-k/3 * delta) = 0.1 * threshold
-      delta = -3.0_wp/blend_k*log(0.1_wp*threshold)
-
-      write (*, "(a)") ""
-      write (*, "(a)") "========================================================================================="
-      write (*, "(a)") "Benchmark: cell_fraction impact on cell-grid-screened SSD + LSF"
-      write (*, "(a, i0, a, i0)") "Points: surface=", n_surface, "  interior=", n_interior
-      write (*, "(a, i0, a, f5.2, a, es8.1)") "Parameters: iterations=", n_iter, &
-         "  k=", blend_k, "  threshold=", threshold
-      write (*, "(a, f8.2, a)") "Screening shell delta=", delta, " bohr"
-      write (*, "(a)") "========================================================================================="
-      write (*, "(a)") ""
-      write (*, "(a14, a9, a10, a12, a14, a14, a12, a9)") &
-         "Structure", "N_atoms", "fraction", "N_cells", "t_build(us)", "t_eval(us)", "N_cand", "speedup"
-      write (*, "(a14, a9, a10, a12, a14, a14, a12, a9)") &
-         "-------------", "--------", "---------", "-----------", &
-         "-------------", "-------------", "-----------", "--------"
-
-      do istruct = 1, n_structs
-         call get_structure(mol, trim(struct_sets(istruct)), trim(struct_names(istruct)))
-
-         if (allocated(radii)) deallocate (radii)
-         if (allocated(r_eff)) deallocate (r_eff)
-         call fill_cpcm_radii(mol, radii, error)
-         if (allocated(error)) return
-         allocate (r_eff(mol%nat))
-         radii = radii*aatoau
-         r_eff = radii + delta
-
-         ! Setup LSF primitive (owns its internal SSD system)
-         call lsf_prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_1b=1.0_wp, &
-            blend_2b=1.0_wp, blend_3b=blend_3b))
-         lsf_prim%screening_threshold = threshold
-         call lsf_prim%set_max_deriv(2)
-         call lsf_prim%update(mol, radii)
-
-         ! Generate test points
-         call generate_categorized_points(mol, radii, all_points, n_surface, n_interior, 0)
-
-         ! --- Baseline: full SSD compute (no cell grid) ---
-         t_full = 0.0_wp
-         n_calls = 0
-         do iter = 1, n_iter
-            do ipt = 1, n_pts
-               point = all_points(:, ipt)
-               call cpu_time(t0)
-               call lsf_prim%prepare(point, lsf_err)
-               call lsf_prim%f012_r(lsf_val, lsf_grad, lsf_hess)
-               call cpu_time(t1)
-               t_full = t_full + real(t1 - t0, wp)
-               n_calls = n_calls + 1
-            end do
-         end do
-         t_full = t_full/real(n_calls, wp)
-
-         write (*, "(a14, i9, a10, a12, a14, f14.4, a12, a9)") &
-            trim(struct_names(istruct)), mol%nat, "full", &
-            "-", "-", 1.0e6_wp*t_full, "-", "1.00x"
-
-         ! --- Cell-grid-screened path for each fraction ---
-         do ifrac = 1, n_fractions
-            ! Build cell grid
-            call cpu_time(t0)
-            call cell_grid%build(mol%xyz, r_eff, cell_fraction=fractions(ifrac))
-            call cpu_time(t1)
-            t_build = real(t1 - t0, wp)
-
-            ! Benchmark screened evaluation
-            t_screened = 0.0_wp
-            cand_sum = 0.0_wp
-            n_calls = 0
-            do iter = 1, n_iter
-               do ipt = 1, n_pts
-                  point = all_points(:, ipt)
-                  call cpu_time(t0)
-                  call cell_grid%query(point, start, n_cand)
-                  call lsf_prim%prepare_subset(point, &
-                                               cell_grid%cell_nlat(start + 1:start + n_cand), &
-                                               lsf_err)
-                  call lsf_prim%f012_r(lsf_val, lsf_grad, lsf_hess)
-                  call cpu_time(t1)
-                  t_screened = t_screened + real(t1 - t0, wp)
-                  cand_sum = cand_sum + real(n_cand, wp)
-                  n_calls = n_calls + 1
-               end do
-            end do
-            t_screened = t_screened/real(n_calls, wp)
-
-            write (frac_str, "(f5.2)") fractions(ifrac)
-            write (*, "(a14, i9, a10, i12, f14.4, f14.4, f12.1, f7.2, a)") &
-               "", mol%nat, adjustr(frac_str), cell_grid%ncells, &
-               1.0e6_wp*t_build, &
-               1.0e6_wp*t_screened, &
-               cand_sum/real(n_calls, wp), &
-               t_full/max(t_screened, 1.0e-30_wp), "x"
-
-            call cell_grid%destroy()
-         end do
-
-         write (*, "(a)") ""
-      end do
-
-      if (allocated(radii)) deallocate (radii)
-      if (allocated(r_eff)) deallocate (r_eff)
-   end subroutine test_timing_cell_fraction_benchmark
-
    !> Benchmark DROP cavity component scaling with system size
    !>
    !> Runs full DROP cavity update and gradient computation for polyalanine
@@ -785,7 +543,7 @@ contains
       real(wp), parameter :: blend_k = 5.5_wp
       real(wp), parameter :: blend_2b = 0.0_wp
       real(wp), parameter :: blend_3b = 3.0_wp
-      integer, parameter :: proj_level = 3
+      integer, parameter :: proj_level = 2
 
       character(len=20) :: struct_names(n_struct)
       !> Display labels (indented by tree depth) and top-level flags, enumerated
@@ -1285,14 +1043,14 @@ contains
 
    !> Benchmark LSF evaluation cost per derivative order and per LSF type
    !>
-   !> Baseline for the code-generation refactor of the SvdW and CFC level set
-   !> functions. Deliberately independent of the DROP projection: the evaluation
+   !> Cost baseline for the generated SvdW and CFC level set function kernels.
+   !> Deliberately independent of the DROP projection: the evaluation
    !> points come from a fixed deterministic shell sample (see
    !> [[build_lsf_shell_points]]) rather than from a cavity, so the series stays
    !> comparable while the projection code changes underneath it
    !>
-   !> `prepare` and the accessors are timed separately, because the refactor
-   !> deliberately moves work across exactly that boundary. `prepare` gets one
+   !> `prepare` and the accessors are timed separately, because kernel generation
+   !> moves work across exactly that boundary. `prepare` gets one
    !> sweep per `set_max_deriv` level; every accessor then gets its own sweep in
    !> which `prepare` (and, for the two accessors consuming its output,
    !> `f3_rr_rA`) runs outside the timer window, so an accessor row is
@@ -1416,7 +1174,6 @@ contains
             if (allocated(radii)) deallocate (radii)
             call fill_cpcm_radii(mol, radii, error)
             if (allocated(error)) return
-            radii = radii*aatoau
 
             if (allocated(points)) deallocate (points)
             allocate (points(ndim, npts))
@@ -1527,7 +1284,7 @@ contains
    !> @param[out] acc_reps    Accessor calls per point used per row
    !> @param[out] act_mean    Mean active-atom count over the point set
    !> @param[out] act_max     Maximum active-atom count over the point set
-   !> @param[out] chk         Value checksum, so a refactor can be checked
+   !> @param[out] chk         Value checksum, so kernel changes can be checked for drift
    !> @param[out] error       Test failure
    subroutine bench_lsf_svdw(mol, radii, points, npts_heavy, thr, &
                              blend_k, blend_2b, blend_3b, &
@@ -1562,12 +1319,12 @@ contains
 
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(mctc_error), allocatable :: lsf_err
-      real(wp) :: val, lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim)
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim), res_rrrr(ndim, ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :, :)
+      real(wp) :: val, lsf0, lsf1_r(ndim), lsf2_rr(6)
+      real(wp) :: lsf3_rrr(10), res_rrrr(15)
+      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :)
       real(wp), allocatable :: res_rArB(:, :, :, :), res_r_rArB(:, :, :, :, :)
-      real(wp), allocatable :: res_rrr_rA(:, :, :, :, :)
-      real(wp), allocatable :: res_rr_rArB(:, :, :, :, :, :), deriv_rA(:, :)
+      real(wp), allocatable :: res_rrr_rA(:, :, :)
+      real(wp), allocatable :: res_rr_rArB(:, :, :, :, :), deriv_rA(:, :)
       real :: c0, c1
       integer :: npts, ipt, ilvl, iacc, nc, nrep, n_act, act_sum
       !> Set for the first accessor call at each point, so that repeated calls
@@ -1621,11 +1378,11 @@ contains
       !> no accessor allocates anything of its own any more
       allocate (lsf1_rA(ndim, act_max), source=0.0_wp)
       allocate (lsf2_r_rA(ndim, ndim, act_max), source=0.0_wp)
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, act_max), source=0.0_wp)
+      allocate (lsf3_rr_rA(6, ndim, act_max), source=0.0_wp)
       allocate (res_rArB(ndim, act_max, ndim, act_max), source=0.0_wp)
       allocate (res_r_rArB(ndim, ndim, act_max, ndim, act_max), source=0.0_wp)
-      allocate (res_rrr_rA(ndim, ndim, ndim, ndim, act_max), source=0.0_wp)
-      allocate (res_rr_rArB(ndim, ndim, ndim, act_max, ndim, act_max), source=0.0_wp)
+      allocate (res_rrr_rA(10, ndim, act_max), source=0.0_wp)
+      allocate (res_rr_rArB(6, ndim, act_max, ndim, act_max), source=0.0_wp)
       allocate (deriv_rA(ndim, act_max), source=0.0_wp)
 
       !> ======================= Accessors, one row at a time =======================
@@ -1726,7 +1483,7 @@ contains
 
       !> Invoke accessor row `iacc` once at the prepared point. On the first
       !> call at each point one element of the result feeds the checksum: enough
-      !> to pin the values down across a refactor without adding a traversal of
+      !> to pin the values down across kernel changes without a traversal of
       !> the (large) result arrays
       subroutine call_accessor(iacc)
          integer, intent(in) :: iacc
@@ -1743,13 +1500,13 @@ contains
             if (chk_on) chk = chk + lsf1_r(1)
          case (4)
             call lsf%f012_r(lsf0=lsf0, lsf1_r=lsf1_r, lsf2_rr=lsf2_rr)
-            if (chk_on) chk = chk + lsf2_rr(1, 1)
+            if (chk_on) chk = chk + lsf2_rr(1)
          case (5)
             call lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-            if (chk_on) chk = chk + lsf3_rrr(1, 1, 1)
+            if (chk_on) chk = chk + lsf3_rrr(1)
          case (6)
             call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-            if (chk_on) chk = chk + lsf3_rr_rA(1, 1, 1, 1)
+            if (chk_on) chk = chk + lsf3_rr_rA(1, 1, 1)
          case (7)
             call lsf%f2_rArB(res_rArB)
             if (chk_on .and. size(res_rArB) > 0) chk = chk + res_rArB(1, 1, 1, 1)
@@ -1758,13 +1515,13 @@ contains
             if (chk_on .and. size(res_r_rArB) > 0) chk = chk + res_r_rArB(1, 1, 1, 1, 1)
          case (9)
             call lsf%f4_rrrr(res_rrrr)
-            if (chk_on) chk = chk + res_rrrr(1, 1, 1, 1)
+            if (chk_on) chk = chk + res_rrrr(1)
          case (10)
             call lsf%f4_rrr_rA(res_rrr_rA)
-            if (chk_on .and. size(res_rrr_rA) > 0) chk = chk + res_rrr_rA(1, 1, 1, 1, 1)
+            if (chk_on .and. size(res_rrr_rA) > 0) chk = chk + res_rrr_rA(1, 1, 1)
          case (11)
             call lsf%f4_rr_rArB(res_rr_rArB)
-            if (chk_on .and. size(res_rr_rArB) > 0) chk = chk + res_rr_rArB(1, 1, 1, 1, 1, 1)
+            if (chk_on .and. size(res_rr_rArB) > 0) chk = chk + res_rr_rArB(1, 1, 1, 1, 1)
          case (12)
             call lsf%normalized_f01_rA(val, deriv_rA=deriv_rA)
             if (chk_on) chk = chk + val + deriv_rA(1, 1)
@@ -1792,7 +1549,7 @@ contains
    !> @param[out] acc_reps    Accessor calls per point used per row
    !> @param[out] act_mean    Mean active-atom count over the point set
    !> @param[out] act_max     Maximum active-atom count over the point set
-   !> @param[out] chk         Value checksum, so a refactor can be checked
+   !> @param[out] chk         Value checksum, so kernel changes can be checked for drift
    !> @param[out] error       Test failure
    subroutine bench_lsf_cfc(mol, radii, points, npts_use, thr, &
                             prep_time, acc_time, acc_ncalls, acc_reps, &
@@ -1840,14 +1597,14 @@ contains
 
       type(moist_cavity_drop_lsf_cfc_type) :: lsf
       type(mctc_error), allocatable :: lsf_err
-      real(wp) :: val, lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim)
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim), lsf4_rrrr(ndim, ndim, ndim, ndim)
-      real(wp) :: norm0, tng2(ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :, :)
-      real(wp), allocatable :: lsf4_rrr_rA(:, :, :, :, :)
+      real(wp) :: val, lsf0, lsf1_r(ndim), lsf2_rr(6)
+      real(wp) :: lsf3_rrr(10), lsf4_rrrr(15)
+      real(wp) :: norm0, tng2(6)
+      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :)
+      real(wp), allocatable :: lsf4_rrr_rA(:, :, :)
       real(wp), allocatable :: lsf2_rArB(:, :, :, :), lsf3_r_rArB(:, :, :, :, :)
-      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :, :)
-      real(wp), allocatable :: hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
+      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :)
+      real(wp), allocatable :: hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :)
       real(wp), allocatable :: vdir(:, :)
       real :: c0, c1
       integer :: npts, ipt, ilvl, iacc, nrep, n_act, act_sum, iat, npts_row
@@ -1900,14 +1657,14 @@ contains
       !> (measured just above on this point set) is the capacity needed
       allocate (lsf1_rA(ndim, act_max), source=0.0_wp)
       allocate (lsf2_r_rA(ndim, ndim, act_max), source=0.0_wp)
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, act_max), source=0.0_wp)
-      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, act_max), source=0.0_wp)
+      allocate (lsf3_rr_rA(6, ndim, act_max), source=0.0_wp)
+      allocate (lsf4_rrr_rA(10, ndim, act_max), source=0.0_wp)
       allocate (lsf2_rArB(ndim, act_max, ndim, act_max), source=0.0_wp)
       allocate (lsf3_r_rArB(ndim, ndim, act_max, ndim, act_max), source=0.0_wp)
-      allocate (lsf4_rr_rArB(ndim, ndim, ndim, act_max, ndim, act_max), source=0.0_wp)
+      allocate (lsf4_rr_rArB(6, ndim, act_max, ndim, act_max), source=0.0_wp)
       allocate (hvp1(ndim, act_max), source=0.0_wp)
       allocate (hvp2(ndim, ndim, act_max), source=0.0_wp)
-      allocate (hvp3(ndim, ndim, ndim, act_max), source=0.0_wp)
+      allocate (hvp3(6, ndim, act_max), source=0.0_wp)
 
       !> Deterministic displacement field for the contracted rows
       allocate (vdir(ndim, mol%nat))
@@ -2017,19 +1774,19 @@ contains
             if (chk_on) chk = chk + lsf1_r(1)
          case (4)
             call lsf%f012_r(lsf0=lsf0, lsf1_r=lsf1_r, lsf2_rr=lsf2_rr)
-            if (chk_on) chk = chk + lsf2_rr(1, 1)
+            if (chk_on) chk = chk + lsf2_rr(1)
          case (5)
             call lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-            if (chk_on) chk = chk + lsf3_rrr(1, 1, 1)
+            if (chk_on) chk = chk + lsf3_rrr(1)
          case (6)
             call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-            if (chk_on) chk = chk + lsf3_rr_rA(1, 1, 1, 1)
+            if (chk_on) chk = chk + lsf3_rr_rA(1, 1, 1)
          case (7)
             call lsf%f4_rrrr(lsf4_rrrr)
-            if (chk_on) chk = chk + lsf4_rrrr(1, 1, 1, 1)
+            if (chk_on) chk = chk + lsf4_rrrr(1)
          case (8)
             call lsf%f4_rrr_rA(lsf4_rrr_rA)
-            if (chk_on) chk = chk + lsf4_rrr_rA(1, 1, 1, 1, 1)
+            if (chk_on) chk = chk + lsf4_rrr_rA(1, 1, 1)
          case (9)
             call lsf%normalized_f01_rA(norm0, deriv_rA=lsf1_rA)
             if (chk_on) chk = chk + norm0
@@ -2041,10 +1798,10 @@ contains
             if (chk_on) chk = chk + lsf3_r_rArB(1, 1, 1, 1, 1)
          case (12)
             call lsf%f4_rr_rArB(lsf4_rr_rArB)
-            if (chk_on) chk = chk + lsf4_rr_rArB(1, 1, 1, 1, 1, 1)
+            if (chk_on) chk = chk + lsf4_rr_rArB(1, 1, 1, 1, 1)
          case (13)
             call lsf%tangent_f2_rr(vdir, tng2)
-            if (chk_on) chk = chk + tng2(1, 1)
+            if (chk_on) chk = chk + tng2(1)
          case (14)
             call lsf%hvp_f1_rA(vdir, hvp1)
             if (chk_on) chk = chk + hvp1(1, 1)
@@ -2053,7 +1810,7 @@ contains
             if (chk_on) chk = chk + hvp2(1, 1, 1)
          case (16)
             call lsf%hvp_f3_rr_rA(vdir, hvp3)
-            if (chk_on) chk = chk + hvp3(1, 1, 1, 1)
+            if (chk_on) chk = chk + hvp3(1, 1, 1)
          case default
             error stop "test_cavity_drop_timings: unhandled iacc"
          end select

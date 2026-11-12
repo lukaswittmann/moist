@@ -21,7 +21,7 @@ implicit none(type, external)
    testsuites = [ &
       & new_testsuite("cavity_drop_born_fit", collect_cavity_drop_born_fit), &
       & new_testsuite("cavity_drop_timings", collect_cavity_drop_timings), &
-      & new_testsuite("cavity_drop_robustness", collect_cavity_drop_robustness), &
+      & new_testsuite("cavity_drop_robustness", collect_cavity_drop_robustness) &
       & ]
 
    call get_argument(1, suite_name)

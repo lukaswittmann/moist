@@ -535,13 +535,13 @@ contains
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
 
-         ! Check if any grid points failed to converge
-         if (allocated(cavity%converged)) then
-            if (any(.not. cavity%converged)) then
-               ! At least one projection failed - write convergence failure file
+         ! Anchors without any surface point: failed projections or weightless anchors
+         if (allocated(cavity%offset)) then
+            if (any(cavity%offset(2:cavity%nmax + 1) == cavity%offset(1:cavity%nmax))) then
                call write_convergence_failure_xyz(mol, itest)
-               write (*, "(4x, A, I0, A, I0, A)") "⚠ Warning: ", count(.not. cavity%converged), &
-                  " of ", size(cavity%converged), " projections failed to converge"
+               write (*, "(4x, A, I0, A, I0, A)") "⚠ Warning: ", &
+                  count(cavity%offset(2:cavity%nmax + 1) == cavity%offset(1:cavity%nmax)), &
+                  " of ", cavity%nmax, " anchors kept no surface point"
             end if
          end if
 
