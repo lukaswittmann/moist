@@ -195,7 +195,7 @@ contains
    !> Largest nuclear charge entering the interior cusp bound
    !>
    !> The atomic number, not the host's nuclear charge `z`: ECP pseudo-densities
-   !> reach `|grad ln rho|` of 3 `z` (Hf, def2-SVP) but stay below `Z`
+   !> reach `|grad ln rho|` well above `z` but stay below `Z`
    !>
    !> @param[in] mol   Molecular structure
    !> @returns   zmax  Largest atomic number (zero for an empty structure)

@@ -23,13 +23,15 @@ module moist_cavity_drop_lsf_isodensity_callback
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
-                                         lsf_base_update, lsf_candidate_space_user
+                                         lsf_base_update, lsf_candidate_space_user, &
+                                         lsf_sorted_candidates, lsf_vjp_batch_shape_message
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
       isodensity_max_nuclear_charge
    use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
       & request_require, moist_phase_build, nuclear_charge_request_type
+   use moist_math_packed_sym, only: pack_sym_matrix, pack_sym_tensor3
    use moist_output_format, only: format_string
    implicit none(type, external)
    private
@@ -112,6 +114,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: f3_rrr => lsf_f3_rrr
       procedure, public :: f3_rr_rA => lsf_f3_rr_rA
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      procedure, public :: vjp_f1_rA_batch => lsf_vjp_f1_rA_batch
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
       procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
@@ -231,24 +234,30 @@ contains
 
    !> Evaluate and cache callback data at one point
    !>
-   !> @param[inout] self  LSF instance
-   !> @param[in]    point Evaluation point in Bohr
-   !> @param[out]   error Host callback failure at this point
-   subroutine lsf_prepare(self, point, error)
+   !> - never unreached: `status = 0`
+   !>
+   !> @param[inout] self   LSF instance
+   !> @param[in]    point  Evaluation point in Bohr
+   !> @param[out]   error  Host callback failure at this point
+   !> @param[out]   status Always 0 (optional)
+   subroutine lsf_prepare(self, point, error, status)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
+      integer, intent(out), optional :: status
 
       procedure(isodensity_lsf_callback), pointer :: callback
       real(c_double) :: c_point(3), c_rho, c_drho(3)
       real(c_double), target :: c_d2rho(3, 3), c_d3rho(3, 3, 3)
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
-      integer(c_int) :: status
+      !> Host return code
+      integer(c_int) :: host_status
       !> Host density with the ECP core fill, and the fill ball holding the point
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
       integer :: inside
 
+      if (present(status)) status = 0
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
       p_hess = c_null_ptr
@@ -263,8 +272,8 @@ contains
       if (want_hess) self%prepared_deriv = 2
       if (want_third) self%prepared_deriv = 3
       c_point = real(point, c_double)
-      status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third)
-      if (status /= 0_c_int) then
+      host_status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third)
+      if (host_status /= 0_c_int) then
          ! Substitute state; numbers are not a result; the caller aborts on `error`
          self%value = 1.0_wp
          self%grad = 0.0_wp
@@ -274,7 +283,7 @@ contains
          self%prepared_deriv = 3
 
          call fatal_error(error, "External LSF evaluation failed with status "// &
-                          format_string(int(status), "(i0)")//" at point ("// &
+                          format_string(int(host_status), "(i0)")//" at point ("// &
                           trim(adjustl(format_string(point(1), "(es13.6)")))//" "// &
                           trim(adjustl(format_string(point(2), "(es13.6)")))//" "// &
                           trim(adjustl(format_string(point(3), "(es13.6)")))// &
@@ -310,14 +319,17 @@ contains
    !> @param[in]    point             Evaluation point in Bohr
    !> @param[in]    candidate_indices Ignored atom candidates
    !> @param[out]   error             Host callback failure at this point
-   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
+   !> @param[out]   status            Always 0 (optional)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error, status)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
+      integer, intent(out), optional :: status
 
+      if (present(status)) status = 0
       if (size(candidate_indices) < 0) return
-      call self%prepare(point, error)
+      call self%prepare(point, error, status)
    end subroutine lsf_prepare_subset
 
    !> Record requested derivative order
@@ -372,18 +384,18 @@ contains
    !> @param[in]  self    LSF instance
    !> @param[out] lsf0    Optional LSF value
    !> @param[out] lsf1_r  Optional spatial gradient
-   !> @param[out] lsf2_rr Optional spatial Hessian
+   !> @param[out] lsf2_rr Optional packed spatial Hessian [6]
    subroutine lsf_f012_r(self, lsf0, lsf1_r, lsf2_rr)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
+      real(wp), intent(out), optional :: lsf2_rr(:)
 
       if (present(lsf0)) lsf0 = self%value
       if (present(lsf1_r)) lsf1_r(:) = self%grad(:)
       if (present(lsf2_rr)) then
          call self%require_deriv(2, "f012_r(lsf2_rr)")
-         lsf2_rr(:, :) = self%hess(:, :)
+         call pack_sym_matrix(self%hess, lsf2_rr, ndim)
       end if
    end subroutine lsf_f012_r
 
@@ -392,18 +404,18 @@ contains
    !> @param[in]  self      LSF instance
    !> @param[out] lsf0      Optional LSF value
    !> @param[out] lsf1_r    Optional spatial gradient
-   !> @param[out] lsf2_rr   Optional spatial Hessian
-   !> @param[out] lsf3_rrr  Spatial third derivative
+   !> @param[out] lsf2_rr   Optional packed spatial Hessian [6]
+   !> @param[out] lsf3_rrr  Packed spatial third derivative [10]
    subroutine lsf_f3_rrr(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
-      real(wp), intent(out) :: lsf3_rrr(:, :, :)
+      real(wp), intent(out), optional :: lsf2_rr(:)
+      real(wp), intent(out) :: lsf3_rrr(:)
 
       call self%require_deriv(3, "f3_rrr")
       call self%f012_r(lsf0, lsf1_r, lsf2_rr)
-      lsf3_rrr(:, :, :) = self%third
+      call pack_sym_tensor3(self%third, lsf3_rrr, ndim)
    end subroutine lsf_f3_rrr
 
    !> Return zero nuclear derivative placeholders
@@ -411,16 +423,16 @@ contains
    !> @param[in]  self        LSF instance
    !> @param[out] lsf1_rA     Optional nuclear gradient placeholder
    !> @param[out] lsf2_r_rA   Optional mixed second derivative placeholder
-   !> @param[out] lsf3_rr_rA  Mixed third derivative placeholder
+   !> @param[out] lsf3_rr_rA  Packed mixed third derivative placeholder [6, 3, n_active]
    subroutine lsf_f3_rr_rA(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf1_rA(:, :)
       real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
-      real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
+      real(wp), intent(out) :: lsf3_rr_rA(:, :, :)
 
       if (present(lsf1_rA)) lsf1_rA(:, :) = 0.0_wp
       if (present(lsf2_r_rA)) lsf2_r_rA(:, :, :) = 0.0_wp
-      lsf3_rr_rA(:, :, :, :) = 0.0_wp
+      lsf3_rr_rA(:, :, :) = 0.0_wp
    end subroutine lsf_f3_rr_rA
 
    !> Return a zero jet-contracted nuclear vector-Jacobian product
@@ -428,25 +440,96 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
    !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
-   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  w2   Packed adjoint weights of the spatial Hessian [6]
    !> @param[out] res  Contracted nuclear gradient placeholder [3, >= n_active]
    subroutine lsf_vjp_f1_rA(self, w0, w1, w2, res)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(in) :: w0
       real(wp), intent(in) :: w1(3)
-      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: w2(:)
       real(wp), intent(out) :: res(:, :)
 
       res(:, 1:self%active_count()) = 0.0_wp
    end subroutine lsf_vjp_f1_rA
+
+   !> Batched nuclear vector-Jacobian product, identically zero
+   !>
+   !> Override of [[lsf_base_vjp_f1_rA_batch]], same contract:
+   !>
+   !> - zero rows for every column without any evaluation: no host callback, no
+   !>   `prepare`, the per-point cache is left alone; the nuclear dependence of
+   !>   the density reaches the gradient through [[lsf_density_adjoint_factor]]
+   !> - the shape and `candidate_indices` checks of the default, so the same bad
+   !>   arguments `error stop` ([[lsf_vjp_batch_shape_message]],
+   !>   [[lsf_sorted_candidates]]); the list only sizes `res`
+   !> - never unreached: `status = 0` for every column
+   !> - a host failure or an ECP core-fill refusal is not raised, as no density is
+   !>   evaluated; a consumer sees it from the `evaluate_batch` / `prepare` it runs
+   !>   on the same points
+   !> - no callback bound: `error` "vjp_f1_rA_batch failed at point 1: ...", no
+   !>   column written, `status` 2; `np = 0` returns after the argument checks
+   !>
+   !> @param[inout] self              LSF instance
+   !> @param[in]    points            Evaluation points (3, np)
+   !> @param[in]    w0                Adjoint weights of the value (np)
+   !> @param[in]    w1                Adjoint weights of the gradient (3, np)
+   !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
+   !> @param[out]   res               Contracted nuclear gradient (3, ncand, np), zero
+   !> @param[out]   status            Per-column status (np), 0, or 2 on the refusal
+   !>                                 (optional)
+   !> @param[out]   error             No callback bound
+   !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
+   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, status, error, &
+                                  candidate_indices)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
+      real(wp), intent(in), contiguous :: points(:, :)
+      real(wp), intent(in), contiguous :: w0(:)
+      real(wp), intent(in), contiguous :: w1(:, :)
+      real(wp), intent(in), contiguous :: w2(:, :)
+      real(wp), intent(out), contiguous :: res(:, :, :)
+      integer, intent(out), optional, contiguous :: status(:)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: candidate_indices(:)
+
+      !> Ascending copy of `candidate_indices`, validated only
+      integer, allocatable :: sorted(:)
+      character(len=:), allocatable :: msg
+      !> Point count, list size, validated list length
+      integer :: np, ncand, nc
+
+      np = size(points, 2)
+      ncand = self%ncenters
+      if (present(candidate_indices)) ncand = size(candidate_indices)
+      if (present(status)) then
+         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, &
+                                           status)
+      else
+         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
+      end if
+      if (len(msg) > 0) error stop msg
+      if (present(candidate_indices)) then
+         allocate (sorted(ncand))
+         call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
+      end if
+      if (np == 0) return
+      if (.not. c_associated(self%callback_ptr)) then
+         call fatal_error(error, "vjp_f1_rA_batch failed at point 1: "// &
+                          "no density callback bound ("//self%name//")")
+         if (present(status)) status(1:np) = 2
+         return
+      end if
+
+      res(:, :, 1:np) = 0.0_wp
+      if (present(status)) status(1:np) = 0
+   end subroutine lsf_vjp_f1_rA_batch
 
    !> Density callback is globally evaluable; no atom-specific reach is needed
    !>
    !> Nothing about the callback decays with distance from an atom, so the offset
    !> is zero
    !>
-   !> - the cavity cell grid gets no extra shell, and the candidate lists this LSF
-   !>   is handed are ignored anyway
+   !> - the candidate cell list gets no extra shell, and the candidate lists this
+   !>   LSF is handed are ignored anyway
    !>
    !> @param[in] self   LSF instance
    !> @param[in] radius Atom radius (Bohr)

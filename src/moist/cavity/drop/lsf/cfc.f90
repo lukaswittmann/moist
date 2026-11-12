@@ -27,9 +27,8 @@
 !>
 !> Batch order
 !> -----------
-!> - Morton Z-order sort of the Newton active list (2^-4 Bohr cells): full update 8-13%
-!>   faster at projection levels 1-3 (mb16_43_01, upu23, nleb 302); SvdW only paid the
-!>   ~11 ns/point sort
+!> - spatially coherent batches pay for CFC: a Morton Z-order sort of the Newton active list
+!>   (2^-4 Bohr cells) speeds up the full update, while SvdW only pays for the sort
 !> - projection does not sort; sort per LSF if revisited
 !>
 !> Not handled
@@ -113,7 +112,7 @@ module moist_cavity_drop_lsf_cfc
    !> - so a strip of box diagonal `D` pays for the pairs of a ball of radius
    !>   ~`r + D/2` around every point instead of `r` (reach `r` ~10-20 Bohr), a
    !>   waste ~`(1 + D/(2r))**6` that is quadratic in the atom count: <= 1.8x at
-   !>   2 Bohr, 21-233x measured for strips scattered over a 45 Bohr lattice
+   !>   2 Bohr, orders of magnitude for scattered strips
    !> - a wider strip is cut into compact sub-strips ([[split_strip]])
    real(wp), parameter :: split_diagonal = 2.0_wp
 
@@ -3882,7 +3881,7 @@ contains
    !>   n <~ 100, ~1e-3 at n = 1000
    !> - zero (certify nothing) outside the guards of [[certificate_setup]] and
    !>   while the constants are stale ([[cfc_certificate_type]]); raw `|S|/L`
-   !>   over-claims inside a band (1.01-1.63x on constructed cases)
+   !>   over-claims inside a band
    !>
    !> A NaN value (an unreached batch column) or `-Inf` certifies nothing in both
    !> modes, `+Inf` nothing with the fade off
