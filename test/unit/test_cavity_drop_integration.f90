@@ -63,7 +63,7 @@ module test_cavity_drop_integration
    !> Projection iteration cap
    integer, parameter :: PROJ_MAXITER = 1000
    !> Projection level, 1 = SLSQP only
-   integer, parameter :: PROJ_LEVEL = 2
+   integer, parameter :: PROJ_LEVEL = 1
 
    !> DROP/reference area-ratio tolerance
    real(wp), parameter :: AREA_REL_THR = 1.0e-2_wp

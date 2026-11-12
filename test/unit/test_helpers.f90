@@ -931,10 +931,6 @@ contains
 
    !> Five-carbon cross, converted to bohr
    !>
-   !> Deliberately concave seams between the four outer atoms: at the
-   !> unconditional-multistart projection level this geometry produces branched
-   !> anchors, which is what the warm-start and gradient FD suites need
-   !>
    !> @param[out] mol  Five-carbon cross structure, coordinates in bohr
    subroutine get_test_cross(mol)
       !> Resulting structure; coordinates in bohr

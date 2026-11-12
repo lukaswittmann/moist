@@ -523,7 +523,7 @@ contains
          call svdw%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.5_wp, blend_3b=1.0_wp))
          call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=svdw, error=err, &
             & param=moist_cavity_drop_parameters_type(num_leb=nleb, tolerance=1.0e-14_wp, &
-            & proj_maxiter=150, proj_level=2), ctx=ctx)
+            & proj_maxiter=150, proj_level=1), ctx=ctx)
          call check_moist_error(error, err, "DROP setup")
          if (allocated(error)) return
          call move_alloc(drop, cavity)

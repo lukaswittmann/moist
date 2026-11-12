@@ -24,7 +24,7 @@ module test_model_component_pcm_interface
       & pcm_slic, mol_triatomic, get_solute, host_energy, host_charges, stage_energy, &
       & answer_sources
    use moist_context, only: moist_context_type, new_context
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
       & moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -1179,7 +1179,7 @@ contains
       type(model_continuum_component_iefpcm) :: component
       type(cavity_type_drop) :: cavity
       type(coupling_type), target :: coupling
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       real(wp), allocatable :: adjoint(:)
       real(wp) :: energy
 
@@ -1611,7 +1611,7 @@ contains
       !> Radius model storage of each cavity
       type(radius_type_static) :: radius_small, radius_large
       !> Surface adjoints offered to the refused host contraction
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       !> Potential adjoint requested before any solve
       real(wp), allocatable :: w_phi(:)
       !> Atomic point charges
@@ -1726,7 +1726,7 @@ contains
       type(structure_type) :: mol
       type(fd_cavity) :: cavity
       !> Zero direction and tangent accumulator
-      type(cavity_surface_adjoint_type) :: direction, tangent
+      type(cavity_adjoint_type) :: direction, tangent
       !> Potential direction, adjoint tangent and energy
       real(wp), allocatable :: dphi(:), dw_phi(:)
       real(wp) :: energy

@@ -53,7 +53,7 @@ module test_model_component_pcm_derivatives
       & mol_label, get_solute, thr_vacuous, pcm_physics, stage_energy, answer_sources, host_energy, host_charges
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
@@ -652,7 +652,7 @@ contains
       !> Synthetic cavity and its displacement
       type(fd_cavity) :: cavity, trial
       !> Total surface weights and a one-channel direction
-      type(cavity_surface_adjoint_type) :: acc, direction
+      type(cavity_adjoint_type) :: acc, direction
       !> Host charges on the solute atoms
       real(wp), allocatable :: q(:)
       !> Host traces, their directions and adjoints
@@ -805,7 +805,7 @@ contains
       !> Synthetic cavity
       type(fd_cavity) :: cavity
       !> Direction of the surface fields
-      type(cavity_surface_adjoint_type) :: direction
+      type(cavity_adjoint_type) :: direction
       !> Fixed traces, their directions and a zero direction
       real(wp), allocatable :: phi(:), dphi_dr(:, :), vn(:), du(:), dq(:), zero(:)
       !> Step of the differences
@@ -905,7 +905,7 @@ contains
       !> Fixed normal trace
       real(wp), intent(in) :: vn(:)
       !> Direction of the surface fields
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Direction of the potential trace
       real(wp), intent(in) :: du(:)
       !> Direction of the normal trace
@@ -926,7 +926,7 @@ contains
       !> Adjoints on the stencil, adjoint tangents of the dense oracle
       real(wp), allocatable :: s_phi(:, :), s_vn(:, :), dense_phi(:), dense_vn(:)
       !> Tangent accumulator, dense tangent, reference and stencil weights
-      type(cavity_surface_adjoint_type) :: tangent, dense, acc0, acc(6)
+      type(cavity_adjoint_type) :: tangent, dense, acc0, acc(6)
       !> Stencil index, channel index and number of grid points
       integer :: k, ich, ngrid
       !> Whether the expected channels must be active
@@ -1128,7 +1128,7 @@ contains
    !> @param[in] name Weight channel, one of `weight_name`
    function weights_of(acc, name) result(w)
       !> Surface weights
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Weight channel
       character(len=*), intent(in) :: name
       !> Flattened weights
@@ -1160,7 +1160,7 @@ contains
    !> @param[in] name Weight channel, one of `weight_name`
    function stencil_weights(acc, name) result(values)
       !> Surface weights on the stencil
-      type(cavity_surface_adjoint_type), intent(in) :: acc(:)
+      type(cavity_adjoint_type), intent(in) :: acc(:)
       !> Weight channel
       character(len=*), intent(in) :: name
       !> Flattened weights per stencil point
@@ -1400,7 +1400,7 @@ contains
       !> Host charges on the solute atoms
       real(wp), intent(in) :: q(:)
       !> Total surface weights
-      type(cavity_surface_adjoint_type), intent(out) :: acc
+      type(cavity_adjoint_type), intent(out) :: acc
       !> Polarization energy
       real(wp), intent(out) :: energy
       !> Test failure
@@ -1551,7 +1551,7 @@ contains
       !> Normal trace
       real(wp), intent(in) :: vn(:)
       !> Operator surface weights
-      type(cavity_surface_adjoint_type), intent(out) :: acc
+      type(cavity_adjoint_type), intent(out) :: acc
       !> Potential adjoint
       real(wp), allocatable, intent(out) :: w_phi(:)
       !> Normal-trace adjoint
@@ -1855,7 +1855,7 @@ contains
    !> @param[in,out] direction Direction
    subroutine clear_direction(direction)
       !> Direction
-      type(cavity_surface_adjoint_type), intent(inout) :: direction
+      type(cavity_adjoint_type), intent(inout) :: direction
 
       if (allocated(direction%w_xyz)) deallocate (direction%w_xyz)
       if (allocated(direction%w_n)) deallocate (direction%w_n)
@@ -1879,7 +1879,7 @@ contains
       !> Channel index
       integer, intent(in) :: ich
       !> Direction
-      type(cavity_surface_adjoint_type), intent(out) :: direction
+      type(cavity_adjoint_type), intent(out) :: direction
 
       call add_channel_direction(cavity, ich, direction)
    end subroutine channel_direction
@@ -1899,7 +1899,7 @@ contains
       !> Channel index
       integer, intent(in) :: ich
       !> Direction
-      type(cavity_surface_adjoint_type), intent(inout) :: direction
+      type(cavity_adjoint_type), intent(inout) :: direction
 
       !> Deterministic unit-scale pattern
       real(wp), allocatable :: s(:)
@@ -1940,9 +1940,9 @@ contains
    !> @param[in] direction Direction, unallocated channels are zero
    pure function contract(acc, direction) result(dedt)
       !> Surface weights
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Direction
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Directional derivative
       real(wp) :: dedt
 
@@ -1966,7 +1966,7 @@ contains
       !> Reference cavity
       type(fd_cavity), intent(in) :: cavity
       !> Direction
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Step
       real(wp), intent(in) :: t
       !> Displaced cavity
@@ -2082,7 +2082,7 @@ contains
       type(structure_type) :: mol
       class(model_continuum_component_pcm), allocatable :: component
       type(cavity_type_drop) :: cavity, displaced
-      type(cavity_surface_adjoint_type) :: weights, response_weights
+      type(cavity_adjoint_type) :: weights, response_weights
       type(coupling_type), target :: coupling
       type(response_type) :: response
       type(potential_adjoint_response_type) :: trace
@@ -3061,7 +3061,7 @@ contains
       !> Test cavity
       class(width_gradient_cavity), intent(in) :: self
       !> Accumulated surface adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
@@ -3089,7 +3089,7 @@ contains
       type(structure_type) :: mol
       type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_drop) :: cavity
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       type(surface_fixture) :: surface
       type(coupling_type) :: coupling
       !> Energy of the fixture, solved to stage the response phase
