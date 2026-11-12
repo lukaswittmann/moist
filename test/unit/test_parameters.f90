@@ -1,6 +1,7 @@
 !> Native parameter construction, JSON/TOML input/output, and copy ownership
 module test_parameters
    use, intrinsic :: iso_c_binding, only: c_null_funptr, c_null_ptr
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, ieee_quiet_nan
    use mctc_env, only: wp, moist_error => error_type
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_model_parameters, only: moist_model_parameters_type
@@ -318,7 +319,7 @@ contains
       type(model_continuum_component_gostshyp) :: gostshyp
 
       call new_context(ctx, nthreads=0, verbosity=0)
-      call param%new(proj_level=9, wleb_prune_level=2, error=err)
+      call param%new(proj_level=4, wleb_prune_level=2, error=err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
 
@@ -327,7 +328,7 @@ contains
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call require_cavity(drop, [character(len=32) :: "Projection tol.", "Wleb switch from", "xi_born", &
-         "Octree seed size", "Softmax scale", "Cell grid fraction", "Surface normals"], error)
+         "Octree seed size", "Softmax scale", "Cell grid full-scan below", "Surface normals"], error)
       if (allocated(error)) return
 
       call cfc%new()
@@ -510,7 +511,7 @@ contains
       character(len=*), parameter :: toml_path = "moist-test-parameters-drop-load.toml"
       character(len=*), parameter :: json_path = "moist-test-parameters-drop-load.json"
 
-      call reference%new(nleb=110, tolerance=3.0e-8_wp, proj_level=9, wleb_prune_level=3, error=err)
+      call reference%new(nleb=110, tolerance=3.0e-8_wp, proj_level=4, wleb_prune_level=3, error=err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
 
@@ -518,7 +519,7 @@ contains
       call check(error, stat, 0)
       if (allocated(error)) return
       write (unit, "(a)", iostat=stat) "tolerance = 3e-8", "[grid]", "num_leb = 110", &
-         "[projection]", "level = 9", "[switching]", "wleb_prune_level = 3"
+         "[projection]", "level = 4", "[switching]", "wleb_prune_level = 3"
       close (unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
@@ -734,9 +735,285 @@ contains
       call expect_error(error, err, "Cannot read parameter file")
    end subroutine test_bad_drop_load_missing_file
 
+   !> A CFC pair power other than 4 is refused when read from JSON
+   subroutine test_bad_cfc_pair_power(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_cfc_param_type) :: param
+      !> Fixture file unit and I/O status
+      integer :: unit, stat
+      !> Fixture path
+      character(len=*), parameter :: path = "moist-test-parameters-cfc-pair-power.json"
+
+      open (newunit=unit, file=path, status="replace", action="write", iostat=stat)
+      if (stat /= 0) return
+      write (unit, "(a)", iostat=stat) '{"m":6}'
+      close (unit, iostat=stat)
+      call param%read_file(path, err)
+      open (newunit=unit, file=path, status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete", iostat=stat)
+      call expect_error(error, err, "CFC pair power m must be 4")
+   end subroutine test_bad_cfc_pair_power
+
+   !> A non-positive projection gate cut is refused
+   subroutine test_bad_drop_gate_grad_cut(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%gate_grad_cut = 0.0_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Projection gate gradient cut must be positive")
+   end subroutine test_bad_drop_gate_grad_cut
+
+   !> A non-positive projection batch size is refused
+   subroutine test_bad_drop_batch_size(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%batch_size = 0
+      call param%compute_derived(err)
+      call expect_error(error, err, "Projection batch size must be positive")
+   end subroutine test_bad_drop_batch_size
+
+   !> A negative Newton stage-switch residual is refused
+   subroutine test_bad_drop_newton_switch_fnorm(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%newton_switch_fnorm = -1.0e-3_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Newton stage-switch residual must be nonnegative")
+   end subroutine test_bad_drop_newton_switch_fnorm
+
+   !> A nonpositive coarse octree seed size is refused
+   subroutine test_bad_drop_octree_coarse_seed_size(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%octree_coarse_seed_size = 0.0_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Coarse octree seed size must be positive")
+   end subroutine test_bad_drop_octree_coarse_seed_size
+
+   !> A non-finite fine octree seed size is refused
+   subroutine test_bad_drop_octree_seed_size(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%octree_seed_size = ieee_value(1.0_wp, ieee_quiet_nan)
+      call param%compute_derived(err)
+      call expect_error(error, err, "Fine octree seed size must be positive")
+   end subroutine test_bad_drop_octree_seed_size
+
+   !> A nonpositive octree box budget is refused
+   subroutine test_bad_drop_octree_max_boxes(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%octree_max_boxes = 0
+      call param%compute_derived(err)
+      call expect_error(error, err, "Octree box budget must be positive")
+   end subroutine test_bad_drop_octree_max_boxes
+
+   !> A nonpositive octree survivor budget is refused
+   subroutine test_bad_drop_octree_max_survivors(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%octree_max_survivors = -1
+      call param%compute_derived(err)
+      call expect_error(error, err, "Octree survivor budget must be positive")
+   end subroutine test_bad_drop_octree_max_survivors
+
+   !> An octree depth limit past the addressable 20 levels is refused
+   subroutine test_bad_drop_octree_max_depth(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%octree_max_depth = 21
+      call param%compute_derived(err)
+      call expect_error(error, err, "Octree depth limit must lie in 1..20")
+   end subroutine test_bad_drop_octree_max_depth
+
+   !> A non-finite SvdW fade band is refused while the fade is on
+   subroutine test_bad_svdw_fade_nonfinite(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_svdw_param_type) :: param
+
+      param%fade_enabled = .true.
+      param%fade_width = ieee_value(1.0_wp, ieee_positive_inf)
+      call param%validate(err)
+      call expect_error(error, err, "SvdW fade_start and fade_width must be finite")
+   end subroutine test_bad_svdw_fade_nonfinite
+
+   !> A zero SvdW fade onset is refused while the fade is on
+   subroutine test_bad_svdw_fade_nonpositive(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_svdw_param_type) :: param
+
+      param%fade_enabled = .true.
+      param%fade_start = 0.0_wp
+      call param%validate(err)
+      call expect_error(error, err, "SvdW fade_start and fade_width must be positive")
+   end subroutine test_bad_svdw_fade_nonpositive
+
+   !> A non-finite CFC fade band is refused while the fade is on
+   subroutine test_bad_cfc_fade_nonfinite(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_cfc_param_type) :: param
+
+      param%fade_enabled = .true.
+      param%fade_width = ieee_value(1.0_wp, ieee_positive_inf)
+      call param%validate(err)
+      call expect_error(error, err, "CFC fade_start and fade_width must be finite")
+   end subroutine test_bad_cfc_fade_nonfinite
+
+   !> A zero CFC fade onset is refused while the fade is on
+   subroutine test_bad_cfc_fade_nonpositive(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_cfc_param_type) :: param
+
+      param%fade_enabled = .true.
+      param%fade_start = 0.0_wp
+      call param%validate(err)
+      call expect_error(error, err, "CFC fade_start and fade_width must be positive")
+   end subroutine test_bad_cfc_fade_nonpositive
+
+   !> A CFC fade with `a2 = 0` is refused: the band counts e-folds of `exp(a2 sigma)`
+   subroutine test_bad_cfc_fade_a2(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_lsf_cfc_param_type) :: param
+
+      param%fade_enabled = .true.
+      param%a2 = 0.0_wp
+      call param%validate(err)
+      call expect_error(error, err, "CFC fade needs a2 < 0")
+   end subroutine test_bad_cfc_fade_a2
+
+   !> A negative Newton cheap-step budget is refused
+   subroutine test_bad_drop_newton_max_cheap_steps(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%newton_max_cheap_steps = -1
+      call param%compute_derived(err)
+      call expect_error(error, err, "Newton cheap-step budget must not be negative")
+   end subroutine test_bad_drop_newton_max_cheap_steps
+
+   !> A nonpositive Newton step cap is refused
+   subroutine test_bad_drop_newton_max_step(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%newton_max_step = 0.0_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Newton step cap must be positive")
+   end subroutine test_bad_drop_newton_max_step
+
+   !> A nonpositive Newton merit margin is refused
+   subroutine test_bad_drop_newton_merit_margin(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%newton_merit_margin = -1.0_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Newton merit margin must be positive")
+   end subroutine test_bad_drop_newton_merit_margin
+
+   !> A negative branch search window (other than the -1 sentinel) is refused
+   subroutine test_bad_drop_negative_search_slack(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%branch_search_rho2_slack = -0.5_wp
+      call param%compute_derived(err)
+      call expect_error(error, err, "Branch search squared-distance slack must be -1 or nonnegative")
+   end subroutine test_bad_drop_negative_search_slack
+
    !> Collect parameter API regressions
-   !>
-   !> @param[out] testsuite Tests to run
    subroutine collect_parameters(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("constructors", test_constructors), &
@@ -748,6 +1025,24 @@ contains
          new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
+         new_unittest("bad_drop_gate_grad_cut", test_bad_drop_gate_grad_cut, should_fail=.true.), &
+         new_unittest("bad_cfc_pair_power", test_bad_cfc_pair_power, should_fail=.true.), &
+         new_unittest("bad_drop_batch_size", test_bad_drop_batch_size, should_fail=.true.), &
+         new_unittest("bad_drop_newton_switch_fnorm", test_bad_drop_newton_switch_fnorm, should_fail=.true.), &
+         new_unittest("bad_drop_newton_max_cheap_steps", test_bad_drop_newton_max_cheap_steps, should_fail=.true.), &
+         new_unittest("bad_drop_octree_coarse_seed_size", test_bad_drop_octree_coarse_seed_size, should_fail=.true.), &
+         new_unittest("bad_drop_octree_seed_size", test_bad_drop_octree_seed_size, should_fail=.true.), &
+         new_unittest("bad_drop_octree_max_boxes", test_bad_drop_octree_max_boxes, should_fail=.true.), &
+         new_unittest("bad_drop_octree_max_survivors", test_bad_drop_octree_max_survivors, should_fail=.true.), &
+         new_unittest("bad_drop_octree_max_depth", test_bad_drop_octree_max_depth, should_fail=.true.), &
+         new_unittest("bad_svdw_fade_nonfinite", test_bad_svdw_fade_nonfinite, should_fail=.true.), &
+         new_unittest("bad_svdw_fade_nonpositive", test_bad_svdw_fade_nonpositive, should_fail=.true.), &
+         new_unittest("bad_cfc_fade_nonfinite", test_bad_cfc_fade_nonfinite, should_fail=.true.), &
+         new_unittest("bad_cfc_fade_nonpositive", test_bad_cfc_fade_nonpositive, should_fail=.true.), &
+         new_unittest("bad_cfc_fade_a2", test_bad_cfc_fade_a2, should_fail=.true.), &
+         new_unittest("bad_drop_newton_max_step", test_bad_drop_newton_max_step, should_fail=.true.), &
+         new_unittest("bad_drop_newton_merit_margin", test_bad_drop_newton_merit_margin, should_fail=.true.), &
+         new_unittest("bad_drop_negative_search_slack", test_bad_drop_negative_search_slack, should_fail=.true.), &
          new_unittest("pcm_physical_inputs", test_pcm_physical_inputs), &
          new_unittest("invalid_fields", test_invalid_fields), &
          new_unittest("file_formats", test_file_formats), &
@@ -1141,11 +1436,11 @@ contains
       !> Independent pruning decade
       real(wp) :: lower
 
-      call param%new(nleb=110, tolerance=2.0e-7_wp, proj_maxiter=81, proj_level=9, &
+      call param%new(nleb=110, tolerance=2.0e-7_wp, proj_maxiter=81, proj_level=4, &
                      branch_weight_s=0.03_wp, rho_grid_h=0.75_wp, wleb_prune_level=0, error=err)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
-      call check(error, param%num_leb == 110 .and. param%proj_maxiter == 81 .and. param%proj_level == 9)
+      call check(error, param%num_leb == 110 .and. param%proj_maxiter == 81 .and. param%proj_level == 4)
       if (allocated(error)) return
       call check(error, param%wleb_cut, 1.0e-8_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
@@ -1205,7 +1500,7 @@ contains
          case (4)
             param%proj_level = 0
          case (5)
-            param%proj_level = 10
+            param%proj_level = 5
          case (6)
             param%branch_weight_floor = 1.0_wp
          case (7)
@@ -1241,24 +1536,36 @@ contains
       type(moist_pcm_parameters_type) :: pcm
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
-                      '"projection":{"maxiter":72,"level":9,"branch_search_rho2_slack":1.5,'// &
-                      '"octree":{"seed_size":0.7,"max_boxes":123,"max_survivors":43,"max_depth":8}},'// &
-                      '"screening":{"cell_grid_full_scan_below":19,"cell_grid_fraction":0.4},'// &
+                      '"projection":{"maxiter":72,"level":4,"branch_search_rho2_slack":1.5,"batch_size":64,'// &
+                      '"gate":{"grad_cut":0.3},"newton":{"switch_fnorm":1e-2,"max_cheap_steps":2,'// &
+                      '"max_step":0.6,"merit_margin":2.5},'// &
+                      '"octree":{"seed_size":0.7,"coarse_seed_size":1.3,"max_boxes":123,"max_survivors":43,'// &
+                      '"max_depth":8}},'// &
+                      '"screening":{"cell_grid_full_scan_below":19},'// &
                       '"switching":{"w_0ls_from":0.2,"w_0ls_to":0.7,"w_0ls_p":0.9,"w_0ls_a":1.7,'// &
                       '"w_0tra_from":0.15,"w_0tra_to":0.4,"wleb_prune_level":2},'// &
                       '"density":{"rho_grid_h":0.8},"branching":{"softmax_scale":0.04,"weight_floor":0.2}}', error)
       if (allocated(error)) return
       call check(error, drop%num_leb == 110 .and. drop%do_fine .and. &
-                 drop%proj_maxiter == 72 .and. drop%proj_level == 9 .and. &
+                 drop%proj_maxiter == 72 .and. drop%proj_level == 4 .and. &
                  drop%octree_max_boxes == 123 .and. drop%octree_max_survivors == 43 .and. &
                  drop%octree_max_depth == 8 .and. &
                  drop%cell_grid_full_scan_below == 19 .and. drop%wleb_prune_level == 2)
       if (allocated(error)) return
+      call check(error, drop%batch_size == 64 .and. drop%newton_max_cheap_steps == 2, &
+                 more="batched projection integer keys")
+      if (allocated(error)) return
+      call check(error, maxval(abs([drop%gate_grad_cut, drop%newton_switch_fnorm, &
+                                    drop%newton_max_step, drop%newton_merit_margin] - &
+                                   [0.3_wp, 1.0e-2_wp, 0.6_wp, 2.5_wp])), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%octree_seed_size, &
-                                    drop%cell_grid_fraction, drop%w_0ls_from, drop%w_0ls_to, drop%w_0ls_p, drop%w_0ls_a, &
+                                    drop%octree_coarse_seed_size, drop%w_0ls_from, &
+                                    drop%w_0ls_to, drop%w_0ls_p, drop%w_0ls_a, &
                                     drop%w_0tra_from, drop%w_0tra_to, drop%rho_grid_h, drop%branch_weight_s, &
                                     drop%branch_weight_floor, drop%branch_search_rho2_slack] - &
-                                   [2.0e-7_wp, 2.0_wp, 0.7_wp, 0.4_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 0.15_wp, 0.4_wp, &
+                                   [2.0e-7_wp, 2.0_wp, 0.7_wp, 1.3_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, &
+                                    0.15_wp, 0.4_wp, &
                                     0.8_wp, 0.04_wp, 0.2_wp, 1.5_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
@@ -1303,17 +1610,26 @@ contains
                                    [0.3_wp, 0.5_wp, 0.2_wp, 4.5_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 1.0e-6_wp])), &
                  0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
-      call configured(svdw, '{"blend_k":7,"blend_1b":0.6,"blend_2b":0.4,"blend_3b":2}', error)
+      call configured(svdw, '{"blend_k":7,"blend_1b":0.6,"blend_2b":0.4,"blend_3b":2,'// &
+                      '"fade_enabled":true,"fade_start":12,"fade_width":5}', error)
       if (allocated(error)) return
-      call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b] - &
-                                   [7.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b, &
+                                    svdw%fade_start, svdw%fade_width] - &
+                                   [7.0_wp, 0.6_wp, 0.4_wp, 2.0_wp, 12.0_wp, 5.0_wp])), 0.0_wp, &
+                 thr=1.0e-14_wp)
       if (allocated(error)) return
-      call configured(cfc, '{"a1":-12,"a2":-7,"c":3,"m":6}', error)
+      call check(error, svdw%fade_enabled, more="fade_enabled read from JSON")
       if (allocated(error)) return
-      call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c] - [-12.0_wp, -7.0_wp, 3.0_wp])), &
+      call configured(cfc, '{"a1":-12,"a2":-7,"c":3,"m":4,'// &
+                      '"fade_enabled":true,"fade_start":20,"fade_width":4}', error)
+      if (allocated(error)) return
+      call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c, cfc%fade_start, cfc%fade_width] - &
+                                   [-12.0_wp, -7.0_wp, 3.0_wp, 20.0_wp, 4.0_wp])), &
                  0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
-      call check(error, cfc%m, 6)
+      call check(error, cfc%m, 4)
+      if (allocated(error)) return
+      call check(error, cfc%fade_enabled, more="CFC fade_enabled read from JSON")
       if (allocated(error)) return
       call configured(rho, '{"rho_iso":0.004,"scale":120,"log_grad_out":6,"log_grad_cusp":3,"exclusion_cap":4,' &
          //'"core_fill":false,"core_radius_fraction":0.3}', error)
@@ -1443,9 +1759,40 @@ contains
       type(moist_cavity_mc_parameters_type) :: mc
       type(moist_cavity_mt_parameters_type) :: mt
       type(moist_pcm_parameters_type) :: pcm
+      type(moist_cavity_drop_lsf_svdw_param_type) :: svdw
+      type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       !> Invalid solver cases
       integer :: invalid
 
+      ! SvdW fade band: read only while the fade is on (default on); the refusals
+      ! are the bad_svdw_fade_* tests
+      call check(error, svdw%fade_enabled, more="fade on by default")
+      if (allocated(error)) return
+      svdw%fade_enabled = .false.
+      svdw%fade_start = 0.0_wp
+      call svdw%validate(err)
+      call check(error, .not. allocated(err), more="fade off must not validate the band")
+      if (allocated(error)) return
+      svdw%fade_enabled = .true.
+      svdw%fade_start = 18.0_wp
+      svdw%fade_width = 7.0_wp
+      call svdw%validate(err)
+      call check(error, .not. allocated(err), more="valid fade band refused")
+      if (allocated(error)) return
+      ! CFC fade band: on by default, read only while on; the refusals are the
+      ! bad_cfc_fade_* tests
+      call check(error, cfc%fade_enabled, more="CFC fade on by default")
+      if (allocated(error)) return
+      cfc%fade_enabled = .false.
+      cfc%fade_start = 0.0_wp
+      call cfc%validate(err)
+      call check(error, .not. allocated(err), more="CFC fade off must not validate the band")
+      if (allocated(error)) return
+      cfc%fade_enabled = .true.
+      cfc%fade_start = 27.0_wp
+      call cfc%validate(err)
+      call check(error, .not. allocated(err), more="CFC default fade band refused")
+      if (allocated(error)) return
       mc%spacing = 0.0_wp
       call mc%validate(err)
       call check(error, allocated(err))
@@ -1476,6 +1823,10 @@ contains
       call read_bad(mt, '{"area_tolerance":1.5}', error)
       if (allocated(error)) return
       call read_bad(pcm, '{"solver":0}', error)
+      if (allocated(error)) return
+      call read_bad(svdw, '{"fade_enabled":true,"fade_width":-1}', error)
+      if (allocated(error)) return
+      call read_bad(cfc, '{"fade_enabled":true,"fade_start":-1}', error)
 
    contains
 
@@ -1522,17 +1873,26 @@ contains
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
 
-      call svdw%new(blend_k=7.0_wp, blend_1b=0.6_wp, blend_2b=0.4_wp, blend_3b=2.0_wp)
+      call svdw%new(blend_k=7.0_wp, blend_1b=0.6_wp, blend_2b=0.4_wp, blend_3b=2.0_wp, &
+                    fade_enabled=.true., fade_start=12.0_wp, fade_width=5.0_wp)
       call svdw%new(blend_k=8.0_wp)
-      call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b] - &
-                                   [8.0_wp, 0.6_wp, 0.4_wp, 2.0_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, maxval(abs([svdw%blend_k, svdw%blend_1b, svdw%blend_2b, svdw%blend_3b, &
+                                    svdw%fade_start, svdw%fade_width] - &
+                                   [8.0_wp, 0.6_wp, 0.4_wp, 2.0_wp, 12.0_wp, 5.0_wp])), 0.0_wp, &
+                 thr=1.0e-14_wp)
       if (allocated(error)) return
-      call cfc%new(a1=-12.0_wp, a2=-7.0_wp, c=3.0_wp, m=6)
+      call check(error, svdw%fade_enabled, more="partial override dropped fade_enabled")
+      if (allocated(error)) return
+      call cfc%new(a1=-12.0_wp, a2=-7.0_wp, c=3.0_wp, m=4, fade_enabled=.true., &
+                   fade_start=20.0_wp, fade_width=4.0_wp)
       call cfc%new(a1=-11.0_wp)
-      call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c] - [-11.0_wp, -7.0_wp, 3.0_wp])), &
+      call check(error, maxval(abs([cfc%a1, cfc%a2, cfc%c, cfc%fade_start, cfc%fade_width] - &
+                                   [-11.0_wp, -7.0_wp, 3.0_wp, 20.0_wp, 4.0_wp])), &
                  0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
-      call check(error, cfc%m, 6)
+      call check(error, cfc%m, 4)
+      if (allocated(error)) return
+      call check(error, cfc%fade_enabled, more="CFC partial override dropped fade_enabled")
       if (allocated(error)) return
       call rho%new(rho_iso=0.004_wp, scale=120.0_wp, log_grad_out=6.0_wp, log_grad_cusp=3.0_wp, exclusion_cap=4.0_wp)
       call rho%new(scale=150.0_wp, core_fill=.false., core_radius_fraction=0.3_wp)
