@@ -1,8 +1,24 @@
-Smooth SES-like surface (SSES-DROP)
-===================================
+Smoothed SES surface (SSES-DROP)
+================================
 
 SSES is an experimental smooth approximation to the solvent-excluded surface (SES), built from weighted blends of the atoms' solvent-accessible spheres.
 It produces reentrant features, but finite smoothing shifts neck formation and closure relative to an exact rolling-probe surface.
+
+.. subfigure:: AB
+   :layout-sm: A|B
+   :subcaptions: below
+   :gap: 8px
+   :name: fig-sses-lsf
+
+   .. image:: /_static/figures/lsf/sses_no_circles.svg
+      :alt: (a) Level set with contour lines
+
+   .. image:: /_static/figures/lsf/sses_no_lsf_lines.svg
+      :alt: (b) Cavity surface against the van der Waals surface (dashed)
+
+   SSES level set of a model molecule. Blue shading marks the interior
+   (:math:`S<0`), red the exterior (:math:`S>0`); the black line is the cavity
+   surface, :math:`S=0`, and the dots are the atom centers.
 
 Usage
 -----

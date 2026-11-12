@@ -13,11 +13,50 @@ The reference cavity is then projected onto the defined zero level set given by 
 After projection, the quadrature weights have to be mapped in order to obtain correct surface integration weights (c).
 The resulting surface grid inherits the smoothness of the underlying LSF and the projection/mapping scheme and thus  is provides consistent analytical derivatives.
 
-DROP is independent of the particular surface definition; currently available:
+DROP is independent of the particular surface definition; the two main level sets are:
  - :doc:`Electron-isodensity surface (ρ-DROP) <isodensity>`, a fully self-consistent and differentiable cavity based on the electron density and a chosen isodensity value.
  - :doc:`Smooth van der Waals surface (SvdW-DROP) <svdw>`, a fully differentiable molecular surface that recovers solvent-excluded-surface-like features while avoiding geometric singularities, crevices, and other discontinuous surface features.
- - :doc:`COSMO Fine Cavity (CFC-DROP) <cfc>`.
- - :doc:`Smooth SES-like surface (SSES-DROP) <sses>`, an experimental optimized power-distance moment surface with a solvent probe radius and smoothing length.
+
+.. subfigure:: ABC
+   :layout-sm: A|B|C
+   :subcaptions: below
+   :gap: 8px
+   :name: fig-drop-lsf-overview
+
+   .. image:: /_static/figures/lsf/vdw.svg
+      :alt: (a) Van der Waals sphere union
+
+   .. image:: /_static/figures/lsf/svdw_no_circles_no_lsf_lines.svg
+      :alt: (b) SvdW-DROP
+
+   .. image:: /_static/figures/lsf/isodensity_no_circles_no_lsf_lines.svg
+      :alt: (c) Isodensity (ρ-DROP)
+
+   The same model molecule under the van der Waals sphere union, the DROP
+   reference cavity (a), and the two main DROP level sets, :doc:`SvdW <svdw>`
+   (b) and :doc:`isodensity <isodensity>` (c). The black line is the cavity
+   surface, :math:`S=0`, and the dots are the atom centers.
+
+For completeness, two further level sets are available: the :doc:`COSMO Fine Cavity (CFC-DROP) <cfc>`, and the :doc:`smooth SES-like surface (SSES-DROP) <sses>`, an experimental optimized power-distance moment surface with a solvent probe radius and smoothing length.
+In all cases, the :doc:`SvdW <svdw>` should be preferred over both due to its supiriour computational cost, smoother PES, and bester testing.
+
+.. dropdown:: Further level sets: CFC and SSES
+
+   .. subfigure:: AB
+      :subcaptions: below
+      :gap: 8px
+      :width: 70%
+      :align: center
+      :name: fig-drop-lsf-further
+
+      .. image:: /_static/figures/lsf/cfc_no_circles_no_lsf_lines.svg
+         :alt: (a) CFC-DROP
+
+      .. image:: /_static/figures/lsf/sses_no_circles_no_lsf_lines.svg
+         :alt: (b) SSES-DROP
+
+      The model molecule under the :doc:`CFC <cfc>` (a) and :doc:`SSES <sses>`
+      (b) level sets.
 
 During the projection and weighting procedure, DROP applies smooth switching functions, handles multiple projection branches in concave regions, and uses spatial screening to keep the construction differentiable and efficient.
 This makes the cavity suitable for continuum-solvation models that require smooth surface areas, polarization energies, and gradients, such as CPCM and pressure-based cavity terms.
@@ -143,14 +182,15 @@ the caller builds a concrete LSF and passes it to the cavity constructor (the ``
 API).
 They are not parameter-file keys and cannot be set through ``load_file``.
 
-MOIST provides SvdW, CFC, and isodensity LSFs:
+MOIST provides isodensity, SvdW, CFC, and SSES LSFs:
 
 .. toctree::
    :maxdepth: 1
 
-   isodensity
    svdw
+   isodensity
    cfc
+   sses
 
 Grid Discretization
 -------------------
@@ -163,13 +203,13 @@ Grid Discretization
 Numerical Tolerance
 -------------------
 
-``tolerance`` (real, default ``1.0e-10``)
+``tolerance`` (:math:`\varepsilon`, real, default ``1.0e-10``)
    Main tolerance; every other DROP threshold derives from it (tightest to loosest):
 
-   - quadrature weight cutoff ``wleb_cut = tolerance * 0.05``
-   - LSF screening threshold ``= tolerance * 0.1`` (added by DROP into the LSF by the constructor)
-   - projection convergence ``proj_tol = tolerance``
-   - branch-degeneracy separation ``= tolerance * 10``
+   - quadrature weight cutoff ``wleb_cut``, :math:`0.05\,\varepsilon`
+   - LSF screening threshold, :math:`0.1\,\varepsilon` (handed to the LSF by the constructor); read by the isodensity LSFs and by SvdW and CFC with their fade off. With the fade on (the SvdW and CFC default) the atom reach is the end of the fade switching region and the threshold is not used, see :doc:`svdw` and :doc:`cfc`
+   - projection convergence ``proj_tol``, :math:`\varepsilon`
+   - branch-degeneracy separation, :math:`10\,\varepsilon`
 
    A nonzero ``switching.wleb_prune_level`` overrides ``wleb_cut`` with the lower bound of its switching region.
    See :cite:t:`wittmann2026drop`, Supporting Information Sec. C.2.c for the convergence behavior with respect to these thresholds.
@@ -182,25 +222,6 @@ Numerical Tolerance
 Surface Projection
 ------------------
 
-``projection.level`` (integer, default ``3``)
-   Strategy used to project grid points onto the surface:
-
-   .. list-table::
-      :header-rows: 1
-      :widths: 10 40 50
-
-      * - Level
-        - Strategy
-        - Recommendation
-      * - 3
-        - conditional multi-tangent SLSQP + Newton refinement 
-        - Recommended for general use
-      * - 7
-        - SLSQP multistart + Newton refinement
-        - Recommended for more challenging cases
-      * - 9
-        - Octree surface coverage + Newton refinement
-        - Reference searches and difficult concave regions; most expensive
 
 ``projection.maxiter`` (integer, default ``150``)
   Maximum iterations for the projection optimizer.
@@ -211,34 +232,11 @@ Surface Projection
   This should not be changed.
 
 ``projection.branch_search_rho2_slack`` (real, default ``-1``)
-  Search window :math:`\Delta\rho^2` in bohr^2: a projection :math:`b` of an anchor is kept only if :math:`\rho_b^2 \le \rho_\mathrm{min}^2 + \Delta\rho^2`, where :math:`\rho_\mathrm{min}` is the closest projection found for that anchor.
+  Search window :math:`\Delta\rho^2` in :math:`\mathrm{bohr}^2`: a projection :math:`b` of an anchor is kept only if :math:`\rho_b^2 \le \rho_\mathrm{min}^2 + \Delta\rho^2`, where :math:`\rho_\mathrm{min}` is the closest projection found for that anchor.
   The window applies to every projection level, both to the branch search and to the candidate filter.
 
-  - ``-1``: derived from the branch weights, :math:`\Delta\rho^2 = 2\,\Delta\Phi_\mathrm{max}/w_a`, with the admissible objective excess :math:`\Delta\Phi_\mathrm{max}` from `Branching`_. With the defaults this is about ``0.26`` bohr^2. Every branch outside it has a softmax weight below the floor.
-  - ``>= 0``: explicit window, independent of the branch weights.
-
-.. dropdown:: Legacy projection strategies
-
-   These legacy projection strategies should not be used.
-
-   .. list-table::
-      :header-rows: 1
-      :widths: 10 40
-
-      * - Level
-        - Strategy
-      * - 1
-        - SLSQP :cite:p:`kraft1988slsqp,kraft1994slsqp` only (no Newton refinement)
-      * - 2
-        - SLSQP + Newton refinement
-      * - 4
-        - conditional SLSQP-deflation
-      * - 5
-        - SLSQP-deflation (unconditional)
-      * - 6
-        - Newton-deflation on the 4D KKT system
-      * - 8
-        - fine SLSQP multistart reference
+  - ``-1``: derived from the branch weights, :math:`\Delta\rho^2 = 2\,\Delta\Phi_\mathrm{max}/w_a`, with the admissible objective excess :math:`\Delta\Phi_\mathrm{max}` from `Branching`_. With the defaults this is about :math:`0.26\,\mathrm{bohr}^2`. Every branch outside it has a softmax weight below the floor.
+  - :math:`\ge 0`: explicit window, independent of the branch weights.
 
 Switching Functions
 -------------------
@@ -288,27 +286,27 @@ Additionally, it can be used in cases where small weights could cause numerical 
       * - 0
         - disabled (default)
       * - 1
-        - 1e-12 to 1e-10
+        - :math:`10^{-12}` to :math:`10^{-10}`
       * - 2
-        - 1e-10 to 1e-8
+        - :math:`10^{-10}` to :math:`10^{-8}`
       * - 3
-        - 1e-8 to 1e-6
+        - :math:`10^{-8}` to :math:`10^{-6}`
       * - 4
-        - 1e-6 to 1e-4
+        - :math:`10^{-6}` to :math:`10^{-4}`
       * - 5
-        - 1e-4 to 1e-2
+        - :math:`10^{-4}` to :math:`10^{-2}`
       * - 6
-        - 1e-2 to 1e0
+        - :math:`10^{-2}` to :math:`1`
 
 
 Branching
 ---------
 
-``branching.softmax_scale`` (real, default ``0.0025``)
+``branching.softmax_scale`` (:math:`\tau_\Phi`, real, default ``0.0025``)
   Softmax scale of the branch-weight model in concave regions; smaller values make the branch-weight distribution sharper.
-  Branch fractions are a softmax of :math:`-\Phi` over the objective values of all competing projections (i.e. the projected distance), divided by this scale, so equal objective values receive equal weights and a lower objective value smoothly dominates.
+  Branch fractions are a softmax of :math:`-\Phi/\tau_\Phi` over the objective values :math:`\Phi` of all competing projections (i.e. the projected distance), so equal objective values receive equal weights and a lower objective value smoothly dominates.
   Each branch fraction multiplies the integration weight of its projected point.
-  The admissible objective excess of a branch is ``softmax_scale * log(1/floor)``, where the floor is ``branching.weight_floor`` (default ``0.0``) or, when that is not positive, the derived quadrature weight cutoff.
+  The admissible objective excess of a branch is :math:`\Delta\Phi_\mathrm{max} = \tau_\Phi\ln(1/w_\mathrm{floor})`, where the floor :math:`w_\mathrm{floor}` is ``branching.weight_floor`` (default ``0.0``) or, when that is not positive, the derived quadrature weight cutoff.
   It sets the default search window ``projection.branch_search_rho2_slack``.
 
 
@@ -317,9 +315,8 @@ Spatial Screening
 
 Acceleration settings that do not change results, only cost.
 
-``screening.cell_grid_fraction`` (real, default ``0.25``)
-   Cell size of the molecular cell grid as a fraction of the reference spacing (``1.0`` = no subdivision, ``0.5`` = halved cells).
-   This has no influence on the actual results but speeds up the LSF evaluations.
-
 ``screening.cell_grid_full_scan_below`` (integer, default ``200``)
-   Below this atom count the cell grid collapses to a single full-scan cell.
+   Below this atom count the level set's candidate cell list collapses to a single full-scan cell.
+   The cell list returns, for each batch of points, the atoms whose screening reach meets the batch; both modes return the same atoms, so this has no influence on the results, only on the cost of the LSF evaluations.
+
+The former ``screening.cell_grid_fraction`` is retired and no longer read; the cell list sizes its cells from the atom reach.
