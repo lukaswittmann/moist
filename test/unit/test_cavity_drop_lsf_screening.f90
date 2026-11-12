@@ -1,13 +1,13 @@
-!> Test suite for the binned cell list in moist_math_cell_list
-module test_math_cell_list
+!> Test suite for the binned cell list in moist_cavity_drop_lsf_screening
+module test_cavity_drop_lsf_screening
    use mctc_env, only: wp
    use, intrinsic :: iso_fortran_env, only: int64
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_math_cell_list, only: moist_cell_list_type
+   use moist_cavity_drop_lsf_screening, only: cell_list_type
    implicit none(type, external)
    private
 
-   public :: collect_math_cell_list
+   public :: collect_cavity_drop_lsf_screening
 
    !> Atoms in the random fixture
    integer, parameter :: nat_fixture = 300
@@ -17,7 +17,7 @@ module test_math_cell_list
 contains
 
    !> Collect all cell-list tests
-   subroutine collect_math_cell_list(testsuite)
+   subroutine collect_cavity_drop_lsf_screening(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
@@ -33,7 +33,7 @@ contains
                   new_unittest("huge_query_returns_all", test_huge_query), &
                   new_unittest("empty_and_single", test_empty_and_single) &
                   ]
-   end subroutine collect_math_cell_list
+   end subroutine collect_cavity_drop_lsf_screening
 
    !* ================================================================================= *!
    !*                                     Helpers                                       *!
@@ -187,7 +187,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
@@ -215,7 +215,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: u(4), center(3), r
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
@@ -242,7 +242,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: p(3), lo(3), hi(3)
       integer :: out(nat_fixture), out2(nat_fixture), ref(nat_fixture)
@@ -277,7 +277,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: offsets(4), lo(3), hi(3)
       integer :: out(nat_fixture), nout, io, ax, sgn
@@ -324,7 +324,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: grid, flat
+      type(cell_list_type) :: grid, flat
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3), u(1)
       integer :: out(nat_fixture), out2(nat_fixture), nout, nout2, iq
@@ -365,7 +365,7 @@ contains
       integer, parameter :: nside = 7
       integer, parameter :: nlat = nside**3
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp) :: xyz(3, nlat), reach(nlat), lo(3), hi(3), u(6)
       integer :: out(nlat), ref(nlat), nout, nref, i, j, k, n, iq
       integer(int64) :: state
@@ -426,7 +426,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
@@ -468,7 +468,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
@@ -501,7 +501,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       integer :: out(nat_fixture), nout
       integer(int64) :: state
@@ -522,7 +522,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(moist_cell_list_type) :: cells
+      type(cell_list_type) :: cells
       real(wp) :: xyz0(3, 0), reach0(0), xyz1(3, 1), reach1(1)
       integer :: out(1), nout
 
@@ -558,4 +558,4 @@ contains
                  more="destroy resets")
    end subroutine test_empty_and_single
 
-end module test_math_cell_list
+end module test_cavity_drop_lsf_screening
