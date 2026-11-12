@@ -3,15 +3,17 @@
 !> - a legacy duplicate of the new implementation,
 !>   [[moist_cavity_drop_derivatives_kernel:build_seed_state]] +
 !>   [[moist_cavity_drop_derivatives_kernel:apply_seed]], seeded with
-!>   `dlsf1_r = lsf2_r_rA(:,beta,A)` and `dlsf2_rr = lsf3_rr_rA(:,:,beta,A)`
+!>   `dlsf1_r = lsf2_r_rA(:,beta,A)` and `dlsf2_rr` the unpacked `lsf3_rr_rA(:,beta,A)`
 !> - kept for comparison and reference until possible bugs or inconsistencies
 !>   in the reverse implementation are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
+   use moist_math_packed, only: packed_idx33, packed_idx333, packed_contract2
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_type, only: add_volume_origin_gradient
    implicit none(type, external)
 
@@ -59,7 +61,7 @@ contains
       type(drop_worker_slots_type) :: slots
 
       !> Loop indices
-      integer :: igrid, iatom, iaxis, jaxis, i, n_active
+      integer :: igrid, iatom, iaxis, jaxis, kaxis, laxis, i, n_active
       integer, allocatable :: active_idx(:)
 
       !> OpenMP thread management
@@ -86,17 +88,17 @@ contains
       real(wp) :: point(3), anchor(3), rho_vec(3), rho_norm
       integer :: owner_idx
 
-      !> LSF derivatives
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
+      !> LSF derivatives, packed Hessian
+      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(6)
       real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
 
-      !> Phi derivatives
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
+      !> Phi derivatives, packed Hessian
+      real(wp) :: phi0, phi1_r(3), phi2_rr(6)
       real(wp), allocatable :: phi2_r_rA(:, :, :)
 
-      !> KKT system
+      !> KKT system, packed Lagrangian Hessian
       real(wp) :: lambda_val
-      real(wp) :: G_lagrangian(3), H_lagrangian(3, 3)
+      real(wp) :: G_lagrangian(3), H_lagrangian(6)
       real(wp) :: kkt_rhs(4, 1)
       real(wp) :: rhs_vec(4)
       integer(lapack_ik) :: kkt_info
@@ -121,12 +123,15 @@ contains
       real(wp) :: A_mat(3, 3)
       real(wp) :: t1_vec(3), t2_vec(3), y1(3), y2(3)
       real(wp) :: cross_vec(3), J_val, inv_J
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :)
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
+      !> Packed level-set third derivative and the packed d^3S/(dr^2 dR_A)
+      real(wp) :: lsf3_rrr(10)
+      real(wp), allocatable :: lsf3_rr_rA(:, :, :)
       !> LSF active slot of entry `i` of `active_idx`
       integer, allocatable :: lsf_slot(:)
-      !> Nuclear partials of the atom entry currently being processed
-      real(wp) :: s1_rA(3), s2_r_rA(3, 3), s3_rr_rA(3, 3, 3)
+      !> LSF active slot of the atom entry currently being processed, or zero
+      integer :: islot
+      !> Nuclear partials of the atom entry currently being processed, s3_rr_rA packed
+      real(wp) :: s1_rA(3), s2_r_rA(3, 3), s3_rr_rA(6, 3)
       real(wp) :: dA_dR(3, 3)
       real(wp) :: dg_dR(3)
 
@@ -183,7 +188,7 @@ contains
       ! Branch-weight post-pass state (serial, after main loop)
       ! Softmax weights_grad takes dphi in (nparam, nbranch) layout with
       ! nparam = 3 * nsph, flattening (iatom, iaxis) -> (iatom - 1) * 3 + iaxis
-      integer :: igroup_start, igroup_end, group_size, m_branch, im_grid
+      integer :: igroup_start, igroup_end, group_size, m_branch, im_grid, ia_group, max_group
       integer :: owner_m, k_param
       real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
       real(wp) :: area_fac_m, rn_m, dwleb_branch, da_branch, dv_branch
@@ -191,8 +196,8 @@ contains
       real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
       real(wp), allocatable :: branch_weights(:), branch_dweights(:, :)
 
-      ! Thread-local xi buffer (avoids storing debug arrays)
-      real(wp), allocatable :: anchor_xi_local(:, :)
+      ! Thread-local switching-gradient scratch
+      type(iswig_workspace_type) :: iswig_work
       ! Scalar temps for atomic reduction (avoids gfortran aliasing issue)
       real(wp) :: ai_val, vi_val
 
@@ -299,7 +304,7 @@ contains
 
       ! Loop over all grid points (parallelized)
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& iatom, iaxis, jaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
+      !$omp& iatom, iaxis, jaxis, kaxis, laxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
       !$omp& lsf1_rA, lsf2_r_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
       !$omp& G_lagrangian, H_lagrangian, kkt_rhs, rhs_vec, &
       !$omp& kkt_info, rho_unit, &
@@ -316,8 +321,8 @@ contains
       !$omp& dtau1, dtau2, dw1, dw2, &
       !$omp& dlambda_switch, &
       !$omp& min_axis_surf, proj_surf, v_norm_surf, n_dot_q1_surf, &
-      !$omp& i, n_active, active_idx, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
-      !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, anchor_xi_local, &
+      !$omp& i, n_active, active_idx, lsf_slot, islot, s1_rA, s2_r_rA, s3_rr_rA, &
+      !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, iswig_work, &
       !$omp& w_pre_i, f_wleb_s, f_wleb_ds, wleb_prune_factor, dw_pre_dR, &
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
       !$omp& Hq1_curv, Hq2_curv, S11_curv, S12_curv, S22_curv, half_diff_curv, &
@@ -329,22 +334,18 @@ contains
 
       ! The LSF nuclear outputs are active-indexed and caller-owned; the buffers
       ! are sized to the atom count, which bounds `active_count()` from above
-      allocate (lsf3_rrr(3, 3, 3))
-      allocate (lsf3_rr_rA(3, 3, 3, self%nsph))
+      allocate (lsf3_rr_rA(6, 3, self%nsph))
       allocate (active_idx(self%nsph))
       allocate (lsf_slot(self%nsph))
       allocate (dn_dR_buf(3, self%nsph, 3))
       allocate (lsf1_rA(3, self%nsph))
       allocate (lsf2_r_rA(3, 3, self%nsph))
       allocate (phi2_r_rA(3, 3, self%nsph))
-      allocate (anchor_xi_local(3, self%nsph))
+      call self%iswig%new_workspace(iswig_work)
       allocate (kkt_rhs_batch(4, 3*self%nsph))
       allocate (A_tot_local(3, self%nsph), source=0.0_wp)
       allocate (V_tot_local(3, self%nsph), source=0.0_wp)
       allocate (dv_dc_sph_local(3, self%nsph), source=0.0_wp)
-
-      !> The anchor_xi depends only on the nuclear geometry of the anchor system
-      anchor_xi_local = 0.0_wp
 
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
@@ -355,7 +356,7 @@ contains
          if (do_timing) call self%ctx%timer%start(h_prim)
 
          point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
+         anchor = self%anchorxyz(:, self%anchor_of_row(igrid))
          owner_idx = self%owner(igrid)
          lambda_val = self%lambda0(igrid)
 
@@ -382,7 +383,7 @@ contains
          g_norm = sqrt(g_norm_sq)
 
          if (g_norm <= weight_tol) then
-            call abort%latch_message("[Error] Level set gradient vanishes", igrid)
+            call abort%latch_message("Level set gradient vanishes", igrid)
             !$omp cancel do
             cycle
          end if
@@ -436,7 +437,7 @@ contains
          ! Single factorization + solve for all RHS
          call drop_kkt_solve(H_lagrangian, lsf1_r, kkt_rhs_batch(:, 1:3*n_active), kkt_info)
          if (kkt_info /= 0_lapack_ik) then
-            call abort%latch_message("[Error] Bordered KKT sensitivity solve failed", igrid)
+            call abort%latch_message("Bordered KKT sensitivity solve failed", igrid)
             !$omp cancel do
             cycle
          end if
@@ -528,14 +529,16 @@ contains
 
          dn_dR_buf = 0.0_wp
 
-         ! Screening: lsf2_r_rA and xyz1_rA are zero for inactive atoms
+         ! Screening: lsf2_r_rA is active-slot indexed, read through `lsf_slot`
          do i = 1, n_active
             iatom = active_idx(i)
+            islot = lsf_slot(i)
             do iaxis = 1, 3
                ! Total derivative of grad(S) w.r.t. r_A:
                ! d(grad(S))/dr_A = ( d^2 S/ dr dr_A) + ( d^2 S/ dr^2 ) * ( dr/ dr_A)
-               dg_dR = lsf2_r_rA(:, iaxis, iatom) &
-                       + matmul(lsf2_rr, self%xyz1_rA(:, iaxis, iatom, igrid))
+               call packed_contract2(lsf2_rr, self%xyz1_rA(:, iaxis, iatom, igrid), dg_dR, 3)
+               ! An atom outside the point's reach has an exactly vanishing explicit partial
+               if (islot > 0) dg_dR = dg_dR + lsf2_r_rA(:, iaxis, islot)
 
                ! Normal derivative:
                ! dn/dr_A = (1/||g||) * [dg/dr_A - n*(n^T*dg/dr_A)]
@@ -575,15 +578,15 @@ contains
          call self%f_crit%eval(g_norm, f_crit0, f_crit_dS)
 
          ! Build A = alpha*I - lambda*H
-         A_mat(1, 1) = alpha_coeff - lambda_val*lsf2_rr(1, 1)
-         A_mat(1, 2) = -lambda_val*lsf2_rr(1, 2)
-         A_mat(1, 3) = -lambda_val*lsf2_rr(1, 3)
-         A_mat(2, 1) = -lambda_val*lsf2_rr(2, 1)
-         A_mat(2, 2) = alpha_coeff - lambda_val*lsf2_rr(2, 2)
-         A_mat(2, 3) = -lambda_val*lsf2_rr(2, 3)
-         A_mat(3, 1) = -lambda_val*lsf2_rr(3, 1)
-         A_mat(3, 2) = -lambda_val*lsf2_rr(3, 2)
-         A_mat(3, 3) = alpha_coeff - lambda_val*lsf2_rr(3, 3)
+         A_mat(1, 1) = alpha_coeff - lambda_val*lsf2_rr(1)
+         A_mat(1, 2) = -lambda_val*lsf2_rr(2)
+         A_mat(1, 3) = -lambda_val*lsf2_rr(4)
+         A_mat(2, 1) = -lambda_val*lsf2_rr(2)
+         A_mat(2, 2) = alpha_coeff - lambda_val*lsf2_rr(3)
+         A_mat(2, 3) = -lambda_val*lsf2_rr(5)
+         A_mat(3, 1) = -lambda_val*lsf2_rr(4)
+         A_mat(3, 2) = -lambda_val*lsf2_rr(5)
+         A_mat(3, 3) = alpha_coeff - lambda_val*lsf2_rr(6)
 
          ! Surface tangent frame Q = [q1, q2] from n = g/|g|
          n_surf = g_vec/g_norm
@@ -612,7 +615,7 @@ contains
 
          if (abs(det_B) <= det_B_guard) then
             call abort%latch_message( &
-               "[Error] Tangent Jacobian matrix B is singular after switching", igrid)
+               "Tangent Jacobian matrix B is singular after switching", igrid)
             !$omp cancel do
             cycle
          end if
@@ -647,7 +650,7 @@ contains
          cross_vec(3) = y1(1)*y2(2) - y1(2)*y2(1)
          J_val = sqrt(dot_product(cross_vec, cross_vec))
          if (J_val <= weight_tol) then
-            call abort%latch_message("[Error] Closest-point Jacobian vanishes", igrid)
+            call abort%latch_message("Closest-point Jacobian vanishes", igrid)
             !$omp cancel do
             cycle
          end if
@@ -670,7 +673,7 @@ contains
 
          ! Lebedev weight switching factor: d(w_pre * S)/dR = (S + |w_pre|*S') * d(w_pre)/dR
          if (self%param%wleb_prune_level > 0) then
-            w_pre_i = self%anchor_wleb0(igrid)*self%cpjac_scal0(igrid)*self%w_f0(igrid)
+            w_pre_i = self%anchor_wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid)*self%w_f0(igrid)
             call self%f_wleb%eval(abs(w_pre_i), f_wleb_s, f_wleb_ds)
             wleb_prune_factor = f_wleb_s + abs(w_pre_i)*f_wleb_ds
          else
@@ -680,8 +683,8 @@ contains
          ! Shape operator in the surface frame [q1, q2]; KM and the gap are
          ! rotation invariants, the gap a sum of squares (accurate near umbilics)
          if (allocated(self%k1_rA)) then
-            Hq1_curv = matmul(lsf2_rr, q1)
-            Hq2_curv = matmul(lsf2_rr, q2)
+            call packed_contract2(lsf2_rr, q1, Hq1_curv, 3)
+            call packed_contract2(lsf2_rr, q2, Hq2_curv, 3)
             S11_curv = dot_product(q1, Hq1_curv)/g_norm
             S12_curv = dot_product(q1, Hq2_curv)/g_norm
             S22_curv = dot_product(q2, Hq2_curv)/g_norm
@@ -701,15 +704,29 @@ contains
                dr_i_dR = self%xyz1_rA(:, iaxis, iatom, igrid)
 
                ! dg/dr_A = explicit + Hessian * dr/dr_A
-               dg_dR = s2_r_rA(:, iaxis) + matmul(lsf2_rr, dr_i_dR)
+               call packed_contract2(lsf2_rr, dr_i_dR, dg_dR, 3)
+               dg_dR = s2_r_rA(:, iaxis) + dg_dR
 
                ! dA/dr_A = -dlambda*H - lambda*(dH/dr_A)
-               dA_dR = -dlambda_val*lsf2_rr
-               do jaxis = 1, 3
-                  dA_dR(:, :) = dA_dR(:, :) &
-                                - lambda_val*lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
+               do kaxis = 1, 3
+                  do jaxis = 1, 3
+                     dA_dR(jaxis, kaxis) = -dlambda_val*lsf2_rr(packed_idx33(jaxis, kaxis))
+                  end do
                end do
-               dA_dR(:, :) = dA_dR(:, :) - lambda_val*s3_rr_rA(:, :, iaxis)
+               do laxis = 1, 3
+                  do kaxis = 1, 3
+                     do jaxis = 1, 3
+                        dA_dR(jaxis, kaxis) = dA_dR(jaxis, kaxis) &
+                                              - lambda_val*lsf3_rrr(packed_idx333(jaxis, kaxis, laxis))*dr_i_dR(laxis)
+                     end do
+                  end do
+               end do
+               do kaxis = 1, 3
+                  do jaxis = 1, 3
+                     dA_dR(jaxis, kaxis) = dA_dR(jaxis, kaxis) &
+                                           - lambda_val*s3_rr_rA(packed_idx33(jaxis, kaxis), iaxis)
+                  end do
+               end do
 
                ! dn_surf/dr_A = (I - n*n^T) * dg/dr_A / |g|
                dn_surf_dR = (dg_dR - n_surf*dot_product(n_surf, dg_dR))/g_norm
@@ -808,8 +825,8 @@ contains
 
                ! d(wleb)/dr_A = wbranch * (S + |w_pre|*S') * d(w_pre)/dr_A
                ! where w_pre = anchor_wleb * cpjac * w_f
-               dw_pre_dR = self%anchor_wleb0(igrid)*self%w_f0(igrid)*dJ_dR &
-                           + self%anchor_wleb0(igrid)*self%cpjac_scal0(igrid) &
+               dw_pre_dR = self%anchor_wleb0(self%anchor_of_row(igrid))*self%w_f0(igrid)*dJ_dR &
+                           + self%anchor_wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid) &
                            *self%w_f1_rA(iaxis, iatom, igrid)
                self%wleb1_rA(iaxis, iatom, igrid) = &
                   self%wbranch(igrid)*wleb_prune_factor*dw_pre_dR
@@ -819,10 +836,18 @@ contains
                ! projected point:
                !   dH/dr_A = d^3S/(dr dr dR_A) + (d^3S/dr^3) . dr/dr_A
                if (allocated(self%k1_rA) .and. allocated(self%k2_rA)) then
-                  dH_curv = s3_rr_rA(:, :, iaxis)
-                  do jaxis = 1, 3
-                     dH_curv(:, :) = dH_curv(:, :) &
-                                     + lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
+                  do kaxis = 1, 3
+                     do jaxis = 1, 3
+                        dH_curv(jaxis, kaxis) = s3_rr_rA(packed_idx33(jaxis, kaxis), iaxis)
+                     end do
+                  end do
+                  do laxis = 1, 3
+                     do kaxis = 1, 3
+                        do jaxis = 1, 3
+                           dH_curv(jaxis, kaxis) = dH_curv(jaxis, kaxis) &
+                                                   + lsf3_rrr(packed_idx333(jaxis, kaxis, laxis))*dr_i_dR(laxis)
+                        end do
+                     end do
                   end do
 
                   ! d(q_a^T H q_b) = dq_a.H q_b + dq_b.H q_a + q_a^T dH q_b (H symmetric)
@@ -873,11 +898,11 @@ contains
          !* ---------------------- f_i derivative ---------------------- *!
          if (do_timing) call self%ctx%timer%start(h_sw)
 
-         !> iswig switching derivatives: evaluated at anchor position
-         !> Uses built-in sorted neighbor list for inner loops (early exit)
-         self%f1_rA(:, :, igrid) = self%iswig%swi1_rA( &
-                                   anchor, owner_idx, self%anchor_xi0(igrid), anchor_xi_local, &
-                                   active=active_idx(1:n_active))
+         !> iswig switching derivatives: evaluated at anchor position, at the
+         !> anchor width, which has no nuclear dependence
+         self%f1_rA(:, :, igrid) = 0.0_wp
+         call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor_xi0(self%anchor_of_row(igrid)), &
+                                   1.0_wp, iswig_work, self%f1_rA(:, :, igrid))
 
          if (do_timing) call self%ctx%timer%stop(h_sw)
 
@@ -954,8 +979,8 @@ contains
       dv_dc_sph = dv_dc_sph + dv_dc_sph_local
       !$omp end critical (gradient_reduction)
 
-      deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
-      deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA, anchor_xi_local)
+      deallocate (lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
+      deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
       !$omp end parallel
 
@@ -982,28 +1007,20 @@ contains
       ! TODO: refactor this; for now a slightly ugly, non-parallel solution
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
-      if (self%ngrid > 0 .and. any(self%branch_count(1:self%ngrid) > 1)) then
-         allocate (branch_phi(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dphi(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
-         allocate (branch_weights(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dweights(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
+      max_group = 0
+      if (self%ngrid > 0) max_group = maxval(self%offset(2:self%nmax + 1) - self%offset(1:self%nmax))
+      if (max_group > 1) then
+         allocate (branch_phi(max_group), source=0.0_wp)
+         allocate (branch_dphi(3*self%nsph, max_group), source=0.0_wp)
+         allocate (branch_weights(max_group), source=0.0_wp)
+         allocate (branch_dweights(3*self%nsph, max_group), source=0.0_wp)
 
-         igroup_start = 1
-         do while (igroup_start <= self%ngrid)
-            if (self%branch_count(igroup_start) <= 1) then
-               igroup_start = igroup_start + 1
-               cycle
-            end if
-
-            ! Extend group while anchor_id stays the same
-            igroup_end = igroup_start
-            do while (igroup_end < self%ngrid)
-               if (self%anchor_id(igroup_end + 1) /= self%anchor_id(igroup_start)) exit
-               igroup_end = igroup_end + 1
-            end do
+         do ia_group = 1, self%nmax
+            ! An anchor's rows are one contiguous group
+            igroup_start = self%offset(ia_group) + 1
+            igroup_end = self%offset(ia_group + 1)
             group_size = igroup_end - igroup_start + 1
+            if (group_size <= 1) cycle
 
             ! Gather phi and dphi for every branch
             do m_branch = 1, group_size
@@ -1012,7 +1029,7 @@ contains
 
                owner_m = self%owner(im_grid)
                pt_m = self%xyz(:, im_grid)
-               anch_m = self%anchorxyz(:, im_grid)
+               anch_m = self%anchorxyz(:, ia_group)
                ! phi = 0.5 * alpha * |r* - anch|^2, so d phi / d r = alpha * (r* - anch)
                phi1_r_m = self%param%phi_alpha*(pt_m - anch_m)
 
@@ -1086,8 +1103,6 @@ contains
                   end do
                end do
             end do
-
-            igroup_start = igroup_end + 1
          end do
 
          deallocate (branch_phi, branch_dphi, branch_weights, branch_dweights)
@@ -1119,10 +1134,10 @@ contains
    !> @param[in]  islot      LSF active slot, or zero when the atom is inactive
    !> @param[in]  lsf1_rA    Active-indexed dS/dR_A
    !> @param[in]  lsf2_r_rA  Active-indexed d^2S/(dr dR_A)
-   !> @param[in]  lsf3_rr_rA Active-indexed d^3S/(dr^2 dR_A)
+   !> @param[in]  lsf3_rr_rA Active-indexed packed d^3S/(dr^2 dR_A)
    !> @param[out] s1_rA      dS/dR_A of this atom [3]
    !> @param[out] s2_r_rA    d^2S/(dr dR_A) of this atom [3, 3]
-   !> @param[out] s3_rr_rA   d^3S/(dr^2 dR_A) of this atom [3, 3, 3]
+   !> @param[out] s3_rr_rA   Packed d^3S/(dr^2 dR_A) of this atom [6, 3]
    pure subroutine gather_lsf_partials(islot, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
                                        s1_rA, s2_r_rA, s3_rr_rA)
       !> LSF active slot, or zero
@@ -1131,19 +1146,19 @@ contains
       real(wp), intent(in) :: lsf1_rA(:, :)
       !> Active-indexed mixed second derivative
       real(wp), intent(in) :: lsf2_r_rA(:, :, :)
-      !> Active-indexed mixed third derivative
-      real(wp), intent(in) :: lsf3_rr_rA(:, :, :, :)
+      !> Active-indexed packed mixed third derivative
+      real(wp), intent(in) :: lsf3_rr_rA(:, :, :)
       !> Gathered nuclear gradient
       real(wp), intent(out) :: s1_rA(3)
       !> Gathered mixed second derivative
       real(wp), intent(out) :: s2_r_rA(3, 3)
-      !> Gathered mixed third derivative
-      real(wp), intent(out) :: s3_rr_rA(3, 3, 3)
+      !> Gathered packed mixed third derivative
+      real(wp), intent(out) :: s3_rr_rA(:, :)
 
       if (islot > 0) then
          s1_rA = lsf1_rA(:, islot)
          s2_r_rA = lsf2_r_rA(:, :, islot)
-         s3_rr_rA = lsf3_rr_rA(:, :, :, islot)
+         s3_rr_rA = lsf3_rr_rA(:, :, islot)
       else
          s1_rA = 0.0_wp
          s2_r_rA = 0.0_wp

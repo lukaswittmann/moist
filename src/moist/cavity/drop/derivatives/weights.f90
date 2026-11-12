@@ -29,12 +29,21 @@ contains
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Calling routine
       character(len=*), intent(in) :: context
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call self%require_built(error)
+      if (allocated(error)) then
+         error%message = context//": "//error%message
+         return
+      end if
+      if (.not. allocated(self%lsf_model)) then
+         call fatal_error(error, context//": level-set model is not initialized")
+         return
+      end if
       if (.not. acc%is_initialized()) then
          call fatal_error(error, context//": accumulator is not initialized")
          return
@@ -79,7 +88,7 @@ contains
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Whether the area channel also folds into the switching channel
       logical, intent(in) :: fold_switching
       !> Folded weights
@@ -127,10 +136,9 @@ contains
       ! adjoint dL/dp_m into dL/dPhi_m, which the seed loop couples to dr/dp
       ! Runs after the folds, since it reads the folded width channel
       allocate (eff%branch_phi_adj(self%ngrid), source=0.0_wp)
-      if (self%ngrid > 0 .and. allocated(self%branch_count)) then
+      if (self%ngrid > 0 .and. allocated(self%offset)) then
          sigma_phi = self%branch_weight%s
-         call compute_branch_phi_adj(self%branch_count(1:self%ngrid), &
-                                     self%anchor_id(1:self%ngrid), &
+         call compute_branch_phi_adj(self%offset, &
                                      self%wbranch(1:self%ngrid), &
                                      self%wleb(1:self%ngrid), &
                                      self%xi0(1:self%ngrid), &
@@ -160,9 +168,9 @@ contains
       type(drop_seed_state_type), intent(inout) :: state
 
       state%alpha_coeff = self%param%phi_alpha
-      state%anchor = self%anchorxyz(:, igrid)
+      state%anchor = self%anchorxyz(:, self%anchor_of_row(igrid))
       state%owner_xyz = self%mol%xyz(:, self%owner(igrid))
-      state%anchor_wleb0 = self%anchor_wleb0(igrid)
+      state%anchor_wleb0 = self%anchor_wleb0(self%anchor_of_row(igrid))
       state%cpjac_scal0 = self%cpjac_scal0(igrid)
       state%w_f0 = self%w_f0(igrid)
       state%wbranch = self%wbranch(igrid)
