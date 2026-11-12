@@ -192,7 +192,7 @@
 !> - lift outputs point-last: `lsf0(np)`, `lsf1_r(3, np)`, `lsf2_rr(6, np)`,
 !>   `lsf3_rrr(10, np)`, `lsf4_rrrr(15, np)`
 !> - symmetric groups packed as sorted tuples a <= b <= c <= d, last index slowest,
-!>   as `moist_math_packed_sym`:
+!>   as `moist_math_packed`:
 !>
 !>    slot = a + b(b-1)/2 + (c-1)c(c+1)/6 + (d-1)d(d+1)(d+2)/24
 !>

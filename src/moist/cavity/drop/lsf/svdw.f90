@@ -21,7 +21,7 @@
 !>   [[active_count]], first `active_count()` slots written, rest untouched
 !> - keeps the OpenMP projection path free of per-call heap traffic
 !> - symmetric spatial groups packed (rank 2: 6, rank 3: 10, rank 4: 15) as
-!>   [[moist_math_packed_sym]]; nuclear and radius indices dense
+!>   [[moist_math_packed]]; nuclear and radius indices dense
 !> - nuclear indices are active-list slots, slot `i` the atom `active_atom(i)`; screened-away
 !>   atoms have no slot, so no zeroing over the whole molecule
 !>
@@ -85,7 +85,7 @@ module moist_cavity_drop_lsf_svdw
                                          lsf_cand_bound_sq, lsf_batch_require_outputs, &
                                          lsf_sorted_candidates, lsf_screen_records, &
                                          lsf_vjp_batch_shape_message
-   use moist_math_packed_sym, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4, &
+   use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4, &
                                     unpack_sym_matrix
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_lsf_svdw_kernel, only: nkind, &
@@ -121,7 +121,7 @@ module moist_cavity_drop_lsf_svdw
    !> Strip width of the nuclear vjp pipeline, the order-2 width
    integer, parameter :: vjp_strip = svdw_strip_width(2)
 
-   !> Packed slot of a dense rank-2 index, the kernel's and `moist_math_packed_sym`'s order
+   !> Packed slot of a dense rank-2 index, the kernel's and `moist_math_packed`'s order
    integer, parameter :: slot2(ndim, ndim) = reshape([1, 2, 4, 2, 3, 5, 4, 5, 6], [ndim, ndim])
    !> Packed slot of a dense rank-3 index
    integer, parameter :: slot3(ndim, ndim, ndim) = reshape([ &

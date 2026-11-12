@@ -31,7 +31,7 @@ module moist_cavity_drop_lsf_isodensity_internal
                                          lsf_vjp_batch_shape_message
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type, &
                                                    moist_iso_gto_tile_type, moist_iso_gto_tile_width
-   use moist_math_packed_sym, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4
+   use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &

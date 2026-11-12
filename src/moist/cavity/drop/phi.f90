@@ -4,7 +4,7 @@
 !> point on the DROP level set surface
 !>
 !> - the level set constraint is owned and evaluated by the projector
-module moist_cavity_drop_objective_phi
+module moist_cavity_drop_phi
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -20,7 +20,7 @@ module moist_cavity_drop_objective_phi
    !> \phi(\mathbf{r}) = \frac{w_a}{2}\|\mathbf{r} - \mathbf{r}^\circ\|^2
    !> $$
    !> where $\mathbf{r}^\circ$ is the anchor point and $w_a$ is `param%phi_alpha`
-   type :: moist_cavity_drop_objective_phi_type
+   type :: moist_cavity_drop_phi_type
       !> Parameters for the DROP cavity
       type(moist_cavity_drop_parameters_type) :: param
 
@@ -45,9 +45,9 @@ module moist_cavity_drop_objective_phi
       procedure :: f2_rArB => phi2_rArB
       !> Mixed derivatives
       procedure :: f2_r_rA => phi2_r_rA
-   end type moist_cavity_drop_objective_phi_type
+   end type moist_cavity_drop_phi_type
 
-   public :: moist_cavity_drop_objective_phi_type
+   public :: moist_cavity_drop_phi_type
 
 contains
 
@@ -56,7 +56,7 @@ contains
    !> @param[inout] self Objective instance
    !> @param[in]    param DROP cavity parameters
    subroutine phi_type_set_parameters(self, param)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       type(moist_cavity_drop_parameters_type), intent(in) :: param
 
       self%param = param
@@ -68,7 +68,7 @@ contains
    !> @param[in]    mol Molecular structure
    !> @param[in]    radii Atomic radii
    subroutine phi_type_set_input(self, mol, radii)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
 
@@ -83,7 +83,7 @@ contains
    !> @param[in]    owner Anchor owner index
    !> @returns      val phi value
    function phi0(self, pt, anch, owner) result(val)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
@@ -102,7 +102,7 @@ contains
    !> @param[in]    owner Anchor owner index
    !> @returns      gradient Spatial gradient
    function phi1_r(self, pt, anch, owner) result(gradient)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
@@ -111,28 +111,29 @@ contains
       gradient = self%param%phi_alpha*(pt - anch)
    end function phi1_r
 
-   !> Compute the spatial Hessian of phi
+   !> Compute the packed spatial Hessian of phi
+   !>
+   !> Packed order of [[moist_math_packed]]
    !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
    !> @param[in]    anch Anchor coordinates
    !> @param[in]    owner Anchor owner index
-   !> @returns      hessian Spatial Hessian
+   !> @returns      hessian Packed spatial Hessian
    function phi2_rr(self, pt, anch, owner) result(hessian)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
-      real(wp) :: hessian(ndim, ndim)
-      integer :: i
+      real(wp) :: hessian(6)
 
       hessian = 0.0_wp
-      do i = 1, ndim
-         hessian(i, i) = self%param%phi_alpha
-      end do
+      hessian([1, 3, 6]) = self%param%phi_alpha
    end function phi2_rr
 
-   !> Compute phi, spatial gradient, and spatial Hessian
+   !> Compute phi, spatial gradient, and packed spatial Hessian
+   !>
+   !> Packed order of [[moist_math_packed]]
    !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
@@ -140,17 +141,16 @@ contains
    !> @param[in]    owner Anchor owner index
    !> @param[out]   val phi value
    !> @param[out]   gradient Optional spatial gradient
-   !> @param[out]   hessian Optional spatial Hessian
+   !> @param[out]   hessian Optional packed spatial Hessian
    subroutine phi012_r(self, pt, anch, owner, val, gradient, hessian)
-      class(moist_cavity_drop_objective_phi_type), intent(inout) :: self
+      class(moist_cavity_drop_phi_type), intent(inout) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
       real(wp), intent(out) :: val
       real(wp), intent(out), optional :: gradient(ndim)
-      real(wp), intent(out), optional :: hessian(ndim, ndim)
+      real(wp), intent(out), optional :: hessian(:)
       real(wp) :: diff(ndim)
-      integer :: i
 
       diff = pt - anch
       val = 0.5_wp*self%param%phi_alpha*sum(diff*diff)
@@ -159,9 +159,7 @@ contains
 
       if (present(hessian)) then
          hessian = 0.0_wp
-         do i = 1, ndim
-            hessian(i, i) = self%param%phi_alpha
-         end do
+         hessian([1, 3, 6]) = self%param%phi_alpha
       end if
    end subroutine phi012_r
 
@@ -173,7 +171,7 @@ contains
    !> @param[in] ownid Owner atom index
    !> @returns   gradient Nuclear gradient
    pure function phi1_rA(self, pt, anch, ownid) result(gradient)
-      class(moist_cavity_drop_objective_phi_type), intent(in) :: self
+      class(moist_cavity_drop_phi_type), intent(in) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: ownid
@@ -193,7 +191,7 @@ contains
    !> @param[in] ownid Owner atom index
    !> @returns   hessian Nuclear Hessian
    pure function phi2_rArB(self, pt, anch, ownid) result(hessian)
-      class(moist_cavity_drop_objective_phi_type), intent(in) :: self
+      class(moist_cavity_drop_phi_type), intent(in) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: ownid
@@ -216,7 +214,7 @@ contains
    !> @param[in] ownid Owner atom index
    !> @returns   deriv Mixed derivative
    pure function phi2_r_rA(self, pt, anch, ownid) result(deriv)
-      class(moist_cavity_drop_objective_phi_type), intent(in) :: self
+      class(moist_cavity_drop_phi_type), intent(in) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: ownid
@@ -239,7 +237,7 @@ contains
    !> @param[in] owner Anchor owner index
    !> @returns   deriv Zero third derivative tensor
    pure function phi3_rrr(self, pt, anch, owner) result(deriv)
-      class(moist_cavity_drop_objective_phi_type), intent(in) :: self
+      class(moist_cavity_drop_phi_type), intent(in) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
@@ -256,7 +254,7 @@ contains
    !> @param[in] owner Anchor owner index
    !> @returns   deriv Zero fourth derivative tensor
    pure function phi4_rrrr(self, pt, anch, owner) result(deriv)
-      class(moist_cavity_drop_objective_phi_type), intent(in) :: self
+      class(moist_cavity_drop_phi_type), intent(in) :: self
       real(wp), intent(in) :: pt(ndim)
       real(wp), intent(in) :: anch(ndim)
       integer, intent(in) :: owner
@@ -265,4 +263,4 @@ contains
       deriv = 0.0_wp
    end function phi4_rrrr
 
-end module moist_cavity_drop_objective_phi
+end module moist_cavity_drop_phi

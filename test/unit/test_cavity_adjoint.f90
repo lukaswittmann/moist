@@ -10,22 +10,22 @@
 !>   its own error message
 !> - Error paths (`should_fail`): an uninitialized accumulator and mis-shaped
 !>   vector or scalar weights each fail through their own named error
-module test_cavity_surface_adjoint
+module test_cavity_adjoint
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    implicit none(type, external)
    private
 
-   public :: collect_cavity_surface_adjoint
+   public :: collect_cavity_adjoint
 
 contains
 
-   !> Collect all cavity_surface_adjoint tests
+   !> Collect all cavity_adjoint tests
    !>
    !> @param[out] testsuite  collected unit tests
-   subroutine collect_cavity_surface_adjoint(testsuite)
+   subroutine collect_cavity_adjoint(testsuite)
       !> Collected unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
@@ -39,7 +39,7 @@ contains
                   new_unittest("bad_normal_shape", test_normal_fails, should_fail=.true.), &
                   new_unittest("bad_area_size", test_area_fails, should_fail=.true.) &
                   ]
-   end subroutine collect_cavity_surface_adjoint
+   end subroutine collect_cavity_adjoint
 
    !> Fail an expected-failure test only on the targeted library error
    !>
@@ -67,7 +67,7 @@ contains
    subroutine test_storage(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
 
       call check(error, .not. acc%is_initialized(), "default surface adjoint claims to be initialized")
       if (allocated(error)) return
@@ -111,7 +111,7 @@ contains
    subroutine test_accumulate(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
       real(wp) :: v3(3, 2), s(2), c(3)
 
@@ -139,7 +139,7 @@ contains
    subroutine test_initialized_shapes(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       integer :: channel
 
       ! Each case drops one channel
@@ -225,7 +225,7 @@ contains
    subroutine test_all_weight_shapes(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
       integer :: channel
       real(wp) :: scalar(2), short_vector(2, 3), long_vector(3, 4)
@@ -287,7 +287,7 @@ contains
    subroutine test_uninit_fails(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
 
       call acc%add_surface_weights(err, w_a=[1.0_wp])
@@ -298,7 +298,7 @@ contains
    subroutine test_xyz_fails(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
       real(wp) :: w_xyz(3, 4)
 
@@ -312,7 +312,7 @@ contains
    subroutine test_normal_fails(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
       real(wp) :: w_n(2, 3)
 
@@ -326,7 +326,7 @@ contains
    subroutine test_area_fails(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
 
       call acc%init(3)
@@ -334,4 +334,4 @@ contains
       call expect_error(error, err, "area weight size mismatch")
    end subroutine test_area_fails
 
-end module test_cavity_surface_adjoint
+end module test_cavity_adjoint
