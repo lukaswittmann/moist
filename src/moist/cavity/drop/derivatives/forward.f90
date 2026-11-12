@@ -356,7 +356,7 @@ contains
          if (do_timing) call self%ctx%timer%start(h_prim)
 
          point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, self%anchor_of_row(igrid))
+         anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
          owner_idx = self%owner(igrid)
          lambda_val = self%lambda0(igrid)
 
@@ -673,7 +673,7 @@ contains
 
          ! Lebedev weight switching factor: d(w_pre * S)/dR = (S + |w_pre|*S') * d(w_pre)/dR
          if (self%param%wleb_prune_level > 0) then
-            w_pre_i = self%anchor_wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid)*self%w_f0(igrid)
+            w_pre_i = self%anchor%wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid)*self%w_f0(igrid)
             call self%f_wleb%eval(abs(w_pre_i), f_wleb_s, f_wleb_ds)
             wleb_prune_factor = f_wleb_s + abs(w_pre_i)*f_wleb_ds
          else
@@ -825,8 +825,8 @@ contains
 
                ! d(wleb)/dr_A = wbranch * (S + |w_pre|*S') * d(w_pre)/dr_A
                ! where w_pre = anchor_wleb * cpjac * w_f
-               dw_pre_dR = self%anchor_wleb0(self%anchor_of_row(igrid))*self%w_f0(igrid)*dJ_dR &
-                           + self%anchor_wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid) &
+               dw_pre_dR = self%anchor%wleb0(self%anchor_of_row(igrid))*self%w_f0(igrid)*dJ_dR &
+                           + self%anchor%wleb0(self%anchor_of_row(igrid))*self%cpjac_scal0(igrid) &
                            *self%w_f1_rA(iaxis, iatom, igrid)
                self%wleb1_rA(iaxis, iatom, igrid) = &
                   self%wbranch(igrid)*wleb_prune_factor*dw_pre_dR
@@ -901,7 +901,7 @@ contains
          !> iswig switching derivatives: evaluated at anchor position, at the
          !> anchor width, which has no nuclear dependence
          self%f1_rA(:, :, igrid) = 0.0_wp
-         call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor_xi0(self%anchor_of_row(igrid)), &
+         call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor%xi0(self%anchor_of_row(igrid)), &
                                    1.0_wp, iswig_work, self%f1_rA(:, :, igrid))
 
          if (do_timing) call self%ctx%timer%stop(h_sw)
@@ -1008,14 +1008,14 @@ contains
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
       max_group = 0
-      if (self%ngrid > 0) max_group = maxval(self%offset(2:self%nmax + 1) - self%offset(1:self%nmax))
+      if (self%ngrid > 0) max_group = maxval(self%offset(2:self%anchor%ngrid + 1) - self%offset(1:self%anchor%ngrid))
       if (max_group > 1) then
          allocate (branch_phi(max_group), source=0.0_wp)
          allocate (branch_dphi(3*self%nsph, max_group), source=0.0_wp)
          allocate (branch_weights(max_group), source=0.0_wp)
          allocate (branch_dweights(3*self%nsph, max_group), source=0.0_wp)
 
-         do ia_group = 1, self%nmax
+         do ia_group = 1, self%anchor%ngrid
             ! An anchor's rows are one contiguous group
             igroup_start = self%offset(ia_group) + 1
             igroup_end = self%offset(ia_group + 1)
@@ -1029,7 +1029,7 @@ contains
 
                owner_m = self%owner(im_grid)
                pt_m = self%xyz(:, im_grid)
-               anch_m = self%anchorxyz(:, ia_group)
+               anch_m = self%anchor%xyz(:, ia_group)
                ! phi = 0.5 * alpha * |r* - anch|^2, so d phi / d r = alpha * (r* - anch)
                phi1_r_m = self%param%phi_alpha*(pt_m - anch_m)
 

@@ -168,9 +168,9 @@ contains
       type(drop_seed_state_type), intent(inout) :: state
 
       state%alpha_coeff = self%param%phi_alpha
-      state%anchor = self%anchorxyz(:, self%anchor_of_row(igrid))
+      state%anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
       state%owner_xyz = self%mol%xyz(:, self%owner(igrid))
-      state%anchor_wleb0 = self%anchor_wleb0(self%anchor_of_row(igrid))
+      state%anchor_wleb0 = self%anchor%wleb0(self%anchor_of_row(igrid))
       state%cpjac_scal0 = self%cpjac_scal0(igrid)
       state%w_f0 = self%w_f0(igrid)
       state%wbranch = self%wbranch(igrid)
