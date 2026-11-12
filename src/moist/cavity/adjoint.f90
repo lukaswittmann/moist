@@ -2,18 +2,18 @@
 !>
 !> Owns surface positions, widths, areas, switching factors, normals and
 !> curvatures for the cavity reverse pass, plus the volume origin
-module moist_cavity_surface_adjoint
+module moist_cavity_adjoint
    use mctc_env, only: wp, error_type, fatal_error
 
    implicit none(type, external)
    private
 
-   public :: cavity_surface_adjoint_type
+   public :: cavity_adjoint_type
 
    !> Adjoint weights for the common quantities of a discretized cavity surface
    !>
    !> Owns every surface channel and the volume-origin channel
-   type :: cavity_surface_adjoint_type
+   type :: cavity_adjoint_type
       !> Weights for point positions r_i (3, ngrid)
       real(wp), allocatable :: w_xyz(:, :)
       !> Weights for integration weights w_i (ngrid)
@@ -42,7 +42,7 @@ module moist_cavity_surface_adjoint
       procedure :: add_surface_weights
       !> Report whether every channel is allocated with consistent shapes
       procedure :: is_initialized => surface_adjoint_is_initialized
-   end type cavity_surface_adjoint_type
+   end type cavity_adjoint_type
 
 contains
 
@@ -52,7 +52,7 @@ contains
    !> @param[in]    ngrid Number of surface grid points
    subroutine init_surface_adjoint(self, ngrid)
       !> Surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: self
+      class(cavity_adjoint_type), intent(inout) :: self
       !> Number of surface grid points
       integer, intent(in) :: ngrid
 
@@ -83,7 +83,7 @@ contains
    !> @param[inout] self  Surface-adjoint accumulator
    subroutine zero_surface_adjoint(self)
       !> Surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: self
+      class(cavity_adjoint_type), intent(inout) :: self
 
       if (allocated(self%w_xyz)) self%w_xyz = 0.0_wp
       if (allocated(self%w_w)) self%w_w = 0.0_wp
@@ -112,7 +112,7 @@ contains
    !> @param[in]    w_c   Optional volume-origin weights (3)
    subroutine add_surface_weights(self, error, w_xi, w_f, w_xyz, w_n, w_k1, w_k2, w_a, w_w, w_c)
       !> Surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: self
+      class(cavity_adjoint_type), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Optional scalar surface weights
@@ -203,7 +203,7 @@ contains
    !> @param[in] self  Surface-adjoint accumulator
    pure logical function surface_adjoint_is_initialized(self) result(initialized)
       !> Surface-adjoint accumulator
-      class(cavity_surface_adjoint_type), intent(in) :: self
+      class(cavity_adjoint_type), intent(in) :: self
 
       !> Number of surface grid points
       integer :: ngrid
@@ -230,11 +230,11 @@ contains
    !> @param[in] self  Accumulator
    pure integer function surface_adjoint_size(self) result(ngrid)
       !> Accumulator
-      class(cavity_surface_adjoint_type), intent(in) :: self
+      class(cavity_adjoint_type), intent(in) :: self
 
       ngrid = 0
       if (allocated(self%w_xi)) ngrid = size(self%w_xi)
 
    end function surface_adjoint_size
 
-end module moist_cavity_surface_adjoint
+end module moist_cavity_adjoint

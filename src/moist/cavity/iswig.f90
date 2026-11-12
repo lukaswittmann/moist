@@ -11,7 +11,7 @@ module moist_cavity_iswig
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, add_volume_origin_gradient, &
       & update_cavity_base
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_bornzeta, only: born_zeta_nleb, get_born_zeta
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -448,7 +448,7 @@ contains
       !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
       !> Accumulated surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling

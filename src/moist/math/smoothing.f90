@@ -3,7 +3,7 @@
 !> References:
 !> https://pysph.readthedocs.io/en/main/reference/kernels.html
 !> https://ludwigboess.github.io/SPHKernels.jl/stable/kernels/
-module moist_math_smoothing_kernels
+module moist_math_smoothing
 
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
@@ -453,4 +453,4 @@ contains
       dwdh = -self%prefactor/self%h*(dwdq*q + w*real(self%dimension, wp))
    end function wendland_gradient_h
 
-end module moist_math_smoothing_kernels
+end module moist_math_smoothing

@@ -20,7 +20,7 @@ module moist_model_continuum_component_gostshyp
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_register, request_require
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_utils_prettyprint, only: prettyprinter
 
@@ -730,7 +730,7 @@ contains
       !> Live model cavity
       class(cavity_type), intent(in) :: cavity
       !> Surface accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
