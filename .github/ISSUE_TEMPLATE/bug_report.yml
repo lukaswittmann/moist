@@ -9,11 +9,48 @@ body:
       description: What happened, and what did you expect instead?
     validations:
       required: true
+  - type: dropdown
+    id: frontend
+    attributes:
+      label: How did you run MOIST?
+      options:
+        - Standalone CLI
+        - Python API
+        - C API
+        - Fortran API
+        - PySCF
+        - ORCA
+        - TURBOMOLE
+        - Other host program (name it below)
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host program and version
+      description: Only if MOIST ran inside another program
+      placeholder: ORCA 7.0.0
+  - type: dropdown
+    id: standalone
+    attributes:
+      label: Does it reproduce without the host program?
+      description: >-
+        Running the same system with the standalone CLI or PySCF tells us
+        whether the problem is in MOIST or in the host coupling
+      options:
+        - Not applicable, I ran MOIST directly
+        - Yes, also with the standalone CLI or PySCF
+        - No, only inside the host program
+        - Not tried
+    validations:
+      required: true
   - type: textarea
     id: reproduce
     attributes:
       label: Steps to reproduce
-      description: Minimal input (geometry, model, settings) or code snippet that triggers the problem
+      description: >-
+        Minimal input (geometry, model, settings) or code snippet. For a host
+        program, attach its input file
       render: shell
     validations:
       required: true
@@ -21,20 +58,27 @@ body:
     id: output
     attributes:
       label: Output / error message
-      description: MOIST output, with verbosity raised (`-v -v`) and debug flags (`-d`) if possible
+      description: >-
+        MOIST part of the output. With the CLI, raise verbosity (`-v -v`) and
+        add `-d`; inside a host program, raise its MOIST print level if it has one
       render: shell
   - type: input
     id: version
     attributes:
       label: MOIST version
-      description: Release tag or commit hash
+      description: >-
+        As printed in the output banner, by `moist --version`, or by
+        `moist.__version__`. Inside a host program, the version in the host output
+      placeholder: 1.2.1-alpha
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Environment
-      description: OS, compiler and version, build system (meson/cmake), BLAS/LAPACK provider
+      description: >-
+        OS, compiler and version, build system (meson/cmake), BLAS/LAPACK
+        provider. For prebuilt host binaries, the OS is enough
       placeholder: macOS 15, gfortran 14.3, meson, OpenBLAS
     validations:
       required: true
