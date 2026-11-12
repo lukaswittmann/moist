@@ -208,7 +208,7 @@ contains
             if (abort%requested) cycle
 
             igrid = igrid0 + p - 1
-            anchor = self%anchorxyz(:, self%anchor_of_row(igrid))
+            anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
             owner_idx = self%owner(igrid)
             call fill_seed_state(self, igrid, eff%have_wk, state)
 
@@ -244,7 +244,7 @@ contains
             ! f_i depends on the nuclear geometry alone and is the same for every
             ! row of an anchor, whose rows are contiguous:
             ! the first row carries the summed weight of the run, evaluated once at fixed width
-            ! (anchor_xi0 has no nuclear dependence)
+            ! (anchor%xi0 has no nuclear dependence)
             ia = self%anchor_of_row(igrid)
             if (igrid > 1) then
                if (self%anchor_of_row(igrid - 1) == ia) cycle
@@ -259,7 +259,7 @@ contains
                end if
             end do
             if (have_switch) then
-               call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor_xi0(ia), w_switch, &
+               call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor%xi0(ia), w_switch, &
                                          iswig_work, tile_grad)
                do k = 1, iswig_work%n
                   call touch_row(iswig_work%k(k), in_row, row_atoms, nrow)

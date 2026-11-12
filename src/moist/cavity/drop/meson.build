@@ -4,10 +4,10 @@ srcs += files(
   'phi.f90',
   'gaussian.f90',
   'projection.f90',
-  'filter.f90',
-  'setup.f90',
+  'anchor.f90',
   'properties.f90',
   'threads.f90',
+  'tile.f90',
 )
 
 subdir('lsf')
