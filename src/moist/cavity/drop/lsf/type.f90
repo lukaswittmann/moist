@@ -29,13 +29,27 @@
 !>
 !> Batched families
 !> ----------------
-!> Point-last, packed symmetric groups, one shared candidate list per tile, per-column `status`
-!> (0 ok, 1 unreached, 2 failed); looping default over the single-point path, overridable by
-!> a kernel:
+!> Point-last, packed symmetric groups, one shared candidate list per tile; unreached columns
+!> read back through `unreached(column)`; looping default over the single-point path,
+!> overridable by a kernel:
 !>
 !>   - `evaluate_batch`: the jet, orders 0..4
 !>   - `vjp_f1_rA_batch`: seed-contracted nuclear derivative of the jet (batched `vjp_f1_rA`),
 !>     output `(3, ncand, np)`, exact zeros out of reach
+!>
+!> Unreached points
+!> ----------------
+!> A point beyond the reach of every atom: no atom survives the screen, the level-set argument
+!> (`PD`, `Z`) is not positive, or the jet is not finite on the exterior side (`S > 0`, or a
+!> NaN `S` from a round-off `Z <= 0`); SvdW and CFC only, never isodensity or SSES
+!>
+!>   - not an `error`: `error` is kept for genuine failures (refused configuration, host
+!>     callback, core fill, a jet not finite inside with `S <= 0`, e.g. on a nucleus)
+!>   - `unreached()` after `prepare` / `prepare_subset`; the per-point accessors abort there
+!>   - `unreached(column)` after `evaluate_batch` / `vjp_f1_rA_batch`, valid until the next
+!>     batch call on the same instance; an unreached column holds NaN derivatives and
+!>     `S` itself where finite (only a derivative overflowed), else `+Inf` (`-log 0`, the
+!>     exterior limit); a NaN `vjp_f1_rA_batch` result
 !>
 !> Atomic partition
 !> ----------------
@@ -56,7 +70,7 @@
 !>     - consumer: octree surface coverage, "can I discard this region?"
 !>     - safe answer **zero** (prune nothing); an over-estimate silently loses branches
 !>     - companion [[far_exclusion_radius]]`()`: same promise for every point no atom reaches
-!>       (batch `status = 1`), a model constant, zero by default
+!>       (an unreached batch column), a model constant, zero by default
 !>   - [[screening_offset]]`(radius)`: maximum distance from the point of an *atom* still
 !>     contributing above `screening_threshold` (SvdW with fade: the band end, threshold unread)
 !>     - consumer: screening, "can I skip this atom?"
@@ -96,8 +110,8 @@
 !>   - one clone per [[lsf_thread_slot]], each allocated independently
 module moist_cavity_drop_lsf_base
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-   use mctc_env, only: error_type, fatal_error
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
+   use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
@@ -179,13 +193,19 @@ module moist_cavity_drop_lsf_base
       !> Highest spatial derivative order actually present in the per-point cache after
       !> the latest `prepare`/`prepare_subset`
       integer :: prepared_deriv = -1
-      !> Point of the latest `prepare`/`prepare_subset` is unreached (escape)
+      !> Point of the latest `prepare`/`prepare_subset` is unreached
       !>
       !> - set by every concrete `prepare`; SvdW and CFC only, never for the
       !>   isodensity LSFs or SSES
       !> - every accessor aborts on it ([[lsf_base_require_reached]]), except
       !>   `active_count` and `active_atom`
       logical :: prepared_unreached = .false.
+      !> Unreached columns of the latest batch call, read through `unreached(column)`
+      !>
+      !> - grows only ([[lsf_base_begin_batch]]); `batch_width` entries are valid
+      logical, allocatable :: batch_unreached(:)
+      !> Columns of the latest `evaluate_batch` / `vjp_f1_rA_batch`
+      integer :: batch_width = 0
 
       !> Index space the concrete LSF wants its `prepare_subset` candidate ids in
       !> Set by the concrete's constructor to [[lsf_candidate_space_user]] or
@@ -302,10 +322,10 @@ module moist_cavity_drop_lsf_base
       procedure :: require_deriv => lsf_base_require_deriv
       !> Abort when an accessor reads the cache of an unreached prepare
       procedure :: require_reached => lsf_base_require_reached
-      !> Whether the prepared point is unreached, no atom in reach
-      procedure :: unreached => lsf_base_unreached
-      !> Report an unreached prepare through `status`, or as `error` without it
-      procedure :: report_unreached => lsf_base_report_unreached
+      !> Whether the prepared point, or a column of the latest batch, is unreached
+      procedure, non_overridable :: unreached => lsf_base_unreached
+      !> Size and clear the unreached mask of a batch call
+      procedure, non_overridable :: begin_batch => lsf_base_begin_batch
       !> Batched jet at many points, orders 0..4; the looping default is correct,
       !> concrete LSFs override it with a vectorized kernel (SvdW: strip kernel)
       procedure :: evaluate_batch => lsf_base_evaluate_batch
@@ -402,31 +422,26 @@ module moist_cavity_drop_lsf_base
 
    abstract interface
 
-      !> Escape contract shared with `prepare_subset`, mirroring `evaluate_batch`:
-      !>   - `status` present: 0 ok, 1 unreached (no atom within reach, or the
-      !>     level-set argument `Z` / `PD` not positive); no `error` for it
-      !>   - `status` absent: an unreached point is an `error` ("point is
-      !>     unreached (no atom within reach)")
-      !>   - both ways the cache is left readable but unreached: every accessor
-      !>     then aborts, `active_count` / `active_atom` keep working
-      !>   - `error` otherwise only for genuine failures (refused configuration,
-      !>     host callback, core fill), `status` then 0
-      !>   - isodensity and SSES are never unreached (`status = 0`)
+      !> Unreached contract shared with `prepare_subset`:
+      !>   - an unreached point (no atom within reach, `Z` / `PD` not positive, or a
+      !>     jet not finite on the exterior side) is no `error`: `unreached()` reports
+      !>     it, every accessor then aborts, `active_count` / `active_atom` keep working
+      !>   - `error` only for genuine failures (refused configuration, host
+      !>     callback, core fill, a jet not finite inside, e.g. on a nucleus)
+      !>   - isodensity and SSES are never unreached
       !>
       !> @param[inout] self   LSF instance
       !> @param[in]    point  Evaluation point (3,)
       !> @param[out]   error  Evaluation failure at this point
-      !> @param[out]   status 0 ok, 1 unreached (optional)
-      subroutine lsf_prepare_iface(self, point, error, status)
+      subroutine lsf_prepare_iface(self, point, error)
          import :: wp, error_type, moist_cavity_drop_lsf_type
          implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
          type(error_type), allocatable, intent(out) :: error
-         integer, intent(out), optional :: status
       end subroutine lsf_prepare_iface
 
-      !> Escape contract as [[lsf_prepare_iface]]
+      !> Unreached contract as [[lsf_prepare_iface]]
       !>
       !> @param[inout] self              LSF instance
       !> @param[in]    point             Evaluation point (3,)
@@ -434,15 +449,13 @@ module moist_cavity_drop_lsf_base
       !>                                 LSF's declared `candidate_space`; unique
       !>                                 ids in 1..ncenters
       !> @param[out]   error             Evaluation failure at this point
-      !> @param[out]   status            0 ok, 1 unreached (optional)
-      subroutine lsf_prepare_subset_iface(self, point, candidate_indices, error, status)
+      subroutine lsf_prepare_subset_iface(self, point, candidate_indices, error)
          import :: wp, error_type, moist_cavity_drop_lsf_type
          implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
          integer, intent(in) :: candidate_indices(:)
          type(error_type), allocatable, intent(out) :: error
-         integer, intent(out), optional :: status
       end subroutine lsf_prepare_subset_iface
 
       !> @param[inout] self LSF instance
@@ -930,56 +943,63 @@ contains
       error stop "moist DROP LSF: accessor called after an unreached prepare ("//caller//")"
    end subroutine lsf_base_require_reached
 
-   !> Whether the point of the latest `prepare` / `prepare_subset` is unreached
+   !> Whether the latest prepared point, or a column of the latest batch, is unreached
    !>
-   !> - unreached: no atom within reach, or `Z` / `PD` not positive; the LSF has
-   !>   no value there (escape)
+   !> - unreached: no atom within reach, `Z` / `PD` not positive, or a jet not
+   !>   finite on the exterior side; the LSF has no finite value there
    !> - never for isodensity (an empty set is a defined value there) or SSES
-   !> - the same flag `prepare`'s `status = 1` reports
+   !> - `column` absent: the latest `prepare` / `prepare_subset`
+   !> - `column` present: that column of the latest `evaluate_batch` /
+   !>   `vjp_f1_rA_batch`; `error stop` outside `1..batch_width`
    !>
-   !> @param[in] self      LSF instance after `prepare`
-   !> @returns   unreached Point has no atom in reach
-   pure function lsf_base_unreached(self) result(unreached)
+   !> @param[in] self      LSF instance after `prepare` or a batch call
+   !> @param[in] column    Batch column (optional)
+   !> @returns   unreached Point or column is unreached
+   pure function lsf_base_unreached(self, column) result(unreached)
       !> LSF instance
       class(moist_cavity_drop_lsf_type), intent(in) :: self
-      !> Point has no atom in reach
+      !> Batch column
+      integer, intent(in), optional :: column
+      !> Point or column is unreached
       logical :: unreached
 
-      unreached = self%prepared_unreached
-   end function lsf_base_unreached
-
-   !> Report the latest prepare's escape: `status = 1`, or an `error` without `status`
-   !>
-   !> - called last by every concrete `prepare` that can be unreached, after
-   !>   `prepared_unreached` is set
-   !> - the message says "no atom within reach", qualified when atoms are active
-   !>   and the lifted jet is not finite instead
-   !> - leaves `status` and `error` alone for a reached point
-   !>
-   !> @param[in]    self   LSF instance after the screen
-   !> @param[inout] error  Set for an unreached point without `status`
-   !> @param[inout] status Set to 1 for an unreached point (optional)
-   subroutine lsf_base_report_unreached(self, error, status)
-      !> LSF instance
-      class(moist_cavity_drop_lsf_type), intent(in) :: self
-      !> Set for an unreached point without `status`
-      type(error_type), allocatable, intent(inout) :: error
-      !> Set to 1 for an unreached point
-      integer, intent(inout), optional :: status
-
-      if (.not. self%prepared_unreached) return
-      if (present(status)) then
-         status = 1
+      if (.not. present(column)) then
+         unreached = self%prepared_unreached
          return
       end if
-      if (self%active_count() > 0) then
-         call fatal_error(error, "prepare: point is unreached (no atom within reach) or the "// &
-                          "value is not finite with atoms in reach ("//self%name//")")
-      else
-         call fatal_error(error, "prepare: point is unreached (no atom within reach) ("// &
-                          self%name//")")
+      if (column < 1 .or. column > self%batch_width) then
+         error stop "moist DROP LSF: unreached(column) outside the latest batch ("//self%name//")"
       end if
-   end subroutine lsf_base_report_unreached
+      unreached = self%batch_unreached(column)
+   end function lsf_base_unreached
+
+   !> Size and clear the unreached mask for a batch call of `n` columns
+   !>
+   !> - called by every `evaluate_batch` / `vjp_f1_rA_batch` after its argument checks
+   !> - grows only; `batch_unreached(1:n)` cleared, `batch_width = n`
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    n    Batch columns
+   pure subroutine lsf_base_begin_batch(self, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Batch columns
+      integer, intent(in) :: n
+
+      !> Capacity of the reallocated mask
+      integer :: cap
+
+      cap = max(n, 64)
+      if (allocated(self%batch_unreached)) then
+         if (size(self%batch_unreached) < n) then
+            cap = max(n, 2*size(self%batch_unreached))
+            deallocate (self%batch_unreached)
+         end if
+      end if
+      if (.not. allocated(self%batch_unreached)) allocate (self%batch_unreached(cap))
+      self%batch_unreached(1:n) = .false.
+      self%batch_width = n
+   end subroutine lsf_base_begin_batch
 
    !> Level set jet at a batch of points, up to spatial derivative `order`
    !>
@@ -998,13 +1018,12 @@ contains
    !>     anchor's neighbourhood): unique ids in 1..ncenters (`error stop`
    !>     otherwise), sorted ascending before use; absent means the full screen
    !>     per point
-   !>   - optional `status(n)`: 0 ok, 1 unreached (no atom within reach), 2 failed
-   !>     or not computed (a host error, or a column at or behind the one an
-   !>     `error` stopped at); every entry `1:n` is defined on every return;
-   !>     unreached and failed columns leave their outputs unspecified; with
-   !>     `status` absent an unreached column is an `error`
+   !>   - unreached columns ([[lsf_base_unreached]]`(column)`, valid until the next
+   !>     batch call): `lsf0` the finite `S` where only a derivative overflowed,
+   !>     `+Inf` (`-log 0`, the exterior limit) otherwise, and every derivative
+   !>     through `order` a quiet NaN; no `error` for them
    !>   - `error` names the first failing column and leaves the remaining columns
-   !>     unspecified, their `status` 2
+   !>     and the unreached mask unspecified
    !>   - the single-point accessor cache (`f0`, `f012_r`, ...) is unspecified
    !>     after this call; re-`prepare` before reading it
    !>
@@ -1013,12 +1032,9 @@ contains
    !>     the per-point accessors for every column; `order` above the prepared `set_max_deriv` aborts
    !>     (`require_deriv`), so a caller raises `set_max_deriv(order)` first
    !>   - orders 2..4 call the packed `f012_r` / `f3_rrr` / `f4_rrrr` straight into the columns
-   !>   - unreached as the prepare's `status = 1` says (CFC: no atom in reach;
-   !>     isodensity: never, an empty set is a defined value there): `status = 1`
-   !>     and every output of the column through `order` a quiet NaN, or `error`
-   !>     naming the column when `status` is absent
-   !>   - `status` starts at 2 for every column, so a `prepare` error leaves the
-   !>     failed column and those behind it at 2
+   !>   - unreached as the prepare's `unreached()` says (CFC: no atom in reach;
+   !>     isodensity: never, an empty set is a defined value there); `lsf0 = +Inf`
+   !>     there, the base has no per-point `S` to keep (CFC and SvdW override)
    !>
    !> @param[inout] self              LSF instance
    !> @param[in]    points            Evaluation points (3, n)
@@ -1028,12 +1044,10 @@ contains
    !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n), written for order >= 2
    !> @param[out]   lsf3_rrr          Packed third derivatives (10, n), written for order >= 3
    !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n), written for order 4
-   !> @param[out]   status            Per-column status (n), 0 ok, 1 unreached, 2 failed
-   !>                                 or not computed
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
    !> @param[out]   error             First failing point, by column
    subroutine lsf_base_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
-                                      lsf3_rrr, lsf4_rrrr, status, candidate_indices, error)
+                                      lsf3_rrr, lsf4_rrrr, candidate_indices, error)
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
       real(wp), intent(in), contiguous :: points(:, :)
       integer, intent(in) :: order
@@ -1042,22 +1056,21 @@ contains
       real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
       real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
       real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
-      integer, intent(out), optional, contiguous :: status(:)
       integer, intent(in), optional :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
 
-      !> Fill of an unreached column
+      !> Derivative fill of an unreached column
       real(wp) :: nan
       !> Ascending copy of `candidate_indices(1:nc)`
       integer, allocatable :: sorted(:)
-      !> Column, point count, list size and the prepare's escape status
-      integer :: i, n, nc, pstat
+      !> Column, point count and list size
+      integer :: i, n, nc
       character(len=16) :: col
 
       n = size(points, 2)
       call lsf_batch_require_outputs(self%name, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
-                                     lsf3_rrr, lsf4_rrrr, status)
-      if (present(status)) status(1:n) = 2
+                                     lsf3_rrr, lsf4_rrrr)
+      call self%begin_batch(n)
       if (present(candidate_indices)) then
          allocate (sorted(size(candidate_indices)))
          call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
@@ -1065,25 +1078,19 @@ contains
 
       do i = 1, n
          if (present(candidate_indices)) then
-            call self%prepare_subset(points(:, i), sorted(1:nc), error, pstat)
+            call self%prepare_subset(points(:, i), sorted(1:nc), error)
          else
-            call self%prepare(points(:, i), error, pstat)
+            call self%prepare(points(:, i), error)
          end if
          if (allocated(error)) then
             write (col, "(i0)") i
             error%message = "evaluate_batch failed at point "//trim(col)//": "//error%message
             return
          end if
-         if (pstat /= 0) then
-            write (col, "(i0)") i
-            if (.not. present(status)) then
-               call fatal_error(error, "evaluate_batch: point "//trim(col)// &
-                                " is unreached, no atom within reach ("//self%name//")")
-               return
-            end if
-            status(i) = 1
+         if (self%prepared_unreached) then
+            self%batch_unreached(i) = .true.
             nan = ieee_value(0.0_wp, ieee_quiet_nan)
-            lsf0(i) = nan
+            lsf0(i) = ieee_value(0.0_wp, ieee_positive_inf)
             if (order >= 1) lsf1_r(:, i) = nan
             if (order >= 2) lsf2_rr_packed(:, i) = nan
             if (order >= 3) lsf3_rrr(:, i) = nan
@@ -1106,7 +1113,6 @@ contains
                              lsf3_rrr=lsf3_rrr(:, i))
             call self%f4_rrrr(lsf4_rrrr(:, i))
          end select
-         if (present(status)) status(i) = 0
       end do
    end subroutine lsf_base_evaluate_batch
 
@@ -1119,7 +1125,6 @@ contains
    !> - `order` outside 0..4
    !> - an output of the requested order absent, or with a leading extent other
    !>   than its width (3, 6, 10, 15), or with fewer than `n` columns
-   !> - `status` present with fewer than `n` entries
    !>
    !> @param[in] who       LSF name for the diagnostic
    !> @param[in] points    Evaluation points (3, n); only the extents are read
@@ -1129,9 +1134,8 @@ contains
    !> @param[in] lsf2_rr_packed Packed Hessians (optional)
    !> @param[in] lsf3_rrr  Packed third derivatives (optional)
    !> @param[in] lsf4_rrrr Packed fourth derivatives (optional)
-   !> @param[in] status    Per-column status (optional)
    subroutine lsf_batch_require_outputs(who, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
-                                        lsf3_rrr, lsf4_rrrr, status)
+                                        lsf3_rrr, lsf4_rrrr)
       !> LSF name for the diagnostic
       character(len=*), intent(in) :: who
       !> Evaluation points; only the extents are read
@@ -1148,8 +1152,6 @@ contains
       real(wp), intent(in), optional :: lsf3_rrr(:, :)
       !> Packed fourth derivatives; only the extents are read
       real(wp), intent(in), optional :: lsf4_rrrr(:, :)
-      !> Per-column status; only the extent is read
-      integer, intent(in), optional :: status(:)
 
       character(len=*), parameter :: pre = "moist DROP LSF evaluate_batch: "
       !> Number of points
@@ -1184,9 +1186,6 @@ contains
          if (size(lsf4_rrrr, 1) /= 15 .or. size(lsf4_rrrr, 2) < n) then
             error stop pre//"lsf4_rrrr must be packed (15, >= n) ("//who//")"
          end if
-      end if
-      if (present(status)) then
-         if (size(status) < n) error stop pre//"status holds fewer than n entries ("//who//")"
       end if
    end subroutine lsf_batch_require_outputs
 
@@ -1730,17 +1729,13 @@ contains
    !>     point `p` with respect to the atom of candidate `candidate_indices(k)` (id
    !>     `k` when absent), in the list's own order; exact zero for a candidate out
    !>     of reach of point `p`, never a skipped write
-   !>   - optional `status(np)`: 0 ok, 1 unreached (no atom within reach), 2 failed
-   !>     or not computed; every entry `1:np` is defined on every return; an
-   !>     unreached column is NaN in `res(:, :, p)`
-   !>   - with `status` present an unreached column never stops the tile: the other
-   !>     columns are computed
-   !>   - with `status` absent an unreached column is an `error` naming the column;
-   !>     the columns behind it are unspecified
+   !>   - unreached columns ([[lsf_base_unreached]]`(column)`, valid until the next
+   !>     batch call): NaN in `res(:, :, p)`, never an `error`; the other columns are
+   !>     computed
    !>   - `error` names the first failing column ("vjp_f1_rA_batch failed at point
-   !>     <i>: ...", a `prepare` / `prepare_subset` error) and the call returns, with
-   !>     or without `status`; the failed and later columns are unspecified, their
-   !>     `status` 2, as in `evaluate_batch`
+   !>     <i>: ...", a `prepare` / `prepare_subset` error) and the call returns; the
+   !>     failed and later columns and the unreached mask are unspecified, as in
+   !>     `evaluate_batch`
    !>   - a shape that cannot hold the tile is a caller bug: `error stop`, see
    !>     [[lsf_vjp_batch_shape_message]]
    !>   - the single-point accessor cache is unspecified after this call
@@ -1752,8 +1747,6 @@ contains
    !>     `active_atom` and `cand_to_user`; the rest of the column is zero
    !>   - needs the prepared order the per-point `vjp_f1_rA` needs (2 for SvdW, 3 for
    !>     CFC), a caller raises `set_max_deriv` first; the per-point abort stands
-   !>   - `status` starts at 2 for every column, so a `prepare` error leaves the
-   !>     failed column and those behind it at 2
    !>   - SSES runs this default, one `prepare` per column; both isodensity LSFs
    !>     override it with evaluation-free zero rows
    !>
@@ -1763,11 +1756,9 @@ contains
    !> @param[in]    w1                Adjoint weights of the gradient (3, np)
    !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
    !> @param[out]   res               Contracted nuclear gradient (3, ncand, np)
-   !> @param[out]   status            Per-column status (np), 0 ok, 1 unreached, 2 failed
-   !>                                 or not computed
    !> @param[out]   error             First failing column
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
-   subroutine lsf_base_vjp_f1_rA_batch(self, points, w0, w1, w2, res, status, error, &
+   subroutine lsf_base_vjp_f1_rA_batch(self, points, w0, w1, w2, res, error, &
                                        candidate_indices)
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
       real(wp), intent(in), contiguous :: points(:, :)
@@ -1775,7 +1766,6 @@ contains
       real(wp), intent(in), contiguous :: w1(:, :)
       real(wp), intent(in), contiguous :: w2(:, :)
       real(wp), intent(out), contiguous :: res(:, :, :)
-      integer, intent(out), optional, contiguous :: status(:)
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: candidate_indices(:)
 
@@ -1788,22 +1778,17 @@ contains
       !> Candidate position of user-space atom id, 0 when not a candidate [ncenters]
       integer, allocatable :: position(:)
       type(error_type), allocatable :: column_error
-      !> Column, point count, list size, slot, candidate position, escape status
-      integer :: p, np, ncand, nc, i, k, pstat
+      !> Column, point count, list size, slot, candidate position
+      integer :: p, np, ncand, nc, i, k
       character(len=16) :: col
       character(len=:), allocatable :: msg
 
       np = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      if (present(status)) then
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, &
-                                           status)
-      else
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
-      end if
+      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
       if (len(msg) > 0) error stop msg
-      if (present(status)) status(1:np) = 2
+      call self%begin_batch(np)
 
       ! Candidate position by user-space id; ids validated and sorted as evaluate_batch
       allocate (position(max(self%ncenters, 1)), work(ndim, max(self%ncenters, 1)))
@@ -1823,9 +1808,9 @@ contains
 
       do p = 1, np
          if (present(candidate_indices)) then
-            call self%prepare_subset(points(:, p), sorted(1:nc), column_error, pstat)
+            call self%prepare_subset(points(:, p), sorted(1:nc), column_error)
          else
-            call self%prepare(points(:, p), column_error, pstat)
+            call self%prepare(points(:, p), column_error)
          end if
          if (allocated(column_error)) then
             write (col, "(i0)") p
@@ -1834,14 +1819,8 @@ contains
                             error%message
             return
          end if
-         if (pstat /= 0) then
-            if (.not. present(status)) then
-               write (col, "(i0)") p
-               call fatal_error(error, "vjp_f1_rA_batch: point "//trim(col)// &
-                                " is unreached, no atom within reach ("//self%name//")")
-               return
-            end if
-            status(p) = 1
+         if (self%prepared_unreached) then
+            self%batch_unreached(p) = .true.
             res(:, :, p) = nan
             cycle
          end if
@@ -1855,7 +1834,6 @@ contains
             end if
             res(:, k, p) = work(:, i)
          end do
-         if (present(status)) status(p) = 0
       end do
    end subroutine lsf_base_vjp_f1_rA_batch
 
@@ -1869,7 +1847,6 @@ contains
    !> - `w0` / `w1` / `w2` with a leading extent other than 1 / 3 / 6, or fewer
    !>   than `np` columns
    !> - `res` with extents other than `(3, ncand, >= np)`
-   !> - `status` present with fewer than `np` entries
    !>
    !> @param[in] who    LSF name for the diagnostic
    !> @param[in] points Evaluation points (3, np); only the extents are read
@@ -1878,10 +1855,8 @@ contains
    !> @param[in] w2     Packed Hessian seeds (6, np); only the extents are read
    !> @param[in] res    Result (3, ncand, np); only the extents are read
    !> @param[in] ncand  Number of candidates, `size(candidate_indices)` or `ncenters`
-   !> @param[in] status Per-column status (optional); only the extent is read
    !> @returns   msg   Diagnostic, empty when the shapes fit
-   pure function lsf_vjp_batch_shape_message(who, points, w0, w1, w2, res, ncand, &
-                                             status) result(msg)
+   pure function lsf_vjp_batch_shape_message(who, points, w0, w1, w2, res, ncand) result(msg)
       !> LSF name for the diagnostic
       character(len=*), intent(in) :: who
       !> Evaluation points; only the extents are read
@@ -1896,8 +1871,6 @@ contains
       real(wp), intent(in) :: res(:, :, :)
       !> Number of candidates
       integer, intent(in) :: ncand
-      !> Per-column status; only the extent is read
-      integer, intent(in), optional :: status(:)
       !> Diagnostic, empty when the shapes fit
       character(len=:), allocatable :: msg
 
@@ -1919,12 +1892,6 @@ contains
       else if (size(res, 1) /= ndim .or. size(res, 2) /= ncand &
                .or. size(res, 3) < np) then
          msg = pre//"res must be (3, ncand, >= np) ("//who//")"
-      end if
-      if (len(msg) > 0) return
-      if (present(status)) then
-         if (size(status) < np) then
-            msg = pre//"status holds fewer than np entries ("//who//")"
-         end if
       end if
    end function lsf_vjp_batch_shape_message
 
@@ -1964,7 +1931,7 @@ contains
    !> Surface-free radius around every unreached point
    !>
    !> Valid for each point no atom reaches: the per-point path's empty active
-   !> list, a batch column with `status = 1`, i.e. every point whose nearest
+   !> list, an unreached batch column at order 0, i.e. every point whose nearest
    !> atom surface lies at least the reach `R + screening_offset(R)` away
    !>
    !> - a constant of the model and geometry, no point argument; the caller

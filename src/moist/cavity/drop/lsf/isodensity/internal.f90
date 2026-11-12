@@ -276,20 +276,16 @@ contains
    !>
    !> Only the derivative orders demanded by `max_deriv` are computed
    !>
-   !> - never unreached: `status = 0`, the density with no shell in reach being
-   !>   a defined zero
+   !> - never unreached, the density with no shell in reach being a defined zero
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    point  Evaluation point in Bohr
    !> @param[out]   error  Set when the point lies in an ECP core fill outside the cavity
-   !> @param[out]   status Always 0 (optional)
-   subroutine lsf_prepare(self, point, error, status)
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
       call lsf_prepare_impl(self, point, error)
    end subroutine lsf_prepare
 
@@ -359,15 +355,12 @@ contains
    !> @param[in]    candidate_indices Candidate owner atoms, user space
    !> @param[out]   error             Set when the point lies in an ECP core fill
    !>                                 outside the cavity
-   !> @param[out]   status            Always 0 (optional)
-   subroutine lsf_prepare_subset(self, point, candidate_indices, error, status)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
-      integer, intent(out), optional :: status
 
-      if (present(status)) status = 0
       call lsf_prepare_impl(self, point, error, cand_atoms=candidate_indices)
    end subroutine lsf_prepare_subset
 
@@ -498,11 +491,11 @@ contains
    !>   when absent; every
    !>   column equals the accessors after `prepare` up to the summation order
    !>   of the contraction
-   !> - `status` never 1: an isodensity point is never unreached, the density
-   !>   with no shell in reach being a defined zero
+   !> - never unreached (`unreached(column)` false), the density with no shell in
+   !>   reach being a defined zero
    !> - `error`: a point inside an ECP core fill that is not inside the cavity,
    !>   or no density installed; names the first failing column, every failing
-   !>   column's outputs unspecified and its `status` 2
+   !>   column's outputs unspecified
    !> - the single-point cache is invalidated (`prepared_deriv = -1`): accessors
    !>   abort until the next `prepare`
    !>
@@ -514,11 +507,10 @@ contains
    !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n), written for order >= 2
    !> @param[out]   lsf3_rrr          Packed third derivatives (10, n), written for order >= 3
    !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n), written for order 4
-   !> @param[out]   status            Per column 0 ok, 2 refused by the core fill (optional)
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
    !> @param[out]   error             First failing column
    subroutine lsf_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
-                                 lsf4_rrrr, status, candidate_indices, error)
+                                 lsf4_rrrr, candidate_indices, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       !> Evaluation points
@@ -535,8 +527,6 @@ contains
       real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
       !> Packed fourth derivatives
       real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
-      !> Per-column status
-      integer, intent(out), optional, contiguous :: status(:)
       !> Shared atom list
       integer, intent(in), optional :: candidate_indices(:)
       !> First failing column
@@ -547,7 +537,8 @@ contains
 
       n = size(points, 2)
       call lsf_batch_require_outputs(self%name, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
-                                     lsf3_rrr, lsf4_rrrr, status)
+                                     lsf3_rrr, lsf4_rrrr)
+      call self%begin_batch(n)
       if (n == 0) return
       self%prepared_deriv = -1
       if (.not. self%gto%has_density()) then
@@ -569,10 +560,10 @@ contains
          if (.not. allocated(self%bat_cand)) allocate (self%bat_cand(size(candidate_indices)))
          call lsf_sorted_candidates(candidate_indices, self%bat_cand, nc, self%ncenters)
          call batch_tiles(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
-                          lsf4_rrrr, status, error, self%bat_cand(1:nc))
+                          lsf4_rrrr, error, self%bat_cand(1:nc))
       else
          call batch_tiles(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
-                          lsf4_rrrr, status, error)
+                          lsf4_rrrr, error)
       end if
    end subroutine lsf_evaluate_batch
 
@@ -588,11 +579,10 @@ contains
    !> @param[out]   lsf2_rr_packed packed Hessians (6, n)
    !> @param[out]   lsf3_rrr  packed third derivatives (10, n)
    !> @param[out]   lsf4_rrrr packed fourth derivatives (15, n)
-   !> @param[out]   status    per-column status (n), 2 on a core-fill refusal
    !> @param[out]   error     first failing column
    !> @param[in]    cand      ascending shared atom list (optional)
    subroutine batch_tiles(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
-                          lsf4_rrrr, status, error, cand)
+                          lsf4_rrrr, error, cand)
       !> LSF instance
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       !> Evaluation points
@@ -609,8 +599,6 @@ contains
       real(wp), intent(inout), optional, contiguous :: lsf3_rrr(:, :)
       !> Packed fourth derivatives
       real(wp), intent(inout), optional, contiguous :: lsf4_rrrr(:, :)
-      !> Per-column status
-      integer, intent(inout), optional, contiguous :: status(:)
       !> First failing column
       type(error_type), allocatable, intent(inout) :: error
       !> Ascending shared atom list
@@ -666,7 +654,6 @@ contains
                                d3rho(:, :, :, p), d4rho(:, :, :, :, p), inside)
             call self%core%check(inside, rho(p), refusal)
             if (allocated(refusal)) then
-               if (present(status)) status(i) = 2
                ! Tiles run in Morton order: keep the refusal of the lowest column
                if (i < fail) then
                   fail = i
@@ -691,7 +678,6 @@ contains
                t4 = -self%param%scale*d4rho(:, :, :, :, p)
                call pack_sym_tensor4(t4, lsf4_rrrr(:, i), ndim)
             end if
-            if (present(status)) status(i) = 0
          end do
       end do
       if (fail <= n) then
@@ -883,7 +869,7 @@ contains
    !> - the shape and `candidate_indices` checks of the default, so the same bad
    !>   arguments `error stop` ([[lsf_vjp_batch_shape_message]],
    !>   [[lsf_sorted_candidates]]); the list only sizes `res`
-   !> - never unreached: `status = 0` for every column
+   !> - never unreached: `unreached(column)` false for every column
    !> - the one per-point failure of this LSF (an ECP core-fill refusal) is not
    !>   raised, as no density is evaluated; a consumer sees it from the
    !>   `evaluate_batch` / `prepare` it runs on the same points
@@ -896,18 +882,15 @@ contains
    !> @param[in]    w1                Adjoint weights of the gradient (3, np)
    !> @param[in]    w2                Packed symmetric part of the Hessian seed (6, np)
    !> @param[out]   res               Contracted nuclear gradient (3, ncand, np), zero
-   !> @param[out]   status            Per-column status (np), always 0 (optional)
    !> @param[out]   error             No density installed
    !> @param[in]    candidate_indices Shared atom list in `candidate_space` (optional)
-   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, status, error, &
-                                  candidate_indices)
+   subroutine lsf_vjp_f1_rA_batch(self, points, w0, w1, w2, res, error, candidate_indices)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in), contiguous :: points(:, :)
       real(wp), intent(in), contiguous :: w0(:)
       real(wp), intent(in), contiguous :: w1(:, :)
       real(wp), intent(in), contiguous :: w2(:, :)
       real(wp), intent(out), contiguous :: res(:, :, :)
-      integer, intent(out), optional, contiguous :: status(:)
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: candidate_indices(:)
 
@@ -920,17 +903,13 @@ contains
       np = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      if (present(status)) then
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, &
-                                           status)
-      else
-         msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
-      end if
+      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
       if (len(msg) > 0) error stop msg
       if (present(candidate_indices)) then
          allocate (sorted(ncand))
          call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
       end if
+      call self%begin_batch(np)
       if (np == 0) return
       if (.not. self%gto%has_density()) then
          call fatal_error(error, "vjp_f1_rA_batch failed at point 1: "// &
@@ -939,7 +918,6 @@ contains
       end if
 
       res(:, :, 1:np) = 0.0_wp
-      if (present(status)) status(1:np) = 0
    end subroutine lsf_vjp_f1_rA_batch
 
    !> Radial offset (from the atom surface) beyond which no shell of this atom
