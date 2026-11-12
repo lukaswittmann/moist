@@ -4,7 +4,7 @@ module test_math_sorters
    use mctc_io_utils, only: to_string
    use mctc_env_error, only: moist_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_math_sorter, only: qsort, counting_argsort
+   use moist_math_sorter, only: qsort, counting_argsort, heapsort
    implicit none(type, external)
    private
 
@@ -30,7 +30,9 @@ contains
                   new_unittest("qsort_partition_companions", test_qsort_partition_companions), &
                   new_unittest("qsort_short_index_validation", test_qsort_short_index_validation), &
                   new_unittest("counting_argsort_stable", test_counting_argsort_stable), &
-                  new_unittest("counting_argsort_edges", test_counting_argsort_edges) &
+                  new_unittest("counting_argsort_edges", test_counting_argsort_edges), &
+                  new_unittest("heapsort_random_matches_reference", test_heapsort_random), &
+                  new_unittest("heapsort_edges", test_heapsort_edges) &
                   ]
    end subroutine collect_math_sorters
 
@@ -300,5 +302,54 @@ contains
       call counting_argsort(b4, 0, p4)
       call check(error, all(p4 == [1, 2, 3, 4]), "All-zero bucket sort must preserve stable order")
    end subroutine test_counting_argsort_edges
+
+   !> Sort random integers with duplicates and compare against an insertion sort
+   subroutine test_heapsort_random(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      integer, parameter :: n = 257
+      real(wp) :: r(n)
+      integer :: a(n), ref(n), i, j, t
+
+      call random_number(r)
+      a = int(r*40.0_wp) - 20
+      ref = a
+      do i = 2, n
+         t = ref(i)
+         j = i - 1
+         do while (j >= 1)
+            if (ref(j) <= t) exit
+            ref(j + 1) = ref(j)
+            j = j - 1
+         end do
+         ref(j + 1) = t
+      end do
+      call heapsort(a)
+      call check(error, all(a == ref), "Heapsort must match the reference ascending order")
+   end subroutine test_heapsort_random
+
+   !> Check empty, singleton, two-element, constant and reversed inputs
+   subroutine test_heapsort_edges(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      integer :: a0(0), a1(1), a2(2), a5(5), i
+
+      call heapsort(a0)
+      a1 = 3
+      call heapsort(a1)
+      call check(error, a1(1) == 3, "Singleton must be unchanged")
+      if (allocated(error)) return
+      a2 = [2, 1]
+      call heapsort(a2)
+      call check(error, all(a2 == [1, 2]), "Two elements must be swapped")
+      if (allocated(error)) return
+      a5 = 7
+      call heapsort(a5)
+      call check(error, all(a5 == 7), "Constant input must be unchanged")
+      if (allocated(error)) return
+      a5 = [(6 - i, i=1, 5)]
+      call heapsort(a5)
+      call check(error, all(a5 == [1, 2, 3, 4, 5]), "Reversed input must come out ascending")
+   end subroutine test_heapsort_edges
 
 end module test_math_sorters

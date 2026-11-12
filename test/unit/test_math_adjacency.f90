@@ -1,19 +1,19 @@
-!> Test suite for adjacency-list utilities in moist_math_adjacency_list
-module test_math_adjacency_list
+!> Test suite for adjacency-list utilities in moist_math_adjacency
+module test_math_adjacency
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_math_adjacency_list, only: adjacency_list_type
+   use moist_math_adjacency, only: adjacency_list_type
    implicit none(type, external)
    private
 
-   public :: collect_math_adjacency_list
+   public :: collect_math_adjacency
 
    real(wp), parameter :: thr = 10.0_wp*epsilon(1.0_wp)
 
 contains
 
    !> Collect all adjacency-list tests
-   subroutine collect_math_adjacency_list(testsuite)
+   subroutine collect_math_adjacency(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
@@ -34,9 +34,10 @@ contains
                   new_unittest("nonpositive_cutoff", test_nonpositive_cutoff), &
                   new_unittest("rebuild_grow_and_shrink", test_rebuild_grow_and_shrink), &
                   new_unittest("destroy_and_reuse", test_destroy_and_reuse), &
-                  new_unittest("init_resets_sorted", test_init_resets_sorted) &
+                  new_unittest("init_resets_sorted", test_init_resets_sorted), &
+                  new_unittest("thread_count_invariant", test_thread_count_invariant) &
                   ]
-   end subroutine collect_math_adjacency_list
+   end subroutine collect_math_adjacency
 
    !> Compare adjacency membership against brute-force distance checks
    subroutine test_pair_membership_bruteforce(error)
@@ -395,6 +396,43 @@ contains
 
       call nlist%destroy()
    end subroutine test_many_cells_bruteforce
+
+   !> One and four threads give identical lists, sorted and unsorted
+   !>
+   !> Above the serial threshold, so the build runs in parallel unless the
+   !> caller is already inside an active region
+   subroutine test_thread_count_invariant(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(adjacency_list_type) :: serial, threaded
+      real(wp), allocatable :: xyz(:, :)
+      integer :: is
+      logical :: sorted
+
+      call random_points(xyz, 2000, 8.0_wp)
+
+      do is = 1, 2
+         sorted = is == 2
+         call serial%init(cutoff=1.0_wp, sorted=sorted)
+         call serial%update(xyz, nthreads=1)
+         call threaded%init(cutoff=1.0_wp, sorted=sorted)
+         call threaded%update(xyz, nthreads=4)
+
+         call check_csr_invariants(error, threaded, size(xyz, 2))
+         if (allocated(error)) return
+         call check_all_rows_bruteforce(error, threaded, xyz, 1.0_wp)
+         if (allocated(error)) return
+
+         call check(error, all(serial%inl == threaded%inl) .and. all(serial%nnl == threaded%nnl), &
+                    "Row layout depends on the thread count")
+         if (allocated(error)) return
+         call check(error, all(serial%nlat == threaded%nlat), &
+                    "Neighbour order depends on the thread count")
+         if (allocated(error)) return
+         call check(error, all(serial%dist == threaded%dist), &
+                    "Distances depend on the thread count")
+         if (allocated(error)) return
+      end do
+   end subroutine test_thread_count_invariant
 
    !> A cutoff far larger than the bounding box collapses to a single cell
    subroutine test_cutoff_exceeds_extent(error)
@@ -917,4 +955,4 @@ contains
       call check(error, all(abs(lhs%dist - rhs%dist) <= thr), label//": dist mismatch")
    end subroutine check_lists_identical
 
-end module test_math_adjacency_list
+end module test_math_adjacency
