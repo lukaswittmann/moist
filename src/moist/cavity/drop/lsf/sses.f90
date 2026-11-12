@@ -14,6 +14,8 @@ module moist_cavity_drop_lsf_sses
    use moist_cavity_drop_lsf_sses_native, only: moment_atom_native
    use moist_cavity_drop_lsf_sses_cache, only: sses_cache_type, sses_cache_build, &
                                                sses_cache_matches, sses_cached_evaluate, sses_cache_moment
+   use moist_math_packed_sym, only: packed_index, packed_index3, packed_index4, &
+                                    pack_sym_matrix
    implicit none(type, external)
    private
    public :: moist_cavity_drop_lsf_sses_type
@@ -151,18 +153,24 @@ contains
 
    !> Prepare the spatial Taylor jet
    !>
+   !> Unbounded support: never unreached, `status = 0`
+   !>
    !> @param[in,out] self Level set instance
    !> @param[in] point Evaluation point in Bohr
    !> @param[out] error Invalid parameters, geometry or numerical accessibility
-   subroutine prepare(self, point, error)
+   !> @param[out] status Always 0 (optional)
+   subroutine prepare(self, point, error, status)
       !> Level set instance
       class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
       !> Evaluation point in Bohr
       real(wp), intent(in) :: point(3)
       !> Invalid parameters, geometry or numerical accessibility
       type(error_type), allocatable, intent(out) :: error
+      !> Always 0
+      integer, intent(out), optional :: status
       logical :: valid
 
+      if (present(status)) status = 0
       self%prepared_deriv = -1
       if (self%ncenters <= 0 .or. .not. allocated(self%radii)) then
          call fatal_error(error, "SSES: update with nonempty geometry before prepare")
@@ -205,7 +213,8 @@ contains
    !> @param[in] point Evaluation point
    !> @param[in] candidate_indices Caller candidates, unused with unbounded support
    !> @param[out] error Evaluation failure
-   subroutine prepare_subset(self, point, candidate_indices, error)
+   !> @param[out] status Always 0 (optional)
+   subroutine prepare_subset(self, point, candidate_indices, error, status)
       !> Level set instance
       class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
       !> Evaluation point
@@ -214,9 +223,12 @@ contains
       integer, intent(in) :: candidate_indices(:)
       !> Evaluation failure
       type(error_type), allocatable, intent(out) :: error
+      !> Always 0
+      integer, intent(out), optional :: status
 
+      if (present(status)) status = 0
       if (size(candidate_indices) < 0) return
-      call self%prepare(point, error)
+      call self%prepare(point, error, status)
    end subroutine prepare_subset
 
    !> Set the spatial derivative order
@@ -491,7 +503,7 @@ contains
       !> Accessor argument
       real(wp), intent(out), optional :: lsf1_r(:)
       !> Accessor argument
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
+      real(wp), intent(out), optional :: lsf2_rr(:)
       !> Cartesian and atom indices
       integer :: i, j
 
@@ -508,8 +520,8 @@ contains
       end if
       if (present(lsf2_rr)) then
       do j = 1, 3
-      do i = 1, 3
-         lsf2_rr(i, j) = jet_derivative(self%spatial, [i, j])
+      do i = 1, j
+         lsf2_rr(packed_index(i, j)) = jet_derivative(self%spatial, [i, j])
       end do
       end do
       end if
@@ -530,9 +542,9 @@ contains
       !> Accessor argument
       real(wp), intent(out), optional :: lsf1_r(:)
       !> Accessor argument
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
+      real(wp), intent(out), optional :: lsf2_rr(:)
       !> Accessor argument
-      real(wp), intent(out) :: lsf3_rrr(:, :, :)
+      real(wp), intent(out) :: lsf3_rrr(:)
       !> Cartesian and atom indices
       integer :: i, j, k
 
@@ -547,15 +559,15 @@ contains
       end if
       if (present(lsf2_rr)) then
       do j = 1, 3
-      do i = 1, 3
-         lsf2_rr(i, j) = jet_derivative(self%spatial, [i, j])
+      do i = 1, j
+         lsf2_rr(packed_index(i, j)) = jet_derivative(self%spatial, [i, j])
       end do
       end do
       end if
       do k = 1, 3
-      do j = 1, 3
-      do i = 1, 3
-         lsf3_rrr(i, j, k) = jet_derivative(self%spatial, [i, j, k])
+      do j = 1, k
+      do i = 1, j
+         lsf3_rrr(packed_index3(i, j, k)) = jet_derivative(self%spatial, [i, j, k])
       end do
       end do
       end do
@@ -569,16 +581,16 @@ contains
       !> Accessor argument
       class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
       !> Accessor argument
-      real(wp), intent(out) :: lsf4_rrrr(:, :, :, :)
+      real(wp), intent(out) :: lsf4_rrrr(:)
       !> Cartesian and atom indices
       integer :: i, j, k, l
 
       call self%require_deriv(4, "f4_rrrr")
       do l = 1, 3
-      do k = 1, 3
-      do j = 1, 3
-      do i = 1, 3
-         lsf4_rrrr(i, j, k, l) = jet_derivative(self%spatial, [i, j, k, l])
+      do k = 1, l
+      do j = 1, k
+      do i = 1, j
+         lsf4_rrrr(packed_index4(i, j, k, l)) = jet_derivative(self%spatial, [i, j, k, l])
       end do
       end do
       end do
@@ -599,13 +611,22 @@ contains
       !> d2F/dr(i) dR(s, a)
       real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
       !> d3F/dr(i) dr(j) dR(s, a)
-      real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
+      real(wp), intent(out) :: lsf3_rr_rA(:, :, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gc(:, :)
+      real(wp), allocatable :: dense(:, :, :, :)
       integer :: i, j, a, s
 
       call self%require_deriv(2, "f3_rr_rA")
-      if (native_atoms(self, 2, gc0=lsf1_rA, gc1=lsf2_r_rA, gc2=lsf3_rr_rA)) return
+      allocate (dense(3, 3, 3, self%ncenters))
+      if (native_atoms(self, 2, gc0=lsf1_rA, gc1=lsf2_r_rA, gc2=dense)) then
+         do a = 1, self%ncenters
+         do s = 1, 3
+            call pack_sym_matrix(dense(:, :, s, a), lsf3_rr_rA(:, s, a), 3)
+         end do
+         end do
+         return
+      end if
       allocate (gc(3, self%ncenters))
       call derivative_jets(self, 2, field, gc=gc)
       do a = 1, self%ncenters
@@ -617,8 +638,8 @@ contains
             end do
          end if
          do j = 1, 3
-            do i = 1, 3
-               lsf3_rr_rA(i, j, s, a) = jet_derivative(gc(s, a), [i, j])
+            do i = 1, j
+               lsf3_rr_rA(packed_index(i, j), s, a) = jet_derivative(gc(s, a), [i, j])
             end do
          end do
       end do
@@ -639,13 +660,20 @@ contains
       !> d2F/dr(i) drad(a)
       real(wp), intent(out), optional :: lsf2_r_rad(:, :)
       !> d3F/dr(i) dr(j) drad(a)
-      real(wp), intent(out) :: lsf3_rr_rad(:, :, :)
+      real(wp), intent(out) :: lsf3_rr_rad(:, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gr(:)
+      real(wp), allocatable :: dense(:, :, :)
       integer :: i, j, a
 
       call self%require_deriv(2, "f3_rr_rad")
-      if (native_atoms(self, 2, gr0=lsf1_rad, gr1=lsf2_r_rad, gr2=lsf3_rr_rad)) return
+      allocate (dense(3, 3, self%ncenters))
+      if (native_atoms(self, 2, gr0=lsf1_rad, gr1=lsf2_r_rad, gr2=dense)) then
+         do a = 1, self%ncenters
+            call pack_sym_matrix(dense(:, :, a), lsf3_rr_rad(:, a), 3)
+         end do
+         return
+      end if
       allocate (gr(self%ncenters))
       call derivative_jets(self, 2, field, gr=gr)
       do a = 1, self%ncenters
@@ -656,8 +684,8 @@ contains
             end do
          end if
          do j = 1, 3
-            do i = 1, 3
-               lsf3_rr_rad(i, j, a) = jet_derivative(gr(a), [i, j])
+            do i = 1, j
+               lsf3_rr_rad(packed_index(i, j), a) = jet_derivative(gr(a), [i, j])
             end do
          end do
       end do
@@ -671,7 +699,7 @@ contains
       !> Prepared level set
       class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
       !> d4F/dr(i) dr(j) dr(k) dR(s, a)
-      real(wp), intent(out) :: lsf4_rrr_rA(:, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rrr_rA(:, :, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gc(:, :)
       integer :: i, j, k, a, s
@@ -682,9 +710,9 @@ contains
       do a = 1, self%ncenters
       do s = 1, 3
       do k = 1, 3
-      do j = 1, 3
-      do i = 1, 3
-         lsf4_rrr_rA(i, j, k, s, a) = jet_derivative(gc(s, a), [i, j, k])
+      do j = 1, k
+      do i = 1, j
+         lsf4_rrr_rA(packed_index3(i, j, k), s, a) = jet_derivative(gc(s, a), [i, j, k])
       end do
       end do
       end do
@@ -756,7 +784,7 @@ contains
       !> Prepared level set
       class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
       !> Second atom derivative block
-      real(wp), intent(out) :: lsf4_rr_rArB(:, :, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_rArB(:, :, :, :, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gc(:, :)
       integer :: i, j, a, b, s, t
@@ -769,8 +797,8 @@ contains
          do a = 1, self%ncenters
          do s = 1, 3
             do j = 1, 3
-            do i = 1, 3
-               lsf4_rr_rArB(i, j, s, a, t, b) = jet_derivative(gc(s, a), [i, j, 5])
+            do i = 1, j
+               lsf4_rr_rArB(packed_index(i, j), s, a, t, b) = jet_derivative(gc(s, a), [i, j, 5])
             end do
             end do
          end do
@@ -835,7 +863,7 @@ contains
       !> Prepared level set
       class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
       !> Second atom derivative block
-      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gr(:)
       integer :: i, j, a, b
@@ -846,8 +874,8 @@ contains
          call derivative_jets(self, 2, field, gr=gr, b=b, axis_b=0)
          do a = 1, self%ncenters
             do j = 1, 3
-            do i = 1, 3
-               lsf4_rr_radrad(i, j, a, b) = jet_derivative(gr(a), [i, j, 5])
+            do i = 1, j
+               lsf4_rr_radrad(packed_index(i, j), a, b) = jet_derivative(gr(a), [i, j, 5])
             end do
             end do
          end do
@@ -914,7 +942,7 @@ contains
       !> Prepared level set
       class(moist_cavity_drop_lsf_sses_type), intent(in) :: self
       !> Second atom derivative block
-      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :, :)
+      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gc(:, :)
       integer :: i, j, a, b, s
@@ -926,8 +954,8 @@ contains
          do a = 1, self%ncenters
          do s = 1, 3
             do j = 1, 3
-            do i = 1, 3
-               lsf4_rr_rA_rad(i, j, s, a, b) = jet_derivative(gc(s, a), [i, j, 5])
+            do i = 1, j
+               lsf4_rr_rA_rad(packed_index(i, j), s, a, b) = jet_derivative(gc(s, a), [i, j, 5])
             end do
             end do
          end do
@@ -987,15 +1015,15 @@ contains
       !> Nuclear direction in user order
       real(wp), intent(in) :: v(:, :)
       !> Directional derivative
-      real(wp), intent(out) :: res(:, :)
+      real(wp), intent(out) :: res(:)
       type(sses_jet_type) :: field
       integer :: i, j
 
       call self%require_deriv(2, "tangent_f2_rr")
       call derivative_jets(self, 2, field, v=v)
       do j = 1, 3
-      do i = 1, 3
-         res(i, j) = jet_derivative(field, [i, j, 5])
+      do i = 1, j
+         res(packed_index(i, j)) = jet_derivative(field, [i, j, 5])
       end do
       end do
    end subroutine tangent_f2_rr
@@ -1011,16 +1039,16 @@ contains
       !> Nuclear direction in user order
       real(wp), intent(in) :: v(:, :)
       !> Directional derivative
-      real(wp), intent(out) :: res(:, :, :)
+      real(wp), intent(out) :: res(:)
       type(sses_jet_type) :: field
       integer :: i, j, k
 
       call self%require_deriv(3, "tangent_f3_rrr")
       call derivative_jets(self, 3, field, v=v)
       do k = 1, 3
-      do j = 1, 3
-      do i = 1, 3
-         res(i, j, k) = jet_derivative(field, [i, j, k, 5])
+      do j = 1, k
+      do i = 1, j
+         res(packed_index3(i, j, k)) = jet_derivative(field, [i, j, k, 5])
       end do
       end do
       end do
@@ -1154,7 +1182,7 @@ contains
       !> Nuclear direction in user order
       real(wp), intent(in) :: v(:, :)
       !> Directional center derivatives
-      real(wp), intent(out) :: res(:, :, :, :)
+      real(wp), intent(out) :: res(:, :, :)
       !> Radius direction in user order
       real(wp), intent(in), optional :: vrad(:)
       type(sses_jet_type) :: field
@@ -1167,8 +1195,8 @@ contains
       do a = 1, self%ncenters
       do s = 1, 3
          do j = 1, 3
-         do i = 1, 3
-            res(i, j, s, a) = jet_derivative(gc(s, a), [i, j, 5])
+         do i = 1, j
+            res(packed_index(i, j), s, a) = jet_derivative(gc(s, a), [i, j, 5])
          end do
          end do
       end do
@@ -1189,7 +1217,7 @@ contains
       !> Radius direction in user order
       real(wp), intent(in) :: vrad(:)
       !> Directional radius derivatives
-      real(wp), intent(out) :: res(:, :, :)
+      real(wp), intent(out) :: res(:, :)
       type(sses_jet_type) :: field
       type(sses_jet_type), allocatable :: gr(:)
       integer :: i, j, a
@@ -1199,8 +1227,8 @@ contains
       call derivative_jets(self, 2, field, gr=gr, v=v, vrad=vrad)
       do a = 1, self%ncenters
          do j = 1, 3
-         do i = 1, 3
-            res(i, j, a) = jet_derivative(gr(a), [i, j, 5])
+         do i = 1, j
+            res(packed_index(i, j), a) = jet_derivative(gr(a), [i, j, 5])
          end do
          end do
       end do
@@ -1220,19 +1248,23 @@ contains
       real(wp), intent(in) :: w0
       !> Gradient weights
       real(wp), intent(in) :: w1(3)
-      !> Hessian weights
-      real(wp), intent(in) :: w2(3, 3)
+      !> Hessian weights, packed symmetric, off-diagonals not doubled
+      real(wp), intent(in) :: w2(:)
       !> Weighted atom derivatives
       real(wp), intent(out) :: res(:, :)
-      real(wp), allocatable :: n0(:, :), n1(:, :, :), n2(:, :, :, :)
+      real(wp), allocatable :: n0(:, :), n1(:, :, :), n2(:, :, :)
+      real(wp) :: hess
       integer :: a, s
 
       call self%require_deriv(2, "vjp_f1_rA")
-      allocate (n0(3, self%ncenters), n1(3, 3, self%ncenters), n2(3, 3, 3, self%ncenters))
+      allocate (n0(3, self%ncenters), n1(3, 3, self%ncenters), n2(6, 3, self%ncenters))
       call self%f3_rr_rA(n0, n1, n2)
       do a = 1, self%ncenters
          do s = 1, 3
-            res(s, a) = w0*n0(s, a) + sum(w1*n1(:, s, a)) + sum(w2*n2(:, :, s, a))
+            ! Diagonal slots (xx, yy, zz) once, off-diagonal slots twice
+            hess = w2(1)*n2(1, s, a) + w2(3)*n2(3, s, a) + w2(6)*n2(6, s, a) &
+                   + 2.0_wp*(w2(2)*n2(2, s, a) + w2(4)*n2(4, s, a) + w2(5)*n2(5, s, a))
+            res(s, a) = w0*n0(s, a) + sum(w1*n1(:, s, a)) + hess
          end do
       end do
    end subroutine vjp_f1_rA
@@ -1251,18 +1283,22 @@ contains
       real(wp), intent(in) :: w0
       !> Gradient weights
       real(wp), intent(in) :: w1(3)
-      !> Hessian weights
-      real(wp), intent(in) :: w2(3, 3)
+      !> Hessian weights, packed symmetric, off-diagonals not doubled
+      real(wp), intent(in) :: w2(:)
       !> Weighted atom derivatives
       real(wp), intent(out) :: res(:)
-      real(wp), allocatable :: n0(:), n1(:, :), n2(:, :, :)
+      real(wp), allocatable :: n0(:), n1(:, :), n2(:, :)
+      real(wp) :: hess
       integer :: a
 
       call self%require_deriv(2, "vjp_f1_rad")
-      allocate (n0(self%ncenters), n1(3, self%ncenters), n2(3, 3, self%ncenters))
+      allocate (n0(self%ncenters), n1(3, self%ncenters), n2(6, self%ncenters))
       call self%f3_rr_rad(n0, n1, n2)
       do a = 1, self%ncenters
-         res(a) = w0*n0(a) + sum(w1*n1(:, a)) + sum(w2*n2(:, :, a))
+         ! Diagonal slots (xx, yy, zz) once, off-diagonal slots twice
+         hess = w2(1)*n2(1, a) + w2(3)*n2(3, a) + w2(6)*n2(6, a) &
+                + 2.0_wp*(w2(2)*n2(2, a) + w2(4)*n2(4, a) + w2(5)*n2(5, a))
+         res(a) = w0*n0(a) + sum(w1*n1(:, a)) + hess
       end do
    end subroutine vjp_f1_rad
 
