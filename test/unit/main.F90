@@ -24,12 +24,13 @@ program tester
    use test_radii, only: collect_radii
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
-   use test_math_smoothing_kernels, only: collect_math_smoothing_kernels
+   use test_math_smoothing, only: collect_math_smoothing
    use test_math_adjacency_list, only: collect_math_adjacency_list
-   use test_math_cell_grid, only: collect_math_cell_grid
+   use test_math_cell_list, only: collect_math_cell_list
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
-   use test_math_packed_sym, only: collect_math_packed_sym
+   use test_math_packed, only: collect_math_packed
+   use test_math_smoothstep, only: collect_math_smoothstep
    use test_math_grid_radial_rule, only: collect_math_grid_radial_rule
    use test_math_grid_radial, only: collect_math_grid_radial
    use test_math_grid_radial_trafo, only: collect_math_grid_radial_trafo
@@ -54,10 +55,12 @@ program tester
    use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
+   use test_cavity_drop_branching, only: collect_cavity_drop_branching
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
+   use test_cavity_drop_potential, only: collect_cavity_drop_potential
    use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
    use test_cavity_numsa, only: collect_cavity_numsa
-   use test_cavity_surface_adjoint, only: collect_cavity_surface_adjoint
+   use test_cavity_adjoint, only: collect_cavity_adjoint
    use test_cavity_mc, only: collect_cavity_mc
    use test_cavity_mt_mesh, only: collect_cavity_mt_mesh
    use test_cavity_mt_patches, only: collect_cavity_mt_patches
@@ -106,13 +109,14 @@ program tester
       & new_testsuite("data", collect_data), &
       & new_testsuite("radii", collect_radii), &
       & new_testsuite("math_linalg", collect_math_linalg), &
-      & new_testsuite("math_smoothing_kernels", collect_math_smoothing_kernels), &
+      & new_testsuite("math_smoothing", collect_math_smoothing), &
       & new_testsuite("math_adjacency_list", collect_math_adjacency_list), &
-      & new_testsuite("math_cell_grid", collect_math_cell_grid), &
+      & new_testsuite("math_cell_list", collect_math_cell_list), &
       & new_testsuite("math_solvers", collect_math_solvers), &
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
-      & new_testsuite("math_packed_sym", collect_math_packed_sym), &
+      & new_testsuite("math_packed", collect_math_packed), &
+      & new_testsuite("math_smoothstep", collect_math_smoothstep), &
       & new_testsuite("math_grid_radial_rule", collect_math_grid_radial_rule), &
       & new_testsuite("math_grid_radial", collect_math_grid_radial), &
       & new_testsuite("math_grid_radial_trafo", collect_math_grid_radial_trafo), &
@@ -144,7 +148,9 @@ program tester
       & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
+      & new_testsuite("cavity_drop_branching", collect_cavity_drop_branching), &
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
+      & new_testsuite("cavity_drop_potential", collect_cavity_drop_potential), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
@@ -158,7 +164,7 @@ program tester
       & new_testsuite("cavity_mt_patches", collect_cavity_mt_patches), &
       & new_testsuite("cavity_mt", collect_cavity_mt), &
       & new_testsuite("cavity_reference", collect_cavity_reference), &
-      & new_testsuite("cavity_surface_adjoint", collect_cavity_surface_adjoint), &
+      & new_testsuite("cavity_adjoint", collect_cavity_adjoint), &
       & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
       & new_testsuite("model_component_pcm_amat_assembly", collect_model_component_pcm_amat_assembly), &
       & new_testsuite("model_component_pcm_amat_adjoint", collect_model_component_pcm_amat_adjoint), &

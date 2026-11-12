@@ -14,7 +14,7 @@ module moist_cavity_drop_lsf_sses
    use moist_cavity_drop_lsf_sses_native, only: moment_atom_native
    use moist_cavity_drop_lsf_sses_cache, only: sses_cache_type, sses_cache_build, &
                                                sses_cache_matches, sses_cached_evaluate, sses_cache_moment
-   use moist_math_packed_sym, only: packed_index, packed_index3, packed_index4, &
+   use moist_math_packed, only: packed_index, packed_index3, packed_index4, &
                                     pack_sym_matrix
    implicit none(type, external)
    private

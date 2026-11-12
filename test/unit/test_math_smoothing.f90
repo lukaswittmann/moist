@@ -1,4 +1,4 @@
-!> Test suite for the Wendland smoothing kernels in moist_math_smoothing_kernels
+!> Test suite for the Wendland smoothing kernels in moist_math_smoothing
 !>
 !> `init` is the only fallible operation: it selects a normalization and binds
 !> the evaluation procedures for one (order, dimension) pair, and there is no
@@ -6,17 +6,17 @@
 !> length. Those used to terminate the process; they now report, which also
 !> makes the guarantee testable that a rejected `init` leaves the kernel
 !> detached rather than half-configured
-module test_math_smoothing_kernels
+module test_math_smoothing
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
    use mctc_env_error, only: moist_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
+   use moist_math_smoothing, only: smoothing_kernel_wendland_type
    use test_helpers, only: fd4_scalar, fd4_offsets
    implicit none(type, external)
    private
 
-   public :: collect_math_smoothing_kernels
+   public :: collect_math_smoothing
 
    !> Smoothing length used by every well-formed init below
    real(wp), parameter :: h_ref = 0.5_wp
@@ -24,7 +24,7 @@ module test_math_smoothing_kernels
 contains
 
    !> Collect all smoothing-kernel tests
-   subroutine collect_math_smoothing_kernels(testsuite)
+   subroutine collect_math_smoothing(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
@@ -38,7 +38,7 @@ contains
                   new_unittest("failed_init_detaches", test_failed_init_detaches) &
                   ]
 
-   end subroutine collect_math_smoothing_kernels
+   end subroutine collect_math_smoothing
 
    !> Every documented (order, dimension) pair initializes and evaluates
    subroutine test_supported_combinations(error)
@@ -335,4 +335,4 @@ contains
 
    end subroutine test_failed_init_detaches
 
-end module test_math_smoothing_kernels
+end module test_math_smoothing

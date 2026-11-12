@@ -6,7 +6,7 @@
 !> - ranks 3 and 4: sorted index tuples, last index slowest; each slab of fixed
 !>   last index holds the next lower rank in its own packed order
 !> - index arithmetic in int64; counts beyond huge(1) error stop
-module moist_math_packed_sym
+module moist_math_packed
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
    implicit none(type, external)
@@ -940,4 +940,4 @@ contains
       end do
    end function packed_full_contract4
 
-end module moist_math_packed_sym
+end module moist_math_packed

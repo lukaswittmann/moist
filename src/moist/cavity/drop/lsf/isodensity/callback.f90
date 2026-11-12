@@ -31,7 +31,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_isodensity_core, only: moist_iso_core_fill_type, iso_check_nuclear_charges
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
       & request_require, moist_phase_build, nuclear_charge_request_type
-   use moist_math_packed_sym, only: pack_sym_matrix, pack_sym_tensor3
+   use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3
    use moist_output_format, only: format_string
    implicit none(type, external)
    private

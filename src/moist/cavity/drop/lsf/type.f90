@@ -22,7 +22,7 @@
 !>
 !> Packed spatial groups
 !> ---------------------
-!>   - symmetric spatial groups of the per-point accessors packed as [[moist_math_packed_sym]]:
+!>   - symmetric spatial groups of the per-point accessors packed as [[moist_math_packed]]:
 !>     `rr` (6) xx, xy, yy, xz, yz, zz; `rrr` (10); `rrrr` (15)
 !>   - other indices keep their dense extents
 !>   - `vjp_f1_rA` / `vjp_f1_rad` seed `w2(6)` packed symmetric, off-diagonals not doubled
@@ -989,9 +989,9 @@ contains
    !>     4 -> packed `lsf4_rrrr(15, n)` too; an output above `order` is left
    !>     untouched, a missing or misshaped output for the requested order aborts
    !>   - Hessian packed `lsf2_rr_packed(6, n)`: xx, xy, yy, xz, yz, zz;
-   !>     `unpack_sym_matrix` from [[moist_math_packed_sym]] for a dense view
+   !>     `unpack_sym_matrix` from [[moist_math_packed]] for a dense view
    !>   - packed slots: sorted tuples `a <= b <= c <= d`, last index slowest,
-   !>     [[moist_math_packed_sym]]'s `packed_index3` / `packed_index4`
+   !>     [[moist_math_packed]]'s `packed_index3` / `packed_index4`
    !>   - `candidate_indices`, when present, is the atom list for *all* points
    !>     (octree children reuse the parent's list, seeds of one anchor share the
    !>     anchor's neighbourhood): unique ids in 1..ncenters (`error stop`
@@ -1628,7 +1628,7 @@ contains
    !> - `w2` is the packed symmetric seed (6): xx, xy, yy, xz, yz, zz
    !> - off-diagonals are not doubled; the contraction applies `m_ab` = 1 on the
    !>   diagonal and 2 off it
-   !> - `pack_sym_part` of [[moist_math_packed_sym]] packs a general seed
+   !> - `pack_sym_part` of [[moist_math_packed]] packs a general seed
    !> - an implementation needs whatever prepared order its own `f3_rr_rA` needs,
    !>   2 for SvdW and 3 for CFC, which asks for the highest *total* order
    !> - must call `require_deriv(<that order>, "vjp_f1_rA")`
@@ -1674,7 +1674,7 @@ contains
    !> - `w2` is the packed symmetric seed (6): xx, xy, yy, xz, yz, zz
    !> - off-diagonals are not doubled; the contraction applies `m_ab` = 1 on the
    !>   diagonal and 2 off it
-   !> - `pack_sym_part` of [[moist_math_packed_sym]] packs a general seed
+   !> - `pack_sym_part` of [[moist_math_packed]] packs a general seed
    !> - an implementation needs whatever prepared order its own `f3_rr_rad` needs,
    !>   2 for both SvdW and CFC today
    !> - must call `require_deriv(<that order>, "vjp_f1_rad")`
@@ -1718,7 +1718,7 @@ contains
    !>     xz, yz, zz, off-diagonal entries not doubled; the contraction applies the
    !>     factor 2 on them, so the column equals `vjp_f1_rA` called with the same
    !>     packed seed (`lsf2_rr` is symmetric: only the symmetric part of a seed
-   !>     contributes), and `pack_sym_part` from [[moist_math_packed_sym]] packs a
+   !>     contributes), and `pack_sym_part` from [[moist_math_packed]] packs a
    !>     general seed
    !>   - `candidate_indices` as in `evaluate_batch`: ids in the LSF's `candidate_space`,
    !>     unique and in 1..ncenters (`error stop` otherwise), sorted ascending before

@@ -50,7 +50,7 @@ module moist_cavity_drop_lsf_cfc
                                          lsf_cand_bound_sq, lsf_batch_require_outputs, &
                                          lsf_sorted_candidates, lsf_screen_records, &
                                          lsf_vjp_batch_shape_message
-   use moist_math_packed_sym, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4, &
+   use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4, &
                                     unpack_sym_matrix
    use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use moist_cavity_drop_lsf_cfc_kernel, only: &
