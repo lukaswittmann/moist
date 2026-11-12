@@ -97,7 +97,7 @@ module moist_cavity_mc
       integer :: n = 0
    end type mc_tri_buffer_type
 
-   !> Value of a vertex beyond the LSF's reach (`prepare` status 1): exterior
+   !> Value of a vertex beyond the LSF's reach (`unreached()` after `prepare`): exterior
    !>
    !> - the true value there is exterior (SvdW `Z = 0`, `S = +inf`; CFC `PD`
    !>   underflowed), so any finite positive value has the right sign; zero is
@@ -782,13 +782,11 @@ contains
       real(wp), intent(out) :: val
       !> LSF evaluation failure
       type(error_type), allocatable, intent(out) :: error
-      !> Prepare status, 0 ok, 1 unreached
-      integer :: status
 
       val = mc_exterior_value
-      call lsf%prepare(point, error, status=status)
+      call lsf%prepare(point, error)
       if (allocated(error)) return
-      if (status /= 0) return
+      if (lsf%unreached()) return
       call lsf%f0(val)
    end subroutine sample_lsf
 
