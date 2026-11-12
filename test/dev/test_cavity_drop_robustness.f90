@@ -537,11 +537,11 @@ contains
 
          ! Anchors without any surface point: failed projections or weightless anchors
          if (allocated(cavity%offset)) then
-            if (any(cavity%offset(2:cavity%nmax + 1) == cavity%offset(1:cavity%nmax))) then
+            if (any(cavity%offset(2:cavity%anchor%ngrid + 1) == cavity%offset(1:cavity%anchor%ngrid))) then
                call write_convergence_failure_xyz(mol, itest)
                write (*, "(4x, A, I0, A, I0, A)") "⚠ Warning: ", &
-                  count(cavity%offset(2:cavity%nmax + 1) == cavity%offset(1:cavity%nmax)), &
-                  " of ", cavity%nmax, " anchors kept no surface point"
+                  count(cavity%offset(2:cavity%anchor%ngrid + 1) == cavity%offset(1:cavity%anchor%ngrid)), &
+                  " of ", cavity%anchor%ngrid, " anchors kept no surface point"
             end if
          end if
 
