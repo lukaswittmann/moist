@@ -30,8 +30,8 @@ module moist_cavity_drop_lsf_svdw_param
       !> Fade onset `a` in e-folds of u, `X_on = 3a/blend_k` in `d_A = x - R_A`
       !>
       !> - default 21 with `fade_width` 3: reach 24 e-folds, onset 11.45, end
-      !>   13.09 Bohr at k = 5.5; measured surface displacement against the
-      !>   untruncated model <= 4.4e-9 Bohr on the 1000-atom lattice
+      !>   13.09 Bohr at k = 5.5; surface displacement against the untruncated
+      !>   model at the nanobohr level
       real(wp) :: fade_start = 21.0_wp
       !> Fade band width `b` in e-folds of u, `Delta = 3b/blend_k`
       real(wp) :: fade_width = 3.0_wp

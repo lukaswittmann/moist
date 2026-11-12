@@ -35,11 +35,20 @@
 !>   other density
 !> - functions are ordered atom by atom, most diffuse shell first, so the shells
 !>   of an atom surviving radial screening form one contiguous run
+!>
+!> The contraction `D phi` of the active functions is the cost centre of the
+!> evaluation. A density of low numerical rank (SCF, MINAO and fragment sums;
+!> rank = number of occupied orbitals) is factored once in [[gto_set_density]] as
+!> `D = L L^T`, and the contraction becomes `L_act (L_act^T phi)`: the active
+!> columns of `L^T` are contiguous runs, so no density panel is gathered. Any
+!> other density keeps the stored matrix and the panel contraction, see
+!> [[factor_density]]
 module moist_cavity_drop_lsf_isodensity_gto
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
-   use moist_math_blas, only: gemm
+   use moist_math_blas, only: gemm, gemv
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -50,6 +59,8 @@ module moist_cavity_drop_lsf_isodensity_gto
    public :: moist_iso_gto_nrhs
    public :: moist_iso_basis_type
    public :: moist_iso_basis
+   public :: moist_iso_gto_tile_type
+   public :: moist_iso_gto_tile_width
 
    !> Highest supported angular momentum (s=0 .. l=8)
    !>
@@ -163,6 +174,47 @@ module moist_cavity_drop_lsf_isodensity_gto
    !> Width of the packed density panel of the screened multi-column contraction
    integer, parameter :: iso_panel_width = 256
 
+   !> Points per tile of `evaluate_batch` by requested order 0..4
+   !>
+   !> - 32 near the best width at orders 2..4 for local points
+   !> - 64 helps orders 0..1 only while a tile stays inside one point cluster and
+   !>   loses as much once it spans two (larger shell union), so 32 is kept
+   !> - order 4 at 16: about as fast as 32, half the scratch (35 AO slots per point)
+   integer, parameter :: moist_iso_gto_tile_width(0:4) = [32, 32, 32, 32, 16]
+
+   !> Columns below which a tile gemm costs one read of its density block
+   !>
+   !> - a tile whose active block is not the whole density either packs it
+   !>   (read and write `nact^2` entries, then a gemm on them) or contracts every
+   !>   function with zero rows for the inactive ones (a gemm on all `nfun^2`)
+   !> - gemm cost per density entry `max(ncol, iso_tile_read_cols)` multiply-adds,
+   !>   packing `2 iso_tile_read_cols`; the cheaper path runs, and a single column
+   !>   always takes the run-pair loop, which reads half the active block
+   !> - both paths add the same nonzero products, so the choice is invisible
+   !>   beyond round-off
+   !> - not used with a factored density: the packed operand is `rank` rows of
+   !>   contiguous runs, so the active set always wins
+   !> - ratio of one-thread gemm throughput (~500 GFLOP/s) to the read bandwidth
+   !>   of a density larger than the cache (~50 GB/s)
+   real(wp), parameter :: iso_tile_read_cols = 40.0_wp
+
+   !> Default largest rank of the density factor, as a fraction of the functions
+   !>
+   !> - above it the stored density and the panel contraction are used
+   !> - both contractions agree to ~1e-12 relative, the factor truncating at `iso_lr_tol`
+   real(wp), parameter :: iso_lr_max_frac = 0.25_wp
+
+   !> Pivot tolerance of the density factorization, relative to the largest diagonal
+   !>
+   !> - SCF densities fall from ~1e-3 to ~1e-16 after the last occupied orbital
+   real(wp), parameter :: iso_lr_tol = 1.0e-14_wp
+
+   !> Most negative residual diagonal accepted, relative to the largest diagonal
+   real(wp), parameter :: iso_lr_neg = 1.0e-12_wp
+
+   !> Largest mismatch of `D x` and `L (L^T x)` accepted, relative to max |D x|
+   real(wp), parameter :: iso_lr_probe = 1.0e-12_wp
+
    !> Largest out-of-subspace residual of a spherical density, relative to max |D|
    real(wp), parameter :: iso_harmonic_tol = 1.0e-10_wp
 
@@ -230,27 +282,52 @@ module moist_cavity_drop_lsf_isodensity_gto
       !> - the monomial itself, or the leading monomial of a harmonic polynomial
       integer, allocatable :: fun_src(:)
       !> Density matrix over the internal functions, symmetric (nfun, nfun)
+      !>
+      !> - freed when the density is factored, `lt` then replaces it
       real(wp), allocatable :: dens(:, :)
+      !> Transposed factor of the density, `D = L L^T`, (lr_rank, nfun)
+      !>
+      !> - the columns of one function are contiguous, so the active runs copy as
+      !>   blocks
+      !> - allocated only when the density passed the checks of [[factor_density]]
+      real(wp), allocatable :: lt(:, :)
+      !> Rank of the density factor, 0 without one
+      integer :: lr_rank = 0
+      !> Largest rank of the factor as a fraction of the functions
+      !>
+      !> - read by [[gto_set_density]]; 0 never factors, 1 factors any rank
+      real(wp) :: lr_max_frac = iso_lr_max_frac
+      !> Whether a density has been installed
+      logical :: density_set = .false.
       !> Highest owner-atom index present in the basis (= size of the CSR below)
       integer :: natom_grid = 0
       !> Atom -> shell CSR offsets, size natom_grid+1; atom A owns shells
       !> `atom_shell(atom_soff(A)+1 : atom_soff(A+1))`
       !>
-      !> - turns a candidate-atom list from the cavity cell grid into a shell list
-      !>   without a scan
+      !> - turns a candidate-atom list from the candidate cell list into a shell
+      !>   list without a scan
       integer, allocatable :: atom_soff(:)
       !> Flat-packed shell indices grouped by owner atom, most diffuse first
       !> within an atom; this is the internal function order, size nshell
       integer, allocatable :: atom_shell(:)
-      !> Per-shell squared radial cutoff, beyond which the shell contributes
-      !> nothing to the value or to derivatives through the order requested from
-      !> [[gto_build_screening]], i.e. for `|r - center|^2 > sh_rcut2`
+      !> Per-shell squared radial cutoff per derivative count, beyond which the shell
+      !> contributes nothing to the value or to the derivatives through that count,
+      !> i.e. for `|r - center|^2 > sh_rcut2(shell, k)`
       !>
+      !> - column k is the cutoff at derivative count min(k, kmax), kmax the
+      !>   `max_deriv` of [[gto_build_screening]] (default 3), so with the default
+      !>   column 4 repeats column 3
+      !> - an evaluation with `ndloc` derivative counts reads column `ndloc`
       !> - set by [[gto_build_screening]]
       !> - huge, meaning no screening, until then and when disabled
-      real(wp), allocatable :: sh_rcut2(:)
-      !> Largest shell reach sqrt(max(sh_rcut2)); the radius the cavity cell grid
-      !> must span so no contributing atom is missed as a candidate
+      real(wp), allocatable :: sh_rcut2(:, :)
+      !> Largest cutoff built by [[gto_build_screening]], the `max_deriv` column
+      !>
+      !> - equals `reach(threshold, max_deriv)`, no production reader
+      !> - the candidate cell list uses `reach(threshold)` at depth 3 instead, equal
+      !>   to it for the production build in `lsf_update`
+      !> - a build at `max_deriv = 4` evaluated at order 4 can exceed that reach
+      !>   (tests only)
       real(wp) :: max_rcut = 0.0_wp
    contains
       !> Configure the basis from per-shell primitive data
@@ -261,12 +338,18 @@ module moist_cavity_drop_lsf_isodensity_gto
       procedure :: set_density => gto_set_density
       !> Whether a density matrix has been installed
       procedure :: has_density => gto_has_density
+      !> Whether the installed density is contracted through its low-rank factor
+      procedure :: factored => gto_factored
       !> (Re)compute the per-shell radial screening cutoffs for a threshold
       procedure :: build_screening => gto_build_screening
       !> Conservative global shell reach (Bohr) for a screening threshold
       procedure :: reach => gto_reach
       !> Evaluate the density and the requested spatial derivatives at one point
       procedure :: eval => gto_eval
+      !> Size the tile scratch for an order and a tile width
+      procedure :: size_tile => gto_size_tile
+      !> Evaluate the density and its spatial derivatives at a tile of points
+      procedure :: eval_tile => gto_eval_tile
    end type moist_iso_gto_type
 
    !> Scratch of [[gto_eval]], one per evaluating thread
@@ -296,6 +379,39 @@ module moist_cavity_drop_lsf_isodensity_gto
       !> Owner atom of each compact row of `phi`, size nfun
       integer, allocatable :: row_atom(:)
    end type moist_iso_gto_work_type
+
+   !> Scratch of [[gto_eval_tile]], one per evaluating thread
+   !>
+   !> - sized by [[gto_size_tile]], grow-only, so evaluation allocates nothing
+   !>   once the largest order and width have been seen
+   !> - flat storage viewed per tile through contiguous pointers, point last:
+   !>   every point's block of `phi` and `dphi` is one contiguous gemm operand
+   !>   of its gram, and the slots the contraction reads are gathered into one
+   !>   contiguous (nact, nrhs*np) operand
+   type :: moist_iso_gto_tile_type
+      !> AO-derivative tile storage, viewed as (nact, 0:nslot-1, np)
+      real(wp), allocatable :: phi(:)
+      !> Contracted slots of every point, viewed as (nact, 0:nrhs-1, np)
+      real(wp), allocatable :: rhs(:)
+      !> Density-weighted AO-derivative storage, viewed as (nact, 0:nrhs-1, np)
+      real(wp), allocatable :: dphi(:)
+      !> Cartesian block of one shell before the spherical fold, (ncart(l), 0:nslot-1, np)
+      real(wp), allocatable :: cart(:)
+      !> Packed density panel of the compact contraction, flat (nfun*iso_panel_width)
+      real(wp), allocatable :: panel(:)
+      !> Storage of the phi rows matching one panel, flat (iso_panel_width*np*nrhs)
+      real(wp), allocatable :: rows(:)
+      !> Shells of the tile in internal function order, size nshell
+      integer, allocatable :: shell(:)
+      !> Whether each listed shell is gated per point (its atom a candidate), size nshell
+      logical, allocatable :: gated(:)
+      !> Whether each atom is on the candidate list, size natom_grid
+      logical, allocatable :: listed(:)
+      !> Internal offset of each active run, size nshell
+      integer, allocatable :: run_off(:)
+      !> Function count of each active run, size nshell
+      integer, allocatable :: run_len(:)
+   end type moist_iso_gto_tile_type
 
 contains
 
@@ -440,6 +556,9 @@ contains
       if (allocated(self%sh_foff)) deallocate (self%sh_foff)
       if (allocated(self%fun_src)) deallocate (self%fun_src)
       if (allocated(self%dens)) deallocate (self%dens)
+      if (allocated(self%lt)) deallocate (self%lt)
+      self%lr_rank = 0
+      self%density_set = .false.
       if (allocated(self%atom_soff)) deallocate (self%atom_soff)
       if (allocated(self%atom_shell)) deallocate (self%atom_shell)
       if (allocated(self%sh_rcut2)) deallocate (self%sh_rcut2)
@@ -485,7 +604,7 @@ contains
 
       !> Atom -> shell CSR, a counting sort on the owner atom
       !>
-      !> - candidate atom lists from the cavity cell grid index straight into it,
+      !> - candidate atom lists from the candidate cell list index straight into it,
       !>   so the hot projection path visits only the shells on nearby atoms
       self%natom_grid = maxval(sh_atom)
       allocate (self%atom_soff(self%natom_grid + 1), source=0)
@@ -530,7 +649,7 @@ contains
 
       !> Default to "no screening" (huge cutoff) until build_screening runs, so a
       !> direct user (no cavity / zero threshold) evaluates every shell exactly
-      allocate (self%sh_rcut2(self%nshell), source=huge(1.0_wp))
+      allocate (self%sh_rcut2(self%nshell, 4), source=huge(1.0_wp))
       self%max_rcut = 0.0_wp
 
    contains
@@ -598,6 +717,8 @@ contains
    !> representation first checks that it lies in the span of the spherical
    !> functions, see [[check_spherical_density]]
    !>
+   !> - then tries the low-rank factor of [[factor_density]]; a density that does
+   !>   not qualify is kept as the matrix, silently
    !> - unchanged on error
    !>
    !> @param[inout] self   Basis instance
@@ -639,7 +760,98 @@ contains
             self%dens(i, j) = dcart(self%fun_src(i), src)
          end do
       end do
+      self%density_set = .true.
+      call factor_density(self)
    end subroutine gto_set_density
+
+   !> Factor the installed density as `D = L L^T` when it has a low rank
+   !>
+   !> Pivoted Cholesky with a gemv update per column, stopping at the pivot
+   !> tolerance; the factor replaces the matrix only if
+   !>
+   !> - every entry is finite; otherwise there is no factor and the dense path
+   !>   carries the NaN/Inf to the value
+   !> - the largest diagonal is positive and the rank is at least 1 and at most
+   !>   `int(lr_max_frac nfun)`
+   !> - no residual diagonal is more negative than `iso_lr_neg` (indefinite density)
+   !> - two fixed probe vectors give `D x = L (L^T x)` to `iso_lr_probe`, which
+   !>   also rejects a density that is not symmetric
+   !>
+   !> Otherwise the density is left as it was; there is no error, and
+   !> [[gto_factored]] tells which contraction runs
+   !>
+   !> @param[inout] self  Basis instance with `dens` set
+   subroutine factor_density(self)
+      !> Basis instance
+      class(moist_iso_gto_type), intent(inout) :: self
+
+      !> Columns of L, residual diagonal, working column, probe and its images
+      real(wp), allocatable :: lc(:, :), dg(:), col(:), x(:), y1(:), y2(:), z(:)
+      real(wp), allocatable :: lt(:, :)
+      real(wp) :: dmax, tol, piv, err, scl
+      integer :: n, rmax, r, p, i, k, stat
+
+      if (allocated(self%lt)) deallocate (self%lt)
+      self%lr_rank = 0
+      ! The maxval/maxloc/minval below skip NaN, so refuse before any of them runs
+      if (.not. all(ieee_is_finite(self%dens))) return
+      n = self%nfun
+      rmax = int(self%lr_max_frac*real(n, wp))
+      if (rmax < 1 .or. n < 1) return
+      allocate (lc(n, rmax), dg(n), col(n), stat=stat)
+      if (stat /= 0) return
+      do i = 1, n
+         dg(i) = self%dens(i, i)
+      end do
+      dmax = maxval(dg)
+      ! Written so that a NaN diagonal is refused
+      if (.not. (dmax > 0.0_wp)) return
+      tol = iso_lr_tol*dmax
+
+      r = 0
+      do
+         p = maxloc(dg, 1)
+         if (dg(p) <= tol) exit
+         if (r == rmax) return
+         r = r + 1
+         col = self%dens(:, p)
+         if (r > 1) then
+            call gemv(lc(:, 1:r - 1), lc(p, 1:r - 1), col, alpha=-1.0_wp, beta=1.0_wp)
+         end if
+         piv = sqrt(dg(p))
+         do i = 1, n
+            lc(i, r) = col(i)/piv
+            dg(i) = dg(i) - lc(i, r)*lc(i, r)
+         end do
+         dg(p) = 0.0_wp
+      end do
+      if (.not. (minval(dg) >= -iso_lr_neg*dmax)) return
+
+      allocate (lt(r, n), x(n), y1(n), y2(n), z(r), stat=stat)
+      if (stat /= 0) return
+      do i = 1, n
+         do k = 1, r
+            lt(k, i) = lc(i, k)
+         end do
+      end do
+      deallocate (lc)
+      do k = 1, 2
+         do i = 1, n
+            x(i) = real(modulo(i*(1237 + 811*k), 2003), wp)/2003.0_wp - 0.5_wp
+         end do
+         call gemv(self%dens, x, y1)
+         call gemv(lt, x, z)
+         call gemv(lt, z, y2, trans="t")
+         err = maxval(abs(y1 - y2))
+         scl = maxval(abs(y1))
+         if (.not. (err <= iso_lr_probe*scl)) return
+      end do
+
+      if (r < 1) return
+      call move_alloc(lt, self%lt)
+      self%lr_rank = r
+      deallocate (self%dens)
+   end subroutine factor_density
 
    !> Check that a cartesian density lies in the span of the spherical functions
    !>
@@ -704,8 +916,20 @@ contains
       class(moist_iso_gto_type), intent(in) :: self
       logical :: ok
 
-      ok = allocated(self%dens)
+      ok = self%density_set
    end function gto_has_density
+
+   !> Whether the density is contracted through its low-rank factor
+   !>
+   !> @param[in] self  Basis instance
+   !> @returns         .true. when `lt` replaces the stored density matrix
+   pure function gto_factored(self) result(ok)
+      !> Basis instance
+      class(moist_iso_gto_type), intent(in) :: self
+      logical :: ok
+
+      ok = allocated(self%lt)
+   end function gto_factored
 
    !> Conservative squared amplitude bound for one primitive at radius `r`
    !>
@@ -807,6 +1031,11 @@ contains
    !> `threshold` is an absolute amplitude cutoff on the (bounded) AO product contribution;
    !> `threshold <= 0` disables screening
    !>
+   !> - column k of `sh_rcut2` is built at derivative count min(k, max_deriv), so an
+   !>   evaluation at a lower order keeps fewer shells than at `max_deriv`
+   !> - `max_rcut` is the largest cutoff built, equal to `reach(threshold, max_deriv)`;
+   !>   the candidate cell list uses `reach(threshold)` at depth 3 instead
+   !>
    !> @param[inout] self      Basis instance
    !> @param[in]    threshold Amplitude screening threshold
    !> @param[in]    max_deriv Optional highest derivative order covered; default 3
@@ -815,7 +1044,7 @@ contains
       real(wp), intent(in) :: threshold
       integer, intent(in), optional :: max_deriv
 
-      integer :: s, p0, p1, derivative_order
+      integer :: s, p0, p1, derivative_order, k
       real(wp) :: rcut
 
       derivative_order = 3
@@ -824,9 +1053,13 @@ contains
       do s = 1, self%nshell
          p0 = self%sh_poff(s)
          p1 = self%sh_poff(s + 1) - 1
+         do k = 1, 4
+            rcut = iso_shell_rcut(self%sh_l(s), self%exps(p0:p1), self%coeffs(p0:p1), &
+                                  threshold, min(k, derivative_order))
+            self%sh_rcut2(s, k) = rcut*rcut
+         end do
          rcut = iso_shell_rcut(self%sh_l(s), self%exps(p0:p1), self%coeffs(p0:p1), &
                                threshold, derivative_order)
-         self%sh_rcut2(s) = rcut*rcut
          self%max_rcut = max(self%max_rcut, rcut)
       end do
    end subroutine gto_build_screening
@@ -868,8 +1101,9 @@ contains
    !> molecule:
    !>
    !> - assembly: with `cand_atoms` present, only the shells owned by those atoms
-   !>   (the cavity cell grid's candidate list) are visited, and every shell beyond
-   !>   its radial cutoff [[gto_type:sh_rcut2]] is skipped; the survivors fill
+   !>   (the candidate cell list's candidates) are visited, and every shell beyond
+   !>   its radial cutoff [[gto_type:sh_rcut2]] at the requested derivative count
+   !>   is skipped; the survivors fill
    !>   compact rows of `work%phi`, folded to the internal functions
    !> - contraction: `work%dphi = D phi` for every column the requested order needs,
    !>   in one pass over the active block of the density, see [[gto_contract]]
@@ -906,7 +1140,7 @@ contains
       real(wp), intent(out), optional :: d2rho(3, 3)
       !> Optional density third derivative
       real(wp), intent(out), optional :: d3rho(3, 3, 3)
-      !> Optional candidate owner-atom list (cavity cell-grid screening)
+      !> Optional candidate owner-atom list (candidate cell list screening)
       integer, intent(in), optional :: cand_atoms(:)
       !> Optional density fourth derivative
       real(wp), intent(out), optional :: d4rho(3, 3, 3, 3)
@@ -970,7 +1204,7 @@ contains
    contains
 
       !> Assemble one shell into the next compact rows of `work%phi` and extend
-      !> the active runs, skipping it beyond its radial cutoff
+      !> the active runs, skipping it beyond its radial cutoff at `ndloc`
       !>
       !> - host-associated: reads point/ndloc/nslot/self, writes work/nact/nrun
       !> - in the spherical representation, shells with l >= 2 are assembled in a
@@ -987,7 +1221,7 @@ contains
 
          d = point - self%center(:, sh)
          u = d(1)*d(1) + d(2)*d(2) + d(3)*d(3)
-         if (u > self%sh_rcut2(sh)) return
+         if (u > self%sh_rcut2(sh, ndloc)) return
 
          l = self%sh_l(sh)
          nc = moist_iso_gto_ncart(l)
@@ -1035,6 +1269,9 @@ contains
       !> Number of density-weighted columns
       integer, intent(in) :: nrhs
 
+      !> Scratch entries required
+      integer :: need
+
       if (allocated(work%phi)) then
          if (size(work%phi, 1) /= self%nfun .or. size(work%phi, 2) < nslot) deallocate (work%phi)
       end if
@@ -1045,12 +1282,29 @@ contains
       end if
       if (.not. allocated(work%dphi)) allocate (work%dphi(self%nfun, 0:nrhs - 1))
 
-      if (nrhs > 1) then
+      if (allocated(self%lt)) then
+         ! Factored density: packed active columns of L^T, then the L^T phi block
+         ! and, when phi is not compact, a compact copy of its columns
+         need = self%lr_rank*self%nfun
+         if (allocated(work%panel)) then
+            if (size(work%panel) < need) deallocate (work%panel)
+         end if
+         if (.not. allocated(work%panel)) allocate (work%panel(need))
+         need = (self%lr_rank + self%nfun)*nrhs
+         if (allocated(work%rows)) then
+            if (size(work%rows) < need) deallocate (work%rows)
+         end if
+         if (.not. allocated(work%rows)) allocate (work%rows(need))
+      else if (nrhs > 1) then
          if (allocated(work%panel)) then
             if (size(work%panel) /= self%nfun*iso_panel_width) deallocate (work%panel)
          end if
          if (.not. allocated(work%panel)) allocate (work%panel(self%nfun*iso_panel_width))
-         if (.not. allocated(work%rows)) allocate (work%rows(iso_panel_width*moist_iso_gto_nrhs(4)))
+         need = iso_panel_width*moist_iso_gto_nrhs(4)
+         if (allocated(work%rows)) then
+            if (size(work%rows) < need) deallocate (work%rows)
+         end if
+         if (.not. allocated(work%rows)) allocate (work%rows(need))
       end if
 
       if (allocated(work%run_off)) then
@@ -1063,6 +1317,327 @@ contains
       end if
       if (.not. allocated(work%row_atom)) allocate (work%row_atom(self%nfun))
    end subroutine size_work
+
+   !* ================================================================================= *!
+   !*                                  Tile evaluation                                  *!
+   !* ================================================================================= *!
+
+   !> Size the tile scratch for a derivative order and a tile width
+   !>
+   !> - grow-only: storage of an earlier, larger order or width is kept
+   !> - the panel storage of the compact contraction is sized on its first use
+   !>   in [[gto_eval_tile]]
+   !>
+   !> @param[in]    self   Basis instance
+   !> @param[inout] work   Tile scratch
+   !> @param[in]    ndloc  highest spatial derivative order, 1..4
+   !> @param[in]    np     points per tile
+   subroutine gto_size_tile(self, work, ndloc, np)
+      !> Basis instance
+      class(moist_iso_gto_type), intent(in) :: self
+      !> Tile scratch
+      type(moist_iso_gto_tile_type), intent(inout) :: work
+      !> Highest spatial derivative order
+      integer, intent(in) :: ndloc
+      !> Points per tile
+      integer, intent(in) :: np
+
+      !> AO-derivative slots and density-weighted columns per point
+      integer :: nslot, nrhs
+
+      if (ndloc < 1 .or. ndloc > 4) then
+         error stop "isodensity tile derivative order must be 1..4"
+      end if
+      nslot = moist_iso_gto_nslot(ndloc)
+      nrhs = moist_iso_gto_nrhs(ndloc)
+      call tile_grow(work%phi, self%nfun*np*nslot)
+      call tile_grow(work%rhs, self%nfun*np*nrhs)
+      call tile_grow(work%dphi, self%nfun*np*nrhs)
+      if (self%basis == moist_iso_basis%spherical) then
+         call tile_grow(work%cart, moist_iso_gto_ncart(self%lmax)*np*nslot)
+      end if
+
+      if (allocated(work%shell)) then
+         if (size(work%shell) /= self%nshell) then
+            deallocate (work%shell, work%gated, work%run_off, work%run_len)
+         end if
+      end if
+      if (.not. allocated(work%shell)) then
+         allocate (work%shell(self%nshell), work%gated(self%nshell), &
+                   work%run_off(self%nshell), work%run_len(self%nshell))
+      end if
+      if (allocated(work%listed)) then
+         if (size(work%listed) /= self%natom_grid) deallocate (work%listed)
+      end if
+      if (.not. allocated(work%listed)) allocate (work%listed(self%natom_grid))
+   end subroutine gto_size_tile
+
+   !> Grow a flat scratch buffer to at least `need` entries, content not kept
+   !>
+   !> @param[inout] buf   scratch buffer
+   !> @param[in]    need  entries required
+   subroutine tile_grow(buf, need)
+      !> Scratch buffer
+      real(wp), allocatable, intent(inout) :: buf(:)
+      !> Entries required
+      integer, intent(in) :: need
+
+      if (allocated(buf)) then
+         if (size(buf) >= need) return
+         deallocate (buf)
+      end if
+      allocate (buf(need))
+   end subroutine tile_grow
+
+   !> Evaluate the electron density and its spatial derivatives at a tile of points
+   !>
+   !> Tile counterpart of [[gto_eval]]: the order is again set by the outputs
+   !> present, and every point receives what [[gto_eval]] gives it, up to the
+   !> summation order of the contraction
+   !>
+   !> - screening as in [[gto_eval]], per (shell, point) pair: shells visited in
+   !>   the same order (the listed atoms, else the whole internal order), each pair
+   !>   kept by the same `|r - center|^2 > sh_rcut2(shell, ndloc)` test; a dropped
+   !>   pair leaves exact zero rows, so its point adds exact zeros where
+   !>   [[gto_eval]] omits the shell (no atom-level truncation exists)
+   !> - a kept pair is assembled by the same [[gto_assemble_shell]] call on the
+   !>   same displacement and folded per column by the same
+   !>   [[moist_iso_gto_fold]], so the AO values match [[gto_eval]] bit for bit
+   !> - rows: the shells kept for at least one point, in visiting order; when the
+   !>   zero rows cost less than packing ([[iso_tile_read_cols]]), every shell
+   !>   in internal order instead, so the contraction is one gemm on the stored
+   !>   density
+   !> - contraction: `D phi` of the slots the order needs, all points in one
+   !>   [[gto_contract]] call on the gathered (nact, nrhs*np) operand
+   !> - per point: the gram `phi^T D phi` in one gemm (every slot against every
+   !>   contracted column, a superset of the entries [[gto_gram]] fills), then
+   !>   the derivatives of [[gto_eval]]
+   !>
+   !> @param[in]    self       Basis instance (read-only)
+   !> @param[in]    points     evaluation points in Bohr (3, np)
+   !> @param[inout] work       tile scratch, grown on demand
+   !> @param[out]   rho        electron density (np)
+   !> @param[out]   drho       density gradient (3, np)
+   !> @param[out]   d2rho      optional density Hessian (3, 3, np)
+   !> @param[out]   d3rho      optional density third derivative (3, 3, 3, np)
+   !> @param[out]   d4rho      optional density fourth derivative (3, 3, 3, 3, np)
+   !> @param[in]    cand_atoms optional candidate owner atoms, ascending for the
+   !>                          internal row order; repeats and atoms without
+   !>                          shells are skipped
+   subroutine gto_eval_tile(self, points, work, rho, drho, d2rho, d3rho, d4rho, &
+                            cand_atoms)
+      !> Basis instance
+      class(moist_iso_gto_type), intent(in) :: self
+      !> Evaluation points
+      real(wp), intent(in) :: points(:, :)
+      !> Tile scratch
+      type(moist_iso_gto_tile_type), intent(inout), target :: work
+      !> Electron density
+      real(wp), intent(out), contiguous :: rho(:)
+      !> Density gradient
+      real(wp), intent(out), contiguous :: drho(:, :)
+      !> Optional density Hessian
+      real(wp), intent(out), optional, contiguous :: d2rho(:, :, :)
+      !> Optional density third derivative
+      real(wp), intent(out), optional, contiguous :: d3rho(:, :, :, :)
+      !> Optional density fourth derivative
+      real(wp), intent(out), optional, contiguous :: d4rho(:, :, :, :, :)
+      !> Optional candidate owner atoms
+      integer, intent(in), optional :: cand_atoms(:)
+
+      !> AO-derivative tile, per point and flat
+      real(wp), pointer, contiguous :: phi(:, :, :), phic(:, :)
+      !> Contracted slots and their density-weighted columns, flat
+      real(wp), pointer, contiguous :: rhsc(:, :), dphic(:, :)
+      !> One point's AO derivatives and density-weighted columns
+      real(wp), pointer, contiguous :: phip(:, :), dphip(:, :)
+      !> Cartesian block of one shell, per point and flat
+      real(wp), pointer, contiguous :: cart(:, :, :), cartc(:, :)
+      !> Gram block of one point, (nslot, nrhs)
+      real(wp), pointer, contiguous :: gblk(:, :)
+      !> Storage of `gblk`
+      real(wp), target :: gbuf(35*10)
+      real(wp) :: gram(0:34, 0:9), d(3), u
+      !> Contracted columns, at least the read-bound count
+      real(wp) :: ncol
+      integer :: np, ndloc, nslot, nrhs, nsel, nact, nrun, ka, aidx, idx, sh, i, p
+      integer :: l, nc, nf, r0, off, k
+      logical :: kept
+
+      np = size(points, 2)
+      ndloc = 1
+      if (present(d2rho)) ndloc = 2
+      if (present(d3rho)) ndloc = 3
+      if (present(d4rho)) ndloc = 4
+      nslot = moist_iso_gto_nslot(ndloc)
+      nrhs = moist_iso_gto_nrhs(ndloc)
+      call gto_size_tile(self, work, ndloc, np)
+
+      rho(1:np) = 0.0_wp
+      drho(:, 1:np) = 0.0_wp
+      if (present(d2rho)) d2rho(:, :, 1:np) = 0.0_wp
+      if (present(d3rho)) d3rho(:, :, :, 1:np) = 0.0_wp
+      if (present(d4rho)) d4rho(:, :, :, :, 1:np) = 0.0_wp
+      if (np == 0) return
+
+      ! Shells kept for at least one point, in visiting order
+      nsel = 0
+      nact = 0
+      if (present(cand_atoms)) then
+         work%listed = .false.
+         do ka = 1, size(cand_atoms)
+            aidx = cand_atoms(ka)
+            if (aidx < 1 .or. aidx > self%natom_grid) cycle
+            if (work%listed(aidx)) cycle
+            work%listed(aidx) = .true.
+            do idx = self%atom_soff(aidx) + 1, self%atom_soff(aidx + 1)
+               call select_shell(self%atom_shell(idx))
+            end do
+         end do
+      else
+         do idx = 1, self%nshell
+            call select_shell(self%atom_shell(idx))
+         end do
+      end if
+
+      ! Dense enough: every shell in internal order, the unlisted ones never kept
+      ncol = max(real(nrhs*np, wp), iso_tile_read_cols)
+      if (nact < self%nfun .and. nrhs*np > 1 .and. .not. allocated(self%lt) .and. &
+          real(self%nfun, wp)**2*ncol <= &
+          real(nact, wp)**2*(ncol + 2.0_wp*iso_tile_read_cols)) then
+         do idx = 1, self%nshell
+            sh = self%atom_shell(idx)
+            work%shell(idx) = sh
+            work%gated(idx) = .true.
+            if (present(cand_atoms)) work%gated(idx) = work%listed(self%sh_atom(sh))
+         end do
+         nsel = self%nshell
+         nact = self%nfun
+      end if
+      if (nact == 0) return
+
+      nrun = 0
+      do i = 1, nsel
+         sh = work%shell(i)
+         nf = shell_nfun(self%basis, self%sh_l(sh))
+         off = self%sh_foff(sh)
+         if (nrun > 0) then
+            if (work%run_off(nrun) + work%run_len(nrun) == off) then
+               work%run_len(nrun) = work%run_len(nrun) + nf
+               cycle
+            end if
+         end if
+         nrun = nrun + 1
+         work%run_off(nrun) = off
+         work%run_len(nrun) = nf
+      end do
+
+      ! Assemble the kept pairs into zeroed rows
+      phi(1:nact, 0:nslot - 1, 1:np) => work%phi(1:nact*nslot*np)
+      phic(1:nact, 0:nslot*np - 1) => work%phi(1:nact*nslot*np)
+      work%phi(1:nact*nslot*np) = 0.0_wp
+      r0 = 0
+      do i = 1, nsel
+         sh = work%shell(i)
+         l = self%sh_l(sh)
+         nc = moist_iso_gto_ncart(l)
+         nf = shell_nfun(self%basis, l)
+         if (work%gated(i)) then
+            if (nf < nc) then
+               cart(1:nc, 0:nslot - 1, 1:np) => work%cart(1:nc*nslot*np)
+               cartc(1:nc, 0:nslot*np - 1) => work%cart(1:nc*nslot*np)
+               work%cart(1:nc*nslot*np) = 0.0_wp
+               kept = .false.
+               do p = 1, np
+                  d = points(:, p) - self%center(:, sh)
+                  u = d(1)*d(1) + d(2)*d(2) + d(3)*d(3)
+                  if (u > self%sh_rcut2(sh, ndloc)) cycle
+                  call gto_assemble_shell(self, sh, d, u, ndloc, cart(:, :, p))
+                  kept = .true.
+               end do
+               if (kept) then
+                  call moist_iso_gto_fold(l, nslot*np, cartc, phic(r0 + 1:r0 + nf, :))
+               end if
+            else
+               do p = 1, np
+                  d = points(:, p) - self%center(:, sh)
+                  u = d(1)*d(1) + d(2)*d(2) + d(3)*d(3)
+                  if (u > self%sh_rcut2(sh, ndloc)) cycle
+                  call gto_assemble_shell(self, sh, d, u, ndloc, &
+                                          phi(r0 + 1:r0 + nf, :, p))
+               end do
+            end if
+         end if
+         r0 = r0 + nf
+      end do
+
+      ! D phi of every point at once, on the gathered contracted slots
+      rhsc(1:nact, 0:nrhs*np - 1) => work%rhs(1:nact*nrhs*np)
+      dphic(1:nact, 0:nrhs*np - 1) => work%dphi(1:nact*nrhs*np)
+      ! Element loop: both pointers view the `target` work, so the section form
+      ! would copy through a heap temporary
+      do p = 1, np
+         do k = 0, nrhs - 1
+            do i = 1, nact
+               rhsc(i, (p - 1)*nrhs + k) = phi(i, k, p)
+            end do
+         end do
+      end do
+      if (allocated(self%lt)) then
+         ! compact phi, so the L^T phi block is the only extra operand
+         call tile_grow(work%panel, self%lr_rank*self%nfun)
+         call tile_grow(work%rows, self%lr_rank*nrhs*np)
+      else if (nrhs*np > 1 .and. .not. (nrun == 1 .and. nact == self%nfun)) then
+         call tile_grow(work%panel, self%nfun*iso_panel_width)
+         call tile_grow(work%rows, iso_panel_width*nrhs*np)
+      end if
+      call gto_contract(self, rhsc, dphic, work%panel, work%rows, &
+                        work%run_off(1:nrun), work%run_len(1:nrun))
+
+      gblk(1:nslot, 1:nrhs) => gbuf(1:nslot*nrhs)
+      do p = 1, np
+         phip(1:nact, 1:nslot) => work%phi((p - 1)*nact*nslot + 1:p*nact*nslot)
+         dphip(1:nact, 1:nrhs) => work%dphi((p - 1)*nact*nrhs + 1:p*nact*nrhs)
+         call gemm(phip, dphip, gblk, transa="t")
+         gram(0:nslot - 1, 0:nrhs - 1) = gblk
+         rho(p) = gram(0, 0)
+         drho(:, p) = 2.0_wp*gram(1:3, 0)
+         if (present(d2rho)) call density_hessian(gram, d2rho(:, :, p))
+         if (present(d3rho)) call density_third(gram, d3rho(:, :, :, p))
+         if (present(d4rho)) call density_fourth(gram, d4rho(:, :, :, :, p))
+      end do
+
+   contains
+
+      !> List one shell when the gate of [[gto_eval]] (cutoff column `ndloc`) keeps it
+      !> at any point
+      !>
+      !> - host-associated: reads points/self, writes work/nsel/nact
+      !>
+      !> @param[in] sh  shell index
+      subroutine select_shell(sh)
+         !> Shell index
+         integer, intent(in) :: sh
+
+         !> Displacement from the shell center and its square
+         real(wp) :: ds(3), us
+         integer :: q
+
+         do q = 1, np
+            ds = points(:, q) - self%center(:, sh)
+            us = ds(1)*ds(1) + ds(2)*ds(2) + ds(3)*ds(3)
+            ! Written so that a NaN point is kept, as in gto_eval
+            if (.not. (us > self%sh_rcut2(sh, ndloc))) then
+               nsel = nsel + 1
+               work%shell(nsel) = sh
+               work%gated(nsel) = .true.
+               nact = nact + shell_nfun(self%basis, self%sh_l(sh))
+               return
+            end if
+         end do
+      end subroutine select_shell
+
+   end subroutine gto_eval_tile
 
    !> Accumulate one shell's cartesian AO-derivative contributions at a point
    !>
@@ -1158,6 +1733,7 @@ contains
    !>
    !> Reads the active block of the density once for all columns of `dphi`:
    !>
+   !> - factored density: [[contract_factor]], `L_act (L_act^T phi)`
    !> - every function active, in internal order: one gemm on the stored density
    !> - value and gradient (one column): run-pair loop over the upper block
    !>   triangle, each density block feeding both halves of the product
@@ -1166,8 +1742,10 @@ contains
    !> @param[in]    self     Basis instance
    !> @param[in]    phi      compact AO-derivative table, (nfun, 0:nslot-1)
    !> @param[out]   dphi     D phi of the first columns, (nact, 0:nrhs-1)
-   !> @param[inout] panel    panel storage, (nfun*iso_panel_width)
-   !> @param[inout] rows     panel-row storage of phi, (iso_panel_width*nrhs)
+   !> @param[inout] panel    panel storage, (nfun*iso_panel_width), or the packed
+   !>                        factor, (rank*nfun)
+   !> @param[inout] rows     panel-row storage of phi, (iso_panel_width*nrhs), or
+   !>                        the `L^T phi` block, (rank*nrhs) plus (nfun*nrhs)
    !> @param[in]    run_off  internal offset of each active run
    !> @param[in]    run_len  function count of each active run
    subroutine gto_contract(self, phi, dphi, panel, rows, run_off, run_len)
@@ -1190,10 +1768,12 @@ contains
 
       nact = size(dphi, 1)
       nrhs = size(dphi, 2)
-      if (size(run_off) == 1 .and. run_off(1) == 0 .and. nact == self%nfun) then
+      if (allocated(self%lt)) then
+         call contract_factor(self, phi, dphi, panel, rows, run_off, run_len)
+      else if (size(run_off) == 1 .and. run_off(1) == 0 .and. nact == self%nfun) then
          ! TODO: this gemm (and the one in contract_panels) runs per point inside
          ! the OpenMP projection; pthreaded OpenBLAS can fight with that
-         ! (~2x slower for ~600 functions)
+         ! (up to ~2x slower)
          call gemm(self%dens, phi(:, 0:nrhs - 1), dphi)
       else if (nrhs == 1) then
          call contract_runs(self, phi, dphi, run_off, run_len)
@@ -1201,6 +1781,79 @@ contains
          call contract_panels(self, phi, dphi, panel, rows, run_off, run_len)
       end if
    end subroutine gto_contract
+
+   !> Contraction through the density factor, `dphi = L_act (L_act^T phi)`
+   !>
+   !> - the active runs of `L^T` are contiguous blocks, copied to `panel` as
+   !>   (rank, nact); all functions active in one run uses `lt` in place
+   !> - `L_act^T phi` is the (rank, ncol) block in `rows`; `phi` is read in place
+   !>   when its leading dimension is nact, else copied compactly behind it
+   !>
+   !> @param[in]    self     Basis instance with a factor
+   !> @param[in]    phi      compact AO-derivative table, (nfun, 0:nslot-1)
+   !> @param[out]   dphi     D phi of the first columns, (nact, 0:nrhs-1)
+   !> @param[inout] panel    packed factor storage, (rank*nfun)
+   !> @param[inout] rows     `L^T phi` and compact phi storage
+   !> @param[in]    run_off  internal offset of each active run
+   !> @param[in]    run_len  function count of each active run
+   subroutine contract_factor(self, phi, dphi, panel, rows, run_off, run_len)
+      !> Basis instance
+      class(moist_iso_gto_type), intent(in) :: self
+      !> Compact AO-derivative table
+      real(wp), intent(in), contiguous :: phi(:, 0:)
+      !> Density-weighted AO derivatives
+      real(wp), intent(out), contiguous :: dphi(:, 0:)
+      !> Packed factor storage
+      real(wp), intent(inout), contiguous, target, optional :: panel(:)
+      !> Block storage
+      real(wp), intent(inout), contiguous, target, optional :: rows(:)
+      !> Internal offset of each active run
+      integer, intent(in) :: run_off(:)
+      !> Function count of each active run
+      integer, intent(in) :: run_len(:)
+
+      !> Packed factor, L^T phi block and compact phi
+      real(wp), pointer, contiguous :: lact(:, :), z(:, :), pc(:, :)
+      integer :: nact, ncol, r, jr, pj, oj, nj, j, i, c
+      logical :: compact
+
+      nact = size(dphi, 1)
+      ncol = size(dphi, 2)
+      r = self%lr_rank
+      z(1:r, 1:ncol) => rows(1:r*ncol)
+      compact = size(phi, 1) == nact
+      if (compact .and. size(run_off) == 1 .and. run_off(1) == 0 &
+          .and. nact == self%nfun) then
+         call gemm(self%lt, phi(:, 0:ncol - 1), z)
+         call gemm(self%lt, z, dphi, transa="t")
+         return
+      end if
+
+      lact(1:r, 1:nact) => panel(1:r*nact)
+      pj = 0
+      do jr = 1, size(run_off)
+         oj = run_off(jr)
+         nj = run_len(jr)
+         do j = 1, nj
+            do i = 1, r
+               lact(i, pj + j) = self%lt(i, oj + j)
+            end do
+         end do
+         pj = pj + nj
+      end do
+      if (compact) then
+         call gemm(lact, phi(:, 0:ncol - 1), z)
+      else
+         pc(1:nact, 1:ncol) => rows(r*ncol + 1:r*ncol + nact*ncol)
+         do c = 1, ncol
+            do i = 1, nact
+               pc(i, c) = phi(i, c - 1)
+            end do
+         end do
+         call gemm(lact, pc, z)
+      end if
+      call gemm(lact, z, dphi, transa="t")
+   end subroutine contract_factor
 
    !> One-column contraction over the active runs, reading each off-diagonal run
    !> block of the density once for both of its symmetric halves
