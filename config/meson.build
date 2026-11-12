@@ -178,7 +178,7 @@ lib_deps += jonquil_dep
 # Create the tool chain library as subproject
 mctc_dep = dependency(
   'mctc-lib',
-  version: '>=0.3.0',
+  version: '>=0.7.0',
   fallback: ['mctc-lib', 'mctc_dep'],
   default_options: ['default_library=static'],
 )
