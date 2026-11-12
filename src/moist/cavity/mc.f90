@@ -97,6 +97,23 @@ module moist_cavity_mc
       integer :: n = 0
    end type mc_tri_buffer_type
 
+   !> Value of a vertex beyond the LSF's reach (`prepare` status 1): exterior
+   !>
+   !> - the true value there is exterior (SvdW `Z = 0`, `S = +inf`; CFC `PD`
+   !>   underflowed), so any finite positive value has the right sign; zero is
+   !>   wrong, not imprecise: it is the surface, and a zero vertex defeats the
+   !>   all-positive skip of a far cube
+   !> - its magnitude never enters an edge interpolation: the reach (SvdW fade
+   !>   band end `3(a + b)/k` past every atom surface, 7.2 bohr at `k = 10`) is
+   !>   far wider than the zero set's spread past the atom spheres, so the
+   !>   reached neighbours of an unreached vertex one cell away are exterior too
+   !>   and no edge of it changes sign
+   !> - a reach thinner than a cell still puts the crossing on that edge, and
+   !>   the cube's refinement re-samples it at reached points
+   !> - one bohr, the LSF's natural scale: no interpolation or volume term
+   !>   overflows the way `huge` would
+   real(wp), parameter :: mc_exterior_value = 1.0_wp
+
    !> Edge-intersection bitmask per cube configuration (standard marching-cubes table)
    !&<
    integer, parameter :: edge_table(256) = [ &
@@ -750,6 +767,31 @@ contains
       end do
    end subroutine new_lsf_slots
 
+   !> LSF value at one vertex; an unreached vertex is `mc_exterior_value`
+   !>
+   !> @param[inout] lsf   Thread-local LSF clone
+   !> @param[in]    point Evaluation point
+   !> @param[out]   val   LSF value, or `mc_exterior_value` when unreached
+   !> @param[out]   error LSF evaluation failure
+   subroutine sample_lsf(lsf, point, val, error)
+      !> Thread-local LSF clone
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Evaluation point
+      real(wp), intent(in) :: point(3)
+      !> LSF value
+      real(wp), intent(out) :: val
+      !> LSF evaluation failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Prepare status, 0 ok, 1 unreached
+      integer :: status
+
+      val = mc_exterior_value
+      call lsf%prepare(point, error, status=status)
+      if (allocated(error)) return
+      if (status /= 0) return
+      call lsf%f0(val)
+   end subroutine sample_lsf
+
    !> Compute grid bounds from the atomic-radii extent plus a padding margin
    subroutine compute_lsf_grid_bounds(lsf, xyz, grid_min, grid_max, margin, spacing)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
@@ -929,7 +971,7 @@ contains
                if (abort_requested) cycle
                ptmp = grid_min + coarse_spacing &
                       *real([ix, iy, iz], wp)
-               call lsf_slots(islot)%lsf%prepare(ptmp, lsf_error)
+               call sample_lsf(lsf_slots(islot)%lsf, ptmp, grid_vals(ix, iy, iz), lsf_error)
                ! The failure cannot be returned from inside this worksharing
                ! construct, so hand it to the shared `error` slot and let the
                ! flag drain the loop
@@ -942,7 +984,6 @@ contains
                   !$omp end critical (mc_abort)
                   cycle
                end if
-               call lsf_slots(islot)%lsf%f0(grid_vals(ix, iy, iz))
             end do
          end do
       end do
@@ -1055,7 +1096,7 @@ contains
 
                   all_pos = all(cube%vals > 0.0_wp)
                   all_neg = all(cube%vals < 0.0_wp)
-                  call lsf_slots(islot)%lsf%prepare(mid, lsf_error)
+                  call sample_lsf(lsf_slots(islot)%lsf, mid, center_val, lsf_error)
                   if (allocated(lsf_error)) then
                      !$omp critical (mc_abort)
                      if (.not. abort_requested) then
@@ -1066,7 +1107,6 @@ contains
                      loc_top = 0
                      cycle
                   end if
-                  call lsf_slots(islot)%lsf%f0(center_val)
                   if (all_pos .and. center_val < 0.0_wp) then
                      all_pos = .false.
                   end if
@@ -1376,9 +1416,8 @@ contains
                if (mod(i, 2) == 0 .and. mod(j, 2) == 0 &
                    .and. mod(k, 2) == 0) cycle
                p = [coords(1, i), coords(2, j), coords(3, k)]
-               call lsf%prepare(p, error)
+               call sample_lsf(lsf, p, cache(i, j, k), error)
                if (allocated(error)) return
-               call lsf%f0(cache(i, j, k))
             end do
          end do
       end do

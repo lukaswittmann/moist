@@ -8,7 +8,7 @@ module moist_model_continuum_component_pv
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_channels_response, only: response_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_utils_prettyprint, only: prettyprinter
 
    implicit none(type, external)
@@ -165,7 +165,7 @@ contains
       !> Live model cavity
       class(cavity_type), intent(in) :: cavity
       !> Surface accumulator
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 

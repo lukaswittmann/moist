@@ -14,7 +14,7 @@ module moist_model_continuum_component_pcm_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_request_type, &
       & point_potential_request_type, gaussian_potential_request_type, nuclear_charge_request_type, &
       & moist_phase_energy, moist_phase_response, moist_phase_gradient, coupling_register, request_require
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_direct_gradient, &
       & pcm_electrostatic_normal_direct_gradient
@@ -705,7 +705,7 @@ contains
       !> Select explicit cavity Jacobians
       logical, intent(in) :: forward
       !> Component surface adjoint
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       !> Local gradient contribution, committed on success
       real(wp), allocatable :: contribution(:, :)
       integer :: stat
@@ -746,7 +746,7 @@ contains
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
       !> Surface adjoint
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
@@ -831,7 +831,7 @@ contains
       !> Raw host primitives in this component's scope
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
 
       call self%get_surface_weights(coupling, cavity, acc, error)
@@ -937,7 +937,7 @@ contains
       class(model_continuum_component_pcm), intent(inout) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
 
       call fatal_error(error, "PCM component does not implement surface weights")
@@ -970,11 +970,11 @@ contains
       !> Cavity the operators were assembled on
       class(cavity_type), intent(in) :: cavity
       !> Surface direction
-      class(cavity_surface_adjoint_type), intent(in) :: direction
+      class(cavity_adjoint_type), intent(in) :: direction
       !> Potential-trace direction
       real(wp), intent(in) :: dphi(:)
       !> Accumulator of the weight tangent
-      class(cavity_surface_adjoint_type), intent(inout) :: tangent
+      class(cavity_adjoint_type), intent(inout) :: tangent
       !> Tangent of the potential adjoint
       real(wp), allocatable, intent(out) :: dw_phi(:)
       !> Error handling
@@ -1097,7 +1097,7 @@ contains
       !> Raw host primitives
       class(coupling_view_type), intent(in) :: coupling
       !> Model-total surface adjoints
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Expected point count
       integer, intent(in) :: ngrid
       !> Missing or mismatched derivative

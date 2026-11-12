@@ -6,7 +6,7 @@ module moist_model_continuum_type
    use moist_context, only: moist_context_type
    use moist_utils_timer, only: cat_build
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm
    use moist_model_type, only: solvation_model_type, model_build
@@ -377,7 +377,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       !> Shared cavity adjoint accumulator
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       !> Component index
       integer :: i
       !> Component-local borrowed read interface
@@ -464,7 +464,7 @@ contains
          ! Reverse mode: every component states its geometry adjoint, the
          ! cavity contracts the lot once, and nothing builds a nuclear Jacobian
          block
-            type(cavity_surface_adjoint_type) :: acc
+            type(cavity_adjoint_type) :: acc
 
             call acc%init(self%cavity%ngrid)
             do i = 1, size(self%components)

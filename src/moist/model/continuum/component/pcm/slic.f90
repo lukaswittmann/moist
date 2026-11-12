@@ -8,7 +8,7 @@ module moist_model_continuum_component_pcm_slic
    use moist_utils_prettyprint, only: prettyprinter
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use moist_model_continuum_component_pcm_layer, only: pcm_layer_base, pcm_layer_feps, &
       & layer_configure_cavity
@@ -236,7 +236,7 @@ contains
    subroutine slic_layer_weights(self, cavity, acc, error)
       class(model_continuum_component_slic), intent(inout) :: self
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
       real(wp), allocatable :: w_a(:), w_xi(:), w_f(:)

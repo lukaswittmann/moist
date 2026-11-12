@@ -4,7 +4,7 @@ module moist_model_continuum_component_pcm_layer
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
    use moist_output_citations, only: citation
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_coupling, only: coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
       & pcm_tangent_block, pcm_tangent_require, pcm_component_list_fields
@@ -70,11 +70,11 @@ module moist_model_continuum_component_pcm_layer
 
       !> Add fixed-trace geometry weights from the generated kernel
       subroutine layer_weights_iface(self, cavity, acc, error)
-         import :: pcm_layer_base, cavity_type, cavity_surface_adjoint_type, error_type
+         import :: pcm_layer_base, cavity_type, cavity_adjoint_type, error_type
          implicit none(type, external)
          class(pcm_layer_base), intent(inout) :: self
          class(cavity_type), intent(in) :: cavity
-         class(cavity_surface_adjoint_type), intent(inout) :: acc
+         class(cavity_adjoint_type), intent(inout) :: acc
          type(error_type), allocatable, intent(out) :: error
       end subroutine layer_weights_iface
 
@@ -375,7 +375,7 @@ contains
       class(pcm_layer_base), intent(inout) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       call self%ensure_charges(coupling, cavity, error)
       if (allocated(error)) return
@@ -393,7 +393,7 @@ contains
       class(pcm_layer_base), intent(inout) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       call self%get_surface_weights(coupling, cavity, acc, error)
       if (allocated(error)) return
@@ -425,11 +425,11 @@ contains
       !> Cavity the operators were assembled on
       class(cavity_type), intent(in) :: cavity
       !> Surface direction
-      class(cavity_surface_adjoint_type), intent(in) :: direction
+      class(cavity_adjoint_type), intent(in) :: direction
       !> Potential-trace direction
       real(wp), intent(in) :: dphi(:)
       !> Accumulator of the weight tangent
-      class(cavity_surface_adjoint_type), intent(inout) :: tangent
+      class(cavity_adjoint_type), intent(inout) :: tangent
       !> Tangent of the potential adjoint
       real(wp), allocatable, intent(out) :: dw_phi(:)
       !> Error handling
@@ -445,7 +445,7 @@ contains
       real(wp), allocatable :: hvp_r(:, :, :), hvp_n(:, :, :), hvp_k1(:, :), hvp_k2(:, :), &
          & hvp_xi(:, :), hvp_f(:, :), hvp_a(:, :), hvp_v(:, :), hvp_vn(:, :)
       !> Kernel weights, recomputed because the tangent requires them
-      type(cavity_surface_adjoint_type) :: scratch
+      type(cavity_adjoint_type) :: scratch
       !> Number of grid points
       integer :: ngrid
 
@@ -497,7 +497,7 @@ contains
       class(pcm_layer_base), intent(in) :: self
       class(coupling_view_type), intent(in) :: coupling
       class(cavity_type), intent(in) :: cavity
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: grad_phi(:, :), hess_phi(:, :, :), mixed(:, :)
       real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_xi(:)

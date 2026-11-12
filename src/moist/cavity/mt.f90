@@ -11,7 +11,7 @@ module moist_cavity_mt
    use moist_cavity_mt_patches, only: mt_patch_type, build_mt_patches
    use moist_cavity_mt_widths, only: width_factors
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
+   use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, coupling_close_view
@@ -261,7 +261,6 @@ contains
       !> Construction failure
       type(error_type), allocatable, intent(out) :: error
 
-      ! Screened exterior points can return a zero sentinel instead of the LSF
       ! Full-scan evaluation preserves the zero set and its spatial normals
       call self%lsf_model%set_screening_threshold(0.0_wp)
       call self%lsf_model%update(self%mol, self%radii)
@@ -294,7 +293,7 @@ contains
       !> Evaluation or allocation failure
       type(error_type), allocatable, intent(out) :: error
       type(mt_gradient_slot), allocatable :: slots(:)
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: critical
+      type(moist_math_smoothstep_sigmoid_type) :: critical
       real(wp), allocatable :: gradients(:, :), weights(:), effective(:), face_weight(:), factor(:)
       logical, allocatable :: active(:)
       !> Width-correction window radius relative to the patch side
@@ -323,7 +322,7 @@ contains
          end if
          call slots(i)%lsf%set_max_deriv(1)
       end do
-      call new_swif_sigmoid_bump(critical, self%param%w_0ls_from, self%param%w_0ls_to, &
+      call new_smoothstep_sigmoid(critical, self%param%w_0ls_from, self%param%w_0ls_to, &
          & p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, &
          & p_lo=self%param%w_0ls_p, a_lo=self%param%w_0ls_a)
       face_weight = 0.0_wp
