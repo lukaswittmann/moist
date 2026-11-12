@@ -101,8 +101,9 @@ module moist_cavity_drop_lsf_base
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
-   use moist_math_cell_list, only: moist_cell_list_type, heapsort
-   use moist_math_sorter_counting_sort, only: counting_argsort
+   use moist_cavity_drop_lsf_screening, only: cell_list_type
+   use moist_math_sorter_heapsort, only: heapsort
+   use moist_math_sorter_counting, only: counting_argsort
    implicit none(type, external)
    private
 
@@ -233,7 +234,7 @@ module moist_cavity_drop_lsf_base
       integer, allocatable :: full_scan_cand(:)
       !> Candidate-space cell list over `cand_screen` centers with the gate's exact
       !> reach `R + offset(R)`, no margin, rebuilt with the screening bounds
-      type(moist_cell_list_type) :: cand_cells
+      type(cell_list_type) :: cand_cells
       !> Candidate count below which `cand_cells` is a single cell
       !>
       !> - set through [[lsf_base_set_full_scan_below]], which the cavity calls

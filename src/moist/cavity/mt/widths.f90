@@ -20,7 +20,7 @@ module moist_cavity_mt_widths
    use mctc_env, only: wp, error_type, fatal_error
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type
-   use moist_math_adjacency_list, only: adjacency_list_type
+   use moist_math_adjacency, only: adjacency_list_type
    implicit none(type, external)
    private
    public :: width_factors
@@ -100,7 +100,7 @@ contains
       xi = scale/sqrt(area)
       reach = 2.0_wp*radius + extent
       call neighbours%init(reach)
-      call neighbours%update(xyz)
+      call neighbours%update(xyz, nthreads)
 !$omp parallel do default(none) schedule(dynamic, 16) num_threads(nthreads) &
 !$omp shared(mesh, patches, patch_index, xyz, area, xi, radius, neighbours, factor, n) &
 !$omp private(i, j, k, layer, pairs, d, xij) reduction(+:limited)

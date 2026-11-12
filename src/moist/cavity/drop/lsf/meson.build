@@ -4,6 +4,7 @@ srcs += files(
   'cfc.f90',
   'sses.f90',
   'isodensity.f90',
+  'screening.f90',
 )
 subdir('svdw')
 subdir('cfc')

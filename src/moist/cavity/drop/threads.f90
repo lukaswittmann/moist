@@ -25,7 +25,7 @@ module moist_cavity_drop_threads
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
+   use moist_cavity_drop_phi, only: moist_cavity_drop_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
 
    implicit none(type, external)
@@ -43,7 +43,7 @@ module moist_cavity_drop_threads
       !> Per-thread LSF evaluators, one per slot
       type(lsf_thread_slot), allocatable :: lsf(:)
       !> Per-thread projection objectives; unallocated unless requested
-      type(moist_cavity_drop_objective_phi_type), allocatable :: phi(:)
+      type(moist_cavity_drop_phi_type), allocatable :: phi(:)
       !> Team size the slots were built for
       integer :: nthreads = 0
    contains
