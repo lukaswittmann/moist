@@ -23,7 +23,6 @@ module moist_output_citations
       integer :: numsa = 6
       integer :: cfc = 7
       integer :: smd = 8
-      integer :: slsqp = 9
       integer :: lbfgsb = 10
       integer :: fmin = 11
       integer :: lsqr = 12
@@ -178,23 +177,6 @@ contains
          "Bulk Dielectric Constant and Atomic Surface Tensions.", &
          journal="J. Phys. Chem. B 2009, 113, 6378-6396", &
          doi="https://doi.org/10.1021/jp810292n")
-
-      call moist_citations%add( &
-         category="Solvers", &
-         label=citation%slsqp, &
-         authors="Kraft, D.", &
-         title="A software package for sequential quadratic programming.", &
-         journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
-         doi="")
-
-      call moist_citations%add( &
-         category="Solvers", &
-         label=citation%slsqp, &
-         authors="Kraft, D.", &
-         title="Algorithm 733: TOMP - Fortran modules for "// &
-         "optimal control calculations.", &
-         journal="ACM Trans. Math. Softw. 1994, 20, 262-281", &
-         doi="https://doi.org/10.1145/192115.192124")
 
       call moist_citations%add( &
          category="Solvers", &

@@ -7,7 +7,7 @@
 submodule(moist_model_moz_potential) moist_model_moz_potential_compute
    use mctc_env, only: fatal_error
    use moist_channels_coupling, only: coupling_view_type, coupling_make_view, coupling_close_view
-   use moist_math_packed_sym, only: packed_index, npair_from_ns
+   use moist_math_packed, only: packed_index, npair_from_ns
    use moist_model_moz_potential_kernel_table_1d, only: evaluate_table_1d, evaluate_table_1d_adjoint
    use moist_model_moz_potential_kernel_table_3d, only: evaluate_table_3d, evaluate_table_3d_adjoint
    implicit none(type, external)

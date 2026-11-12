@@ -16,7 +16,7 @@ module moist_api
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
       & current_request, answer_flat, output_name_len, coupling_extent_grid_atom
    use moist_channels_response, only: response_type, response_item_type, current_response_item
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_continuum_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, &
@@ -119,7 +119,7 @@ module moist_api
       !> Maximum projection iterations
       integer(c_int) :: proj_maxiter = 150_c_int
       !> Projection refinement level
-      integer(c_int) :: proj_level = 3_c_int
+      integer(c_int) :: proj_level = 2_c_int
       !> Branch-selection smoothing weight
       real(c_double) :: branch_weight_s = 0.0025_c_double
       !> Grid density kernel length in Bohr
@@ -1458,6 +1458,11 @@ contains
       call read_cfc_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_cfc_lsf")
       if (allocated(error%ptr)) return
+      if (o%m /= 4_c_int) then
+         call api_error(error%ptr, "new_cfc_lsf", &
+                        "CFC pair power m must be 4 (the generated kernel bakes it in)")
+         return
+      end if
       allocate (lsf, stat=stat)
       if (stat == 0) allocate (moist_cavity_drop_lsf_cfc_type :: lsf%ptr, stat=stat)
       if (stat /= 0) then
@@ -4639,7 +4644,7 @@ contains
    !>   the cavity's own ngrid/nsph, otherwise nothing is written
    subroutine get_cavity_results_api(verror, vcav, ngrid_cap, nsph_cap, &
          & area, volume, ngrid, nsph, &
-         & xyz, a, owner, converged, radii, asph) &
+         & xyz, a, owner, radii, asph) &
          & bind(C, name=namespace//"get_cavity_results")
       !> Required diagnostic handle
       type(c_ptr), value :: verror
@@ -4663,8 +4668,6 @@ contains
       real(c_double), intent(inout), optional :: a(ngrid_cap)
       !> Owning atom index for each grid point
       integer(c_int), intent(inout), optional :: owner(ngrid_cap)
-      !> Whether the cavity projection converged
-      logical(c_bool), intent(inout), optional :: converged(ngrid_cap)
       !> Atomic radii in Bohr
       real(c_double), intent(inout), optional :: radii(nsph_cap)
       !> Per-atom surface areas
@@ -4712,10 +4715,6 @@ contains
          call api_error(error%ptr, "get_cavity_results", "Required pointer 'owner' is missing")
          return
       end if
-      if (.not. present(converged)) then
-         call api_error(error%ptr, "get_cavity_results", "Required pointer 'converged' is missing")
-         return
-      end if
       if (.not. present(radii)) then
          call api_error(error%ptr, "get_cavity_results", "Required pointer 'radii' is missing")
          return
@@ -4757,12 +4756,6 @@ contains
       a(:local_ngrid) = cav%ptr%a
       ! Convert from Fortran 1-based to C 0-based indexing
       owner(:local_ngrid) = cav%ptr%owner - 1
-      select type (cavity => cav%ptr)
-      type is (cavity_type_drop)
-         converged(:local_ngrid) = cavity%converged
-      class default
-         converged(:local_ngrid) = .true.
-      end select
 
       ! Get per-sphere arrays from base cavity_type
       radii(:local_nsph) = cav%ptr%radii
@@ -6890,7 +6883,7 @@ contains
       !> Decoded optional curvature weights
       real(c_double), pointer :: w_k1(:), w_k2(:)
       !> Packed surface-adjoint accumulator handed to the cavity
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(error_type), allocatable :: cavity_error
       integer :: ngrid
 
