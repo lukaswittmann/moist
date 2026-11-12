@@ -1,3 +1,5 @@
+!> Candidate-atom screening for DROP LSF evaluation
+!>
 !> Binned cell list with box, sphere and point queries over per-atom reach spheres
 !>
 !> Each atom is binned into exactly one cell by its center
@@ -22,14 +24,14 @@
 !> caller's own exact test of the same expression never keeps an atom the list
 !> dropped
 !>
-module moist_math_cell_list
+module moist_cavity_drop_lsf_screening
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
+   use moist_math_sorter_heapsort, only: heapsort
    implicit none(type, external)
    private
 
-   public :: moist_cell_list_type
-   public :: heapsort
+   public :: cell_list_type
 
    !> Rows of a slot record: center (1:3), reach, squared reach
    integer, parameter :: slot_rows = 5
@@ -52,7 +54,7 @@ module moist_math_cell_list
    real(wp), parameter :: hit_slack = 16.0_wp*epsilon(1.0_wp)
 
    !> Binned cell list in CSR layout, slots stored in cell order
-   type :: moist_cell_list_type
+   type :: cell_list_type
       !> Number of atoms indexed
       integer :: natoms = 0
       !> Whether every query scans all atoms in id order
@@ -90,7 +92,7 @@ module moist_math_cell_list
       procedure :: query_point => cell_list_query_point
       !> Deallocate all storage
       procedure :: destroy => cell_list_destroy
-   end type moist_cell_list_type
+   end type cell_list_type
 
 contains
 
@@ -109,7 +111,7 @@ contains
    !> @param[in]     full_scan_below  single-cell mode for `n < full_scan_below` (optional)
    subroutine cell_list_build(self, xyz, reach, full_scan_below)
       !> Cell list
-      class(moist_cell_list_type), intent(inout) :: self
+      class(cell_list_type), intent(inout) :: self
       !> Atom centers
       real(wp), intent(in) :: xyz(:, :)
       !> Reach per atom
@@ -227,7 +229,7 @@ contains
    !> @param[in]     sat     `sqrt(huge)`, saturation threshold
    pure subroutine store_slot(self, s, atom, center, reach, sat)
       !> Cell list
-      type(moist_cell_list_type), intent(inout) :: self
+      type(cell_list_type), intent(inout) :: self
       !> Slot
       integer, intent(in) :: s
       !> Atom id
@@ -268,7 +270,7 @@ contains
    !> @param[out] nout  number of atoms found
    pure subroutine cell_list_query_box(self, lo, hi, out, nout)
       !> Cell list
-      class(moist_cell_list_type), intent(in) :: self
+      class(cell_list_type), intent(in) :: self
       !> Box corner
       real(wp), intent(in) :: lo(3)
       !> Opposite box corner
@@ -295,7 +297,7 @@ contains
    !> @param[out] nout    number of atoms found
    pure subroutine cell_list_query_sphere(self, center, r, out, nout)
       !> Cell list
-      class(moist_cell_list_type), intent(in) :: self
+      class(cell_list_type), intent(in) :: self
       !> Ball center
       real(wp), intent(in) :: center(3)
       !> Ball radius
@@ -320,7 +322,7 @@ contains
    !> @param[out] nout   number of atoms found
    pure subroutine cell_list_query_point(self, point, out, nout)
       !> Cell list
-      class(moist_cell_list_type), intent(in) :: self
+      class(cell_list_type), intent(in) :: self
       !> Query point
       real(wp), intent(in) :: point(3)
       !> Atom ids
@@ -346,7 +348,7 @@ contains
    !> @param[out] nout    number of atoms found
    pure subroutine collect(self, blo, bhi, center, r, sphere, out, nout)
       !> Cell list
-      type(moist_cell_list_type), intent(in) :: self
+      type(cell_list_type), intent(in) :: self
       !> Lower box corner
       real(wp), intent(in) :: blo(3)
       !> Upper box corner
@@ -444,7 +446,7 @@ contains
    !> @param[in] sphere  sphere mode
    pure function slot_hit(self, s, blo, bhi, center, r, sphere) result(hit)
       !> Cell list
-      type(moist_cell_list_type), intent(in) :: self
+      type(cell_list_type), intent(in) :: self
       !> Slot
       integer, intent(in) :: s
       !> Lower box corner
@@ -514,57 +516,6 @@ contains
       d2 = dx*dx + dy*dy + dz*dz
    end function box_d2
 
-   !> In-place ascending heapsort, allocation-free
-   !>
-   !> @param[in,out] a  values to sort
-   pure subroutine heapsort(a)
-      !> Values to sort
-      integer, intent(inout) :: a(:)
-
-      integer :: n, i, tmp
-
-      n = size(a)
-      do i = n/2, 1, -1
-         call sift_down(a, i, n)
-      end do
-      do i = n, 2, -1
-         tmp = a(1)
-         a(1) = a(i)
-         a(i) = tmp
-         call sift_down(a, 1, i - 1)
-      end do
-   end subroutine heapsort
-
-   !> Restore the max-heap property below `root` within `a(1:last)`
-   !>
-   !> @param[in,out] a     heap
-   !> @param[in]     root  root index
-   !> @param[in]     last  last heap index
-   pure subroutine sift_down(a, root, last)
-      !> Heap
-      integer, intent(inout) :: a(:)
-      !> Root index
-      integer, intent(in) :: root
-      !> Last heap index
-      integer, intent(in) :: last
-
-      integer :: i, child, tmp
-
-      i = root
-      do
-         child = 2*i
-         if (child > last) exit
-         if (child < last) then
-            if (a(child + 1) > a(child)) child = child + 1
-         end if
-         if (a(i) >= a(child)) exit
-         tmp = a(i)
-         a(i) = a(child)
-         a(child) = tmp
-         i = child
-      end do
-   end subroutine sift_down
-
    !* ================================================================================= *!
    !*                                    Lifecycle                                      *!
    !* ================================================================================= *!
@@ -574,7 +525,7 @@ contains
    !> @param[in,out] self  cell list
    subroutine cell_list_destroy(self)
       !> Cell list
-      class(moist_cell_list_type), intent(inout) :: self
+      class(cell_list_type), intent(inout) :: self
 
       self%natoms = 0
       self%full_scan = .false.
@@ -591,4 +542,4 @@ contains
       if (allocated(self%slot_geom)) deallocate (self%slot_geom)
    end subroutine cell_list_destroy
 
-end module moist_math_cell_list
+end module moist_cavity_drop_lsf_screening

@@ -7,7 +7,7 @@
 !> Designed for spatial bucket indices (0..n_buckets-1) where n_buckets is
 !> small (typically <= 256); the sort is stable, atoms with the same bucket
 !> appear in perm in their original order
-module moist_math_sorter_counting_sort
+module moist_math_sorter_counting
    implicit none(type, external)
    private
 
@@ -56,4 +56,4 @@ contains
       end do
    end subroutine counting_argsort
 
-end module moist_math_sorter_counting_sort
+end module moist_math_sorter_counting

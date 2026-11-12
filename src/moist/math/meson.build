@@ -7,8 +7,7 @@ subdir('grid')
 subdir('fft')
 
 srcs += files(
-  'adjacency_list.f90',
-  'cell_list.f90',
+  'adjacency.f90',
   'lapack.f90',
   'blas.f90',
   'linalg.f90',
