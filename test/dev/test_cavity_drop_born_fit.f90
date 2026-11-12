@@ -213,7 +213,7 @@ contains
                blend_1b=1.0_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
             call new_cavity_drop(cavities(ir), radius_model=radius_model, lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, &
-               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2), ctx=ctx)
+               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=1), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "new_cavity_drop failed for nleb=" &
