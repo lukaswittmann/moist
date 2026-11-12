@@ -1296,7 +1296,7 @@ contains
    !> @param[in] self Level set
    !> @param[out] lsf0 Level-set value
    !> @param[out] lsf1_r Spatial gradient (3)
-   !> @param[out] lsf2_rr Spatial Hessian (3, 3)
+   !> @param[out] lsf2_rr Packed spatial Hessian (6)
    subroutine constant_gradient_f012_r(self, lsf0, lsf1_r, lsf2_rr)
       !> Level set
       class(constant_gradient_lsf_type), intent(in) :: self
@@ -1304,8 +1304,8 @@ contains
       real(wp), intent(out), optional :: lsf0
       !> Spatial gradient
       real(wp), intent(out), optional :: lsf1_r(:)
-      !> Spatial Hessian
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
+      !> Packed spatial Hessian
+      real(wp), intent(out), optional :: lsf2_rr(:)
 
       call self%moist_cavity_drop_lsf_svdw_type%f012_r(lsf0, lsf1_r, lsf2_rr)
       if (present(lsf1_r)) lsf1_r = self%gradient
@@ -1373,7 +1373,7 @@ contains
    !> @param[in] self Level set
    !> @param[out] lsf0 Level-set value
    !> @param[out] lsf1_r Spatial gradient (3)
-   !> @param[out] lsf2_rr Spatial Hessian (3, 3)
+   !> @param[out] lsf2_rr Packed spatial Hessian (6)
    subroutine counting_f012_r(self, lsf0, lsf1_r, lsf2_rr)
       !> Level set
       class(counting_lsf_type), intent(in) :: self
@@ -1381,8 +1381,8 @@ contains
       real(wp), intent(out), optional :: lsf0
       !> Spatial gradient
       real(wp), intent(out), optional :: lsf1_r(:)
-      !> Spatial Hessian
-      real(wp), intent(out), optional :: lsf2_rr(:, :)
+      !> Packed spatial Hessian
+      real(wp), intent(out), optional :: lsf2_rr(:)
 
       call self%moist_cavity_drop_lsf_svdw_type%f012_r(lsf0, lsf1_r, lsf2_rr)
       if (.not. present(lsf1_r)) return

@@ -20,7 +20,7 @@ module test_model_component_gostshyp
    use moist_channels_response, only: response_type, gaussian_amplitude_response_type
    use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_model_continuum_component_gostshyp, only: moist_gostshyp_parameters_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop
    use test_model_component_helper, only: surface_fixture, &
@@ -637,7 +637,7 @@ contains
       !> Component under test
       type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       !> Fixture mirroring the synthetic surface for the harness
       type(surface_fixture) :: surface
       !> Radial normal field
@@ -751,7 +751,7 @@ contains
       !> Component under test
       type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -868,7 +868,7 @@ contains
 
       type(moist_error_type), allocatable :: err
       !> Prefilled accumulator the component must not touch
-      type(cavity_surface_adjoint_type) :: prefilled
+      type(cavity_adjoint_type) :: prefilled
       !> Response list receiving the zero amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
@@ -1205,7 +1205,7 @@ contains
       !> Caller accumulators and response snapshot
       type(response_type) :: response
       type(gaussian_amplitude_response_type), allocatable :: before, after
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       !> Host moments and fixture normals
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       real(wp) :: normals(3, ngrid_sw), energy

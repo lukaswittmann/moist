@@ -25,8 +25,7 @@ program tester
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
    use test_math_smoothing, only: collect_math_smoothing
-   use test_math_adjacency_list, only: collect_math_adjacency_list
-   use test_math_cell_list, only: collect_math_cell_list
+   use test_math_adjacency, only: collect_math_adjacency
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
    use test_math_packed, only: collect_math_packed
@@ -53,6 +52,7 @@ program tester
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
+   use test_cavity_drop_lsf_screening, only: collect_cavity_drop_lsf_screening
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
    use test_cavity_drop_branching, only: collect_cavity_drop_branching
@@ -110,8 +110,7 @@ program tester
       & new_testsuite("radii", collect_radii), &
       & new_testsuite("math_linalg", collect_math_linalg), &
       & new_testsuite("math_smoothing", collect_math_smoothing), &
-      & new_testsuite("math_adjacency_list", collect_math_adjacency_list), &
-      & new_testsuite("math_cell_list", collect_math_cell_list), &
+      & new_testsuite("math_adjacency", collect_math_adjacency), &
       & new_testsuite("math_solvers", collect_math_solvers), &
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
@@ -146,6 +145,7 @@ program tester
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &
+      & new_testsuite("cavity_drop_lsf_screening", collect_cavity_drop_lsf_screening), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
       & new_testsuite("cavity_drop_branching", collect_cavity_drop_branching), &

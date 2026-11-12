@@ -314,8 +314,8 @@ if(MOIST_TESTS)
   set(moist_test_suites
     api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
-    math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
-    math_solvers math_sorters math_trig math_packed_sym math_smoothstep
+    math_linalg math_smoothing math_adjacency
+    math_solvers math_sorters math_trig math_packed math_smoothstep
     math_fft_dst4 math_fft_3d math_fft_threads finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
@@ -325,11 +325,11 @@ if(MOIST_TESTS)
     math_grid_3d_guards math_grid_3d_derivatives
     math_grid_3d_integration
     math_grid_3d_invariance
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
-    cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
+    cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint cavity_drop_potential
     cavity_drop_integration cavity_drop_filter cavity_drop_projector cavity_drop_projection
     cavity_drop_cpcm cavity_drop_properties
-    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_surface_adjoint
+    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint

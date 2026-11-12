@@ -23,7 +23,7 @@ module test_model_coupling
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       & response_accumulate
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
@@ -66,7 +66,7 @@ module test_model_coupling
    real(wp), parameter :: drop_blend_3b = 1.0_wp
    real(wp), parameter :: drop_proj_tol = 1.0e-14_wp
    integer, parameter :: drop_proj_maxiter = 1000
-   integer, parameter :: drop_proj_level = 2
+   integer, parameter :: drop_proj_level = 1
    integer, parameter :: drop_prune_level = 4
 
    !> Test component that fails after the cavity surface is built
@@ -641,7 +641,7 @@ contains
       type(moist_error_type), allocatable :: err
       !> Uninitialized cavity and empty accumulators
       type(cavity_type_drop) :: cavity
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       type(response_type) :: response
       call cavity%get_surface_response(weights, response, err)
       call check(error, allocated(err))

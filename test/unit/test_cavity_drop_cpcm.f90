@@ -72,7 +72,7 @@ module test_cavity_drop_cpcm
    !> DROP projection settings
    real(wp), parameter :: PROJ_TOL = 1.0e-14_wp
    integer, parameter :: PROJ_MAXITER = 150
-   integer, parameter :: PROJ_LEVEL = 2
+   integer, parameter :: PROJ_LEVEL = 1
 
 contains
 
@@ -609,10 +609,10 @@ contains
       do igrid = 1, ngrid
          if (cavity%numbering(igrid) > 0) numbering_to_idx(cavity%numbering(igrid)) = igrid
       end do
-      valid_ref = cavity%converged(1:ngrid)
+      allocate (valid_ref(ngrid), source=.true.)
       allocate (anchor_offset(3, ngrid))
       do igrid = 1, ngrid
-         anchor_offset(:, igrid) = real(cavity%anchorxyz(:, igrid), rk) &
+         anchor_offset(:, igrid) = real(cavity%anchorxyz(:, cavity%anchor_of_row(igrid)), rk) &
                                    - real(mol%xyz(:, cavity%owner(igrid)), rk)
       end do
 
@@ -697,7 +697,7 @@ contains
                   if (idx(igrid) > 0) then
                      displaced_anchors(:, igrid) = anchor_offset(:, idx(igrid))
                   else
-                     displaced_anchors(:, igrid) = real(cavity%anchorxyz(:, igrid), rk) &
+                     displaced_anchors(:, igrid) = real(cavity%anchorxyz(:, cavity%anchor_of_row(igrid)), rk) &
                                                    - real(mol_fd%xyz(:, cavity%owner(igrid)), rk)
                   end if
                end do
@@ -711,7 +711,7 @@ contains
                seen = .false.
                do jgrid = 1, cavity%ngrid
                   if (idx(jgrid) == 0) cycle
-                  seen(idx(jgrid)) = cavity%converged(jgrid)
+                  seen(idx(jgrid)) = .true.
                   do igrid = 1, cavity%ngrid
                      if (idx(igrid) == 0) cycle
                      samples(idx(igrid), idx(jgrid), istep) = ref_values(igrid, jgrid)
@@ -855,11 +855,11 @@ contains
    !> @param[in] x Switching input
    !> @param[in] sw Critical or focal switching parameters
    function ref_bump(x, sw) result(value)
-      use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type
+      use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type
       !> Switching input
       real(rk), intent(in) :: x
       !> Critical or focal switching parameters
-      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(in) :: sw
+      type(moist_math_smoothstep_sigmoid_type), intent(in) :: sw
       !> Switching value
       real(rk) :: value
       real(rk) :: lo, hi, width, u, t, exponent
@@ -917,9 +917,7 @@ contains
       point = real(cavity%xyz(:, igrid), rk)
       lambda = real(cavity%lambda0(igrid), rk)
       alpha = real(cavity%param%phi_alpha, rk)
-      if (cavity%converged(igrid)) then
-         call ref_refine(point, lambda, anchor, centers, real(cavity%iswig%radii, rk), blend, alpha, error)
-      end if
+      call ref_refine(point, lambda, anchor, centers, real(cavity%iswig%radii, rk), blend, alpha, error)
       if (allocated(error)) then
          weight = 0.0_rk
          return
@@ -955,7 +953,7 @@ contains
       ! Area of the closest-point map between sphere and surface tangent planes
       area = alpha*alpha*abs(dot_product(n, sphere))/abs(detb)
       focus = ref_bump(gnorm, cavity%f_crit)*ref_bump(beta2, cavity%f_foc)
-      weight = real(cavity%anchor_wleb0(igrid), rk)*area*focus
+      weight = real(cavity%anchor_wleb0(cavity%anchor_of_row(igrid)), rk)*area*focus
    end function ref_weight
 
    !> Refine one converged production branch with a spatial KKT solve
@@ -1068,7 +1066,7 @@ contains
          weight(i) = ref_weight(cavity, i, anchor, centers, blend, points(:, i), error)
          if (allocated(error)) return
          phi(i) = 0.5_rk*real(cavity%param%phi_alpha, rk)*sum((points(:, i) - anchor)**2)
-         width = real(cavity%anchor_xi0(i), rk)
+         width = real(cavity%anchor_xi0(cavity%anchor_of_row(i)), rk)
          switches(i) = 1.0_rk
          do a = 1, size(centers, 2)
             if (a == owner) cycle
@@ -1083,7 +1081,7 @@ contains
       do while (lo <= cavity%ngrid)
          hi = lo
          do while (hi < cavity%ngrid)
-            if (cavity%anchor_id(hi + 1) /= cavity%anchor_id(lo)) exit
+            if (cavity%anchor_of_row(hi + 1) /= cavity%anchor_of_row(lo)) exit
             hi = hi + 1
          end do
          if (hi > lo) then
@@ -1094,12 +1092,6 @@ contains
       end do
       do i = 1, cavity%ngrid
          widths(i) = real(cavity%iswig%swx, rk)/(real(cavity%iswig%radii(cavity%owner(i)), rk)*sqrt(weight(i)*branch(i)))
-         if (.not. cavity%converged(i)) then
-            ! Unconverged points retain their seeds and remain outside the FD mask
-            points(:, i) = real(cavity%xyz(:, i), rk)
-            widths(i) = real(cavity%xi0(i), rk)
-            switches(i) = real(cavity%f(i), rk)
-         end if
       end do
       if (.not. all(ieee_is_finite(points)) .or. .not. all(ieee_is_finite(widths)) .or. &
           .not. all(ieee_is_finite(switches)) .or. any(widths <= 0.0_rk) .or. any(switches <= 0.0_rk)) then

@@ -18,7 +18,7 @@ module test_model_component_pv
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -380,7 +380,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Analytic surface weights, and a prefilled accumulator PV must not touch
-      type(cavity_surface_adjoint_type) :: weights, prefilled
+      type(cavity_adjoint_type) :: weights, prefilled
       !> Fixture mirroring the synthetic surface for the harness
       type(surface_fixture) :: surface
       !> Radial normal field of the fixture
@@ -630,7 +630,7 @@ contains
          !> Host part of the gradient phase, unused by PV
          type(response_type) :: response
          !> Reverse-mode surface adjoints
-         type(cavity_surface_adjoint_type) :: acc
+         type(cavity_adjoint_type) :: acc
          !> Forward and reverse gradients
          real(wp), allocatable :: grad_fwd(:, :), grad_rev(:, :)
          !> Energies on both structures and the discrete closure `sum_i a_i n_i`

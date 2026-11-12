@@ -19,7 +19,7 @@ module test_model_component_pcm_vacuum
       & stage_energy, answer_sources
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
@@ -201,7 +201,7 @@ contains
       !> Host coupling of the gradient phase
       type(coupling_type), target :: coupling
       !> Surface weights of the gradient
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       !> Trace adjoints and the direct nuclear term
       real(wp), allocatable :: w_phi(:), w_vn(:), direct(:, :)
       !> Energy
