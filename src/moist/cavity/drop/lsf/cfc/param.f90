@@ -182,12 +182,10 @@ contains
          call pp%kv("Fade start", self%fade_start, "e-folds")
          call pp%kv("Fade width", self%fade_width, "e-folds")
          if (self%a2 < 0.0_wp) then
-            call pp%kv("Fade onset (sigma)", self%fade_start/abs(self%a2), "R_A")
-            call pp%kv("Fade end, reach (sigma)", &
-                       (self%fade_start + self%fade_width)/abs(self%a2), "R_A")
-            call pp%kv("Fade onset (R_A = 2 Bohr)", &
-                       print_ref_radius*self%fade_start/abs(self%a2), "Bohr")
-            call pp%kv("Fade end, reach (R_A = 2 Bohr)", &
+            call pp%kv2("Fade onset (sigma)", self%fade_start/abs(self%a2), "R_A", &
+                        print_ref_radius*self%fade_start/abs(self%a2), "Bohr")
+            call pp%kv2("Fade end, reach (sigma)", &
+                       (self%fade_start + self%fade_width)/abs(self%a2), "R_A", &
                        print_ref_radius*(self%fade_start + self%fade_width)/abs(self%a2), "Bohr")
          end if
       end if
