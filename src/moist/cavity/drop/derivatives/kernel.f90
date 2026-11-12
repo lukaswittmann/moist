@@ -21,7 +21,8 @@
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_type
+   use moist_math_packed, only: packed_idx33, packed_idx333, packed_contract2
+   use moist_math_smoothstep, only: moist_math_smoothstep_type
 
    implicit none(type, external)
    private
@@ -30,7 +31,7 @@ module moist_cavity_drop_derivatives_kernel
    public :: build_seed_state, apply_seed, compute_branch_phi_adj
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
-   public :: seed_state_singular_bmat, seed_state_singular_jacobian
+   public :: seed_state_singular_bmat, seed_state_singular_jacobian, seed_state_singular_kkt
    public :: seed_weight_tol, seed_det_b_guard, seed_curv_disc_guard
 
    !> Grid point is usable
@@ -41,6 +42,8 @@ module moist_cavity_drop_derivatives_kernel
    integer, parameter :: seed_state_singular_bmat = 2
    !> Closest-point Jacobian `J` vanished
    integer, parameter :: seed_state_singular_jacobian = 3
+   !> Bordered KKT sensitivity system is singular
+   integer, parameter :: seed_state_singular_kkt = 4
 
    !> Magnitude below which a weight or a norm counts as zero
    real(wp), parameter :: seed_weight_tol = 1.0e-30_wp
@@ -63,10 +66,12 @@ module moist_cavity_drop_derivatives_kernel
 
       !* --------------------------------- Inputs --------------------------------- *!
 
-      !> Level-set gradient and Hessian at the projected point
-      real(wp) :: lsf1_r(3) = 0.0_wp, lsf2_rr(3, 3) = 0.0_wp
-      !> Third spatial derivative of the level set at the projected point
-      real(wp) :: lsf3_rrr(3, 3, 3) = 0.0_wp
+      !> Level-set gradient and packed Hessian at the projected point
+      !>
+      !> - packed order of [[moist_math_packed]]
+      real(wp) :: lsf1_r(3) = 0.0_wp, lsf2_rr(6) = 0.0_wp
+      !> Packed third spatial derivative of the level set at the projected point
+      real(wp) :: lsf3_rrr(10) = 0.0_wp
       !> Lagrange multiplier of the projection
       real(wp) :: lambda_val = 0.0_wp
       !> Objective coefficient `phi_alpha`
@@ -92,9 +97,9 @@ module moist_cavity_drop_derivatives_kernel
       !> `B = Q^T A Q` and its inverse
       real(wp) :: B11 = 0.0_wp, B12 = 0.0_wp, B22 = 0.0_wp, det_B = 0.0_wp
       real(wp) :: Binv11 = 0.0_wp, Binv12 = 0.0_wp, Binv22 = 0.0_wp
-      !> Eigenvector of `B` for the switched eigenvalue, lifted to 3D
-      real(wp) :: u_switch(3) = 0.0_wp
-      !> Both eigenvalues of `B` coincide, `u_switch` is arbitrary
+      !> Eigenvector of `B` for the switched eigenvalue, in the frame `[q1, q2]`
+      real(wp) :: v_switch(2) = 0.0_wp
+      !> Both eigenvalues of `B` coincide, `v_switch` is arbitrary
       logical :: degenerate_switch = .false.
       !> Sphere tangent frame and its projection into the surface tangent plane
       real(wp) :: t1_vec(3) = 0.0_wp, t2_vec(3) = 0.0_wp
@@ -106,8 +111,6 @@ module moist_cavity_drop_derivatives_kernel
       !> Gram-Schmidt data for the tangent-frame derivative
       integer :: min_axis = 1
       real(wp) :: n_dot_q1 = 0.0_wp, proj_surf = 0.0_wp, v_norm_surf = 0.0_wp
-      !> Tangent projector and `A P`
-      real(wp) :: P_tan(3, 3) = 0.0_wp, AP_tan(3, 3) = 0.0_wp
       !> Switching-function values and slopes
       real(wp) :: f_crit0 = 0.0_wp, f_crit_dS = 0.0_wp
       real(wp) :: f_foc_f0 = 0.0_wp, f_foc_dS = 0.0_wp
@@ -138,7 +141,7 @@ module moist_cavity_drop_derivatives_kernel
    !> Surface adjoints reduced to the channels the seed loop actually reads
    !>
    !> The area and integration-weight channels of a
-   !> `cavity_surface_adjoint_type` are *derived*: with
+   !> `cavity_adjoint_type` are *derived*: with
    !> `a_i = R_I^2 f_i wleb_i`, `w_i = wleb_i` and
    !> `xi_i = swx/(R_I sqrt(wleb_i))` we have `a = c f/xi^2` and `w = c/xi^2`,
    !> so both fold into the width channel through `d/dxi`. The area channel
@@ -185,7 +188,7 @@ contains
       !> Seed state
       type(drop_seed_state_type), intent(inout) :: state
       !> Switching functions owned by the cavity
-      class(moist_cavity_drop_swif_type), intent(in) :: f_crit, f_foc, f_wleb
+      class(moist_math_smoothstep_type), intent(in) :: f_crit, f_foc, f_wleb
       !> Whether Lebedev-weight pruning is active
       logical, intent(in) :: use_wleb_prune
       !> Degeneracy status
@@ -196,6 +199,8 @@ contains
       real(wp) :: vmin_B(2), vmax_B(2)
       !> Lebedev pruning scratch
       real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds
+      !> Cartesian indices
+      integer :: iaxis, jaxis
 
       status = seed_state_ok
 
@@ -208,7 +213,11 @@ contains
       call f_crit%eval(state%g_norm, state%f_crit0, state%f_crit_dS)
 
       ! A = alpha*I - lambda*H
-      state%A_mat = -state%lambda_val*state%lsf2_rr
+      do jaxis = 1, 3
+         do iaxis = 1, 3
+            state%A_mat(iaxis, jaxis) = -state%lambda_val*state%lsf2_rr(packed_idx33(iaxis, jaxis))
+         end do
+      end do
       state%A_mat(1, 1) = state%A_mat(1, 1) + state%alpha_coeff
       state%A_mat(2, 2) = state%A_mat(2, 2) + state%alpha_coeff
       state%A_mat(3, 3) = state%A_mat(3, 3) + state%alpha_coeff
@@ -228,7 +237,7 @@ contains
       end if
       call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
-      state%u_switch = vmin_B(1)*state%q1 + vmin_B(2)*state%q2
+      state%v_switch = vmin_B
       state%degenerate_switch = beta_max - lambda_switch <= seed_switch_gap_guard
       call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS)
 
@@ -266,13 +275,6 @@ contains
       state%proj_surf = 1.0_wp - state%n_dot_q1**2
       state%v_norm_surf = sqrt(max(state%proj_surf, 1.0e-30_wp))
 
-      state%P_tan(:, :) = -spread(state%n_surf, dim=2, ncopies=3) &
-                          *spread(state%n_surf, dim=1, ncopies=3)
-      state%P_tan(1, 1) = state%P_tan(1, 1) + 1.0_wp
-      state%P_tan(2, 2) = state%P_tan(2, 2) + 1.0_wp
-      state%P_tan(3, 3) = state%P_tan(3, 3) + 1.0_wp
-      state%AP_tan = matmul(state%A_mat, state%P_tan)
-
       ! d(w_pre * S)/dp = (S + |w_pre|*S') * d(w_pre)/dp
       if (use_wleb_prune) then
          w_pre_i = state%anchor_wleb0*state%cpjac_scal0*state%w_f0
@@ -285,8 +287,8 @@ contains
       ! Shape operator in the surface frame [q1, q2]; KM and the gap are
       ! rotation invariants, the gap a sum of squares (accurate near umbilics)
       if (state%want_curvature) then
-         state%Hq1 = matmul(state%lsf2_rr, state%q1)
-         state%Hq2 = matmul(state%lsf2_rr, state%q2)
+         call packed_contract2(state%lsf2_rr, state%q1, state%Hq1, 3)
+         call packed_contract2(state%lsf2_rr, state%q2, state%Hq2, 3)
          state%S11_curv = dot_product(state%q1, state%Hq1)/state%g_norm
          state%S12_curv = dot_product(state%q1, state%Hq2)/state%g_norm
          state%S22_curv = dot_product(state%q2, state%Hq2)/state%g_norm
@@ -329,8 +331,8 @@ contains
       !> `B` and `B^-1` sensitivities
       real(wp) :: dAq1(3), dAq2(3), dB11, dB12, dB22, ddet_B
       real(wp) :: dBinv11, dBinv12, dBinv22
-      !> Tangent projector sensitivities and the switched eigenvalue response
-      real(wp) :: dP_tan(3, 3), dM_tan(3, 3), dlambda_switch
+      !> Switched eigenvalue response and the symmetric part of `q1^T dA q2`
+      real(wp) :: dlambda_switch, dB12_sym
       !> Lifted tangent-vector sensitivities
       real(wp) :: dtau1(2), dtau2(2), dw1(2), dw2(2)
       real(wp) :: dy1(3), dy2(3), dcross(3)
@@ -338,15 +340,30 @@ contains
       real(wp) :: dw_pre
       !> Shape-operator, mean-curvature and half-gap sensitivities
       real(wp) :: dS11, dS12, dS22, dKM, d_disc
-      !> Cartesian index
-      integer :: kaxis
+      !> `H dr`
+      real(wp) :: Hdr(3)
+      !> Cartesian indices
+      integer :: iaxis, jaxis, kaxis
 
-      res%dg = dlsf1_r + matmul(state%lsf2_rr, dr)
+      call packed_contract2(state%lsf2_rr, dr, Hdr, 3)
+      res%dg = dlsf1_r + Hdr
       res%dH = dlsf2_rr
-      do kaxis = 1, 3
-         res%dH(:, :) = res%dH(:, :) + state%lsf3_rrr(:, :, kaxis)*dr(kaxis)
+      if (any(dr /= 0.0_wp)) then
+         do kaxis = 1, 3
+            do jaxis = 1, 3
+               do iaxis = 1, 3
+                  res%dH(iaxis, jaxis) = res%dH(iaxis, jaxis) &
+                                         + state%lsf3_rrr(packed_idx333(iaxis, jaxis, kaxis))*dr(kaxis)
+               end do
+            end do
+         end do
+      end if
+      do jaxis = 1, 3
+         do iaxis = 1, 3
+            dA(iaxis, jaxis) = -dlambda*state%lsf2_rr(packed_idx33(iaxis, jaxis)) &
+                               - state%lambda_val*res%dH(iaxis, jaxis)
+         end do
       end do
-      dA = -dlambda*state%lsf2_rr - state%lambda_val*res%dH
 
       res%dn_surf = (res%dg - state%n_surf*dot_product(state%n_surf, res%dg))/state%g_norm
 
@@ -378,18 +395,18 @@ contains
       dBinv12 = (-dB12*state%det_B + state%B12*ddet_B)/(state%det_B*state%det_B)
       dBinv22 = (dB11*state%det_B - state%B11*ddet_B)/(state%det_B*state%det_B)
 
-      ! Basis-invariant switched-eigenvalue response via M = P A P
-      dP_tan(:, :) = -(spread(res%dn_surf, dim=2, ncopies=3) &
-                       *spread(state%n_surf, dim=1, ncopies=3) &
-                       + spread(state%n_surf, dim=2, ncopies=3) &
-                       *spread(res%dn_surf, dim=1, ncopies=3))
-      dM_tan = matmul(dP_tan, state%AP_tan) &
-               + matmul(state%P_tan, matmul(dA, state%P_tan)) &
-               + matmul(state%P_tan, matmul(state%A_mat, dP_tan))
+      ! Switched-eigenvalue response, d(lambda) = v^T dB v
+      ! - With antisymmetric Q^T dQ and B v = lambda v, the in-plane rotation of the frame
+      !   drops out, so this equals u^T d(P A P) u for u = Q v
+      ! - The cross term takes the symmetric part of q1^T dA q2, exact for any seed
+      dB12_sym = dot_product(dq1, state%Aq2) + dot_product(dq2, state%Aq1) &
+                 + 0.5_wp*(dot_product(state%q1, dAq2) + dot_product(dAq1, state%q2))
       if (state%degenerate_switch) then
-         dlambda_switch = 0.5_wp*(dM_tan(1, 1) + dM_tan(2, 2) + dM_tan(3, 3))
+         dlambda_switch = 0.5_wp*(dB11 + dB22)
       else
-         dlambda_switch = dot_product(state%u_switch, matmul(dM_tan, state%u_switch))
+         dlambda_switch = state%v_switch(1)*state%v_switch(1)*dB11 &
+                          + 2.0_wp*state%v_switch(1)*state%v_switch(2)*dB12_sym &
+                          + state%v_switch(2)*state%v_switch(2)*dB22
       end if
 
       ! The sphere tangent frame is rigid, so dt1 = dt2 = 0
@@ -469,11 +486,10 @@ contains
    !> - the pass converts the remaining width-induced adjoint `dL/dp_m` into
    !>   `dL/dPhi_m`, which the seed loop then couples to the point motion
    !>
-   !> Groups are runs of equal `anchor_id`; points with `branch_count <= 1`
-   !> carry no softmax factor and stay at zero
+   !> Groups are the CSR rows of one anchor; an anchor with a single row
+   !> carries no softmax factor and stays at zero
    !>
-   !> @param[in]  branch_count    Number of branches per grid point (ngrid)
-   !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
+   !> @param[in]  offset          Row offsets per anchor (nmax + 1)
    !> @param[in]  wbranch         Softmax branch weight per grid point (ngrid)
    !> @param[in]  wleb            Lebedev weight per grid point (ngrid)
    !> @param[in]  xi0             Gaussian width per grid point (ngrid)
@@ -481,10 +497,10 @@ contains
    !> @param[in]  w_xi            Effective Gaussian-width adjoint (ngrid)
    !> @param[out] branch_phi_adj  Adjoint of the branch objective Phi (ngrid)
    ! TODO: This is serial; it sh/could be parallelized
-   pure subroutine compute_branch_phi_adj(branch_count, anchor_id, wbranch, wleb, xi0, &
+   pure subroutine compute_branch_phi_adj(offset, wbranch, wleb, xi0, &
                                           sigma_phi, w_xi, branch_phi_adj)
-      !> Branch bookkeeping per grid point
-      integer, intent(in) :: branch_count(:), anchor_id(:)
+      !> Row offsets per anchor
+      integer, intent(in) :: offset(:)
       !> Branch weight, Lebedev weight and Gaussian width per grid point
       real(wp), intent(in) :: wbranch(:), wleb(:), xi0(:)
       !> Softmax temperature
@@ -494,42 +510,31 @@ contains
       !> Adjoint of the branch objective
       real(wp), intent(out) :: branch_phi_adj(:)
 
-      !> Grid extent and group bookkeeping
-      integer :: ngrid, igroup_start, igroup_end, group_size, m_branch, im_grid
+      !> Anchor and group bookkeeping
+      integer :: ia, igroup_start, igroup_end, group_size, m_branch, im_grid
       !> Weight-adjoint scratch
-      real(wp) :: adj_wleb, adj_branch, mean_adj_branch, factor_m
+      real(wp) :: adj_branch, mean_adj_branch
 
       branch_phi_adj = 0.0_wp
-      ngrid = size(branch_count)
-      if (ngrid <= 0) return
-      if (.not. any(branch_count > 1)) return
+      if (size(branch_phi_adj) <= 0) return
       if (sigma_phi <= seed_weight_tol) return
 
-      igroup_start = 1
-      do while (igroup_start <= ngrid)
-         if (branch_count(igroup_start) <= 1) then
-            igroup_start = igroup_start + 1
-            cycle
-         end if
-
-         ! Extend the group while anchor_id stays the same
-         igroup_end = igroup_start
-         do while (igroup_end < ngrid)
-            if (anchor_id(igroup_end + 1) /= anchor_id(igroup_start)) exit
-            igroup_end = igroup_end + 1
-         end do
+      do ia = 1, size(offset) - 1
+         igroup_start = offset(ia) + 1
+         igroup_end = offset(ia + 1)
          group_size = igroup_end - igroup_start + 1
+         if (group_size <= 1) cycle
 
          mean_adj_branch = 0.0_wp
          do m_branch = 1, group_size
             im_grid = igroup_start + m_branch - 1
+            ! dxi/dp_m = -xi/(2 wleb) * wleb/p_m; the Lebedev weight cancels, but
+            ! a pruned point (wleb = 0) has no finite width and stays at zero (guard)
             adj_branch = 0.0_wp
             if (abs(w_xi(im_grid)) > seed_weight_tol &
-                .and. wleb(im_grid) > seed_weight_tol &
+                .and. wleb(im_grid) > tiny(1.0_wp) &
                 .and. wbranch(im_grid) > tiny(1.0_wp)) then
-               adj_wleb = -0.5_wp*w_xi(im_grid)*xi0(im_grid)/wleb(im_grid)
-               factor_m = wleb(im_grid)/wbranch(im_grid)
-               adj_branch = adj_wleb*factor_m
+               adj_branch = -0.5_wp*w_xi(im_grid)*xi0(im_grid)/wbranch(im_grid)
             end if
             mean_adj_branch = mean_adj_branch + wbranch(im_grid)*adj_branch
             branch_phi_adj(im_grid) = adj_branch
@@ -540,8 +545,6 @@ contains
             branch_phi_adj(im_grid) = -wbranch(im_grid) &
                                       *(branch_phi_adj(im_grid) - mean_adj_branch)/sigma_phi
          end do
-
-         igroup_start = igroup_end + 1
       end do
 
    end subroutine compute_branch_phi_adj
@@ -565,6 +568,8 @@ contains
          msg = "tangent Jacobian matrix B is singular after switching"
       case (seed_state_singular_jacobian)
          msg = "closest-point Jacobian vanishes"
+      case (seed_state_singular_kkt)
+         msg = "KKT sensitivity solve failed"
       case default
          msg = "unknown sensitivity-kernel failure"
       end select
