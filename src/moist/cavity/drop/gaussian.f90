@@ -9,7 +9,7 @@ module moist_cavity_drop_gaussian
    use mctc_env_accuracy, only: wp
    use mctc_io_constants, only: pi
    use mctc_io_structure, only: structure_type
-   use moist_math_adjacency_list, only: adjacency_list_type
+   use moist_math_adjacency, only: adjacency_list_type
 
    implicit none(type, external)
    private
@@ -59,7 +59,8 @@ contains
    !> @param[in] mol      Molecular structure
    !> @param[in] radii    Atomic radii (bohr)
    !> @param[in] wleb_max Maximum Lebedev quadrature weight (optional)
-   subroutine iswig_set_input(self, mol, radii, wleb_max)
+   !> @param[in] nthreads OpenMP team size of the neighbour-list build (optional)
+   subroutine iswig_set_input(self, mol, radii, wleb_max, nthreads)
       class(moist_cavity_drop_iswig), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
@@ -67,6 +68,8 @@ contains
       real(wp), intent(in) :: radii(:)
       !> Maximum Lebedev weight (enables sorted neighbor list construction)
       real(wp), intent(in), optional :: wleb_max
+      !> OpenMP team size of the neighbour-list build
+      integer, intent(in), optional :: nthreads
 
       self%nsph = mol%nat
 
@@ -81,7 +84,7 @@ contains
 
       ! Build sorted neighbor list when Lebedev weight info is available
       if (present(wleb_max)) then
-         call iswig_build_neighbors(self, wleb_max)
+         call iswig_build_neighbors(self, wleb_max, nthreads)
       else
          call self%adj_list%destroy()
       end if
@@ -99,10 +102,13 @@ contains
    !>
    !> @param[inout] self     iSwig instance with xyz and radii set
    !> @param[in]    wleb_max Maximum Lebedev quadrature weight
-   subroutine iswig_build_neighbors(self, wleb_max)
+   !> @param[in]    nthreads OpenMP team size (optional)
+   subroutine iswig_build_neighbors(self, wleb_max, nthreads)
       class(moist_cavity_drop_iswig), intent(inout) :: self
       !> Maximum Lebedev weight (for computing minimum xi per sphere)
       real(wp), intent(in) :: wleb_max
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
       real(wp) :: cutoff_global
 
@@ -116,7 +122,7 @@ contains
 
       ! Build adjacency list (distances and sorting handled internally)
       call self%adj_list%init(cutoff=cutoff_global, sorted=.true.)
-      call self%adj_list%update(self%xyz)
+      call self%adj_list%update(self%xyz, nthreads)
 
    end subroutine iswig_build_neighbors
 
