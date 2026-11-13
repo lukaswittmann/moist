@@ -34,6 +34,8 @@ module moist_cavity_drop_projection_polish
    !> Diagonal and off-diagonal slots of a packed 3x3 Hessian
    integer, parameter :: diag_slots(3) = [1, 3, 6], offdiag_slots(3) = [2, 4, 5]
 
+   ! TODO: we should also think about making this a general solver or at least some type of Riemannian Newton module
+
    !> Polish settings
    ! TODO: good idea to introduce a new type here with drop parameters again?
    type :: polish_config_type
