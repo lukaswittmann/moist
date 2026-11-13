@@ -339,7 +339,6 @@ int test_drop_cavity(void)
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
-    bool* converged = NULL;
     double* vradii = NULL;
     double* asph = NULL;
     double* normal = NULL;
@@ -397,7 +396,6 @@ int test_drop_cavity(void)
     xyz = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     a = (double*)malloc((size_t)ngrid * sizeof(double));
     owner = (int*)malloc((size_t)ngrid * sizeof(int));
-    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
     vradii = (double*)malloc((size_t)nsph * sizeof(double));
     asph = (double*)malloc((size_t)nsph * sizeof(double));
 
@@ -409,7 +407,7 @@ int test_drop_cavity(void)
     f = (double*)malloc((size_t)ngrid * sizeof(double));
     rho = (double*)malloc((size_t)ngrid * sizeof(double));
 
-    if (!xyz || !a || !owner || !converged || !vradii || !asph || !normal ||
+    if (!xyz || !a || !owner || !vradii || !asph || !normal ||
         !wleb || !r_iI0 || !xi || !f || !rho) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
@@ -418,7 +416,7 @@ int test_drop_cavity(void)
     // Get generic cavity results
     moist_get_cavity_results(error, cav, ngrid, nsph,
                              &area, &volume, &ngrid, &nsph,
-                             xyz, a, owner, converged, vradii, asph);
+                             xyz, a, owner, vradii, asph);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -441,13 +439,13 @@ int test_drop_cavity(void)
              nmax >= ngrid && wleb[0] > 0.0 && a[0] > 0.0 &&
              r_iI0[0] > 0.0 && xi[0] > 0.0 &&
              f[0] > 0.0 && rho[0] >= 0.0 &&
-             converged[0] == true && asph[0] > 0.0 &&
+             asph[0] > 0.0 &&
              vradii[0] > 0.0
          ? 0
          : 1;
 
 cleanup:
-    free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
+    free(xyz); free(a); free(owner); free(vradii); free(asph);
     free(normal); free(wleb); free(r_iI0); free(xi); free(f); free(rho);
 
     // Free handles and verify they reset to NULL (generic delete)
@@ -478,7 +476,6 @@ int test_custom_radii(void)
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
-    bool* converged = NULL;
     double* vradii = NULL;
     double* asph = NULL;
 
@@ -530,16 +527,15 @@ int test_custom_radii(void)
     xyz = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     a = (double*)malloc((size_t)ngrid * sizeof(double));
     owner = (int*)malloc((size_t)ngrid * sizeof(int));
-    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
     vradii = (double*)malloc((size_t)nsph * sizeof(double));
     asph = (double*)malloc((size_t)nsph * sizeof(double));
-    if (!xyz || !a || !owner || !converged || !vradii || !asph) {
+    if (!xyz || !a || !owner || !vradii || !asph) {
         printf("  Error: memory allocation failed\n");
         goto cleanup;
     }
 
     moist_get_cavity_results(error, cav, ngrid, nsph, &area, &volume, &ngrid, &nsph,
-                             xyz, a, owner, converged, vradii, asph);
+                             xyz, a, owner, vradii, asph);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -550,8 +546,8 @@ int test_custom_radii(void)
                      fabs(vradii[2] - r_elem[0]) < 1e-12;
 
     /* Grid size can change between rounds; free the first round's buffers before resizing */
-    free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
-    xyz = NULL; a = NULL; owner = NULL; converged = NULL; vradii = NULL; asph = NULL;
+    free(xyz); free(a); free(owner); free(vradii); free(asph);
+    xyz = NULL; a = NULL; owner = NULL; vradii = NULL; asph = NULL;
     moist_delete_cavity(&cav);
 
     // Atom-specific custom radii
@@ -585,16 +581,15 @@ int test_custom_radii(void)
     xyz = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     a = (double*)malloc((size_t)ngrid * sizeof(double));
     owner = (int*)malloc((size_t)ngrid * sizeof(int));
-    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
     vradii = (double*)malloc((size_t)nsph * sizeof(double));
     asph = (double*)malloc((size_t)nsph * sizeof(double));
-    if (!xyz || !a || !owner || !converged || !vradii || !asph) {
+    if (!xyz || !a || !owner || !vradii || !asph) {
         printf("  Error: memory allocation failed\n");
         goto cleanup;
     }
 
     moist_get_cavity_results(error, cav, ngrid, nsph, &area, &volume, &ngrid, &nsph,
-                             xyz, a, owner, converged, vradii, asph);
+                             xyz, a, owner, vradii, asph);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -607,7 +602,7 @@ int test_custom_radii(void)
     result = (element_ok && atom_ok) ? 0 : 1;
 
 cleanup:
-    free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
+    free(xyz); free(a); free(owner); free(vradii); free(asph);
 
     moist_delete_cavity(&cav);
     moist_delete_radii(&radii_model);
@@ -648,7 +643,6 @@ int test_h2o_cavity(void)
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
-    bool* converged = NULL;
     double* vradii = NULL;
     double* asph = NULL;
     double* normal = NULL;
@@ -696,7 +690,6 @@ int test_h2o_cavity(void)
     xyz = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     a = (double*)malloc((size_t)ngrid * sizeof(double));
     owner = (int*)malloc((size_t)ngrid * sizeof(int));
-    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
     vradii = (double*)malloc((size_t)nsph * sizeof(double));
     asph = (double*)malloc((size_t)nsph * sizeof(double));
     normal = (double*)malloc((size_t)3 * ngrid * sizeof(double));
@@ -707,7 +700,7 @@ int test_h2o_cavity(void)
     gaussian_f = (double*)malloc((size_t)ngrid * sizeof(double));
     rho = (double*)malloc((size_t)ngrid * sizeof(double));
 
-    if (!xyz || !a || !owner || !converged || !vradii || !asph || !normal ||
+    if (!xyz || !a || !owner || !vradii || !asph || !normal ||
         !wleb || !r_iI0 || !f || !gaussian_xi || !gaussian_f || !rho) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
@@ -716,7 +709,7 @@ int test_h2o_cavity(void)
     // Get generic cavity results
     double area = 0.0, volume = 0.0;
     moist_get_cavity_results(error, cav, ngrid, nsph, &area, &volume, &ngrid, &nsph,
-                             xyz, a, owner, converged, vradii, asph);
+                             xyz, a, owner, vradii, asph);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -750,7 +743,7 @@ int test_h2o_cavity(void)
     }
 
 cleanup:
-    free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
+    free(xyz); free(a); free(owner); free(vradii); free(asph);
     free(normal); free(wleb); free(r_iI0); free(f);
     free(gaussian_xi); free(gaussian_f); free(rho);
 
@@ -1281,13 +1274,12 @@ int test_isodensity_internal_cavity(void)
         int ngrid_out = -1, nsph_out = -1;
         double xyz_buf[3], a_buf[1], radii_buf[H2O_NATOMS], asph_buf[H2O_NATOMS];
         int owner_buf[1];
-        bool converged_buf[1];
         int nfield = -1;
 
         moist_get_cavity_sizes(probe, cav, &sizes[0], &sizes[1]);
         failures += expect_failure(&probe, unbuilt, "sizes of an unbuilt cavity");
         moist_get_cavity_results(probe, cav, 1, H2O_NATOMS, &area, &volume, &ngrid_out, &nsph_out,
-                                 xyz_buf, a_buf, owner_buf, converged_buf, radii_buf, asph_buf);
+                                 xyz_buf, a_buf, owner_buf, radii_buf, asph_buf);
         failures += expect_failure(&probe, unbuilt, "results of an unbuilt cavity");
         if (sizes[0] != -1 || sizes[1] != -1 || area != -1.0 || volume != -1.0
             || ngrid_out != -1 || nsph_out != -1) {
@@ -1495,20 +1487,19 @@ static int cavity_area_volume(moist_error error, moist_cavity cav,
     double* xyz = (double*)malloc((size_t)(3 * *ngrid) * sizeof(double));
     double* a = (double*)malloc((size_t)*ngrid * sizeof(double));
     int* owner = (int*)malloc((size_t)*ngrid * sizeof(int));
-    bool* converged = (bool*)malloc((size_t)*ngrid * sizeof(bool));
     double* radii = (double*)malloc((size_t)*nsph * sizeof(double));
     double* asph = (double*)malloc((size_t)*nsph * sizeof(double));
 
     int stat = 1;
-    if (!xyz || !a || !owner || !converged || !radii || !asph) {
+    if (!xyz || !a || !owner || !radii || !asph) {
         printf("  Error: memory allocation failed\n");
     } else {
         moist_get_cavity_results(error, cav, *ngrid, *nsph, area, volume, ngrid, nsph,
-                                 xyz, a, owner, converged, radii, asph);
+                                 xyz, a, owner, radii, asph);
         stat = moist_check_error(error) ? 1 : 0;
     }
 
-    free(xyz); free(a); free(owner); free(converged); free(radii); free(asph);
+    free(xyz); free(a); free(owner); free(radii); free(asph);
     return stat;
 }
 
@@ -2180,8 +2171,9 @@ int test_cavity_fields(void)
     int* anchor_id = NULL;
     int* branch = NULL;
     int* branch_count = NULL;
-    bool* converged = NULL;
-    bool* converged2 = NULL;
+    moist_cavity mt_cav = NULL;
+    bool* flags = NULL;
+    bool* flags2 = NULL;
 
     mol = make_h2o(error);
     if (moist_check_error(error)) { show_error(error); goto cleanup; }
@@ -2306,31 +2298,63 @@ int test_cavity_fields(void)
     printf("  %d of %d points are branched\n", nbranched, ngrid);
 
     /* Logical accessor, the third of the three: every value it can return is
-     * also a legal seed. Read into two oppositely seeded buffers to confirm
-     * every entry was written */
-    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
-    converged2 = (bool*)malloc((size_t)ngrid * sizeof(bool));
-    if (!converged || !converged2) {
+     * also a legal seed. The boolean field lives on an MT cavity (one flag
+     * per unswitched patch); read it into two oppositely seeded buffers to
+     * confirm every entry was written */
+    {
+        moist_lsf mt_lsf = moist_new_svdw_lsf(error, NULL);
+        if (moist_check_error(error)) { show_error(error); goto cleanup; }
+        mt_cav = moist_new_mt_cavity(error, fixture_context, mt_lsf, NULL, NULL);
+        moist_delete(mt_lsf);
+    }
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+    host_update_cavity(error, mt_cav, mol, NULL, NULL);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    int npatch = 0, mt_nfield = 0;
+    moist_get_cavity_field_count(error, mt_cav, &mt_nfield);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+    for (int i = 0; i < mt_nfield; i++) {
+        char name[MOIST_FIELD_NAME_MAX + 1] = {0};
+        int dtype = 0, rank = 0, count = 0;
+        int dims[MOIST_FIELD_MAX_RANK] = {0};
+        moist_get_cavity_field_info(error, mt_cav, i, name, &dtype, &rank, dims, &count);
+        if (moist_check_error(error)) { show_error(error); goto cleanup; }
+        if (strcmp(name, "area_exception") == 0) {
+            if (dtype != MOIST_FIELD_BOOL || rank != 1) {
+                printf("  FAIL: area_exception is not a rank-1 bool field\n");
+                goto cleanup;
+            }
+            npatch = count;
+        }
+    }
+    if (npatch <= 0) {
+        printf("  FAIL: MT cavity declares no area_exception field\n");
+        goto cleanup;
+    }
+    flags = (bool*)malloc((size_t)npatch * sizeof(bool));
+    flags2 = (bool*)malloc((size_t)npatch * sizeof(bool));
+    if (!flags || !flags2) {
         printf("  Error: memory allocation failed\n");
         goto cleanup;
     }
-    memset(converged, 0, (size_t)ngrid * sizeof(bool));
-    memset(converged2, 1, (size_t)ngrid * sizeof(bool));
+    memset(flags, 0, (size_t)npatch * sizeof(bool));
+    memset(flags2, 1, (size_t)npatch * sizeof(bool));
 
-    moist_get_cavity_field_bool(error, cav, "converged", converged);
+    moist_get_cavity_field_bool(error, mt_cav, "area_exception", flags);
     if (moist_check_error(error)) { show_error(error); goto cleanup; }
-    moist_get_cavity_field_bool(error, cav, "converged", converged2);
+    moist_get_cavity_field_bool(error, mt_cav, "area_exception", flags2);
     if (moist_check_error(error)) { show_error(error); goto cleanup; }
 
-    int nconverged = 0;
-    for (int i = 0; i < ngrid; i++) {
-        if (converged[i] != converged2[i]) {
-            printf("  FAIL: converged[%d] depends on the seed of the buffer\n", i);
+    int nexception = 0;
+    for (int i = 0; i < npatch; i++) {
+        if (flags[i] != flags2[i]) {
+            printf("  FAIL: area_exception[%d] depends on the seed of the buffer\n", i);
             goto cleanup;
         }
-        if (converged[i]) nconverged++;
+        if (flags[i]) nexception++;
     }
-    printf("  %d of %d points converged\n", nconverged, ngrid);
+    printf("  %d of %d MT patches flag an area exception\n", nexception, npatch);
 
     /* A name the cavity does not hold is an error, never a buffer of zeros */
     double probe = 12345.0;
@@ -2366,7 +2390,8 @@ int test_cavity_fields(void)
 cleanup:
     free(about);
     free(numbering); free(anchor_id); free(branch); free(branch_count);
-    free(converged); free(converged2);
+    free(flags); free(flags2);
+    moist_delete_cavity(&mt_cav);
     moist_delete_cavity(&cav);
     moist_delete_structure(&mol);
     moist_delete_error(&error);
@@ -2403,7 +2428,7 @@ int test_capacity_validation(void)
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
-    bool* converged = NULL;
+    bool* flags = NULL;
     double* vradii = NULL;
     double* asph = NULL;
     double* wleb = NULL;
@@ -2416,7 +2441,6 @@ int test_capacity_validation(void)
     double* big_xyz = NULL;
     double* big_a = NULL;
     int* big_owner = NULL;
-    bool* big_conv = NULL;
     double* big_radii = NULL;
     double* big_asph = NULL;
 
@@ -2445,7 +2469,7 @@ int test_capacity_validation(void)
     xyz = (double*)malloc(n_xyz);
     a = (double*)malloc(n_a);
     owner = (int*)malloc(n_owner);
-    converged = (bool*)malloc(n_conv);
+    flags = (bool*)malloc(n_conv);
     vradii = (double*)malloc(n_sph);
     asph = (double*)malloc(n_sph);
     wleb = (double*)malloc(n_a);
@@ -2456,7 +2480,7 @@ int test_capacity_validation(void)
     xi = (double*)malloc(n_a);
     gaussian_f = (double*)malloc(n_a);
 
-    if (!xyz || !a || !owner || !converged || !vradii || !asph || !wleb ||
+    if (!xyz || !a || !owner || !flags || !vradii || !asph || !wleb ||
         !r_iI0 || !f || !rho || !numbering || !xi ||
         !gaussian_f) {
         printf("  Error: memory allocation failed\n");
@@ -2473,12 +2497,12 @@ int test_capacity_validation(void)
 
     if (result == 0) {
         fill_sentinel(xyz, n_xyz); fill_sentinel(a, n_a);
-        fill_sentinel(owner, n_owner); fill_sentinel(converged, n_conv);
+        fill_sentinel(owner, n_owner); fill_sentinel(flags, n_conv);
         fill_sentinel(vradii, n_sph); fill_sentinel(asph, n_sph);
 
         moist_get_cavity_results(error, cav, short_ngrid, nsph,
                                  &area, &volume, &out_ngrid, &out_nsph,
-                                 xyz, a, owner, converged, vradii, asph);
+                                 xyz, a, owner, vradii, asph);
         if (!moist_check_error(error)) {
             printf("  FAIL: get_cavity_results accepted ngrid_cap = %d < %d\n",
                    short_ngrid, ngrid);
@@ -2487,7 +2511,7 @@ int test_capacity_validation(void)
             show_error(error);
             if (!sentinel_intact(xyz, n_xyz) || !sentinel_intact(a, n_a) ||
                 !sentinel_intact(owner, n_owner) ||
-                !sentinel_intact(converged, n_conv) ||
+                !sentinel_intact(flags, n_conv) ||
                 !sentinel_intact(vradii, n_sph) || !sentinel_intact(asph, n_sph)) {
                 printf("  FAIL: get_cavity_results wrote into a rejected buffer\n");
                 result = 1;
@@ -2501,12 +2525,12 @@ int test_capacity_validation(void)
         /* A short sphere capacity has to be caught just the same; the grid
          * capacity is honest here, isolating the sphere check */
         fill_sentinel(xyz, n_xyz); fill_sentinel(a, n_a);
-        fill_sentinel(owner, n_owner); fill_sentinel(converged, n_conv);
+        fill_sentinel(owner, n_owner); fill_sentinel(flags, n_conv);
         fill_sentinel(vradii, n_sph); fill_sentinel(asph, n_sph);
 
         moist_get_cavity_results(error, cav, ngrid, nsph - 1,
                                  &area, &volume, &out_ngrid, &out_nsph,
-                                 xyz, a, owner, converged, vradii, asph);
+                                 xyz, a, owner, vradii, asph);
         if (!moist_check_error(error)) {
             printf("  FAIL: get_cavity_results accepted nsph_cap = %d < %d\n",
                    nsph - 1, nsph);
@@ -2514,7 +2538,7 @@ int test_capacity_validation(void)
         } else {
             if (!sentinel_intact(xyz, n_xyz) || !sentinel_intact(a, n_a) ||
                 !sentinel_intact(owner, n_owner) ||
-                !sentinel_intact(converged, n_conv) ||
+                !sentinel_intact(flags, n_conv) ||
                 !sentinel_intact(vradii, n_sph) || !sentinel_intact(asph, n_sph)) {
                 printf("  FAIL: get_cavity_results wrote into a rejected buffer\n");
                 result = 1;
@@ -2528,14 +2552,14 @@ int test_capacity_validation(void)
      * the payload the accessor would copy out is the unallocated one, so a
      * mistyped read must not become a memory error */
     if (result == 0) {
-        fill_sentinel(converged, n_conv);
+        fill_sentinel(flags, n_conv);
 
-        moist_get_cavity_field_bool(error, cav, "wleb", converged);
+        moist_get_cavity_field_bool(error, cav, "wleb", flags);
         if (!moist_check_error(error)) {
             printf("  FAIL: get_cavity_field_bool accepted a real-valued field\n");
             result = 1;
         } else {
-            if (!sentinel_intact(converged, n_conv)) {
+            if (!sentinel_intact(flags, n_conv)) {
                 printf("  FAIL: get_cavity_field_bool wrote into a rejected buffer\n");
                 result = 1;
             }
@@ -2587,17 +2611,16 @@ int test_capacity_validation(void)
         big_xyz = (double*)calloc((size_t)3 * big_ngrid, sizeof(double));
         big_a = (double*)calloc((size_t)big_ngrid, sizeof(double));
         big_owner = (int*)calloc((size_t)big_ngrid, sizeof(int));
-        big_conv = (bool*)calloc((size_t)big_ngrid, sizeof(bool));
         big_radii = (double*)calloc((size_t)big_nsph, sizeof(double));
         big_asph = (double*)calloc((size_t)big_nsph, sizeof(double));
 
-        if (!big_xyz || !big_a || !big_owner || !big_conv || !big_radii || !big_asph) {
+        if (!big_xyz || !big_a || !big_owner || !big_radii || !big_asph) {
             printf("  Error: memory allocation failed\n");
             result = 1;
         } else {
             moist_get_cavity_results(error, cav, big_ngrid, big_nsph,
                                      &area, &volume, &out_ngrid, &out_nsph,
-                                     big_xyz, big_a, big_owner, big_conv,
+                                     big_xyz, big_a, big_owner,
                                      big_radii, big_asph);
             if (moist_check_error(error) || out_ngrid != ngrid || out_nsph != nsph)
                 result = 1;
@@ -2613,10 +2636,10 @@ int test_capacity_validation(void)
     }
 
 cleanup:
-    free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
+    free(xyz); free(a); free(owner); free(flags); free(vradii); free(asph);
     free(wleb); free(r_iI0); free(f); free(rho); free(numbering);
     free(xi); free(gaussian_f);
-    free(big_xyz); free(big_a); free(big_owner); free(big_conv);
+    free(big_xyz); free(big_a); free(big_owner);
     free(big_radii); free(big_asph);
 
     moist_delete_cavity(&cav);

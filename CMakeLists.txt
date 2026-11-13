@@ -325,7 +325,7 @@ if(MOIST_TESTS)
     math_grid_3d_guards math_grid_3d_derivatives
     math_grid_3d_integration
     math_grid_3d_invariance
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
+    cavity_drop_phi cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint cavity_drop_potential
     cavity_drop_integration cavity_drop_anchor cavity_drop_projector
     cavity_drop_projection
@@ -368,6 +368,10 @@ if(MOIST_TESTS)
     batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
     radial_trafo_one_per_thread partition_grid_threaded)
+  set(moist_test_selected_cavity_drop_nuclear_adjoint
+    all_channels single_channels branching_channels branching_xi_fd
+    model_forward_reverse cosmo_model_forward_reverse shape_guard
+    thread_count_invariance)
 
   set(moist_test_srcs
     "${_unit}/main.F90"

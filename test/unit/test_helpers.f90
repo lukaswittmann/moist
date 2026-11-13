@@ -327,7 +327,7 @@ contains
       span = box_max - box_min
 
       allocate (points(3, total))
-      rng = int(mol%nat, int64)* 67_int64 + 12345_int64
+      rng = int(mol%nat, int64)* 97_int64 + 12345_int64
       accepted = 0
       do attempt = 1, max_attempts
          do ax = 1, 3
