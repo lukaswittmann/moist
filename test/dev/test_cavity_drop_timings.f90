@@ -490,14 +490,17 @@ contains
                      proj_level=proj_level), ctx=ctx)
                end block
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+               if (allocated(error)) return
                call cavity_drop%update(mol, error=cavity_error)
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+               if (allocated(error)) return
                call cpu_time(t1)
                time_update = time_update + real(t1 - t0, wp)
 
                call cpu_time(t0)
                call cavity_drop%get_gradient(cavity_error)
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+               if (allocated(error)) return
                call cpu_time(t1)
                time_gradient = time_gradient + real(t1 - t0, wp)
             end do
