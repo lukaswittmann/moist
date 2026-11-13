@@ -23,6 +23,12 @@ module test_cavity_mt_mesh
       real(wp) :: scale = 1.0_wp
       !> Inject a recoverable preparation failure
       logical :: fail = .false.
+      !> Level-set value beyond which a point is far, Bohr
+      real(wp) :: reach = huge(1.0_wp)
+      !> Report a far point as reached with `far_value` instead of unreached
+      logical :: fake_far = .false.
+      !> Value of a far point when `fake_far`
+      real(wp) :: far_value = 0.0_wp
    contains
       procedure :: prepare => analytic_prepare
       procedure :: f0 => analytic_f0
@@ -44,6 +50,7 @@ contains
                   new_unittest("disconnected_cfc_underflow", test_cfc_underflow), &
                   new_unittest("invalid_input_and_evaluation", test_errors), &
                   new_unittest("default_thread_count", test_default_threads), &
+                  new_unittest("unreached_nodes_exterior", test_unreached_nodes), &
                   new_unittest("bad_no_atoms", test_bad_no_atoms, should_fail=.true.), &
                   new_unittest("bad_unresolved_surface", test_bad_unresolved, should_fail=.true.), &
                   new_unittest("bad_nonfinite_coordinates", test_bad_coordinates, should_fail=.true.), &
@@ -423,6 +430,52 @@ contains
       call check(error, size(mesh%vertices, 2) - size(mesh%area)/2, 2*expected, "Euler characteristic")
    end subroutine check_closed
 
+   !> Lattice nodes beyond the level set's reach count as exterior
+   !>
+   !> - a reach of 1 Bohr past the unit sphere is wider than the cell diagonal
+   !>   (0.25 sqrt(3) Bohr), so no tetrahedron joins an unreached node to an
+   !>   interior one, while the lattice corners (4.3 Bohr out) are unreached
+   !> - the mesh then equals the uncut one node for node
+   !> - negative control: the same far nodes reported as interior (-1) put a
+   !>   negative value on every outer lattice, so the bounds never close; a far
+   !>   value of 0 is indistinguishable here (`f >= 0` is exterior and a zero node
+   !>   without a negative neighbour spawns no triangle)
+   subroutine test_unreached_nodes(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(analytic_lsf_type) :: lsf
+      type(mt_mesh_type) :: plain, cut
+      type(mctc_error), allocatable :: mesh_error
+      real(wp) :: xyz(3, 1)
+      xyz = 0.0_wp
+      call init_analytic(lsf, xyz, [1.0_wp])
+      call build_mt_mesh(lsf, xyz, 0.25_wp, plain, mesh_error, nthreads=1)
+      call require_mesh(mesh_error, error)
+      if (allocated(error)) return
+      lsf%reach = 1.0_wp
+      call build_mt_mesh(lsf, xyz, 0.25_wp, cut, mesh_error, nthreads=1)
+      call require_mesh(mesh_error, error)
+      if (allocated(error)) return
+      call check(error, size(cut%area), size(plain%area))
+      if (allocated(error)) return
+      call check(error, size(cut%vertices, 2), size(plain%vertices, 2))
+      if (allocated(error)) return
+      call check(error, all(cut%triangles == plain%triangles), "unreached nodes change the topology")
+      if (allocated(error)) return
+      call check(error, maxval(abs(cut%vertices - plain%vertices)), 0.0_wp, thr=0.0_wp)
+      if (allocated(error)) return
+      call check(error, cut%total_area, plain%total_area, thr=0.0_wp)
+      if (allocated(error)) return
+      call check(error, cut%total_volume, plain%total_volume, thr=0.0_wp)
+      if (allocated(error)) return
+      lsf%fake_far = .true.
+      lsf%far_value = -1.0_wp
+      call build_mt_mesh(lsf, xyz, 0.25_wp, cut, mesh_error, nthreads=1)
+      call check(error, allocated(mesh_error), "interior far nodes must keep the lattice boundary open")
+      if (allocated(error)) return
+      call check(error, index(mesh_error%message, "exterior boundary not found") > 0, mesh_error%message)
+   end subroutine test_unreached_nodes
+
    !> Bind an analytic fixture through the production LSF update API
    !>
    !> @param[out] lsf Analytic LSF fixture
@@ -447,6 +500,10 @@ contains
    !>
    !> @param[in,out] self Analytic fixture
    !> @param[in] point Evaluation point (3), Bohr
+   !> - unreached beyond `reach` unless `fake_far`
+   !>
+   !> @param[in,out] self Analytic fixture
+   !> @param[in] point Evaluation point (3), Bohr
    !> @param[out] error Injected evaluation failure
    subroutine analytic_prepare(self, point, error)
       !> Analytic fixture
@@ -456,6 +513,8 @@ contains
       !> Evaluation failure
       type(mctc_error), allocatable, intent(out) :: error
       integer :: i
+
+      self%prepared_unreached = .false.
       if (self%fail) then
          call fatal_error(error, "analytic fixture preparation failure")
          return
@@ -465,6 +524,13 @@ contains
          self%value = min(self%value, norm2(point - self%mol%xyz(:, i)) - self%scale*self%radii(i))
       end do
       if (self%inner > 0.0_wp) self%value = max(self%value, self%inner - norm2(point - self%mol%xyz(:, 1)))
+      if (self%value > self%reach) then
+         if (self%fake_far) then
+            self%value = self%far_value
+         else
+            self%prepared_unreached = .true.
+         end if
+      end if
    end subroutine analytic_prepare
 
    !> Return the cached analytic value

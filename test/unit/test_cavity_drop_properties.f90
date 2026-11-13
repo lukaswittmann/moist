@@ -5,17 +5,19 @@
 !> - curvatures, normals, point-to-center distances, area and volume of isolated spheres
 !> - `analyze_cavity` report against the cavity's own areas and curvatures
 !> - atom-partitioned areas of separated spheres and of a molecule
+!> - curvature refusal on a level-set failure of the surface tile
+!> - warning on an SvdW `blend_k` below the advised minimum
 module test_cavity_drop_properties
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use mctc_env_accuracy, only: wp
-   use mctc_env_error, only: mctc_error => error_type
+   use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    use moist_cavity_drop, only: cavity_type_drop
-   use test_helpers, only: build_test_cavity_drop
+   use test_helpers, only: build_test_cavity_drop, read_printout
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: new_radii_custom_atoms, default_cpcm_radii, radius_type
    use moist_context, only: moist_context_type, new_context
@@ -28,8 +30,8 @@ module test_cavity_drop_properties
    real(wp), parameter :: PROJ_TOL = 1.0e-12_wp
    !> Projection iteration cap
    integer, parameter :: PROJ_MAXITER = 1000
-   !> Projection level, 1 = SLSQP only
-   integer, parameter :: PROJ_LEVEL = 2
+   !> Projection level, 1 = local Newton with octree retry
+   integer, parameter :: PROJ_LEVEL = 1
    !> Sphere radii of the isolated-atom fixtures, bohr
    real(wp), parameter :: SPHERE_RADII(3) = [2.0_wp, 3.5_wp, 5.0_wp]
    !> Density kernel lengths paired with `SPHERE_RADII`, bohr
@@ -91,6 +93,14 @@ module test_cavity_drop_properties
    !> Observed 22.7 (Al), at 194 points and `blend_k = 1`
    real(wp), parameter :: PARTITION_SHIFT_MIN = 1.0_wp
 
+   !> SvdW level set whose batched order-2 jet fails once armed
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: armed_failing_lsf_type
+      !> Fail every batched jet of order 2 or higher
+      logical :: armed = .false.
+   contains
+      procedure :: evaluate_batch => armed_evaluate_batch
+   end type armed_failing_lsf_type
+
 contains
 
    !> Collect all exported unit tests
@@ -107,7 +117,8 @@ contains
                   new_unittest("sphere_geometry", test_sphere_geometry), &
                   new_unittest("analyze_cavity_output", test_analyze_cavity_output), &
                   new_unittest("integral_identities", test_integral_identities), &
-                  new_unittest("atom_area_partition", test_atom_area_partition) &
+                  new_unittest("atom_area_partition", test_atom_area_partition), &
+                  new_unittest("bad_curvature_lsf_failure", test_bad_curvature_lsf_failure, should_fail=.true.) &
                   ]
    end subroutine collect_cavity_drop_properties
 
@@ -750,5 +761,106 @@ contains
          "Partitioned areas follow the owner sums, largest shift "//to_string(shift)//" Bohr^2")
       if (allocated(error)) return
    end subroutine test_atom_area_partition
+
+   !> Curvature refuses a surface tile whose level-set jet fails
+   !>
+   !> - the cavity is built with the plain SvdW jet, then the failure is armed and
+   !>   the curvature recomputed, so only `compute_curvature` sees it
+   !> - one thread, so the first tile latches and the reported grid point is 1
+   subroutine test_bad_curvature_lsf_failure(error)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      class(radius_type), allocatable :: radius_model
+      type(armed_failing_lsf_type) :: lsf
+      type(mctc_error), allocatable :: cavity_error
+
+      radius_model = default_cpcm_radii()
+      call get_structure(mol, "MB16-43", "16")
+      call new_context(ctx, nthreads=1, verbosity=0)
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=2.0_wp, blend_2b=1.0_wp, blend_3b=0.0_wp))
+      allocate (cavity)
+      call build_test_cavity_drop(mol, 302, ctx, radius_model, lsf, cavity, cavity_error, &
+         param=fixture_param(302, 1.0_wp, .false., .false.))
+      if (allocated(cavity_error)) return
+
+      select type (model => cavity%lsf_model)
+      type is (armed_failing_lsf_type)
+         model%armed = .true.
+      class default
+         return
+      end select
+      call cavity%compute_curvature(cavity_error)
+      call expect_error(error, cavity_error, "compute_curvature: level-set evaluation failed on the "// &
+         "surface tile from grid point 1: Injected level-set failure")
+   end subroutine test_bad_curvature_lsf_failure
+
+   !> Fail the test only on the expected error
+   !>
+   !> - a missing or different error returns cleanly, so the should-fail test is
+   !>   reported as failed
+   !> - callers return cleanly when their own setup fails
+   !>
+   !> @param[out] error     Test failure, set only on the expected error
+   !> @param[in]  err       Library error, possibly unallocated
+   !> @param[in]  expected  Exact expected error message
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Exact expected error message
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (err%message == expected) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> Batched jet of the SvdW level set, failing at order 2 or higher once armed
+   !>
+   !> @param[in,out] self               Level set
+   !> @param[in]     points             Evaluation points (3, n), bohr
+   !> @param[in]     order              Highest spatial derivative to write
+   !> @param[out]    lsf0               Values (n)
+   !> @param[out]    lsf1_r             Gradients (3, n)
+   !> @param[out]    lsf2_rr_packed     Packed Hessians (6, n)
+   !> @param[out]    lsf3_rrr           Packed third derivatives (10, n)
+   !> @param[out]    lsf4_rrrr          Packed fourth derivatives (15, n)
+   !> @param[in]     candidate_indices  Shared atom list
+   !> @param[out]    error              Injected failure once armed
+   subroutine armed_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, lsf3_rrr, &
+                                   lsf4_rrrr, candidate_indices, error)
+      !> Level set
+      class(armed_failing_lsf_type), intent(inout) :: self
+      !> Evaluation points
+      real(wp), intent(in), contiguous :: points(:, :)
+      !> Highest spatial derivative to write
+      integer, intent(in) :: order
+      !> Values
+      real(wp), intent(out), contiguous :: lsf0(:)
+      !> Gradients
+      real(wp), intent(out), optional, contiguous :: lsf1_r(:, :)
+      !> Packed Hessians
+      real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
+      !> Packed third derivatives
+      real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
+      !> Packed fourth derivatives
+      real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
+      !> Shared atom list
+      integer, intent(in), optional :: candidate_indices(:)
+      !> Injected failure
+      type(mctc_error), allocatable, intent(out) :: error
+
+      if (self%armed .and. order >= 2) then
+         call self%begin_batch(size(points, 2))
+         call fatal_error(error, "Injected level-set failure")
+         return
+      end if
+      call self%moist_cavity_drop_lsf_svdw_type%evaluate_batch(points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+         lsf3_rrr, lsf4_rrrr, candidate_indices, error)
+   end subroutine armed_evaluate_batch
 
 end module test_cavity_drop_properties

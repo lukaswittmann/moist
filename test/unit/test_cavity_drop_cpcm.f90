@@ -612,7 +612,7 @@ contains
       allocate (valid_ref(ngrid), source=.true.)
       allocate (anchor_offset(3, ngrid))
       do igrid = 1, ngrid
-         anchor_offset(:, igrid) = real(cavity%anchorxyz(:, cavity%anchor_of_row(igrid)), rk) &
+         anchor_offset(:, igrid) = real(cavity%anchor%xyz(:, cavity%anchor_of_row(igrid)), rk) &
                                    - real(mol%xyz(:, cavity%owner(igrid)), rk)
       end do
 
@@ -697,7 +697,7 @@ contains
                   if (idx(igrid) > 0) then
                      displaced_anchors(:, igrid) = anchor_offset(:, idx(igrid))
                   else
-                     displaced_anchors(:, igrid) = real(cavity%anchorxyz(:, cavity%anchor_of_row(igrid)), rk) &
+                     displaced_anchors(:, igrid) = real(cavity%anchor%xyz(:, cavity%anchor_of_row(igrid)), rk) &
                                                    - real(mol_fd%xyz(:, cavity%owner(igrid)), rk)
                   end if
                end do
@@ -953,7 +953,7 @@ contains
       ! Area of the closest-point map between sphere and surface tangent planes
       area = alpha*alpha*abs(dot_product(n, sphere))/abs(detb)
       focus = ref_bump(gnorm, cavity%f_crit)*ref_bump(beta2, cavity%f_foc)
-      weight = real(cavity%anchor_wleb0(cavity%anchor_of_row(igrid)), rk)*area*focus
+      weight = real(cavity%anchor%wleb0(cavity%anchor_of_row(igrid)), rk)*area*focus
    end function ref_weight
 
    !> Refine one converged production branch with a spatial KKT solve
@@ -1066,7 +1066,7 @@ contains
          weight(i) = ref_weight(cavity, i, anchor, centers, blend, points(:, i), error)
          if (allocated(error)) return
          phi(i) = 0.5_rk*real(cavity%param%phi_alpha, rk)*sum((points(:, i) - anchor)**2)
-         width = real(cavity%anchor_xi0(cavity%anchor_of_row(i)), rk)
+         width = real(cavity%anchor%xi0(cavity%anchor_of_row(i)), rk)
          switches(i) = 1.0_rk
          do a = 1, size(centers, 2)
             if (a == owner) cycle

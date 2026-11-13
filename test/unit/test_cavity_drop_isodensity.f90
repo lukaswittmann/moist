@@ -32,7 +32,9 @@ module test_cavity_drop_isodensity
    use moist, only: moist_iso_basis
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_ptr, c_null_ptr, c_funloc, &
-                                          c_associated, c_f_pointer, c_null_funptr
+                                          c_associated, c_f_pointer, c_null_funptr, c_loc
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_positive_inf, &
+                                            ieee_quiet_nan
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -46,12 +48,15 @@ module test_cavity_drop_isodensity
    use moist_channels_fields, only: field_query_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_work_type, &
-                                                   moist_iso_gto_nslot, moist_iso_gto_nrhs
+                                                   moist_iso_gto_tile_type, &
+                                                   moist_iso_gto_nslot, moist_iso_gto_nrhs, &
+                                                   moist_iso_gto_tile_width
+   use moist_math_packed, only: unpack_sym_matrix, unpack_sym_tensor3, unpack_sym_tensor4
    use moist_cavity_drop_lsf_isodensity_internal, only: &
       moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_drop_lsf_isodensity_callback, only: &
       moist_cavity_drop_lsf_isodensity_callback_type
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_vjp_batch_shape_message
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -76,6 +81,17 @@ module test_cavity_drop_isodensity
    !> orders contract the density along different paths, so they agree to round-off
    !> - the value is measured against [[value_magnitude]], not against itself
    real(wp), parameter :: ORDER_THR = 1.0e-13_wp
+
+   !> `evaluate_batch` against the accessors: the tile and the per-point path
+   !> contract the density in different summation orders
+   !> - relative to the largest entry of each order block, orders 0..3
+   real(wp), parameter :: BATCH_REL = 1.0e-11_wp
+   !> Same for the fourth-order block
+   real(wp), parameter :: BATCH_REL4 = 1.0e-11_wp
+   !> Absolute floor of the batch comparison
+   real(wp), parameter :: BATCH_ABS = 1.0e-13_wp
+   !> Points of the batch tests: more than one tile plus a partial one at every order
+   integer, parameter :: nbatch_points = 37
 
    !> Every test pairs one mstore record with one basis set
    integer, parameter :: nmolecules = 3
@@ -185,12 +201,19 @@ contains
                   new_unittest("gto_highl_value_reference", test_gto_highl_value_reference), &
                   new_unittest("gto_highl_derivatives_fd", test_gto_highl_derivatives_fd), &
                   new_unittest("gto_highl_spherical_matches_cartesian", test_gto_highl_spherical_matches_cartesian), &
+                  new_unittest("gto_factor_vs_matrix", test_gto_factor_matches_matrix), &
+                  new_unittest("gto_factor_rank", test_gto_factor_rank), &
+                  new_unittest("gto_factor_rejections", test_gto_factor_rejections), &
+                  new_unittest("gto_factor_nonfinite", test_gto_factor_nonfinite), &
+                  new_unittest("gto_density_change_persistent_work", test_gto_density_change_persistent_work), &
                   new_unittest("internal_vs_callback", test_internal_vs_callback), &
                   new_unittest("max_deriv_gating_internal", test_max_deriv_internal), &
                   new_unittest("max_deriv_gating_callback", test_max_deriv_callback), &
                   new_unittest("internal_fourth_fd", test_internal_fourth_fd), &
                   new_unittest("internal_fourth_gating", test_internal_fourth_gating), &
                   new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
+                  new_unittest("gto_screening_per_order", test_gto_screening_per_order), &
+                  new_unittest("internal_per_order_gate", test_internal_per_order_gate), &
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
                   new_unittest("exclusion_radius_ignores_host_charges", test_exclusion_radius_host_charges), &
@@ -214,6 +237,17 @@ contains
                   new_unittest("core_fill_refuses_charges_out_of_range", test_core_fill_charge_range), &
                   new_unittest("mc_follows_the_density", test_mc_follows_density), &
                   new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives), &
+                 new_unittest("isodensity_batch_vs_accessors", test_batch_vs_accessors), &
+                 new_unittest("isodensity_batch_candidate_list", test_batch_candidate_list), &
+                 new_unittest("isodensity_batch_callback_loops", test_batch_callback_loops), &
+                 new_unittest("isodensity_batch_callback_order", test_batch_callback_order), &
+                 new_unittest("isodensity_batch_core_fill", test_batch_core_fill), &
+                 new_unittest("internal_vjp_batch_zero", test_internal_vjp_batch_zero), &
+                 new_unittest("callback_vjp_batch_zero", test_callback_vjp_batch_zero), &
+                 new_unittest("bad_internal_evaluate_batch_no_density", &
+                              test_bad_evaluate_batch_no_density, should_fail=.true.), &
+                 new_unittest("bad_callback_vjp_batch_no_callback", &
+                              test_bad_callback_vjp_no_callback, should_fail=.true.), &
                   new_unittest("bad_gradient_after_update", test_gradient_after_update_fails, should_fail=.true.), &
                   new_unittest("bad_gradient_after_prepare_build", test_gradient_after_staging_fails, &
                                should_fail=.true.) &
@@ -974,14 +1008,14 @@ contains
                   if (allocated(error)) return
 
                   if (istep == 0) then
-                     adjacent_active = adjacent_active .or. &
-                                       any_moving_shell_active(screened_gto, points(:, ip), center_mol%nat)
+                     adjacent_active = adjacent_active .or. any_moving_shell_active( &
+                                       screened_gto, points(:, ip), center_mol%nat, 3)
                      call eval_at(base_gto, points(:, ip), 1, rho_center, grad_center, &
                                   hess_center, third_center)
                      adjacent_effect = adjacent_effect .or. abs(rho_e - rho_center) > 100.0_wp*threshold
                   else if (istep == nsteps) then
-                     far_inactive = far_inactive .and. &
-                                    .not. any_moving_shell_active(screened_gto, points(:, ip), center_mol%nat)
+                     far_inactive = far_inactive .and. .not. any_moving_shell_active( &
+                                    screened_gto, points(:, ip), center_mol%nat, 3)
                   end if
                end do
             end do
@@ -1034,7 +1068,8 @@ contains
          nscreened = 0
          do ip = 1, size(pts, 2)
             if (any(sum((spread(pts(:, ip), 2, screened%nshell) - screened%center)**2, dim=1) &
-                    > screened%sh_rcut2)) nscreened = nscreened + 1
+                    > screened%sh_rcut2(:, 4))) &
+                nscreened = nscreened + 1
 
             call exact%eval(pts(:, ip), work_e, rho_e, grad_e)
             call screened%eval(pts(:, ip), work_s, rho_s, grad_s, cand_atoms=reversed)
@@ -1230,7 +1265,9 @@ contains
    !> @param[in]  basis     Density representation
    !> @param[out] error     Set if the evaluator rejects the basis
    !> @param[out] dcart_out Optional host cartesian density matrix
-   subroutine build_highl_gto(gto, basis, error, dcart_out)
+   !> @param[in]  dsph_in   Optional density over the real solid harmonics, (97, 97)
+   !> @param[in]  lr_frac   Optional largest factor rank as a fraction of the functions
+   subroutine build_highl_gto(gto, basis, error, dcart_out, dsph_in, lr_frac)
       !> Configured basis + density
       type(moist_iso_gto_type), intent(out) :: gto
       !> Density representation
@@ -1239,6 +1276,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Host cartesian density matrix
       real(wp), allocatable, optional, intent(out) :: dcart_out(:, :)
+      !> Density over the real solid harmonics
+      real(wp), intent(in), optional :: dsph_in(:, :)
+      !> Largest factor rank as a fraction of the functions
+      real(wp), intent(in), optional :: lr_frac
 
       integer, parameter :: nsh = 11
       integer, parameter :: sh_atom(nsh) = [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
@@ -1276,12 +1317,21 @@ contains
       end do
 
       allocate (dsph(nsph, nsph))
-      do j = 1, nsph
-         do i = 1, nsph
-            dsph(i, j) = 0.2_wp*cos(0.37_wp*real(i - j, wp))/(1.0_wp + 0.04_wp*real(i + j, wp)) &
-                         + merge(0.1_wp, 0.0_wp, i == j)
+      if (present(dsph_in)) then
+         if (any(shape(dsph_in) /= nsph)) then
+            call test_failed(error, "hand-made density has the wrong shape")
+            return
+         end if
+         dsph = dsph_in
+      else
+         do j = 1, nsph
+            do i = 1, nsph
+               dsph(i, j) = 0.2_wp*cos(0.37_wp*real(i - j, wp)) &
+                            /(1.0_wp + 0.04_wp*real(i + j, wp)) &
+                            + merge(0.1_wp, 0.0_wp, i == j)
+            end do
          end do
-      end do
+      end if
       dcart = matmul(u, matmul(dsph, transpose(u)))
 
       call new(mol, [6, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.1_wp, -0.4_wp, 0.7_wp], [3, 2]))
@@ -1295,6 +1345,7 @@ contains
       if (allocated(error)) return
       call check(error, gto%ncart, ncart, more="hand-made basis cartesian count")
       if (allocated(error)) return
+      if (present(lr_frac)) gto%lr_max_frac = lr_frac
       call gto%set_density(dcart, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
@@ -1445,6 +1496,608 @@ contains
       end do
    end subroutine test_gto_highl_spherical_matches_cartesian
 
+   !> Density over the 97 solid harmonics of the hand-made basis, `C C^T + shift`
+   !>
+   !> - `C` has a known number of columns, so the rank of the result is known
+   !> - with `hole`, harmonics 60-64 carry no density: their rows and columns are zero
+   !>
+   !> @param[in] rank   Columns of C
+   !> @param[in] shift  Multiple of the identity added
+   !> @param[in] hole   Optional, zero the rows of harmonics 60-64 in C
+   !> @returns          Density, (97, 97)
+   pure function fdens(rank, shift, hole) result(dsph)
+      !> Columns of C
+      integer, intent(in) :: rank
+      !> Multiple of the identity added
+      real(wp), intent(in) :: shift
+      !> Zero the rows of harmonics 60-64
+      logical, intent(in), optional :: hole
+      real(wp) :: dsph(97, 97)
+
+      real(wp) :: c(97, rank)
+      integer :: i, k
+
+      do k = 1, rank
+         do i = 1, 97
+            c(i, k) = cos(0.31_wp*real(i*k, wp) + 0.17_wp*real(i, wp)) &
+                      + 0.5_wp*sin(0.9_wp*real(k, wp))
+         end do
+      end do
+      if (present(hole)) then
+         if (hole) c(60:64, :) = 0.0_wp
+      end if
+      dsph = matmul(c, transpose(c))/real(rank, wp)
+      do i = 1, 97
+         dsph(i, i) = dsph(i, i) + shift
+      end do
+   end function fdens
+
+   !> Density, gradient and higher derivatives of a basis at points, by one of the two
+   !> evaluators and a requested order
+   !>
+   !> @param[in]  gto   Basis
+   !> @param[in]  pts   Evaluation points, (3, np)
+   !> @param[in]  order Highest derivative order, 1..4
+   !> @param[in]  tile  Evaluate as one tile instead of point by point
+   !> @param[out] vals  Concatenated outputs
+   subroutine factor_eval_all(gto, pts, order, tile, vals)
+      !> Basis
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Evaluation points
+      real(wp), intent(in) :: pts(:, :)
+      !> Highest derivative order
+      integer, intent(in) :: order
+      !> Evaluate as one tile
+      logical, intent(in) :: tile
+      !> Concatenated outputs
+      real(wp), allocatable, intent(out) :: vals(:)
+
+      type(moist_iso_gto_work_type) :: work
+      type(moist_iso_gto_tile_type) :: twork
+
+      call factor_eval_with(gto, pts, order, tile, work, twork, vals)
+   end subroutine factor_eval_all
+
+   !> Same as [[factor_eval_all]] on caller-owned scratch, kept across calls
+   !>
+   !> @param[in]    gto    Basis
+   !> @param[in]    pts    Evaluation points, (3, np)
+   !> @param[in]    order  Highest derivative order, 1..4
+   !> @param[in]    tile   Evaluate as one tile instead of point by point
+   !> @param[inout] work   Scratch of the point-by-point evaluator
+   !> @param[inout] twork  Scratch of the tile evaluator
+   !> @param[out]   vals   Concatenated outputs
+   subroutine factor_eval_with(gto, pts, order, tile, work, twork, vals)
+      !> Basis
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Evaluation points
+      real(wp), intent(in) :: pts(:, :)
+      !> Highest derivative order
+      integer, intent(in) :: order
+      !> Evaluate as one tile
+      logical, intent(in) :: tile
+      !> Scratch of the point-by-point evaluator
+      type(moist_iso_gto_work_type), intent(inout) :: work
+      !> Scratch of the tile evaluator
+      type(moist_iso_gto_tile_type), intent(inout) :: twork
+      !> Concatenated outputs
+      real(wp), allocatable, intent(out) :: vals(:)
+
+      real(wp), allocatable :: rho(:), d1(:, :), d2(:, :, :), d3(:, :, :, :)
+      real(wp), allocatable :: d4(:, :, :, :, :)
+      integer :: np, ip
+
+      np = size(pts, 2)
+      allocate (rho(np), d1(3, np), d2(3, 3, np), d3(3, 3, 3, np), d4(3, 3, 3, 3, np))
+      if (tile) then
+         select case (order)
+         case (1); call gto%eval_tile(pts, twork, rho, d1)
+         case (2); call gto%eval_tile(pts, twork, rho, d1, d2rho=d2)
+         case (3); call gto%eval_tile(pts, twork, rho, d1, d2rho=d2, d3rho=d3)
+         case default
+            call gto%eval_tile(pts, twork, rho, d1, d2rho=d2, d3rho=d3, d4rho=d4)
+         end select
+      else
+         d2 = 0.0_wp
+         d3 = 0.0_wp
+         d4 = 0.0_wp
+         do ip = 1, np
+            select case (order)
+            case (1); call gto%eval(pts(:, ip), work, rho(ip), d1(:, ip))
+            case (2)
+               call gto%eval(pts(:, ip), work, rho(ip), d1(:, ip), d2rho=d2(:, :, ip))
+            case (3)
+               call gto%eval(pts(:, ip), work, rho(ip), d1(:, ip), d2rho=d2(:, :, ip), &
+                             d3rho=d3(:, :, :, ip))
+            case default
+               call gto%eval(pts(:, ip), work, rho(ip), d1(:, ip), d2rho=d2(:, :, ip), &
+                             d3rho=d3(:, :, :, ip), d4rho=d4(:, :, :, :, ip))
+            end select
+         end do
+      end if
+      vals = [rho, reshape(d1, [3*np])]
+      if (order >= 2) vals = [vals, reshape(d2, [9*np])]
+      if (order >= 3) vals = [vals, reshape(d3, [27*np])]
+      if (order >= 4) vals = [vals, reshape(d4, [81*np])]
+   end subroutine factor_eval_with
+
+   !> Largest deviation of two bases over both evaluators and orders 1-4, relative to the
+   !> largest output of each order
+   !>
+   !> @param[in]  test  Basis under test
+   !> @param[in]  ref   Reference basis
+   !> @param[in]  sets  Evaluation point sets, (3, np, nset)
+   !> @returns          Largest relative deviation
+   function factor_deviation(test, ref, sets) result(dev)
+      !> Basis under test
+      type(moist_iso_gto_type), intent(in) :: test
+      !> Reference basis
+      type(moist_iso_gto_type), intent(in) :: ref
+      !> Evaluation point sets
+      real(wp), intent(in) :: sets(:, :, :)
+      real(wp) :: dev
+
+      real(wp), allocatable :: a(:), b(:)
+      integer :: iset, order, itile
+
+      dev = 0.0_wp
+      do iset = 1, size(sets, 3)
+         do order = 1, 4
+            do itile = 0, 1
+               call factor_eval_all(test, sets(:, :, iset), order, itile == 1, a)
+               call factor_eval_all(ref, sets(:, :, iset), order, itile == 1, b)
+               dev = max(dev, maxval(abs(a - b))/max(maxval(abs(b)), tiny(1.0_wp)))
+            end do
+         end do
+      end do
+   end function factor_deviation
+
+   !> Shells dropped for every point of a set at one derivative order
+   !>
+   !> @param[in] gto   Basis with screening built
+   !> @param[in] pts   Evaluation points
+   !> @param[in] order Derivative order
+   !> @returns         Number of shells beyond their cutoff for all points
+   function dropped_shells(gto, pts, order) result(n)
+      !> Basis with screening built
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Evaluation points
+      real(wp), intent(in) :: pts(:, :)
+      !> Derivative order
+      integer, intent(in) :: order
+      integer :: n
+
+      integer :: sh, ip
+
+      n = 0
+      do sh = 1, gto%nshell
+         if (all([(sum((pts(:, ip) - gto%center(:, sh))**2) > gto%sh_rcut2(sh, order), &
+                   ip=1, size(pts, 2))])) n = n + 1
+      end do
+   end function dropped_shells
+
+   !> Point sets for the factor tests: around the molecule, where every shell is
+   !> active, and displaced, where part of the shells is dropped
+   pure function factor_point_sets() result(sets)
+      real(wp) :: sets(3, 5, 2)
+
+      sets(:, :, 1) = highl_points()
+      sets(:, :, 2) = highl_points() + spread([4.0_wp, -3.0_wp, 3.5_wp], 2, 5)
+   end function factor_point_sets
+
+   !> Factored contraction against the matrix contraction of the same density
+   !>
+   !> - forced through `lr_max_frac` = 1 and 0, in both representations, with partly and
+   !>   fully active shell sets, accessor and tile, orders 1-4
+   !> - the factored path must really be taken, the matrix path must keep the
+   !>   matrix, and a density that differs by 1e-6 must fail the same comparison
+   subroutine test_gto_factor_matches_matrix(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: thr = 1.0e-12_wp
+      integer, parameter :: bases(2) = [moist_iso_basis%cartesian, &
+                                        moist_iso_basis%spherical]
+      type(moist_iso_gto_type) :: fac, mat, off
+      real(wp) :: sets(3, 5, 2)
+      integer :: ib, order
+
+      sets = factor_point_sets()
+      do ib = 1, size(bases)
+         call build_highl_gto(fac, bases(ib), error, dsph_in=fdens(12, 0.0_wp), &
+                              lr_frac=1.0_wp)
+         if (allocated(error)) return
+         call build_highl_gto(mat, bases(ib), error, dsph_in=fdens(12, 0.0_wp), &
+                              lr_frac=0.0_wp)
+         if (allocated(error)) return
+         call build_highl_gto(off, bases(ib), error, &
+                              dsph_in=1.000001_wp*fdens(12, 0.0_wp), lr_frac=0.0_wp)
+         if (allocated(error)) return
+         call check(error, fac%factored(), "lr_max_frac=1 must factor a rank-12 density")
+         if (allocated(error)) return
+         call check(error, .not. mat%factored() .and. allocated(mat%dens), &
+                    "lr_max_frac=0 must keep the density matrix")
+         if (allocated(error)) return
+         call fac%build_screening(1.0e-4_wp, 4)
+         mat%sh_rcut2 = fac%sh_rcut2
+         off%sh_rcut2 = fac%sh_rcut2
+         ! the displaced set must drop some shells, but not all
+         do order = 1, 4
+            call check(error, dropped_shells(fac, sets(:, :, 2), order) > 0 .and. &
+                       dropped_shells(fac, sets(:, :, 2), order) < fac%nshell, &
+                       "displaced points must leave a partly active shell set")
+            if (allocated(error)) return
+         end do
+         call check(error, dropped_shells(fac, sets(:, :, 1), 1) == 0, &
+                    "points around the molecule must keep every shell active")
+         if (allocated(error)) return
+
+         call check(error, factor_deviation(fac, mat, sets) <= thr, &
+                    "factored and matrix contractions differ")
+         if (allocated(error)) return
+         call check(error, factor_deviation(fac, off, sets) > thr, &
+                    "the comparison must see a 1e-6 change of the density")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gto_factor_matches_matrix
+
+   !> Rank of the factor of D = C C^T with a known C, and what the factor replaces
+   !>
+   !> - the rank limit is a fraction of the functions: 24 of 97 pass, 25 do not
+   subroutine test_gto_factor_rank(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: ranks(4) = [1, 4, 12, 24]
+      type(moist_iso_gto_type) :: gto
+      integer :: ir
+
+      do ir = 1, size(ranks)
+         call build_highl_gto(gto, moist_iso_basis%spherical, error, &
+                              dsph_in=fdens(ranks(ir), 0.0_wp))
+         if (allocated(error)) return
+         call check(error, gto%factored(), "a low-rank density must be factored")
+         if (allocated(error)) return
+         call check(error, gto%lr_rank, ranks(ir), more="rank of the density factor")
+         if (allocated(error)) return
+         call check(error, all(shape(gto%lt) == [ranks(ir), gto%nfun]), &
+                    "factor shape")
+         if (allocated(error)) return
+         call check(error, .not. allocated(gto%dens) .and. gto%has_density(), &
+                    "the factor must replace the density matrix")
+         if (allocated(error)) return
+         call check(error, size(gto%lt) < gto%nfun*gto%nfun, "the factor must be smaller")
+         if (allocated(error)) return
+      end do
+
+      ! one column more than the limit of 24 of 97 functions
+      call build_highl_gto(gto, moist_iso_basis%spherical, error, &
+                           dsph_in=fdens(25, 0.0_wp))
+      if (allocated(error)) return
+      call check(error, .not. gto%factored() .and. allocated(gto%dens), &
+                 "rank 25 of 97 functions is beyond the default limit")
+      if (allocated(error)) return
+      ! the same density without the limit
+      call build_highl_gto(gto, moist_iso_basis%spherical, error, &
+                           dsph_in=fdens(25, 0.0_wp), lr_frac=1.0_wp)
+      if (allocated(error)) return
+      call check(error, gto%lr_rank, 25, more="rank of the factor without the limit")
+   end subroutine test_gto_factor_rank
+
+   !> Densities that must not be factored take the matrix path with identical results
+   !>
+   !> - full rank, indefinite and asymmetric densities, each against the same
+   !>   density with the defect removed, which must be accepted
+   subroutine test_gto_factor_rejections(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: thr = 1.0e-12_wp
+      integer, parameter :: bases(2) = [moist_iso_basis%cartesian, &
+                                        moist_iso_basis%spherical]
+      type(moist_iso_gto_type) :: bad, good, ref
+      real(wp) :: base(97, 97), vec(97), skew(97, 97), sets(3, 5, 2)
+      integer :: ib, i, j
+
+      sets = factor_point_sets()
+      base = fdens(12, 0.0_wp)
+      do i = 1, 97
+         vec(i) = sin(0.7_wp*real(i, wp)) + 0.3_wp
+         do j = 1, 97
+            skew(i, j) = sin(0.5_wp*real(i - j, wp))
+         end do
+      end do
+
+      do ib = 1, size(bases)
+         ! full rank: the identity exceeds the rank limit, and passes without it
+         call build_highl_gto(bad, bases(ib), error, dsph_in=fdens(1, 1.0_wp))
+         if (allocated(error)) return
+         call check(error, .not. bad%factored(), &
+                    "a full-rank density must not be factored")
+         if (allocated(error)) return
+         call build_highl_gto(good, bases(ib), error, dsph_in=fdens(1, 1.0_wp), &
+                              lr_frac=1.0_wp)
+         if (allocated(error)) return
+         call check(error, good%factored(), &
+                    "the same density passes without the rank limit")
+         if (allocated(error)) return
+         call build_highl_gto(ref, bases(ib), error, dsph_in=fdens(1, 1.0_wp), &
+                              lr_frac=0.0_wp)
+         if (allocated(error)) return
+         call bad%build_screening(1.0e-4_wp, 4)
+         ref%sh_rcut2 = bad%sh_rcut2
+         call check(error, factor_deviation(bad, ref, sets) <= thr, &
+                    "full-rank fallback differs")
+         if (allocated(error)) return
+
+         ! indefinite: one negative direction outside the span of C
+         call build_highl_gto(bad, bases(ib), error, &
+                              dsph_in=base - 0.1_wp*spread(vec, 2, 97)*spread(vec, 1, 97))
+         if (allocated(error)) return
+         call check(error, .not. bad%factored(), &
+                    "an indefinite density must not be factored")
+         if (allocated(error)) return
+         call build_highl_gto(good, bases(ib), error, &
+                              dsph_in=base + 0.1_wp*spread(vec, 2, 97)*spread(vec, 1, 97))
+         if (allocated(error)) return
+         call check(error, good%factored() .and. good%lr_rank == 13, &
+                    "the semidefinite counterpart must be factored")
+         if (allocated(error)) return
+         call build_highl_gto(ref, bases(ib), error, lr_frac=0.0_wp, &
+                              dsph_in=base - 0.1_wp*spread(vec, 2, 97)*spread(vec, 1, 97))
+         if (allocated(error)) return
+         call bad%build_screening(1.0e-4_wp, 4)
+         ref%sh_rcut2 = bad%sh_rcut2
+         call check(error, factor_deviation(bad, ref, sets) <= thr, &
+                    "indefinite fallback differs")
+         if (allocated(error)) return
+
+         ! asymmetric: a 1e-6 antisymmetric part is seen, host round-off is not
+         call build_highl_gto(bad, bases(ib), error, dsph_in=base + 1.0e-6_wp*skew)
+         if (allocated(error)) return
+         call check(error, .not. bad%factored(), &
+                    "an asymmetric density must not be factored")
+         if (allocated(error)) return
+         call build_highl_gto(good, bases(ib), error, dsph_in=base + 1.0e-14_wp*skew)
+         if (allocated(error)) return
+         call check(error, good%factored(), &
+                    "round-off asymmetry must not prevent the factor")
+         if (allocated(error)) return
+         call build_highl_gto(ref, bases(ib), error, lr_frac=0.0_wp, &
+                              dsph_in=base + 1.0e-6_wp*skew)
+         if (allocated(error)) return
+         call bad%build_screening(1.0e-4_wp, 4)
+         ref%sh_rcut2 = bad%sh_rcut2
+         call check(error, factor_deviation(bad, ref, sets) <= thr, &
+                    "asymmetric fallback differs")
+         if (allocated(error)) return
+      end do
+
+      ! Asymmetry among functions without density: no weight on the diagonal the
+      ! pivoting follows, only the probe vectors see it
+      ! - spherical only, there those functions are single internal functions
+      base = fdens(12, 0.0_wp, hole=.true.)
+      skew = 0.0_wp
+      do i = 60, 64
+         do j = 60, 64
+            skew(i, j) = sin(0.5_wp*real(i - j, wp))
+         end do
+      end do
+      call build_highl_gto(bad, moist_iso_basis%spherical, error, &
+                           dsph_in=base + 1.0e-6_wp*skew)
+      if (allocated(error)) return
+      call check(error, .not. bad%factored(), "a hidden asymmetry must not be factored")
+      if (allocated(error)) return
+      call build_highl_gto(good, moist_iso_basis%spherical, error, dsph_in=base)
+      if (allocated(error)) return
+      call check(error, good%factored() .and. good%lr_rank == 12, &
+                 "the symmetric counterpart of the hidden asymmetry must be factored")
+      if (allocated(error)) return
+      call build_highl_gto(ref, moist_iso_basis%spherical, error, lr_frac=0.0_wp, &
+                           dsph_in=base + 1.0e-6_wp*skew)
+      if (allocated(error)) return
+      call bad%build_screening(1.0e-4_wp, 4)
+      ref%sh_rcut2 = bad%sh_rcut2
+      call check(error, factor_deviation(bad, ref, sets) <= thr, &
+                 "hidden asymmetry fallback differs")
+   end subroutine test_gto_factor_rejections
+
+   !> Non-finite densities are never factored and keep the matrix path
+   !>
+   !> - a clean rank-6 density is factored, as control
+   !> - +Inf on a diagonal, NaN on a diagonal, NaN on an off-diagonal pair of
+   !>   functions without density: no factor, the matrix kept, and the value
+   !>   carries the NaN/Inf, at both evaluators
+   subroutine test_gto_factor_nonfinite(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: nrank = 6
+      !> Functions 100-110 carry no density, so 100 and 105 are never pivots
+      integer, parameter :: hole(2) = [100, 105]
+      character(len=*), parameter :: label(0:3) = [character(len=24) :: "clean", &
+                                                   "+Inf diagonal", "NaN diagonal", &
+                                                   "NaN off-diagonal pair"]
+      type(moist_iso_gto_type) :: gto
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: dcart(:, :), dpoke(:, :), cmat(:, :), vals(:)
+      real(wp) :: pts(3, 5)
+      integer :: icase, n, i, k, itile
+
+      pts = highl_points()
+      call build_highl_gto(gto, moist_iso_basis%cartesian, error, dcart_out=dcart)
+      if (allocated(error)) return
+      n = size(dcart, 1)
+      call check(error, n >= 110, "the cartesian test basis must have 110 functions")
+      if (allocated(error)) return
+      allocate (cmat(n, nrank))
+      do k = 1, nrank
+         do i = 1, n
+            cmat(i, k) = cos(0.31_wp*real(i*k, wp) + 0.17_wp*real(i, wp)) &
+                         + 0.5_wp*sin(0.9_wp*real(k, wp))
+         end do
+      end do
+      cmat(100:110, :) = 0.0_wp
+      dcart = matmul(cmat, transpose(cmat))
+
+      do icase = 0, 3
+         dpoke = dcart
+         select case (icase)
+         case (1); dpoke(3, 3) = ieee_value(1.0_wp, ieee_positive_inf)
+         case (2); dpoke(3, 3) = ieee_value(1.0_wp, ieee_quiet_nan)
+         case (3)
+            dpoke(hole(1), hole(2)) = ieee_value(1.0_wp, ieee_quiet_nan)
+            dpoke(hole(2), hole(1)) = ieee_value(1.0_wp, ieee_quiet_nan)
+         end select
+         call build_highl_gto(gto, moist_iso_basis%cartesian, error)
+         if (allocated(error)) return
+         call gto%set_density(dpoke, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         if (icase == 0) then
+            call check(error, gto%factored() .and. gto%lr_rank == nrank, &
+                       "the clean rank-6 density must be factored")
+         else
+            call check(error, .not. gto%factored() .and. allocated(gto%dens), &
+                       trim(label(icase))//": no factor, matrix kept")
+         end if
+         if (allocated(error)) return
+         do itile = 0, 1
+            call factor_eval_all(gto, pts, 1, itile == 1, vals)
+            if (icase == 0) then
+               call check(error, all(ieee_is_finite(vals)), &
+                          "the clean density must evaluate finite")
+            else
+               call check(error, .not. any(ieee_is_finite(vals(1:size(pts, 2)))), &
+                          trim(label(icase))//": the value must carry the NaN/Inf")
+            end if
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_gto_factor_nonfinite
+
+   !> Scratch that outlives a change of the density
+   !>
+   !> - one basis with one point scratch and one tile scratch: factored density at
+   !>   order 1, a full-rank density at order 4, the factored one again at order 3
+   !> - every result against a fresh basis holding the matrix density, 1e-12 relative
+   !> - displaced points drop shells, where the matrix contraction packs panels
+   !>   through the rows scratch, sized for order 4
+   subroutine test_gto_density_change_persistent_work(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: bases(2) = [moist_iso_basis%cartesian, &
+                                        moist_iso_basis%spherical]
+      type(moist_iso_gto_type) :: gto, ref_fac, ref_full
+      type(moist_iso_gto_work_type) :: work
+      type(moist_iso_gto_tile_type) :: twork
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: dfac(:, :), dfull(:, :)
+      real(wp) :: sets(3, 5, 2)
+      integer :: ib, width
+
+      sets = factor_point_sets()
+      do ib = 1, size(bases)
+         call build_highl_gto(gto, bases(ib), error, dcart_out=dfac, &
+                              dsph_in=fdens(12, 0.0_wp))
+         if (allocated(error)) return
+         call build_highl_gto(ref_fac, bases(ib), error, dsph_in=fdens(12, 0.0_wp), &
+                              lr_frac=0.0_wp)
+         if (allocated(error)) return
+         call build_highl_gto(ref_full, bases(ib), error, dcart_out=dfull, &
+                              dsph_in=fdens(1, 1.0_wp), lr_frac=0.0_wp)
+         if (allocated(error)) return
+         call gto%build_screening(1.0e-4_wp, 4)
+         ref_fac%sh_rcut2 = gto%sh_rcut2
+         ref_full%sh_rcut2 = gto%sh_rcut2
+         call check(error, gto%factored(), "the rank-12 density must be factored")
+         if (allocated(error)) return
+
+         call check_persistent(error, gto, ref_fac, sets, 1, work, twork, &
+                               "factored, order 1")
+         if (allocated(error)) return
+         call check(error, size(work%panel) >= gto%lr_rank*gto%nfun .and. &
+                    size(work%rows) >= (gto%lr_rank + gto%nfun)*moist_iso_gto_nrhs(1), &
+                    "factored scratch must hold the packed factor and L^T phi with phi")
+         if (allocated(error)) return
+
+         call gto%set_density(dfull, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         call check(error, .not. gto%factored() .and. allocated(gto%dens), &
+                    "the full-rank density must replace the factor")
+         if (allocated(error)) return
+         call check_persistent(error, gto, ref_full, sets, 4, work, twork, &
+                               "matrix after factor, order 4")
+         if (allocated(error)) return
+         ! rows of the matrix contraction: iso_panel_width = size(panel)/nfun columns
+         width = size(work%panel)/gto%nfun
+         call check(error, size(work%rows) >= width*moist_iso_gto_nrhs(4), &
+                    "rows scratch too small for the matrix contraction at order 4")
+         if (allocated(error)) return
+
+         call gto%set_density(dfac, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         call check(error, gto%factored(), "the rank-12 density must be factored again")
+         if (allocated(error)) return
+         call check_persistent(error, gto, ref_fac, sets, 3, work, twork, &
+                               "factor after matrix, order 3")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gto_density_change_persistent_work
+
+   !> Evaluate on persistent scratch and compare with a fresh reference basis
+   !>
+   !> @param[inout] error  Error handle, set on a deviation above 1e-12
+   !> @param[in]    gto    Basis under test
+   !> @param[in]    ref    Reference basis
+   !> @param[in]    sets   Evaluation point sets, (3, np, nset)
+   !> @param[in]    order  Highest derivative order, 1..4
+   !> @param[inout] work   Persistent scratch of the point-by-point evaluator
+   !> @param[inout] twork  Persistent scratch of the tile evaluator
+   !> @param[in]    label  Step name for the message
+   subroutine check_persistent(error, gto, ref, sets, order, work, twork, label)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      !> Basis under test
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Reference basis
+      type(moist_iso_gto_type), intent(in) :: ref
+      !> Evaluation point sets
+      real(wp), intent(in) :: sets(:, :, :)
+      !> Highest derivative order
+      integer, intent(in) :: order
+      !> Persistent scratch of the point-by-point evaluator
+      type(moist_iso_gto_work_type), intent(inout) :: work
+      !> Persistent scratch of the tile evaluator
+      type(moist_iso_gto_tile_type), intent(inout) :: twork
+      !> Step name
+      character(len=*), intent(in) :: label
+
+      real(wp), allocatable :: a(:), b(:)
+      real(wp) :: dev
+      integer :: iset, itile
+
+      do iset = 1, size(sets, 3)
+         do itile = 0, 1
+            call factor_eval_with(gto, sets(:, :, iset), order, itile == 1, work, twork, a)
+            call factor_eval_all(ref, sets(:, :, iset), order, itile == 1, b)
+            dev = maxval(abs(a - b))/max(maxval(abs(b)), tiny(1.0_wp))
+            call check(error, dev <= 1.0e-12_wp, &
+                       label//": differs from the fresh matrix reference")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_persistent
+
    !> Build two translated molecular copies with a block-diagonal density
    subroutine build_density_pair(base_gto, base_dcart, center_mol, gap, pair_gto, pair_mol, error)
       type(moist_iso_gto_type), intent(in) :: base_gto
@@ -1489,17 +2142,21 @@ contains
    end subroutine build_density_pair
 
    !> Whether any shell on the translated molecular copy survives screening
-   logical function any_moving_shell_active(gto, point, center_natom) result(active)
+   !> at a derivative count
+   logical function any_moving_shell_active(gto, point, center_natom, ndloc) &
+      result(active)
       type(moist_iso_gto_type), intent(in) :: gto
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: center_natom
+      !> Derivative count, the column of `sh_rcut2`
+      integer, intent(in) :: ndloc
 
       integer :: shell
 
       active = .false.
       do shell = 1, gto%nshell
          if (gto%sh_atom(shell) <= center_natom) cycle
-         if (sum((point - gto%center(:, shell))**2) <= gto%sh_rcut2(shell)) then
+         if (sum((point - gto%center(:, shell))**2) <= gto%sh_rcut2(shell, ndloc)) then
             active = .true.
             return
          end if
@@ -2085,19 +2742,19 @@ contains
       real(wp), intent(in) :: point(ndim)
       character(len=*), intent(in) :: what
 
-      real(wp) :: v(2), g(ndim, 2), h(ndim, ndim, 2), t(ndim, ndim, ndim, 2)
-      real(wp) :: f4(ndim, ndim, ndim, ndim, 2)
+      real(wp) :: v(2), g(ndim, 2), h(6, 2), t(10, 2)
+      real(wp) :: f4(15, 2)
 
       call prepare_internal(lsf_a, point, error)
       if (allocated(error)) return
-      call lsf_a%f3_rrr(v(1), g(:, 1), h(:, :, 1), t(:, :, :, 1))
-      call lsf_a%f4_rrrr(f4(:, :, :, :, 1))
+      call lsf_a%f3_rrr(v(1), g(:, 1), h(:, 1), t(:, 1))
+      call lsf_a%f4_rrrr(f4(:, 1))
       call prepare_internal(lsf_b, point, error)
       if (allocated(error)) return
-      call lsf_b%f3_rrr(v(2), g(:, 2), h(:, :, 2), t(:, :, :, 2))
-      call lsf_b%f4_rrrr(f4(:, :, :, :, 2))
-      if (v(1) /= v(2) .or. any(g(:, 1) /= g(:, 2)) .or. any(h(:, :, 1) /= h(:, :, 2)) &
-          .or. any(t(:, :, :, 1) /= t(:, :, :, 2)) .or. any(f4(:, :, :, :, 1) /= f4(:, :, :, :, 2))) then
+      call lsf_b%f3_rrr(v(2), g(:, 2), h(:, 2), t(:, 2))
+      call lsf_b%f4_rrrr(f4(:, 2))
+      if (v(1) /= v(2) .or. any(g(:, 1) /= g(:, 2)) .or. any(h(:, 1) /= h(:, 2)) &
+          .or. any(t(:, 1) /= t(:, 2)) .or. any(f4(:, 1) /= f4(:, 2))) then
          call test_failed(error, "core fill changed the level set: "//what)
       end if
    end subroutine check_lsf_identical
@@ -2118,6 +2775,7 @@ contains
       real(wp) :: dirs(ndim, 7), x0(ndim), x(ndim), fd, ref, v_off
       real(wp) :: v0, g0(ndim), h0(ndim, ndim), t0(ndim, ndim, ndim), q0(ndim, ndim, ndim, ndim)
       real(wp) :: v(4), g(ndim, 4), hh(ndim, ndim, 4), t(ndim, ndim, ndim, 4)
+      real(wp) :: h0p(6), t0p(10), q0p(15), hhp(6), tp(10)
       integer :: ir, ax, k, i, j, l
 
       call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error)
@@ -2134,8 +2792,11 @@ contains
          call lsf_off%f0(v_off)
          call prepare_internal(lsf, x0, error)
          if (allocated(error)) return
-         call lsf%f3_rrr(v0, g0, h0, t0)
-         call lsf%f4_rrrr(q0)
+         call lsf%f3_rrr(v0, g0, h0p, t0p)
+         call lsf%f4_rrrr(q0p)
+         call unpack_sym_matrix(h0p, h0, ndim)
+         call unpack_sym_tensor3(t0p, t0, ndim)
+         call unpack_sym_tensor4(q0p, q0, ndim)
          call check(error, v0 /= v_off, more="no fill at the probe: the derivatives checked are the density's alone")
          if (allocated(error)) return
          do ax = 1, ndim
@@ -2144,7 +2805,9 @@ contains
                x(ax) = x0(ax) + fd4_offsets(k)*h
                call prepare_internal(lsf, x, error)
                if (allocated(error)) return
-               call lsf%f3_rrr(v(k), g(:, k), hh(:, :, k), t(:, :, :, k))
+               call lsf%f3_rrr(v(k), g(:, k), hhp, tp)
+               call unpack_sym_matrix(hhp, hh(:, :, k), ndim)
+               call unpack_sym_tensor3(tp, t(:, :, :, k), ndim)
             end do
             ref = maxval(abs(g0))
             call fd4_scalar(v(1), v(2), v(3), v(4), h, fd, error)
@@ -2221,8 +2884,8 @@ contains
       type(structure_type) :: mol
       type(mctc_error), allocatable :: lsf_err
       real(wp) :: dirs(ndim, 7), point(ndim), radii(4)
-      real(wp) :: vi(2), gi(ndim, 2), hi(ndim, ndim, 2), ti(ndim, ndim, ndim, 2)
-      real(wp) :: vc(2), gc(ndim, 2), hc(ndim, ndim, 2), tc(ndim, ndim, ndim, 2)
+      real(wp) :: vi(2), gi(ndim, 2), hi(6, 2), ti(10, 2)
+      real(wp) :: vc(2), gc(ndim, 2), hc(6, 2), tc(10, 2)
       integer :: ir, idir
 
       call build_pseudo_atom_lsf(int_on, 54, 8, .true., mol, error)
@@ -2249,18 +2912,18 @@ contains
             point = radii(ir)*dirs(:, idir)
             call prepare_internal(int_on, point, error)
             if (allocated(error)) return
-            call int_on%f3_rrr(vi(1), gi(:, 1), hi(:, :, 1), ti(:, :, :, 1))
+            call int_on%f3_rrr(vi(1), gi(:, 1), hi(:, 1), ti(:, 1))
             call prepare_internal(int_off, point, error)
             if (allocated(error)) return
-            call int_off%f3_rrr(vi(2), gi(:, 2), hi(:, :, 2), ti(:, :, :, 2))
+            call int_off%f3_rrr(vi(2), gi(:, 2), hi(:, 2), ti(:, 2))
             call cb_on%prepare(point, lsf_err)
-            if (.not. allocated(lsf_err)) call cb_on%f3_rrr(vc(1), gc(:, 1), hc(:, :, 1), tc(:, :, :, 1))
+            if (.not. allocated(lsf_err)) call cb_on%f3_rrr(vc(1), gc(:, 1), hc(:, 1), tc(:, 1))
             if (.not. allocated(lsf_err)) call cb_off%prepare(point, lsf_err)
             if (allocated(lsf_err)) then
                call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
                return
             end if
-            call cb_off%f3_rrr(vc(2), gc(:, 2), hc(:, :, 2), tc(:, :, :, 2))
+            call cb_off%f3_rrr(vc(2), gc(:, 2), hc(:, 2), tc(:, 2))
 
             call check(error, vi(1) /= vi(2), more="no fill at the probe: both variants would agree on zero")
             if (allocated(error)) return
@@ -2270,11 +2933,11 @@ contains
             call check(error, maxval(abs((gc(:, 1) - gc(:, 2)) - (gi(:, 1) - gi(:, 2)))) <= &
                        1.0e-10_wp*maxval(abs(gi(:, 1) - gi(:, 2))), more="core fill gradients")
             if (allocated(error)) return
-            call check(error, maxval(abs((hc(:, :, 1) - hc(:, :, 2)) - (hi(:, :, 1) - hi(:, :, 2)))) <= &
-                       1.0e-10_wp*maxval(abs(hi(:, :, 1) - hi(:, :, 2))), more="core fill Hessians")
+            call check(error, maxval(abs((hc(:, 1) - hc(:, 2)) - (hi(:, 1) - hi(:, 2)))) <= &
+                       1.0e-10_wp*maxval(abs(hi(:, 1) - hi(:, 2))), more="core fill Hessians")
             if (allocated(error)) return
-            call check(error, maxval(abs((tc(:, :, :, 1) - tc(:, :, :, 2)) - (ti(:, :, :, 1) - ti(:, :, :, 2)))) <= &
-                       1.0e-10_wp*maxval(abs(ti(:, :, :, 1) - ti(:, :, :, 2))), more="core fill third derivatives")
+            call check(error, maxval(abs((tc(:, 1) - tc(:, 2)) - (ti(:, 1) - ti(:, 2)))) <= &
+                       1.0e-10_wp*maxval(abs(ti(:, 1) - ti(:, 2))), more="core fill third derivatives")
             if (allocated(error)) return
          end do
       end do
@@ -2494,10 +3157,8 @@ contains
 
    !> Every projector reports a fill refusal as an error, wherever it meets it
    !>
-   !> The single-SLSQP seed search (level 2) reaches the fill first, at first
-   !> order; refining after that abort read second order from the first-order
-   !> cache and ended in an `error stop`. The octree (level 9) exhausts its
-   !> budget before it reaches the fill
+   !> The local Newton (level 1) and the coarse octree (level 3) reach the fill;
+   !> the fine octree (level 4) exhausts its budget before it reaches it
    subroutine test_core_fill_seed_abort(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2508,8 +3169,8 @@ contains
       class(radius_type), allocatable :: radii
       type(mctc_error), allocatable :: cavity_error
       character(len=8) :: label
-      !> Every level that is not an octree
-      integer, parameter :: levels(8) = [2, 1, 3, 4, 5, 6, 7, 8]
+      !> Levels that reach the fill
+      integer, parameter :: levels(2) = [1, 3]
       integer :: il, level
 
       ! One thread: the first anchor to fail decides where the abort is latched
@@ -2846,10 +3507,10 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v0_i, v0_c, v01_i, v01_c, g01_i(3), g01_c(3)
-      real(wp) :: v012_i, v012_c, g012_i(3), g012_c(3), h012_i(3, 3), h012_c(3, 3)
-      real(wp) :: v_i, g_i(3), h_i(3, 3)
-      real(wp) :: v_c, g_c(3), h_c(3, 3)
-      real(wp) :: t_i(3, 3, 3), t_c(3, 3, 3)
+      real(wp) :: v012_i, v012_c, g012_i(3), g012_c(3), h012_i(6), h012_c(6)
+      real(wp) :: v_i, g_i(3), h_i(6)
+      real(wp) :: v_c, g_c(3), h_c(6)
+      real(wp) :: t_i(10), t_c(10)
       real(wp) :: dev_val, dev_grad, dev_hess, dev_third, scale_ref
       type(mctc_error), allocatable :: lsf_err
       integer :: ip
@@ -2951,7 +3612,7 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v1, g1(3)
-      real(wp) :: v2, g2(3), h2(3, 3)
+      real(wp) :: v2, g2(3), h2(6)
       type(mctc_error), allocatable :: lsf_err
       integer :: test, ip
       logical :: any_nonzero
@@ -3014,7 +3675,7 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v1, g1(3)
-      real(wp) :: v2, g2(3), h2(3, 3)
+      real(wp) :: v2, g2(3), h2(6)
       type(mctc_error), allocatable :: lsf_err
       integer :: ip
       logical :: any_nonzero
@@ -3084,7 +3745,7 @@ contains
       !> Gradient at max_deriv = 2
       real(wp), intent(in) :: g2(3)
       !> Hessian at max_deriv = 2
-      real(wp), intent(in) :: h2(3, 3)
+      real(wp), intent(in) :: h2(6)
       !> Backend name used in failure messages
       character(len=*), intent(in) :: label
       !> Set once a non-zero max_deriv=2 Hessian is seen
@@ -3227,8 +3888,8 @@ contains
    !>
    !> With screening_threshold <= 0 the per-shell reach saturates at the
    !> evaluator's cap, so every shell contributes at every point (exact
-   !> evaluation) and neighbor_cutoff degrades the cavity cell grid to a full
-   !> scan. A tight positive threshold must reproduce that exact result at both
+   !> evaluation) and screening_offset degrades the candidate cell list to a
+   !> full scan. A tight positive threshold must reproduce that exact result at both
    !> near and far points, otherwise the screening bound is not conservative
    subroutine test_internal_screening_equivalence(error)
       !> Error handle
@@ -3237,9 +3898,9 @@ contains
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_exact, lsf_screened
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
-      real(wp) :: v_e, g_e(3), h_e(3, 3)
-      real(wp) :: v_s, g_s(3), h_s(3, 3)
-      real(wp) :: t_e(3, 3, 3), t_s(3, 3, 3)
+      real(wp) :: v_e, g_e(3), h_e(6)
+      real(wp) :: v_s, g_s(3), h_s(6)
+      real(wp) :: t_e(10), t_s(10)
       real(wp) :: far_pts(3, 4), centroid(3), extent
       type(mctc_error), allocatable :: lsf_err
       real(wp), parameter :: THR_SCREEN = 1.0e-12_wp
@@ -3255,13 +3916,13 @@ contains
          call build_molecular_internal_lsf(lsf_screened, test, SCREEN_TOL, mol, error)
          if (allocated(error)) return
 
-         !> Screening off -> reach saturates at the evaluator cap, so the cell-grid
+         !> Screening off -> reach saturates at the evaluator cap, so the cell-list
          !> reach swallows the whole molecule and no shell is ever dropped
          call check(error, lsf_exact%gto%reach(0.0_wp) > 500.0_wp, &
                     "screening_threshold <= 0 must give an unbounded shell reach")
          if (allocated(error)) return
-         call check(error, lsf_exact%neighbor_cutoff(2.0_wp) > 500.0_wp, &
-                    "screening_threshold <= 0 must disable the cell-grid cutoff")
+         call check(error, lsf_exact%screening_offset(2.0_wp) > 500.0_wp, &
+                    "screening_threshold <= 0 must disable the screening offset")
          if (allocated(error)) return
 
          !> Screening on -> a finite reach that actually drops shells
@@ -3333,6 +3994,299 @@ contains
       end do
    end subroutine test_internal_screening_equivalence
 
+   !> Per-order radial cutoffs of the shells
+   !>
+   !> - column k of `sh_rcut2` is the cutoff at derivative count min(k, max_deriv)
+   !> - default build: columns 1 < 2 < 3 strictly, column 4 repeats column 3
+   !> - `max_deriv = 3` equals the default bitwise, `max_deriv = 4` opens column 4,
+   !>   `max_deriv = 1` and 2 fold the higher columns back
+   !> - `max_rcut` stays the reach at `max_deriv`
+   !> - unscreened: huge before a build, equal columns for a zero threshold
+   subroutine test_gto_screening_per_order(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: gto, g1, g2, g3, g4
+      real(wp), parameter :: threshold = 1.0e-10_wp
+      !> But14diol/1 in def2-TZVP (cartesian) and def2-SVP (spherical)
+      integer, parameter :: tests(2) = [3, 9]
+      integer :: itest, s, k, nchecked
+
+      do itest = 1, size(tests)
+         call build_test(gto, tests(itest), error)
+         if (allocated(error)) return
+         call check(error, all(shape(gto%sh_rcut2) == [gto%nshell, 4]), &
+                    test_label(tests(itest))//": sh_rcut2 shape")
+         if (allocated(error)) return
+         call check(error, all(gto%sh_rcut2 == huge(1.0_wp)), &
+                    test_label(tests(itest))//": unbuilt cutoffs huge")
+         if (allocated(error)) return
+
+         ! A zero threshold keeps every column at the same unscreened cap
+         g1 = gto
+         call g1%build_screening(0.0_wp)
+         do k = 2, 4
+            call check(error, all(g1%sh_rcut2(:, k) == g1%sh_rcut2(:, 1)), &
+                       test_label(tests(itest))//": zero threshold, columns equal")
+            if (allocated(error)) return
+         end do
+         call check(error, all(g1%sh_rcut2 >= 1.0e5_wp), &
+                    test_label(tests(itest))//": zero threshold, no shell screened")
+         if (allocated(error)) return
+
+         g3 = gto
+         call g3%build_screening(threshold, max_deriv=3)
+         call gto%build_screening(threshold)
+         g4 = gto
+         call g4%build_screening(threshold, max_deriv=4)
+         g1 = gto
+         call g1%build_screening(threshold, max_deriv=1)
+         g2 = gto
+         call g2%build_screening(threshold, max_deriv=2)
+
+         nchecked = 0
+         do s = 1, gto%nshell
+            if (.not. any(gto%exps(gto%sh_poff(s):gto%sh_poff(s + 1) - 1) > 0.0_wp)) cycle
+            nchecked = nchecked + 1
+            call check(error, gto%sh_rcut2(s, 1) < gto%sh_rcut2(s, 2) &
+                       .and. gto%sh_rcut2(s, 2) < gto%sh_rcut2(s, 3), &
+                       test_label(tests(itest))//": columns 1 < 2 < 3 strictly")
+            if (allocated(error)) return
+            call check(error, gto%sh_rcut2(s, 4) == gto%sh_rcut2(s, 3), &
+                       test_label(tests(itest))//": column 4 repeats column 3")
+            if (allocated(error)) return
+            call check(error, g4%sh_rcut2(s, 4) > g4%sh_rcut2(s, 3), &
+                       test_label(tests(itest))//": max_deriv=4 opens column 4")
+            if (allocated(error)) return
+         end do
+         call check(error, nchecked == gto%nshell, &
+                    test_label(tests(itest))//": every shell has a positive exponent")
+         if (allocated(error)) return
+
+         ! The order-3 cutoffs are today's, bit for bit
+         call check(error, all(g3%sh_rcut2 == gto%sh_rcut2), &
+                    test_label(tests(itest))//": default equals max_deriv=3")
+         if (allocated(error)) return
+         call check(error, all(g4%sh_rcut2(:, 1:3) == gto%sh_rcut2(:, 1:3)), &
+                    test_label(tests(itest))//": max_deriv=4 keeps columns 1..3")
+         if (allocated(error)) return
+         do k = 1, 4
+            call check(error, all(g1%sh_rcut2(:, k) == gto%sh_rcut2(:, 1)), &
+                       test_label(tests(itest))//": max_deriv=1 is column 1 throughout")
+            if (allocated(error)) return
+            call check(error, all(g2%sh_rcut2(:, k) == gto%sh_rcut2(:, min(k, 2))), &
+                       test_label(tests(itest))//": max_deriv=2 folds columns 3, 4")
+            if (allocated(error)) return
+         end do
+
+         ! The global reach is that of max_deriv, the largest cutoff in use
+         call check(error, abs(gto%max_rcut - gto%reach(threshold)) &
+                    <= 4.0_wp*epsilon(1.0_wp)*gto%reach(threshold), &
+                    test_label(tests(itest))//": max_rcut is the reach")
+         if (allocated(error)) return
+         call check(error, sqrt(maxval(gto%sh_rcut2(:, 4))) &
+                    <= gto%max_rcut*(1.0_wp + 1.0e-14_wp), &
+                    test_label(tests(itest))//": reach covers every cutoff in use")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gto_screening_per_order
+
+   !> Batch evaluation at a lower order uses the cutoff of that order
+   !>
+   !> - orders 1 and 2 agree with order 3 at the same points to 1e-12
+   !> - points sit between the order-1 and order-3 cutoff of each shell, along a
+   !>   ray from its center, so the gate really drops a shell there
+   !> - orders 3 and 4 equal, bit for bit, the same evaluation on a copy whose
+   !>   columns 1 and 2 hold column 3, so a read of a lower column at those orders
+   !>   shows (the 1e-12 comparison is blind to it, the real gap is about 1e-16)
+   !> - vacuity guard: order 1 differs bitwise from the same evaluation with the
+   !>   order-3 cutoff forced into column 1, at some of those points
+   !> - `prepare` at `max_deriv = 1` equals the order-1 batch at the batch tolerance
+   !>   (same column; the two differ in the summation order of the contraction)
+   !> - negative control: a column 1 taken from a 1e-3 threshold moves the value
+   !>   by far more than the tolerance at points just beyond that loose cutoff
+   subroutine test_internal_per_order_gate(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf, forced, loose
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_loose
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :), pts_loose(:, :)
+      real(wp), allocatable :: v1(:), g1(:, :), v2(:), g2(:, :), h2(:, :)
+      real(wp), allocatable :: v3(:), g3(:, :), h3(:, :)
+      real(wp), allocatable :: f3(:, :), vf(:), gf(:, :), vl(:), gl(:, :), ve(:), ge(:, :)
+      real(wp), allocatable :: vf3(:), gf3(:, :), hf3(:, :), ff3(:, :)
+      real(wp), allocatable :: v4(:), g4(:, :), h4(:, :), t4(:, :), q4(:, :)
+      real(wp), allocatable :: vf4(:), gf4(:, :), hf4(:, :), tf4(:, :), qf4(:, :)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15), r_lo, r_hi, shift, ratio, worst
+      real(wp), parameter :: SCREEN_TOL = 1.0e-14_wp
+      real(wp), parameter :: LOOSE_TOL = 1.0e-3_wp
+      real(wp), parameter :: AGREE = 1.0e-12_wp
+      !> Unit ray direction from a shell center
+      real(wp), parameter :: dir(ndim) = [0.36_wp, 0.48_wp, 0.8_wp]
+      !> But14diol/1 in def2-TZVP (cartesian) and def2-SVP (spherical)
+      integer, parameter :: tests(2) = [3, 9]
+      integer :: itest, s, np, ip, ndiff, nbit, nprep, nmoved, nfar
+      character(len=96) :: label
+
+      do itest = 1, size(tests)
+         label = test_label(tests(itest))
+         call build_molecular_internal_lsf(lsf, tests(itest), SCREEN_TOL, mol, error)
+         if (allocated(error)) return
+         call build_molecular_internal_lsf(forced, tests(itest), SCREEN_TOL, mol, error)
+         if (allocated(error)) return
+         call build_molecular_internal_lsf(loose, tests(itest), LOOSE_TOL, mol, error)
+         if (allocated(error)) return
+         ! Same fixture with the order-3 cutoff in every column: no per-order gate
+         forced%gto%sh_rcut2(:, 1) = forced%gto%sh_rcut2(:, 3)
+         forced%gto%sh_rcut2(:, 2) = forced%gto%sh_rcut2(:, 3)
+
+         ! One point per shell between its order-1 and order-3 cutoff, then a
+         ! block of regular test points
+         np = lsf%gto%nshell
+         allocate (pts(ndim, np))
+         do s = 1, np
+            r_lo = sqrt(lsf%gto%sh_rcut2(s, 1))
+            r_hi = sqrt(lsf%gto%sh_rcut2(s, 3))
+            call check(error, r_lo < r_hi, trim(label)//": order-1 vs 3 cutoff gap")
+            if (allocated(error)) return
+            pts(:, s) = lsf%gto%center(:, s) + 0.5_wp*(r_lo + r_hi)*dir
+         end do
+         allocate (v1(np), g1(ndim, np), v2(np), g2(ndim, np), h2(6, np), v3(np), &
+                   g3(ndim, np), h3(6, np), f3(10, np), vf(np), gf(ndim, np))
+         allocate (vf3(np), gf3(ndim, np), hf3(6, np), ff3(10, np))
+         allocate (v4(np), g4(ndim, np), h4(6, np), t4(10, np), q4(15, np))
+         allocate (vf4(np), gf4(ndim, np), hf4(6, np), tf4(10, np), qf4(15, np))
+
+         call lsf%evaluate_batch(pts, 3, v3, g3, h3, f3, error=lsf_err)
+         call batch_ok("order 3")
+         if (allocated(error)) return
+         call lsf%evaluate_batch(pts, 2, v2, g2, h2, error=lsf_err)
+         call batch_ok("order 2")
+         if (allocated(error)) return
+         call lsf%evaluate_batch(pts, 1, v1, g1, error=lsf_err)
+         call batch_ok("order 1")
+         if (allocated(error)) return
+         call forced%evaluate_batch(pts, 1, vf, gf, error=lsf_err)
+         call batch_ok("forced order 1")
+         if (allocated(error)) return
+         call forced%evaluate_batch(pts, 3, vf3, gf3, hf3, ff3, error=lsf_err)
+         call batch_ok("forced order 3")
+         if (allocated(error)) return
+         call lsf%evaluate_batch(pts, 4, v4, g4, h4, t4, q4, error=lsf_err)
+         call batch_ok("order 4")
+         if (allocated(error)) return
+         call forced%evaluate_batch(pts, 4, vf4, gf4, hf4, tf4, qf4, &
+                                    error=lsf_err)
+         call batch_ok("forced order 4")
+         if (allocated(error)) return
+
+         ! Orders 3 and 4 read the column the forced copy holds (column 3), so the
+         ! two agree bit for bit; a read of a lower column at either order drops
+         ! shells the forced copy keeps
+         call check(error, all(v3 == vf3) .and. all(g3 == gf3) .and. all(h3 == hf3) &
+                    .and. all(f3 == ff3), &
+                    trim(label)//": order 3 equals the order-3 cutoff")
+         if (allocated(error)) return
+         call check(error, all(v4 == vf4) .and. all(g4 == gf4) .and. all(h4 == hf4) &
+                    .and. all(t4 == tf4) .and. all(q4 == qf4), &
+                    trim(label)//": order 4 equals the order-3 cutoff")
+         if (allocated(error)) return
+
+         call check(error, maxval(abs(v1 - v3)), 0.0_wp, thr=AGREE, &
+                    more=trim(label)//": order 1 value")
+         if (allocated(error)) return
+         call check(error, maxval(abs(g1 - g3)), 0.0_wp, thr=AGREE, &
+                    more=trim(label)//": order 1 gradient")
+         if (allocated(error)) return
+         call check(error, maxval(abs(v2 - v3)), 0.0_wp, thr=AGREE, &
+                    more=trim(label)//": order 2 value")
+         if (allocated(error)) return
+         call check(error, maxval(abs(g2 - g3)), 0.0_wp, thr=AGREE, &
+                    more=trim(label)//": order 2 gradient")
+         if (allocated(error)) return
+         call check(error, maxval(abs(h2 - h3)), 0.0_wp, thr=AGREE, &
+                    more=trim(label)//": order 2 Hessian")
+         if (allocated(error)) return
+
+         ! Vacuity guards: the gate dropped a shell at some points, in both
+         ! orders, and the order-1 batch is the order-1 gate of `prepare`
+         ndiff = count(v1 /= vf .or. any(g1 /= gf, dim=1))
+         call check(error, ndiff > 0, trim(label)//": order-1 gate dropped no shell")
+         if (allocated(error)) return
+         nbit = count(v1 /= v3)
+         call check(error, nbit > 0, trim(label)//": order 1 equals order 3 bitwise")
+         if (allocated(error)) return
+
+         call lsf%set_max_deriv(1)
+         nprep = 0
+         worst = 0.0_wp
+         do ip = 1, np
+            call lsf%prepare(pts(:, ip), lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, trim(label)//": "//lsf_err%message)
+               return
+            end if
+            call accessor_jet(lsf, 1, a0, a1, a2, a3, a4)
+            ratio = max(block_ratio([v1(ip)], [a0], BATCH_REL, worst), &
+                        block_ratio(g1(:, ip), a1, BATCH_REL, worst))
+            if (ratio > 1.0_wp) nprep = nprep + 1
+         end do
+         call check(error, nprep, 0, more=trim(label)//": prepare vs order-1 batch")
+         if (allocated(error)) return
+
+         ! Negative control: the loose column 1 moves the value past the tolerance
+         ! at points just beyond the loose cutoff of each shell
+         lsf_loose = lsf
+         lsf_loose%gto%sh_rcut2(:, 1) = loose%gto%sh_rcut2(:, 1)
+         allocate (pts_loose(ndim, np), ve(np), ge(ndim, np), vl(np), gl(ndim, np))
+         do s = 1, np
+            pts_loose(:, s) = lsf%gto%center(:, s) &
+                              + 1.001_wp*sqrt(loose%gto%sh_rcut2(s, 1))*dir
+         end do
+         call lsf%evaluate_batch(pts_loose, 1, ve, ge, error=lsf_err)
+         call batch_ok("control, tight")
+         if (allocated(error)) return
+         call lsf_loose%evaluate_batch(pts_loose, 1, vl, gl, error=lsf_err)
+         call batch_ok("control, loose")
+         if (allocated(error)) return
+         shift = maxval(abs(vl - ve))
+         nmoved = count(abs(vl - ve) > 100.0_wp*AGREE)
+         nfar = count(sqrt(loose%gto%sh_rcut2(:, 1)) < sqrt(lsf%gto%sh_rcut2(:, 1)))
+         if (get_env("MOIST_TEST_VERBOSE", "") /= "") then
+            print "(2a,i0,3(a,i0),2(a,es9.2))", trim(label), ": per-order gate, np ", &
+               np, " order1~forced ", ndiff, " order1~order3 ", nbit, &
+               " loose moved ", nmoved, &
+               " max |v1-v3| ", maxval(abs(v1 - v3)), " loose shift ", shift
+         end if
+         call check(error, nfar, np, more=trim(label)//": loose cutoffs are tighter")
+         if (allocated(error)) return
+         call check(error, nmoved > 0, trim(label)//": loose column moves no value")
+         if (allocated(error)) return
+         call check(error, shift > 100.0_wp*AGREE, &
+                    trim(label)//": control shift too small")
+         if (allocated(error)) return
+
+         deallocate (pts, pts_loose, v1, g1, v2, g2, h2, v3, g3, h3, f3, vf, gf, &
+                     ve, ge, vl, gl, vf3, gf3, hf3, ff3, v4, g4, h4, t4, q4, vf4, gf4, &
+                     hf4, tf4, qf4)
+      end do
+
+   contains
+
+      !> Fail on an error of the last batch call
+      subroutine batch_ok(what)
+         !> Which call
+         character(len=*), intent(in) :: what
+
+         if (allocated(lsf_err)) then
+            call test_failed(error, trim(label)//": "//what//": "//lsf_err%message)
+         end if
+      end subroutine batch_ok
+   end subroutine test_internal_per_order_gate
+
    !* ------------ *                  Fourth spatial derivative (internal) ------------ *!
 
    !> Prepare the internal LSF and translate an evaluator failure into a test one
@@ -3373,13 +4327,16 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
+      real(wp) :: t3p(10)
+
       call prepare_internal(lsf, point, error)
       if (allocated(error)) return
-      call lsf%f3_rrr(lsf3_rrr=t3)
+      call lsf%f3_rrr(lsf3_rrr=t3p)
+      call unpack_sym_tensor3(t3p, t3, ndim)
    end subroutine third_at
 
    !> The internal backend's analytic `f4_rrrr` matches a 4-point central FD of
-   !> its own `f3_rrr`, and is fully index symmetric
+   !> its own `f3_rrr`
    !>
    !> This is the LSF-level counterpart of [[test_gto_fourth_fd]]: it covers the
    !> sign/scale lift, the `(3,3,3,3)` cache and the per-instance scratch that the
@@ -3391,10 +4348,10 @@ contains
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
-      real(wp) :: f4(ndim, ndim, ndim, ndim)
+      real(wp) :: f4(ndim, ndim, ndim, ndim), f4p(15)
       real(wp) :: tpp(ndim, ndim, ndim), tp(ndim, ndim, ndim)
       real(wp) :: tm(ndim, ndim, ndim), tmm(ndim, ndim, ndim)
-      real(wp) :: pp(ndim), fd, dev, scale_ref
+      real(wp) :: pp(ndim), fd, scale_ref
       integer :: ip, ax, ix, jx, kx
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
@@ -3412,26 +4369,9 @@ contains
          call check(error, lsf%prepared_deriv, 4, &
                     more="internal LSF cached the wrong order at max_deriv=4")
          if (allocated(error)) return
-         call lsf%f4_rrrr(f4)
-         scale_ref = max(scale_ref, maxval(abs(f4)))
-
-         ! A fourth derivative of a smooth field is symmetric under every index
-         ! permutation; the packed slot table must reproduce that exactly
-         dev = 0.0_wp
-         do ax = 1, ndim
-            do ix = 1, ndim
-               do jx = 1, ndim
-                  do kx = 1, ndim
-                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ix, ax, jx, kx)))
-                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ax, jx, ix, kx)))
-                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ax, ix, kx, jx)))
-                  end do
-               end do
-            end do
-         end do
-         call check(error, dev, 0.0_wp, thr=1.0e-14_wp, &
-                    more="internal f4_rrrr permutation symmetry")
-         if (allocated(error)) return
+         call lsf%f4_rrrr(f4p)
+         scale_ref = max(scale_ref, maxval(abs(f4p)))
+         call unpack_sym_tensor4(f4p, f4, ndim)
 
          ! Dropping back to order 3 for the FD stencil also exercises the cache
          ! being refilled at a lower order between two order-4 evaluations
@@ -3492,9 +4432,9 @@ contains
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
-      real(wp) :: v3, g3(ndim), h3(ndim, ndim), t3(ndim, ndim, ndim)
-      real(wp) :: v4, g4(ndim), h4(ndim, ndim), t4(ndim, ndim, ndim)
-      real(wp) :: f4(ndim, ndim, ndim, ndim)
+      real(wp) :: v3, g3(ndim), h3(6), t3(10)
+      real(wp) :: v4, g4(ndim), h4(6), t4(10)
+      real(wp) :: f4(15)
       integer :: ip
       logical :: any_nonzero
 
@@ -3517,9 +4457,20 @@ contains
       call check(error, size(lsf%work%dphi, 2), moist_iso_gto_nrhs(1), &
                  more="max_deriv=1 must not size the density-weighted columns for a higher order")
       if (allocated(error)) return
-      call check(error, .not. allocated(lsf%work%panel), &
-                 "the multi-column density panel must not be allocated at max_deriv=1")
+      ! The panel of the matrix contraction is not needed for one column; the packed
+      ! factor of a factored density is, whatever the column count
+      call check(error, allocated(lsf%work%panel) .eqv. lsf%gto%factored(), &
+                 "max_deriv=1 panel storage must follow the density factor")
       if (allocated(error)) return
+      if (lsf%gto%factored()) then
+         call check(error, size(lsf%work%panel) == lsf%gto%lr_rank*lsf%gto%nfun, &
+                    "max_deriv=1 must size the panel as the packed factor only")
+         if (allocated(error)) return
+         call check(error, size(lsf%work%rows) == &
+                    (lsf%gto%lr_rank + lsf%gto%nfun)*moist_iso_gto_nrhs(1), &
+                    "max_deriv=1 rows must hold L^T phi and a compact phi, one column")
+         if (allocated(error)) return
+      end if
 
       any_nonzero = .false.
       do ip = 1, size(pts, 2)
@@ -4462,5 +5413,904 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_rebuild_drops_derivatives
+
+   !* ================================================================================= *!
+   !*                                 Batched evaluation                                *!
+   !* ================================================================================= *!
+
+   !> Points of the batch tests: spread over the molecule, or clustered within
+   !> half a Bohr of atom 1 so a tile's shell union stays compact
+   !>
+   !> @param[in]  mol        Molecular structure
+   !> @param[in]  clustered  Whether to cluster the points around atom 1
+   !> @param[out] pts        Points (3, nbatch_points)
+   subroutine batch_points(mol, clustered, pts)
+      !> Molecular structure
+      type(structure_type), intent(in) :: mol
+      !> Whether to cluster the points around atom 1
+      logical, intent(in) :: clustered
+      !> Points
+      real(wp), allocatable, intent(out) :: pts(:, :)
+
+      !> Spread points, the clustered ones' offsets
+      real(wp), allocatable :: spread(:, :)
+      !> Bounding-box center of the spread points
+      real(wp) :: mid(ndim)
+      integer :: i
+
+      call get_test_points(mol, spread, nbatch_points)
+      if (.not. clustered) then
+         call move_alloc(spread, pts)
+         return
+      end if
+      mid = 0.5_wp*(minval(spread, dim=2) + maxval(spread, dim=2))
+      allocate (pts(ndim, nbatch_points))
+      do i = 1, nbatch_points
+         pts(:, i) = mol%xyz(:, 1) + 0.5_wp*(spread(:, i) - mid)/maxval(abs(spread(:, i) - mid))
+      end do
+   end subroutine batch_points
+
+   !> Accessor jet of the prepared point, packed like `evaluate_batch`
+   !>
+   !> @param[in]  lsf    LSF after `prepare` at `max_deriv >= order`
+   !> @param[in]  order  highest spatial derivative (0..4)
+   !> @param[out] a0     value
+   !> @param[out] a1     gradient
+   !> @param[out] a2     packed Hessian
+   !> @param[out] a3     packed third derivative
+   !> @param[out] a4     packed fourth derivative
+   subroutine accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+      !> LSF after prepare
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Highest spatial derivative
+      integer, intent(in) :: order
+      !> Value
+      real(wp), intent(out) :: a0
+      !> Gradient
+      real(wp), intent(out) :: a1(ndim)
+      !> Packed Hessian
+      real(wp), intent(out) :: a2(6)
+      !> Packed third derivative
+      real(wp), intent(out) :: a3(10)
+      !> Packed fourth derivative
+      real(wp), intent(out) :: a4(15)
+
+      a1 = 0.0_wp
+      a2 = 0.0_wp
+      a3 = 0.0_wp
+      a4 = 0.0_wp
+      select case (order)
+      case (0)
+         call lsf%f0(a0)
+      case (1)
+         call lsf%f012_r(a0, a1)
+      case (2)
+         call lsf%f012_r(a0, a1, a2)
+      case default
+         call lsf%f3_rrr(a0, a1, a2, a3)
+         if (order >= 4) call lsf%f4_rrrr(a4)
+      end select
+   end subroutine accessor_jet
+
+   !> Deviation of one batch block from its accessor block, in units of the
+   !> allowed `max(BATCH_ABS, rel max|accessor|)`
+   !>
+   !> @param[in]    b     batch block
+   !> @param[in]    a     accessor block
+   !> @param[in]    rel   relative tolerance
+   !> @param[inout] worst largest relative deviation seen, `max|b - a| / max|a|`
+   !> @returns      ratio deviation over the allowed one, <= 1 passes
+   function block_ratio(b, a, rel, worst) result(ratio)
+      !> Batch block
+      real(wp), intent(in) :: b(:)
+      !> Accessor block
+      real(wp), intent(in) :: a(:)
+      !> Relative tolerance
+      real(wp), intent(in) :: rel
+      !> Largest relative deviation seen
+      real(wp), intent(inout) :: worst
+      !> Deviation over the allowed one
+      real(wp) :: ratio
+
+      real(wp) :: dev, mag
+
+      dev = maxval(abs(b - a))
+      mag = maxval(abs(a))
+      if (mag > 0.0_wp) worst = max(worst, dev/mag)
+      ratio = dev/max(BATCH_ABS, rel*mag)
+   end function block_ratio
+
+   !> Internal `evaluate_batch` against `prepare` plus the accessors
+   !>
+   !> - orders 0..4, n = 1, the tile width, width + 1 and 37 columns
+   !> - cartesian and spherical fixtures, screening off (one gemm on the stored
+   !>   density) and coarse (1e-6: per-point masks inside a tile; spread points
+   !>   fill the tile, clustered ones take the packed compact contraction)
+   !> - per column and order block within `max(BATCH_ABS, BATCH_REL max|accessor|)`
+   !> - never unreached, a non-trivial level set, and the outputs above
+   !>   `order` untouched
+   subroutine test_batch_vs_accessors(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Fixtures: Heavy28/h2o TZVP and But14diol/1 TZVP cartesian,
+      !> Heavy28/h2o TZVP and But14diol/1 SVP spherical
+      integer, parameter :: tests(4) = [test_reference, 3, test_reference_sph, 9]
+      real(wp), parameter :: thresholds(2) = [0.0_wp, 1.0e-6_wp]
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: b0(nbatch_points), b1(ndim, nbatch_points), b2(6, nbatch_points)
+      real(wp) :: b3(10, nbatch_points), b4(15, nbatch_points)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15)
+      real(wp) :: worst(0:4), ratio, grad_max, fourth_max
+      integer :: sizes(4), it, ith, ipt, order, is, n, i
+      character(len=96) :: label
+
+      worst = 0.0_wp
+      grad_max = 0.0_wp
+      fourth_max = 0.0_wp
+      do it = 1, size(tests)
+         do ith = 1, size(thresholds)
+            call build_molecular_internal_lsf(lsf, tests(it), thresholds(ith), mol, error)
+            if (allocated(error)) return
+            do ipt = 1, 2
+               if (ith == 1 .and. ipt == 2) cycle
+               call batch_points(mol, ipt == 2, pts)
+               do order = 0, 4
+                  sizes = [1, moist_iso_gto_tile_width(order), moist_iso_gto_tile_width(order) + 1, &
+                           nbatch_points]
+                  call lsf%set_max_deriv(order)
+                  do is = 1, size(sizes)
+                     n = sizes(is)
+                     write (label, "(a,' thr ',es7.0,' pts ',i0,' order ',i0,' n ',i0)") &
+                        test_label(tests(it)), thresholds(ith), ipt, order, n
+                     b3 = -7.0_wp
+                     b4 = -7.0_wp
+                     call lsf%evaluate_batch(pts(:, 1:n), order, b0, b1, b2, b3, b4, &
+                                             error=lsf_err)
+                     if (allocated(lsf_err)) then
+                        call test_failed(error, trim(label)//": "//lsf_err%message)
+                        return
+                     end if
+                     call check(error, all([(.not. lsf%unreached(i), i=1, n)]), &
+                                more=trim(label)//": never unreached")
+                     if (allocated(error)) return
+                     if (order < 4) then
+                        call check(error, all(b4 == -7.0_wp), more=trim(label)//": f4 untouched")
+                        if (allocated(error)) return
+                     end if
+                     if (order < 3) then
+                        call check(error, all(b3 == -7.0_wp), more=trim(label)//": f3 untouched")
+                        if (allocated(error)) return
+                     end if
+                     do i = 1, n
+                        call lsf%prepare(pts(:, i), lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, trim(label)//": "//lsf_err%message)
+                           return
+                        end if
+                        call accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+                        ratio = block_ratio([b0(i)], [a0], BATCH_REL, worst(0))
+                        if (order >= 1) then
+                           ratio = max(ratio, block_ratio(b1(:, i), a1, BATCH_REL, worst(1)))
+                           grad_max = max(grad_max, maxval(abs(a1)))
+                        end if
+                        if (order >= 2) ratio = max(ratio, block_ratio(b2(:, i), a2, BATCH_REL, worst(2)))
+                        if (order >= 3) ratio = max(ratio, block_ratio(b3(:, i), a3, BATCH_REL, worst(3)))
+                        if (order >= 4) then
+                           ratio = max(ratio, block_ratio(b4(:, i), a4, BATCH_REL4, worst(4)))
+                           fourth_max = max(fourth_max, maxval(abs(a4)))
+                        end if
+                        call check(error, ratio <= 1.0_wp, more=trim(label)//": batch vs accessors")
+                        if (allocated(error)) return
+                     end do
+                  end do
+               end do
+            end do
+         end do
+      end do
+      call check(error, grad_max > 1.0e-3_wp .and. fourth_max > 1.0e-3_wp, &
+                 more="the batch fixtures carry level-set gradients and fourth derivatives")
+      if (allocated(error)) return
+      if (get_env("MOIST_TEST_VERBOSE", "") /= "") then
+         print "(a,5es10.2)", "isodensity batch vs accessors, max rel dev by order:", worst
+      end if
+   end subroutine test_batch_vs_accessors
+
+   !> The shared candidate list: sorted, reversed and absent give identical bits;
+   !> a partial list follows `prepare_subset` with the same list
+   !>
+   !> - every atom listed equals no list: the same shells in the same order
+   !> - the partial list (first half of the atoms, reversed) against
+   !>   `prepare_subset` at the batch tolerance, and away from the full list
+   !>   (negative control: the list is honoured)
+   subroutine test_batch_candidate_list(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: tests(2) = [3, test_reference_sph]
+      integer, parameter :: order = 4
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: b0(nbatch_points, 4), b1(ndim, nbatch_points, 4), b2(6, nbatch_points, 4)
+      real(wp) :: b3(10, nbatch_points, 4), b4(15, nbatch_points, 4)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15), worst, ratio, apart
+      integer, allocatable :: sorted(:), reversed(:), partial(:)
+      integer :: it, i, k, half
+
+      do it = 1, size(tests)
+         call build_molecular_internal_lsf(lsf, tests(it), 1.0e-6_wp, mol, error)
+         if (allocated(error)) return
+         call batch_points(mol, .false., pts)
+         sorted = [(i, i=1, mol%nat)]
+         reversed = [(i, i=mol%nat, 1, -1)]
+         half = max(1, mol%nat/2)
+         partial = [(i, i=half, 1, -1)]
+
+         do k = 1, 4
+            select case (k)
+            case (1)
+               call lsf%evaluate_batch(pts, order, b0(:, k), b1(:, :, k), b2(:, :, k), b3(:, :, k), &
+                                       b4(:, :, k), error=lsf_err)
+            case (2)
+               call lsf%evaluate_batch(pts, order, b0(:, k), b1(:, :, k), b2(:, :, k), b3(:, :, k), &
+                                       b4(:, :, k), candidate_indices=sorted, error=lsf_err)
+            case (3)
+               call lsf%evaluate_batch(pts, order, b0(:, k), b1(:, :, k), b2(:, :, k), b3(:, :, k), &
+                                       b4(:, :, k), candidate_indices=reversed, error=lsf_err)
+            case default
+               call lsf%evaluate_batch(pts, order, b0(:, k), b1(:, :, k), b2(:, :, k), b3(:, :, k), &
+                                       b4(:, :, k), candidate_indices=partial, error=lsf_err)
+            end select
+            if (allocated(lsf_err)) then
+               call test_failed(error, test_label(tests(it))//": "//lsf_err%message)
+               return
+            end if
+         end do
+
+         do k = 2, 3
+            call check(error, all(b0(:, k) == b0(:, 1)) .and. all(b1(:, :, k) == b1(:, :, 1)) .and. &
+                       all(b2(:, :, k) == b2(:, :, 1)) .and. all(b3(:, :, k) == b3(:, :, 1)) .and. &
+                       all(b4(:, :, k) == b4(:, :, 1)), &
+                       more=test_label(tests(it))//": full list "//merge("sorted  ", "reversed", k == 2)// &
+                       " bitwise equal to no list")
+            if (allocated(error)) return
+         end do
+
+         call lsf%set_max_deriv(order)
+         worst = 0.0_wp
+         apart = 0.0_wp
+         do i = 1, nbatch_points
+            call lsf%prepare_subset(pts(:, i), partial, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, test_label(tests(it))//": "//lsf_err%message)
+               return
+            end if
+            call accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+            ratio = block_ratio([b0(i, 4)], [a0], BATCH_REL, worst)
+            ratio = max(ratio, block_ratio(b1(:, i, 4), a1, BATCH_REL, worst))
+            ratio = max(ratio, block_ratio(b2(:, i, 4), a2, BATCH_REL, worst))
+            ratio = max(ratio, block_ratio(b3(:, i, 4), a3, BATCH_REL, worst))
+            ratio = max(ratio, block_ratio(b4(:, i, 4), a4, BATCH_REL4, worst))
+            call check(error, ratio <= 1.0_wp, more=test_label(tests(it))//": partial list vs prepare_subset")
+            if (allocated(error)) return
+            apart = max(apart, abs(b0(i, 4) - b0(i, 1))/max(abs(b0(i, 1)), 1.0e-300_wp))
+         end do
+         call check(error, apart > 1.0e-6_wp, &
+                    more=test_label(tests(it))//": the partial list changes the value somewhere")
+         if (allocated(error)) return
+      end do
+   end subroutine test_batch_candidate_list
+
+   !> The batched nuclear vjp is identically zero and evaluates nothing
+   !>
+   !> - zero for every column with no list, a partial reversed list and the full
+   !>   list, keyword and positional `error`, never unreached; columns past `np` keep their sentinel
+   !> - equal to the per-point `prepare` + `vjp_f1_rA`, which is zero as well
+   !> - the per-point cache is untouched: the value of a prepared point is the same
+   !>   bits after the call (the looping default would leave the last column there)
+   !> - negative controls: an LSF without a density refuses with the batch message and
+   !>   no column written; the shape message is empty for the right `ncand` and
+   !>   non-empty for a wrong one
+   subroutine test_internal_vjp_batch_zero(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: i8 = selected_int_kind(18)
+      !> Columns past `np` and the sentinel they hold
+      integer, parameter :: nextra = 2
+      real(wp), parameter :: sentinel = 7.0_wp
+      character(len=*), parameter :: refusal = &
+         "vjp_f1_rA_batch failed at point 1: no density matrix installed"
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf, lsf_nd
+      type(structure_type) :: mol
+      type(moist_iso_gto_type) :: gto
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :), w0(:), w1(:, :), w2(:, :)
+      real(wp), allocatable :: res(:, :, :), pt(:, :)
+      real(wp), allocatable :: radii(:), dcart(:, :)
+      integer, allocatable :: lists(:, :), cand(:), sh_nprim(:)
+      integer(i8) :: state
+      real(wp) :: f_before, f_after
+      integer :: np, ncand, k, l, i, nlist(3), half
+
+      call build_molecular_internal_lsf(lsf, test_reference, 1.0e-6_wp, mol, error)
+      if (allocated(error)) return
+      call lsf%set_max_deriv(3)
+      call batch_points(mol, .false., pts)
+      np = size(pts, 2)
+
+      ! Deterministic seeds from an LCG
+      allocate (w0(np), w1(ndim, np), w2(6, np))
+      state = 12345_i8
+      do i = 1, np
+         w0(i) = lcg_next(state)
+         w1(:, i) = [(lcg_next(state), k=1, ndim)]
+         w2(:, i) = [(lcg_next(state), k=1, 6)]
+      end do
+
+      half = max(1, mol%nat/2)
+      allocate (lists(mol%nat, 3), source=0)
+      nlist = [0, half, mol%nat]
+      lists(1:half, 2) = [(i, i=half, 1, -1)]
+      lists(:, 3) = [(i, i=mol%nat, 1, -1)]
+
+      call lsf%prepare(pts(:, 1), lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "prepare: "//lsf_err%message)
+         return
+      end if
+      call lsf%f0(f_before)
+
+      do k = 1, 3
+         ncand = merge(lsf%ncenters, nlist(k), k == 1)
+         allocate (res(ndim, ncand, np + nextra), source=sentinel)
+         do l = 1, 2
+            res = sentinel
+            if (k == 1) then
+               if (l == 1) then
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err)
+               else
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, lsf_err)
+               end if
+            else
+               cand = lists(1:ncand, k)
+               if (l == 1) then
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err, &
+                                           candidate_indices=cand)
+               else
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, lsf_err, cand)
+               end if
+            end if
+            if (allocated(lsf_err)) then
+               call test_failed(error, "vjp_f1_rA_batch: "//lsf_err%message)
+               return
+            end if
+            call check(error, all(res(:, :, 1:np) == 0.0_wp), &
+                       more="vjp_f1_rA_batch columns exactly zero")
+            if (allocated(error)) return
+            call check(error, all(res(:, :, np + 1:) == sentinel), &
+                       more="vjp_f1_rA_batch writes columns 1:np only")
+            if (allocated(error)) return
+            call check(error, all([(.not. lsf%unreached(i), i=1, np)]), &
+                       more="vjp_f1_rA_batch never unreached on 1:np")
+            if (allocated(error)) return
+         end do
+         deallocate (res)
+      end do
+
+      ! The per-point cache is the one of the point prepared before the batches
+      call lsf%f0(f_after)
+      call check(error, f_after == f_before, &
+                 more="vjp_f1_rA_batch leaves the point cache")
+      if (allocated(error)) return
+
+      ! Per-point contract: zero over the active slots
+      allocate (pt(ndim, mol%nat), source=sentinel)
+      do i = 1, np, 12
+         call lsf%prepare(pts(:, i), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "prepare: "//lsf_err%message)
+            return
+         end if
+         call lsf%vjp_f1_rA(w0(i), w1(:, i), w2(:, i), pt)
+         call check(error, all(pt(:, 1:lsf%active_count()) == 0.0_wp), &
+                    more="per-point vjp_f1_rA zero over the active slots")
+         if (allocated(error)) return
+      end do
+
+      ! Shape message: right ncand empty, wrong ncand non-empty
+      allocate (res(ndim, lsf%ncenters, np), source=0.0_wp)
+      call check(error, len(lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, &
+                                                        lsf%ncenters)) == 0, &
+                 more="shape message empty for the right ncand")
+      if (allocated(error)) return
+      call check(error, len(lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, &
+                                                        lsf%ncenters + 1)) > 0, &
+                 more="shape message non-empty for a wrong ncand")
+      if (allocated(error)) return
+
+      ! No density installed: refusal, no column written
+      call build_test(gto, test_reference, error, mol, dcart)
+      if (allocated(error)) return
+      sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
+      allocate (radii(mol%nat), source=2.0_wp)
+      call lsf_nd%new(sh_atom=gto%sh_atom, sh_l=gto%sh_l, sh_nprim=sh_nprim, &
+                      exps=gto%exps, coeffs=gto%coeffs, error=lsf_err, &
+                      param=moist_cavity_drop_lsf_isodensity_param_type( &
+                      rho_iso=rho_iso_ref, scale=1.0_wp, &
+                      basis=test_representation(test_reference)))
+      if (allocated(lsf_err)) then
+         call test_failed(error, lsf_err%message)
+         return
+      end if
+      call lsf_nd%update(mol, radii)
+      deallocate (res)
+      allocate (res(ndim, lsf_nd%ncenters, np), source=sentinel)
+      call lsf_nd%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err)
+      call check(error, allocated(lsf_err), more="no density: vjp_f1_rA_batch refuses")
+      if (allocated(error)) return
+      call check(error, index(lsf_err%message, refusal) == 1, &
+                 more="no density: message "//lsf_err%message)
+      if (allocated(error)) return
+      call check(error, all(res == sentinel), more="no density: no column written")
+   end subroutine test_internal_vjp_batch_zero
+
+   !> Constant density that counts its calls in the `integer(c_int)` behind `context`
+   function counting_density_callback(context, point, rho, drho, d2rho, d3rho) &
+      result(status) bind(C)
+      !> Call counter, `integer(c_int)`
+      type(c_ptr), value :: context
+      !> Evaluation point in Bohr
+      real(c_double), intent(in) :: point(3)
+      !> Electron density
+      real(c_double), intent(out) :: rho
+      !> Density spatial gradient
+      real(c_double), intent(out) :: drho(3)
+      !> Density spatial Hessian (Fortran (3,3), or NULL)
+      type(c_ptr), value :: d2rho
+      !> Density third spatial derivative (Fortran (3,3,3), or NULL)
+      type(c_ptr), value :: d3rho
+      !> Zero on success, one for a non-finite point
+      integer(c_int) :: status
+
+      integer(c_int), pointer :: count
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+
+      status = 0_c_int
+      if (any(point /= point)) status = 1_c_int
+      call c_f_pointer(context, count)
+      count = count + 1_c_int
+      rho = 1.0e-3_c_double
+      drho = 0.0_c_double
+      if (c_associated(d2rho)) then
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = 0.0_c_double
+      end if
+      if (c_associated(d3rho)) then
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = 0.0_c_double
+      end if
+   end function counting_density_callback
+
+   !> The callback LSF's batched nuclear vjp is identically zero and calls no host
+   !>
+   !> - zero for every column with no list, a partial reversed list and the full
+   !>   list, keyword and positional `error`, never unreached; columns past `np` keep their sentinel
+   !> - the host callback is never invoked, and the per-point cache of a point
+   !>   prepared before keeps its bits
+   !> - negative control: one `prepare` counts one call, so the counter is live
+   subroutine test_callback_vjp_batch_zero(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Columns past `np` and the sentinel they hold
+      integer, parameter :: np = 5, nextra = 2, nat = 3
+      real(wp), parameter :: sentinel = 7.0_wp
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      integer(c_int), target :: ncalls
+      real(wp) :: pts(ndim, np), w0(np), w1(ndim, np), w2(6, np), f_before, f_after
+      real(wp), allocatable :: res(:, :, :)
+      integer, allocatable :: cand(:)
+      integer :: k, l, i, ncand
+
+      call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp, 0.0_wp, 0.0_wp, &
+                                        -0.4_wp, 1.7_wp, 0.0_wp], [ndim, nat]))
+      ncalls = 0_c_int
+      call lsf%new(callback_ptr=c_funloc(counting_density_callback), context=c_loc(ncalls), &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call lsf%update(mol, [3.0_wp, 2.2_wp, 2.2_wp])
+      call lsf%set_max_deriv(3)
+      do i = 1, np
+         pts(:, i) = [0.7_wp*real(i, wp), -0.3_wp*real(i, wp), 0.2_wp]
+         w0(i) = 0.1_wp*real(i, wp)
+         w1(:, i) = [0.3_wp, -0.2_wp, 0.5_wp]*real(i, wp)
+         w2(:, i) = [(0.05_wp*real(i + k, wp), k=1, 6)]
+      end do
+
+      call lsf%prepare(pts(:, 1), lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "prepare: "//lsf_err%message)
+         return
+      end if
+      call check(error, ncalls == 1_c_int, more="one prepare counts one host call")
+      if (allocated(error)) return
+      call lsf%f0(f_before)
+
+      do k = 1, 3
+         ncand = merge(nat, merge(2, nat, k == 2), k == 1)
+         allocate (res(ndim, ncand, np + nextra))
+         if (k == 2) cand = [3, 1]
+         if (k == 3) cand = [3, 2, 1]
+         do l = 1, 2
+            res = sentinel
+            if (k == 1) then
+               if (l == 1) then
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err)
+               else
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, lsf_err)
+               end if
+            else
+               if (l == 1) then
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err, &
+                                           candidate_indices=cand)
+               else
+                  call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, lsf_err, cand)
+               end if
+            end if
+            if (allocated(lsf_err)) then
+               call test_failed(error, "vjp_f1_rA_batch: "//lsf_err%message)
+               return
+            end if
+            call check(error, all(res(:, :, 1:np) == 0.0_wp), &
+                       more="vjp_f1_rA_batch columns exactly zero")
+            if (allocated(error)) return
+            call check(error, all(res(:, :, np + 1:) == sentinel), &
+                       more="vjp_f1_rA_batch writes columns 1:np only")
+            if (allocated(error)) return
+            call check(error, all([(.not. lsf%unreached(i), i=1, np)]), &
+                       more="vjp_f1_rA_batch never unreached on 1:np")
+            if (allocated(error)) return
+         end do
+         deallocate (res)
+      end do
+
+      call check(error, ncalls == 1_c_int, more="vjp_f1_rA_batch called the host density")
+      if (allocated(error)) return
+      call lsf%f0(f_after)
+      call check(error, f_after == f_before, more="vjp_f1_rA_batch leaves the point cache")
+   end subroutine test_callback_vjp_batch_zero
+
+   !> `evaluate_batch` of an internal LSF without a density matrix is refused
+   subroutine test_bad_evaluate_batch_no_density(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(moist_iso_gto_type) :: gto
+      type(mctc_error), allocatable :: lsf_err
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+      real(wp), allocatable :: dcart(:, :), radii(:)
+      integer, allocatable :: sh_nprim(:)
+      real(wp) :: pts(ndim, 2), b0(2)
+
+      call build_test(gto, test_reference, setup, mol, dcart)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
+      allocate (radii(mol%nat), source=2.0_wp)
+      call lsf%new(sh_atom=gto%sh_atom, sh_l=gto%sh_l, sh_nprim=sh_nprim, &
+                   exps=gto%exps, coeffs=gto%coeffs, error=lsf_err, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type( &
+                   rho_iso=rho_iso_ref, scale=1.0_wp, &
+                   basis=test_representation(test_reference)))
+      if (allocated(lsf_err)) return
+      call lsf%update(mol, radii)
+      pts(:, 1) = mol%xyz(:, 1) + [2.0_wp, 0.0_wp, 0.0_wp]
+      pts(:, 2) = mol%xyz(:, 1) - [2.0_wp, 0.0_wp, 0.0_wp]
+      call lsf%evaluate_batch(pts, 0, b0, error=lsf_err)
+      call expect_error(error, lsf_err, "evaluate_batch failed at point 1: no density matrix installed")
+   end subroutine test_bad_evaluate_batch_no_density
+
+   !> `vjp_f1_rA_batch` of a callback LSF without a bound callback is refused
+   subroutine test_bad_callback_vjp_no_callback(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: pts(ndim, 1), w0(1), w1(ndim, 1), w2(6, 1), res(ndim, 1, 1)
+
+      call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [ndim, 1]))
+      call lsf%new(callback_ptr=c_null_funptr, context=c_null_ptr, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call lsf%update(mol, [3.0_wp])
+      pts(:, 1) = [2.0_wp, 0.0_wp, 0.0_wp]
+      w0 = 1.0_wp
+      w1 = 0.5_wp
+      w2 = 0.25_wp
+      call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err)
+      call expect_error(error, lsf_err, "vjp_f1_rA_batch failed at point 1: no density callback bound")
+   end subroutine test_bad_callback_vjp_no_callback
+
+   !> Next uniform value in (-1, 1) of a linear congruential generator
+   !>
+   !> @param[inout] state Generator state, 31 bits
+   !> @returns          r Value in (-1, 1)
+   function lcg_next(state) result(r)
+      !> Generator state
+      integer(selected_int_kind(18)), intent(inout) :: state
+      !> Value in (-1, 1)
+      real(wp) :: r
+
+      integer, parameter :: i8 = selected_int_kind(18)
+
+      state = mod(state*1103515245_i8 + 12345_i8, 2147483648_i8)
+      r = 2.0_wp*real(state, wp)/2147483648.0_wp - 1.0_wp
+   end function lcg_next
+
+   !> The callback variant runs the looping default: bitwise prepare + accessors
+   subroutine test_batch_callback_loops(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !$omp critical(iso_reference_density)
+      call run_batch_callback_loops(error)
+      !$omp end critical(iso_reference_density)
+   end subroutine test_batch_callback_loops
+
+   !> Body of [[test_batch_callback_loops]], run under the `cb_gto` lock
+   subroutine run_batch_callback_loops(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: order = 3
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: b0(nbatch_points), b1(ndim, nbatch_points), b2(6, nbatch_points)
+      real(wp) :: b3(10, nbatch_points)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15)
+      integer :: i
+
+      call set_reference_density(mol, error)
+      if (allocated(error)) return
+      call build_callback_lsf(lsf, mol)
+      call lsf%set_max_deriv(order)
+      call batch_points(mol, .false., pts)
+      call lsf%evaluate_batch(pts, order, b0, b1, b2, b3, error=lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "callback evaluate_batch: "//lsf_err%message)
+         return
+      end if
+      call check(error, all([(.not. lsf%unreached(i), i=1, nbatch_points)]), &
+                 more="callback evaluate_batch never unreached")
+      if (allocated(error)) return
+      do i = 1, nbatch_points
+         call lsf%prepare(pts(:, i), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "callback prepare: "//lsf_err%message)
+            return
+         end if
+         call accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+         call check(error, b0(i) == a0 .and. all(b1(:, i) == a1) .and. all(b2(:, i) == a2) .and. &
+                    all(b3(:, i) == a3), more="callback evaluate_batch bitwise equal to the accessors")
+         if (allocated(error)) return
+      end do
+   end subroutine run_batch_callback_loops
+
+   !> Constant density tallying its calls and the derivative arrays it is handed
+   !> in the `integer(c_int)` triple behind `context`: calls, Hessians, third derivatives
+   function tallying_density_callback(context, point, rho, drho, d2rho, d3rho) &
+      result(status) bind(C)
+      !> Tally, `integer(c_int)` triple
+      type(c_ptr), value :: context
+      !> Evaluation point in Bohr
+      real(c_double), intent(in) :: point(3)
+      !> Electron density
+      real(c_double), intent(out) :: rho
+      !> Density spatial gradient
+      real(c_double), intent(out) :: drho(3)
+      !> Density spatial Hessian (Fortran (3,3), or NULL)
+      type(c_ptr), value :: d2rho
+      !> Density third spatial derivative (Fortran (3,3,3), or NULL)
+      type(c_ptr), value :: d3rho
+      !> Zero on success, one for a non-finite point
+      integer(c_int) :: status
+
+      integer(c_int), pointer :: tally(:)
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+
+      status = 0_c_int
+      if (any(point /= point)) status = 1_c_int
+      call c_f_pointer(context, tally, [3])
+      tally(1) = tally(1) + 1_c_int
+      rho = 1.0e-3_c_double
+      drho = 0.0_c_double
+      if (c_associated(d2rho)) then
+         tally(2) = tally(2) + 1_c_int
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = 0.0_c_double
+      end if
+      if (c_associated(d3rho)) then
+         tally(3) = tally(3) + 1_c_int
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = 0.0_c_double
+      end if
+   end function tallying_density_callback
+
+   !> `order` alone governs the looping default `evaluate_batch`
+   !>
+   !> - callback LSF: the host is handed the Hessian and third-derivative arrays
+   !>   as `order` needs them, whatever `set_max_deriv` holds
+   !>   - order 3 at `max_deriv = 0`: both, at every column
+   !>   - order 1 at `max_deriv = 3`: neither
+   !> - `get_max_deriv` reads the same after the call as before, also after a
+   !>   failed column (NaN point, refused by the host)
+   !> - negative control: one `prepare` at `max_deriv = 3` is handed both
+   subroutine test_batch_callback_order(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: np = 4, nat = 3
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      !> Host calls, Hessians and third derivatives asked for
+      integer(c_int), target :: tally(3)
+      real(wp) :: pts(ndim, np), b0(np), b1(ndim, np), b2(6, np), b3(10, np)
+      integer :: i
+
+      call new(mol, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.8_wp, 0.0_wp, 0.0_wp, &
+                                        -0.4_wp, 1.7_wp, 0.0_wp], [ndim, nat]))
+      call lsf%new(callback_ptr=c_funloc(tallying_density_callback), context=c_loc(tally), &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call lsf%update(mol, [3.0_wp, 2.2_wp, 2.2_wp])
+      do i = 1, np
+         pts(:, i) = [0.7_wp*real(i, wp), -0.3_wp*real(i, wp), 0.2_wp]
+      end do
+
+      tally = 0_c_int
+      call lsf%set_max_deriv(0)
+      call lsf%evaluate_batch(pts, 3, b0, b1, b2, b3, error=lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "order 3 at max_deriv 0: "//lsf_err%message)
+         return
+      end if
+      call check(error, all(tally == int(np, c_int)), &
+                 more="order 3 is handed the Hessian and the third derivative at every column")
+      if (allocated(error)) return
+      call check(error, lsf%get_max_deriv(), 0, "max_deriv after an order 3 batch")
+      if (allocated(error)) return
+
+      tally = 0_c_int
+      call lsf%set_max_deriv(3)
+      call lsf%evaluate_batch(pts, 1, b0, b1, error=lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "order 1 at max_deriv 3: "//lsf_err%message)
+         return
+      end if
+      call check(error, all(tally == [int(np, c_int), 0_c_int, 0_c_int]), &
+                 more="order 1 is handed neither the Hessian nor the third derivative")
+      if (allocated(error)) return
+      call check(error, lsf%get_max_deriv(), 3, "max_deriv after an order 1 batch")
+      if (allocated(error)) return
+
+      tally = 0_c_int
+      call lsf%prepare(pts(:, 1), lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "prepare: "//lsf_err%message)
+         return
+      end if
+      call check(error, all(tally == 1_c_int), more="prepare at max_deriv 3 is handed both")
+      if (allocated(error)) return
+
+      pts(1, 3) = ieee_value(0.0_wp, ieee_quiet_nan)
+      call lsf%evaluate_batch(pts, 1, b0, b1, error=lsf_err)
+      call check(error, allocated(lsf_err), more="the host refuses the NaN column")
+      if (allocated(error)) return
+      call check(error, lsf%get_max_deriv(), 3, "max_deriv after a failed column")
+   end subroutine test_batch_callback_order
+
+   !> A batch point inside an ECP core fill outside the cavity is an error naming
+   !> its column, the lowest of several; filled points match the accessors
+   !>
+   !> - two refused columns in a batch of 40 > tile width: the higher (40) at
+   !>   `x = -1.95` is ordered by the Morton cells into an earlier tile than the
+   !>   lower (1) at `x = +1.95`; the reorder is asserted taken, the error names
+   !>   column 1
+   subroutine test_batch_core_fill(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: order = 4, nbig = 40
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: pts(ndim, 3), b0(nbig), b1(ndim, nbig), b2(6, nbig), b3(10, nbig), b4(15, nbig)
+      real(wp) :: big(ndim, nbig)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15), worst, ratio
+      integer :: i, width, pos_lo, pos_hi
+
+      call build_pseudo_atom_lsf(lsf, 54, 8, .true., mol, error, rho_iso=0.4_wp)
+      if (allocated(error)) return
+      pts(:, 1) = [0.3_wp, 0.2_wp, -0.1_wp]
+      pts(:, 2) = [4.0_wp, 0.0_wp, 0.0_wp]
+      pts(:, 3) = [1.95_wp, 0.0_wp, 0.0_wp]
+      call lsf%evaluate_batch(pts(:, 1:2), order, b0, b1, b2, b3, b4, error=lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "core fill batch: "//lsf_err%message)
+         return
+      end if
+      call lsf%set_max_deriv(order)
+      worst = 0.0_wp
+      do i = 1, 2
+         call lsf%prepare(pts(:, i), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "core fill prepare: "//lsf_err%message)
+            return
+         end if
+         call accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+         ratio = block_ratio([b0(i)], [a0], BATCH_REL, worst)
+         ratio = max(ratio, block_ratio(b1(:, i), a1, BATCH_REL, worst))
+         ratio = max(ratio, block_ratio(b2(:, i), a2, BATCH_REL, worst))
+         ratio = max(ratio, block_ratio(b3(:, i), a3, BATCH_REL, worst))
+         ratio = max(ratio, block_ratio(b4(:, i), a4, BATCH_REL4, worst))
+         call check(error, ratio <= 1.0_wp, more="core fill batch vs accessors")
+         if (allocated(error)) return
+      end do
+
+      call lsf%evaluate_batch(pts, order, b0, b1, b2, b3, b4, error=lsf_err)
+      call check(error, allocated(lsf_err), more="a batch point inside the fill ball must be refused")
+      if (allocated(error)) return
+      call check(error, index(lsf_err%message, "point 3") > 0 .and. &
+                 index(lsf_err%message, "ECP core fill of atom 1") > 0, &
+                 more="the refusal names the column and the atom: "//lsf_err%message)
+      if (allocated(error)) return
+
+      ! Two refused columns, the higher one in an earlier tile: the lower is named.
+      ! On the x axis the Morton cells sort by x; the caller's order interleaves a
+      ! left cluster, the nucleus region and a right cluster, so every caller tile
+      ! spans the whole batch and the reorder is taken
+      width = moist_iso_gto_tile_width(order)
+      call check(error, nbig > 2*width, more="the batch must span three tiles")
+      if (allocated(error)) return
+      big = 0.0_wp
+      big(1, 1) = 1.95_wp
+      big(1, nbig) = -1.95_wp
+      do i = 2, nbig - 1
+         select case (mod(i, 3))
+         case (0)
+            big(1, i) = -5.0_wp - 0.03_wp*real(i, wp)
+         case (1)
+            big(1, i) = -0.4_wp + 0.02_wp*real(i, wp)
+         case default
+            big(1, i) = 5.0_wp + 0.03_wp*real(i, wp)
+         end select
+      end do
+      call lsf%evaluate_batch(big, order, b0, b1, b2, b3, b4, error=lsf_err)
+      call check(error, allocated(lsf_err), more="both fill points must be refused")
+      if (allocated(error)) return
+      call check(error, index(lsf_err%message, "point 1:") > 0, &
+                 more="the refusal names the lowest failing column: "//lsf_err%message)
+      if (allocated(error)) return
+      pos_lo = findloc(lsf%bat_perm(1:nbig), 1, dim=1)
+      pos_hi = findloc(lsf%bat_perm(1:nbig), nbig, dim=1)
+      call check(error, (pos_hi - 1)/width < (pos_lo - 1)/width, &
+                 more="the Morton reorder must put column 40 in an earlier tile than column 1")
+   end subroutine test_batch_core_fill
 
 end module test_cavity_drop_isodensity

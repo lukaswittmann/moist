@@ -27,10 +27,11 @@ module test_cavity_drop_nuclear_adjoint
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
-   use test_helpers, only: get_test_cross
+   use test_helpers, only: get_test_cross, fd6_offsets
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_drop_tile, only: surface_tile_width
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_radii, only: default_cpcm_radii
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
@@ -59,7 +60,7 @@ module test_cavity_drop_nuclear_adjoint
 
    real(wp), parameter :: PROJ_TOL = 1E-14_wp
    integer, parameter :: PROJ_MAXITER = 1000
-   integer, parameter :: PROJ_LEVEL = 2
+   integer, parameter :: PROJ_LEVEL = 1
 
    !> Absolute forward-versus-reverse bound across all channels
    real(wp), parameter :: EQ_ABS = 5.0E-10_wp
@@ -108,7 +109,8 @@ contains
                   new_unittest("branching_xi_fd", test_branching_xi_fd), &
                   new_unittest("model_forward_reverse", test_model_forward_reverse), &
                   new_unittest("cosmo_model_forward_reverse", test_cosmo_model_forward_reverse), &
-                  new_unittest("shape_guard", test_shape_guard) &
+                  new_unittest("shape_guard", test_shape_guard), &
+                  new_unittest("thread_count_invariance", test_thread_count_invariance) &
                   ]
 
    end subroutine collect_cavity_drop_nuclear_adjoint
@@ -177,7 +179,7 @@ contains
    !> `test_branching_channels` only proves the reverse path matches the
    !> forward one. Both apply a branch-weight correction to `xi` that no
    !> shipped fixture ever exercised, so this pins the pair against an
-   !> independent 4-point stencil on the scalar functional
+   !> independent 6-point stencil on the scalar functional
    !>
    !>   L(R) = sum_i w_i * xi_i(R)
    !>
@@ -189,15 +191,16 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      !> Central-difference stencil
-      integer, parameter :: NSTEP = 4
+      !> O(h^6) central-difference stencil: with the 79 branched anchors of the
+      !> level-3 cross the O(h^4) truncation error exceeds XI_FD_REL (2.3e-8)
+      integer, parameter :: NSTEP = 6
       !> Coordinate with a nonzero branching-width response
       integer, parameter :: FD_ATOM = 5, FD_AXIS = 3
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(moist_context_type), target :: ctx_fd
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol, mol_fd
 
@@ -209,14 +212,14 @@ contains
       real(wp) :: num_deriv, ana_deriv, diff
       integer :: max_num, istep, igrid, inum, ngrid, ncommon, nphantom
 
-      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*XI_FD_STEP
+      fd_delta = fd6_offsets*XI_FD_STEP
 
       call fixture_geometry(.true., mol)
       call build_cavity(cavity, ctx, mol, .true., error)
       if (allocated(error)) return
 
       ngrid = cavity%ngrid
-      if (.not. any(cavity%branch_count(1:ngrid) > 1)) then
+      if (.not. any(cavity%offset(2:cavity%anchor%ngrid + 1) - cavity%offset(1:cavity%anchor%ngrid) > 1)) then
          call test_failed(error, "FD fixture did not branch")
          return
       end if
@@ -243,7 +246,8 @@ contains
                if (inum < 1 .or. inum > max_num) cycle
                have(inum, istep) = .true.
                xi_store(inum, istep) = cavity_fd%xi0(igrid)
-               bc_store(inum, istep) = cavity_fd%branch_count(igrid)
+               bc_store(inum, istep) = cavity_fd%offset(cavity_fd%anchor_of_row(igrid) + 1) &
+                                        - cavity_fd%offset(cavity_fd%anchor_of_row(igrid))
             end do
          end block
       end do
@@ -274,6 +278,7 @@ contains
                              "point "//to_string(inum)//": branch counts "// &
                              to_string(bc_store(inum, 1))//", "//to_string(bc_store(inum, 2))// &
                              ", "//to_string(bc_store(inum, 3))//", "//to_string(bc_store(inum, 4))// &
+                             ", "//to_string(bc_store(inum, 5))//", "//to_string(bc_store(inum, 6))// &
                              ", so its xi is compared across different branch weightings")
             return
          end if
@@ -291,8 +296,9 @@ contains
       do inum = 1, max_num
          if (.not. usable(inum)) cycle
          num_deriv = num_deriv + wmap(inum)* &
-                     (8.0_wp*(xi_store(inum, 3) - xi_store(inum, 2)) - &
-                      (xi_store(inum, 4) - xi_store(inum, 1)))/(12.0_wp*XI_FD_STEP)
+                     (45.0_wp*(xi_store(inum, 3) - xi_store(inum, 4)) - &
+                      9.0_wp*(xi_store(inum, 2) - xi_store(inum, 5)) + &
+                      (xi_store(inum, 1) - xi_store(inum, 6)))/(60.0_wp*XI_FD_STEP)
       end do
       if (.not. ieee_is_finite(num_deriv)) then
          call test_failed(error, "branching xi FD reference is not finite")
@@ -566,6 +572,67 @@ contains
 
    end subroutine build_model
 
+   !> The reverse gradient is bit-identical on one and on four threads
+   !>
+   !> Every tile keeps its own gradient rows, summed in tile order after the
+   !> parallel region, so neither the team size nor the schedule may move a bit
+   subroutine test_thread_count_invariance(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Team size compared against one thread
+      integer, parameter :: TEAM = 4
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx, ctx_serial, ctx_team
+      type(cavity_adjoint_type) :: acc
+      type(mctc_error), allocatable :: cav_error
+      real(wp), allocatable :: grad_serial(:, :), grad_team(:, :)
+      integer :: ich
+
+      ! The branching cross: several tiles per thread and multi-row anchors
+      call build_fixture(cavity, ctx, .true., error)
+      if (allocated(error)) return
+      if (cavity%ngrid <= 2*TEAM*surface_tile_width) then
+         call test_failed(error, "fixture too small to spread over "//to_string(TEAM)// &
+                          " threads: "//to_string(cavity%ngrid)//" points")
+         return
+      end if
+
+      call acc%init(cavity%ngrid)
+      do ich = 1, NCHAN
+         call apply_channel(acc, ich, cavity, error)
+         if (allocated(error)) return
+      end do
+
+      call new_context(ctx_serial, nthreads=1, verbosity=0)
+      call new_context(ctx_team, nthreads=TEAM, verbosity=0)
+      allocate (grad_serial(3, cavity%nsph), source=0.0_wp)
+      allocate (grad_team(3, cavity%nsph), source=0.0_wp)
+
+      cavity%ctx => ctx_serial
+      call cavity%get_surface_gradient(acc, grad_serial, cav_error)
+      if (.not. allocated(cav_error)) then
+         cavity%ctx => ctx_team
+         call cavity%get_surface_gradient(acc, grad_team, cav_error)
+      end if
+      cavity%ctx => ctx
+      if (allocated(cav_error)) then
+         call test_failed(error, "reverse gradient failed: "//cav_error%message)
+         return
+      end if
+
+      if (maxval(abs(grad_serial)) <= VACUITY_THR) then
+         call test_failed(error, "reverse gradient is vacuous")
+         return
+      end if
+      if (any(grad_serial /= grad_team)) then
+         call test_failed(error, "reverse gradient depends on the thread count: max deviation "// &
+                          to_string(maxval(abs(grad_serial - grad_team)))// &
+                          " between 1 and "//to_string(TEAM)//" threads")
+      end if
+
+   end subroutine test_thread_count_invariance
+
    !> A mis-shaped gradient accumulator must be rejected, not silently ignored
    subroutine test_shape_guard(error)
       !> Error handle
@@ -573,7 +640,7 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: cav_error
       real(wp), allocatable :: bad_grad(:, :)
 
@@ -606,7 +673,7 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       type(mctc_error), allocatable :: cav_error
 
       !> Reverse-mode and forward-mode gradients
@@ -626,15 +693,16 @@ contains
       ! Without real branching the softmax reverse pass and its explicit owner
       ! term are dead code here, so the branching variant must prove it branched
       if (branching) then
-         if (.not. allocated(cavity%branch_count)) then
-            call test_failed(error, "branching fixture has no branch_count array")
+         if (.not. allocated(cavity%offset)) then
+            call test_failed(error, "branching fixture has no row layout")
             return
          end if
-         if (.not. any(cavity%branch_count(1:ngrid) > 1)) then
+         if (.not. any(cavity%offset(2:cavity%anchor%ngrid + 1) - cavity%offset(1:cavity%anchor%ngrid) > 1)) then
             call test_failed(error, "branching fixture did not branch; "// &
                              "the softmax channel would go untested (ngrid "// &
                              to_string(ngrid)//", max branch_count "// &
-                             to_string(maxval(cavity%branch_count(1:ngrid)))//")")
+                             to_string(maxval(cavity%offset(2:cavity%anchor%ngrid + 1) &
+                                              - cavity%offset(1:cavity%anchor%ngrid)))//")")
             return
          end if
       end if
@@ -725,7 +793,7 @@ contains
    !> @param[out]   error    Error handle
    subroutine apply_channel(acc, channel, cavity, error)
       !> Surface-adjoint accumulator
-      type(cavity_surface_adjoint_type), intent(inout) :: acc
+      type(cavity_adjoint_type), intent(inout) :: acc
       !> Channel identifier
       integer, intent(in) :: channel
       !> Cavity supplying the grid extent
@@ -888,7 +956,7 @@ contains
       blend_k_loc = k
       proj_level_loc = PROJ_LEVEL
       if (branching) then
-         proj_level_loc = 7
+         proj_level_loc = 3
          blend_k_loc = 1.0_wp
          gamma_loc = 1.0_wp
          nleb_loc = 110
