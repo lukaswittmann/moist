@@ -293,6 +293,7 @@ contains
          ! DROP
          if (args%has_key("drop_tolerance")) call args%get("drop_tolerance", config%drop%tolerance)
          if (args%has_key("drop_proj_level")) call args%get("drop_proj_level", config%drop%proj_level)
+         if (args%has_key("drop_batch_size")) call args%get("drop_batch_size", config%drop%batch_size)
          if (args%has_key("drop_wleb_prune_level")) call args%get("drop_wleb_prune_level", config%drop%wleb_prune_level)
          if (args%has_key("drop_fine")) call args%get("drop_fine", config%drop%do_fine)
 
@@ -603,7 +604,7 @@ contains
                                               prog="moist cavity drop sses", &
                                               description="Construct DROP cavities with the smooth SES-like level set")
          call add_cavity_shared_arguments(subparsers(3), nleb=defaults%num_leb)
-         call add_cavity_drop_arguments(subparsers(3), proj_level=2)
+         call add_cavity_drop_arguments(subparsers(3), proj_level=1)
          call add_cavity_drop_sses_arguments(subparsers(3))
          call p%add_parser("sses", subparsers(3), help_text="Smooth SES-like DROP cavity")
       end subroutine setup_drop_parser
@@ -767,12 +768,15 @@ contains
                              action=not_less_than(1), &
                              dest="drop_proj_level", metavar="INT", &
                              help="Projection solver level", &
-                             choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
-                                      "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
-                                      "5=SLSQP-deflation", "6=Newton-deflation", &
-                                      "7=Multistart", "8=Fine multistart", &
-                                      "9=Octree coverage"], &
+                             choices=[character(len=26) :: "1=Newton, octree retry", "3=Coarse octree", &
+                                      "4=Fine octree"], &
                              print_choices=.true., &
+                             group_idx=grp_technical)
+         call p%add_argument("--batch-size", data_type="integer", &
+                             default_val=defaults%batch_size, &
+                             action=not_less_than(1), &
+                             dest="drop_batch_size", metavar="INT", &
+                             help="Projection batch size (points per batched Newton solve)", &
                              group_idx=grp_technical)
          call p%add_argument("--wleb-switch", data_type="integer", &
                              default_val=defaults%wleb_prune_level, &
