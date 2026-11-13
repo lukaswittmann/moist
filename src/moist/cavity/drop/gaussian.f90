@@ -14,10 +14,22 @@ module moist_cavity_drop_gaussian
    implicit none(type, external)
    private
 
-   public :: moist_cavity_drop_iswig, new_iswig
+   public :: moist_cavity_drop_iswig, new_iswig, iswig_workspace_type
 
    !> Erf argument beyond which erf(x) = 1 in double precision (erf(6) = 1 - 2.2e-17)
    real(wp), parameter :: erf_cutoff = 6.0_wp
+
+   !> Per-thread scratch of the switching gradient: one row per neighbour
+   type :: iswig_workspace_type
+      !> Neighbours collected by the last call
+      integer :: n = 0
+      !> Neighbour atoms
+      integer, allocatable :: k(:)
+      !> Point minus neighbour centre (3, n)
+      real(wp), allocatable :: d(:, :)
+      !> Distance, scaled erfc arguments and pair factor
+      real(wp), allocatable :: rij(:), rplus(:), rminus(:), fij(:)
+   end type iswig_workspace_type
 
    !> iSwig switching function type
    type :: moist_cavity_drop_iswig
@@ -39,7 +51,8 @@ module moist_cavity_drop_gaussian
       procedure :: xi0 => iswig_xi0
       procedure :: xi1_rA => iswig_xi1_rA
       procedure :: swi0 => iswig_swi_f0
-      procedure :: swi1_rA => iswig_swi_f1_rA
+      procedure :: new_workspace => iswig_new_workspace
+      procedure :: add_f1_rA => iswig_add_f1_rA
    end type moist_cavity_drop_iswig
 
 contains
@@ -267,20 +280,48 @@ contains
 
    end function iswig_swi_f0
 
-   !> Compute gradient of iSwig switching function w.r.t. atomic positions
+   !> Workspace of [[iswig_add_f1_rA]] for the largest neighbour list
    !>
-   !> The gradient is computed as:
-   !>    df/dr_k = f * sum_j (1/f_j) * df_j/dr_k
+   !> Allocate once per thread, outside the point loop
    !>
-   !> When a sorted per-atom neighbor list is available, all three inner
-   !> loops use it with early exit
+   !> @param[out] work Workspace sized for every owner
+   pure subroutine iswig_new_workspace(self, work)
+      class(moist_cavity_drop_iswig), intent(in) :: self
+      !> Workspace sized for every owner
+      type(iswig_workspace_type), intent(out) :: work
+
+      integer :: nmax
+
+      if (self%adj_list%n > 0) then
+         nmax = maxval(self%adj_list%nnl)
+      else
+         nmax = self%nsph
+      end if
+      nmax = max(1, nmax)
+      allocate (work%k(nmax), work%d(3, nmax), work%rij(nmax), work%rplus(nmax), &
+                work%rminus(nmax), work%fij(nmax))
+      work%n = 0
+   end subroutine iswig_new_workspace
+
+   !> Add the weighted nuclear gradient of the switching function at fixed width
    !>
-   !> @param[in]  pos    Position of surface point (3, bohr)
-   !> @param[in]  owner  Owner atom index
-   !> @param[in]  xi     Gaussian width parameter (precomputed)
-   !> @param[in]  xi1_rA Derivative of xi w.r.t. atomic positions (3, nsph)
-   !> @param[in]  active Optional list of active atom indices for output screening
-   pure function iswig_swi_f1_rA(self, pos, owner, xi, xi1_rA, active) result(grad)
+   !> Adds `weight * df/dR_k`, with
+   !>    df/dR_k = f * sum_j (1/f_j) * df_j/dR_k,
+   !> to the owner and to every neighbour inside the erf cutoff
+   !>
+   !> - `xi` is held fixed: DROP evaluates `f` at the anchor, whose width has no
+   !>   nuclear dependence
+   !> - O(n_nb) and allocation-free; the atoms touched besides the owner are
+   !>   left in `work%k(1:work%n)`
+   !> - the sorted per-atom neighbour list, when built, is walked with early exit
+   !>
+   !> @param[in]    pos    Position of surface point (3, bohr)
+   !> @param[in]    owner  Owner atom index
+   !> @param[in]    xi     Gaussian width parameter (precomputed)
+   !> @param[in]    weight Adjoint weight of `f`
+   !> @param[inout] work   Workspace from [[iswig_new_workspace]]
+   !> @param[inout] grad   Gradient accumulator (3, nsph)
+   pure subroutine iswig_add_f1_rA(self, pos, owner, xi, weight, work, grad)
       class(moist_cavity_drop_iswig), intent(in) :: self
       !> Position of surface point (3, bohr)
       real(wp), intent(in) :: pos(3)
@@ -288,168 +329,86 @@ contains
       integer, intent(in) :: owner
       !> Gaussian width parameter (precomputed)
       real(wp), intent(in) :: xi
-      !> Derivative of xi w.r.t. atomic positions (3, nsph)
-      real(wp), intent(in) :: xi1_rA(3, self%nsph)
-      !> Optional list of active atom indices for output screening
-      integer, intent(in), optional :: active(:)
-      !> Gradient w.r.t. atomic positions (3, nsph)
-      real(wp) :: grad(3, self%nsph)
+      !> Adjoint weight of `f`
+      real(wp), intent(in) :: weight
+      !> Workspace
+      type(iswig_workspace_type), intent(inout) :: work
+      !> Gradient accumulator (3, nsph)
+      real(wp), intent(inout) :: grad(:, :)
 
-      integer :: k, ii, iatom, start, count, n_nb, jj
-      real(wp) :: xdif, ydif, zdif, rij, rplus, rminus, rplus2, rminus2
-      real(wp) :: fij, f_val, prefac, coeff, total_coeff, break_thresh
-      real(wp) :: exp_rp, exp_rm
-      integer, allocatable :: nb_k(:)
-      real(wp), allocatable :: nb_xdif(:), nb_ydif(:), nb_zdif(:)
-      real(wp), allocatable :: nb_rij(:), nb_rplus(:), nb_rminus(:), nb_fij(:)
+      integer :: k, ii, start, count, jj
+      real(wp) :: xdif, ydif, zdif, rij, rplus, rminus, fij, f_val, prefac, coeff
+      real(wp) :: break_thresh, exp_rp, exp_rm
+      !> Walk the sorted neighbour list
+      logical :: use_list
+      !> Owner row before the weight
+      real(wp) :: g_owner(3)
 
-      grad = 0.0_wp
-
-      if (self%adj_list%n > 0) then
-         ! Sorted per-atom neighbor list: iterate with early exit
+      ! Pass 1: f_val product, neighbour intermediates cached in `work`; the
+      ! sorted neighbour list exits early and skips atoms beyond their erf
+      ! cutoff, the fallback walks every atom without that cutoff
+      use_list = self%adj_list%n > 0
+      if (use_list) then
          start = self%adj_list%inl(owner)
          count = self%adj_list%nnl(owner)
          break_thresh = self%radii(owner) + self%R_max + erf_cutoff/xi
-
-         allocate (nb_k(count))
-         allocate (nb_xdif(count), nb_ydif(count), nb_zdif(count), &
-                   nb_rij(count), nb_rplus(count), nb_rminus(count), nb_fij(count))
-
-         ! Pass 1: f_val product and cache intermediates
-         f_val = 1.0_wp
-         n_nb = 0
-         do ii = 1, count
+      else
+         start = 0
+         count = self%nsph
+         break_thresh = huge(1.0_wp)
+      end if
+      f_val = 1.0_wp
+      work%n = 0
+      do ii = 1, count
+         if (use_list) then
             if (self%adj_list%dist(start + ii) > break_thresh) exit
             k = self%adj_list%nlat(start + ii)
-
-            xdif = pos(1) - self%xyz(1, k)
-            ydif = pos(2) - self%xyz(2, k)
-            zdif = pos(3) - self%xyz(3, k)
-            rij = sqrt(xdif*xdif + ydif*ydif + zdif*zdif)
-
-            if (xi*(rij - self%radii(k)) > erf_cutoff) cycle
-
-            rplus = xi*(self%radii(k) + rij)
-            rminus = xi*(self%radii(k) - rij)
-            fij = 0.5_wp*(erfc(rplus) + erfc(rminus))
-            f_val = f_val*fij
-
-            n_nb = n_nb + 1
-            nb_k(n_nb) = k
-            nb_xdif(n_nb) = xdif
-            nb_ydif(n_nb) = ydif
-            nb_zdif(n_nb) = zdif
-            nb_rij(n_nb) = rij
-            nb_rplus(n_nb) = rplus
-            nb_rminus(n_nb) = rminus
-            nb_fij(n_nb) = fij
-         end do
-
-         ! Pass 2: fused spatial gradient + xi chain-rule coefficient
-         prefac = -f_val*xi/sqrt(pi)
-         total_coeff = 0.0_wp
-
-         do jj = 1, n_nb
-            k = nb_k(jj)
-            rij = nb_rij(jj)
-            fij = nb_fij(jj)
-
-            if (rij < 1.0e-30_wp) cycle
-            if (abs(fij) < 1.0e-30_wp) cycle
-
-            rplus2 = nb_rplus(jj)*nb_rplus(jj)
-            rminus2 = nb_rminus(jj)*nb_rminus(jj)
-            exp_rp = exp(-rplus2)
-            exp_rm = exp(-rminus2)
-
-            coeff = prefac/(fij*rij)*(exp_rp - exp_rm)
-
-            grad(1, k) = grad(1, k) - coeff*nb_xdif(jj)
-            grad(2, k) = grad(2, k) - coeff*nb_ydif(jj)
-            grad(3, k) = grad(3, k) - coeff*nb_zdif(jj)
-
-            grad(1, owner) = grad(1, owner) + coeff*nb_xdif(jj)
-            grad(2, owner) = grad(2, owner) + coeff*nb_ydif(jj)
-            grad(3, owner) = grad(3, owner) + coeff*nb_zdif(jj)
-
-            if (self%radii(k) /= 0.0_wp) then
-               total_coeff = total_coeff - f_val/(fij*sqrt(pi))* &
-                             ((self%radii(k) + rij)*exp_rp + (self%radii(k) - rij)*exp_rm)
-            end if
-         end do
-      else
-         ! Fallback: full loop over all atoms
-
-         allocate (nb_k(self%nsph))
-         allocate (nb_xdif(self%nsph), nb_ydif(self%nsph), nb_zdif(self%nsph), &
-                   nb_rij(self%nsph), nb_rplus(self%nsph), nb_rminus(self%nsph), &
-                   nb_fij(self%nsph))
-
-         ! Pass 1: f_val product and cache intermediates
-         f_val = 1.0_wp
-         n_nb = 0
-         do k = 1, self%nsph
+         else
+            k = ii
             if (k == owner) cycle
-            xdif = pos(1) - self%xyz(1, k)
-            ydif = pos(2) - self%xyz(2, k)
-            zdif = pos(3) - self%xyz(3, k)
-            rij = sqrt(xdif*xdif + ydif*ydif + zdif*zdif)
-            rplus = xi*(self%radii(k) + rij)
-            rminus = xi*(self%radii(k) - rij)
-            fij = 0.5_wp*(erfc(rplus) + erfc(rminus))
-            f_val = f_val*fij
+         end if
+         xdif = pos(1) - self%xyz(1, k)
+         ydif = pos(2) - self%xyz(2, k)
+         zdif = pos(3) - self%xyz(3, k)
+         rij = sqrt(xdif*xdif + ydif*ydif + zdif*zdif)
+         if (use_list) then
+            if (xi*(rij - self%radii(k)) > erf_cutoff) cycle
+         end if
 
-            n_nb = n_nb + 1
-            nb_k(n_nb) = k
-            nb_xdif(n_nb) = xdif
-            nb_ydif(n_nb) = ydif
-            nb_zdif(n_nb) = zdif
-            nb_rij(n_nb) = rij
-            nb_rplus(n_nb) = rplus
-            nb_rminus(n_nb) = rminus
-            nb_fij(n_nb) = fij
-         end do
+         rplus = xi*(self%radii(k) + rij)
+         rminus = xi*(self%radii(k) - rij)
+         fij = 0.5_wp*(erfc(rplus) + erfc(rminus))
+         f_val = f_val*fij
 
-         ! Pass 2: fused spatial gradient + xi chain-rule coefficient
-         prefac = -f_val*xi/sqrt(pi)
-         total_coeff = 0.0_wp
+         work%n = work%n + 1
+         work%k(work%n) = k
+         work%d(:, work%n) = [xdif, ydif, zdif]
+         work%rij(work%n) = rij
+         work%rplus(work%n) = rplus
+         work%rminus(work%n) = rminus
+         work%fij(work%n) = fij
+      end do
 
-         do jj = 1, n_nb
-            k = nb_k(jj)
-            rij = nb_rij(jj)
-            fij = nb_fij(jj)
-            if (rij < 1.0e-30_wp) cycle
-            if (abs(fij) < 1.0e-30_wp) cycle
-            rplus2 = nb_rplus(jj)*nb_rplus(jj)
-            rminus2 = nb_rminus(jj)*nb_rminus(jj)
-            exp_rp = exp(-rplus2)
-            exp_rm = exp(-rminus2)
-            coeff = prefac/(fij*rij)*(exp_rp - exp_rm)
-            grad(1, k) = grad(1, k) - coeff*nb_xdif(jj)
-            grad(2, k) = grad(2, k) - coeff*nb_ydif(jj)
-            grad(3, k) = grad(3, k) - coeff*nb_zdif(jj)
-            grad(1, owner) = grad(1, owner) + coeff*nb_xdif(jj)
-            grad(2, owner) = grad(2, owner) + coeff*nb_ydif(jj)
-            grad(3, owner) = grad(3, owner) + coeff*nb_zdif(jj)
-            if (self%radii(k) /= 0.0_wp) then
-               total_coeff = total_coeff - f_val/(fij*sqrt(pi))* &
-                             ((self%radii(k) + rij)*exp_rp + (self%radii(k) - rij)*exp_rm)
-            end if
-         end do
-      end if
+      ! Pass 2: spatial gradient; the owner row collects the opposite of every
+      ! neighbour row
+      prefac = -f_val*xi/sqrt(pi)
+      g_owner = 0.0_wp
+      do jj = 1, work%n
+         k = work%k(jj)
+         rij = work%rij(jj)
+         fij = work%fij(jj)
+         if (rij < 1.0e-30_wp) cycle
+         if (abs(fij) < 1.0e-30_wp) cycle
 
-      ! Apply accumulated xi chain-rule coefficient (screened by active list)
-      if (present(active)) then
-         do ii = 1, size(active)
-            iatom = active(ii)
-            grad(:, iatom) = grad(:, iatom) + total_coeff*xi1_rA(:, iatom)
-         end do
-      else
-         do iatom = 1, self%nsph
-            grad(:, iatom) = grad(:, iatom) + total_coeff*xi1_rA(:, iatom)
-         end do
-      end if
+         exp_rp = exp(-work%rplus(jj)*work%rplus(jj))
+         exp_rm = exp(-work%rminus(jj)*work%rminus(jj))
+         coeff = prefac/(fij*rij)*(exp_rp - exp_rm)
 
-   end function iswig_swi_f1_rA
+         grad(:, k) = grad(:, k) + weight*(-coeff*work%d(:, jj))
+         g_owner = g_owner + coeff*work%d(:, jj)
+      end do
+      grad(:, owner) = grad(:, owner) + weight*g_owner
+
+   end subroutine iswig_add_f1_rA
 
 end module moist_cavity_drop_gaussian

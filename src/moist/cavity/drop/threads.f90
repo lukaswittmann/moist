@@ -123,8 +123,6 @@ contains
 
       do islot = 1, self%nthreads
          allocate (self%lsf(islot)%lsf, source=lsf_model)
-         ! The screened-derivative cache is sized here, before the first
-         ! %prepare call; a later upgrade would have to reallocate it
          call self%lsf(islot)%lsf%set_max_deriv(max_deriv)
          if (want_phi) then
             call self%phi(islot)%set_parameters(param)

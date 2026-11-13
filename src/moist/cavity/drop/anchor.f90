@@ -1,4 +1,4 @@
-!> DROP anchor grid: the reference grid
+!> DROP anchor grid: the unprojected Lebedev points on the atomic spheres
 !>
 !> Struct of arrays indexed by anchor, `1 .. ngrid`, never by surface row;
 !> the projection maps anchors to rows through the cavity's `offset` and
