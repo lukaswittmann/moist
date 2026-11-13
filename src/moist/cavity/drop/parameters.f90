@@ -13,10 +13,11 @@ module moist_cavity_drop_parameters
    integer, parameter :: maxAtomicNumbers = 118
 
    public :: moist_cavity_drop_parameters_type
-   public :: proj_level_max
+   public :: is_valid_proj_level
 
-   !> Highest projection level
-   integer, parameter :: proj_level_max = 9
+   !> Deepest octree level the seeder supports, keeping its integer lattice
+   !> coordinates representable (`max_addressable_depth` of the octree seeder)
+   integer, parameter :: octree_depth_max = 20
    private
 
    !> Parameter container for DROP
@@ -29,28 +30,22 @@ module moist_cavity_drop_parameters
       !> Number of Lebedev quadrature points per atomic sphere
       integer :: num_leb = 194
 
-      !> Compute all optional cavity properties; sets every `do_*` flag below
-      logical :: do_fine = .false.
-
       !* ----------------------------- Optional properties ---------------------------- *!
+
+      !> Compute all optional cavity properties below
+      logical :: do_fine = .false.
 
       !> Compute the local grid point density
       logical :: do_grid_density = .false.
-
-      !> Compute principal (and with this mean and Gaussian) curvatures
+      !> Compute principal curvatures (and mean and Gaussian)
       logical :: do_curvature = .false.
-
       !> Store surface normal vectors at grid points
       logical :: do_normal = .false.
-
       !> Store sphere-center to grid point distances
       logical :: do_r_iI = .false.
-
       !> Store anchor-to-projected-point displacement distances
       logical :: do_rho = .false.
-
-      !> Partition the area of each point among the atoms by the level set's
-      !> atomic shares; skipped with a warning by a level set without them
+      !> Atomic areas via spatial partition of atomic contributions of the LSF
       logical :: do_atomarea = .false.
 
       !* ---------------------------------- Tolerance --------------------------------- *!
@@ -87,23 +82,26 @@ module moist_cavity_drop_parameters
       !> Maximum iterations for projection optimizer
       integer :: proj_maxiter = 150
       !> Projection level:
-      !> 1 = SLSQP only (no Newton refinement)
-      !> 2 = SLSQP + Newton refinement
-      !> 3 = Conditional multi-tangent for degenerate points
-      !> 4 = Conditional SLSQP-deflation
-      !> 5 = SLSQP-deflation (unconditional)
-      !> 6 = Newton-deflation on 4D KKT system
-      !> 7 = Regular SLSQP multistart
-      !> 8 = Fine SLSQP multistart reference (very expensive)
-      !> 9 = Octree surface coverage followed by local refinement
+      !> 1 = local batched KKT Newton only
+      !> 3 = every anchor, coarse octree seeds (`projection.octree.coarse_seed_size`)
+      !> 4 = every anchor, fine octree seeds (`projection.octree.seed_size`)
+      !> Any other value is refused
+      !> A failed local solve is retried from the level's octree, the coarse one at level 1
+      !> The coarse octree drops a leaf without sign change; the fine one probes its children once
       integer :: proj_level = 3
 
-      !* --------------------- Octree surface coverage (level 9) ---------------------- *!
+      !* ------------ Octree surface coverage (levels 3, 4; fallback of 1) ------------ *!
 
-      !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr)
+      !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr);
+      !> a leaf without sign change has its children probed once
       real(wp) :: octree_seed_size = 0.2_wp
-      !> Box budget per anchor
-      integer :: octree_max_boxes = 200000
+      !> Leaf edge length of the coarse octree of level 3 and the level-1 fallback (Bohr);
+      !> a leaf without sign change is dropped unrefined
+      real(wp) :: octree_coarse_seed_size = 1.0_wp
+      !> Tree-descent box budget per anchor; the level-synchronous search counts every
+      !> box probed at every depth, so it trips earlier than the old lazy best-first
+      !> search did for the same value; face-neighbour and refinement probes not counted
+      integer :: octree_max_boxes = 500000
       !> Surviving-leaf budget per anchor
       integer :: octree_max_survivors = 200000
       !> Octree depth limit
@@ -114,19 +112,31 @@ module moist_cavity_drop_parameters
       !> - >= 0: use this window independently of branch weights
       real(wp) :: branch_search_rho2_slack = -1.0_wp
 
+      !* ----------------------------- Batched projection ----------------------------- *!
+
+      !> Flush target of the projection batch (points per batch)
+      integer :: batch_size = 256
+      !> Residual norm below which a Newton point switches to the full KKT system
+      real(wp) :: newton_switch_fnorm = 1.0e-3_wp
+      !> Cheap Newton steps after which a point switches to the full KKT system
+      integer :: newton_max_cheap_steps = 50
+      !> Longest spatial Newton step before the line search (Bohr)
+      real(wp) :: newton_max_step = 1.0_wp
+      !> Margin of the merit penalty over the Newton multiplier
+      real(wp) :: newton_merit_margin = 1.0_wp
+
       !* ---------------------------------- Screening --------------------------------- *!
 
       !> Distance cutoff for grid point adj. list, derived as `4*rho_grid_h`
       real(wp) :: adj_list_grid_cutoff = 1.0_wp
-      !> Below this atom count, the cell grid collapses to a single full-scan cell
+      !> Below this atom count, the level set's candidate cell list collapses to a
+      !> single full-scan cell
       !>
       !> - for small systems the per-cell fan-out reduces to "every atom in every
       !>   cell" anyway, so the build work is skipped and every query returns the
       !>   full atom list directly
+      !> - handed to the level set through `set_full_scan_below`
       integer :: cell_grid_full_scan_below = 200
-      !> Cell fraction for molecular cell grid
-      !> (1.0 = no subdivision, 0.5 = halved cell,..)
-      real(wp) :: cell_grid_fraction = 0.25_wp
 
       !* ------------------------ Hard-sphere reference cavity ------------------------ *!
 
@@ -282,13 +292,19 @@ contains
       self%proj_level = fresh%proj_level
       ! Octree surface coverage
       self%octree_seed_size = fresh%octree_seed_size
+      self%octree_coarse_seed_size = fresh%octree_coarse_seed_size
       self%octree_max_boxes = fresh%octree_max_boxes
       self%octree_max_survivors = fresh%octree_max_survivors
       self%octree_max_depth = fresh%octree_max_depth
       self%branch_search_rho2_slack = fresh%branch_search_rho2_slack
+      ! Batched projection
+      self%batch_size = fresh%batch_size
+      self%newton_switch_fnorm = fresh%newton_switch_fnorm
+      self%newton_max_cheap_steps = fresh%newton_max_cheap_steps
+      self%newton_max_step = fresh%newton_max_step
+      self%newton_merit_margin = fresh%newton_merit_margin
       ! Screening
       self%cell_grid_full_scan_below = fresh%cell_grid_full_scan_below
-      self%cell_grid_fraction = fresh%cell_grid_fraction
       ! Switching
       self%w_0ls_from = fresh%w_0ls_from
       self%w_0ls_to = fresh%w_0ls_to
@@ -331,8 +347,12 @@ contains
       real(wp) :: weight_floor
 
       if (self%tolerance <= 0.0_wp .or. self%rho_grid_h <= 0.0_wp .or. &
-          self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > proj_level_max) then
+          self%proj_maxiter < 1) then
          call fatal_error(error, "Invalid DROP numerical parameters")
+         return
+      end if
+      if (.not. is_valid_proj_level(self%proj_level)) then
+         call fatal_error(error, "Invalid DROP numerical parameters: projection level must be 1, 3 or 4")
          return
       end if
 
@@ -345,12 +365,87 @@ contains
          return
       end if
 
+      if (.not. ieee_is_finite(self%octree_coarse_seed_size) .or. self%octree_coarse_seed_size <= 0.0_wp) then
+         call fatal_error(error, "Coarse octree seed size must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(self%octree_seed_size) .or. self%octree_seed_size <= 0.0_wp) then
+         call fatal_error(error, "Fine octree seed size must be positive")
+         return
+      end if
+      if (self%octree_max_boxes < 1) then
+         call fatal_error(error, "Octree box budget must be positive")
+         return
+      end if
+      if (self%octree_max_survivors < 1) then
+         call fatal_error(error, "Octree survivor budget must be positive")
+         return
+      end if
+      if (self%octree_max_depth < 1 .or. self%octree_max_depth > octree_depth_max) then
+         call fatal_error(error, "Octree depth limit must lie in 1..20")
+         return
+      end if
+      if (self%batch_size < 1) then
+         call fatal_error(error, "Projection batch size must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(self%newton_switch_fnorm) .or. self%newton_switch_fnorm < 0.0_wp) then
+         call fatal_error(error, "Newton stage-switch residual must be nonnegative")
+         return
+      end if
+      if (self%newton_max_cheap_steps < 0) then
+         call fatal_error(error, "Newton cheap-step budget must not be negative")
+         return
+      end if
+      if (.not. (ieee_is_finite(self%newton_max_step) .and. self%newton_max_step > 0.0_wp)) then
+         call fatal_error(error, "Newton step cap must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(self%newton_merit_margin) .or. self%newton_merit_margin <= 0.0_wp) then
+         call fatal_error(error, "Newton merit margin must be positive")
+         return
+      end if
+
       !> Derive tolerance hierarchy from master tolerance
       !> (tightest to loosest: wleb_cut < screening < proj_tol < branch_sep)
       self%wleb_cut = self%tolerance*0.05_wp
       self%screening_threshold = self%tolerance*0.1_wp
       self%proj_tol = self%tolerance
       self%branch_sep_cut = self%tolerance*10.0_wp
+
+      !> Derive weight switching bounds from level
+      select case (self%wleb_prune_level)
+      case (0)
+         self%wleb_prune_from = 0.0_wp
+         self%wleb_prune_to = 0.0_wp
+      case (1)
+         self%wleb_prune_from = 1.0E-12_wp
+         self%wleb_prune_to = 1.0E-10_wp
+      case (2)
+         self%wleb_prune_from = 1.0E-10_wp
+         self%wleb_prune_to = 1.0E-8_wp
+      case (3)
+         self%wleb_prune_from = 1.0E-8_wp
+         self%wleb_prune_to = 1.0E-6_wp
+      case (4)
+         self%wleb_prune_from = 1.0E-6_wp
+         self%wleb_prune_to = 1.0E-4_wp
+      case (5)
+         self%wleb_prune_from = 1.0E-4_wp
+         self%wleb_prune_to = 1.0E-2_wp
+      case (6)
+         self%wleb_prune_from = 1.0E-2_wp
+         self%wleb_prune_to = 1.0E0_wp
+      case default
+         call fatal_error(error, "Invalid wleb_prune_level (must be 0-6)")
+         return
+      end select
+
+      ! With pruning on the cut follows the prune onset; ahead of the branch
+      ! floor below, which tracks the cut
+      if (self%wleb_prune_level > 0) then
+         self%wleb_cut = self%wleb_prune_from
+      end if
 
       !> Branch admissibility from the softmax weight floor
       !>
@@ -394,39 +489,6 @@ contains
          self%do_atomarea = .true.
       end if
 
-      !> Derive weight switching bounds from level
-      select case (self%wleb_prune_level)
-      case (0)
-         self%wleb_prune_from = 0.0_wp
-         self%wleb_prune_to = 0.0_wp
-      case (1)
-         self%wleb_prune_from = 1.0E-12_wp
-         self%wleb_prune_to = 1.0E-10_wp
-      case (2)
-         self%wleb_prune_from = 1.0E-10_wp
-         self%wleb_prune_to = 1.0E-8_wp
-      case (3)
-         self%wleb_prune_from = 1.0E-8_wp
-         self%wleb_prune_to = 1.0E-6_wp
-      case (4)
-         self%wleb_prune_from = 1.0E-6_wp
-         self%wleb_prune_to = 1.0E-4_wp
-      case (5)
-         self%wleb_prune_from = 1.0E-4_wp
-         self%wleb_prune_to = 1.0E-2_wp
-      case (6)
-         self%wleb_prune_from = 1.0E-2_wp
-         self%wleb_prune_to = 1.0E0_wp
-      case default
-         call fatal_error(error, "Invalid wleb_prune_level (must be 0-6)")
-         return
-      end select
-
-      ! If prune level is on, adjust wleb_cut
-      if (self%wleb_prune_level > 0) then
-         self%wleb_cut = self%wleb_prune_from
-      end if
-
       !> Select fitted Born zeta for the active Lebedev grid size
       call self%select_born_zeta(error)
 
@@ -461,16 +523,21 @@ contains
       call self%register_int_scalar("projection.maxiter", self%proj_maxiter)
       call self%register_int_scalar("projection.level", self%proj_level)
       call self%register_real_scalar("projection.branch_search_rho2_slack", self%branch_search_rho2_slack)
-      ! Octree surface coverage (projection level 9)
+      ! Octree surface coverage (projection levels 3 and 4, fallback of 1)
       call self%register_real_scalar("projection.octree.seed_size", self%octree_seed_size)
+      call self%register_real_scalar("projection.octree.coarse_seed_size", self%octree_coarse_seed_size)
       call self%register_int_scalar("projection.octree.max_boxes", self%octree_max_boxes)
       call self%register_int_scalar("projection.octree.max_survivors", self%octree_max_survivors)
       call self%register_int_scalar("projection.octree.max_depth", self%octree_max_depth)
+      ! Batched projection
+      call self%register_int_scalar("projection.batch_size", self%batch_size)
+      call self%register_real_scalar("projection.newton.switch_fnorm", self%newton_switch_fnorm)
+      call self%register_int_scalar("projection.newton.max_cheap_steps", self%newton_max_cheap_steps)
+      call self%register_real_scalar("projection.newton.max_step", self%newton_max_step)
+      call self%register_real_scalar("projection.newton.merit_margin", self%newton_merit_margin)
       ! Screening
       call self%register_int_scalar("screening.cell_grid_full_scan_below", &
                                     self%cell_grid_full_scan_below)
-      call self%register_real_scalar("screening.cell_grid_fraction", &
-                                     self%cell_grid_fraction)
       ! Switching
       call self%register_real_scalar("switching.w_0ls_from", self%w_0ls_from)
       call self%register_real_scalar("switching.w_0ls_to", self%w_0ls_to)
@@ -518,6 +585,17 @@ contains
       if (.not. found) call fatal_error(error, "No fitted DROP Born zeta parameter for Lebedev grid")
    end subroutine select_born_zeta
 
+   !> Whether `level` is a supported projection level: 1, 3 or 4
+   !>
+   !> @param[in] level Projection level
+   !> @return    valid Supported level
+   pure function is_valid_proj_level(level) result(valid)
+      integer, intent(in) :: level
+      logical :: valid
+
+      valid = level == 1 .or. level == 3 .or. level == 4
+   end function is_valid_proj_level
+
    !> Return a human-readable label for the current projection level
    !>
    !> @param[in] self Parameter container
@@ -528,23 +606,11 @@ contains
 
       select case (self%proj_level)
       case (1)
-         label = "SLSQP"
-      case (2)
-         label = "SLSQP + Newton"
+         label = "Local Newton, octree retry"
       case (3)
-         label = "Conditional multi-tangent"
+         label = "Coarse octree seeds"
       case (4)
-         label = "Conditional SLSQP-deflation"
-      case (5)
-         label = "SLSQP-deflation"
-      case (6)
-         label = "Newton-deflation (4D KKT)"
-      case (7)
-         label = "Regular SLSQP multistart"
-      case (8)
-         label = "Fine SLSQP multistart reference"
-      case (9)
-         label = "Octree surface coverage + local refinement"
+         label = "Fine octree seeds"
       case default
          label = "unknown"
       end select
@@ -665,10 +731,12 @@ contains
          call pp%kv("Maximum iterations", self%proj_maxiter)
          rho2_slack = self%branch_rho2_slack()
          call pp%kv("Branch search window", rho2_slack, "Bohr^2")
-         if (self%proj_level >= 9) then
-            call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
+         if (self%proj_level == 3) call pp%kv("Octree seed size", self%octree_coarse_seed_size, "Bohr")
+         if (self%proj_level == 4) call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
+         if (self%proj_level >= 3) then
             call pp%kv("Octree box budget", self%octree_max_boxes)
          end if
+         call pp%kv("Batch size", self%batch_size)
       end if
       call pp%pop()
 
@@ -681,7 +749,6 @@ contains
 
          call pp%push("Screening:")
          call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
-         call pp%kv("Cell grid fraction", self%cell_grid_fraction)
          call pp%pop()
 
          call pp%push("Optional properties:")

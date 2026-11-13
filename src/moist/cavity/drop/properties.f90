@@ -3,12 +3,56 @@ submodule(moist_cavity_drop) moist_cavity_drop_properties
    !$ use omp_lib, only: omp_get_thread_num
    use mctc_io_constants, only: pi
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
+   use moist_cavity_drop_tile, only: surface_tile_width, surface_tile_candidates, &
+      & surface_jet_tile
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter_quicksort, only: qsort
    implicit none(type, external)
 
 contains
+
+   !* ================================================================================= *!
+   !*                             Grid adjacency list setup                             *!
+   !* ================================================================================= *!
+
+   !> Build grid point neighbour list for density computation
+   !>
+   !> @param[inout] self  Cavity instance (projected surface rows `xyz` must be filled)
+   !> @param[out]   error Error object
+   module subroutine setup_grid_adj_list(self, error)
+      class(cavity_type_drop), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: cutoff, rgrid
+      type(prettyprinter) :: pp
+
+      cutoff = self%param%adj_list_grid_cutoff
+
+      call self%grid_adj_list%init(cutoff=cutoff)
+      call self%grid_adj_list%update(self%xyz(:, 1:self%ngrid), self%ctx%get_num_threads())
+
+      if (self%ctx%verbosity(4)) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
+         call pp%blank()
+         call pp%push("Grid neighbour list:")
+         call pp%kv("Cutoff distance", cutoff, "bohr")
+         call pp%kv("Number of points", self%ngrid)
+         call pp%kv("Maximum neighbours", maxval(self%grid_adj_list%nnl))
+         call pp%kv("Minimum neighbours", minval(self%grid_adj_list%nnl))
+         ! Real point count: its square overflows a default integer past 46340 points
+         rgrid = real(max(1, self%ngrid), wp)
+         call pp%kv("Average neighbours", &
+                    real(sum(self%grid_adj_list%nnl), wp)/rgrid, fmt="(f14.4)")
+         call pp%kv("Average neighbours (%)", &
+                    real(sum(self%grid_adj_list%nnl), wp)/rgrid/rgrid*100.0_wp, "%", &
+                    fmt="(f14.4)")
+         call pp%kv("Total pairs", size(self%grid_adj_list%nlat))
+         call pp%kv("Total pairs (%)", &
+                    real(size(self%grid_adj_list%nlat), wp)/rgrid/rgrid*100.0_wp, "%", fmt="(f14.4)")
+         call pp%pop()
+      end if
+
+   end subroutine setup_grid_adj_list
 
    !* ================================================================================= *!
    !*                  Grid point density (reference cavity and cavity)                 *!
@@ -111,9 +155,9 @@ contains
          isph = self%owner(igrid)
 
          ! Anchor coordinates of active point i
-         xi = self%anchorxyz(1, igrid)
-         yi = self%anchorxyz(2, igrid)
-         zi = self%anchorxyz(3, igrid)
+         xi = self%anchor%xyz(1, self%anchor_of_row(igrid))
+         yi = self%anchor%xyz(2, self%anchor_of_row(igrid))
+         zi = self%anchor%xyz(3, self%anchor_of_row(igrid))
 
          do jj = 1, self%param%num_leb
             ! Full-grid Lebedev point j on owner sphere
@@ -353,14 +397,21 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(drop_worker_slots_type) :: slots
       integer :: igrid, thread_slot
-      real(wp) :: lsf0_loc, lsf1_r_loc(3), lsf2_rr_loc(3, 3)
-      real(wp) :: g_vec(3), H_mat(3, 3)
+      !> Tile index, tile count, tile width, first grid point, size and column
+      integer :: itile, ntile, tile, igrid0, np, p
+      !> Shared candidate list of the tile
+      integer, allocatable :: cand(:)
+      integer :: nc
+      !> Tile points and level-set jet, packed Hessian (order of [[moist_math_packed]])
+      real(wp), allocatable :: tile_xyz(:, :), tile_lsf0(:), tile_lsf1(:, :), tile_lsf2(:, :)
+      !> Packed Hessian of the current point
+      real(wp) :: lsf2_rr_loc(6)
+      real(wp) :: g_vec(3)
       real(wp) :: g_norm, g_norm_sq, inv_g_norm
       real(wp) :: n_vec(3), t1(3), t2(3), Ht1(3), Ht2(3)
       real(wp) :: S11, S12, S22, half_trace, half_diff, disc
-      !> Loop-wide abort latch and the LSF evaluation failure handed to it
+      !> Loop-wide abort latch
       type(drop_abort_latch_type) :: abort
-      type(error_type), allocatable :: lsf_error
 
       ! Initialize curvature arrays
       if (allocated(self%k1)) deallocate (self%k1)
@@ -372,97 +423,112 @@ contains
       if (allocated(self%KG)) deallocate (self%KG)
       allocate (self%KG(self%ngrid), source=0.0_wp)
 
-      ! Set up thread-local LSF evaluators and SSD systems
+      ! Set up thread-local LSF evaluators
       ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the cached
       ! callback LSF must be told to compute up to second order
       call slots%init(self%ctx, self%lsf_model, 2)
+      tile = surface_tile_width
+      ntile = (self%ngrid + tile - 1)/tile
 
       call abort%reset()
 
-      ! num_threads pins the team to the size the slots were built for; without it
-      ! a larger live team indexes slots%lsf out of bounds
-      !$omp parallel do num_threads(slots%nthreads) default(shared) &
-      !$omp& private(igrid, thread_slot, lsf0_loc, lsf1_r_loc, lsf2_rr_loc, &
-      !$omp&   g_vec, H_mat, g_norm, g_norm_sq, inv_g_norm, &
+      ! Tiles of `surface_tile_width` points: one batched order-2 jet per tile
+      ! over one shared candidate list; num_threads pins the team to the size the
+      ! slots were built for, a larger live team would index slots%lsf out of bounds
+      !$omp parallel num_threads(slots%nthreads) default(shared) &
+      !$omp& private(itile, igrid0, np, p, igrid, thread_slot, cand, nc, &
+      !$omp&   tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2, lsf2_rr_loc, &
+      !$omp&   g_vec, g_norm, g_norm_sq, inv_g_norm, &
       !$omp&   n_vec, t1, t2, Ht1, Ht2, &
-      !$omp&   S11, S12, S22, half_trace, half_diff, disc, lsf_error) &
-      !$omp& schedule(dynamic)
-      do igrid = 1, self%ngrid
+      !$omp&   S11, S12, S22, half_trace, half_diff, disc)
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
+
+      allocate (cand(max(1, slots%lsf(thread_slot)%lsf%ncenters)))
+      allocate (tile_xyz(3, tile), tile_lsf0(tile), tile_lsf1(3, tile), tile_lsf2(6, tile))
+
+      !$omp do schedule(dynamic, 1)
+      do itile = 1, ntile
          if (abort%requested) cycle
-         thread_slot = 1
-         !$ thread_slot = omp_get_thread_num() + 1
 
-         ! Compute SSD on-the-fly and evaluate LSF gradient (g) and Hessian (H)
-         call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)
-         if (allocated(lsf_error)) then
-            call abort%latch_error(lsf_error, igrid)
-            cycle
-         end if
+         igrid0 = (itile - 1)*tile + 1
+         np = min(tile, self%ngrid - igrid0 + 1)
+         tile_xyz(:, 1:np) = self%xyz(:, igrid0:igrid0 + np - 1)
 
-         call slots%lsf(thread_slot)%lsf%f012_r( &
-            lsf0_loc, lsf1_r_loc, lsf2_rr_loc)
+         ! Gradient (g) and Hessian (H) of the whole tile; a failure is parked
+         ! for the post-region promotion and the tile is dropped
+         call surface_tile_candidates(slots%lsf(thread_slot)%lsf, tile_xyz(:, 1:np), cand, nc)
+         if (.not. surface_jet_tile(slots%lsf(thread_slot)%lsf, tile_xyz(:, 1:np), cand(1:nc), &
+                                    igrid0, "compute_curvature", 2, tile_lsf0, tile_lsf1, &
+                                    lsf2_rr=tile_lsf2, abort=abort)) cycle
 
-         g_vec = lsf1_r_loc
-         H_mat = lsf2_rr_loc
+         do p = 1, np
+            igrid = igrid0 + p - 1
 
-         ! Gradient magnitude
-         g_norm_sq = g_vec(1)*g_vec(1) + g_vec(2)*g_vec(2) + g_vec(3)*g_vec(3)
-         g_norm = sqrt(g_norm_sq)
-         inv_g_norm = 1.0_wp/g_norm
+            g_vec = tile_lsf1(:, p)
+            lsf2_rr_loc = tile_lsf2(:, p)
 
-         ! Unit surface normal
-         n_vec(1) = g_vec(1)*inv_g_norm
-         n_vec(2) = g_vec(2)*inv_g_norm
-         n_vec(3) = g_vec(3)*inv_g_norm
+            ! Gradient magnitude
+            g_norm_sq = g_vec(1)*g_vec(1) + g_vec(2)*g_vec(2) + g_vec(3)*g_vec(3)
+            g_norm = sqrt(g_norm_sq)
+            inv_g_norm = 1.0_wp/g_norm
 
-         ! Build orthonormal tangent frame {t1, t2}
-         ! Choose reference axis least aligned with n to avoid cancellation
-         if (abs(n_vec(1)) < 0.9_wp) then
-            ! t1 = normalize(e_x x n) = normalize(0, n_z, -n_y)
-            t1(1) = 0.0_wp
-            t1(2) = n_vec(3)
-            t1(3) = -n_vec(2)
-         else
-            ! t1 = normalize(e_y x n) = normalize(-n_z, 0, n_x)
-            t1(1) = -n_vec(3)
-            t1(2) = 0.0_wp
-            t1(3) = n_vec(1)
-         end if
-         t1 = t1*(1.0_wp/sqrt(t1(1)*t1(1) + t1(2)*t1(2) + t1(3)*t1(3)))
+            ! Unit surface normal
+            n_vec(1) = g_vec(1)*inv_g_norm
+            n_vec(2) = g_vec(2)*inv_g_norm
+            n_vec(3) = g_vec(3)*inv_g_norm
 
-         ! t2 = n x t1 (unit length by construction)
-         t2(1) = n_vec(2)*t1(3) - n_vec(3)*t1(2)
-         t2(2) = n_vec(3)*t1(1) - n_vec(1)*t1(3)
-         t2(3) = n_vec(1)*t1(2) - n_vec(2)*t1(1)
+            ! Build orthonormal tangent frame {t1, t2}
+            ! Choose reference axis least aligned with n to avoid cancellation
+            if (abs(n_vec(1)) < 0.9_wp) then
+               ! t1 = normalize(e_x x n) = normalize(0, n_z, -n_y)
+               t1(1) = 0.0_wp
+               t1(2) = n_vec(3)
+               t1(3) = -n_vec(2)
+            else
+               ! t1 = normalize(e_y x n) = normalize(-n_z, 0, n_x)
+               t1(1) = -n_vec(3)
+               t1(2) = 0.0_wp
+               t1(3) = n_vec(1)
+            end if
+            t1 = t1*(1.0_wp/sqrt(t1(1)*t1(1) + t1(2)*t1(2) + t1(3)*t1(3)))
 
-         ! Shape operator matrix elements: S_ab = (1/||g||) * t_a^T H t_b
-         Ht1(1) = H_mat(1, 1)*t1(1) + H_mat(1, 2)*t1(2) + H_mat(1, 3)*t1(3)
-         Ht1(2) = H_mat(2, 1)*t1(1) + H_mat(2, 2)*t1(2) + H_mat(2, 3)*t1(3)
-         Ht1(3) = H_mat(3, 1)*t1(1) + H_mat(3, 2)*t1(2) + H_mat(3, 3)*t1(3)
+            ! t2 = n x t1 (unit length by construction)
+            t2(1) = n_vec(2)*t1(3) - n_vec(3)*t1(2)
+            t2(2) = n_vec(3)*t1(1) - n_vec(1)*t1(3)
+            t2(3) = n_vec(1)*t1(2) - n_vec(2)*t1(1)
 
-         Ht2(1) = H_mat(1, 1)*t2(1) + H_mat(1, 2)*t2(2) + H_mat(1, 3)*t2(3)
-         Ht2(2) = H_mat(2, 1)*t2(1) + H_mat(2, 2)*t2(2) + H_mat(2, 3)*t2(3)
-         Ht2(3) = H_mat(3, 1)*t2(1) + H_mat(3, 2)*t2(2) + H_mat(3, 3)*t2(3)
+            ! Shape operator matrix elements: S_ab = (1/||g||) * t_a^T H t_b
+            Ht1(1) = lsf2_rr_loc(1)*t1(1) + lsf2_rr_loc(2)*t1(2) + lsf2_rr_loc(4)*t1(3)
+            Ht1(2) = lsf2_rr_loc(2)*t1(1) + lsf2_rr_loc(3)*t1(2) + lsf2_rr_loc(5)*t1(3)
+            Ht1(3) = lsf2_rr_loc(4)*t1(1) + lsf2_rr_loc(5)*t1(2) + lsf2_rr_loc(6)*t1(3)
 
-         S11 = (t1(1)*Ht1(1) + t1(2)*Ht1(2) + t1(3)*Ht1(3))*inv_g_norm
-         S12 = (t2(1)*Ht1(1) + t2(2)*Ht1(2) + t2(3)*Ht1(3))*inv_g_norm
-         S22 = (t2(1)*Ht2(1) + t2(2)*Ht2(2) + t2(3)*Ht2(3))*inv_g_norm
+            Ht2(1) = lsf2_rr_loc(1)*t2(1) + lsf2_rr_loc(2)*t2(2) + lsf2_rr_loc(4)*t2(3)
+            Ht2(2) = lsf2_rr_loc(2)*t2(1) + lsf2_rr_loc(3)*t2(2) + lsf2_rr_loc(5)*t2(3)
+            Ht2(3) = lsf2_rr_loc(4)*t2(1) + lsf2_rr_loc(5)*t2(2) + lsf2_rr_loc(6)*t2(3)
 
-         ! Closed-form eigenvalues of the 2x2 shape operator
-         half_trace = 0.5_wp*(S11 + S22)
-         half_diff = 0.5_wp*(S11 - S22)
-         disc = sqrt(half_diff*half_diff + S12*S12)
+            S11 = (t1(1)*Ht1(1) + t1(2)*Ht1(2) + t1(3)*Ht1(3))*inv_g_norm
+            S12 = (t2(1)*Ht1(1) + t2(2)*Ht1(2) + t2(3)*Ht1(3))*inv_g_norm
+            S22 = (t2(1)*Ht2(1) + t2(2)*Ht2(2) + t2(3)*Ht2(3))*inv_g_norm
 
-         ! Principal curvatures (k1 >= k2 by construction)
-         self%k1(igrid) = half_trace + disc
-         self%k2(igrid) = half_trace - disc
+            ! Closed-form eigenvalues of the 2x2 shape operator
+            half_trace = 0.5_wp*(S11 + S22)
+            half_diff = 0.5_wp*(S11 - S22)
+            disc = sqrt(half_diff*half_diff + S12*S12)
 
-         ! Mean and Gaussian curvature from principal curvatures
-         self%KM(igrid) = half_trace
-         self%KG(igrid) = self%k1(igrid)*self%k2(igrid)
+            ! Principal curvatures (k1 >= k2 by construction)
+            self%k1(igrid) = half_trace + disc
+            self%k2(igrid) = half_trace - disc
 
+            ! Mean and Gaussian curvature from principal curvatures
+            self%KM(igrid) = half_trace
+            self%KG(igrid) = self%k1(igrid)*self%k2(igrid)
+         end do
       end do
-      !$omp end parallel do
+      !$omp end do
+
+      deallocate (cand, tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2)
+      !$omp end parallel
 
       if (abort%requested) then
          if (allocated(abort%error)) then
@@ -477,16 +543,38 @@ contains
    end subroutine compute_curvature
 
    !* ================================================================================= *!
+   !*                              Gaussian surface charges                             *!
+   !* ================================================================================= *!
+
+   !> Recompute gaussian surface charge widths with projected wleb, after CP
+   !> Jacobian scaling
+   !>
+   !> - the "true" xi used for CPCM energy and gradients
+   module subroutine compute_gaussians(self, error)
+      class(cavity_type_drop), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i
+
+      if (allocated(self%xi0)) deallocate (self%xi0)
+      allocate (self%xi0(self%ngrid), source=0.0_wp)
+
+      do i = 1, self%ngrid
+         self%xi0(i) = self%iswig%xi0(self%owner(i), self%wleb(i))
+      end do
+
+   end subroutine compute_gaussians
+
+   !* ================================================================================= *!
    !*                                  Diagnostics                                      *!
    !* ================================================================================= *!
 
-   !> Run diagnostic checks on the computed cavity grid
+   !> Report curvature-based diagnostics of the computed cavity grid
    !>
-   !> Checks for suspicious values that may indicate numerical issues
-   !>  - |KG|: Gaussian curvature magnitude
-   !>  - |S|: projection residual (should be near zero on the surface)
-   !>  - ||grad_S||: LSF gradient norm (low values indicate blending ambiguity)
-   !>  - cpjac_scal: closest-point Jacobian scaling
+   !> With curvatures present
+   !>  - k1 and k2 spread (min/mean/max)
+   !>  - surface area by curvature regime (convex, saddle, pit)
+   !>  - effective probe radius from points with k2 < -1/r_A_max
+   !>  - watershed patches of k2, with a per-patch table at verbosity 3
    !>
    !> With `do_fine` and `do_atomarea`, also lists the owner-summed (naive) and
    !> partitioned area of every atom
@@ -497,10 +585,7 @@ contains
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
       type(prettyprinter) :: pp
-      real(wp) :: S_val, grad_S(3)
-      real(wp), allocatable :: s_vals(:), grad_s_norms(:)
       integer :: i, ngrid
 
       ! Effective probe sphere analysis
@@ -525,26 +610,11 @@ contains
       real(wp) :: rp_amean, rp_harmonic, rp_min, rp_max, patch_area_total
       type(error_type), allocatable :: sort_error
       type(prettylistprinter) :: plp
+      !> Neighbour list of the watershed, local to the diagnostic
+      type(adjacency_list_type) :: adj
       integer :: iat
 
       ngrid = self%ngrid
-
-      ! Collect S and ||grad_S|| values at each grid point
-      allocate (s_vals(ngrid))
-      allocate (grad_s_norms(ngrid))
-
-      !> Setup LSF for surface constraint evaluation
-      allocate (lsf, source=self%lsf_model)
-
-      do i = 1, ngrid
-         ! Serial loop, so an evaluation failure can be returned immediately
-         ! (see the parallel loops for the general contract)
-         call lsf%prepare(self%xyz(:, i), error)
-         if (allocated(error)) return
-         call lsf%f012_r(lsf0=S_val, lsf1_r=grad_S)
-         s_vals(i) = abs(S_val)
-         grad_s_norms(i) = sqrt(dot_product(grad_S, grad_S))
-      end do
 
       !> Effective probe sphere radius routine
       if (allocated(self%k1) .and. allocated(self%k2) .and. &
@@ -669,10 +739,15 @@ contains
          call pp%pop()
 
          !> Watershed segmentation of the non-convex region into basins
-         if (allocated(self%grid_adj_list%inl)) then
+         n_eligible = count(self%k2(1:ngrid) < 0.0_wp)
+         if (n_eligible > 0) then
+
+            ! The diagnostic owns its neighbour list; the cavity keeps none unless
+            ! the grid density asked for one
+            call adj%init(cutoff=self%param%adj_list_grid_cutoff)
+            call adj%update(self%xyz(:, 1:ngrid), self%ctx%get_num_threads())
 
             ! Collect eligible (concave) points and their k2 values
-            n_eligible = count(self%k2(1:ngrid) < 0.0_wp)
             allocate (eligible_idx(n_eligible))
             allocate (eligible_k2(n_eligible))
             ip = 0
@@ -703,9 +778,8 @@ contains
                ! second distinct patch shows up
                first_p = 0
                multi_patches = .false.
-               do jj_p = self%grid_adj_list%inl(cur_i) + 1, &
-                  self%grid_adj_list%inl(cur_i) + self%grid_adj_list%nnl(cur_i)
-                  jneigh = self%grid_adj_list%nlat(jj_p)
+               do jj_p = adj%inl(cur_i) + 1, adj%inl(cur_i) + adj%nnl(cur_i)
+                  jneigh = adj%nlat(jj_p)
                   j_pid = patch_id(jneigh)
                   if (j_pid > 0) then
                      if (first_p == 0) then
