@@ -53,7 +53,7 @@ tests = [
   'moz_potential_lj',
   'moz_potential_oplsaa',
   'moz_solvent',
-  'cavity_drop_primitives',
+  'cavity_drop_phi',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
   'cavity_drop_lsf_reference',
@@ -127,6 +127,11 @@ test_selected = {
     'molecular_nufft_type3_threaded',
     'radial_trafo_one_per_thread',
     'partition_grid_threaded',
+  ],
+  'cavity_drop_nuclear_adjoint': [
+    'all_channels', 'single_channels', 'branching_channels', 'branching_xi_fd',
+    'model_forward_reverse', 'cosmo_model_forward_reverse', 'shape_guard',
+    'thread_count_invariance',
   ],
 }
 

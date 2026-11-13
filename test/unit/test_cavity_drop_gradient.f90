@@ -3,7 +3,7 @@ module test_cavity_drop_gradient
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use test_helpers, only: get_test_cross, fill_legacy_radii, build_numbering_map
+   use test_helpers, only: fill_legacy_radii, build_numbering_map
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -38,9 +38,6 @@ module test_cavity_drop_gradient
    integer, parameter :: PROJ_MAXITER = 1000
    integer, parameter :: PROJ_LEVEL = 1
 
-   !> FD step used by [[test_branching_xyz_totals]] only
-   real(wp), parameter :: TOTALS_STEP_SIZE = 1.0E-3_wp
-
 contains
 
    subroutine collect_cavity_drop_gradient(testsuite)
@@ -56,9 +53,7 @@ contains
                   new_unittest("il16_008", test_il16_008), &
                   ! Adjoint tests
                   new_unittest("adjoint_channels_fd", test_adjoint_channels_fd), &
-                  new_unittest("adjoint_area_channels", test_adjoint_area_channels), &
-                  ! Branching tests (more expensive but kept for now)
-                  new_unittest("branching_xyz_totals", test_branching_xyz_totals) &
+                  new_unittest("adjoint_area_channels", test_adjoint_area_channels) &
                   ]
    end subroutine collect_cavity_drop_gradient
 
@@ -66,210 +61,64 @@ contains
    subroutine test_single_atom(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       ! Create single oxygen atom
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_single_atom
 
    !> Test gradient for a dimer
    subroutine test_dimer(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       ! Create dimer (two oxygen atoms)
       call new(mol, [6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
                                      6.0_wp, 1.1_wp, 0.0_wp], [3, 2]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii, blend_k_override=2.0_wp, nleb_override=194, proj_level_override=1)
+      call do_test(error, mol, blend_k_override=2.0_wp, nleb_override=194, proj_level_override=1)
    end subroutine test_dimer
 
    !> Test gradient for Amino20x4 GLY_xab
    subroutine test_amino20x4_gly_xab(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "Amino20x4", "GLY_xab")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_amino20x4_gly_xab
 
    !> Test gradient for MB16-43 01
    subroutine test_mb16_43_01(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "MB16-43", "01")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_mb16_43_01
 
    !> Test gradient for But14diol 1
    subroutine test_but14diol_1(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "But14diol", "1")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_but14diol_1
 
    !> Test gradient for IL16 008
    subroutine test_il16_008(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "IL16", "008")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_il16_008
-
-   !> Total-area and total-volume gradient test for four carbons in a planar cross plus a central carbon
-   subroutine test_branching_xyz_totals(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-      type(cavity_type_drop), allocatable :: cavity
-      type(mctc_error), allocatable :: cavity_error
-      real(wp), allocatable :: radii(:)
-      real(wp) :: en_dA_drA(ndim, 5), en_dV_drA(ndim, 5)
-      real(wp) :: num_dA_drA(ndim, 5), num_dV_drA(ndim, 5)
-      real(wp) :: A_nn, A_n, A_p, A_pp
-      real(wp) :: V_nn, V_n, V_p, V_pp
-      integer :: iat, idir
-      !> Local run context borrowed by the cavities built here
-      type(moist_context_type), target :: ctx
-
-      call new_context(ctx, nthreads=0, verbosity=0)
-
-      call get_test_cross(mol)
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      allocate (cavity)
-      block
-         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.0_wp, &
-            blend_3b=1.0_wp))
-         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=3), ctx=ctx)
-      end block
-      if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-      if (allocated(error)) return
-
-      !> The cavity must *borrow* the caller-owned run context, not copy it
-      call check(error, associated(cavity%ctx, ctx), &
-                 "DROP cavity does not borrow the caller-owned run context")
-      if (allocated(error)) return
-      call check(error, cavity%ctx%verbosity() == 0, &
-                 "DROP cavity does not observe the context verbosity")
-      if (allocated(error)) return
-
-      call cavity%update(mol, error=cavity_error)
-      if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-      if (allocated(error)) return
-
-      if (.not. allocated(cavity%offset)) then
-         call test_failed(error, "Fixture requested branching but has no row layout")
-         return
-      end if
-
-      call cavity%get_gradient(cavity_error)
-      if (allocated(cavity_error)) then
-         call test_failed(error, cavity_error%message)
-         return
-      end if
-
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            en_dA_drA(idir, iat) = sum(cavity%asph1_rA(idir, :, iat))
-            en_dV_drA(idir, iat) = sum(cavity%vsph1_rA(idir, :, iat))
-         end do
-      end do
-
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            call build_and_totalize(cavity, mol, iat, idir, -2.0_wp*TOTALS_STEP_SIZE, A_nn, V_nn, error)
-            if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir, -1.0_wp*TOTALS_STEP_SIZE, A_n, V_n, error)
-            if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir, 1.0_wp*TOTALS_STEP_SIZE, A_p, V_p, error)
-            if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir, 2.0_wp*TOTALS_STEP_SIZE, A_pp, V_pp, error)
-            if (allocated(error)) return
-
-            num_dA_drA(idir, iat) = (-A_pp + 8.0_wp*A_p - 8.0_wp*A_n + A_nn)/(12.0_wp*TOTALS_STEP_SIZE)
-            num_dV_drA(idir, iat) = (-V_pp + 8.0_wp*V_p - 8.0_wp*V_n + V_nn)/(12.0_wp*TOTALS_STEP_SIZE)
-         end do
-      end do
-
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            call check(error, ieee_is_finite(num_dA_drA(idir, iat)) .and. &
-                       ieee_is_finite(num_dV_drA(idir, iat)), "Non-finite total area or volume FD reference")
-            if (allocated(error)) return
-            call check(error, en_dA_drA(idir, iat), num_dA_drA(idir, iat), &
-                       thr_abs=ABS_THR, thr_rel=REL_THR, &
-                       more="Total area gradient mismatch")
-            if (allocated(error)) return
-            call check(error, en_dV_drA(idir, iat), num_dV_drA(idir, iat), &
-                       thr_abs=ABS_THR, thr_rel=REL_THR, &
-                       more="Total volume gradient mismatch")
-            if (allocated(error)) return
-         end do
-      end do
-   end subroutine test_branching_xyz_totals
-
-   !> Helper: rebuild cavity with atom (iat, idir) shifted by delta and
-   !> return sum(a) and sum(v) over the resulting grid points
-   subroutine build_and_totalize(cavity, mol, iat, idir, delta, A_tot, V_tot, error)
-      type(cavity_type_drop), intent(inout) :: cavity
-      type(structure_type), intent(in) :: mol
-      integer, intent(in) :: iat, idir
-      real(wp), intent(in) :: delta
-      real(wp), intent(out) :: A_tot, V_tot
-      !> Error handle: set (and caller should return) if the cavity rebuild fails
-      type(error_type), allocatable, intent(out) :: error
-
-      type(structure_type) :: mol_fd
-      type(mctc_error), allocatable :: cavity_error
-
-      mol_fd = mol
-      mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + delta
-      call cavity%update(mol_fd, error=cavity_error)
-      if (allocated(cavity_error)) then
-         call test_failed(error, cavity_error%message)
-         return
-      end if
-      A_tot = sum(cavity%a(1:cavity%ngrid))
-      V_tot = sum(cavity%v(1:cavity%ngrid))
-   end subroutine build_and_totalize
 
    !> Translate an mctc_error message into the testdrive error_type so the
    !> check assertion framework can pick it up
@@ -282,13 +131,11 @@ contains
    end subroutine fatal_error_from_mctc
 
    !> Test gradient of gridpoints w.r.t. atomic positions
-   subroutine do_test(error, mol, radii, blend_k_override, blend_3b_override, nleb_override, proj_level_override)
+   subroutine do_test(error, mol, blend_k_override, blend_3b_override, nleb_override, proj_level_override)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
       type(structure_type), intent(in) :: mol
-      !> Atomic radii
-      real(wp), intent(in) :: radii(:)
       !> Optional override for blending steepness parameter
       real(wp), intent(in), optional :: blend_k_override
       !> Optional override for blending blend_3b parameter
@@ -341,11 +188,6 @@ contains
       real(wp), allocatable :: nn_iswig(:), n_iswig(:)
       real(wp), allocatable :: p_iswig(:), pp_iswig(:)
       real(wp), allocatable :: nnn_iswig(:), ppp_iswig(:)
-
-      real(wp), allocatable :: num_pou_f1_rA(:, :, :)
-      real(wp), allocatable :: nn_pou_f(:), n_pou_f(:)
-      real(wp), allocatable :: p_pou_f(:), pp_pou_f(:)
-      real(wp), allocatable :: nnn_pou_f(:), ppp_pou_f(:)
 
       ! Volume gradient arrays
       real(wp), allocatable :: en_volume1_rA(:, :, :)
@@ -444,6 +286,7 @@ contains
 
       if (.not. allocated(cavity%xyz1_rA)) then
          call test_failed(error, "xyz1_rA not allocated after get_gradient")
+         return
       end if
 
       allocate (en_xyz1_rA(ndim, ndim, mol%nat, ngrid_set), source=0.0_wp)
@@ -498,14 +341,6 @@ contains
       allocate (pp_iswig(ngrid_set))
       allocate (nnn_iswig(ngrid_set))
       allocate (ppp_iswig(ngrid_set))
-
-      allocate (num_pou_f1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_pou_f(ngrid_set))
-      allocate (n_pou_f(ngrid_set))
-      allocate (p_pou_f(ngrid_set))
-      allocate (pp_pou_f(ngrid_set))
-      allocate (nnn_pou_f(ngrid_set))
-      allocate (ppp_pou_f(ngrid_set))
 
       allocate (num_area1_rA(ndim, mol%nat, ngrid_set))
       allocate (nn_area(ngrid_set))
@@ -598,12 +433,6 @@ contains
             pp_iswig = 0.0_wp
             nnn_iswig = 0.0_wp
             ppp_iswig = 0.0_wp
-            nn_pou_f = 0.0_wp
-            n_pou_f = 0.0_wp
-            p_pou_f = 0.0_wp
-            pp_pou_f = 0.0_wp
-            nnn_pou_f = 0.0_wp
-            ppp_pou_f = 0.0_wp
             nn_area = 0.0_wp
             n_area = 0.0_wp
             p_area = 0.0_wp
@@ -663,7 +492,6 @@ contains
                num_nnn(idir, iat, idx_map) = num_idn
                nnn_r_iI(idx_map) = cavity%r_iI0(jgrid)
                nnn_iswig(idx_map) = cavity%f(jgrid)
-               nnn_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                nnn_area(idx_map) = cavity%a(jgrid)
                nnn_volume(idx_map) = cavity%v(jgrid)
                nnn_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -689,7 +517,6 @@ contains
                num_nn(idir, iat, idx_map) = num_idn
                nn_r_iI(idx_map) = cavity%r_iI0(jgrid)
                nn_iswig(idx_map) = cavity%f(jgrid)
-               nn_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                nn_area(idx_map) = cavity%a(jgrid)
                nn_volume(idx_map) = cavity%v(jgrid)
                nn_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -715,7 +542,6 @@ contains
                num_n(idir, iat, idx_map) = num_idn
                n_r_iI(idx_map) = cavity%r_iI0(jgrid)
                n_iswig(idx_map) = cavity%f(jgrid)
-               n_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                n_area(idx_map) = cavity%a(jgrid)
                n_volume(idx_map) = cavity%v(jgrid)
                n_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -741,7 +567,6 @@ contains
                num_p(idir, iat, idx_map) = num_idn
                p_r_iI(idx_map) = cavity%r_iI0(jgrid)
                p_iswig(idx_map) = cavity%f(jgrid)
-               p_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                p_area(idx_map) = cavity%a(jgrid)
                p_volume(idx_map) = cavity%v(jgrid)
                p_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -767,7 +592,6 @@ contains
                num_pp(idir, iat, idx_map) = num_idn
                pp_r_iI(idx_map) = cavity%r_iI0(jgrid)
                pp_iswig(idx_map) = cavity%f(jgrid)
-               pp_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                pp_area(idx_map) = cavity%a(jgrid)
                pp_volume(idx_map) = cavity%v(jgrid)
                pp_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -793,7 +617,6 @@ contains
                num_ppp(idir, iat, idx_map) = num_idn
                ppp_r_iI(idx_map) = cavity%r_iI0(jgrid)
                ppp_iswig(idx_map) = cavity%f(jgrid)
-               ppp_pou_f(idx_map) = cavity%anchor%f0(cavity%anchor_of_row(jgrid))
                ppp_area(idx_map) = cavity%a(jgrid)
                ppp_volume(idx_map) = cavity%v(jgrid)
                ppp_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
@@ -818,11 +641,6 @@ contains
             num_iswig1_rA(idir, iat, :) = &
                (45.0_wp*(p_iswig(:) - n_iswig(:)) - 9.0_wp*(pp_iswig(:) - nn_iswig(:)) &
                 + (ppp_iswig(:) - nnn_iswig(:))) &
-               /(60.0_wp*STEP_SIZE)
-
-            num_pou_f1_rA(idir, iat, :) = &
-               (45.0_wp*(p_pou_f(:) - n_pou_f(:)) - 9.0_wp*(pp_pou_f(:) - nn_pou_f(:)) &
-                + (ppp_pou_f(:) - nnn_pou_f(:))) &
                /(60.0_wp*STEP_SIZE)
 
             num_area1_rA(idir, iat, :) = &
