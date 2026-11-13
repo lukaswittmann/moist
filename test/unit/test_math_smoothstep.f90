@@ -14,6 +14,12 @@
 !> Erf and sigmoid types:
 !>
 !> - erf_pinned_values, sigmoid_pinned_values: values pinned from the pre-move `switching.f90`
+!> - sigmoid_endpoint: no divide by zero next to the lower edge
+!>
+!> Nuclear chain rule of the base type:
+!>
+!> - f1_ra_chain_rule: `f1_rA` against central differences of `f0` over a synthetic
+!>   argument, and the `active` column mask
 !>
 !> Error stops, not testable in process:
 !>
@@ -21,6 +27,7 @@
 !> - Polynomial evaluation before new_smoothstep_polynomial
 !> - f3 or f4 requested from the erf or sigmoid type
 module test_math_smoothstep
+   use, intrinsic :: ieee_exceptions, only: ieee_get_flag, ieee_set_flag, ieee_divide_by_zero
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_smoothstep, only: moist_math_smoothstep_type, &
@@ -48,6 +55,10 @@ module test_math_smoothstep
    real(wp), parameter :: dsym_thr = 5.0e-12_wp
    !> Pinned erf/sigmoid values, relative tolerance
    real(wp), parameter :: pin_thr = 1.0e-13_wp
+   !> Central first-derivative weights, offsets 1..4, O(h^8)
+   real(wp), parameter :: w8(4) = [4.0_wp/5.0_wp, -1.0_wp/5.0_wp, 4.0_wp/105.0_wp, -1.0_wp/280.0_wp]
+   !> Centre count of the synthetic chain-rule argument
+   integer, parameter :: ncent = 4
 
 contains
 
@@ -66,7 +77,9 @@ contains
                   new_unittest("polynomial_default_order", test_polynomial_default_order), &
                   new_unittest("polynomial_reference_values", test_polynomial_reference_values), &
                   new_unittest("erf_pinned_values", test_erf_pinned_values), &
-                  new_unittest("sigmoid_pinned_values", test_sigmoid_pinned_values) &
+                  new_unittest("sigmoid_pinned_values", test_sigmoid_pinned_values), &
+                  new_unittest("sigmoid_endpoint", test_sigmoid_endpoint), &
+                  new_unittest("f1_ra_chain_rule", test_f1_rA_chain_rule) &
                   ]
    end subroutine collect_math_smoothstep
 
@@ -306,8 +319,6 @@ contains
    !> Derivatives 1..4 against an 8th-order central difference of the next lower one
    subroutine test_polynomial_fd_derivatives(error)
       type(error_type), allocatable, intent(out) :: error
-      !> Central first-derivative weights, offsets 1..4, O(h^8)
-      real(wp), parameter :: w8(4) = [4.0_wp/5.0_wp, -1.0_wp/5.0_wp, 4.0_wp/105.0_wp, -1.0_wp/280.0_wp]
       type(moist_math_smoothstep_polynomial_type) :: sw
       real(wp) :: width, h, x, fd, an, diff
       character(len=128) :: msg
@@ -504,5 +515,110 @@ contains
       call check_pinned(error, s2, 1.4_wp, [1.56454857869192665e-5_wp, -1.52823798204837621e-3_wp, &
          & 1.22121184095400168e-1_wp], "sigmoid falling 3")
    end subroutine test_sigmoid_pinned_values
+
+   !> Next to the lower edge the sigmoid stays finite without a divide by zero
+   subroutine test_sigmoid_endpoint(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_math_smoothstep_sigmoid_type) :: sw
+      real(wp) :: value
+      logical :: raised, previous
+
+      call new_smoothstep_sigmoid(sw, 0.0_wp, 1.0_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
+      call ieee_get_flag(ieee_divide_by_zero, previous)
+      call ieee_set_flag(ieee_divide_by_zero, .false.)
+      value = sw%f0(1.0e-20_wp)
+      call ieee_get_flag(ieee_divide_by_zero, raised)
+      call ieee_set_flag(ieee_divide_by_zero, previous)
+      call check(error,.not. raised .and. value == 0.0_wp, "finite endpoint switching without divide by zero")
+   end subroutine test_sigmoid_endpoint
+
+   !> Synthetic smoothstep argument: linear plus isotropic quadratic in the centres
+   pure subroutine synthetic_arg(centers, offset, x0, x1)
+      !> Centre coordinates (3, ncent)
+      real(wp), intent(in) :: centers(3, ncent)
+      !> Constant shift of the argument
+      real(wp), intent(in) :: offset
+      !> Argument value
+      real(wp), intent(out) :: x0
+      !> Argument gradient w.r.t. the centres (3, ncent)
+      real(wp), intent(out), optional :: x1(3, ncent)
+      !> Curvature of the quadratic part
+      real(wp), parameter :: curv = 0.1_wp
+      real(wp) :: lin
+      integer :: ic, ia
+
+      x0 = offset
+      do ia = 1, ncent
+         do ic = 1, 3
+            lin = 0.05_wp*real(ic - 2, wp) + 0.02_wp*real(ia, wp)
+            x0 = x0 + lin*centers(ic, ia) + 0.5_wp*curv*centers(ic, ia)*centers(ic, ia)
+            if (present(x1)) x1(ic, ia) = lin + curv*centers(ic, ia)
+         end do
+      end do
+   end subroutine synthetic_arg
+
+   !> `f1_rA` against central differences of `f0` over the synthetic argument
+   !>
+   !> - `active`: listed columns bit-identical to the full result, the others exactly 0
+   !> - against `fd_thr`: measured abs 1.4e-13, rel 3.5e-12
+   subroutine test_f1_rA_chain_rule(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Argument values inside the erf transition
+      real(wp), parameter :: x_target(3) = [-0.2_wp, -0.1_wp, 0.0_wp]
+      !> Listed centres, unsorted
+      integer, parameter :: active(2) = [3, 1]
+      !> Centre step
+      real(wp), parameter :: h = 1.0e-3_wp
+      type(moist_math_smoothstep_erf_type) :: sw
+      real(wp) :: centers(3, ncent), shifted(3, ncent), x1(3, ncent)
+      real(wp) :: grad(3, ncent), masked(3, ncent)
+      real(wp) :: x0, x_plus, x_minus, offset, fd
+      character(len=128) :: msg
+      integer :: it, ia, ic, j
+
+      call new_smoothstep_erf(sw, -0.5_wp, 0.5_wp)
+      do ia = 1, ncent
+         do ic = 1, 3
+            centers(ic, ia) = 0.3_wp*sin(real(ic + 3*ia, wp))
+         end do
+      end do
+
+      do it = 1, size(x_target)
+         ! Shift that puts the argument on the target at the reference centres
+         call synthetic_arg(centers, 0.0_wp, x0)
+         offset = x_target(it) - x0
+         call synthetic_arg(centers, offset, x0, x1)
+         grad = sw%f1_rA(x0, x1)
+
+         ! Negative control: a vanishing gradient would pass every comparison below
+         call check(error, maxval(abs(grad)) > 1.0e-3_wp, "chain-rule gradient vanishes at the test point")
+         if (allocated(error)) return
+
+         do ia = 1, ncent
+            do ic = 1, 3
+               fd = 0.0_wp
+               do j = 1, 4
+                  shifted = centers
+                  shifted(ic, ia) = centers(ic, ia) + real(j, wp)*h
+                  call synthetic_arg(shifted, offset, x_plus)
+                  shifted(ic, ia) = centers(ic, ia) - real(j, wp)*h
+                  call synthetic_arg(shifted, offset, x_minus)
+                  fd = fd + w8(j)*(sw%f0(x_plus) - sw%f0(x_minus))
+               end do
+               fd = fd/h
+               write (msg, "(a,i0,a,i0,a,f5.2,a,es10.3,a,es10.3)") "centre ", ia, " axis ", ic, " x0 ", &
+                  & x_target(it), " diff ", abs(grad(ic, ia) - fd), " ref ", fd
+               call check(error, within(grad(ic, ia), fd, fd_thr), msg)
+               if (allocated(error)) return
+            end do
+         end do
+
+         masked = sw%f1_rA(x0, x1, active)
+         call check(error, all(masked(:, active) == grad(:, active)), "active columns differ from the full gradient")
+         if (allocated(error)) return
+         call check(error, all(masked(:, [2, 4]) == 0.0_wp), "columns outside active are not zero")
+         if (allocated(error)) return
+      end do
+   end subroutine test_f1_rA_chain_rule
 
 end module test_math_smoothstep
