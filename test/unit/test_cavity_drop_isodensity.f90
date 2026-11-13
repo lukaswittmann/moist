@@ -39,7 +39,8 @@ module test_cavity_drop_isodensity
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: fd4_scalar, fd4_offsets, fd6_scalar, get_test_points, center_at_origin, rel_deviation
+   use test_helpers, only: fd4_scalar, fd4_offsets, fd6_scalar, get_test_points, center_at_origin, &
+                           rel_deviation, det_rand
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
@@ -5720,7 +5721,6 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: i8 = selected_int_kind(18)
       !> Columns past `np` and the sentinel they hold
       integer, parameter :: nextra = 2
       real(wp), parameter :: sentinel = 7.0_wp
@@ -5734,7 +5734,7 @@ contains
       real(wp), allocatable :: res(:, :, :), pt(:, :)
       real(wp), allocatable :: radii(:), dcart(:, :)
       integer, allocatable :: lists(:, :), cand(:), sh_nprim(:)
-      integer(i8) :: state
+      integer :: state
       real(wp) :: f_before, f_after
       integer :: np, ncand, k, l, i, nlist(3), half
 
@@ -5746,12 +5746,10 @@ contains
 
       ! Deterministic seeds from an LCG
       allocate (w0(np), w1(ndim, np), w2(6, np))
-      state = 12345_i8
-      do i = 1, np
-         w0(i) = lcg_next(state)
-         w1(:, i) = [(lcg_next(state), k=1, ndim)]
-         w2(:, i) = [(lcg_next(state), k=1, 6)]
-      end do
+      state = 12345
+      call det_rand(w0, state, -1.0_wp, 1.0_wp)
+      call det_rand(w1, state, -1.0_wp, 1.0_wp)
+      call det_rand(w2, state, -1.0_wp, 1.0_wp)
 
       half = max(1, mol%nat/2)
       allocate (lists(mol%nat, 3), source=0)
@@ -6045,22 +6043,6 @@ contains
       call expect_error(error, lsf_err, "vjp_f1_rA_batch failed at point 1: no density callback bound")
    end subroutine test_bad_callback_vjp_no_callback
 
-   !> Next uniform value in (-1, 1) of a linear congruential generator
-   !>
-   !> @param[inout] state Generator state, 31 bits
-   !> @returns          r Value in (-1, 1)
-   function lcg_next(state) result(r)
-      !> Generator state
-      integer(selected_int_kind(18)), intent(inout) :: state
-      !> Value in (-1, 1)
-      real(wp) :: r
-
-      integer, parameter :: i8 = selected_int_kind(18)
-
-      state = mod(state*1103515245_i8 + 12345_i8, 2147483648_i8)
-      r = 2.0_wp*real(state, wp)/2147483648.0_wp - 1.0_wp
-   end function lcg_next
-
    !> The callback variant runs the looping default: bitwise prepare + accessors
    subroutine test_batch_callback_loops(error)
       !> Error handle
@@ -6156,10 +6138,11 @@ contains
    !>
    !> - callback LSF: the host is handed the Hessian and third-derivative arrays
    !>   as `order` needs them, whatever `set_max_deriv` holds
-   !>   - order 3 at `max_deriv = 0`: both, at every column
+   !>   - order 3 at the constructor's `max_deriv = 0`: both, at every column
    !>   - order 1 at `max_deriv = 3`: neither
-   !> - `get_max_deriv` reads the same after the call as before, also after a
+   !> - `max_deriv` is the same after the call as before, also after a
    !>   failed column (NaN point, refused by the host)
+   !> - the constructor leaves `max_deriv = 0`: a bare `prepare` is handed neither
    !> - negative control: one `prepare` at `max_deriv = 3` is handed both
    subroutine test_batch_callback_order(error)
       !> Error handle
@@ -6184,7 +6167,16 @@ contains
       end do
 
       tally = 0_c_int
-      call lsf%set_max_deriv(0)
+      call lsf%prepare(pts(:, 1), lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "prepare: "//lsf_err%message)
+         return
+      end if
+      call check(error, all(tally == [1_c_int, 0_c_int, 0_c_int]), &
+                 more="a fresh callback LSF is handed neither the Hessian nor the third derivative")
+      if (allocated(error)) return
+
+      tally = 0_c_int
       call lsf%evaluate_batch(pts, 3, b0, b1, b2, b3, error=lsf_err)
       if (allocated(lsf_err)) then
          call test_failed(error, "order 3 at max_deriv 0: "//lsf_err%message)
@@ -6193,7 +6185,7 @@ contains
       call check(error, all(tally == int(np, c_int)), &
                  more="order 3 is handed the Hessian and the third derivative at every column")
       if (allocated(error)) return
-      call check(error, lsf%get_max_deriv(), 0, "max_deriv after an order 3 batch")
+      call check(error, lsf%max_deriv, 0, "max_deriv after an order 3 batch")
       if (allocated(error)) return
 
       tally = 0_c_int
@@ -6206,7 +6198,7 @@ contains
       call check(error, all(tally == [int(np, c_int), 0_c_int, 0_c_int]), &
                  more="order 1 is handed neither the Hessian nor the third derivative")
       if (allocated(error)) return
-      call check(error, lsf%get_max_deriv(), 3, "max_deriv after an order 1 batch")
+      call check(error, lsf%max_deriv, 3, "max_deriv after an order 1 batch")
       if (allocated(error)) return
 
       tally = 0_c_int
@@ -6222,7 +6214,7 @@ contains
       call lsf%evaluate_batch(pts, 1, b0, b1, error=lsf_err)
       call check(error, allocated(lsf_err), more="the host refuses the NaN column")
       if (allocated(error)) return
-      call check(error, lsf%get_max_deriv(), 3, "max_deriv after a failed column")
+      call check(error, lsf%max_deriv, 3, "max_deriv after a failed column")
    end subroutine test_batch_callback_order
 
    !> A batch point inside an ECP core fill outside the cavity is an error naming
