@@ -758,8 +758,8 @@ contains
       call expect_error(error, err, "CFC pair power m must be 4")
    end subroutine test_bad_cfc_pair_power
 
-   !> A non-positive projection gate cut is refused
-   subroutine test_bad_drop_gate_grad_cut(error)
+   !> Projection level 2 is refused
+   subroutine test_bad_drop_proj_level_2(error)
       !> Test failure, set only on the expected error
       type(error_type), allocatable, intent(out) :: error
       !> Library error
@@ -768,10 +768,10 @@ contains
       type(moist_cavity_drop_parameters_type) :: param
 
       call param%init_defaults()
-      param%gate_grad_cut = 0.0_wp
+      param%proj_level = 2
       call param%compute_derived(err)
-      call expect_error(error, err, "Projection gate gradient cut must be positive")
-   end subroutine test_bad_drop_gate_grad_cut
+      call expect_error(error, err, "Invalid DROP numerical parameters: projection level must be 1, 3 or 4")
+   end subroutine test_bad_drop_proj_level_2
 
    !> A non-positive projection batch size is refused
    subroutine test_bad_drop_batch_size(error)
@@ -1025,7 +1025,7 @@ contains
          new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
-         new_unittest("bad_drop_gate_grad_cut", test_bad_drop_gate_grad_cut, should_fail=.true.), &
+         new_unittest("bad_drop_proj_level_2", test_bad_drop_proj_level_2, should_fail=.true.), &
          new_unittest("bad_cfc_pair_power", test_bad_cfc_pair_power, should_fail=.true.), &
          new_unittest("bad_drop_batch_size", test_bad_drop_batch_size, should_fail=.true.), &
          new_unittest("bad_drop_newton_switch_fnorm", test_bad_drop_newton_switch_fnorm, should_fail=.true.), &
@@ -1488,7 +1488,7 @@ contains
          end if
          if (allocated(error)) return
       end do
-      do invalid = 1, 10
+      do invalid = 1, 11
          call param%init_defaults()
          select case (invalid)
          case (1)
@@ -1502,14 +1502,16 @@ contains
          case (5)
             param%proj_level = 5
          case (6)
-            param%branch_weight_floor = 1.0_wp
+            param%proj_level = 2
          case (7)
-            param%phi_alpha = 0.0_wp
+            param%branch_weight_floor = 1.0_wp
          case (8)
-            param%branch_weight_s = -0.1_wp
+            param%phi_alpha = 0.0_wp
          case (9)
-            param%wleb_prune_level = 7
+            param%branch_weight_s = -0.1_wp
          case (10)
+            param%wleb_prune_level = 7
+         case (11)
             param%num_leb = 1
          case default
             error stop "invalid DROP test case"
@@ -1537,7 +1539,7 @@ contains
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
                       '"projection":{"maxiter":72,"level":4,"branch_search_rho2_slack":1.5,"batch_size":64,'// &
-                      '"gate":{"grad_cut":0.3},"newton":{"switch_fnorm":1e-2,"max_cheap_steps":2,'// &
+                      '"newton":{"switch_fnorm":1e-2,"max_cheap_steps":2,'// &
                       '"max_step":0.6,"merit_margin":2.5},'// &
                       '"octree":{"seed_size":0.7,"coarse_seed_size":1.3,"max_boxes":123,"max_survivors":43,'// &
                       '"max_depth":8}},'// &
@@ -1555,9 +1557,8 @@ contains
       call check(error, drop%batch_size == 64 .and. drop%newton_max_cheap_steps == 2, &
                  more="batched projection integer keys")
       if (allocated(error)) return
-      call check(error, maxval(abs([drop%gate_grad_cut, drop%newton_switch_fnorm, &
-                                    drop%newton_max_step, drop%newton_merit_margin] - &
-                                   [0.3_wp, 1.0e-2_wp, 0.6_wp, 2.5_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, maxval(abs([drop%newton_switch_fnorm, drop%newton_max_step, drop%newton_merit_margin] - &
+                                   [1.0e-2_wp, 0.6_wp, 2.5_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%octree_seed_size, &
                                     drop%octree_coarse_seed_size, drop%w_0ls_from, &
