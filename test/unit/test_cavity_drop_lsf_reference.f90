@@ -11,8 +11,6 @@
 !>   * `i1..i6`   index tuple (see [[nuc_slot]])
 !>   * `value`    `es24.16`
 !>
-!> Symmetric slots stored once (j <= k <= l <= m)
-!> Omitted components checked by `*_tensor_symmetry`
 module test_cavity_drop_lsf_reference
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use mctc_env, only: wp
@@ -23,6 +21,7 @@ module test_cavity_drop_lsf_reference
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_math_packed, only: packed_index, packed_index3, packed_index4, pack_sym_matrix
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
    implicit none(type, external)
    private
@@ -31,19 +30,18 @@ module test_cavity_drop_lsf_reference
 
    integer, parameter :: ndim = 3
 
-   !> Maximum derivative order by concrete
+   !> Maximum derivative order by lsf
    integer, parameter :: max_deriv_svdw = 4
    integer, parameter :: max_deriv_cfc = 3
 
    !> Screening threshold
    real(wp), parameter :: production_threshold = 1.0e-11_wp
 
-   !> Reference tolerance in rel_deviation
-   real(wp), parameter :: reference_tol = 1.0e-12_wp
-
-   !> Tolerances of the companion symmetry checks
-   real(wp), parameter :: symmetry_rel_tol = 1.0e-10_wp
-   real(wp), parameter :: symmetry_abs_tol = 1.0e-12_wp
+   !> Reference tolerance in rel_deviation, by lsf
+   real(wp), parameter :: svdw_reference_tol = 1.0e-11_wp
+   real(wp), parameter :: cfc_reference_tol = 5.0e-13_wp
+   !> CFC `evaluate_batch` (strip kernel) against the per-point records
+   real(wp), parameter :: cfc_batch_reference_tol = 1.0e-11_wp
 
    !> Evaluation points per case
    integer, parameter :: n_points = 5
@@ -143,6 +141,16 @@ module test_cavity_drop_lsf_reference
       integer :: nproblem = 0
       !> First structural problem
       character(len=:), allocatable :: problem
+      !> Fade of the traversed instances recorded ([[record_fade]])
+      logical :: fade_set = .false.
+      !> Fade switch of the traversed instances
+      logical :: fade_enabled = .false.
+      !> Fade onset and width in e-folds of the traversed instances
+      real(wp) :: fade_band(2) = 0.0_wp
+      !> CFC `a1`, `a2`, `c` of the traversed instances
+      real(wp) :: cfc_shape(3) = 0.0_wp
+      !> CFC pair power `m` of the traversed instances
+      integer :: cfc_m = 0
    contains
       !> Append one record
       procedure :: emit => stream_emit
@@ -159,8 +167,7 @@ contains
       testsuite = [ &
                   new_unittest("svdw_matches_reference", test_svdw_reference), &
                   new_unittest("cfc_matches_reference", test_cfc_reference), &
-                  new_unittest("svdw_tensor_symmetry", test_svdw_symmetry), &
-                  new_unittest("cfc_tensor_symmetry", test_cfc_symmetry), &
+                  new_unittest("cfc_batch_matches_reference", test_cfc_batch_reference), &
                   new_unittest("stream_is_reproducible", test_stream_reproducible) &
                   ]
    end subroutine collect_cavity_drop_lsf_reference
@@ -202,11 +209,112 @@ contains
       call check_problems(got, error)
       if (allocated(error)) return
 
+      call write_requested_fixture(got, kind, error)
+      if (allocated(error)) return
+
       call load_fixture(path, ref, error)
       if (allocated(error)) return
 
-      call compare_stream(got, ref, path, error)
+      if (kind == "svdw") then
+         call compare_stream(got, ref, path, svdw_reference_tol, error)
+      else
+         call compare_stream(got, ref, path, cfc_reference_tol, error)
+      end if
    end subroutine run_reference
+
+   !> CFC `evaluate_batch` at order 4 against the per-point fixture records
+   !>
+   !> - every CFC case and both screening flags (`S` at the production threshold,
+   !>   `U` threshold 0; the same reach with the default fade), the five points of
+   !>   a case in one batch, every column reached
+   !> - the fixture's `f0`, `f012_lsf0`, `f012_lsf1_r`, `f012_lsf2_rr` and `f3_rrr`
+   !>   records against the batch outputs in `rel_deviation`, at
+   !>   [[cfc_batch_reference_tol]]; the batch's fourth derivative has no fixture
+   !>   record (CFC's fixture stops at order 3)
+   !> - every such fixture record compared exactly once
+   !>
+   !> @param[out] error  testdrive failure
+   subroutine test_cfc_batch_reference(error)
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Spatial records per point: f0, f012_lsf0, 3 gradient, 6 Hessian, 10 third
+      integer, parameter :: records_per_point = 21
+      type(record_type), allocatable :: ref(:)
+      character(len=:), allocatable :: path, first
+      type(structure_type) :: mol
+      real(wp), allocatable :: radii(:), points(:, :)
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp) :: b0(n_points), b1(ndim, n_points), b2(6, n_points)
+      real(wp) :: b3(10, n_points), b4(15, n_points), got
+      integer :: icase, iflag, i, ncmp, nfail
+      character(len=1) :: flag
+      character(len=80) :: values
+      type(mctc_error), allocatable :: err
+
+      call reference_path("cfc", path)
+      call load_fixture(path, ref, error)
+      if (allocated(error)) return
+
+      ncmp = 0
+      nfail = 0
+      first = ""
+      do icase = 1, n_cfc_cases
+         call load_case(reference_cases(icase), mol, radii)
+         call build_points("cfc", mol, radii, points, error)
+         if (allocated(error)) return
+         do iflag = 1, 2
+            flag = merge("S", "U", iflag == 1)
+            call new_lsf(lsf, "cfc", reference_cases(icase), mol, radii, &
+                         merge(production_threshold, 0.0_wp, iflag == 1))
+            call lsf%evaluate_batch(points, 4, b0, b1, b2, b3, b4, error=err)
+            call check_moist_error(error, err, "CFC evaluate_batch failed")
+            if (allocated(error)) return
+            do i = 1, n_points
+               if (.not. lsf%unreached(i)) cycle
+               call test_failed(error, trim(reference_cases(icase)%tag)//" "//flag// &
+                                ": a fixture point is unreached in the batch")
+               return
+            end do
+            do i = 1, size(ref)
+               associate (r => ref(i))
+                  if (r%id%kind /= "cfc" .or. r%id%flag /= flag .or. &
+                      r%id%case_tag /= reference_cases(icase)%tag) cycle
+                  select case (trim(r%quantity))
+                  case ("f0", "f012_lsf0")
+                     got = b0(r%id%ip)
+                  case ("f012_lsf1_r")
+                     got = b1(r%idx(1), r%id%ip)
+                  case ("f012_lsf2_rr")
+                     got = b2(packed_index(r%idx(1), r%idx(2)), r%id%ip)
+                  case ("f3_rrr")
+                     got = b3(packed_index3(r%idx(1), r%idx(2), r%idx(3)), r%id%ip)
+                  case default
+                     cycle
+                  end select
+                  ncmp = ncmp + 1
+                  if (rel_deviation(got, r%val) <= cfc_batch_reference_tol) cycle
+                  nfail = nfail + 1
+                  if (nfail == 1) then
+                     write (values, "(a,es24.16,a,es24.16)") " reference ", r%val, " batch ", got
+                     first = record_label(r)//values
+                  end if
+               end associate
+            end do
+            deallocate (lsf)
+         end do
+         deallocate (radii, points)
+      end do
+
+      if (ncmp /= 2*n_cfc_cases*n_points*records_per_point) then
+         call test_failed(error, "CFC batch reference: compared "//itoa(ncmp)// &
+                          " records, expected "//itoa(2*n_cfc_cases*n_points*records_per_point))
+         return
+      end if
+      if (nfail == 0) return
+      call test_failed(error, itoa(nfail)//" CFC batch value(s) deviate from the per-point "// &
+                       "fixture; first: "//first)
+   end subroutine test_cfc_batch_reference
 
    !> Find a fixture reference path
    !>
@@ -227,6 +335,122 @@ contains
       if (stat /= 0 .or. length == 0) root = "."
       path = trim(root)//"/test/unit/data/lsf_reference_"//kind//".txt"
    end subroutine reference_path
+
+   !> Write a record stream to the path its writer variable names, if any
+   !>
+   !> - `MOIST_LSF_REFERENCE_WRITE` (SvdW) or `MOIST_LSF_REFERENCE_WRITE_CFC`
+   !>   (CFC): one variable per concrete, as both tests may run in parallel
+   !> - fixture format of `lsf_reference_<kind>.txt`: header (thresholds, order,
+   !>   radii, fade band and switch, case table, point table), then one record per
+   !>   line `(a4, 1x, a12, i1, 1x, a1, a19 right-justified, 6i4, 1x, es24.16)`
+   !> - fade band and switch, and the CFC `a1, a2, c, m` and `far_out` offset,
+   !>   from the traversed instances ([[record_fade]])
+   !> - unset or empty: nothing written
+   !>
+   !> @param[in]  stream Traversed stream
+   !> @param[in]  kind   `svdw` or `cfc`
+   !> @param[out] error  testdrive failure on an I/O error or no recorded fade
+   subroutine write_requested_fixture(stream, kind, error)
+      !> Traversed stream
+      type(record_stream_type), intent(in) :: stream
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(reference_case_type) :: gcase
+      character(len=4096) :: path
+      character(len=19) :: qty
+      character(len=4) :: tag
+      character(len=:), allocatable :: env, reads
+      integer :: length, stat, unit, i, icase, max_deriv
+
+      if (kind == "svdw") then
+         env = "MOIST_LSF_REFERENCE_WRITE"
+         max_deriv = max_deriv_svdw
+         reads = " (SvdW reads no screening_threshold then)"
+      else
+         env = "MOIST_LSF_REFERENCE_WRITE_CFC"
+         max_deriv = max_deriv_cfc
+         reads = " (CFC reads no screening_threshold then)"
+      end if
+      call get_environment_variable(env, path, length, stat)
+      if (stat /= 0 .or. length == 0) return
+      if (.not. stream%fade_set) then
+         call test_failed(error, "fixture writer: no "//kind//" instance recorded its fade")
+         return
+      end if
+
+      open (newunit=unit, file=trim(path), status="replace", action="write", iostat=stat)
+      if (stat /= 0) then
+         call test_failed(error, "cannot open fixture output '"//trim(path)//"'")
+         return
+      end if
+      write (unit, "(a/a/a,es12.4/a,es12.4/a,i0/a/a,2f8.3/a,l1,a/a)", iostat=stat) &
+         "# moist - DROP level set function reference fixture ("//kind//")", "#", &
+         "# screening_threshold (flag S) : ", production_threshold, &
+         "# screening_threshold (flag U) : ", 0.0_wp, &
+         "# max_deriv                    : ", max_deriv, &
+         "# radii                        : default_cpcm_radii()", &
+         "# fade (a, b e-folds)          : ", stream%fade_band, &
+         "# fade enabled                 : ", stream%fade_enabled, reads, "#"
+      if (stat == 0 .and. kind == "svdw") then
+         write (unit, "(a)", iostat=stat) &
+            "# case tag      collection   record       blend_k  blend_1b  blend_2b  blend_3b"
+         do icase = 1, n_svdw_cases
+            if (stat /= 0) exit
+            gcase = reference_cases(icase)
+            write (unit, "(a,a12,1x,a12,1x,a12,4f10.4)", iostat=stat) "# ", gcase%tag, &
+               gcase%collection, gcase%record, gcase%blend_k, gcase%blend_1b, gcase%blend_2b, &
+               gcase%blend_3b
+         end do
+      else if (stat == 0) then
+         write (unit, "(a)", iostat=stat) &
+            "# case tag      collection   record             a1        a2         c   m"
+         do icase = 1, n_cfc_cases
+            if (stat /= 0) exit
+            gcase = reference_cases(icase)
+            write (unit, "(a,a12,1x,a12,1x,a12,3f10.4,i4)", iostat=stat) "# ", gcase%tag, &
+               gcase%collection, gcase%record, stream%cfc_shape, stream%cfc_m
+         end do
+      end if
+      if (stat == 0) then
+         write (unit, "(a)", iostat=stat) "#", &
+            "# point ip  anchor                                offset (bohr)"
+      end if
+      if (stat == 0 .and. kind == "svdw") then
+         write (unit, "(a)", iostat=stat) &
+            "#   1 far_out   atom 1 surface, off-axis direction        +13.00"
+      else if (stat == 0) then
+         write (unit, "(a,f6.4,a)", iostat=stat) &
+            "#   1 far_out   atom 1 surface, off-axis direction   +", &
+            cfc_far_sigma(stream%fade_band, stream%cfc_shape(2)), " * R(1)"
+      end if
+      if (stat == 0) then
+         write (unit, "(a)", iostat=stat) &
+            "#   2 near_out  atom 1 surface, off-axis direction         +1.25", &
+            "#   3 surface   atom 1 surface, off-axis direction         +0.10", &
+            "#   4 deep_in   nucleus 1, off-axis direction        0.40 * R(1)", &
+            "#   5 near_nuc  last nucleus, off-axis direction            +0.05", &
+            "#"
+      end if
+      do i = 1, stream%n
+         if (stat /= 0) exit
+         associate (r => stream%rec(i))
+            tag = adjustr(r%id%kind(1:4))
+            qty = adjustr(r%quantity(1:19))
+            write (unit, "(a4,1x,a12,i1,1x,a1,a19,6i4,1x,es24.16)", iostat=stat) tag, &
+               r%id%case_tag, r%id%ip, r%id%flag, qty, r%idx, r%val
+         end associate
+      end do
+      if (stat /= 0) then
+         close (unit)
+         call test_failed(error, "write to fixture output '"//trim(path)//"' failed")
+         return
+      end if
+      close (unit, iostat=stat)
+      if (stat /= 0) call test_failed(error, "close of fixture output '"//trim(path)//"' failed")
+   end subroutine write_requested_fixture
 
    !* ================================================================================= *!
    !*                                   Traversal                                       *!
@@ -252,7 +476,7 @@ contains
 
       do icase = 1, n_cases(kind)
          call load_case(reference_cases(icase), mol, radii)
-         call build_points(mol, radii, points, error)
+         call build_points(kind, mol, radii, points, error)
          if (allocated(error)) return
          call select_atoms(mol%nat, sel)
 
@@ -302,18 +526,25 @@ contains
    !>
    !> Nucleus-anchored offsets with consistent surface positions:
    !>
-   !>   1 `far_out`  atom 1 surface + 13.0 bohr; far atoms screened
-   !>                (~13.8 bohr reach at k = 5.5, threshold 1e-11)
+   !>   1 `far_out`  SvdW: atom 1 surface + 13.0 bohr; at k = 5.5 inside atom 1's
+   !>                fade band (onset 11.45, end 13.09 bohr), atoms beyond the band
+   !>                end screened; k = 3 (`ch4_legacy`): plateau (onset 21 bohr);
+   !>                CFC: atom 1 surface + [[cfc_far_sigma]] R(1), the middle of
+   !>                atom 1's default band (sigma 3..3.33), atoms beyond the band
+   !>                end screened
    !>   2 `near_out` atom 1 surface + 1.25 bohr; outside, well conditioned
    !>   3 `surface`  atom 1 surface + 0.10 bohr; near zero level set
    !>   4 `deep_in`  0.40 * R1 from nucleus 1; deep inside
    !>   5 `near_nuc` 0.05 bohr from last nucleus; never on nucleus
    !>
+   !> @param[in]  kind   `svdw` or `cfc`
    !> @param[in]  mol    Structure
    !> @param[in]  radii  Per-atom radii
    !> @param[out] points (3, n_points) evaluation points
    !> @param[out] error  testdrive failure if a point lands on a nucleus
-   subroutine build_points(mol, radii, points, error)
+   subroutine build_points(kind, mol, radii, points, error)
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
       !> Structure
       type(structure_type), intent(in) :: mol
       !> Per-atom radii
@@ -327,13 +558,22 @@ contains
       real(wp) :: dmin
       integer :: ip, iat
       character(len=64) :: tail
+      !> CFC instance as [[new_lsf]] constructs it, for the band of `far_out`
+      type(moist_cavity_drop_lsf_cfc_type) :: cfc
 
       do ip = 1, n_points
          dir(:, ip) = raw_dirs(:, ip)/norm2(raw_dirs(:, ip))
       end do
 
       allocate (points(ndim, n_points))
-      points(:, 1) = mol%xyz(:, 1) + (radii(1) + point_offsets(1))*dir(:, 1)
+      if (kind == "cfc") then
+         call cfc%new()
+         points(:, 1) = mol%xyz(:, 1) + radii(1)*(1.0_wp + &
+                        cfc_far_sigma([cfc%param%fade_start, cfc%param%fade_width], &
+                                      cfc%param%a2))*dir(:, 1)
+      else
+         points(:, 1) = mol%xyz(:, 1) + (radii(1) + point_offsets(1))*dir(:, 1)
+      end if
       points(:, 2) = mol%xyz(:, 1) + (radii(1) + point_offsets(2))*dir(:, 2)
       points(:, 3) = mol%xyz(:, 1) + (radii(1) + point_offsets(3))*dir(:, 3)
       points(:, 4) = mol%xyz(:, 1) + point_offsets(4)*radii(1)*dir(:, 4)
@@ -352,6 +592,26 @@ contains
          end if
       end do
    end subroutine build_points
+
+   !> CFC `far_out` offset off atom 1's surface in units of R(1) (sigma)
+   !>
+   !> - the middle of the band, `(a + b/2)/|a2|`; 27/3 e-folds at `a2 = -9`:
+   !>   sigma 3..3.33, 13 Bohr lies past the reach of most first atoms
+   !> - one rounding, `28.5/9` bit for bit at the defaults
+   !>
+   !> @param[in] band  Fade onset and width in e-folds
+   !> @param[in] a2    Pair-term exponent
+   !> @returns   sigma Offset in units of R(1)
+   pure function cfc_far_sigma(band, a2) result(sigma)
+      !> Fade onset and width in e-folds
+      real(wp), intent(in) :: band(2)
+      !> Pair-term exponent
+      real(wp), intent(in) :: a2
+      !> Offset in units of R(1)
+      real(wp) :: sigma
+
+      sigma = (band(1) + 0.5_wp*band(2))/abs(a2)
+   end function cfc_far_sigma
 
    !> Select first, middle, and last atoms in ascending order
    !>
@@ -466,6 +726,11 @@ contains
    !> state left over from a previous point (accumulators, active-set data)
    !> The unscreened LSF is prepared once on a fresh object
    !>
+   !> - fade on (SvdW and CFC fixtures): both flags share the reach (band end),
+   !>   so the active counts must agree and the two blocks must be bit-identical
+   !>   ([[check_flags_identical]]); fade off: threshold 0 must leave every atom
+   !>   active
+   !>
    !> @param[in]    kind    `svdw` or `cfc`
    !> @param[in]    gcase   Case descriptor
    !> @param[in]    mol     Structure
@@ -500,9 +765,15 @@ contains
 
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_scr, lsf_ref
       real(wp) :: f0_scr, f0_ref
+      !> Stream length before the `S` and before the `U` block
+      integer :: n0, n1
 
       call new_lsf(lsf_scr, kind, gcase, mol, radii, production_threshold)
       call new_lsf(lsf_ref, kind, gcase, mol, radii, 0.0_wp)
+      call record_fade(stream, lsf_scr, gcase%tag, error)
+      if (allocated(error)) return
+      call record_fade(stream, lsf_ref, gcase%tag, error)
+      if (allocated(error)) return
 
       call prepare_lsf(lsf_scr, prior, error)
       if (allocated(error)) return
@@ -516,19 +787,80 @@ contains
       call prepare_lsf(lsf_ref, point, error)
       if (allocated(error)) return
 
-      call assert_unscreened(lsf_ref%active_count(), mol%nat, gcase%tag, ip, error)
+      if (stream%fade_enabled) then
+         call assert_same_reach(lsf_scr%active_count(), lsf_ref%active_count(), gcase%tag, &
+                                ip, error)
+      else
+         call assert_unscreened(lsf_ref%active_count(), mol%nat, gcase%tag, ip, error)
+      end if
       if (allocated(error)) return
 
+      n0 = stream%n
       call emit_block(lsf_scr, record_id_type(kind, gcase%tag, ip, "S"), sel, stream, f0_scr)
+      n1 = stream%n
       call emit_block(lsf_ref, record_id_type(kind, gcase%tag, ip, "U"), sel, stream, f0_ref)
       call stream%emit(record_id_type(kind, gcase%tag, ip, "D"), "f0_delta", idx6(), &
                        f0_scr - f0_ref)
+      if (stream%fade_enabled) call check_flags_identical(stream, n0, n1, gcase%tag, ip)
    end subroutine emit_point
+
+   !> Record the fade of an SvdW or CFC instance for the fixture header
+   !>
+   !> - the first instance sets it, every later one must match: the header
+   !>   holds one band for the whole fixture
+   !> - CFC also `a1, a2, c, m`, one set for every case
+   !>
+   !> @param[inout] stream Record sink
+   !> @param[in]    lsf    Instance as [[new_lsf]] built it
+   !> @param[in]    tag    Case tag for the failure message
+   !> @param[out]   error  testdrive failure, instances disagree
+   subroutine record_fade(stream, lsf, tag, error)
+      !> Record sink
+      type(record_stream_type), intent(inout) :: stream
+      !> Instance as built
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Case tag
+      character(len=*), intent(in) :: tag
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      logical :: enabled
+      real(wp) :: band(2)
+      !> CFC `a1, a2, c` and `m` (zero for SvdW)
+      real(wp) :: par(3)
+      integer :: m
+
+      par = 0.0_wp
+      m = 0
+      select type (lsf)
+      type is (moist_cavity_drop_lsf_svdw_type)
+         enabled = lsf%param%fade_enabled
+         band = [lsf%param%fade_start, lsf%param%fade_width]
+      type is (moist_cavity_drop_lsf_cfc_type)
+         enabled = lsf%param%fade_enabled
+         band = [lsf%param%fade_start, lsf%param%fade_width]
+         par = [lsf%param%a1, lsf%param%a2, lsf%param%c]
+         m = lsf%param%m
+      class default
+         return
+      end select
+      if (.not. stream%fade_set) then
+         stream%fade_set = .true.
+         stream%fade_enabled = enabled
+         stream%fade_band = band
+         stream%cfc_shape = par
+         stream%cfc_m = m
+      else if ((stream%fade_enabled .neqv. enabled) .or. any(stream%fade_band /= band) .or. &
+               any(stream%cfc_shape /= par) .or. stream%cfc_m /= m) then
+         call test_failed(error, trim(tag)//": instances disagree on the fade or shape, "// &
+                          "the fixture header records one set")
+      end if
+   end subroutine record_fade
 
    !> Emit all quantities of a prepared LSF for one screening flag
    !>
    !> Shared spatial and single-nucleus blocks
-   !> SvdW-only pair, normalisation, and order-4 blocks
+   !> SvdW-only pair, normalisation, order-4, radius and contracted blocks
    !> CFC capped at order 3; unprepared accessors fail
    !>
    !> @param[in]    lsf     Prepared LSF
@@ -558,6 +890,8 @@ contains
       if (id%kind /= "svdw") return
       call emit_pair_block(lsf, id, sel, act, stream)
       call emit_normalized_block(lsf, id, sel, act, stream)
+      call emit_radius_block(lsf, id, sel, act, stream)
+      call emit_contracted_block(lsf, id, sel, act, stream)
    end subroutine emit_block
 
    !> Emit spatial derivatives and active count for nuclear records
@@ -576,8 +910,8 @@ contains
       !> Value of `f0`
       real(wp), intent(out) :: f0
 
-      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim)
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim), lsf4_rrrr(ndim, ndim, ndim, ndim)
+      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(6)
+      real(wp) :: lsf3_rrr(10), lsf4_rrrr(15)
       integer :: j, k, l, m
 
       call stream%emit(id, "n_active", idx6(), real(lsf%active_count(), wp))
@@ -592,7 +926,7 @@ contains
       end do
       do j = 1, ndim
          do k = j, ndim
-            call stream%emit(id, "f012_lsf2_rr", idx6(j, k), lsf2_rr(j, k))
+            call stream%emit(id, "f012_lsf2_rr", idx6(j, k), lsf2_rr(packed_index(j, k)))
          end do
       end do
 
@@ -600,7 +934,8 @@ contains
       do j = 1, ndim
          do k = j, ndim
             do l = k, ndim
-               call stream%emit(id, "f3_rrr", idx6(j, k, l), lsf3_rrr(j, k, l))
+               call stream%emit(id, "f3_rrr", idx6(j, k, l), &
+                                lsf3_rrr(packed_index3(j, k, l)))
             end do
          end do
       end do
@@ -612,7 +947,8 @@ contains
          do k = j, ndim
             do l = k, ndim
                do m = l, ndim
-                  call stream%emit(id, "f4_rrrr", idx6(j, k, l, m), lsf4_rrrr(j, k, l, m))
+                  call stream%emit(id, "f4_rrrr", idx6(j, k, l, m), &
+                                   lsf4_rrrr(packed_index4(j, k, l, m)))
                end do
             end do
          end do
@@ -639,14 +975,14 @@ contains
       type(record_stream_type), intent(inout) :: stream
 
       real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :), lsf4_rrr_rA(:, :, :, :, :)
+      real(wp), allocatable :: lsf3_rr_rA(:, :, :), lsf4_rrr_rA(:, :, :)
       integer :: nac, j, k, l, s, ia, atomA, slotA
 
       ! Nuclear outputs use active indices and caller-sized buffers
       ! Resolve returned index space from extent (see `nuc_slot`)
       nac = lsf%active_count()
       allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
+      allocate (lsf3_rr_rA(6, ndim, nac))
 
       call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
       call check_user_space(lsf1_rA, act, "f3rrA_lsf1_rA", stream)
@@ -670,12 +1006,12 @@ contains
       end do
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf3_rr_rA, 4), atomA, act, "f3_rr_rA", stream)
+         slotA = nuc_slot(size(lsf3_rr_rA, 3), atomA, act, "f3_rr_rA", stream)
          do s = 1, ndim
             do j = 1, ndim
                do k = j, ndim
                   call stream%emit(id, "f3_rr_rA", idx6(j, k, s, atomA), &
-                                   slot_read(lsf3_rr_rA(j, k, s, :), slotA))
+                                   slot_read(lsf3_rr_rA(packed_index(j, k), s, :), slotA))
                end do
             end do
          end do
@@ -683,17 +1019,17 @@ contains
 
       if (id%kind /= "svdw") return
 
-      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
+      allocate (lsf4_rrr_rA(10, ndim, nac))
       call lsf%f4_rrr_rA(lsf4_rrr_rA)
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf4_rrr_rA, 5), atomA, act, "f4_rrr_rA", stream)
+         slotA = nuc_slot(size(lsf4_rrr_rA, 3), atomA, act, "f4_rrr_rA", stream)
          do s = 1, ndim
             do j = 1, ndim
                do k = j, ndim
                   do l = k, ndim
                      call stream%emit(id, "f4_rrr_rA", idx6(j, k, l, s, atomA), &
-                                      slot_read(lsf4_rrr_rA(j, k, l, s, :), slotA))
+                                      slot_read(lsf4_rrr_rA(packed_index3(j, k, l), s, :), slotA))
                   end do
                end do
             end do
@@ -721,14 +1057,14 @@ contains
       type(record_stream_type), intent(inout) :: stream
 
       real(wp), allocatable :: lsf2_rArB(:, :, :, :), lsf3_r_rArB(:, :, :, :, :)
-      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :, :)
+      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :)
       integer :: nac, npair, j, k, s, t, ia, ib, atomA, atomB, slotA, slotB
 
       nac = lsf%active_count()
       npair = min(n_pair_atoms, size(sel))
       allocate (lsf2_rArB(ndim, nac, ndim, nac))
       allocate (lsf3_r_rArB(ndim, ndim, nac, ndim, nac))
-      allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
+      allocate (lsf4_rr_rArB(6, ndim, nac, ndim, nac))
 
       call lsf%f2_rArB(lsf2_rArB)
       do ia = 1, npair
@@ -767,17 +1103,17 @@ contains
       call lsf%f4_rr_rArB(lsf4_rr_rArB)
       do ia = 1, npair
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf4_rr_rArB, 4), atomA, act, "f4_rr_rArB", stream)
+         slotA = nuc_slot(size(lsf4_rr_rArB, 3), atomA, act, "f4_rr_rArB", stream)
          do ib = 1, npair
             atomB = sel(ib)
-            slotB = nuc_slot(size(lsf4_rr_rArB, 6), atomB, act, "f4_rr_rArB", stream)
+            slotB = nuc_slot(size(lsf4_rr_rArB, 5), atomB, act, "f4_rr_rArB", stream)
             do s = 1, ndim
                do t = 1, ndim
                   do j = 1, ndim
                      do k = j, ndim
                         call stream%emit(id, "f4_rr_rArB", &
                                          idx6(j, k, s, atomA, t, atomB), &
-                                         slot_read2(lsf4_rr_rArB(j, k, s, :, t, :), &
+                                         slot_read2(lsf4_rr_rArB(packed_index(j, k), s, :, t, :), &
                                                     slotA, slotB))
                      end do
                   end do
@@ -824,6 +1160,229 @@ contains
          end do
       end do
    end subroutine emit_normalized_block
+
+   !> Emit the radius family: `f3_rr_rad`, the radius-pair and nuclear-radius blocks
+   !>
+   !> - single-radius ladder for the selected atoms, two-index blocks over the
+   !>   first [[n_pair_atoms]] of them, symmetric spatial pairs once (j <= k)
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[in]    act     Atom -> active index map
+   !> @param[inout] stream  Record sink
+   subroutine emit_radius_block(lsf, id, sel, act, stream)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Atom -> active index map
+      integer, intent(in) :: act(:)
+      !> Record sink
+      type(record_stream_type), intent(inout) :: stream
+
+      real(wp), allocatable :: r1(:), r2(:, :), r3(:, :)
+      real(wp), allocatable :: rr2(:, :), rr3(:, :, :), rr4(:, :, :)
+      real(wp), allocatable :: xr2(:, :, :), xr3(:, :, :, :), xr4(:, :, :, :)
+      integer :: nac, npair, j, k, s, ia, ib, atomA, atomB, slotA, slotB
+
+      nac = lsf%active_count()
+      npair = min(n_pair_atoms, size(sel))
+      allocate (r1(nac), r2(ndim, nac), r3(6, nac))
+      allocate (rr2(nac, nac), rr3(ndim, nac, nac), rr4(6, nac, nac))
+      allocate (xr2(ndim, nac, nac), xr3(ndim, ndim, nac, nac), xr4(6, ndim, nac, nac))
+
+      call lsf%f3_rr_rad(r1, r2, r3)
+      do ia = 1, size(sel)
+         atomA = sel(ia)
+         slotA = nuc_slot(size(r1), atomA, act, "f3_rr_rad", stream)
+         call stream%emit(id, "f3rrrad_lsf1_rad", idx6(atomA), slot_read(r1, slotA))
+         do j = 1, ndim
+            call stream%emit(id, "f3rrrad_lsf2_r_rad", idx6(j, atomA), &
+                             slot_read(r2(j, :), slotA))
+         end do
+         do j = 1, ndim
+            do k = j, ndim
+               call stream%emit(id, "f3_rr_rad", idx6(j, k, atomA), &
+                                slot_read(r3(packed_index(j, k), :), slotA))
+            end do
+         end do
+      end do
+
+      call lsf%f2_radrad(rr2)
+      call lsf%f3_r_radrad(rr3)
+      call lsf%f4_rr_radrad(rr4)
+      call lsf%f2_rA_rad(xr2)
+      call lsf%f3_r_rA_rad(xr3)
+      call lsf%f4_rr_rA_rad(xr4)
+      do ia = 1, npair
+         atomA = sel(ia)
+         slotA = nuc_slot(size(rr2, 1), atomA, act, "f2_radrad", stream)
+         do ib = 1, npair
+            atomB = sel(ib)
+            slotB = nuc_slot(size(rr2, 2), atomB, act, "f2_radrad", stream)
+            call stream%emit(id, "f2_radrad", idx6(atomA, atomB), slot_read2(rr2, slotA, slotB))
+            do j = 1, ndim
+               call stream%emit(id, "f3_r_radrad", idx6(j, atomA, atomB), &
+                                slot_read2(rr3(j, :, :), slotA, slotB))
+            end do
+            do j = 1, ndim
+               do k = j, ndim
+                  call stream%emit(id, "f4_rr_radrad", idx6(j, k, atomA, atomB), &
+                                   slot_read2(rr4(packed_index(j, k), :, :), slotA, slotB))
+               end do
+            end do
+            do s = 1, ndim
+               call stream%emit(id, "f2_rA_rad", idx6(s, atomA, atomB), &
+                                slot_read2(xr2(s, :, :), slotA, slotB))
+            end do
+            do s = 1, ndim
+               do j = 1, ndim
+                  call stream%emit(id, "f3_r_rA_rad", idx6(j, s, atomA, atomB), &
+                                   slot_read2(xr3(j, s, :, :), slotA, slotB))
+               end do
+            end do
+            do s = 1, ndim
+               do j = 1, ndim
+                  do k = j, ndim
+                     call stream%emit(id, "f4_rr_rA_rad", idx6(j, k, s, atomA, atomB), &
+                                      slot_read2(xr4(packed_index(j, k), s, :, :), slotA, slotB))
+                  end do
+               end do
+            end do
+         end do
+      end do
+   end subroutine emit_radius_block
+
+   !> Emit the contracted families: joint `hvp_f*_rA`, `hvp_f*_rad`, `vjp_f1_rA`, `vjp_f1_rad`
+   !>
+   !> - directions and adjoint weights from [[contraction_vectors]] at this point
+   !> - records for the selected atoms, symmetric spatial pairs once
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[in]    act     Atom -> active index map
+   !> @param[inout] stream  Record sink
+   subroutine emit_contracted_block(lsf, id, sel, act, stream)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Atom -> active index map
+      integer, intent(in) :: act(:)
+      !> Record sink
+      type(record_stream_type), intent(inout) :: stream
+
+      real(wp), allocatable :: v(:, :), vrad(:)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :)
+      real(wp), allocatable :: g1(:), g2(:, :), g3(:, :), ja(:, :), jr(:)
+      real(wp) :: w0, w1(ndim), w2(ndim, ndim), w2p(6)
+      integer :: nac, j, k, s, ia, atomA, slotA
+
+      nac = lsf%active_count()
+      allocate (v(ndim, lsf%ncenters), vrad(lsf%ncenters))
+      call contraction_vectors(id%ip, v, vrad, w0, w1, w2)
+      call pack_sym_matrix(w2, w2p, ndim)
+      allocate (h1(ndim, nac), h2(ndim, ndim, nac), h3(6, ndim, nac))
+      allocate (g1(nac), g2(ndim, nac), g3(6, nac), ja(ndim, nac), jr(nac))
+
+      call lsf%hvp_f1_rA(v, h1, vrad)
+      call lsf%hvp_f2_r_rA(v, h2, vrad)
+      call lsf%hvp_f3_rr_rA(v, h3, vrad)
+      call lsf%hvp_f1_rad(v, vrad, g1)
+      call lsf%hvp_f2_r_rad(v, vrad, g2)
+      call lsf%hvp_f3_rr_rad(v, vrad, g3)
+      call lsf%vjp_f1_rA(w0, w1, w2p, ja)
+      call lsf%vjp_f1_rad(w0, w1, w2p, jr)
+      do ia = 1, size(sel)
+         atomA = sel(ia)
+         slotA = nuc_slot(size(h1, 2), atomA, act, "hvp_f1_rA", stream)
+         do s = 1, ndim
+            call stream%emit(id, "hvp_f1_rA", idx6(s, atomA), slot_read(h1(s, :), slotA))
+         end do
+         do s = 1, ndim
+            do j = 1, ndim
+               call stream%emit(id, "hvp_f2_r_rA", idx6(j, s, atomA), &
+                                slot_read(h2(j, s, :), slotA))
+            end do
+         end do
+         do s = 1, ndim
+            do j = 1, ndim
+               do k = j, ndim
+                  call stream%emit(id, "hvp_f3_rr_rA", idx6(j, k, s, atomA), &
+                                   slot_read(h3(packed_index(j, k), s, :), slotA))
+               end do
+            end do
+         end do
+         call stream%emit(id, "hvp_f1_rad", idx6(atomA), slot_read(g1, slotA))
+         do j = 1, ndim
+            call stream%emit(id, "hvp_f2_r_rad", idx6(j, atomA), slot_read(g2(j, :), slotA))
+         end do
+         do j = 1, ndim
+            do k = j, ndim
+               call stream%emit(id, "hvp_f3_rr_rad", idx6(j, k, atomA), &
+                                slot_read(g3(packed_index(j, k), :), slotA))
+            end do
+         end do
+         do s = 1, ndim
+            call stream%emit(id, "vjp_f1_rA", idx6(s, atomA), slot_read(ja(s, :), slotA))
+         end do
+         call stream%emit(id, "vjp_f1_rad", idx6(atomA), slot_read(jr, slotA))
+      end do
+   end subroutine emit_contracted_block
+
+   !> Deterministic joint direction and adjoint weights of one evaluation point
+   !>
+   !> - `v(i, A) = sin(0.7 i + 1.3 A + 0.37 ip)`, user-space atom `A`
+   !> - `vrad(A) = 0.5 cos(1.1 A + 0.29 ip)`
+   !> - `w0 = 0.6 + 0.05 ip`, `w1(i) = cos(0.9 i + 0.31 ip)`,
+   !>   `w2(i, j) = (sin(0.4 i + 0.8 j + 0.2 ip) + sin(0.4 j + 0.8 i + 0.2 ip))/2`
+   !>   (symmetric)
+   !>
+   !> @param[in]  ip   Evaluation-point index
+   !> @param[out] v    Nuclear direction [ndim, ncenters]
+   !> @param[out] vrad Radius direction [ncenters]
+   !> @param[out] w0   Adjoint weight of the value
+   !> @param[out] w1   Adjoint weights of the gradient
+   !> @param[out] w2   Adjoint weights of the Hessian
+   pure subroutine contraction_vectors(ip, v, vrad, w0, w1, w2)
+      !> Evaluation-point index
+      integer, intent(in) :: ip
+      !> Nuclear direction
+      real(wp), intent(out) :: v(:, :)
+      !> Radius direction
+      real(wp), intent(out) :: vrad(:)
+      !> Adjoint weight of the value
+      real(wp), intent(out) :: w0
+      !> Adjoint weights of the gradient
+      real(wp), intent(out) :: w1(ndim)
+      !> Adjoint weights of the Hessian
+      real(wp), intent(out) :: w2(ndim, ndim)
+
+      integer :: i, j, a
+      real(wp) :: t
+
+      t = real(ip, wp)
+      do a = 1, size(v, 2)
+         do i = 1, ndim
+            v(i, a) = sin(0.7_wp*real(i, wp) + 1.3_wp*real(a, wp) + 0.37_wp*t)
+         end do
+         vrad(a) = 0.5_wp*cos(1.1_wp*real(a, wp) + 0.29_wp*t)
+      end do
+      w0 = 0.6_wp + 0.05_wp*t
+      do i = 1, ndim
+         w1(i) = cos(0.9_wp*real(i, wp) + 0.31_wp*t)
+         do j = 1, ndim
+            w2(i, j) = 0.5_wp*(sin(0.4_wp*real(i, wp) + 0.8_wp*real(j, wp) + 0.2_wp*t) + &
+                               sin(0.4_wp*real(j, wp) + 0.8_wp*real(i, wp) + 0.2_wp*t))
+         end do
+      end do
+   end subroutine contraction_vectors
 
    !> Pack up to six indices; zero-fill unused slots
    !>
@@ -993,6 +1552,76 @@ contains
                        " point "//itoa(ip)//": active "//itoa(nact)//" of "//itoa(nat))
    end subroutine assert_unscreened
 
+   !> Require the same active count for both flags (fade on)
+   !>
+   !> With the fade on the reach is the band end whatever the threshold, so the
+   !> production and the threshold-0 LSF must screen alike
+   !>
+   !> @param[in]  nscr   Active count at the production threshold
+   !> @param[in]  nref   Active count at threshold 0
+   !> @param[in]  tag    Case tag, for the message
+   !> @param[in]  ip     Evaluation-point index, for the message
+   !> @param[out] error  testdrive failure
+   subroutine assert_same_reach(nscr, nref, tag, ip, error)
+      !> Active count at the production threshold
+      integer, intent(in) :: nscr
+      !> Active count at threshold 0
+      integer, intent(in) :: nref
+      !> Case tag
+      character(len=*), intent(in) :: tag
+      !> Evaluation-point index
+      integer, intent(in) :: ip
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      if (nscr == nref) return
+      call test_failed(error, "fade on: the screening threshold changes the active set for "// &
+                       trim(tag)//" point "//itoa(ip)//": "//itoa(nscr)//" vs "//itoa(nref))
+   end subroutine assert_same_reach
+
+   !> Flag a problem unless the `S` and `U` blocks hold bit-identical values
+   !>
+   !> - `S` block: records `n0+1..n1`; `U` block: the next `n1-n0`; then the `D`
+   !>   record, which must be an exact zero
+   !>
+   !> @param[inout] stream  Record sink
+   !> @param[in]    n0      Stream length before the `S` block
+   !> @param[in]    n1      Stream length before the `U` block
+   !> @param[in]    tag     Case tag, for the message
+   !> @param[in]    ip      Evaluation-point index, for the message
+   subroutine check_flags_identical(stream, n0, n1, tag, ip)
+      !> Record sink
+      type(record_stream_type), intent(inout) :: stream
+      !> Stream length before the `S` block
+      integer, intent(in) :: n0
+      !> Stream length before the `U` block
+      integer, intent(in) :: n1
+      !> Case tag
+      character(len=*), intent(in) :: tag
+      !> Evaluation-point index
+      integer, intent(in) :: ip
+
+      integer :: i, m
+
+      m = n1 - n0
+      if (stream%n /= n1 + m + 1) then
+         call stream%flag_problem("S and U block lengths differ for "//trim(tag)// &
+                                  " point "//itoa(ip))
+         return
+      end if
+      do i = 1, m
+         if (stream%rec(n0 + i)%val == stream%rec(n1 + i)%val) cycle
+         call stream%flag_problem("fade on: S and U records differ for "//trim(tag)// &
+                                  " point "//itoa(ip)//" ("// &
+                                  trim(stream%rec(n0 + i)%quantity)//")")
+         return
+      end do
+      if (stream%rec(stream%n)%val /= 0.0_wp) then
+         call stream%flag_problem("fade on: f0_delta not exactly zero for "// &
+                                  trim(tag)//" point "//itoa(ip))
+      end if
+   end subroutine check_flags_identical
+
    !> Build atom-to-active-index map (0 = dropped)
    !>
    !> Assert ascending user-space order when all atoms are active
@@ -1100,20 +1729,23 @@ contains
    !> @param[in]  got    Emitted stream
    !> @param[in]  ref    Parsed fixture
    !> @param[in]  path   Fixture path, for the failure message
+   !> @param[in]  tol    Tolerance in rel_deviation
    !> @param[out] error  testdrive failure
-   subroutine compare_stream(got, ref, path, error)
+   subroutine compare_stream(got, ref, path, tol, error)
       !> Emitted stream
       type(record_stream_type), intent(in) :: got
       !> Parsed fixture
       type(record_type), intent(in) :: ref(:)
       !> Fixture path
       character(len=*), intent(in) :: path
+      !> Tolerance in rel_deviation
+      real(wp), intent(in) :: tol
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
       integer :: i, nfail
       character(len=:), allocatable :: first
-      character(len=64) :: values
+      character(len=80) :: values
 
       if (got%n /= size(ref)) then
          call test_failed(error, "reference fixture length mismatch: evaluated "// &
@@ -1132,7 +1764,7 @@ contains
                                     record_label(got%rec(i))//"' now"
             cycle
          end if
-         if (rel_deviation(got%rec(i)%val, ref(i)%val) <= reference_tol) cycle
+         if (rel_deviation(got%rec(i)%val, ref(i)%val) <= tol) cycle
          nfail = nfail + 1
          if (nfail == 1) then
             write (values, "(a,es24.16,a,es24.16)") " reference ", ref(i)%val, " now ", &
@@ -1317,199 +1949,5 @@ contains
          return
       end do
    end subroutine compare_two_passes
-
-   !* ================================================================================= *!
-   !*                              Tensor symmetry checks                               *!
-   !* ================================================================================= *!
-
-   !> Check full-tensor symmetry for fixture slots stored once
-   !>
-   !> Loose tolerance detects wrong permutations over roundoff
-   subroutine test_svdw_symmetry(error)
-      type(error_type), allocatable, intent(out) :: error
-      call run_symmetry(error, "svdw")
-   end subroutine test_svdw_symmetry
-
-   !> Check CFC symmetry at orders 2 and 3
-   subroutine test_cfc_symmetry(error)
-      type(error_type), allocatable, intent(out) :: error
-      call run_symmetry(error, "cfc")
-   end subroutine test_cfc_symmetry
-
-   !> Check symmetric slots for every case and point
-   !>
-   !> @param[out] error  testdrive failure
-   !> @param[in]  kind   `svdw` or `cfc`
-   subroutine run_symmetry(error, kind)
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Concrete selector
-      character(len=*), intent(in) :: kind
-
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ip
-
-      do icase = 1, n_cases(kind)
-         call load_case(reference_cases(icase), mol, radii)
-         call build_points(mol, radii, points, error)
-         if (allocated(error)) return
-
-         do ip = 1, n_points
-            call new_lsf(lsf, kind, reference_cases(icase), mol, radii, production_threshold)
-            call prepare_lsf(lsf, points(:, ip), error)
-            if (allocated(error)) return
-
-            call check_symmetry_low(lsf, error)
-            if (allocated(error)) return
-            if (kind /= "svdw") cycle
-            call check_symmetry_high(lsf, error)
-            if (allocated(error)) return
-         end do
-
-         deallocate (radii, points)
-      end do
-   end subroutine run_symmetry
-
-   !> Check symmetric slots through order 3
-   !>
-   !> @param[in]  lsf    Prepared LSF
-   !> @param[out] error  testdrive failure
-   subroutine check_symmetry_low(lsf, error)
-      !> Prepared LSF
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim), lsf3_rrr(ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :, :)
-      real(wp) :: dev_jk, dev_kl
-      integer :: nac, j, s, iA
-
-      nac = lsf%active_count()
-      allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
-
-      call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
-      call check_sym(error, asym(lsf2_rr), maxval(abs(lsf2_rr)), "f012_lsf2_rr")
-      if (allocated(error)) return
-
-      call lsf%f3_rrr(lsf3_rrr=lsf3_rrr)
-      dev_jk = 0.0_wp
-      dev_kl = 0.0_wp
-      do j = 1, ndim
-         dev_jk = max(dev_jk, asym(lsf3_rrr(:, :, j)))
-         dev_kl = max(dev_kl, asym(lsf3_rrr(j, :, :)))
-      end do
-      call check_sym(error, dev_jk, maxval(abs(lsf3_rrr)), "f3_rrr(jk)")
-      if (allocated(error)) return
-      call check_sym(error, dev_kl, maxval(abs(lsf3_rrr)), "f3_rrr(kl)")
-      if (allocated(error)) return
-
-      call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-      dev_jk = 0.0_wp
-      do iA = 1, nac
-         do s = 1, ndim
-            dev_jk = max(dev_jk, asym(lsf3_rr_rA(:, :, s, iA)))
-         end do
-      end do
-      call check_sym(error, dev_jk, maxval(abs(lsf3_rr_rA)), "f3_rr_rA(jk)")
-   end subroutine check_symmetry_low
-
-   !> Check SvdW order-4 tensor symmetry
-   !>
-   !> @param[in]  lsf    Prepared LSF
-   !> @param[out] error  testdrive failure
-   subroutine check_symmetry_high(lsf, error)
-      !> Prepared LSF
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: lsf4_rrrr(ndim, ndim, ndim, ndim)
-      real(wp), allocatable :: lsf4_rrr_rA(:, :, :, :, :), lsf4_rr_rArB(:, :, :, :, :, :)
-      real(wp) :: dev_jk, dev_kl, dev_lm
-      integer :: nac, j, k, l, s, iA
-
-      nac = lsf%active_count()
-      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
-      allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
-
-      call lsf%f4_rrrr(lsf4_rrrr)
-      dev_jk = 0.0_wp
-      dev_kl = 0.0_wp
-      dev_lm = 0.0_wp
-      do j = 1, ndim
-         do k = 1, ndim
-            dev_jk = max(dev_jk, asym(lsf4_rrrr(:, :, j, k)))
-            dev_kl = max(dev_kl, asym(lsf4_rrrr(j, :, :, k)))
-            dev_lm = max(dev_lm, asym(lsf4_rrrr(j, k, :, :)))
-         end do
-      end do
-      call check_sym(error, dev_jk, maxval(abs(lsf4_rrrr)), "f4_rrrr(jk)")
-      if (allocated(error)) return
-      call check_sym(error, dev_kl, maxval(abs(lsf4_rrrr)), "f4_rrrr(kl)")
-      if (allocated(error)) return
-      call check_sym(error, dev_lm, maxval(abs(lsf4_rrrr)), "f4_rrrr(lm)")
-      if (allocated(error)) return
-
-      call lsf%f4_rrr_rA(lsf4_rrr_rA)
-      dev_jk = 0.0_wp
-      dev_kl = 0.0_wp
-      do iA = 1, nac
-         do s = 1, ndim
-            do l = 1, ndim
-               dev_jk = max(dev_jk, asym(lsf4_rrr_rA(:, :, l, s, iA)))
-               dev_kl = max(dev_kl, asym(lsf4_rrr_rA(l, :, :, s, iA)))
-            end do
-         end do
-      end do
-      call check_sym(error, dev_jk, maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(jk)")
-      if (allocated(error)) return
-      call check_sym(error, dev_kl, maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(kl)")
-      if (allocated(error)) return
-
-      call lsf%f4_rr_rArB(lsf4_rr_rArB)
-      dev_jk = 0.0_wp
-      do j = 1, ndim
-         do k = 1, ndim
-            dev_jk = max(dev_jk, maxval(abs(lsf4_rr_rArB(j, k, :, :, :, :) &
-                                            - lsf4_rr_rArB(k, j, :, :, :, :))))
-         end do
-      end do
-      call check_sym(error, dev_jk, maxval(abs(lsf4_rr_rArB)), "f4_rr_rArB(jk)")
-   end subroutine check_symmetry_high
-
-   !> Largest asymmetry of a square matrix, `max |m - m^T|`
-   !>
-   !> @param[in] m  Matrix, or a rank-reduced slice of a higher-rank tensor
-   !> @returns      Largest absolute deviation from symmetry
-   pure real(wp) function asym(m) result(dev)
-      !> Matrix to test
-      real(wp), intent(in) :: m(:, :)
-
-      dev = maxval(abs(m - transpose(m)))
-   end function asym
-
-   !> Check tensor asymmetry against scaled tolerance
-   !>
-   !> @param[out] error  testdrive failure
-   !> @param[in]  dev    Largest absolute deviation from symmetry
-   !> @param[in]  scale  Largest absolute element of the tensor
-   !> @param[in]  label  Name reported on failure
-   subroutine check_sym(error, dev, scale, label)
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Largest absolute deviation from symmetry
-      real(wp), intent(in) :: dev
-      !> Largest absolute element of the tensor
-      real(wp), intent(in) :: scale
-      !> Name reported on failure
-      character(len=*), intent(in) :: label
-
-      if (dev <= max(symmetry_abs_tol, symmetry_rel_tol*scale)) return
-      call test_failed(error, "tensor slot not symmetric: "//label)
-   end subroutine check_sym
 
 end module test_cavity_drop_lsf_reference
