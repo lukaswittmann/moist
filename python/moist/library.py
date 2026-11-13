@@ -821,7 +821,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
     xyz = np.zeros((ngrid, 3), dtype=np.float64, order="C")
     weights = np.zeros(ngrid, dtype=np.float64)
     owner = np.zeros(ngrid, dtype=np.int32)
-    converged = np.zeros(ngrid, dtype=np.bool_)
     radii = np.zeros(nsph, dtype=np.float64)
     asph = np.zeros(nsph, dtype=np.float64)
 
@@ -836,7 +835,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
         _cast("double*", xyz),
         _cast("double*", weights),
         _cast("int*", owner),
-        _cast("bool*", converged),
         _cast("double*", radii),
         _cast("double*", asph),
     )
@@ -849,7 +847,6 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
         "xyz": xyz,
         "a": weights,
         "owner": owner,
-        "converged": converged,
         "radii": radii,
         "asph": asph,
     }

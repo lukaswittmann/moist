@@ -380,7 +380,7 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     import moist
 
     assert DROP is moist.DROP and Isodensity is moist.Isodensity
-    parameters = DROPParameters(nleb=26, proj_level=2, tolerance=2e-10)
+    parameters = DROPParameters(nleb=26, proj_level=1, tolerance=2e-10)
     surface = Isodensity(parameters=IsodensityParameters(rho_iso=8e-4)) if density_dependent else SvdW()
     radii = CustomRadii([3., 2.5, 2.5])
     config = DROP(lsf=surface, parameters=parameters, radii=radii)

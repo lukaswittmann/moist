@@ -113,7 +113,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
-                    proj_level=2,
+                    proj_level=1,
                     branch_weight_s=0.08,
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
@@ -130,7 +130,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
-                    proj_level=2,
+                    proj_level=1,
                     branch_weight_s=0.08,
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
@@ -171,7 +171,7 @@ def test_public_cavity_types_accept_their_optional_arguments(
 
 @pytest.fixture
 def branching_cross() -> Structure:
-    """Five-carbon cross whose concave seams branch at ``proj_level=7``.
+    """Five-carbon cross whose concave seams branch at ``proj_level=3``.
 
     Same fixture as the Fortran suite's ``get_test_cross``. The default
     projection level finds no second solution on it.
@@ -257,7 +257,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
 
 def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
     """Branch data comes from moist's own arrays, not from unpacking an id."""
-    cavity = CavityDROP(parameters=DROPParameters(proj_level=7), context=CONTEXT)
+    cavity = CavityDROP(parameters=DROPParameters(proj_level=3), context=CONTEXT)
     cavity.update(branching_cross)
     snapshot = cavity.snapshot()
 
@@ -277,6 +277,17 @@ def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
         group = snapshot.anchor_id == anchor
         assert snapshot.branch_count[group].min() == group.sum()
         assert np.array_equal(np.unique(snapshot.branch[group]), snapshot.branch[group])
+
+    # The zero-based row layout: anchor i owns rows offset[i]:offset[i + 1].
+    rows_per_anchor = np.diff(snapshot.offset)
+    assert snapshot.offset.shape == (snapshot.nmax + 1,)
+    assert snapshot.offset[0] == 0
+    assert snapshot.offset[-1] == snapshot.ngrid
+    assert np.array_equal(
+        snapshot.anchor_of_row, np.repeat(np.arange(snapshot.nmax), rows_per_anchor)
+    )
+    assert np.array_equal(snapshot.branch_count, rows_per_anchor[snapshot.anchor_of_row])
+    assert rows_per_anchor.max() > 1
 
 
 def test_named_results_reach_every_cavity_type(
