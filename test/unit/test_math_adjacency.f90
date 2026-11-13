@@ -1,6 +1,7 @@
 !> Test suite for adjacency-list utilities in moist_math_adjacency
 module test_math_adjacency
    use mctc_env, only: wp
+   use test_helpers, only: det_rand
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_adjacency, only: adjacency_list_type
    implicit none(type, external)
@@ -774,12 +775,7 @@ contains
       xyz(:, 8) = [0.0_wp, 0.0_wp, -1.375_wp]
    end subroutine star_cluster
 
-   !> Fill a coordinate array with points drawn from a pinned random stream
-   !>
-   !> The seed follows the convention in test_math_sorters, so the fixture is
-   !> reproducible for a given compiler. Assertions built on it are all
-   !> comparisons against a brute-force reference, so a differing pseudo-random
-   !> stream changes the fixture but never the verdict
+   !> Fill a coordinate array with points drawn from a pinned `det_rand` stream
    subroutine random_points(xyz, npoints, box)
       real(wp), allocatable, intent(out) :: xyz(:, :)
       !> Number of points to generate
@@ -787,20 +783,11 @@ contains
       !> Side length of the cubic box the points are drawn from
       real(wp), intent(in) :: box
 
-      integer, allocatable :: seed(:)
-      integer :: seed_size, i
+      integer :: state
 
-      call random_seed(size=seed_size)
-      allocate (seed(seed_size))
-      do i = 1, seed_size
-         seed(i) = 420 + 69*i
-      end do
-      call random_seed(put=seed)
-      deallocate (seed)
-
+      state = 420
       allocate (xyz(3, npoints))
-      call random_number(xyz)
-      xyz = box*xyz
+      call det_rand(xyz, state, 0.0_wp, box)
    end subroutine random_points
 
    !> Brute-force reference for the neighbours of point i within cutoff

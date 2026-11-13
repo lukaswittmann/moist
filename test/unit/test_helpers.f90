@@ -49,6 +49,8 @@
 !>                                         degree, positive-weight rules
 !>   * `read_printout(unit, lines, nline)` - lines written to a scratch unit
 !>   * `printed_entry(lines, key, value)` - whether a `key ... value` line was printed
+!>   * `det_rand(x, state, x_start, x_end)` - deterministic uniform numbers in
+!>                                            [x_start, x_end) (default [0, 1))
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
@@ -157,7 +159,13 @@ module test_helpers
       module procedure submit_1, submit_2, submit_3
    end interface submit
 
+   !> Deterministic uniform pseudo-random numbers in [x_start, x_end) (default [0, 1))
+   interface det_rand
+      module procedure det_rand_0, det_rand_1, det_rand_2, det_rand_3, det_rand_4
+   end interface det_rand
+
    public :: get_cartesian_gaussian_grid
+   public :: det_rand
 
 contains
 
@@ -302,9 +310,8 @@ contains
       real(wp), parameter :: min_dist = 2.0e-1_wp
       integer, parameter :: max_attempts = 10000
 
-      integer :: total
-      integer(int64) :: rng
-      real(wp) :: box_min(3), box_max(3), span(3), cand(3)
+      integer :: total, rng
+      real(wp) :: box_min(3), box_max(3), cand(3)
       integer :: ax, attempt, accepted
 
       total = default_n_points
@@ -316,16 +323,15 @@ contains
          box_min(ax) = minval(mol%xyz(ax, :)) - pad
          box_max(ax) = maxval(mol%xyz(ax, :)) + pad
       end do
-      span = box_max - box_min
 
       allocate (points(3, total))
       !* Seed mixes mol%nat with a fixed offset so different-sized
       !* molecules get distinct draws while each size is reproducible
-      rng = int(mol%nat, int64)*97_int64 + 12345_int64
+      rng = mol%nat*97 + 12345
       accepted = 0
       do attempt = 1, max_attempts
          do ax = 1, 3
-            cand(ax) = box_min(ax) + lcg_uniform(rng)*span(ax)
+            call det_rand(cand(ax), rng, box_min(ax), box_max(ax))
          end do
          if (.not. far_from_all_atoms(cand, mol%xyz, min_dist)) cycle
          accepted = accepted + 1
@@ -1099,6 +1105,7 @@ contains
       integer, intent(in) :: n
       integer(int64), intent(inout) :: rng
       integer, allocatable, intent(out) :: order(:)
+      real(wp) :: u
       integer :: i, j, tmp
 
       allocate (order(n))
@@ -1106,9 +1113,12 @@ contains
          order(i) = i
       end do
       !* Standard Fisher-Yates: for i = n downto 2, swap order(i) with
-      !* order(j) where j uniform in [1, i]
+      !* order(j) where j uniform in [1, i]. Keep Knuth's 64-bit MMIX step
+      !* here so get_test_structures stays pinned to cavity_reference.txt
       do i = n, 2, -1
-         j = 1 + int(lcg_uniform(rng)*real(i, wp))
+         rng = rng*6364136223846793005_int64 + 1442695040888963407_int64
+         u = real(ishft(rng, -33), wp)/real(2_int64**31, wp)
+         j = 1 + int(u*real(i, wp))
          if (j > i) j = i   ! guard against rounding to exactly i
          tmp = order(i)
          order(i) = order(j)
@@ -1134,17 +1144,111 @@ contains
       end do
    end function far_from_all_atoms
 
-   !> 64-bit LCG (Knuth MMIX constants from TAOCP vol 2). Self-contained;
-   !> does not touch the global Fortran RNG state, so safe under parallel
-   !> test execution
+   !> Deterministic uniform sample in [x_start, x_end) (default [0, 1)) from a 31-bit LCG
    !>
-   !> @param[inout] state  LCG state, advanced by one step
-   real(wp) function lcg_uniform(state) result(u)
-      integer(int64), intent(inout) :: state
-      state = state*6364136223846793005_int64 + 1442695040888963407_int64
-      !* Top 31 bits as a nonneg integer; divide by 2^31 to land in [0, 1)
-      u = real(ishft(state, -33), wp)/real(2_int64**31, wp)
-   end function lcg_uniform
+   !> Self-contained; advances caller-owned `state` (kept in 0..2^31-1 so a plain
+   !> default integer suffices) and never touches the global Fortran RNG state
+   !>
+   !> @param[out]   x        Uniform value in [x_start, x_end)
+   !> @param[inout] state    LCG state, advanced by one step
+   !> @param[in]    x_start  Optional lower bound (default 0)
+   !> @param[in]    x_end    Optional upper bound (default 1)
+   pure subroutine det_rand_0(x, state, x_start, x_end)
+      !> Uniform value in [x_start, x_end)
+      real(wp), intent(out) :: x
+      !> LCG state, advanced by one step
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      real(wp) :: lo, hi, u
+      integer(int64) :: s
+
+      lo = 0.0_wp
+      if (present(x_start)) lo = x_start
+      hi = 1.0_wp
+      if (present(x_end)) hi = x_end
+
+      s = iand(int(state, int64), 2147483647_int64)
+      s = iand(s*1103515245_int64 + 12345_int64, 2147483647_int64)
+      state = int(s)
+      u = real(s, wp)/2147483648.0_wp
+      x = lo + (hi - lo)*u
+   end subroutine det_rand_0
+
+   !> Fill a rank-1 array with deterministic uniform samples in [x_start, x_end)
+   pure subroutine det_rand_1(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: i
+
+      do i = 1, size(x)
+         call det_rand_0(x(i), state, x_start, x_end)
+      end do
+   end subroutine det_rand_1
+
+   !> Fill a rank-2 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_2(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: j
+
+      do j = 1, size(x, 2)
+         call det_rand_1(x(:, j), state, x_start, x_end)
+      end do
+   end subroutine det_rand_2
+
+   !> Fill a rank-3 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_3(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: k
+
+      do k = 1, size(x, 3)
+         call det_rand_2(x(:, :, k), state, x_start, x_end)
+      end do
+   end subroutine det_rand_3
+
+   !> Fill a rank-4 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_4(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :, :, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: l
+
+      do l = 1, size(x, 4)
+         call det_rand_3(x(:, :, :, l), state, x_start, x_end)
+      end do
+   end subroutine det_rand_4
 
    !* --------------------------- Legacy radii and numbering -------------------------- *!
 
