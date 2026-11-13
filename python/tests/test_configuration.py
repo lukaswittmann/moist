@@ -294,7 +294,7 @@ def test_pcm_iterative_controls_round_trip(component):
 @pytest.mark.parametrize("lsf", [moist.SvdW(), moist.CFC(), moist.Isodensity()])
 def test_all_drop_surfaces_share_parameters(lsf, gaussian_density, build_with):
     parameters = moist.DROPParameters(
-        nleb=26, tolerance=2e-9, proj_maxiter=200, proj_level=2,
+        nleb=26, tolerance=2e-9, proj_maxiter=200, proj_level=1,
         branch_weight_s=.08, rho_grid_h=.8, wleb_prune_level=1,
     )
     config = moist.DROP(lsf=lsf, parameters=parameters)

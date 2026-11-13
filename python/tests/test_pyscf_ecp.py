@@ -18,8 +18,8 @@ Each test fails without an active fill:
   until the surface reaches into the fill ball, where an active fill must
   refuse the build
 - every projector but one keeps to the outer surface, the inner sheet being
-  some 4 bohr from every anchor; the Newton-deflation projector
-  (``proj_level=6``) converges onto it for some anchors when the fill is
+  some 4 bohr from every anchor; the global coarse-octree search
+  (``proj_level=3``) can reach it for some anchors when the fill is
   missing, so with the fill it must return the default projector's cavity
 """
 
@@ -42,7 +42,7 @@ from moist.pyscf import DROP, Isodensity, PySCFHost
 #: Run context shared by every cavity in this module
 CONTEXT = Context()
 #: Projection level whose deflated Newton search reaches the inner sheet
-DEFLATION = 6
+GLOBAL_SEARCH = 3
 #: Distance from an ECP nucleus, in bohr, inside which a surface point lies on the inner sheet
 INNER = 1.5
 
@@ -75,8 +75,8 @@ def _assert_fill_active(source, structure, rho_iso):
 
 
 def _assert_matches_default_projector(source, structure, **drop):
-    """The deflated projector, which reaches an unfilled inner sheet, returns the default cavity."""
-    deflated = _cavity(source, structure, proj_level=DEFLATION, **drop)
+    """The global search, which can reach an unfilled inner sheet, returns the default cavity."""
+    deflated = _cavity(source, structure, proj_level=GLOBAL_SEARCH, **drop)
     reference = _cavity(source, structure, **drop)
     assert len(deflated.xyz) == len(reference.xyz)
     # Measured 9e-13: the two projectors converge onto the same points

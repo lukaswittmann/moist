@@ -67,8 +67,6 @@ class CavitySnapshot(_ImmutableArrayValue):
         ``(ngrid,)`` grid-point areas.
     ``owner``
         ``(ngrid,)`` index of the sphere each grid point belongs to.
-    ``converged``
-        ``(ngrid,)`` per-point projection success flags.
     ``radii``, ``asph``
         ``(nsph,)`` sphere radii and per-sphere surface areas.
     ``xi0``
@@ -89,7 +87,6 @@ class CavitySnapshot(_ImmutableArrayValue):
     xyz: np.ndarray
     a: np.ndarray
     owner: np.ndarray
-    converged: np.ndarray
     radii: np.ndarray
     asph: np.ndarray
     xi0: np.ndarray
@@ -119,8 +116,16 @@ class CavitySnapshotDROP(CavitySnapshot):
         is one-based, and ``branch_count`` counts the *surviving* branches in
         the point's anchor group -- so ``branch_count > 1`` marks the branched
         points and a point whose siblings were filtered away reports one.
+        ``branch`` can have gaps: the canonical index is assigned before the
+        final weight cut, and ``branch_count`` is the surviving row count
+        ``offset[i + 1] - offset[i]`` of the anchor.
     ``wbranch``
         ``(ngrid,)`` branch weights, one for an unbranched point.
+    ``offset``, ``anchor_of_row``
+        DROP row layout, both zero-based: ``offset`` ``(nmax + 1,)`` holds the
+        first row of each anchor, so anchor ``i`` owns rows
+        ``offset[i]:offset[i + 1]``; ``anchor_of_row`` ``(ngrid,)`` is the
+        anchor of each row.
 
     Everything the cavity holds beyond these -- curvatures, grid densities,
     projection diagnostics -- is reachable by name through
@@ -136,6 +141,8 @@ class CavitySnapshotDROP(CavitySnapshot):
     branch: np.ndarray
     branch_count: np.ndarray
     wbranch: np.ndarray
+    offset: np.ndarray
+    anchor_of_row: np.ndarray
 
     @property
     def branched(self) -> np.ndarray:
@@ -212,8 +219,9 @@ class DensityResponse(_ImmutableArrayValue):
     your own ``d rho/dP`` they complete the Fock matrix, against the
     basis-center ``d rho/dR`` the nuclear gradient.  Going straight to the
     gradient phase drops that term and nothing reports it.  Hessian weights
-    use ``[point,b,a]`` for native ``(a,b,point)``.  They need not be
-    symmetric; preserve both Cartesian axes in contractions.
+    use ``[point,b,a]`` for native ``(a,b,point)``.  They are symmetric with
+    off-diagonals not doubled; contract all nine entries against the
+    density Hessian.
     """
 
     #: Native item name
@@ -853,10 +861,6 @@ class Cavity(ABC):
         return self.snapshot().owner
 
     @property
-    def converged(self) -> np.ndarray:
-        return self.snapshot().converged
-
-    @property
     def radii(self) -> np.ndarray:
         return self.snapshot().radii
 
@@ -935,6 +939,8 @@ _DROP_SNAPSHOT_FIELDS = _GRID_INPUT_FIELDS + (
     "branch",
     "branch_count",
     "wbranch",
+    "offset",
+    "anchor_of_row",
 )
 
 
