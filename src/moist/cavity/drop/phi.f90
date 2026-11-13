@@ -40,9 +40,6 @@ module moist_cavity_drop_phi
       procedure :: f4_rrrr => phi4_rrrr
       !> Combined value and derivatives
       procedure :: f012_r => phi012_r
-      !> Nuclear derivatives
-      procedure :: f1_rA => phi1_rA
-      procedure :: f2_rArB => phi2_rArB
       !> Mixed derivatives
       procedure :: f2_r_rA => phi2_r_rA
    end type moist_cavity_drop_phi_type
@@ -162,49 +159,6 @@ contains
          hessian([1, 3, 6]) = self%param%phi_alpha
       end if
    end subroutine phi012_r
-
-   !> Compute the gradient of phi with respect to nuclear positions
-   !>
-   !> @param[in] self Objective instance
-   !> @param[in] pt Evaluation point
-   !> @param[in] anch Anchor coordinates
-   !> @param[in] ownid Owner atom index
-   !> @returns   gradient Nuclear gradient
-   pure function phi1_rA(self, pt, anch, ownid) result(gradient)
-      class(moist_cavity_drop_phi_type), intent(in) :: self
-      real(wp), intent(in) :: pt(ndim)
-      real(wp), intent(in) :: anch(ndim)
-      integer, intent(in) :: ownid
-      real(wp), allocatable :: gradient(:, :)
-
-      allocate (gradient(ndim, self%ncenters), source=0.0_wp)
-      if (ownid < 1 .or. ownid > self%ncenters) return
-
-      gradient(:, ownid) = -self%param%phi_alpha*(pt - anch)
-   end function phi1_rA
-
-   !> Compute the Hessian of phi with respect to nuclear positions
-   !>
-   !> @param[in] self Objective instance
-   !> @param[in] pt Evaluation point
-   !> @param[in] anch Anchor coordinates
-   !> @param[in] ownid Owner atom index
-   !> @returns   hessian Nuclear Hessian
-   pure function phi2_rArB(self, pt, anch, ownid) result(hessian)
-      class(moist_cavity_drop_phi_type), intent(in) :: self
-      real(wp), intent(in) :: pt(ndim)
-      real(wp), intent(in) :: anch(ndim)
-      integer, intent(in) :: ownid
-      real(wp), allocatable :: hessian(:, :, :, :)
-      integer :: axis
-
-      allocate (hessian(ndim, ndim, self%ncenters, self%ncenters), source=0.0_wp)
-      if (ownid < 1 .or. ownid > self%ncenters) return
-
-      do axis = 1, ndim
-         hessian(axis, axis, ownid, ownid) = self%param%phi_alpha
-      end do
-   end function phi2_rArB
 
    !> Compute the mixed spatial-nuclear Hessian of phi
    !>
