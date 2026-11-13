@@ -3,6 +3,7 @@ module test_math_sorters
    use mctc_env, only: wp
    use mctc_io_utils, only: to_string
    use mctc_env_error, only: moist_error_type => error_type
+   use test_helpers, only: det_rand
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_sorter, only: qsort, counting_argsort, heapsort
    implicit none(type, external)
@@ -80,19 +81,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
       real(wp) :: a(10000)
-      integer, allocatable :: seed(:)
-      integer :: seed_size, i
+      integer :: state, i
 
-      call random_seed(size=seed_size)
-      allocate (seed(seed_size))
-      do i = 1, seed_size
-         seed(i) = 420 + 69*i
-      end do
-      call random_seed(put=seed)
-      deallocate (seed)
-
-      call random_number(a)
-      a = 6.9_wp*a - 4.2_wp
+      state = 420
+      call det_rand(a, state, -4.2_wp, 2.7_wp)
 
       call qsort(a, error=sort_error)
 
@@ -309,10 +301,11 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: n = 257
       real(wp) :: r(n)
-      integer :: a(n), ref(n), i, j, t
+      integer :: a(n), ref(n), state, i, j, t
 
-      call random_number(r)
-      a = int(r*40.0_wp) - 20
+      state = 257
+      call det_rand(r, state, 0.0_wp, 40.0_wp)
+      a = int(r) - 20
       ref = a
       do i = 2, n
          t = ref(i)

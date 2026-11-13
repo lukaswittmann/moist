@@ -2,6 +2,7 @@
 module test_math_packed
    use mctc_env, only: wp
    use, intrinsic :: iso_fortran_env, only: int64
+   use test_helpers, only: det_rand
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_packed, only: npair_from_ns, packed_index, packed_index_lut, unpack_sym_matrix, &
       & pack_sym_matrix, pack_sym_part, packed_symmatmul, packed_symmatmul_lut, ntriple_from_ns, nquad_from_ns, &
@@ -65,27 +66,15 @@ contains
                   ]
    end subroutine collect_math_packed
 
-   !> Deterministic pseudo-random numbers in [-1, 1) from a linear congruential generator
-   subroutine fill_random(x, seed)
-      real(wp), intent(out) :: x(:)
-      integer, intent(in) :: seed
-      integer(int64) :: state
-      integer :: i
-
-      state = int(seed, int64)
-      do i = 1, size(x)
-         state = mod(state*1103515245_int64 + 12345_int64, 2147483648_int64)
-         x(i) = 2.0_wp*real(state, wp)/2147483648.0_wp - 1.0_wp
-      end do
-   end subroutine fill_random
-
    !> Random packed array of dimension ns
    subroutine random_packed(ns, seed, packed)
       integer, intent(in) :: ns, seed
       real(wp), allocatable, intent(out) :: packed(:)
+      integer :: state
 
+      state = seed
       allocate (packed(ns*(ns + 1)/2))
-      call fill_random(packed, seed)
+      call det_rand(packed, state, -1.0_wp, 1.0_wp)
    end subroutine random_packed
 
    !> Number of pairs is the triangular number
@@ -352,9 +341,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: pa(:), pf(:), a(:, :), x(:, :), b(:, :)
       integer, allocatable :: ipiv(:)
-      integer :: is, ns, info, i, nrhs
+      integer :: is, ns, info, i, nrhs, state
 
       nrhs = 3
+      state = 3
       do is = 1, size(sizes)
          ns = sizes(is)
          call random_packed(ns, 61 + is, pa)
@@ -363,9 +353,7 @@ contains
          end do
          allocate (a(ns, ns), x(ns, nrhs), b(ns, nrhs), pf(size(pa)), ipiv(ns))
          call unpack_sym_matrix(pa, a, ns)
-         call fill_random(b(:, 1), 3)
-         call fill_random(b(:, 2), 4)
-         call fill_random(b(:, 3), 5)
+         call det_rand(b, state, -1.0_wp, 1.0_wp)
          x = b
          pf = pa
          call wrap_dsptrf(pf, ipiv, info, "u")
@@ -403,9 +391,11 @@ contains
       integer, intent(in) :: seed
       !> Random packed tensor
       real(wp), allocatable, intent(out) :: packed(:)
+      integer :: state
 
+      state = seed
       allocate (packed(ntriple_from_ns(ns)))
-      call fill_random(packed, seed)
+      call det_rand(packed, state, -1.0_wp, 1.0_wp)
    end subroutine random_packed3
 
    !> Random rank-4 packed tensor of dimension ns
@@ -416,9 +406,11 @@ contains
       integer, intent(in) :: seed
       !> Random packed tensor
       real(wp), allocatable, intent(out) :: packed(:)
+      integer :: state
 
+      state = seed
       allocate (packed(nquad_from_ns(ns)))
-      call fill_random(packed, seed)
+      call det_rand(packed, state, -1.0_wp, 1.0_wp)
    end subroutine random_packed4
 
    !* ================================================================================= *!
@@ -763,13 +755,14 @@ contains
    subroutine test_contract2_vs_dense(error)
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: ph(:), h(:, :), v(:), out(:), ref(:)
-      integer :: is, ns, i
+      integer :: is, ns, i, state
 
+      state = 151
       do is = 1, size(tsizes)
          ns = tsizes(is)
          call random_packed(ns, 51 + is, ph)
          allocate (h(ns, ns), v(ns), out(ns), ref(ns))
-         call fill_random(v, 151 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          call unpack_sym_matrix(ph, h, ns)
          ref = matmul(h, v)
          call packed_contract2(ph, v, out, ns)
@@ -785,13 +778,14 @@ contains
    subroutine test_contract3_vs_dense(error)
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: pt(:), t(:, :, :), v(:), pout(:), out(:, :), ref(:, :)
-      integer :: is, ns, i, j, k
+      integer :: is, ns, i, j, k, state
 
+      state = 153
       do is = 1, size(tsizes)
          ns = tsizes(is)
          call random_packed3(ns, 53 + is, pt)
          allocate (t(ns, ns, ns), v(ns), pout(npair_from_ns(ns)), out(ns, ns), ref(ns, ns))
-         call fill_random(v, 153 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          call unpack_sym_tensor3(pt, t, ns)
          ref = 0.0_wp
          do k = 1, ns
@@ -817,13 +811,14 @@ contains
    subroutine test_contract4_vs_dense(error)
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: pf(:), f(:, :, :, :), v(:), pout(:), out(:, :, :), ref(:, :, :)
-      integer :: is, ns, i, j, k, l
+      integer :: is, ns, i, j, k, l, state
 
+      state = 157
       do is = 1, size(tsizes)
          ns = tsizes(is)
          call random_packed4(ns, 57 + is, pf)
          allocate (f(ns, ns, ns, ns), v(ns), pout(ntriple_from_ns(ns)), out(ns, ns, ns), ref(ns, ns, ns))
-         call fill_random(v, 157 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          call unpack_sym_tensor4(pf, f, ns)
          ref = 0.0_wp
          do l = 1, ns
@@ -855,8 +850,9 @@ contains
       real(wp), allocatable :: ph(:), pt(:), pf(:), h(:, :), t(:, :, :), f(:, :, :, :), v(:)
       real(wp), allocatable :: w1(:), w2(:), w3(:)
       real(wp) :: ref2, ref3, ref4
-      integer :: is, ns, i, j, k, l
+      integer :: is, ns, i, j, k, l, state
 
+      state = 161
       do is = 1, size(tsizes)
          ns = tsizes(is)
          call random_packed(ns, 61 + is, ph)
@@ -864,7 +860,7 @@ contains
          call random_packed4(ns, 67 + is, pf)
          allocate (h(ns, ns), t(ns, ns, ns), f(ns, ns, ns, ns), v(ns))
          allocate (w1(ns), w2(npair_from_ns(ns)), w3(ntriple_from_ns(ns)))
-         call fill_random(v, 161 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          call unpack_sym_matrix(ph, h, ns)
          call unpack_sym_tensor3(pt, t, ns)
          call unpack_sym_tensor4(pf, f, ns)
@@ -904,14 +900,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: pt(:), pf(:), v(:)
       real(wp) :: ref3, ref4
-      integer :: is, ns, i, j, k, l
+      integer :: is, ns, i, j, k, l, state
 
+      state = 171
       do is = 1, size(tsizes)
          ns = tsizes(is)
          call random_packed3(ns, 71 + is, pt)
          call random_packed4(ns, 73 + is, pf)
          allocate (v(ns))
-         call fill_random(v, 171 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          ref3 = 0.0_wp
          ref4 = 0.0_wp
          do l = 1, ns
@@ -941,10 +938,12 @@ contains
       real(wp) :: v(ns), out3(npair_from_ns(ns)), out3b(npair_from_ns(ns))
       real(wp) :: out4(ntriple_from_ns(ns)), out4b(ntriple_from_ns(ns))
       real(wp) :: s3, s4
+      integer :: state
 
+      state = 181
       call random_packed3(ns, 81, pt)
       call random_packed4(ns, 83, pf)
-      call fill_random(v, 181)
+      call det_rand(v, state, -1.0_wp, 1.0_wp)
       call packed_contract3(pt, v, out3, ns)
       call packed_contract4(pf, v, out4, ns)
       s3 = packed_full_contract3(pt, v, ns)
@@ -997,13 +996,14 @@ contains
       real(wp), parameter :: rtol = 1.0e-14_wp
       real(wp), allocatable :: ph(:), h(:, :), v(:), out(:), scale(:)
       real(wp), allocatable :: ref_row(:), ref_mm(:)
-      integer :: is, ns
+      integer :: is, ns, state
 
+      state = 351
       do is = 1, size(ns_list)
          ns = ns_list(is)
          call random_packed(ns, 251 + is, ph)
          allocate (h(ns, ns), v(ns), out(ns), ref_row(ns), ref_mm(ns), scale(ns))
-         call fill_random(v, 351 + is)
+         call det_rand(v, state, -1.0_wp, 1.0_wp)
          call unpack_sym_matrix(ph, h, ns)
          call contract2_rowwise(ph, v, ref_row, ns)
          ref_mm = matmul(h, v)
@@ -1026,10 +1026,11 @@ contains
       real(wp), parameter :: delta = 1.0e-6_wp
       real(wp), allocatable :: ph(:)
       real(wp) :: v(ns), out(ns), out2(ns), expect(ns)
-      integer :: i, j
+      integer :: i, j, state
 
+      state = 452
       call random_packed(ns, 451, ph)
-      call fill_random(v, 452)
+      call det_rand(v, state, -1.0_wp, 1.0_wp)
       call packed_contract2(ph, v, out, ns)
       do j = 2, ns
          do i = 1, j - 1
@@ -1056,14 +1057,12 @@ contains
       integer(int64), intent(in) :: seed
       !> Value
       real(wp) :: x
-      integer(int64) :: state
-      integer :: m
+      integer :: state, m
 
-      state = mod(seed, 2147483648_int64)
+      state = int(iand(seed, 2147483647_int64))
       do m = 1, 3
-         state = mod(state*1103515245_int64 + 12345_int64, 2147483648_int64)
+         call det_rand(x, state, -1.0_wp, 1.0_wp)
       end do
-      x = 2.0_wp*real(state, wp)/2147483648.0_wp - 1.0_wp
    end function seeded_value
 
    !> Pack places every dense entry at the index-function slot; unpack restores it
@@ -1074,10 +1073,11 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: ns_list(2) = [3, 5]
       real(wp), allocatable :: f3(:, :, :), g3(:, :, :), p3(:)
-      real(wp), allocatable :: f4(:, :, :, :), g4(:, :, :, :), p4(:), flat(:)
+      real(wp), allocatable :: f4(:, :, :, :), g4(:, :, :, :), p4(:)
       integer(int64) :: e1, e2, e3, e4
-      integer :: is, ns, i, j, k, l
+      integer :: is, ns, i, j, k, l, state
 
+      state = 551
       do is = 1, size(ns_list)
          ns = ns_list(is)
          allocate (f3(ns, ns, ns), g3(ns, ns, ns), p3(ntriple_from_ns(ns)))
@@ -1124,10 +1124,8 @@ contains
          if (allocated(error)) return
 
          ! Negative control: dense random input, not symmetric
-         allocate (flat(ns**4))
-         call fill_random(flat, 551 + is)
-         f3 = reshape(flat(:ns**3), [ns, ns, ns])
-         f4 = reshape(flat, [ns, ns, ns, ns])
+         call det_rand(f3, state, -1.0_wp, 1.0_wp)
+         call det_rand(f4, state, -1.0_wp, 1.0_wp)
          call pack_sym_tensor3(f3, p3, ns)
          call unpack_sym_tensor3(p3, g3, ns)
          call check(error, any(g3 /= f3), "asymmetric rank-3 input not restored")
@@ -1136,7 +1134,7 @@ contains
          call unpack_sym_tensor4(p4, g4, ns)
          call check(error, any(g4 /= f4), "asymmetric rank-4 input not restored")
          if (allocated(error)) return
-         deallocate (f3, g3, p3, f4, g4, p4, flat)
+         deallocate (f3, g3, p3, f4, g4, p4)
       end do
    end subroutine test_tensor_pack_matches_index
 
