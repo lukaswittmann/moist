@@ -200,9 +200,6 @@ module moist_cavity_drop_lsf_svdw
       !> SvdW blending parameters (k, one-, two- and three-body weights)
       type(moist_cavity_drop_lsf_svdw_param_type) :: param
 
-      !> Highest spatial-derivative order the power sums are accumulated to
-      integer :: max_deriv = 2
-
       !> Exclusion-certificate constants of the faded model, refreshed by `update`
       type(svdw_certificate_type) :: cert
 
@@ -319,8 +316,6 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: prepare => lsf_prepare
       !> Point preparation with a caller-provided candidate atom list
       procedure, public :: prepare_subset => lsf_prepare_subset
-      !> Configure the highest power-sum order `prepare` accumulates
-      procedure, public :: set_max_deriv => lsf_set_max_deriv
       !> Number of atoms active after the latest prepare/prepare_subset
       procedure, public :: active_count => lsf_active_count
       !> User-space atom index of the i-th active atom
@@ -482,22 +477,6 @@ contains
       self%prepared_unreached = .false.
       call certificate_setup(self)
    end subroutine lsf_update
-
-   !> Configure the highest power-sum order `prepare` accumulates
-   !>
-   !> Nothing is allocated here: the power sums are fixed-size components and the
-   !> per-atom buffers are sized by [[update]]
-   !>
-   !> @param[inout] self LSF instance
-   !> @param[in]    n    Requested max derivative order (0..4)
-   subroutine lsf_set_max_deriv(self, n)
-      !> LSF instance
-      class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
-      !> Requested max derivative order
-      integer, intent(in) :: n
-
-      self%max_deriv = min(4, max(0, n))
-   end subroutine lsf_set_max_deriv
 
    !> Screen every atom at the evaluation point and refresh the caches
    !>

@@ -186,9 +186,6 @@ module moist_cavity_drop_lsf_cfc
       !> CFC shape parameters (a1, a2, c, m)
       type(moist_cavity_drop_lsf_cfc_param_type) :: param
 
-      !> Highest total derivative order `prepare` provisions (0..4)
-      integer :: max_deriv = 2
-
       !> Reciprocal Lipschitz bound of the unfaded `S`
       real(wp) :: excl_inv_lip = 0.0_wp
       !> Exclusion-certificate constants, refreshed by `update`
@@ -314,8 +311,6 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: vjp_f1_rA_batch => lsf_vjp_f1_rA_batch
       !> Point preparation with a caller-provided candidate atom list
       procedure, public :: prepare_subset => lsf_prepare_subset
-      !> Configure the highest total derivative order `prepare` provisions
-      procedure, public :: set_max_deriv => lsf_set_max_deriv
       !> Number of atoms active after the latest prepare/prepare_subset
       procedure, public :: active_count => lsf_active_count
       !> User-space atom index of the i-th active atom
@@ -488,22 +483,6 @@ contains
       call cfc_set_exclusion_bound(self)
       call certificate_setup(self)
    end subroutine lsf_update
-
-   !> Configure the highest total derivative order `prepare` provisions
-   !>
-   !> Nothing is allocated here: the aggregate tensors are fixed-size components
-   !> and the per-atom buffers are sized by [[update]] to the full order set
-   !>
-   !> @param[inout] self LSF instance
-   !> @param[in]    n    Requested max derivative order (0..4)
-   subroutine lsf_set_max_deriv(self, n)
-      !> LSF instance
-      class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
-      !> Requested max derivative order
-      integer, intent(in) :: n
-
-      self%max_deriv = min(4, max(0, n))
-   end subroutine lsf_set_max_deriv
 
    !> Screen every atom at the evaluation point and refresh the caches
    !>
