@@ -1030,8 +1030,8 @@ moist_get_response_item_name(moist_error error, moist_response response,
 ///   "density": "w_rho" [ngrid], "w_grad_rho" [ngrid][3], "w_hess_rho"
 ///     [ngrid][3][3], the weights conjugate to the density value, gradient and
 ///     Hessian. Hessian weights use C indices [point][b][a] for native
-///     weights(a,b,point); need not be symmetric, preserve this axis order
-///     when contracting
+///     weights(a,b,point); symmetric, off-diagonals not doubled, so the
+///     full 3x3 contraction sum_ab w[i][b][a] H_ab applies as is
 ///   "gaussian_amplitude": "w_overlap" [ngrid], "w_normal_deriv" [ngrid],
 ///     contracted as `F_uv += sum_i [w_overlap[i] g_uv,i + w_normal_deriv[i] f_uv,i]`
 ///     with g_uv,i = <u|G_i|v> and f_uv,i = n_i . grad_r g_uv,i
@@ -1198,9 +1198,7 @@ moist_get_cavity_sizes(moist_error error,
                        int* nsph) moist_API_SUFFIX__V_1_0;
 
 /// Get generic cavity results - works for all cavity types
-/// Returns fields shared by all cavity types. `converged` contains DROP's
-/// per-point projection status; cavity types without a projection solve return
-/// true for every retained point
+/// Returns fields shared by all cavity types
 /// Call moist_get_cavity_sizes first to get ngrid, nsph, then allocate arrays
 /// and pass the capacities you allocated them with (see the capacity
 /// convention at the top of this header). Nothing is written when either
@@ -1221,7 +1219,6 @@ moist_get_cavity_results(moist_error error,
                          double* xyz /* : row-major (ngrid_cap, 3) */,
                          double* a /* [ngrid_cap] */,
                          int* owner /* [ngrid_cap] - 0-based atom indices (0 to nsph-1) */,
-                         bool* converged /* [ngrid_cap] */,
                          double* radii /* [nsph_cap] */,
                          double* asph /* [nsph_cap] */) moist_API_SUFFIX__V_1_0;
 
@@ -1298,7 +1295,9 @@ moist_get_cavity_field_real(moist_error error,
 /// Read a MOIST_FIELD_INT field by name
 /// Sphere indices handed out 0-based, matching moist_get_cavity_results;
 /// the DROP point ids `numbering` and `anchor_id` and the 1-based `branch` are
-/// passed through as the cavity stores them
+/// passed through as the cavity stores them; DROP `offset` [nmax + 1] holds the
+/// 0-based first row of each anchor (rows of anchor i are offset[i] to
+/// offset[i + 1] - 1) and `anchor_of_row` [ngrid] the 0-based anchor of each row
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_field_int(moist_error error,
                            moist_cavity cavity,
@@ -1577,7 +1576,7 @@ moist_get_cavity_gradient(moist_error error,
 ///   w_lsf1    row-major (ngrid, 3)        - LSF gradient adjoint weights
 ///   w_lsf2    row-major (ngrid, 3, 3)      - LSF Hessian adjoint weights
 /// w_lsf2[i][b][a] is conjugate to the native Hessian(a,b,i)
-/// Note: w_lsf2 is NOT symmetric
+/// Note: w_lsf2 is symmetric in its two Cartesian axes, off-diagonals not doubled
 /// This entry point covers the xi/f/xyz channels only: a thin wrapper
 /// forwarding NULL for the extended channels below
 moist_API_ENTRY void moist_API_CALL
