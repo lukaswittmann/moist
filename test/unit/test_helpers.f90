@@ -310,8 +310,9 @@ contains
       real(wp), parameter :: min_dist = 2.0e-1_wp
       integer, parameter :: max_attempts = 10000
 
-      integer :: total, rng
-      real(wp) :: box_min(3), box_max(3), cand(3)
+      integer :: total
+      integer(int64) :: rng
+      real(wp) :: box_min(3), box_max(3), span(3), cand(3), u
       integer :: ax, attempt, accepted
 
       total = default_n_points
@@ -323,15 +324,16 @@ contains
          box_min(ax) = minval(mol%xyz(ax, :)) - pad
          box_max(ax) = maxval(mol%xyz(ax, :)) + pad
       end do
+      span = box_max - box_min
 
       allocate (points(3, total))
-      !* Seed mixes mol%nat with a fixed offset so different-sized
-      !* molecules get distinct draws while each size is reproducible
-      rng = mol%nat*97 + 12345
+      rng = int(mol%nat, int64)* 67_int64 + 12345_int64
       accepted = 0
       do attempt = 1, max_attempts
          do ax = 1, 3
-            call det_rand(cand(ax), rng, box_min(ax), box_max(ax))
+            rng = rng*6364136223846793005_int64 + 1442695040888963407_int64
+            u = real(ishft(rng, -33), wp)/real(2_int64**31, wp)
+            cand(ax) = box_min(ax) + u*span(ax)
          end do
          if (.not. far_from_all_atoms(cand, mol%xyz, min_dist)) cycle
          accepted = accepted + 1
@@ -1144,19 +1146,20 @@ contains
       end do
    end function far_from_all_atoms
 
-   !> Deterministic uniform sample in [x_start, x_end) (default [0, 1)) from a 31-bit LCG
+   !> Deterministic uniform sample in [x_start, x_end) (default [0, 1))
    !>
-   !> Self-contained; advances caller-owned `state` (kept in 0..2^31-1 so a plain
-   !> default integer suffices) and never touches the global Fortran RNG state
+   !> Self-contained 31-bit Weyl step with a SplitMix64 output mixer (53-bit mantissa);
+   !> keeps caller-owned `state` in 0..2^31-1 so a plain default integer suffices, and
+   !> never touches the global Fortran RNG state
    !>
    !> @param[out]   x        Uniform value in [x_start, x_end)
-   !> @param[inout] state    LCG state, advanced by one step
+   !> @param[inout] state    Generator state, advanced by one step
    !> @param[in]    x_start  Optional lower bound (default 0)
    !> @param[in]    x_end    Optional upper bound (default 1)
    pure subroutine det_rand_0(x, state, x_start, x_end)
       !> Uniform value in [x_start, x_end)
       real(wp), intent(out) :: x
-      !> LCG state, advanced by one step
+      !> Generator state, advanced by one step
       integer, intent(inout) :: state
       !> Optional lower bound (default 0)
       real(wp), intent(in), optional :: x_start
@@ -1164,17 +1167,19 @@ contains
       real(wp), intent(in), optional :: x_end
 
       real(wp) :: lo, hi, u
-      integer(int64) :: s
+      integer(int64) :: s, z
 
       lo = 0.0_wp
       if (present(x_start)) lo = x_start
       hi = 1.0_wp
       if (present(x_end)) hi = x_end
 
-      s = iand(int(state, int64), 2147483647_int64)
-      s = iand(s*1103515245_int64 + 12345_int64, 2147483647_int64)
+      s = iand(int(state, int64) + 1640531527_int64, 2147483647_int64)
       state = int(s)
-      u = real(s, wp)/2147483648.0_wp
+      z = ieor(s, shiftr(s, 30))*(-4658895280553007687_int64)
+      z = ieor(z, shiftr(z, 27))*(-7723592293110705685_int64)
+      z = ieor(z, shiftr(z, 31))
+      u = real(shiftr(z, 11), wp)*(1.0_wp/real(2_int64**53, wp))
       x = lo + (hi - lo)*u
    end subroutine det_rand_0
 
