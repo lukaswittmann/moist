@@ -78,8 +78,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -131,8 +133,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -194,8 +198,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -245,8 +251,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -295,8 +303,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -344,8 +354,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          if (allocated(cavity)) deallocate (cavity)
 
          deallocate (radii)
@@ -532,8 +544,10 @@ contains
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
          call cavity%update(mol, error=cavity_error)
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+         if (allocated(error)) return
 
          ! Anchors without any surface point: failed projections or weightless anchors
          if (allocated(cavity%offset)) then
