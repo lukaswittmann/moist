@@ -25,7 +25,7 @@ pressure, separate from numerical settings:
    cavity = CavityDROP(
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
-       parameters=DROPParameters(nleb=194, proj_level=2),
+       parameters=DROPParameters(nleb=194, proj_level=3),
    )
    model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
