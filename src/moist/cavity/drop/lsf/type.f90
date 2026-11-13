@@ -190,6 +190,12 @@ module moist_cavity_drop_lsf_base
       !> - direct users (tests calling the concrete without a cavity) may set it
       !>   before calling `update`
       real(wp) :: screening_threshold = 0.0_wp
+      !> Highest spatial derivative order `prepare` / `prepare_subset` provision (0..4)
+      !>
+      !> - written through `set_max_deriv`; a concrete LSF with another default
+      !>   sets it in its constructor (isodensity: 0)
+      !> - `evaluate_batch` ignores it: `order` governs there
+      integer :: max_deriv = 2
       !> Highest spatial derivative order actually present in the per-point cache after
       !> the latest `prepare`/`prepare_subset`
       integer :: prepared_deriv = -1
@@ -317,7 +323,7 @@ module moist_cavity_drop_lsf_base
       !> Cache per-point state with a caller-provided candidate list
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
       !> Configure the highest spatial derivative order required
-      procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
+      procedure :: set_max_deriv => lsf_base_set_max_deriv
       !> Abort when an accessor is asked for an order `prepare` did not compute
       procedure :: require_deriv => lsf_base_require_deriv
       !> Abort when an accessor reads the cache of an unreached prepare
@@ -457,15 +463,6 @@ module moist_cavity_drop_lsf_base
          integer, intent(in) :: candidate_indices(:)
          type(error_type), allocatable, intent(out) :: error
       end subroutine lsf_prepare_subset_iface
-
-      !> @param[inout] self LSF instance
-      !> @param[in]    n    Requested max derivative order
-      subroutine lsf_set_max_deriv_iface(self, n)
-         import :: moist_cavity_drop_lsf_type
-         implicit none(type, external)
-         class(moist_cavity_drop_lsf_type), intent(inout) :: self
-         integer, intent(in) :: n
-      end subroutine lsf_set_max_deriv_iface
 
       !> @param[in]  self LSF instance
       !> @returns         Number of currently active atoms
@@ -897,6 +894,22 @@ contains
       deallocate (buckets)
    end subroutine lsf_base_spatial_sort
 
+   !> Configure the highest spatial derivative order `prepare` provisions
+   !>
+   !> - clamped to 0..4; nothing is allocated here
+   !> - takes effect at the next `prepare` / `prepare_subset`
+   !>
+   !> @param[inout] self LSF instance
+   !> @param[in]    n    Requested max derivative order
+   subroutine lsf_base_set_max_deriv(self, n)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+      !> Requested max derivative order
+      integer, intent(in) :: n
+
+      self%max_deriv = min(4, max(0, n))
+   end subroutine lsf_base_set_max_deriv
+
    !> Abort when an accessor is asked for a derivative order the latest
    !> `prepare` did not compute
    !>
@@ -1009,6 +1022,8 @@ contains
    !>     too, 2 -> packed `lsf2_rr_packed(6, n)` too, 3 -> packed `lsf3_rrr(10, n)` too,
    !>     4 -> packed `lsf4_rrrr(15, n)` too; an output above `order` is left
    !>     untouched, a missing or misshaped output for the requested order aborts
+   !>   - `order` alone governs, whatever `set_max_deriv` holds; `max_deriv` is
+   !>     the same after the call as before
    !>   - Hessian packed `lsf2_rr_packed(6, n)`: xx, xy, yy, xz, yz, zz;
    !>     `unpack_sym_matrix` from [[moist_math_packed]] for a dense view
    !>   - packed slots: sorted tuples `a <= b <= c <= d`, last index slowest,
@@ -1029,8 +1044,11 @@ contains
    !>
    !> Looping default:
    !>   - `prepare` / `prepare_subset` (on one ascending copy of the list) plus
-   !>     the per-point accessors for every column; `order` above the prepared `set_max_deriv` aborts
-   !>     (`require_deriv`), so a caller raises `set_max_deriv(order)` first
+   !>     the per-point accessors for every column
+   !>   - `max_deriv` is `order` for the loop, so `prepare` provisions for `order`
+   !>     alone, and back at the caller's value on every exit, the `error` return
+   !>     included
+   !>   - `order` above what the level set's `prepare` provides aborts (`require_deriv`)
    !>   - orders 2..4 call the packed `f012_r` / `f3_rrr` / `f4_rrrr` straight into the columns
    !>   - unreached as the prepare's `unreached()` says (CFC: no atom in reach;
    !>     isodensity: never, an empty set is a defined value there); `lsf0 = +Inf`
@@ -1065,6 +1083,8 @@ contains
       integer, allocatable :: sorted(:)
       !> Column, point count and list size
       integer :: i, n, nc
+      !> `max_deriv` of the caller
+      integer :: caller_deriv
       character(len=16) :: col
 
       n = size(points, 2)
@@ -1076,6 +1096,9 @@ contains
          call lsf_sorted_candidates(candidate_indices, sorted, nc, self%ncenters)
       end if
 
+      ! `prepare` computes at `max_deriv`: `order` for the loop, restored below
+      caller_deriv = self%max_deriv
+      self%max_deriv = order
       do i = 1, n
          if (present(candidate_indices)) then
             call self%prepare_subset(points(:, i), sorted(1:nc), error)
@@ -1085,7 +1108,7 @@ contains
          if (allocated(error)) then
             write (col, "(i0)") i
             error%message = "evaluate_batch failed at point "//trim(col)//": "//error%message
-            return
+            exit
          end if
          if (self%prepared_unreached) then
             self%batch_unreached(i) = .true.
@@ -1114,6 +1137,7 @@ contains
             call self%f4_rrrr(lsf4_rrrr(:, i))
          end select
       end do
+      self%max_deriv = caller_deriv
    end subroutine lsf_base_evaluate_batch
 
    !> Abort on an `evaluate_batch` call whose outputs cannot hold `order`

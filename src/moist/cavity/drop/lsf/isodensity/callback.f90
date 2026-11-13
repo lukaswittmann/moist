@@ -89,8 +89,6 @@ module moist_cavity_drop_lsf_isodensity_callback
       real(wp) :: hess(ndim, ndim) = 0.0_wp
       !> Cached third spatial derivative
       real(wp) :: third(ndim, ndim, ndim) = 0.0_wp
-      !> Highest requested derivative order
-      integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
       real(wp) :: zmax = 0.0_wp
       !> Core fill of the ECP nuclei in the bound structure
@@ -106,7 +104,6 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: update => lsf_update
       procedure, public :: prepare => lsf_prepare
       procedure, public :: prepare_subset => lsf_prepare_subset
-      procedure, public :: set_max_deriv => lsf_set_max_deriv
       procedure, public :: active_count => lsf_active_count
       procedure, public :: active_atom => lsf_active_atom
       procedure, public :: f0 => lsf_f0
@@ -143,6 +140,8 @@ contains
       self%name = "Isodensity"
 
       self%radius_dependent = .false.
+      ! Value and gradient only until a caller raises the order
+      self%max_deriv = 0
 
       self%callback_ptr = callback_ptr
       self%context = context
@@ -325,17 +324,6 @@ contains
       if (size(candidate_indices) < 0) return
       call self%prepare(point, error)
    end subroutine lsf_prepare_subset
-
-   !> Record requested derivative order
-   !>
-   !> @param[inout] self LSF instance
-   !> @param[in]    n    Requested max derivative order
-   subroutine lsf_set_max_deriv(self, n)
-      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
-      integer, intent(in) :: n
-
-      self%max_deriv = max(0, n)
-   end subroutine lsf_set_max_deriv
 
    !> Number of active atoms, true-density callbacks not being atom screened
    pure function lsf_active_count(self) result(n)

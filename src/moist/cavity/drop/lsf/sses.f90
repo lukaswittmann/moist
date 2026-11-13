@@ -26,8 +26,6 @@ module moist_cavity_drop_lsf_sses
       type(moist_cavity_drop_lsf_sses_param_type) :: param
       !> Prepared evaluation point
       real(wp), private :: point(3) = 0.0_wp
-      !> Requested spatial derivative order
-      integer, private :: max_deriv = 2
       !> Prepared spatial Taylor jet
       type(sses_jet_type), private :: spatial
       !> Value-owned geometry and optimizer cache
@@ -41,8 +39,6 @@ module moist_cavity_drop_lsf_sses
       procedure :: prepare
       !> Prepare a point with unbounded atom support
       procedure :: prepare_subset
-      !> Set the spatial derivative order
-      procedure :: set_max_deriv
       !> Number of retained atoms
       procedure :: active_count
       !> User-space atom identity
@@ -222,19 +218,6 @@ contains
       if (size(candidate_indices) < 0) return
       call self%prepare(point, error)
    end subroutine prepare_subset
-
-   !> Set the spatial derivative order
-   !>
-   !> @param[in,out] self Level set instance
-   !> @param[in] n Highest derivative order
-   subroutine set_max_deriv(self, n)
-      !> Level set instance
-      class(moist_cavity_drop_lsf_sses_type), intent(inout) :: self
-      !> Highest derivative order
-      integer, intent(in) :: n
-
-      self%max_deriv = min(4, max(0, n))
-   end subroutine set_max_deriv
 
    !> Number of prepared atom slots
    !>
