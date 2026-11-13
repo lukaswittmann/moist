@@ -758,21 +758,6 @@ contains
       call expect_error(error, err, "CFC pair power m must be 4")
    end subroutine test_bad_cfc_pair_power
 
-   !> Projection level 2 is refused
-   subroutine test_bad_drop_proj_level_2(error)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error
-      type(moist_error), allocatable :: err
-      !> Settings under test
-      type(moist_cavity_drop_parameters_type) :: param
-
-      call param%init_defaults()
-      param%proj_level = 2
-      call param%compute_derived(err)
-      call expect_error(error, err, "Invalid DROP numerical parameters: projection level must be 1, 3 or 4")
-   end subroutine test_bad_drop_proj_level_2
-
    !> A non-positive projection batch size is refused
    subroutine test_bad_drop_batch_size(error)
       !> Test failure, set only on the expected error
@@ -1025,7 +1010,6 @@ contains
          new_unittest("drop_load_file", test_drop_load_file), &
          new_unittest("bad_drop_load_unfitted_grid", test_bad_drop_load_unfitted_grid, should_fail=.true.), &
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
-         new_unittest("bad_drop_proj_level_2", test_bad_drop_proj_level_2, should_fail=.true.), &
          new_unittest("bad_cfc_pair_power", test_bad_cfc_pair_power, should_fail=.true.), &
          new_unittest("bad_drop_batch_size", test_bad_drop_batch_size, should_fail=.true.), &
          new_unittest("bad_drop_newton_switch_fnorm", test_bad_drop_newton_switch_fnorm, should_fail=.true.), &

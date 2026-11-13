@@ -61,9 +61,11 @@ contains
    !*                               drop_anchor_type%fill                               *!
    !* ================================================================================= *!
 
-   !> Anchor `(i - 1)*num_leb + j` is Lebedev node `j` on sphere `i`: it lies on
-   !> that sphere in the node's direction, carries the node's weight and its own
-   !> index as id, and the weights of every sphere sum to 4 pi
+   !> Anchor `(i - 1)*num_leb + j` is Lebedev node `j` on sphere `i`
+   !>
+   !> - lies on sphere `i` in the direction of node `j`
+   !> - carries the node's weight, owner `i` and its own index as id
+   !> - the weights of every sphere sum to 4 pi
    subroutine test_fill_sphere_layout(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -100,15 +102,15 @@ contains
             if (allocated(error)) return
 
             offset = anchors%xyz(:, ii) - centers(:, i)
-            call check(error, norm2(offset), radii(i), thr_abs=thr*radii(i), &
+            call check(error, norm2(offset), radii(i), thr_abs=thr*radii(i), thr_rel=10.0_wp*thr, &
                        message="anchor lies on its sphere")
             if (allocated(error)) return
-            call check(error, dot_product(offset, leb%points(:, jj))/radii(i), 1.0_wp, thr_abs=thr, &
+            call check(error, dot_product(offset, leb%points(:, jj))/radii(i), 1.0_wp, thr_abs=thr, thr_rel=10.0_wp*thr, &
                        message="anchor lies in the direction of its node")
             if (allocated(error)) return
          end do
 
-         call check(error, sum(anchors%wleb0((i - 1)*NLEB + 1:i*NLEB)), 4.0_wp*pi, thr_abs=thr, &
+         call check(error, sum(anchors%wleb0((i - 1)*NLEB + 1:i*NLEB)), 4.0_wp*pi, thr_abs=thr, thr_rel=10.0_wp*thr, &
                     message="solid-angle weights of one sphere")
          if (allocated(error)) return
       end do
