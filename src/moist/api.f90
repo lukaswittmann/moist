@@ -40,7 +40,7 @@ module moist_api
    use moist_cavity_mt, only: cavity_type_mt, &
       & new_cavity_mt, moist_cavity_mt_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, proj_level_max
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, is_valid_proj_level
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
@@ -118,8 +118,8 @@ module moist_api
       real(c_double) :: tolerance = 1.0e-10_c_double
       !> Maximum projection iterations
       integer(c_int) :: proj_maxiter = 150_c_int
-      !> Projection refinement level
-      integer(c_int) :: proj_level = 2_c_int
+      !> Projection refinement level: 1, 3 or 4
+      integer(c_int) :: proj_level = 3_c_int
       !> Branch-selection smoothing weight
       real(c_double) :: branch_weight_s = 0.0025_c_double
       !> Grid density kernel length in Bohr
@@ -1771,9 +1771,13 @@ contains
          return
       end if
       if (o%tolerance <= 0.0_c_double .or. o%rho_grid_h <= 0.0_c_double .or. &
-          o%branch_weight_s < 0.0_c_double .or. o%proj_maxiter < 1 .or. &
-          o%proj_level < 1 .or. o%proj_level > proj_level_max) then
+          o%branch_weight_s < 0.0_c_double .or. o%proj_maxiter < 1) then
          call api_error(error%ptr, "new_drop_cavity", "Invalid DROP options")
+         return
+      end if
+      if (.not. is_valid_proj_level(int(o%proj_level))) then
+         call api_error(error%ptr, "new_drop_cavity", &
+                        "Invalid DROP options: projection level must be 1, 3 or 4")
          return
       end if
       call read_api_radii(vradii, radii, error%ptr)
