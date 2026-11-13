@@ -48,7 +48,7 @@ program tester
    use test_math_grid_3d_invariance, only: collect_math_grid_3d_invariance
    use test_math_grid_3d_guards, only: collect_math_grid_3d_guards
    use test_cavity_iswig, only: collect_cavity_iswig
-   use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
+   use test_cavity_drop_phi, only: collect_cavity_drop_phi
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
@@ -141,7 +141,7 @@ program tester
       & new_testsuite("moz_potential_lj", collect_moz_potential_lj), &
       & new_testsuite("moz_potential_oplsaa", collect_moz_potential_oplsaa), &
       & new_testsuite("moz_solvent", collect_moz_solvent), &
-      & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
+      & new_testsuite("cavity_drop_phi", collect_cavity_drop_phi), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &

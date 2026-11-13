@@ -19,6 +19,7 @@
 !> `test_all_channels` drives every channel at once; `test_single_channels`
 !> drives them one at a time so a bug in one cannot hide behind another
 module test_cavity_drop_nuclear_adjoint
+!$ use omp_lib, only: omp_in_parallel
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
@@ -573,9 +574,6 @@ contains
    end subroutine build_model
 
    !> The reverse gradient is bit-identical on one and on four threads
-   !>
-   !> Every tile keeps its own gradient rows, summed in tile order after the
-   !> parallel region, so neither the team size nor the schedule may move a bit
    subroutine test_thread_count_invariance(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -588,6 +586,14 @@ contains
       type(mctc_error), allocatable :: cav_error
       real(wp), allocatable :: grad_serial(:, :), grad_team(:, :)
       integer :: ich
+      logical :: in_parallel
+
+      ! Inside test-drive's suite-level team the library region would get one thread
+      in_parallel = .false.
+!$    in_parallel = omp_in_parallel()
+      call check(error, .not. in_parallel, &
+         & "thread-count check must run as a selected test, not inside the suite-level parallel run")
+      if (allocated(error)) return
 
       ! The branching cross: several tiles per thread and multi-row anchors
       call build_fixture(cavity, ctx, .true., error)

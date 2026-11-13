@@ -1,20 +1,15 @@
-module test_cavity_drop_primitives
-   use, intrinsic :: ieee_exceptions, only: ieee_get_flag, ieee_set_flag, ieee_divide_by_zero
+module test_cavity_drop_phi
    use mctc_env_accuracy, only: wp
-   use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
+   use moist_cavity_drop_phi, only: moist_cavity_drop_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_math_smoothstep, only: moist_math_smoothstep_erf_type, &
-                                          new_smoothstep_erf, moist_math_smoothstep_sigmoid_type, &
-                                          new_smoothstep_sigmoid
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_math_packed, only: unpack_sym_matrix
+   use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
    private
 
-   public :: collect_cavity_drop_primitives
+   public :: collect_cavity_drop_phi
 
    integer, parameter :: ndim = 3
    integer, parameter :: owner_dummy = 1
@@ -25,8 +20,8 @@ module test_cavity_drop_primitives
 
 contains
 
-   !> Collect the phi primitive FD tests plus the switching nuclear gradient
-   subroutine collect_cavity_drop_primitives(testsuite)
+   !> Collect the tests of the projection objective phi
+   subroutine collect_cavity_drop_phi(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
@@ -35,20 +30,15 @@ contains
                   new_unittest("phi_f2_rr", test_phi_f2_rr), &
                   new_unittest("phi_f3_rrr", test_phi_f3_rrr), &
                   new_unittest("phi_f4_rrrr", test_phi_f4_rrrr), &
-                  new_unittest("phi_f1_ra", test_phi_f1_rA), &
-                  new_unittest("phi_f2_rarb", test_phi_f2_rArB), &
                   new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
-                  new_unittest("phi_f012_r", test_phi_f012_r), &
-                  new_unittest("switching_f1_ra", test_switching_f1_rA), &
-                  new_unittest("switching_endpoint", test_switching_endpoint), &
-                  new_unittest("parameters_invalid", test_parameters_invalid) &
+                  new_unittest("phi_f012_r", test_phi_f012_r) &
                   ]
-   end subroutine collect_cavity_drop_primitives
+   end subroutine collect_cavity_drop_phi
 
    !> Test phi value against the direct quadratic expression
    subroutine test_phi_f0(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol
@@ -82,7 +72,7 @@ contains
    !> Test phi point gradient against a finite difference of the value
    subroutine test_phi_f1_r(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol
@@ -139,12 +129,13 @@ contains
    !> Test phi point Hessian against a finite difference of the point gradient
    subroutine test_phi_f2_rr(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:), points(:, :)
       real(wp) :: point(ndim), anchor(ndim), analytic(ndim, ndim), numeric(ndim, ndim)
+      real(wp) :: analytic_packed(6)
       real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
       real(wp) :: work_point(ndim)
       integer :: icase, ipt, jpt, i, j, axis
@@ -165,7 +156,8 @@ contains
             point = points(:, ipt)
             do jpt = 1, size(points, 2)
                anchor = points(:, jpt)
-               analytic = phi%f2_rr(point, anchor, owner_dummy)
+               analytic_packed = phi%f2_rr(point, anchor, owner_dummy)
+               call unpack_sym_matrix(analytic_packed, analytic, ndim)
 
                do axis = 1, ndim
                   work_point = point
@@ -203,10 +195,11 @@ contains
    !> anchor) pair is hard-coded rather than sourced from a molecule
    subroutine test_phi_f3_rrr(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       real(wp) :: analytic(ndim, ndim, ndim), numeric(ndim, ndim, ndim)
       real(wp) :: hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
+      real(wp) :: hess_packed(6)
       real(wp) :: point(ndim), anchor(ndim), work_point(ndim)
       integer :: i, j, k, axis
       real(wp) :: h
@@ -224,16 +217,20 @@ contains
       do axis = 1, ndim
          work_point = point
          work_point(axis) = point(axis) + 2.0_wp*h
-         hess_pp = phi%f2_rr(work_point, anchor, owner_dummy)
+         hess_packed = phi%f2_rr(work_point, anchor, owner_dummy)
+         call unpack_sym_matrix(hess_packed, hess_pp, ndim)
          work_point = point
          work_point(axis) = point(axis) + h
-         hess_p = phi%f2_rr(work_point, anchor, owner_dummy)
+         hess_packed = phi%f2_rr(work_point, anchor, owner_dummy)
+         call unpack_sym_matrix(hess_packed, hess_p, ndim)
          work_point = point
          work_point(axis) = point(axis) - h
-         hess_m = phi%f2_rr(work_point, anchor, owner_dummy)
+         hess_packed = phi%f2_rr(work_point, anchor, owner_dummy)
+         call unpack_sym_matrix(hess_packed, hess_m, ndim)
          work_point = point
          work_point(axis) = point(axis) - 2.0_wp*h
-         hess_mm = phi%f2_rr(work_point, anchor, owner_dummy)
+         hess_packed = phi%f2_rr(work_point, anchor, owner_dummy)
+         call unpack_sym_matrix(hess_packed, hess_mm, ndim)
          do i = 1, ndim
             do j = 1, ndim
                call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h, numeric(i, j, axis), error)
@@ -257,7 +254,7 @@ contains
    !> Mol-less pure-math test (see test_phi_f3_rrr)
    subroutine test_phi_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       real(wp) :: analytic(ndim, ndim, ndim, ndim), numeric(ndim, ndim, ndim, ndim)
       real(wp) :: third_pp(ndim, ndim, ndim), third_p(ndim, ndim, ndim)
@@ -313,135 +310,10 @@ contains
       end do
    end subroutine test_phi_f4_rrrr
 
-   !> Test phi nuclear gradient against a finite difference of the anchor point
-   subroutine test_phi_f1_rA(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
-      type(moist_cavity_drop_parameters_type) :: param
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp) :: point(ndim), anchor(ndim)
-      real(wp), allocatable :: analytic(:, :), numeric(:, :)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: work_anchor(ndim)
-      integer :: icase, owner, i, j, axis
-      real(wp) :: h
-
-      param%phi_alpha = 0.7_wp
-      call phi%set_parameters(param)
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-         call phi%set_input(mol, radii)
-
-         point = points(:, 1)
-         anchor = points(:, 2)
-         do owner = 1, mol%nat
-            analytic = phi%f1_rA(point, anchor, owner)
-            allocate (numeric(ndim, mol%nat), source=0.0_wp)
-            do axis = 1, ndim
-               work_anchor = anchor
-               work_anchor(axis) = anchor(axis) + 2.0_wp*h
-               f_pp = phi%f0(point, work_anchor, owner)
-               work_anchor = anchor
-               work_anchor(axis) = anchor(axis) + h
-               f_p = phi%f0(point, work_anchor, owner)
-               work_anchor = anchor
-               work_anchor(axis) = anchor(axis) - h
-               f_m = phi%f0(point, work_anchor, owner)
-               work_anchor = anchor
-               work_anchor(axis) = anchor(axis) - 2.0_wp*h
-               f_mm = phi%f0(point, work_anchor, owner)
-               call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis, owner), error)
-               if (allocated(error)) return
-            end do
-
-            do i = 1, ndim
-               do j = 1, mol%nat
-                  call check(error, analytic(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-            deallocate (numeric)
-         end do
-      end do
-   end subroutine test_phi_f1_rA
-
-   !> Test phi nuclear Hessian against finite differences of the nuclear gradient
-   subroutine test_phi_f2_rArB(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
-      type(moist_cavity_drop_parameters_type) :: param
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: analytic(:, :, :, :), numeric(:, :, :, :)
-      real(wp), allocatable :: g_pp(:, :), g_p(:, :), g_m(:, :), g_mm(:, :)
-      real(wp) :: work_anchor(ndim)
-      integer :: icase, owner, i, j, atom_a, atom_b, axis
-      real(wp) :: h
-
-      param%phi_alpha = 0.7_wp
-      call phi%set_parameters(param)
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-         call phi%set_input(mol, radii)
-
-         do owner = 1, mol%nat
-            analytic = phi%f2_rArB(points(:, 1), points(:, 2), owner)
-            allocate (numeric(ndim, ndim, mol%nat, mol%nat), source=0.0_wp)
-            do axis = 1, ndim
-               work_anchor = points(:, 2)
-               work_anchor(axis) = points(axis, 2) + 2.0_wp*h
-               g_pp = phi%f1_rA(points(:, 1), work_anchor, owner)
-               work_anchor = points(:, 2)
-               work_anchor(axis) = points(axis, 2) + h
-               g_p = phi%f1_rA(points(:, 1), work_anchor, owner)
-               work_anchor = points(:, 2)
-               work_anchor(axis) = points(axis, 2) - h
-               g_m = phi%f1_rA(points(:, 1), work_anchor, owner)
-               work_anchor = points(:, 2)
-               work_anchor(axis) = points(axis, 2) - 2.0_wp*h
-               g_mm = phi%f1_rA(points(:, 1), work_anchor, owner)
-               do i = 1, ndim
-                  do atom_a = 1, mol%nat
-                     call fd4_scalar(g_pp(i, atom_a), g_p(i, atom_a), g_m(i, atom_a), g_mm(i, atom_a), h, &
-                                     numeric(i, axis, atom_a, owner), error)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-
-            do i = 1, ndim
-               do j = 1, ndim
-                  do atom_a = 1, mol%nat
-                     do atom_b = 1, mol%nat
-                        call check(error, analytic(i, j, atom_a, atom_b), numeric(i, j, atom_a, atom_b), &
-                                   thr_abs=ABS_THR, thr_rel=REL_THR)
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-            end do
-            deallocate (numeric)
-         end do
-      end do
-   end subroutine test_phi_f2_rArB
-
    !> Test phi mixed point-nuclear Hessian against finite differences of point gradient
    subroutine test_phi_f2_r_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol
@@ -502,7 +374,7 @@ contains
    !> Test combined phi value, gradient, and Hessian against finite differences
    subroutine test_phi_f012_r(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_cavity_drop_objective_phi_type) :: phi
+      type(moist_cavity_drop_phi_type) :: phi
       type(moist_cavity_drop_parameters_type) :: param
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol
@@ -511,6 +383,7 @@ contains
       real(wp) :: analytic_val, numeric_val
       real(wp) :: analytic_grad(ndim), numeric_grad(ndim)
       real(wp) :: analytic_hess(ndim, ndim), numeric_hess(ndim, ndim)
+      real(wp) :: analytic_hess_packed(6)
       real(wp) :: f_pp, f_p, f_m, f_mm
       real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
       integer :: icase, ipt, jpt, i, j, axis
@@ -531,7 +404,9 @@ contains
             point = points(:, ipt)
             do jpt = 1, size(points, 2)
                anchor = points(:, jpt)
-               call phi%f012_r(point, anchor, owner_dummy, analytic_val, analytic_grad, analytic_hess)
+               call phi%f012_r(point, anchor, owner_dummy, analytic_val, analytic_grad, &
+                               analytic_hess_packed)
+               call unpack_sym_matrix(analytic_hess_packed, analytic_hess, ndim)
                numeric_val = phi%f0(point, anchor, owner_dummy)
 
                do axis = 1, ndim
@@ -579,183 +454,4 @@ contains
       end do
    end subroutine test_phi_f012_r
 
-   !> Test switching function nuclear gradient via finite difference
-   !> Builds an LSF-svdw scaffold to obtain f0 and nuclear gradients,
-   !> wraps them through the smooth-step switching function, and
-   !> FD-checks against the analytic switching gradient
-   subroutine test_switching_f1_rA(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol_base, mol_shift
-      type(moist_cavity_drop_lsf_svdw_type) :: prim
-      type(moist_math_smoothstep_erf_type) :: sw
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer :: icase, ipt, atom, axis
-      real(wp) :: point(ndim)
-      real(wp) :: lsf0
-      real(wp), allocatable :: lsf1(:, :)
-      real(wp), allocatable :: analytic(:, :)
-      real(wp), allocatable :: dummy_rr_rA(:, :, :, :)
-      real(wp) :: f_pp, f_p, f_m, f_mm, numeric
-      real(wp) :: lsf0_tmp
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol_base = mols(icase)
-         call get_test_radii(mol_base, radii)
-         call get_test_points(mol_base, points)
-         allocate (centers_base(ndim, mol_base%nat), centers_local(ndim, mol_base%nat))
-         centers_base = mol_base%xyz
-         call new_smoothstep_erf(sw, -0.5_wp, 0.5_wp)
-
-         prim%screening_threshold = 0.0_wp
-         call prim%new()
-         call prim%update(mol_base, radii)
-         call prim%set_max_deriv(3)
-
-         if (allocated(lsf1)) deallocate (lsf1)
-         if (allocated(dummy_rr_rA)) deallocate (dummy_rr_rA)
-         allocate (lsf1(ndim, mol_base%nat))
-         allocate (dummy_rr_rA(ndim, ndim, ndim, mol_base%nat))
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            call prim%update(mol_base, radii)
-            call prim%set_centers(centers_base)
-            call prim%prepare(point, lsf_err)
-            if (allocated(lsf_err)) then
-               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-               return
-            end if
-            call prim%f0(lsf0)
-            call prim%f3_rr_rA(lsf1_rA=lsf1, &
-                                        lsf3_rr_rA=dummy_rr_rA)
-            analytic = sw%f1_rA(lsf0, lsf1)
-
-            do atom = 1, mol_base%nat
-               do axis = 1, ndim
-                  mol_shift = mol_base
-                  centers_local = centers_base
-                  centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
-                  mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
-                  call prim%set_centers(centers_local)
-                  call prim%prepare(point, lsf_err)
-                  call prim%f0(lsf0_tmp)
-                  f_pp = sw%f0(lsf0_tmp)
-
-                  mol_shift = mol_base
-                  centers_local = centers_base
-                  centers_local(axis, atom) = centers_local(axis, atom) + eps
-                  mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
-                  call prim%set_centers(centers_local)
-                  call prim%prepare(point, lsf_err)
-                  call prim%f0(lsf0_tmp)
-                  f_p = sw%f0(lsf0_tmp)
-
-                  mol_shift = mol_base
-                  centers_local = centers_base
-                  centers_local(axis, atom) = centers_local(axis, atom) - eps
-                  mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
-                  call prim%set_centers(centers_local)
-                  call prim%prepare(point, lsf_err)
-                  call prim%f0(lsf0_tmp)
-                  f_m = sw%f0(lsf0_tmp)
-
-                  mol_shift = mol_base
-                  centers_local = centers_base
-                  centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
-                  mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
-                  call prim%set_centers(centers_local)
-                  call prim%prepare(point, lsf_err)
-                  call prim%f0(lsf0_tmp)
-                  f_mm = sw%f0(lsf0_tmp)
-
-                  call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
-                  if (allocated(error)) return
-
-                  call check(error, &
-                             analytic(axis, atom), numeric, &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine test_switching_f1_rA
-
-   !> Near-endpoint switching avoids subtracting a rounded unit coordinate
-   subroutine test_switching_endpoint(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_math_smoothstep_sigmoid_type) :: critical
-      real(wp) :: value
-      logical :: raised, previous
-      call new_smoothstep_sigmoid(critical, 0.0_wp, 1.0_wp, &
-                                 p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
-      call ieee_get_flag(ieee_divide_by_zero, previous)
-      call ieee_set_flag(ieee_divide_by_zero, .false.)
-      value = critical%f0(1.0e-20_wp)
-      call ieee_get_flag(ieee_divide_by_zero, raised)
-      call ieee_set_flag(ieee_divide_by_zero, previous)
-      call check(error,.not. raised .and. value == 0.0_wp, "finite endpoint switching without divide by zero")
-   end subroutine test_switching_endpoint
-
-   !> Derived DROP parameters refuse each out-of-range numerical control
-   subroutine test_parameters_invalid(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error handling
-      type(mctc_error), allocatable :: err
-      !> Parameter set under test, reset to defaults per case
-      type(moist_cavity_drop_parameters_type) :: param
-      !> Case index
-      integer :: icase
-      !> Number of invalid cases
-      integer, parameter :: ncase = 5
-
-      ! The defaults themselves derive cleanly, so each refusal below is the
-      ! single field changed for that case
-      call param%compute_derived(err)
-      if (allocated(err)) then
-         call test_failed(error, "default DROP parameters were refused: "//err%message)
-         return
-      end if
-
-      do icase = 1, ncase
-         call param%init_defaults()
-         select case (icase)
-         case (1)
-            param%tolerance = 0.0_wp
-         case (2)
-            param%rho_grid_h = -1.0_wp
-         case (3)
-            param%proj_maxiter = 0
-         case (4)
-            param%proj_level = 0
-         case (5)
-            param%proj_level = 5
-         case default
-            error stop "test_cavity_drop_primitives: unhandled icase"
-         end select
-         call param%compute_derived(err)
-         if (.not. allocated(err)) then
-            call test_failed(error, "invalid DROP parameters were accepted")
-            return
-         end if
-         call check(error, index(err%message, "Invalid DROP numerical parameters") > 0, &
-                    more="unexpected error message: "//err%message)
-         if (allocated(error)) return
-      end do
-   end subroutine test_parameters_invalid
-
-end module test_cavity_drop_primitives
+end module test_cavity_drop_phi
