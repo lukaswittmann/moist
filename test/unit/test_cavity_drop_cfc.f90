@@ -1,18 +1,23 @@
 !> Kernel-level unit tests for the auto-generated CFC pseudo-density module
 module test_cavity_drop_cfc
    use mctc_env_accuracy, only: wp
+   use mctc_env_error, only: mctc_error => error_type
+   use moist_api, only: vp_error
    use moist_cavity_drop_lsf_cfc_kernel, only: cfc_atomic_term_eval, &
                                                cfc_pair_term_eval, cfc_spatial_eval, &
                                                cfc_nuclear_eval, cfc_hessian_eval, &
                                                cfc_tangent_eval, cfc_hvp_eval
    use test_helpers, only: fd4_scalar
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
 
    public :: collect_cavity_drop_cfc
 
    integer, parameter :: ndim = 3
+
+   !> Fade band at infinity in sigma: every center on the unfaded kernel body
+   real(wp), parameter :: no_fade_start = huge(1.0_wp), no_fade_width = 1.0_wp
 
    !> Klamt-Diedenhofen 2018 reference parameter set
    real(wp), parameter :: a1_ref = -15.0_wp
@@ -113,8 +118,8 @@ contains
       pd2_rr = 0.0_wp
       pd3_rrr = 0.0_wp
       pd4_rrrr = 0.0_wp
-      call cfc_atomic_term_eval(d_a, R_a, a1, max_deriv, pd0, pd1_r, pd2_rr, pd3_rrr, &
-                                pd4_rrrr)
+      call cfc_atomic_term_eval(d_a, R_a, a1, no_fade_start, no_fade_width, max_deriv, &
+                                pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr)
    end subroutine eval_atom
 
    !> Evaluate the pair-term kernel at one (d_a, d_b) configuration
@@ -141,8 +146,8 @@ contains
       pd3_abb = 0.0_wp; pd3_bbb = 0.0_wp
       pd4_aaaa = 0.0_wp; pd4_aaab = 0.0_wp; pd4_aabb = 0.0_wp
       pd4_abbb = 0.0_wp; pd4_bbbb = 0.0_wp
-      call cfc_pair_term_eval(d_a, d_b, R_a, R_b, a2, c_par, max_deriv, &
-                              pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
+      call cfc_pair_term_eval(d_a, d_b, R_a, R_b, a2, c_par, no_fade_start, no_fade_width, &
+                              max_deriv, pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
                               pd3_aaa, pd3_aab, pd3_abb, pd3_bbb, &
                               pd4_aaaa, pd4_aaab, pd4_aabb, pd4_abbb, pd4_bbbb)
    end subroutine eval_pair
