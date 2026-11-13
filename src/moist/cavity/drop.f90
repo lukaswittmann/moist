@@ -1,15 +1,11 @@
 !> Main DROP (Discretization via Reference-Onto surface Projection) implementation
 module moist_cavity_drop
    use, intrinsic :: iso_fortran_env, only: output_unit
-   use mctc_env, only: wp
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_io_structure, only: structure_type
-   use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
    use moist_output_citations, only: citation
-   use moist_math_lapack, only: getrf, getrs
-   use moist_math_lapack_gesv, only: dgesv
-   use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
-   use moist_math_boys, only: dboysfun1
+   use moist_math_linalg, only: setup_tangent_frame
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, update_cavity_base, build_cavity_base, &
@@ -17,20 +13,16 @@ module moist_cavity_drop
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
       & coupling_close_view
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_fields, only: field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, new_swif_smooth_step
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
+   use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig
-   use moist_cavity_drop_projector, only: drop_projector_type
-   use moist_cavity_drop_types, only: projection_buffer_type, projection_workspace_type
-   use moist_math_adjacency_list, only: adjacency_list_type
-   use moist_math_cell_grid, only: moist_cell_grid_type
+   use moist_math_adjacency, only: adjacency_list_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
@@ -38,13 +30,12 @@ module moist_cavity_drop
    use moist_cavity_drop_lsf_isodensity, only: &
       moist_cavity_drop_lsf_isodensity_internal_type, &
       moist_cavity_drop_lsf_isodensity_callback_type
-   use moist_utils_mem, only: grow_array, filter_array
-   use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
+   use moist_cavity_drop_anchor, only: drop_anchor_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
-   use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
+   use moist_math_smoothing, only: smoothing_kernel_wendland_type
 
-   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
+   use moist_utils_timer, only: cat_setup, cat_solve, cat_properties, cat_gradient
 
    implicit none(type, external)
    private
@@ -63,19 +54,29 @@ module moist_cavity_drop
 
       !* ----------------------------- Atomic sphere data ----------------------------- *!
 
-      !> Per-cell candidate atom lists for point-to-atom screening
-      type(moist_cell_grid_type) :: mol_cell_grid
-
       !> Grid point neighbour list for density computation (CSR format)
       type(adjacency_list_type) :: grid_adj_list
 
-      !> Unique numbering
+      !> Unique numbering, `anchor%id + nsph*num_leb*(branch - 1)` (ngrid)
       integer, allocatable :: numbering(:)
+
+      !* ------------------------- Anchor/row layout (CSR) ---------------------------- *!
+
+      !> Unprojected anchor points, indexed by anchor (`anchor%ngrid`)
+      type(drop_anchor_type) :: anchor
+
+      !> Rows of anchor `i` are `offset(i)+1 : offset(i+1)` (anchor%ngrid + 1)
+      !>
+      !> - `anchor` arrays are sized `anchor%ngrid` and hold one value per
+      !>   anchor; row arrays are sized `ngrid`, one per surface point
+      !> - the base-type `owner` and `f` stay per row: they are the generic
+      !>   cavity contract every model component reads
+      integer, allocatable :: offset(:)
+      !> Anchor of each row (ngrid)
+      integer, allocatable :: anchor_of_row(:)
 
       !* ------------------------------ Integration grid ------------------------------ *!
 
-      !> Anchor Lebedev quadrature weights (ngrid)
-      real(wp), allocatable :: anchor_wleb0(:)
       !> Final Lebedev quadrature weights (ngrid)
       real(wp), allocatable :: wleb(:)
       !> Raw Lebedev quadrature weights (3, nsph, ngrid)
@@ -95,13 +96,6 @@ module moist_cavity_drop
       real(wp), allocatable :: rho_grid_anchor(:)
 
       !* ---------------------------- Geometric quantities ---------------------------- *!
-
-      !> Initial (unprojected) grid positions
-      real(wp), allocatable :: anchorxyz(:, :)
-
-      !> Per-gridpoint second derivatives of gridpoint w.r.t. nuclear coordinates
-      !> Shape: (3, 3, nsph, 3, nsph, ngrid) = (j, alpha, A, beta, B, igrid)
-      real(wp), allocatable :: xyz2_rArB(:, :, :, :, :, :)
 
       !> Distance from anchor to projected point
       real(wp), allocatable :: rho(:)
@@ -150,8 +144,6 @@ module moist_cavity_drop
 
       !* -------------------------- Grid settings and caching ------------------------- *!
 
-      !> Total number of initial grid points (before filtering)
-      integer, allocatable :: nmax
       !> Lebedev grid order index
       integer, allocatable :: oleb
       !> Cached Lebedev angular grid (3, num_leb)
@@ -162,11 +154,11 @@ module moist_cavity_drop
       !* ----------------------------- Switching functions ---------------------------- *!
 
       !> Critical level set switching function
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit
       !> Focal/branching point switching function
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_foc
+      type(moist_math_smoothstep_sigmoid_type) :: f_foc
       !> Lebedev weight pruning function (suppresses near-zero weights)
-      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_wleb
+      type(moist_math_smoothstep_sigmoid_type) :: f_wleb
 
       !> Weight switching values per point (ngrid)
       real(wp), allocatable :: w_f0(:)
@@ -176,22 +168,13 @@ module moist_cavity_drop
       !> iSwiG
       type(moist_cavity_drop_iswig) :: iswig
 
-      !> iSwiG switching values per point
-      real(wp), allocatable :: iswig_f0(:)
-
       !* --------------------------------- Projection --------------------------------- *!
 
       !> Branch weight model for handling degenerate branches
       type(branch_weight_type) :: branch_weight
 
-      !> Branch index per grid point (1 = default/unbranched)
+      !> Canonical branch index of each row within its anchor (ngrid)
       integer, allocatable :: branch(:)
-      !> Anchor group id for each grid point
-      integer, allocatable :: anchor_id(:)
-      !> Number of branches in the anchor group of each grid point
-      integer, allocatable :: branch_count(:)
-      !> Per-grid point projection convergence flag (ngrid)
-      logical, allocatable :: converged(:)
       !> Branch weight per grid point (ngrid) (1 = default/unbranched)
       real(wp), allocatable :: wbranch(:)
       !> Projection-objective value phi at each surviving grid point (ngrid)
@@ -202,14 +185,6 @@ module moist_cavity_drop
       real(wp), allocatable :: lambda0(:)
       !> Per-gridpoint derivatives of lambda w.r.t. nuclear coordinates (3, nsph, ngrid)
       real(wp), allocatable :: lambda1_rA(:, :, :)
-      !> Per-gridpoint second derivatives of lambda w.r.t. nuclear coordinates
-      !> Shape: (3, nsph, 3, nsph, ngrid) = (alpha, A, beta, B, igrid)
-      real(wp), allocatable :: lambda2_rArB(:, :, :, :, :)
-
-      !* ------------------------------------ CPCM ------------------------------------ *!
-
-      !> Gaussian width at each anchor grid point (ngrid)
-      real(wp), allocatable :: anchor_xi0(:)
 
    contains
       !> Enable optional geometry required by model components
@@ -244,23 +219,8 @@ module moist_cavity_drop
       !> Compute anchor-only nuclear derivatives (callback/isodensity LSF)
       procedure :: compute_anchor_gradient
 
-      !> Build per-cell atom lists for point-to-atom screening
-      procedure :: setup_mol_cell_grid
       !> Build grid point neighbour list for density computation
       procedure :: setup_grid_adj_list
-
-      !> Initialize grid arrays with Lebedev points on spheres
-      procedure :: fill_arrays
-
-      !> Switching functions
-      procedure :: compute_switching => compute_switching_function
-
-      !> Remove points below switching cutoff (after projection)
-      procedure :: filter_arrays
-
-      !> Compute branch weights on the final surviving set and fold them into
-      !> wleb, once, after all filter passes
-      procedure :: compute_branch_weights
 
       !> Compute surface area from projected grid
       procedure :: compute_area_volume
@@ -273,8 +233,6 @@ module moist_cavity_drop
       procedure :: project_all_points
       !> Compute mean and Gaussian curvatures
       procedure :: compute_curvature
-      !> Compute closest-point Jacobian scaling
-      procedure :: compute_cp_jacobian_scaling
       !> Compute local grid point densities
       procedure :: compute_grid_point_density
       !> Run diagnostic checks on grid point health
@@ -296,23 +254,8 @@ module moist_cavity_drop
    interface
 
       !* ============================================================================== *!
-      !*               Internal DROP routines (should not be used outside)               *!
+      !*              Internal DROP routines (should not be used outside)               *!
       !* ============================================================================== *!
-
-      !> [projection.f90] Compute the next capacity for projection work arrays
-      module pure integer function projection_grow_capacity(current_capacity, required_capacity) result(new_capacity)
-         implicit none(type, external)
-         integer, intent(in) :: current_capacity
-         integer, intent(in) :: required_capacity
-      end function projection_grow_capacity
-
-      !> [projection.f90] Ensure projection arrays are allocated for `new_capacity`
-      module subroutine ensure_projection_capacity(self, new_capacity, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         integer, intent(in) :: new_capacity
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine ensure_projection_capacity
 
       !> [projection.f90] Project all current grid points onto the LSF surface
       module subroutine project_all_points(self, error)
@@ -320,13 +263,6 @@ module moist_cavity_drop
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine project_all_points
-
-      !> [setup.f90] Evaluate switching weights for all grid points
-      module subroutine compute_switching_function(self, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine compute_switching_function
 
       !> [properties.f90] Compute local grid point density values
       module subroutine compute_grid_point_density(self, error)
@@ -342,41 +278,12 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine analyze_cavity
 
-      !> [setup.f90] Fill initial DROP arrays from per-atom Lebedev grids
-      module subroutine fill_arrays(self, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine fill_arrays
-
-      !> [setup.f90] Build per-cell atom screening grid
-      module subroutine setup_mol_cell_grid(self, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine setup_mol_cell_grid
-
-      !> [setup.f90] Build grid point neighbour list for density computation
+      !> [properties.f90] Build grid point neighbour list for density computation
       module subroutine setup_grid_adj_list(self, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine setup_grid_adj_list
-
-      !> [filter.f90] Filter and compact points after projection
-      module subroutine filter_arrays(self, name, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         character(len=*), intent(in) :: name
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine filter_arrays
-
-      !> [filter.f90] Compute branch weights on the final surviving set
-      module subroutine compute_branch_weights(self, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine compute_branch_weights
 
       !> [properties.f90] Compute total/atomic area and volume contributions
       module subroutine compute_area_volume(self, error)
@@ -399,14 +306,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_curvature
 
-      !> [projection.f90] Compute closest-point Jacobian scaling factors
-      module subroutine compute_cp_jacobian_scaling(self, error)
-         implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
-         type(error_type), allocatable, intent(out) :: error
-      end subroutine compute_cp_jacobian_scaling
-
-      !> [projection.f90] Compute CPCM Gaussian width parameters for grid points
+      !> [properties.f90] Compute CPCM Gaussian width parameters for grid points
       module subroutine compute_gaussians(self, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -442,7 +342,7 @@ module moist_cavity_drop
       module subroutine check_surface_adjoint(self, acc, context, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(cavity_adjoint_type), intent(in) :: acc
          character(len=*), intent(in) :: context
          type(error_type), allocatable, intent(out) :: error
       end subroutine check_surface_adjoint
@@ -457,7 +357,7 @@ module moist_cavity_drop
       module subroutine prepare_surface_weights(self, acc, fold_switching, eff)
          implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(cavity_adjoint_type), intent(in) :: acc
          logical, intent(in) :: fold_switching
          type(drop_surface_weights_type), intent(out) :: eff
       end subroutine prepare_surface_weights
@@ -487,7 +387,7 @@ module moist_cavity_drop
       module subroutine contract_surface_lsf_weights(self, acc, w_lsf0, w_lsf1, w_lsf2, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(cavity_adjoint_type), intent(in) :: acc
          real(wp), intent(out) :: w_lsf0(:)
          real(wp), intent(out) :: w_lsf1(:, :)
          real(wp), intent(out) :: w_lsf2(:, :, :)
@@ -498,7 +398,7 @@ module moist_cavity_drop
       module subroutine get_surface_response_drop(self, acc, response, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(cavity_adjoint_type), intent(in) :: acc
          type(response_type), intent(inout) :: response
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_response_drop
@@ -512,7 +412,7 @@ module moist_cavity_drop
       module subroutine get_surface_gradient_drop(self, acc, gradient, error)
          implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(cavity_adjoint_type), intent(in) :: acc
          real(wp), intent(inout) :: gradient(:, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_gradient_drop
@@ -602,21 +502,22 @@ contains
       else
          self%label = "DROP"
       end if
-      !> Push the cavity-derived screening threshold into the LSF
+      !> Push the cavity-derived screening threshold and cell-list cutoff into the LSF
       self%lsf_model%screening_threshold = self%param%screening_threshold
+      call self%lsf_model%set_full_scan_below(self%param%cell_grid_full_scan_below)
 
       !> Set up weight switching function
-      call new_swif_sigmoid_bump(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
+      call new_smoothstep_sigmoid(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
 
-      call new_swif_sigmoid_bump(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
+      call new_smoothstep_sigmoid(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
 
       !> Set up Lebedev weight switching function (optional)
       if (self%param%wleb_prune_level > 0) then
-         call new_swif_sigmoid_bump(self%f_wleb, &
+         call new_smoothstep_sigmoid(self%f_wleb, &
                                     self%param%wleb_prune_from, self%param%wleb_prune_to)
       end if
 
@@ -853,13 +754,29 @@ contains
 
       !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
+      !> Anchors dropped by the pre-filter, and those below the iSwiG cut
+      integer :: nremoved, n_iswig_removed
+      !> Pre-filter report
+      type(prettyprinter) :: pp
 
       ! The previous surface and its derivatives go before the projection
       ! re-allocates them: the getters test `A_tot1_rA` for availability
       call self%clear_surface()
+      ! DROP row arrays; with `clear_surface` every array the projection allocates
+      if (allocated(self%offset)) deallocate (self%offset)
+      if (allocated(self%anchor_of_row)) deallocate (self%anchor_of_row)
+      if (allocated(self%numbering)) deallocate (self%numbering)
+      if (allocated(self%lambda0)) deallocate (self%lambda0)
+      if (allocated(self%branch)) deallocate (self%branch)
+      if (allocated(self%wbranch)) deallocate (self%wbranch)
+      if (allocated(self%phi0)) deallocate (self%phi0)
+      if (allocated(self%rho)) deallocate (self%rho)
+      if (allocated(self%r_iI0)) deallocate (self%r_iI0)
+      if (allocated(self%cpjac_scal0)) deallocate (self%cpjac_scal0)
+      if (allocated(self%w_f0)) deallocate (self%w_f0)
+      if (allocated(self%wleb)) deallocate (self%wleb)
       if (allocated(self%wleb1_rA)) deallocate (self%wleb1_rA)
       if (allocated(self%cpjac_scal1_rA)) deallocate (self%cpjac_scal1_rA)
-      if (allocated(self%xyz2_rArB)) deallocate (self%xyz2_rArB)
       if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
       if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
       if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
@@ -872,8 +789,9 @@ contains
       if (allocated(self%V_tot1_rA)) deallocate (self%V_tot1_rA)
       if (allocated(self%w_f1_rA)) deallocate (self%w_f1_rA)
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
-      if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
       if (allocated(self%asph_partition)) deallocate (self%asph_partition)
+      ! An optional list of the previous surface must not outlive it
+      call self%grid_adj_list%destroy()
 
       !> Refresh LSF geometry caches
       call self%lsf_model%update(self%mol, self%radii)
@@ -891,53 +809,49 @@ contains
       end if
       call self%ctx%timer%stop("Lebedev cache")
 
-      !> Fill intermediate arrays
+      !> Anchor grid: the Lebedev points on every sphere
       call self%ctx%timer%start("Array setup")
-      call self%fill_arrays(error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
+      call self%anchor%fill(self%sphxyz, self%radii, self%ang_grid, self%ang_weight)
       call self%ctx%timer%stop("Array setup")
 
-      !> Neighbour list setups (before switching so cell grid is available for screening)
+      !> iSwiG atom-atom neighbour list, sorted by distance for early exit
       call self%ctx%timer%start("Adj. lists")
-      call self%setup_mol_cell_grid(error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
+      call self%iswig%update(self%mol, self%radii, wleb_max=maxval(self%anchor%wleb0), &
+                             nthreads=self%ctx%get_num_threads())
       call self%ctx%timer%stop("Adj. lists")
 
-      !> Compute switching function (uses cell grid for O(1) candidate lookup)
+      !> Compute switching function
       call self%ctx%timer%start("Switching func.")
-      call self%compute_switching(error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
+      call self%anchor%compute_switching(self%iswig, self%ctx%get_num_threads())
+      if (self%ctx%verbosity(4)) then
+         n_iswig_removed = count(self%anchor%f0 < self%param%wleb_cut)
+         pp = new_prettyprinter(unit=self%ctx%unit)
+         call pp%blank()
+         call pp%push("Pre-filter:")
+         call pp%kv("Points before removal", self%anchor%ngrid)
+         call pp%kv("iSwig removed", n_iswig_removed)
+         call pp%kv("Points to project", self%anchor%ngrid - n_iswig_removed)
+         call pp%pop()
       end if
       call self%ctx%timer%stop("Switching func.")
 
       !> Pre-filter points below switching cutoff (reduces projection workload)
       call self%ctx%timer%start("Pre-filter")
-      call self%filter_arrays("Prefilter", error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
+      call self%anchor%filter(self%param%wleb_cut, nremoved)
+      if (self%ctx%verbosity(4)) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
+         call pp%blank()
+         call pp%kv("Prefilter removed", nremoved, "points")
       end if
       call self%ctx%timer%stop("Pre-filter")
 
       call self%ctx%timer%stop("Setup")
-
-      !> Adjust nmax (i.e. the number of anchor points)
-      self%nmax = self%ngrid
 
       !* ------------------------------ Projection phase ------------------------------ *!
       call self%ctx%timer%start("Projector", category=cat_solve)
       call self%project_all_points(error)
       if (.not. allocated(error)) then
          call self%lsf_model%check_surface(self%xyz(:, 1:self%ngrid), &
-                                           self%converged(1:self%ngrid) .and. &
                                            self%f(1:self%ngrid) >= self%param%wleb_cut, error)
       end if
       if (allocated(error)) then
@@ -949,56 +863,19 @@ contains
       !* ---------------------------- Post processing phase --------------------------- *!
       call self%ctx%timer%start("Post processing", category=cat_setup)
 
-      !> Compute closest-point Jacobian scaling
-      call self%ctx%timer%start("CP Jacobian")
-      call self%compute_cp_jacobian_scaling(error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("CP Jacobian")
+      ! CP Jacobian scaling, switching, branch weights and the weight cut ran
+      ! per anchor inside the projection; only rows that carry weight exist
 
-      !> Adjust integration weights for scaling and switching
-      self%wleb = self%wleb*self%cpjac_scal0*self%w_f0
-
-      !> Switch off small lebedev weights
-      if (self%param%wleb_prune_level > 0) then
-         block
-            integer :: i
-            do i = 1, self%ngrid
-               self%wleb(i) = self%wleb(i)*self%f_wleb%f0(abs(self%wleb(i)))
-            end do
-         end block
-      end if
-
-      !> Compute branch weights over the final surviving anchor groups
-      call self%ctx%timer%start("Branch weights")
-      call self%compute_branch_weights(error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("Branch weights")
-
-      !> Filter out points below cutoff
-      call self%ctx%timer%start("Filter")
-      call self%filter_arrays("Postfilter", error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("Filter")
-
-      !> Setup grid point adjacency list for density computation
-      call self%ctx%timer%start("Grid adj. list")
-      if (self%param%do_grid_density .or. self%ctx%verbosity(3)) then
+      !> Setup grid point adjacency list for density computation [optional]
+      if (self%param%do_grid_density) then
+         call self%ctx%timer%start("Grid adj. list")
          call self%setup_grid_adj_list(error)
+         if (allocated(error)) then
+            call self%ctx%timer%unwind(d0)
+            return
+         end if
+         call self%ctx%timer%stop("Grid adj. list")
       end if
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("Grid adj. list")
 
       call self%ctx%timer%stop("Post processing")
 
@@ -1159,17 +1036,12 @@ contains
           .and. allocated(self%ang_weight) &
           .and. allocated(self%oleb) &
           ) then
-         if (self%oleb == oleb .and. size(self%ang_weight) == self%param%num_leb) then
-            if (.not. allocated(self%nmax)) allocate (self%nmax)
-            self%nmax = self%param%num_leb*self%nsph
-            return
-         end if
+         if (self%oleb == oleb .and. size(self%ang_weight) == self%param%num_leb) return
       end if
 
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
       if (allocated(self%ang_weight)) deallocate (self%ang_weight)
       if (allocated(self%oleb)) deallocate (self%oleb)
-      if (allocated(self%nmax)) deallocate (self%nmax)
 
       call new_lebedev_grid(leb, error, npts=self%param%num_leb, positive_weights_only=.true.)
       if (allocated(error)) return
@@ -1180,9 +1052,6 @@ contains
       allocate (self%oleb)
       self%oleb = oleb
 
-      allocate (self%nmax)
-      self%nmax = self%param%num_leb*self%nsph
-
    end subroutine ensure_lebedev_cache
 
    !* ================================================================================= *!
@@ -1190,14 +1059,20 @@ contains
    !* ================================================================================= *!
 
    !> Write grid to csv file (for debugging)
+   !>
+   !> Per-point properties that were not computed are written as NaN
+   !>
+   !> @param[in]  self      DROP cavity instance
+   !> @param[in]  filename  Output CSV path
+   !> @param[out] error     Error on missing grid or failed open
    subroutine write_cavity_csv_debug(self, filename, error)
       class(cavity_type_drop), intent(in) :: self
       character(len=*), intent(in) :: filename
       type(error_type), allocatable, intent(out) :: error
 
       integer :: unit, stat, i
-      real(wp) :: val_rho_grid, val_rho_grid_anchor, val_KM, val_KG, val_cpjac
-      real(wp) :: val_kappa_B
+      real(wp) :: nan
+      real(wp) :: val_rho_scal, val_rho_grid, val_rho_grid_anchor, val_KM, val_KG, val_cpjac
 
       if (.not. allocated(self%xyz)) then
          call fatal_error(error, "write_csv_debug: cavity grid not allocated")
@@ -1215,41 +1090,40 @@ contains
       end if
 
       write (unit, "(a)") "ngrid,numbering,x,y,z,owner,area,switch_f,w_leb,rho_scal0,rad,r_iI0,rho,"// &
-         "anch_x,anch_y,anch_z,n_x,n_y,n_z,rho_grid,rho_grid_anchor,KM,KG,cpjac_scal,"// &
-         ",converged"
+         "anch_x,anch_y,anch_z,n_x,n_y,n_z,rho_grid,rho_grid_anchor,KM,KG,cpjac_scal"
 
+      nan = ieee_value(nan, ieee_quiet_nan)
       do i = 1, self%ngrid
 
-         val_rho_grid = 0.0_wp
-         val_rho_grid_anchor = 0.0_wp
-         val_KM = 0.0_wp
-         val_KG = 0.0_wp
-         val_cpjac = 1.0_wp
+         val_rho_scal = nan
+         val_rho_grid = nan
+         val_rho_grid_anchor = nan
+         val_KM = nan
+         val_KG = nan
+         val_cpjac = nan
 
-         ! Safely extract values
+         if (allocated(self%rho_scal0)) val_rho_scal = self%rho_scal0(i)
          if (allocated(self%rho_grid)) val_rho_grid = self%rho_grid(i)
          if (allocated(self%rho_grid_anchor)) val_rho_grid_anchor = self%rho_grid_anchor(i)
-         if (allocated(self%k1)) val_KM = self%k1(i)
-         if (allocated(self%k2)) val_KG = self%k2(i)
+         if (allocated(self%KM)) val_KM = self%KM(i)
+         if (allocated(self%KG)) val_KG = self%KG(i)
          if (allocated(self%cpjac_scal0)) val_cpjac = self%cpjac_scal0(i)
-         if (allocated(self%w_f0)) val_kappa_B = self%w_f0(i)
 
-         write (unit, '(i0,",",i0,30(",",g0))') &
+         write (unit, '(i0,",",i0,22(",",g0))') &
             i, &
             self%numbering(i), &
             self%xyz(1, i), self%xyz(2, i), self%xyz(3, i), &
             self%owner(i), &
             self%a(i), &
             self%f(i), &
-            self%wleb(i), 0.0_wp, &
+            self%wleb(i), val_rho_scal, &
             self%radii(self%owner(i)), &
             self%r_iI0(i), &
             self%rho(i), &
-            self%anchorxyz(1, i), self%anchorxyz(2, i), self%anchorxyz(3, i), &
+            self%anchor%xyz(:, self%anchor_of_row(i)), &
             self%normal0(1, i), self%normal0(2, i), self%normal0(3, i), &
             val_rho_grid, val_rho_grid_anchor, &
-            val_KM, val_KG, val_cpjac, &
-            self%converged(i)
+            val_KM, val_KG, val_cpjac
       end do
       close (unit)
 
@@ -1274,6 +1148,9 @@ contains
       class(cavity_type_drop), intent(in) :: self
       !> Walker collecting or fetching the declarations
       type(field_query_type), intent(inout) :: query
+      !> Per-row views of anchor arrays, built for this request only
+      integer, allocatable :: row_int(:)
+      real(wp), allocatable :: row_real(:), row_real2(:, :)
 
       call list_cavity_fields_base(self, query)
       ! Everything below belongs to the surface of the latest build
@@ -1282,27 +1159,40 @@ contains
       !> Grid layout and provenance
       call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
          & self%param%num_leb)
-      call query%add_int_scalar("nmax", "Anchor points surviving the pre-filter", self%nmax)
+      call query%add_int_value("nmax", "Anchor points surviving the pre-filter", self%anchor%ngrid)
       call query%add_int_scalar("oleb", "Index of the cached Lebedev grid order", self%oleb)
 
-      !> Point identity. `numbering` is the stable id across rebuilds
+      !> Point identity. `numbering` is the stable id across rebuilds; the
+      !> per-row views of anchor quantities are materialized for this request only
       call query%add_int("numbering", "Stable point id, anchor_id + nsph*num_leb*(branch - 1) (ngrid)", &
          & self%numbering)
-      call query%add_int("anchor_id", "Anchor group id shared by the branches of one point (ngrid)", &
-         & self%anchor_id)
+      call query%add_int("offset", "Row offset per anchor, 0-based start; rows of anchor i are "// &
+         & "offset(i)+1:offset(i+1) (nmax + 1)", self%offset)
+      call query%add_int("anchor_of_row", "Anchor slot of each row, 0-based (ngrid)", self%anchor_of_row, &
+         & zero_based=.true.)
+      if (allocated(self%anchor%id)) then
+         row_int = self%anchor%id(self%anchor_of_row(1:self%ngrid))
+         call query%add_int("anchor_id", "Anchor group id shared by the branches of one point (ngrid)", row_int)
+      end if
       call query%add_int("branch", "Branch index within the anchor group, 1 when unbranched (ngrid)", &
          & self%branch)
-      call query%add_int("branch_count", "Surviving branches in the point's anchor group (ngrid)", &
-         & self%branch_count)
+      if (allocated(self%offset)) then
+         row_int = self%offset(self%anchor_of_row(1:self%ngrid) + 1) &
+            & - self%offset(self%anchor_of_row(1:self%ngrid))
+         call query%add_int("branch_count", "Surviving branches in the point's anchor group (ngrid)", row_int)
+      end if
       call query%add_real("wbranch", "Branch weight, 1 when unbranched (ngrid)", self%wbranch)
-      call query%add_bool("converged", "Whether the projection converged at the point (ngrid)", &
-         & self%converged)
 
       !> Quadrature and projection geometry
       call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
-      call query%add_real("anchor_wleb0", "Lebedev quadrature weight of the anchor point (ngrid)", &
-         & self%anchor_wleb0)
-      call query%add_real2("anchorxyz", "Unprojected anchor coordinates, bohr (3, ngrid)", self%anchorxyz)
+      if (allocated(self%anchor%wleb0)) then
+         row_real = self%anchor%wleb0(self%anchor_of_row(1:self%ngrid))
+         call query%add_real("anchor_wleb0", "Lebedev quadrature weight of the anchor point (ngrid)", row_real)
+      end if
+      if (allocated(self%anchor%xyz)) then
+         row_real2 = self%anchor%xyz(:, self%anchor_of_row(1:self%ngrid))
+         call query%add_real2("anchorxyz", "Unprojected anchor coordinates, bohr (3, ngrid)", row_real2)
+      end if
       call query%add_real("rho", "Anchor-to-projected-point distance, bohr (ngrid)", self%rho)
       call query%add_real("r_iI0", "Owner sphere center to grid point distance, bohr (ngrid)", self%r_iI0)
       call query%add_real("phi0", "Projection objective value at the point (ngrid)", self%phi0)
@@ -1312,8 +1202,14 @@ contains
 
       !> Switching functions
       call query%add_real("w_f0", "Weight switching value per point (ngrid)", self%w_f0)
-      call query%add_real("iswig_f0", "iSwiG switching value per point (ngrid)", self%iswig_f0)
-      call query%add_real("anchor_xi0", "Gaussian width at the anchor point (ngrid)", self%anchor_xi0)
+      if (allocated(self%anchor%f0)) then
+         row_real = self%anchor%f0(self%anchor_of_row(1:self%ngrid))
+         call query%add_real("iswig_f0", "iSwiG switching value per point (ngrid)", row_real)
+      end if
+      if (allocated(self%anchor%xi0)) then
+         row_real = self%anchor%xi0(self%anchor_of_row(1:self%ngrid))
+         call query%add_real("anchor_xi0", "Gaussian width at the anchor point (ngrid)", row_real)
+      end if
 
       !> Diagnostics, present only when the matching property was requested
       call query%add_real("KM", "Mean curvature (ngrid)", self%KM)
@@ -1345,17 +1241,17 @@ contains
       if (allocated(self%xi0)) deallocate (self%xi0)
       if (allocated(self%f)) deallocate (self%f)
       if (allocated(self%wleb)) deallocate (self%wleb)
-      if (allocated(self%anchor_wleb0)) deallocate (self%anchor_wleb0)
       if (allocated(self%rho)) deallocate (self%rho)
       if (allocated(self%r_iI0)) deallocate (self%r_iI0)
       if (allocated(self%normal0)) deallocate (self%normal0)
-      if (allocated(self%anchorxyz)) deallocate (self%anchorxyz)
       if (allocated(self%numbering)) deallocate (self%numbering)
       if (allocated(self%v)) deallocate (self%v)
       if (allocated(self%vsph)) deallocate (self%vsph)
 
+      ! Deallocate anchor arrays
+      call self%anchor%clear()
+
       ! Deallocate grid settings/caching
-      if (allocated(self%nmax)) deallocate (self%nmax)
       if (allocated(self%oleb)) deallocate (self%oleb)
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
       if (allocated(self%ang_weight)) deallocate (self%ang_weight)
@@ -1363,15 +1259,13 @@ contains
       ! Deallocate gradient arrays
       if (allocated(self%lambda0)) deallocate (self%lambda0)
       if (allocated(self%branch)) deallocate (self%branch)
-      if (allocated(self%anchor_id)) deallocate (self%anchor_id)
-      if (allocated(self%branch_count)) deallocate (self%branch_count)
+      if (allocated(self%offset)) deallocate (self%offset)
+      if (allocated(self%anchor_of_row)) deallocate (self%anchor_of_row)
       if (allocated(self%wbranch)) deallocate (self%wbranch)
       if (allocated(self%phi0)) deallocate (self%phi0)
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
-      if (allocated(self%xyz2_rArB)) deallocate (self%xyz2_rArB)
       if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
-      if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
       if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
       if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
       if (allocated(self%a_i1_rA)) deallocate (self%a_i1_rA)
@@ -1390,7 +1284,6 @@ contains
       if (allocated(self%vsph1_rA)) deallocate (self%vsph1_rA)
 
       ! Deallocate neighbour list
-      call self%mol_cell_grid%destroy()
       call self%grid_adj_list%destroy()
 
       ! Deallocate inherited allocatable components from base cavity_type
@@ -1404,7 +1297,6 @@ contains
       if (allocated(self%xyz)) deallocate (self%xyz)
       if (allocated(self%a)) deallocate (self%a)
       if (allocated(self%owner)) deallocate (self%owner)
-      if (allocated(self%converged)) deallocate (self%converged)
 
    end subroutine finalize_cavity_drop
 
