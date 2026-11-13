@@ -1,7 +1,7 @@
 !> Test suite for the binned cell list in moist_cavity_drop_lsf_screening
 module test_cavity_drop_lsf_screening
    use mctc_env, only: wp
-   use, intrinsic :: iso_fortran_env, only: int64
+   use test_helpers, only: det_rand
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop_lsf_screening, only: cell_list_type
    implicit none(type, external)
@@ -39,21 +39,6 @@ contains
    !*                                     Helpers                                       *!
    !* ================================================================================= *!
 
-   !> Deterministic pseudo-random numbers in [0, 1) from a linear congruential generator
-   subroutine fill_random(x, state)
-      !> Output values
-      real(wp), intent(out) :: x(:)
-      !> Generator state, advanced
-      integer(int64), intent(inout) :: state
-
-      integer :: i
-
-      do i = 1, size(x)
-         state = mod(state*1103515245_int64 + 12345_int64, 2147483648_int64)
-         x(i) = real(state, wp)/2147483648.0_wp
-      end do
-   end subroutine fill_random
-
    !> Random atoms in a 30 bohr cube with reach in [0.5, 4.5)
    subroutine random_atoms(n, xyz, reach, state)
       !> Number of atoms
@@ -63,15 +48,11 @@ contains
       !> Reach per atom
       real(wp), allocatable, intent(out) :: reach(:)
       !> Generator state
-      integer(int64), intent(inout) :: state
+      integer, intent(inout) :: state
 
-      real(wp), allocatable :: tmp(:)
-
-      allocate (xyz(3, n), reach(n), tmp(3*n))
-      call fill_random(tmp, state)
-      xyz = reshape(30.0_wp*tmp, [3, n])
-      call fill_random(reach, state)
-      reach = 0.5_wp + 4.0_wp*reach
+      allocate (xyz(3, n), reach(n))
+      call det_rand(xyz, state, 0.0_wp, 30.0_wp)
+      call det_rand(reach, state, 0.5_wp, 4.5_wp)
    end subroutine random_atoms
 
    !> Random box with center in [-10, 40) and half-widths in [0, 12); some axes flat
@@ -81,11 +62,11 @@ contains
       !> Upper corner
       real(wp), intent(out) :: hi(3)
       !> Generator state
-      integer(int64), intent(inout) :: state
+      integer, intent(inout) :: state
 
       real(wp) :: u(7), c(3), h(3)
 
-      call fill_random(u, state)
+      call det_rand(u, state)
       c = -10.0_wp + 50.0_wp*u(1:3)
       h = 12.0_wp*u(4:6)
       if (u(7) < 0.2_wp) h(1) = 0.0_wp
@@ -191,9 +172,9 @@ contains
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 7_int64
+      state = 7
       call random_atoms(nat_fixture, xyz, reach, state)
       call cells%build(xyz, reach, full_scan_below=0)
       call check(error, .not. cells%full_scan, more="fixture must use the binned grid")
@@ -219,14 +200,14 @@ contains
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: u(4), center(3), r
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 11_int64
+      state = 11
       call random_atoms(nat_fixture, xyz, reach, state)
       call cells%build(xyz, reach, full_scan_below=0)
 
       do iq = 1, nquery
-         call fill_random(u, state)
+         call det_rand(u, state)
          center = -10.0_wp + 50.0_wp*u(1:3)
          r = 10.0_wp*u(4)
          if (iq <= 20) r = 0.0_wp
@@ -247,15 +228,14 @@ contains
       real(wp) :: p(3), lo(3), hi(3)
       integer :: out(nat_fixture), out2(nat_fixture), ref(nat_fixture)
       integer :: nout, nout2, nref, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 13_int64
+      state = 13
       call random_atoms(nat_fixture, xyz, reach, state)
       call cells%build(xyz, reach, full_scan_below=0)
 
       do iq = 1, nquery
-         call fill_random(p, state)
-         p = -5.0_wp + 40.0_wp*p
+         call det_rand(p, state, -5.0_wp, 35.0_wp)
          call cells%query_point(p, out, nout)
          call brute_box(xyz, reach, p, p, ref, nref)
          call check_same(error, out, nout, ref, nref, "query_point")
@@ -281,9 +261,9 @@ contains
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: offsets(4), lo(3), hi(3)
       integer :: out(nat_fixture), nout, io, ax, sgn
-      integer(int64) :: state
+      integer :: state
 
-      state = 17_int64
+      state = 17
       call random_atoms(nat_fixture, xyz, reach, state)
       call cells%build(xyz, reach, full_scan_below=0)
 
@@ -326,11 +306,11 @@ contains
 
       type(cell_list_type) :: grid, flat
       real(wp), allocatable :: xyz(:, :), reach(:)
-      real(wp) :: lo(3), hi(3), u(1)
+      real(wp) :: lo(3), hi(3), u
       integer :: out(nat_fixture), out2(nat_fixture), nout, nout2, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 19_int64
+      state = 19
       call random_atoms(nat_fixture, xyz, reach, state)
       call grid%build(xyz, reach, full_scan_below=nat_fixture)
       call flat%build(xyz, reach, full_scan_below=nat_fixture + 1)
@@ -346,9 +326,9 @@ contains
          call flat%query_box(lo, hi, out2, nout2)
          call check_same(error, out2, nout2, out, nout, "full scan box")
          if (allocated(error)) return
-         call fill_random(u, state)
-         call grid%query_sphere(lo, 6.0_wp*u(1), out, nout)
-         call flat%query_sphere(lo, 6.0_wp*u(1), out2, nout2)
+         call det_rand(u, state, 0.0_wp, 6.0_wp)
+         call grid%query_sphere(lo, u, out, nout)
+         call flat%query_sphere(lo, u, out2, nout2)
          call check_same(error, out2, nout2, out, nout, "full scan ball")
          if (allocated(error)) return
       end do
@@ -368,7 +348,7 @@ contains
       type(cell_list_type) :: cells
       real(wp) :: xyz(3, nlat), reach(nlat), lo(3), hi(3), u(6)
       integer :: out(nlat), ref(nlat), nout, nref, i, j, k, n, iq
-      integer(int64) :: state
+      integer :: state
 
       n = 0
       do k = 0, nside - 1
@@ -385,9 +365,9 @@ contains
                  more="lattice must bin into one cell per atom")
       if (allocated(error)) return
 
-      state = 37_int64
+      state = 37
       do iq = 1, nquery
-         call fill_random(u, state)
+         call det_rand(u, state)
          ! Integer faces in [-2, 8], half-integer on odd queries, flat boxes every fifth
          lo = real(floor(11.0_wp*u(1:3)), wp) - 2.0_wp
          hi = lo + real(floor(4.0_wp*u(4:6)), wp)
@@ -430,9 +410,9 @@ contains
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 23_int64
+      state = 23
       call random_atoms(nat_fixture, xyz, reach, state)
       reach = huge(0.0_wp)
       call cells%build(xyz, reach, full_scan_below=0)
@@ -472,9 +452,9 @@ contains
       real(wp), allocatable :: xyz(:, :), reach(:)
       real(wp) :: lo(3), hi(3)
       integer :: out(nat_fixture), ref(nat_fixture), nout, nref, iq
-      integer(int64) :: state
+      integer :: state
 
-      state = 29_int64
+      state = 29
       call random_atoms(nat_fixture, xyz, reach, state)
       xyz(:, nat_fixture/2 + 1:) = xyz(:, nat_fixture/2 + 1:) + 1.0e5_wp
       call cells%build(xyz, reach, full_scan_below=0)
@@ -504,9 +484,9 @@ contains
       type(cell_list_type) :: cells
       real(wp), allocatable :: xyz(:, :), reach(:)
       integer :: out(nat_fixture), nout
-      integer(int64) :: state
+      integer :: state
 
-      state = 31_int64
+      state = 31
       call random_atoms(nat_fixture, xyz, reach, state)
       call cells%build(xyz, reach, full_scan_below=0)
       call cells%query_box([-huge(0.0_wp), -huge(0.0_wp), -huge(0.0_wp)], &
