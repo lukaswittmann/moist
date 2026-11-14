@@ -108,7 +108,29 @@ class _GaussianDensity:
             + np.einsum("a,aj,ik->ijk", g, d, eye)
             + np.einsum("a,ak,ij->ijk", g, d, eye)
         )
-        return rho, drho, d2rho, d3rho
+        if order < 4:
+            return rho, drho, d2rho, d3rho
+
+        d4rho = np.einsum("a,ai,aj,ak,al->ijkl", 16.0 * self.a**4 * g, d, d, d, d)
+        d4rho -= 8.0 * self.a**3 * (
+            np.einsum("a,ij,ak,al->ijkl", g, eye, d, d)
+            + np.einsum("a,ik,aj,al->ijkl", g, eye, d, d)
+            + np.einsum("a,il,aj,ak->ijkl", g, eye, d, d)
+            + np.einsum("a,jk,ai,al->ijkl", g, eye, d, d)
+            + np.einsum("a,jl,ai,ak->ijkl", g, eye, d, d)
+            + np.einsum("a,kl,ai,aj->ijkl", g, eye, d, d)
+        )
+        d4rho += (
+            4.0
+            * self.a**2
+            * g.sum()
+            * (
+                np.einsum("ij,kl->ijkl", eye, eye)
+                + np.einsum("ik,jl->ijkl", eye, eye)
+                + np.einsum("il,jk->ijkl", eye, eye)
+            )
+        )
+        return rho, drho, d2rho, d3rho, d4rho
 
     def with_order(self, point, order):
         return self._derivatives(point, order)
@@ -453,7 +475,7 @@ def test_callback_uninspectable_falls_back():
     assert not _callback_takes_order(Uninspectable())
 
 
-@pytest.mark.parametrize("order", [1, 2, 3])
+@pytest.mark.parametrize("order", [1, 2, 3, 4])
 @pytest.mark.parametrize("attributes", [False, True])
 def test_callback_transports_requested_density_derivatives(order, attributes):
     from moist.library import ffi
@@ -462,13 +484,14 @@ def test_callback_transports_requested_density_derivatives(order, attributes):
     gradient = np.array([2.0, -3.0, 5.0])
     hessian = np.arange(9, dtype=float).reshape(3, 3) + 7.0
     third = np.arange(27, dtype=float).reshape(3, 3, 3) - 11.0
+    fourth = np.arange(81, dtype=float).reshape(3, 3, 3, 3) + 13.0
     seen = []
 
     def callback(actual_point, actual_order):
         seen.append((actual_point.copy(), actual_order))
-        values = (4.25, gradient, hessian, third)[:actual_order + 1]
+        values = (4.25, gradient, hessian, third, fourth)[:actual_order + 1]
         if attributes:
-            return SimpleNamespace(**dict(zip(("rho", "drho", "d2rho", "d3rho"), values)))
+            return SimpleNamespace(**dict(zip(("rho", "drho", "d2rho", "d3rho", "d4rho"), values)))
         return values
 
     handle = _isodensity(callback)._as_handle()
@@ -476,8 +499,9 @@ def test_callback_transports_requested_density_derivatives(order, attributes):
     rho = ffi.new("double *")
     drho = ffi.new("double[3]")
     d2rho = ffi.new("double[9]") if order >= 2 else ffi.NULL
-    d3rho = ffi.new("double[27]") if order == 3 else ffi.NULL
-    assert handle.callback_ref(ffi.NULL, native_point, rho, drho, d2rho, d3rho) == 0
+    d3rho = ffi.new("double[27]") if order >= 3 else ffi.NULL
+    d4rho = ffi.new("double[81]") if order == 4 else ffi.NULL
+    assert handle.callback_ref(ffi.NULL, native_point, rho, drho, d2rho, d3rho, d4rho) == 0
     assert len(seen) == 1
     np.testing.assert_array_equal(seen[0][0], point)
     assert seen[0][1] == order
@@ -485,16 +509,28 @@ def test_callback_transports_requested_density_derivatives(order, attributes):
     np.testing.assert_array_equal(list(drho), gradient)
     if order >= 2:
         np.testing.assert_array_equal(list(d2rho), hessian.ravel(order="C"))
-    if order == 3:
+    if order >= 3:
         np.testing.assert_array_equal(list(d3rho), third.ravel(order="C"))
+    if order == 4:
+        np.testing.assert_array_equal(list(d4rho), fourth.ravel(order="C"))
 
 
 @pytest.mark.parametrize("values,order,message", [
     ((1.0, np.zeros((1, 3))), 1, "gradient must have shape"),
     ((1.0, np.zeros(3), np.zeros(9)), 2, "Hessian must have shape"),
     ((1.0, np.zeros(3), np.zeros((3, 3)), np.zeros(27)), 3, "third derivative must have shape"),
+    (
+        (1.0, np.zeros(3), np.zeros((3, 3)), np.zeros((3, 3, 3)), np.zeros(81)),
+        4,
+        "fourth derivative must have shape",
+    ),
     ((1.0, np.zeros(3)), 2, "did not return the requested Hessian"),
     ((1.0, np.zeros(3), np.zeros((3, 3))), 3, "did not return the requested third derivative"),
+    (
+        (1.0, np.zeros(3), np.zeros((3, 3)), np.zeros((3, 3, 3))),
+        4,
+        "did not return the requested fourth derivative",
+    ),
 ])
 def test_callback_rejects_malformed_derivatives(values, order, message):
     from moist.library import ffi
@@ -503,7 +539,8 @@ def test_callback_rejects_malformed_derivatives(values, order, message):
     status = handle.callback_ref(
         ffi.NULL, ffi.new("double[3]"), ffi.new("double *"), ffi.new("double[3]"),
         ffi.new("double[9]") if order >= 2 else ffi.NULL,
-        ffi.new("double[27]") if order == 3 else ffi.NULL,
+        ffi.new("double[27]") if order >= 3 else ffi.NULL,
+        ffi.new("double[81]") if order == 4 else ffi.NULL,
     )
     assert status != 0
     with raises(ValueError, match=message):
@@ -521,7 +558,7 @@ def test_callback_preserves_base_exception():
     handle = _isodensity(callback)._as_handle()
     assert handle.callback_ref(
         ffi.NULL, ffi.new("double[3]"), ffi.new("double *"), ffi.new("double[3]"),
-        ffi.NULL, ffi.NULL,
+        ffi.NULL, ffi.NULL, ffi.NULL,
     ) != 0
     with raises(KeyboardInterrupt) as caught:
         handle.callback_state.raise_if_failed()

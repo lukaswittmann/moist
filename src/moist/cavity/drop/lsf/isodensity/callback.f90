@@ -4,7 +4,7 @@
 !> host owns the density and moist owns the level set built from it; the C
 !> callback returns the electron density and its spatial derivatives at a point,
 !>
-!>    rho(r), d rho/dr, d^2 rho/dr^2, d^3 rho/dr^3
+!>    rho(r), d rho/dr, d^2 rho/dr^2, d^3 rho/dr^3, d^4 rho/dr^4
 !>
 !> and this module forms
 !>
@@ -55,8 +55,10 @@ module moist_cavity_drop_lsf_isodensity_callback
       !> @param[out] drho     Density gradient d rho/dr
       !> @param[out] d2rho    Density Hessian d2 rho/drdr  (double[3][3] or NULL)
       !> @param[out] d3rho    Density third deriv          (double[3][3][3] or NULL)
+      !> @param[out] d4rho    Density fourth deriv         (double[3][3][3][3] or NULL)
       !> @returns             0 on success, nonzero host status on failure
-      function isodensity_lsf_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      function isodensity_lsf_callback(context, point, rho, drho, d2rho, d3rho, d4rho) &
+         result(status) bind(C)
          import :: c_double, c_int, c_ptr
          implicit none(type, external)
          type(c_ptr), value :: context
@@ -65,6 +67,7 @@ module moist_cavity_drop_lsf_isodensity_callback
          real(c_double), intent(out) :: drho(3)
          type(c_ptr), value :: d2rho
          type(c_ptr), value :: d3rho
+         type(c_ptr), value :: d4rho
          integer(c_int) :: status
       end function isodensity_lsf_callback
    end interface
@@ -87,6 +90,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       real(wp) :: hess(ndim, ndim) = 0.0_wp
       !> Cached third spatial derivative
       real(wp) :: third(ndim, ndim, ndim) = 0.0_wp
+      !> Cached fourth spatial derivative, read by the nuclear Hessian alone
+      real(wp) :: fourth(ndim, ndim, ndim, ndim) = 0.0_wp
       !> Highest requested derivative order
       integer :: max_deriv = 0
       !> Largest nuclear charge in the bound structure
@@ -110,6 +115,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: f0 => lsf_f0
       procedure, public :: f012_r => lsf_f012_r
       procedure, public :: f3_rrr => lsf_f3_rrr
+      procedure, public :: f4_rrrr => lsf_f4_rrrr
       procedure, public :: f3_rr_rA => lsf_f3_rr_rA
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
@@ -140,6 +146,7 @@ contains
       self%name = "Isodensity"
 
       self%radius_dependent = .false.
+      self%host_defined = .true.
 
       self%callback_ptr = callback_ptr
       self%context = context
@@ -219,12 +226,17 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error Error handling (optional)
+   subroutine lsf_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out), optional :: error
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (present(error)) then
+         if (allocated(error)) return
+      end if
       self%zmax = isodensity_max_nuclear_charge(mol)
       call self%core%update(mol, radii, self%param, self%z)
    end subroutine lsf_update
@@ -241,20 +253,24 @@ contains
 
       procedure(isodensity_lsf_callback), pointer :: callback
       real(c_double) :: c_point(3), c_rho, c_drho(3)
-      real(c_double), target :: c_d2rho(3, 3), c_d3rho(3, 3, 3)
-      type(c_ptr) :: p_hess, p_third
-      logical :: want_hess, want_third
+      real(c_double), target :: c_d2rho(3, 3), c_d3rho(3, 3, 3), c_d4rho(3, 3, 3, 3)
+      type(c_ptr) :: p_hess, p_third, p_fourth
+      logical :: want_hess, want_third, want_fourth
       integer(c_int) :: status
       !> Host density with the ECP core fill, and the fill ball holding the point
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
+      real(wp) :: d4rho(ndim, ndim, ndim, ndim)
       integer :: inside
 
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
+      want_fourth = self%max_deriv >= 4
       p_hess = c_null_ptr
       p_third = c_null_ptr
+      p_fourth = c_null_ptr
       if (want_hess) p_hess = c_loc(c_d2rho)
       if (want_third) p_third = c_loc(c_d3rho)
+      if (want_fourth) p_fourth = c_loc(c_d4rho)
 
       call c_f_procpointer(self%callback_ptr, callback)
       self%point = point
@@ -262,8 +278,9 @@ contains
       self%prepared_deriv = 1
       if (want_hess) self%prepared_deriv = 2
       if (want_third) self%prepared_deriv = 3
+      if (want_fourth) self%prepared_deriv = 4
       c_point = real(point, c_double)
-      status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third)
+      status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third, p_fourth)
       if (status /= 0_c_int) then
          ! Substitute state; numbers are not a result; the caller aborts on `error`
          self%value = 1.0_wp
@@ -271,7 +288,8 @@ contains
          self%grad(1) = 1.0_wp
          self%hess = 0.0_wp
          self%third = 0.0_wp
-         self%prepared_deriv = 3
+         self%fourth = 0.0_wp
+         self%prepared_deriv = 4
 
          call fatal_error(error, "External LSF evaluation failed with status "// &
                           format_string(int(status), "(i0)")//" at point ("// &
@@ -285,7 +303,8 @@ contains
       drho = real(c_drho, wp)
       if (want_hess) d2rho = real(c_d2rho, wp)
       if (want_third) d3rho = real(c_d3rho, wp)
-      call self%core%add(point, self%prepared_deriv, rho, drho, d2rho, d3rho, inside=inside)
+      if (want_fourth) d4rho = real(c_d4rho, wp)
+      call self%core%add(point, self%prepared_deriv, rho, drho, d2rho, d3rho, d4rho, inside=inside)
       call self%core%check(inside, rho, error)
       ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
       ! derivative inherits the sign flip; identical by construction to the lift
@@ -301,6 +320,11 @@ contains
          self%third = -self%param%scale*d3rho
       else
          self%third = 0.0_wp
+      end if
+      if (want_fourth) then
+         self%fourth = -self%param%scale*d4rho
+      else
+         self%fourth = 0.0_wp
       end if
    end subroutine lsf_prepare
 
@@ -405,6 +429,18 @@ contains
       call self%f012_r(lsf0, lsf1_r, lsf2_rr)
       lsf3_rrr(:, :, :) = self%third
    end subroutine lsf_f3_rrr
+
+   !> Return the cached fourth spatial derivative
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[out] lsf4_rrrr Fourth spatial derivative [3, 3, 3, 3]
+   subroutine lsf_f4_rrrr(self, lsf4_rrrr)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      real(wp), intent(out) :: lsf4_rrrr(:, :, :, :)
+
+      call self%require_deriv(4, "f4_rrrr")
+      lsf4_rrrr(:, :, :, :) = self%fourth
+   end subroutine lsf_f4_rrrr
 
    !> Return zero nuclear derivative placeholders
    !>

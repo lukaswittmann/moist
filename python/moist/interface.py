@@ -1117,8 +1117,8 @@ class _CavityMTBorrowed(_CavityGenericBorrowed):
     isodensity_layout = _CavityDROPBase.isodensity_layout
 
 
-#: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:
-#: the tuple grows with the requested order.
+#: ``(rho, drho)``, ``(rho, drho, d2rho)``, ``(rho, drho, d2rho, d3rho)`` or
+#: ``(rho, drho, d2rho, d3rho, d4rho)``: the tuple grows with the requested order.
 DensityDerivatives = tuple[Union[float, np.ndarray], ...]
 
 #: A raw density callback.  It takes ``(point, order)``, or just ``(point)``

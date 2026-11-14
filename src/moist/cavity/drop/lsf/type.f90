@@ -105,6 +105,7 @@ module moist_cavity_drop_lsf_base
    public :: moist_cavity_drop_lsf_type
    public :: lsf_thread_slot
    public :: lsf_base_update
+   public :: lsf_jet_row_entry
    public :: lsf_candidate_space_undeclared
    public :: lsf_candidate_space_user
    public :: lsf_candidate_space_sorted
@@ -192,6 +193,14 @@ module moist_cavity_drop_lsf_base
 
       !> LSF dependency on atomic radii
       logical :: radius_dependent = .true.
+
+      !> Whether the level set is the host's function rather than moist's
+      !>
+      !> - a host-defined level set reports zero nuclear partials and no active
+      !>   atoms, the host completing the nuclear chain itself
+      !> - the second-order host exchange keys on this flag to ask the host for
+      !>   the level set's tangents along the directions of a Hessian
+      logical :: host_defined = .false.
 
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
@@ -287,6 +296,9 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
       !> Abort when an accessor is asked for an order `prepare` did not compute
       procedure :: require_deriv => lsf_base_require_deriv
+      !> Cache what the derivative accessors of the prepared point share; the
+      !> base has nothing to cache, a concrete LSF may override
+      procedure :: cache_point_tensors => lsf_base_cache_point_tensors
       !> Number of atoms currently active after `prepare`/`prepare_subset`
       procedure(lsf_active_count_iface), deferred :: active_count
       !> User-space atom id of the i-th currently active atom
@@ -339,12 +351,16 @@ module moist_cavity_drop_lsf_base
       procedure :: tangent_f2_rr => lsf_base_tangent_f2_rr
       !> Directional nuclear derivative of the third spatial derivative
       procedure :: tangent_f3_rrr => lsf_base_tangent_f3_rrr
+      !> The four directional nuclear derivatives above in one pass
+      procedure :: tangent_jet => lsf_base_tangent_jet
       !> Nuclear Hessian-vector product
       procedure :: hvp_f1_rA => lsf_base_hvp_f1_rA
       !> Directional nuclear derivative of `f2_r_rA`
       procedure :: hvp_f2_r_rA => lsf_base_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure :: hvp_f3_rr_rA => lsf_base_hvp_f3_rr_rA
+      !> The three nuclear Hessian-vector products above in one pass
+      procedure :: hvp_jet_rA => lsf_base_hvp_jet_rA
       !> Radius row of the joint Hessian-vector product
       procedure :: hvp_f1_rad => lsf_base_hvp_f1_rad
       !> Joint directional derivative of `f2_r_rad`
@@ -355,6 +371,12 @@ module moist_cavity_drop_lsf_base
       !> the value/gradient/Hessian jet contracted against per-point adjoint
       !> weights over the spatial indices
       procedure :: vjp_f1_rA => lsf_base_vjp_f1_rA
+      !> Nuclear Jacobian of that jet-contracted row: the adjoint-weighted mixed
+      !> nuclear Hessian block over the active atoms, in its generic
+      !> column-by-column form
+      procedure :: vjp_f2_rArB => lsf_base_vjp_f2_rArB
+      !> That block applied to a batch of nuclear directions, without forming it
+      procedure :: vjp_f2_rArB_apply => lsf_base_vjp_f2_rArB_apply
       !> Jet-contracted radius vector-Jacobian product: the radius gradient of
       !> that same jet contracted against the same per-point adjoint weights
       procedure :: vjp_f1_rad => lsf_base_vjp_f1_rad
@@ -525,10 +547,16 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii (size mol%nat)
-   subroutine lsf_base_update(self, mol, radii)
+   !> @param[out]   error Set when the LSF cannot be bound to this structure (optional)
+   subroutine lsf_base_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out), optional :: error
+
+      if (present(error)) then
+         if (allocated(error)) deallocate (error)
+      end if
 
       self%mol = mol
       self%ncenters = mol%nat
@@ -788,6 +816,23 @@ contains
          " -- raise set_max_deriv before prepare"
    end subroutine lsf_base_require_deriv
 
+   !> Cache the per-atom quantities the derivative accessors of this point share
+   !>
+   !> The derivative drivers call this once per grid point, right after a
+   !> successful `prepare`; the primal projection never does, because the
+   !> accessors that follow its prepares read the aggregate jet alone and a cache
+   !> filled inside `prepare` would be paid on every solver iteration for
+   !> nothing. The base type has nothing to cache. A level set whose nuclear
+   !> accessors each recompute per-atom tensors overrides this to compute them
+   !> once, and its `prepare` invalidates what it cached.
+   !>
+   !> @param[inout] self LSF instance
+   subroutine lsf_base_cache_point_tensors(self)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: self
+
+      if (self%prepared_deriv < 0) return
+   end subroutine lsf_base_cache_point_tensors
+
    !* ================================================================================= *!
    !*                Erroring defaults of the optional derivative set                   *!
    !* ================================================================================= *!
@@ -1044,6 +1089,37 @@ contains
          "tangent_f3_rrr derivative"
    end subroutine lsf_base_tangent_f3_rrr
 
+   !> Directional nuclear derivatives of the whole jet, generic form
+   !>
+   !> What `tangent_f0`, `tangent_f1_r`, `tangent_f2_rr` and `tangent_f3_rrr`
+   !> return for the same direction, in one call: the four are one contraction
+   !> of the same direction-contracted quantities, so a level set with a shared
+   !> pass overrides this and pays for that pass once. This default is the four
+   !> accessors in a row and inherits their contracts, aborting where any of
+   !> them does. `dv3` is optional: without it the third order is neither
+   !> computed nor required, so the prepared order is that of `tangent_f2_rr`,
+   !> with it that of `tangent_f3_rrr`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] dv0  Directional derivative of the value
+   !> @param[out] dv1  Directional derivative of the spatial gradient [3]
+   !> @param[out] dv2  Directional derivative of the spatial Hessian [3, 3]
+   !> @param[out] dv3  Directional derivative of the third derivative [3, 3, 3]
+   subroutine lsf_base_tangent_jet(self, v, dv0, dv1, dv2, dv3)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(out) :: dv0
+      real(wp), intent(out) :: dv1(3)
+      real(wp), intent(out) :: dv2(3, 3)
+      real(wp), intent(out), optional :: dv3(3, 3, 3)
+
+      call self%tangent_f0(v, dv0)
+      call self%tangent_f1_r(v, dv1)
+      call self%tangent_f2_rr(v, dv2)
+      if (present(dv3)) call self%tangent_f3_rrr(v, dv3)
+   end subroutine lsf_base_tangent_jet
+
    !> Erroring default of the nuclear Hessian-vector product
    !>
    !> @param[in]  self LSF instance
@@ -1097,6 +1173,75 @@ contains
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "hvp_f3_rr_rA derivative"
    end subroutine lsf_base_hvp_f3_rr_rA
+
+   !> Composing default of the one-pass nuclear Hessian-vector family
+   !>
+   !> `hvp_jet_rA` returns what `hvp_f1_rA`, `hvp_f2_r_rA` and `hvp_f3_rr_rA`
+   !> return, for the same nuclear direction. A level set that shares the
+   !> direction-contracted power sums and the per-atom tensors between the
+   !> three orders overrides this with a single sweep of the active atoms
+   !> (SvdW, CFC); the default composes the three accessors, exactly as
+   !> [[lsf_base_tangent_jet]] does, so a level set that implements them
+   !> separately inherits a working -- if slower -- jet. A level set without
+   !> them aborts inside the first accessor. Nuclear only: the joint
+   !> position/radius contraction keeps the three separate accessors and their
+   !> `vrad`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, n_active]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, n_active]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, n_active]
+   subroutine lsf_base_hvp_jet_rA(self, v, hvp1, hvp2, hvp3)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(out) :: hvp1(:, :)
+      real(wp), intent(out) :: hvp2(:, :, :)
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+
+      call self%hvp_f1_rA(v, hvp1)
+      call self%hvp_f2_r_rA(v, hvp2)
+      call self%hvp_f3_rr_rA(v, hvp3)
+   end subroutine lsf_base_hvp_jet_rA
+
+   !> One entry of a jet-weighted nuclear row
+   !>
+   !> The contraction every nuclear row of the derivative traversals is built
+   !> from: `w0 t0 + sum_a w1(a) t1(a) + sum_{a,b} w2(a, b) t2(a, b)`, for one
+   !> Cartesian component of one active atom, with `t0`, `t1`, `t2` the
+   !> matching entries of the mixed derivatives `dS/dR`, `d^2S/(dr dR)` and
+   !> `d^3S/(dr^2 dR)` (or of any of their directional tangents). The
+   !> accumulation order -- value, then the gradient axis, then the Hessian
+   !> with the first axis fast -- is fixed here so that every caller sums
+   !> identically.
+   !>
+   !> @param[in]  w0 Adjoint weight of the value
+   !> @param[in]  w1 Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2 Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  t0 Value-order entry
+   !> @param[in]  t1 Gradient-order entries [3]
+   !> @param[in]  t2 Hessian-order entries [3, 3]
+   pure function lsf_jet_row_entry(w0, w1, w2, t0, t1, t2) result(acc)
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: t0
+      real(wp), intent(in) :: t1(3)
+      real(wp), intent(in) :: t2(3, 3)
+      real(wp) :: acc
+
+      integer :: a, b
+
+      acc = w0*t0
+      do a = 1, 3
+         acc = acc + w1(a)*t1(a)
+      end do
+      do b = 1, 3
+         do a = 1, 3
+            acc = acc + w2(a, b)*t2(a, b)
+         end do
+      end do
+   end function lsf_jet_row_entry
 
    !* ================================================================================= *!
    !*                      Radius row of the joint Hessian-vector product               *!
@@ -1202,6 +1347,102 @@ contains
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "vjp_f1_rA derivative"
    end subroutine lsf_base_vjp_f1_rA
+
+   !> Adjoint-weighted mixed nuclear Hessian block applied to directions, generic form
+   !>
+   !> The block of [[lsf_base_vjp_f2_rArB]] times each direction of a batch,
+   !> without forming the block:
+   !>
+   !>     res(s, i, j) = sum_{t,B} d/dR_(t,B) [ w0 * lsf1_rA(s, i)
+   !>                                          + sum_a w1(a) * lsf2_r_rA(a, s, i)
+   !>                                          + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, s, i) ]
+   !>                             * dirs(t, B, j)
+   !>
+   !> for active slots `i = 1 .. active_count()` and directions `j`; the sum
+   !> over `B` runs over every center, of which only the active ones contribute.
+   !> Columns beyond `active_count()` are left untouched, and nothing is written
+   !> when the active list is empty. `w2` is a general 3x3.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  dirs Nuclear directions [3, ncenters, ndir]
+   !> @param[out] res  Weighted block times each direction [3, >= n_active, ndir]
+   subroutine lsf_base_vjp_f2_rArB_apply(self, w0, w1, w2, dirs, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: dirs(:, :, :)
+      real(wp), intent(out) :: res(:, :, :)
+
+      !> The HVP family along one direction
+      real(wp), allocatable :: hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
+      !> Active count and slot, direction, Cartesian component
+      integer :: n, i, j, s
+
+      n = self%active_count()
+      if (n == 0) return
+
+      allocate (hvp1(3, n), hvp2(3, 3, n), hvp3(3, 3, 3, n))
+      do j = 1, size(dirs, 3)
+         call self%hvp_jet_rA(dirs(:, :, j), hvp1, hvp2, hvp3)
+         do i = 1, n
+            do s = 1, 3
+               res(s, i, j) = lsf_jet_row_entry(w0, w1, w2, hvp1(s, i), hvp2(:, s, i), &
+                                                hvp3(:, :, s, i))
+            end do
+         end do
+      end do
+   end subroutine lsf_base_vjp_f2_rArB_apply
+
+   !> Adjoint-weighted mixed nuclear Hessian block, generic form
+   !>
+   !> The nuclear Jacobian of the row [[lsf_base_vjp_f1_rA]] describes,
+   !>
+   !>     res(3(i-1)+s, 3(j-1)+t) = d/dR_(t,B) [ w0 * lsf1_rA(s, i)
+   !>                                          + sum_a w1(a) * lsf2_r_rA(a, s, i)
+   !>                                          + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, s, i) ]
+   !>
+   !> for active slots `i, j = 1 .. active_count()`, `B = active_atom(j)`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Weighted mixed nuclear Hessian block [>= 3 n_active, >= 3 n_active]
+   subroutine lsf_base_vjp_f2_rArB(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:, :)
+
+      !> Unit direction over all centers, and the HVP family along it
+      real(wp), allocatable :: v(:, :), hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
+      !> Active count and slots, Cartesian components
+      integer :: n, i, j, s, t
+
+      n = self%active_count()
+      if (n == 0) return
+
+      allocate (v(3, self%ncenters), source=0.0_wp)
+      allocate (hvp1(3, n), hvp2(3, 3, n), hvp3(3, 3, 3, n))
+      do j = 1, n
+         do t = 1, 3
+            v(t, self%active_atom(j)) = 1.0_wp
+            call self%hvp_jet_rA(v, hvp1, hvp2, hvp3)
+            v(t, self%active_atom(j)) = 0.0_wp
+            do i = 1, n
+               do s = 1, 3
+                  res(3*(i - 1) + s, 3*(j - 1) + t) = &
+                     lsf_jet_row_entry(w0, w1, w2, hvp1(s, i), hvp2(:, s, i), hvp3(:, :, s, i))
+               end do
+            end do
+         end do
+      end do
+   end subroutine lsf_base_vjp_f2_rArB
 
    !> Erroring default of the jet-contracted radius vector-Jacobian product
    !>

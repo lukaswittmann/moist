@@ -22,9 +22,10 @@
 !> function carries no *explicit* nuclear-position dependence for the cavity
 !> chain rule, and the mixed spatial/nuclear derivatives vanish here
 module moist_cavity_drop_lsf_isodensity_internal
-   use mctc_env, only: error_type
+   use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
+   use moist_output_format, only: format_string
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type
@@ -123,6 +124,7 @@ contains
       self%name = "Isodensity"
 
       self%radius_dependent = .false.
+      self%host_defined = .true.
 
       call self%param%init_defaults()
       if (present(param)) self%param = param
@@ -230,12 +232,33 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error Set when the basis has shells on atoms the structure lacks (optional)
+   subroutine lsf_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out), optional :: error
 
-      call lsf_base_update(self, mol, radii)
+      character(len=:), allocatable :: msg
+
+      call lsf_base_update(self, mol, radii, error)
+      if (present(error)) then
+         if (allocated(error)) return
+      end if
+      if (self%gto%nshell > 0) then
+         if (maxval(self%gto%sh_atom) > mol%nat) then
+            msg = "Isodensity basis needs "// &
+                  format_string(maxval(self%gto%sh_atom), "(i0)")// &
+                  " atoms, but the structure has only "// &
+                  format_string(mol%nat, "(i0)")
+            if (present(error)) then
+               call fatal_error(error, msg)
+               return
+            else
+               error stop msg
+            end if
+         end if
+      end if
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
@@ -253,8 +276,25 @@ contains
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
+
+      call require_density(self, error)
+      if (allocated(error)) return
       call lsf_prepare_impl(self, point, error)
    end subroutine lsf_prepare
+
+   !> Refuse to evaluate before the host has installed a density matrix
+   !>
+   !> @param[in]  self  LSF instance
+   !> @param[out] error Set when no density matrix has been installed
+   subroutine require_density(self, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. self%gto%has_density()) then
+         call fatal_error(error, "Isodensity density matrix has not been installed; "// &
+                          "set the density before building the cavity")
+      end if
+   end subroutine require_density
 
    !> Shared prepare body: evaluate the level set at `point` and cache it
    !>
@@ -322,6 +362,8 @@ contains
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
 
+      call require_density(self, error)
+      if (allocated(error)) return
       call lsf_prepare_impl(self, point, error, cand_atoms=candidate_indices)
    end subroutine lsf_prepare_subset
 

@@ -497,7 +497,7 @@ def test_l1_density_callback_derivatives(system, basis):
     host = make_host(mol, dm=dm)
     point = mol.atom_coords()[0] + np.array([0.9, 0.4, 1.3])
     step = 1e-4
-    _, drho, d2rho, d3rho = host.density(point, 3)
+    _, drho, d2rho, d3rho, d4rho = host.density(point, 4)
 
     def stencil(func, axis):
         samples = []
@@ -510,10 +510,12 @@ def test_l1_density_callback_derivatives(system, basis):
     numerical_grad = np.array([stencil(lambda p: host.density(p, 1)[0], k) for k in range(3)])
     numerical_hess = np.array([stencil(lambda p: host.density(p, 1)[1], k) for k in range(3)])
     numerical_third = np.array([stencil(lambda p: host.density(p, 2)[2], k) for k in range(3)])
+    numerical_fourth = np.array([stencil(lambda p: host.density(p, 3)[3], k) for k in range(3)])
 
     assert np.abs(numerical_grad - drho).max() < 1e-9
     assert np.abs(numerical_hess.T - d2rho).max() < 1e-9
     assert np.abs(np.moveaxis(numerical_third, 0, -1) - d3rho).max() < 1e-8
+    assert np.abs(np.moveaxis(numerical_fourth, 0, -1) - d4rho).max() < 1e-7
     assert np.abs(d2rho - d2rho.T).max() < 1e-14
 
 
@@ -531,12 +533,12 @@ def test_density_callback_is_finite(system, basis):
     center = mol.atom_coords()[0]
     for offset in ([0.9, 0.4, 1.3], [40.0, 0.0, 0.0], [0.0, -60.0, 25.0]):
         point = center + np.array(offset)
-        rho, drho, d2rho, d3rho = host.density(point, 3)
+        rho, drho, d2rho, d3rho, d4rho = host.density(point, 4)
         assert np.isfinite(rho)
-        for tensor in (drho, d2rho, d3rho):
+        for tensor in (drho, d2rho, d3rho, d4rho):
             assert np.isfinite(tensor).all()
 
-        ao = host._ao(point.reshape(1, 3), 3)[:, 0, :]
+        ao = host._ao(point.reshape(1, 3), 4)[:, 0, :]
         reference = np.einsum("cu,uv->cv", ao, dm, optimize=False)
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             product = ao @ dm

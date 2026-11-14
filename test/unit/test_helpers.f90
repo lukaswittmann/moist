@@ -74,6 +74,9 @@ module test_helpers
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
@@ -121,8 +124,13 @@ module test_helpers
    public :: stage_point_charge_energy
    public :: stage_model_point_charge_energy
    public :: get_test_cross
+   public :: drop_fixture_geometry
+   public :: build_drop_test_cavity
+   public :: LSF_SVDW, LSF_CFC
+   public :: FIX_PLAIN, FIX_CROSS
    public :: read_printout, printed_entry
    public :: fd4_scalar
+   public :: fd4_stencil
    public :: fd4_offsets
    public :: fd6_scalar
    public :: fd6_offsets
@@ -141,6 +149,28 @@ module test_helpers
    integer, parameter :: default_n_points = 7
    !> Default Lebedev order for get_test_cavity_iswig
    integer, parameter :: default_nleb = 26
+
+   !> Level-set model of a DROP derivative-suite fixture
+   integer, parameter :: LSF_SVDW = 1, LSF_CFC = 2
+
+   !> Geometry of a DROP derivative-suite fixture
+   integer, parameter :: FIX_PLAIN = 1, FIX_CROSS = 2
+
+   !> Shared tuning of the DROP derivative fixtures
+   real(wp), parameter :: BLEND_K = 2.5_wp
+   real(wp), parameter :: BLEND_3B = 1.0_wp
+   integer, parameter :: NUM_LEB = 50
+   real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
+   integer, parameter :: PROJ_MAXITER = 1000
+   integer, parameter :: PROJ_LEVEL = 2
+   integer, parameter :: WLEB_PRUNE = 4
+
+   !> Overrides of the branching (`FIX_CROSS`) fixture
+   real(wp), parameter :: CROSS_BLEND_K = 1.0_wp
+   integer, parameter :: CROSS_PROJ_LEVEL = 7
+
+   !> Softmax scale of the compact (`FIX_PLAIN`) fixture
+   real(wp), parameter :: PLAIN_BRANCH_S = 0.0025_wp
 
    !> Stencil offsets, in units of h, matching `fd4_scalar`'s argument order
    real(wp), parameter :: fd4_offsets(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
@@ -1015,6 +1045,22 @@ contains
       end if
    end subroutine fd4_scalar
 
+   !> Elemental 4-point central finite-difference formula for conformable arrays/scalars
+   elemental real(wp) function fd4_stencil(fpp, fp, fm, fmm, h) result(df)
+      !> Value at x + 2h
+      real(wp), intent(in) :: fpp
+      !> Value at x + h
+      real(wp), intent(in) :: fp
+      !> Value at x - h
+      real(wp), intent(in) :: fm
+      !> Value at x - 2h
+      real(wp), intent(in) :: fmm
+      !> Step size h
+      real(wp), intent(in) :: h
+
+      df = (-fpp + 8.0_wp*fp - 8.0_wp*fm + fmm)/(12.0_wp*h)
+   end function fd4_stencil
+
    !> 6-point central finite-difference formula:
    !>   f'(x) ~ (45 (f(x+h) - f(x-h)) - 9 (f(x+2h) - f(x-2h)) + (f(x+3h) - f(x-3h))) / (60 h)
    !> Truncation O(h^6 f^(7)), for derivatives too stiff for `fd4_scalar`
@@ -1603,4 +1649,127 @@ contains
          end if
       end do
    end function printed_entry
+
+   !> Fixture geometry of the DROP derivative suites
+   !>
+   !> @param[in]  fix_kind Geometry selector
+   !> @param[out] mol      Structure
+   subroutine drop_fixture_geometry(fix_kind, mol)
+      !> Geometry selector
+      integer, intent(in) :: fix_kind
+      !> Structure
+      type(structure_type), intent(out) :: mol
+
+      select case (fix_kind)
+      case (FIX_PLAIN)
+         call new(mol, [8, 6, 1], reshape([ &
+                                          0.00_wp, 0.00_wp, 0.00_wp, &
+                                          0.00_wp, 0.00_wp, 4.60_wp, &
+                                          2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
+      case default
+         call get_test_cross(mol)
+      end select
+
+   end subroutine drop_fixture_geometry
+
+   !> Build the DROP cavity for a fixture and a level-set model
+   !>
+   !> @param[out]   cavity         Constructed cavity
+   !> @param[inout] ctx            Run context borrowed by the cavity; must outlive it
+   !> @param[in]    mol            Structure to build on
+   !> @param[in]    fix_kind       Geometry of the fixture
+   !> @param[in]    lsf_kind       Level-set model
+   !> @param[out]   error          Error handle
+   !> @param[in]    cross_branch_s Softmax scale of the branching fixture
+   !> @param[in]    want_fine      Whether to request curvature and normals
+   subroutine build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                     cross_branch_s, want_fine)
+      !> Constructed cavity
+      type(cavity_type_drop), allocatable, intent(out) :: cavity
+      !> Run context borrowed by the cavity
+      type(moist_context_type), target, intent(inout) :: ctx
+      !> Structure to build on
+      type(structure_type), intent(in) :: mol
+      !> Geometry of the fixture
+      integer, intent(in) :: fix_kind
+      !> Level-set model
+      integer, intent(in) :: lsf_kind
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      !> Softmax scale of the branching fixture
+      real(wp), intent(in), optional :: cross_branch_s
+      !> Whether to request curvature and normals
+      logical, intent(in), optional :: want_fine
+
+      real(wp), allocatable :: radii(:)
+      type(moist_error_type), allocatable :: cav_error
+      type(moist_cavity_drop_parameters_type) :: drop_param
+      real(wp) :: blend_k_loc, branch_s_loc
+      integer :: proj_level_loc
+      logical :: want_fine_loc
+
+      call fill_legacy_radii(mol, radii, error)
+      if (allocated(error)) return
+
+      if (fix_kind == FIX_CROSS) then
+         if (.not. present(cross_branch_s)) then
+            call test_failed(error, "build_drop_test_cavity: FIX_CROSS needs an"// &
+                             " explicit cross_branch_s")
+            return
+         end if
+         blend_k_loc = CROSS_BLEND_K
+         proj_level_loc = CROSS_PROJ_LEVEL
+         branch_s_loc = cross_branch_s
+      else
+         blend_k_loc = BLEND_K
+         proj_level_loc = PROJ_LEVEL
+         branch_s_loc = PLAIN_BRANCH_S
+      end if
+
+      want_fine_loc = .true.
+      if (present(want_fine)) want_fine_loc = want_fine
+
+      drop_param = moist_cavity_drop_parameters_type( &
+                   num_leb=NUM_LEB, do_fine=want_fine_loc, &
+                   tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
+                   proj_level=proj_level_loc, wleb_prune_level=WLEB_PRUNE, &
+                   branch_weight_s=branch_s_loc)
+
+      allocate (cavity)
+      call new_context(ctx, verbosity=0)
+      select case (lsf_kind)
+      case (LSF_SVDW)
+         block
+            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+            call svdw_template%new(moist_cavity_drop_lsf_svdw_param_type( &
+                                   blend_k=blend_k_loc, blend_3b=BLEND_3B))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), &
+                                 lsf_model=svdw_template, error=cav_error, &
+                                 param=drop_param, ctx=ctx)
+         end block
+      case default
+         block
+            type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
+            call cfc_template%new()
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), &
+                                 lsf_model=cfc_template, error=cav_error, &
+                                 param=drop_param, ctx=ctx)
+         end block
+      end select
+      if (allocated(cav_error)) then
+         call test_failed(error, "failed to initialize cavity: "//cav_error%message)
+         return
+      end if
+
+      call cavity%update(mol, error=cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "failed to build cavity: "//cav_error%message)
+         return
+      end if
+      if (cavity%ngrid == 0) then
+         call test_failed(error, "empty grid")
+         return
+      end if
+
+   end subroutine build_drop_test_cavity
 end module test_helpers

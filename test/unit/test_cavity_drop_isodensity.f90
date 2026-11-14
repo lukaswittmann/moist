@@ -57,7 +57,7 @@ module test_cavity_drop_isodensity
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
-   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
+   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type, to_string
    implicit none(type, external)
    private
 
@@ -192,6 +192,7 @@ contains
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
                   new_unittest("exclusion_radius_ignores_host_charges", test_exclusion_radius_host_charges), &
+                  new_unittest("internal_update_needs_basis_atoms", test_internal_update_atoms), &
                   new_unittest("core_fill_removes_dip", test_core_fill_dip), &
                   new_unittest("core_fill_fd", test_core_fill_fd), &
                   new_unittest("core_fill_callback_matches_internal", test_core_fill_callback), &
@@ -1586,7 +1587,7 @@ contains
    !> Returns the bare density rho and its spatial derivatives; the LSF applies
    !> the isovalue, the sign convention and its multiplier
    !>
-   !> d2rho/d3rho are NULL when the cavity did not request that order
+   !> d2rho/d3rho/d4rho are NULL when the cavity did not request that order
    !>
    !> @param[in]  context Unused callback context
    !> @param[in]  point   Evaluation point in Bohr
@@ -1594,8 +1595,10 @@ contains
    !> @param[out] drho    Density spatial gradient
    !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL)
    !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL)
+   !> @param[out] d4rho   Density fourth spatial derivative (Fortran (3,3,3,3), or NULL)
    !> @returns            0 (this reference implementation never fails)
-   function iso_reference_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+   function iso_reference_callback(context, point, rho, drho, d2rho, d3rho, d4rho) &
+      result(status) bind(C)
       !> Unused callback context (the test keeps its data in module state)
       type(c_ptr), value :: context
       !> Evaluation point in Bohr
@@ -1608,17 +1611,24 @@ contains
       type(c_ptr), value :: d2rho
       !> Density third spatial derivative (Fortran (3,3,3), or NULL)
       type(c_ptr), value :: d3rho
+      !> Density fourth spatial derivative (Fortran (3,3,3,3), or NULL)
+      type(c_ptr), value :: d4rho
       !> Zero on success
       integer(c_int) :: status
 
-      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
-      real(wp) :: rho_w, drho_w(3), d2rho_w(3, 3), d3rho_w(3, 3, 3)
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :), fptr(:, :, :, :)
+      real(wp) :: rho_w, drho_w(3), d2rho_w(3, 3), d3rho_w(3, 3, 3), d4rho_w(3, 3, 3, 3)
       logical :: want_hess, want_third
 
       status = 0_c_int
       if (c_associated(context)) return
       want_hess = c_associated(d2rho)
       want_third = c_associated(d3rho)
+      if (c_associated(d4rho)) then
+         call eval_at(cb_gto, real(point, wp), 4, rho_w, drho_w, d2rho_w, d3rho_w, d4rho_w)
+         call c_f_pointer(d4rho, fptr, [3, 3, 3, 3])
+         fptr = real(d4rho_w, c_double)
+      end if
 
       call rho_product_rule(real(point, wp), rho_w, drho_w, d2rho_w, d3rho_w)
 
@@ -2098,16 +2108,18 @@ contains
    end subroutine test_core_fill_fd
 
    !> Constant density with vanishing derivatives, so the callback LSF shows the fill alone
-   function constant_density_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+   function constant_density_callback(context, point, rho, drho, d2rho, d3rho, d4rho) &
+      result(status) bind(C)
       type(c_ptr), value :: context
       real(c_double), intent(in) :: point(3)
       real(c_double), intent(out) :: rho
       real(c_double), intent(out) :: drho(3)
       type(c_ptr), value :: d2rho
       type(c_ptr), value :: d3rho
+      type(c_ptr), value :: d4rho
       integer(c_int) :: status
 
-      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :), fptr(:, :, :, :)
 
       status = 0_c_int
       if (c_associated(context) .or. any(point /= point)) status = 1_c_int
@@ -2120,6 +2132,10 @@ contains
       if (c_associated(d3rho)) then
          call c_f_pointer(d3rho, tptr, [3, 3, 3])
          tptr = 0.0_c_double
+      end if
+      if (c_associated(d4rho)) then
+         call c_f_pointer(d4rho, fptr, [3, 3, 3, 3])
+         fptr = 0.0_c_double
       end if
    end function constant_density_callback
 
@@ -2730,12 +2746,54 @@ contains
       type(structure_type), intent(in) :: mol
 
       real(wp), allocatable :: radii(:)
+      type(mctc_error), allocatable :: update_err
 
       allocate (radii(mol%nat), source=2.0_wp)
       call lsf%new(callback_ptr=c_funloc(iso_reference_callback), context=c_null_ptr, &
          param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=rho_iso_ref, scale=lsf_scale))
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, update_err)
+      if (allocated(update_err)) error stop "build_callback_lsf: "//update_err%message
    end subroutine build_callback_lsf
+
+   !> Binding a structure with fewer atoms than the basis has owners is refused
+   subroutine test_internal_update_atoms(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_iso_gto_type) :: gto
+      type(structure_type) :: mol, small
+      type(mctc_error), allocatable :: merr
+      integer, allocatable :: sh_nprim(:)
+      real(wp), allocatable :: radii(:)
+
+      call build_test(gto, 1, error, mol)
+      if (allocated(error)) return
+      sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
+      call lsf%new(sh_atom=gto%sh_atom, sh_l=gto%sh_l, sh_nprim=sh_nprim, &
+                   exps=gto%exps, coeffs=gto%coeffs, error=merr, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type( &
+                   rho_iso=rho_iso_ref, scale=lsf_scale))
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, lsf%host_defined, &
+                 "the internal isodensity level set must declare itself host-defined")
+      if (allocated(error)) return
+      call check(error, maxval(gto%sh_atom) == mol%nat, "every atom of the test molecule must own a shell")
+      if (allocated(error)) return
+
+      call new(small, mol%num(mol%id(:mol%nat - 1)), mol%xyz(:, :mol%nat - 1))
+      allocate (radii(small%nat), source=2.0_wp)
+      call lsf%update(small, radii, merr)
+      if (.not. allocated(merr)) then
+         call test_failed(error, "update accepted a structure missing a basis atom")
+         return
+      end if
+      call check(error, index(merr%message, "has only "//to_string(small%nat)) > 0, &
+                 "refused for the wrong reason: "//merr%message)
+   end subroutine test_internal_update_atoms
 
    !> Both isodensity backends must describe the same level set
    subroutine test_internal_vs_callback(error)
@@ -3474,44 +3532,68 @@ contains
                  "internal isodensity LSF returned a zero f4_rrrr at max_deriv=4")
       if (allocated(error)) return
 
-      ! The callback ABI stops at the third derivative and must say so
+      ! The callback ABI carries the fourth derivative for the nuclear Hessian
       !$omp critical(iso_reference_density)
-      call run_callback_fourth_cap(error)
+      call run_callback_fourth_order(error)
       !$omp end critical(iso_reference_density)
    end subroutine test_internal_fourth_gating
 
    !> Body of the callback half of [[test_internal_fourth_gating]], run under the
-   !> `cb_gto` lock
-   subroutine run_callback_fourth_cap(error)
+   !> `cb_gto` lock: at `max_deriv = 4` the callback LSF delivers the fourth
+   !> derivative through the ABI's trailing buffer, records the order, and
+   !> agrees with the internal evaluator on it
+   subroutine run_callback_fourth_order(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_int
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
+      real(wp) :: f4_cb(ndim, ndim, ndim, ndim), f4_int(ndim, ndim, ndim, ndim)
+      real(wp) :: dev, scale_ref
       type(mctc_error), allocatable :: lsf_err
       integer :: ip
 
+      real(wp), parameter :: THR_FOURTH = 1.0e-9_wp
+
       call set_reference_density(mol, error)
       if (allocated(error)) return
+      call build_internal_lsf(lsf_int, mol, 0.0_wp, error)
+      if (allocated(error)) return
       call build_callback_lsf(lsf, mol)
+      call check(error, lsf%host_defined, &
+                 "the callback isodensity level set must declare itself host-defined")
+      if (allocated(error)) return
       call get_test_points(mol, pts, 4)
 
       call lsf%set_max_deriv(4)
+      call lsf_int%set_max_deriv(4)
+      dev = 0.0_wp
+      scale_ref = 0.0_wp
       do ip = 1, size(pts, 2)
          call lsf%prepare(pts(:, ip), lsf_err)
          if (allocated(lsf_err)) then
             call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
             return
          end if
-         !> Not 4: the C ABI carries no fourth-derivative buffer, so claiming
-         !> order 4 here would make `require_deriv` wave through an `f4_rrrr`
-         !> read that the base type is supposed to abort
-         call check(error, lsf%prepared_deriv, 3, &
-                    more="callback isodensity LSF claimed an order its ABI cannot deliver")
+         call check(error, lsf%prepared_deriv, 4, &
+                    more="callback isodensity LSF did not record the fourth order")
          if (allocated(error)) return
+         call prepare_internal(lsf_int, pts(:, ip), error)
+         if (allocated(error)) return
+         call lsf%f4_rrrr(f4_cb)
+         call lsf_int%f4_rrrr(f4_int)
+         dev = max(dev, maxval(abs(f4_cb - f4_int)))
+         scale_ref = max(scale_ref, maxval(abs(f4_int)))
       end do
-   end subroutine run_callback_fourth_cap
+      call check(error, scale_ref > 0.0_wp, &
+                 "the internal evaluator returned a zero fourth derivative")
+      if (allocated(error)) return
+      call check(error, dev <= THR_FOURTH*scale_ref, &
+                 "callback and internal isodensity LSF disagree on the fourth derivative: "// &
+                 to_string(dev)//" against "//to_string(scale_ref))
+   end subroutine run_callback_fourth_order
 
    !* =================================================================================== *!
    !*                                  Update protocol                                    *!
@@ -3657,20 +3739,22 @@ contains
    !>
    !> At the default isovalue the surface lies at 3.72 Bohr, inside a 4 Bohr
    !> sphere, so a callback cavity built over it is never empty
-   function gaussian_density_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+   function gaussian_density_callback(context, point, rho, drho, d2rho, d3rho, d4rho) &
+      result(status) bind(C)
       type(c_ptr), value :: context
       real(c_double), intent(in) :: point(3)
       real(c_double), intent(out) :: rho
       real(c_double), intent(out) :: drho(3)
       type(c_ptr), value :: d2rho
       type(c_ptr), value :: d3rho
+      type(c_ptr), value :: d4rho
       integer(c_int) :: status
 
       !> Exponent of the Gaussian
       real(wp), parameter :: alpha = 0.5_wp
-      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :), fptr(:, :, :, :)
       real(wp) :: g, delta(3, 3)
-      integer :: i, j, k
+      integer :: i, j, k, l
 
       status = 0_c_int
       if (c_associated(context)) status = 1_c_int
@@ -3697,6 +3781,27 @@ contains
                   tptr(i, j, k) = (-8.0_wp*alpha**3*point(i)*point(j)*point(k) &
                                    + 4.0_wp*alpha**2*(point(i)*delta(j, k) + point(j)*delta(i, k) &
                                                       + point(k)*delta(i, j)))*g
+               end do
+            end do
+         end do
+      end if
+      if (c_associated(d4rho)) then
+         call c_f_pointer(d4rho, fptr, [3, 3, 3, 3])
+         do l = 1, 3
+            do k = 1, 3
+               do j = 1, 3
+                  do i = 1, 3
+                     fptr(i, j, k, l) = (16.0_wp*alpha**4*point(i)*point(j)*point(k)*point(l) &
+                                         - 8.0_wp*alpha**3*(delta(i, j)*point(k)*point(l) &
+                                                            + delta(i, k)*point(j)*point(l) &
+                                                            + delta(i, l)*point(j)*point(k) &
+                                                            + delta(j, k)*point(i)*point(l) &
+                                                            + delta(j, l)*point(i)*point(k) &
+                                                            + delta(k, l)*point(i)*point(j)) &
+                                         + 4.0_wp*alpha**2*(delta(i, j)*delta(k, l) &
+                                                            + delta(i, k)*delta(j, l) &
+                                                            + delta(i, l)*delta(j, k)))*g
+                  end do
                end do
             end do
          end do

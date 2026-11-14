@@ -154,12 +154,16 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: tangent_f2_rr => lsf_tangent_f2_rr
       !> Directional nuclear derivative of the third spatial derivative
       procedure, public :: tangent_f3_rrr => lsf_tangent_f3_rrr
+      !> The four directional nuclear derivatives above in one pass
+      procedure, public :: tangent_jet => lsf_tangent_jet
       !> Nuclear Hessian-vector product
       procedure, public :: hvp_f1_rA => lsf_hvp_f1_rA
       !> Directional nuclear derivative of `f2_r_rA`
       procedure, public :: hvp_f2_r_rA => lsf_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure, public :: hvp_f3_rr_rA => lsf_hvp_f3_rr_rA
+      !> The three nuclear Hessian-vector products above in one pass
+      procedure, public :: hvp_jet_rA => lsf_hvp_jet_rA
       !> Radius row of the joint Hessian-vector product
       procedure, public :: hvp_f1_rad => lsf_hvp_f1_rad
       !> Joint directional derivative of `f2_r_rad`
@@ -214,18 +218,24 @@ contains
    !> @param[inout] self   LSF instance
    !> @param[in]    mol    Molecular structure
    !> @param[in]    radii  Per-atom radii (size mol%nat)
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error  Error handling (optional)
+   subroutine lsf_update(self, mol, radii, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Per-atom radii
       real(wp), intent(in) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out), optional :: error
 
       !> Atom capacity of the per-point buffers
       integer :: n_alloc
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (present(error)) then
+         if (allocated(error)) return
+      end if
 
       n_alloc = mol%nat
       if (allocated(self%active_cand)) deallocate (self%active_cand)
@@ -1626,6 +1636,45 @@ contains
       res = t3
    end subroutine lsf_tangent_f3_rrr
 
+   !> Directional nuclear derivatives of the whole jet in one pass
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] dv0  Directional derivative of the value
+   !> @param[out] dv1  Directional derivative of the spatial gradient [3]
+   !> @param[out] dv2  Directional derivative of the spatial Hessian [3, 3]
+   !> @param[out] dv3  Directional derivative of the third derivative [3, 3, 3]
+   subroutine lsf_tangent_jet(self, v, dv0, dv1, dv2, dv3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Directional derivatives of the jet
+      real(wp), intent(out) :: dv0, dv1(3), dv2(3, 3)
+      real(wp), intent(out), optional :: dv3(3, 3, 3)
+
+      !> Direction-contracted pair tensors
+      real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
+      !> Third order, read only when asked for
+      real(wp) :: t3(ndim, ndim, ndim)
+      !> Kernel level
+      integer :: level
+
+      dv0 = 0.0_wp
+      dv1 = 0.0_wp
+      dv2 = 0.0_wp
+      if (present(dv3)) dv3 = 0.0_wp
+      if (self%n_active == 0) return
+      level = 2
+      if (present(dv3)) level = 3
+      call self%require_deriv(level, "tangent_jet")
+
+      call tangent_tensors(self, v, level, tg0, tg1_r, tg2_rr, tg3_rrr)
+      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+                            tg0, tg1_r, tg2_rr, tg3_rrr, level, dv0, dv1, dv2, t3)
+      if (present(dv3)) dv3 = t3
+   end subroutine lsf_tangent_jet
+
    !> Fill the per-atom Hessian-vector-product family (and its tangent ladder)
    !>
    !> One atom sweep and one pair sweep of `cfc_*_hvp_eval`, which fills the
@@ -1965,6 +2014,63 @@ contains
       !> Radius directions
       real(wp), intent(in), optional :: vrad(:)
 
+      !> The two lower orders the level-2 kernel produces on the way
+      real(wp) :: hvp1(ndim, self%n_active), hvp2(ndim, ndim, self%n_active)
+
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
+      call self%require_deriv(3, "hvp_f3_rr_rA")
+      call hvp_jet_sweep(self, v, hvp1, hvp2, res, vrad)
+   end subroutine lsf_hvp_f3_rr_rA
+
+   !> The three nuclear Hessian-vector products in one pass, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
+   subroutine lsf_hvp_jet_rA(self, v, hvp1, hvp2, hvp3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Contracted nuclear Hessian
+      real(wp), intent(out) :: hvp1(:, :)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: hvp2(:, :, :)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+
+      if (self%n_active == 0) return
+      call self%require_deriv(3, "hvp_jet_rA")
+      call hvp_jet_sweep(self, v, hvp1, hvp2, hvp3)
+   end subroutine lsf_hvp_jet_rA
+
+   !> The active-atom sweep of the nuclear Hessian-vector family
+   !>
+   !> @param[in]  self LSF instance, prepared to order 3 at least
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
+   subroutine hvp_jet_sweep(self, v, hvp1, hvp2, hvp3, vrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Contracted nuclear Hessian
+      real(wp), intent(out) :: hvp1(:, :)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: hvp2(:, :, :)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
+
       !> Contracted pseudo-density tensors
       real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
       !> Per-atom HVP tensors and the radius-row by-product
@@ -1974,12 +2080,6 @@ contains
       real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
-
-      if (self%n_active == 0) then
-         res = 0.0_wp
-         return
-      end if
-      call self%require_deriv(3, "hvp_f3_rr_rA")
 
       allocate (hv0(ndim, self%n_active))
       allocate (hv1(ndim, ndim, self%n_active))
@@ -1996,9 +2096,11 @@ contains
          call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
                            self%qn0(:, ia), self%qn1_r(:, :, ia), self%qn2_rr(:, :, :, ia), &
                            hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia), 2, h1, h2, h3)
-         res(:, :, :, ia) = h3
+         hvp1(:, ia) = h1
+         hvp2(:, :, ia) = h2
+         hvp3(:, :, :, ia) = h3
       end do
-   end subroutine lsf_hvp_f3_rr_rA
+   end subroutine hvp_jet_sweep
 
    !* ================================================================================= *!
    !*                     Radius row of the joint Hessian-vector product                *!

@@ -80,6 +80,7 @@ module moist_cavity_drop_lsf_svdw
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_sorted
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_math_blas, only: gemm
    use moist_cavity_drop_lsf_svdw_kernel, only: nkind, &
                                                 svdw_atom_eval, svdw_atom_tangent_eval, &
                                                 svdw_spatial_eval, svdw_nuclear_eval, &
@@ -90,12 +91,16 @@ module moist_cavity_drop_lsf_svdw
                                                 svdw_nucrad_eval, svdw_nucrad_diag_eval, &
                                                 svdw_tangent_eval, svdw_hvp_eval, &
                                                 svdw_vjp_eval, svdw_radius_vjp_eval, &
+                                                svdw_hvp_vjp_eval, svdw_vjp_diag_eval, &
                                                 svdw_normalized_eval, svdw_powersums
    implicit none(type, external)
    private
 
    !> Spatial dimension
    integer, parameter :: ndim = 3
+   !> Components of the linear forms of the weighted hvp row: for each kind the
+   !> scalar, vector and matrix rungs of the direction-contracted power sums
+   integer, parameter :: nform = nkind*(1 + ndim + ndim*ndim)
 
    !> Smooth van der Waals LSF
    !>
@@ -156,6 +161,13 @@ module moist_cavity_drop_lsf_svdw
       real(wp) :: ps3(ndim, ndim, ndim, nkind) = 0.0_wp
       !> Order-4 power-sum tensors
       real(wp) :: ps4(ndim, ndim, ndim, ndim, nkind) = 0.0_wp
+
+      !* -------------------------- Per-point atom-tensor cache ----------------------- *!
+      !> Highest derivative order cached for the prepared point (-1 when invalid)
+      integer :: cache_deriv = -1
+      !> Cached kind tensors of active atom `ia`, `cat{n}(.., kind, ia)` [.., nkind, nat]
+      real(wp), allocatable :: cat0(:, :), cat1(:, :, :), cat2(:, :, :, :)
+      real(wp), allocatable :: cat3(:, :, :, :, :), cat4(:, :, :, :, :, :)
    contains
       !> Constructor: configure blending parameters and declare the candidate space
       procedure, public :: new => lsf_new
@@ -167,6 +179,8 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: prepare_subset => lsf_prepare_subset
       !> Configure the highest power-sum order `prepare` accumulates
       procedure, public :: set_max_deriv => lsf_set_max_deriv
+      !> Cache the kind tensors of the active atoms at the prepared order
+      procedure, public :: cache_point_tensors => lsf_cache_point_tensors
       !> Number of atoms active after the latest prepare/prepare_subset
       procedure, public :: active_count => lsf_active_count
       !> User-space atom index of the i-th active atom
@@ -213,12 +227,16 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: tangent_f2_rr => lsf_tangent_f2_rr
       !> Directional nuclear derivative of the third spatial derivative
       procedure, public :: tangent_f3_rrr => lsf_tangent_f3_rrr
+      !> The four directional nuclear derivatives above in one pass
+      procedure, public :: tangent_jet => lsf_tangent_jet
       !> Nuclear Hessian-vector product
       procedure, public :: hvp_f1_rA => lsf_hvp_f1_rA
       !> Directional nuclear derivative of `f2_r_rA`
       procedure, public :: hvp_f2_r_rA => lsf_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure, public :: hvp_f3_rr_rA => lsf_hvp_f3_rr_rA
+      !> The three nuclear Hessian-vector products above in one pass
+      procedure, public :: hvp_jet_rA => lsf_hvp_jet_rA
       !> Radius row of the joint Hessian-vector product
       procedure, public :: hvp_f1_rad => lsf_hvp_f1_rad
       !> Joint directional derivative of `f2_r_rad`
@@ -227,6 +245,11 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
       !> Jet-contracted nuclear gradient (reverse mode)
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      !> Nuclear Jacobian of the jet-contracted row as a rank-52 product of
+      !> per-atom quantities
+      procedure, public :: vjp_f2_rArB => lsf_vjp_f2_rArB
+      !> That block applied to a batch of directions from the same linear form
+      procedure, public :: vjp_f2_rArB_apply => lsf_vjp_f2_rArB_apply
       !> Jet-contracted radius gradient (reverse mode)
       procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the SvdW weight equals `screening_threshold`
@@ -271,18 +294,24 @@ contains
    !> @param[inout] self   LSF instance
    !> @param[in]    mol    Molecular structure
    !> @param[in]    radii  Per-atom radii (size mol%nat)
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error  Error handling (optional)
+   subroutine lsf_update(self, mol, radii, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Per-atom radii
       real(wp), intent(in) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out), optional :: error
 
       !> Atom capacity of the per-point buffers
       integer :: n_alloc
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (present(error)) then
+         if (allocated(error)) return
+      end if
 
       n_alloc = mol%nat
       if (allocated(self%active_cand)) deallocate (self%active_cand)
@@ -290,15 +319,22 @@ contains
       if (allocated(self%act_d)) deallocate (self%act_d)
       if (allocated(self%act_radius)) deallocate (self%act_radius)
       if (allocated(self%act_x)) deallocate (self%act_x)
+      if (allocated(self%cat0)) deallocate (self%cat0, self%cat1, self%cat2, self%cat3, self%cat4)
 
       allocate (self%active_cand(n_alloc))
       allocate (self%act_atom(n_alloc))
       allocate (self%act_d(ndim, n_alloc))
       allocate (self%act_radius(n_alloc))
       allocate (self%act_x(n_alloc))
+      allocate (self%cat0(nkind, n_alloc))
+      allocate (self%cat1(ndim, nkind, n_alloc))
+      allocate (self%cat2(ndim, ndim, nkind, n_alloc))
+      allocate (self%cat3(ndim, ndim, ndim, nkind, n_alloc))
+      allocate (self%cat4(ndim, ndim, ndim, ndim, nkind, n_alloc))
 
       self%n_active = 0
       self%prepared_deriv = -1
+      self%cache_deriv = -1
    end subroutine lsf_update
 
    !> Configure the highest power-sum order `prepare` accumulates
@@ -316,6 +352,50 @@ contains
 
       self%max_deriv = min(4, max(0, n))
    end subroutine lsf_set_max_deriv
+
+   !> Cache the kind tensors of every active atom at the prepared order
+   !>
+   !> @param[inout] self LSF instance
+   subroutine lsf_cache_point_tensors(self)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
+
+      !> Active slot and the prepared order
+      integer :: ia, md
+
+      self%cache_deriv = -1
+      if (self%prepared_deriv < 0) return
+      md = self%prepared_deriv
+      do ia = 1, self%n_active
+         if (self%act_x(ia) > 0.0_wp) then
+            call svdw_atom_eval(self%act_d(:, ia), self%act_radius(ia), self%param%blend_k, &
+                                md, self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                                self%cat3(:, :, :, :, ia), self%cat4(:, :, :, :, :, ia))
+         else
+            call svdw_atom_eval(self%act_d(:, ia), self%act_radius(ia), self%param%blend_k, &
+                                0, self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                                self%cat3(:, :, :, :, ia), self%cat4(:, :, :, :, :, ia))
+            if (md >= 1) self%cat1(:, :, ia) = 0.0_wp
+            if (md >= 2) self%cat2(:, :, :, ia) = 0.0_wp
+            if (md >= 3) self%cat3(:, :, :, :, ia) = 0.0_wp
+            if (md >= 4) self%cat4(:, :, :, :, :, ia) = 0.0_wp
+         end if
+      end do
+      self%cache_deriv = md
+   end subroutine lsf_cache_point_tensors
+
+   !> Whether the point cache holds the kind tensors of the active atoms to `order`
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] order Kind-tensor order the caller is about to read
+   pure logical function cache_holds(self, order)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Kind-tensor order the caller is about to read
+      integer, intent(in) :: order
+
+      cache_holds = order <= self%cache_deriv
+   end function cache_holds
 
    !> Screen every atom at the evaluation point and refresh the caches
    !>
@@ -394,6 +474,7 @@ contains
 
       self%n_active = 0
       self%prepared_deriv = self%max_deriv
+      self%cache_deriv = -1
       if (.not. allocated(self%cand_screen)) return
 
       call self%screen_candidates(point, candidate_indices, self%active_cand, n)
@@ -558,6 +639,15 @@ contains
       !> Order-4 kind tensor
       real(wp), intent(out) :: at4(ndim, ndim, ndim, ndim, nkind)
 
+      if (max_deriv <= self%cache_deriv) then
+         at0 = self%cat0(:, ia)
+         if (max_deriv >= 1) at1 = self%cat1(:, :, ia)
+         if (max_deriv >= 2) at2 = self%cat2(:, :, :, ia)
+         if (max_deriv >= 3) at3 = self%cat3(:, :, :, :, ia)
+         if (max_deriv >= 4) at4 = self%cat4(:, :, :, :, :, ia)
+         return
+      end if
+
       if (self%act_x(ia) > 0.0_wp) then
          call svdw_atom_eval(self%act_d(:, ia), self%act_radius(ia), self%param%blend_k, &
                              max_deriv, at0, at1, at2, at3, at4)
@@ -603,6 +693,23 @@ contains
       real(wp), intent(out) :: aw2(ndim, ndim, nkind)
       !> Order-3 contracted kind tensor
       real(wp), intent(out) :: aw3(ndim, ndim, ndim, nkind)
+
+      !> Cartesian axis of the displacement
+      integer :: t
+
+      if (max_deriv + 1 <= self%cache_deriv) then
+         aw0 = 0.0_wp
+         if (max_deriv >= 1) aw1 = 0.0_wp
+         if (max_deriv >= 2) aw2 = 0.0_wp
+         if (max_deriv >= 3) aw3 = 0.0_wp
+         do t = 1, ndim
+            aw0 = aw0 - v_a(t)*self%cat1(t, :, ia)
+            if (max_deriv >= 1) aw1 = aw1 - v_a(t)*self%cat2(:, t, :, ia)
+            if (max_deriv >= 2) aw2 = aw2 - v_a(t)*self%cat3(:, :, t, :, ia)
+            if (max_deriv >= 3) aw3 = aw3 - v_a(t)*self%cat4(:, :, :, t, :, ia)
+         end do
+         return
+      end if
 
       if (self%act_x(ia) > 0.0_wp) then
          call svdw_atom_tangent_eval(self%act_d(:, ia), self%act_radius(ia), &
@@ -955,11 +1062,20 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
-         call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
-         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
-                                self%ps0, self%ps1, self%ps2, self%ps3, &
-                                at0, at1, at2, at3, at4, 2, &
-                                f1_rA, f2_r_rA, f3_rr_rA, d4)
+         if (cache_holds(self, 3)) then
+            call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, self%ps3, &
+                                   self%cat0(:, ia), self%cat1(:, :, ia), &
+                                   self%cat2(:, :, :, ia), self%cat3(:, :, :, :, ia), &
+                                   self%cat4(:, :, :, :, :, ia), 2, &
+                                   f1_rA, f2_r_rA, f3_rr_rA, d4)
+         else
+            call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
+            call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, self%ps3, &
+                                   at0, at1, at2, at3, at4, 2, &
+                                   f1_rA, f2_r_rA, f3_rr_rA, d4)
+         end if
          if (present(lsf1_rA)) lsf1_rA(:, ia) = f1_rA
          if (present(lsf2_r_rA)) lsf2_r_rA(:, :, ia) = f2_r_rA
          lsf3_rr_rA(:, :, :, ia) = f3_rr_rA
@@ -1055,11 +1171,20 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
-         call atom_tensors(self, ia, 4, at0, at1, at2, at3, at4)
-         call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
-                                self%ps0, self%ps1, self%ps2, self%ps3, &
-                                at0, at1, at2, at3, at4, 3, &
-                                f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+         if (cache_holds(self, 4)) then
+            call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, self%ps3, &
+                                   self%cat0(:, ia), self%cat1(:, :, ia), &
+                                   self%cat2(:, :, :, ia), self%cat3(:, :, :, :, ia), &
+                                   self%cat4(:, :, :, :, :, ia), 3, &
+                                   f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+         else
+            call atom_tensors(self, ia, 4, at0, at1, at2, at3, at4)
+            call svdw_nuclear_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, self%ps3, &
+                                   at0, at1, at2, at3, at4, 3, &
+                                   f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA)
+         end if
          lsf4_rrr_rA(:, :, :, :, ia) = f4_rrr_rA
       end do
    end subroutine lsf_f4_rrr_rA
@@ -1632,6 +1757,49 @@ contains
       res = t3
    end subroutine lsf_tangent_f3_rrr
 
+   !> Directional nuclear derivatives of the whole jet in one pass
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] dv0  Directional derivative of the value
+   !> @param[out] dv1  Directional derivative of the spatial gradient [3]
+   !> @param[out] dv2  Directional derivative of the spatial Hessian [3, 3]
+   !> @param[out] dv3  Directional derivative of the third derivative [3, 3, 3]
+   subroutine lsf_tangent_jet(self, v, dv0, dv1, dv2, dv3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Directional derivatives of the jet
+      real(wp), intent(out) :: dv0, dv1(3), dv2(3, 3)
+      real(wp), intent(out), optional :: dv3(3, 3, 3)
+
+      !> Blending weights and direction-contracted power sums
+      real(wp) :: s_1, s_2, s_3
+      real(wp) :: ws0(nkind), ws1(ndim, nkind), ws2(ndim, ndim, nkind)
+      real(wp) :: ws3(ndim, ndim, ndim, nkind)
+      !> Third order, read only when asked for
+      real(wp) :: t3(ndim, ndim, ndim)
+      !> Kernel level
+      integer :: level
+
+      dv0 = 0.0_wp
+      dv1 = 0.0_wp
+      dv2 = 0.0_wp
+      if (present(dv3)) dv3 = 0.0_wp
+      if (self%n_active == 0) return
+      level = 2
+      if (present(dv3)) level = 3
+      call self%require_deriv(level, "tangent_jet")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      call tangent_powersums(self, v, level, ws0, ws1, ws2, ws3)
+      call svdw_tangent_eval(self%param%blend_k, s_1, s_2, s_3, &
+                             self%ps0, self%ps1, self%ps2, self%ps3, &
+                             ws0, ws1, ws2, ws3, level, dv0, dv1, dv2, t3)
+      if (present(dv3)) dv3 = t3
+   end subroutine lsf_tangent_jet
+
    !> Nuclear Hessian-vector product, active-indexed
    !>
    !> @param[in]  self LSF instance
@@ -1768,6 +1936,63 @@ contains
       !> Radius directions
       real(wp), intent(in), optional :: vrad(:)
 
+      !> The two lower orders the level-2 kernel produces on the way
+      real(wp) :: hvp1(ndim, self%n_active), hvp2(ndim, ndim, self%n_active)
+
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
+      call self%require_deriv(2, "hvp_f3_rr_rA")
+      call hvp_jet_sweep(self, v, hvp1, hvp2, res, vrad)
+   end subroutine lsf_hvp_f3_rr_rA
+
+   !> The three nuclear Hessian-vector products in one pass, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
+   subroutine lsf_hvp_jet_rA(self, v, hvp1, hvp2, hvp3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Contracted nuclear Hessian
+      real(wp), intent(out) :: hvp1(:, :)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: hvp2(:, :, :)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "hvp_jet_rA")
+      call hvp_jet_sweep(self, v, hvp1, hvp2, hvp3)
+   end subroutine lsf_hvp_jet_rA
+
+   !> The active-atom sweep of the nuclear Hessian-vector family
+   !>
+   !> @param[in]  self LSF instance, prepared to order 2 at least
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
+   subroutine hvp_jet_sweep(self, v, hvp1, hvp2, hvp3, vrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Contracted nuclear Hessian
+      real(wp), intent(out) :: hvp1(:, :)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: hvp2(:, :, :)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
+
       !> Blending weights and contracted power sums
       real(wp) :: s_1, s_2, s_3
       real(wp) :: ws0(nkind), ws1(ndim, nkind), ws2(ndim, ndim, nkind)
@@ -1784,16 +2009,9 @@ contains
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) then
-         res = 0.0_wp
-         return
-      end if
-      call self%require_deriv(2, "hvp_f3_rr_rA")
-
       call svdw_weights(self, s_1, s_2, s_3)
       call tangent_powersums(self, v, 2, ws0, ws1, ws2, ws3, vrad)
       do ia = 1, self%n_active
-         call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
          call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), 3, aw0, aw1, aw2, aw3)
          if (present(vrad)) then
             call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), 3, &
@@ -1803,12 +2021,22 @@ contains
             aw2 = aw2 + awr2
             aw3 = aw3 + awr3
          end if
-         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
-                            self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
-                            at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
-         res(:, :, :, ia) = h3
+         if (cache_holds(self, 3)) then
+            call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
+                               self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                               self%cat3(:, :, :, :, ia), aw0, aw1, aw2, aw3, 2, h1, h2, h3)
+         else
+            call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
+            call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
+                               at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
+         end if
+         hvp1(:, ia) = h1
+         hvp2(:, :, ia) = h2
+         hvp3(:, :, :, ia) = h3
       end do
-   end subroutine lsf_hvp_f3_rr_rA
+   end subroutine hvp_jet_sweep
 
    !* ================================================================================= *!
    !*                    Radius row of the joint Hessian-vector product                 *!
@@ -2019,13 +2247,242 @@ contains
 
       call svdw_weights(self, s_1, s_2, s_3)
       do ia = 1, self%n_active
-         call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
-         call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
-                            self%ps0, self%ps1, self%ps2, &
-                            at0, at1, at2, at3, w0, w1, w2, vjp_f1_rA)
+         if (cache_holds(self, 3)) then
+            call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, &
+                               self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                               self%cat3(:, :, :, :, ia), w0, w1, w2, vjp_f1_rA)
+         else
+            call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
+            call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, &
+                               at0, at1, at2, at3, w0, w1, w2, vjp_f1_rA)
+         end if
          res(:, ia) = vjp_f1_rA
       end do
    end subroutine lsf_vjp_f1_rA
+
+   !* ================================================================================= *!
+   !*                   Adjoint-weighted mixed nuclear Hessian block                    *!
+   !* ================================================================================= *!
+
+   !> Pack one kind-tensor triple into the 52-component form vector
+   !>
+   !> @param[in]  x0  Order-0 tensor [nkind]
+   !> @param[in]  x1  Order-1 tensor [3, nkind]
+   !> @param[in]  x2  Order-2 tensor [3, 3, nkind]
+   !> @param[out] vec Packed form vector [nform]
+   pure subroutine pack_form(x0, x1, x2, vec)
+      !> Kind tensors
+      real(wp), intent(in) :: x0(nkind), x1(ndim, nkind), x2(ndim, ndim, nkind)
+      !> Packed form vector
+      real(wp), intent(out) :: vec(nform)
+
+      !> Kind, spatial axes and running form index
+      integer :: k, a, b, iform
+
+      iform = 0
+      do k = 1, nkind
+         iform = iform + 1
+         vec(iform) = x0(k)
+         do a = 1, ndim
+            iform = iform + 1
+            vec(iform) = x1(a, k)
+         end do
+         do b = 1, ndim
+            do a = 1, ndim
+               iform = iform + 1
+               vec(iform) = x2(a, b, k)
+            end do
+         end do
+      end do
+   end subroutine pack_form
+
+   !> The weighted hvp row of one active atom as a linear form in the direction
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  ia   Active slot
+   !> @param[in]  s_1  One-body blending weight
+   !> @param[in]  s_2  Two-body blending weight
+   !> @param[in]  s_3  Three-body blending weight
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] gmat Coefficients of the aggregate half [nform, 3]
+   !> @param[out] dmat The atom's own block [3, 3]
+   subroutine atom_row_form(self, ia, s_1, s_2, s_3, w0, w1, w2, gmat, dmat)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Active slot
+      integer, intent(in) :: ia
+      !> Blending weights
+      real(wp), intent(in) :: s_1, s_2, s_3
+      !> Adjoint weights of the jet
+      real(wp), intent(in) :: w0, w1(3), w2(3, 3)
+      !> Coefficients of the aggregate half
+      real(wp), intent(out) :: gmat(nform, ndim)
+      !> The atom's own block
+      real(wp), intent(out) :: dmat(ndim, ndim)
+
+      !> Kind tensors of the atom, when not served from the cache
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Coefficients of the weighted row with respect to `ws0`, `ws1`, `ws2`
+      real(wp) :: gw0(ndim, nkind), gw1(ndim, ndim, nkind), gw2(ndim, ndim, ndim, nkind)
+      !> Nuclear component
+      integer :: s
+
+      if (cache_holds(self, 4)) then
+         call svdw_hvp_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                self%ps0, self%ps1, self%ps2, &
+                                self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                                self%cat3(:, :, :, :, ia), w0, w1, w2, gw0, gw1, gw2)
+         call svdw_vjp_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                 self%ps0, self%ps1, self%ps2, &
+                                 self%cat0(:, ia), self%cat1(:, :, ia), self%cat2(:, :, :, ia), &
+                                 self%cat3(:, :, :, :, ia), self%cat4(:, :, :, :, :, ia), &
+                                 w0, w1, w2, dmat)
+      else
+         call atom_tensors(self, ia, 4, at0, at1, at2, at3, at4)
+         call svdw_hvp_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                self%ps0, self%ps1, self%ps2, at0, at1, at2, at3, &
+                                w0, w1, w2, gw0, gw1, gw2)
+         call svdw_vjp_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                 self%ps0, self%ps1, self%ps2, at0, at1, at2, at3, at4, &
+                                 w0, w1, w2, dmat)
+      end if
+      do s = 1, ndim
+         call pack_form(gw0(s, :), gw1(:, s, :), gw2(:, :, s, :), gmat(:, s))
+      end do
+   end subroutine atom_row_form
+
+   !> Adjoint-weighted mixed nuclear Hessian block, active-indexed in both nuclei
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Weighted mixed nuclear Hessian block [>= 3 n_act, >= 3 n_act]
+   subroutine lsf_vjp_f2_rArB(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Adjoint weight of the level-set value
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+      !> Weighted mixed nuclear Hessian block
+      real(wp), intent(out) :: res(:, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Linear form of one atom's row
+      real(wp) :: gform(nform, ndim)
+      !> The atom's contracted tensors along one of its unit directions
+      real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
+      real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      !> Unit direction of the column atom
+      real(wp) :: e_t(ndim)
+      !> The two factors and the diagonal blocks
+      real(wp), allocatable :: gmat(:, :), vmat(:, :), diag(:, :, :)
+      !> Active count and slot, Cartesian components
+      integer :: n, ia, s, t
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f2_rArB")
+
+      n = self%n_active
+      call svdw_weights(self, s_1, s_2, s_3)
+      allocate (gmat(ndim*n, nform), vmat(nform, ndim*n), diag(ndim, ndim, n))
+
+      do ia = 1, n
+         call atom_row_form(self, ia, s_1, s_2, s_3, w0, w1, w2, gform, diag(:, :, ia))
+         do s = 1, ndim
+            gmat(ndim*(ia - 1) + s, :) = gform(:, s)
+         end do
+         do t = 1, ndim
+            e_t = 0.0_wp
+            e_t(t) = 1.0_wp
+            call atom_tangent_tensors(self, ia, e_t, 2, aw0, aw1, aw2, aw3)
+            call pack_form(aw0, aw1, aw2, vmat(:, ndim*(ia - 1) + t))
+         end do
+      end do
+
+      call gemm(gmat, vmat, res(1:ndim*n, 1:ndim*n))
+
+      do ia = 1, n
+         res(ndim*(ia - 1) + 1:ndim*ia, ndim*(ia - 1) + 1:ndim*ia) = diag(:, :, ia)
+      end do
+   end subroutine lsf_vjp_f2_rArB
+
+   !> Adjoint-weighted mixed nuclear Hessian block applied to a batch of directions
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  dirs Nuclear directions [3, ncenters, ndir]
+   !> @param[out] res  Weighted block times each direction [3, >= n_active, ndir]
+   subroutine lsf_vjp_f2_rArB_apply(self, w0, w1, w2, dirs, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Adjoint weights of the jet
+      real(wp), intent(in) :: w0, w1(3), w2(3, 3)
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Weighted block times each direction
+      real(wp), intent(out) :: res(:, :, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Direction-contracted power sums of one direction
+      real(wp) :: ws0(nkind), ws1(ndim, nkind), ws2(ndim, ndim, nkind)
+      real(wp) :: ws3(ndim, ndim, ndim, nkind)
+      !> The atom's own contracted tensors along one direction, and their form
+      real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
+      real(wp) :: aw3(ndim, ndim, ndim, nkind), awvec(nform)
+      !> Linear form of one atom's row
+      real(wp) :: gform(nform, ndim), dmat(ndim, ndim)
+      !> Packed aggregate of every direction
+      real(wp), allocatable :: wsmat(:, :)
+      !> Row entry
+      real(wp) :: acc
+      !> Active count and slot, atom, direction count and index, components
+      integer :: n, ia, iatom, ndir, j, s, t, iform
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f2_rArB_apply")
+
+      n = self%n_active
+      ndir = size(dirs, 3)
+      call svdw_weights(self, s_1, s_2, s_3)
+
+      allocate (wsmat(nform, ndir))
+      do j = 1, ndir
+         call tangent_powersums(self, dirs(:, :, j), 2, ws0, ws1, ws2, ws3)
+         call pack_form(ws0, ws1, ws2, wsmat(:, j))
+      end do
+
+      do ia = 1, n
+         iatom = self%act_atom(ia)
+         call atom_row_form(self, ia, s_1, s_2, s_3, w0, w1, w2, gform, dmat)
+         do j = 1, ndir
+            call atom_tangent_tensors(self, ia, dirs(:, iatom, j), 2, aw0, aw1, aw2, aw3)
+            call pack_form(aw0, aw1, aw2, awvec)
+            do s = 1, ndim
+               acc = 0.0_wp
+               do iform = 1, nform
+                  acc = acc + gform(iform, s)*(wsmat(iform, j) - awvec(iform))
+               end do
+               do t = 1, ndim
+                  acc = acc + dmat(s, t)*dirs(t, iatom, j)
+               end do
+               res(s, ia, j) = acc
+            end do
+         end do
+      end do
+   end subroutine lsf_vjp_f2_rArB_apply
 
    !> Adjoint-weighted radius gradient, active-indexed
    !>
@@ -2301,6 +2758,7 @@ contains
       if (allocated(self%act_d)) deallocate (self%act_d)
       if (allocated(self%act_radius)) deallocate (self%act_radius)
       if (allocated(self%act_x)) deallocate (self%act_x)
+      if (allocated(self%cat0)) deallocate (self%cat0, self%cat1, self%cat2, self%cat3, self%cat4)
 
       ! Deallocate structure_type allocatable components
       if (allocated(self%mol%id)) deallocate (self%mol%id)

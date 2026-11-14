@@ -154,12 +154,12 @@ typedef struct moist_response_s* moist_response;
 /// Calls may run concurrently on multiple threads with the same context
 /// pointer. Callback must be reentrant; synchronize shared state or use
 /// thread-local scratch
-/// `d2rho`/`d3rho` optional: NULL when the cavity does not need that
+/// `d2rho`/`d3rho`/`d4rho` optional: NULL when the cavity does not need that
 /// derivative order (e.g. the value+gradient-only projection phase); NULL
 /// means skip computing that derivative, not merely skip writing it
-/// Dereferencing a NULL `d2rho`/`d3rho` is a host bug -- branch on them
+/// Dereferencing a NULL `d2rho`/`d3rho`/`d4rho` is a host bug -- branch on them
 /// before writing
-/// `d2rho`/`d3rho` follow the C row-major layout convention above; both
+/// `d2rho`/`d3rho`/`d4rho` follow the C row-major layout convention above; all
 /// symmetric under any index permutation, storage order immaterial
 ///
 /// RETURN VALUE -- the failure channel
@@ -183,7 +183,8 @@ typedef int (*moist_isodensity_lsf_callback)(void* context,
                                              double* rho,
                                              double* drho /* [3] */,
                                              double* d2rho /* : row-major (3, 3), or NULL */,
-                                             double* d3rho /* : row-major (3, 3, 3), or NULL */);
+                                             double* d3rho /* : row-major (3, 3, 3), or NULL */,
+                                             double* d4rho /* : row-major (3, 3, 3, 3), or NULL */);
 
 
 #ifdef __cplusplus

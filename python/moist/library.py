@@ -424,13 +424,14 @@ def new_drop_cavity_isodensity_callback(
     state = CallbackState()
 
     @ffi.callback("moist_isodensity_lsf_callback")
-    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr):
+    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr, d4rho_ptr):
         want_hess = d2rho_ptr != ffi.NULL
         want_third = d3rho_ptr != ffi.NULL
+        want_fourth = d4rho_ptr != ffi.NULL
         try:
             point = np.frombuffer(ffi.buffer(point_ptr, 24), dtype=np.float64)
             if pass_order:
-                order = 3 if want_third else (2 if want_hess else 1)
+                order = 4 if want_fourth else (3 if want_third else (2 if want_hess else 1))
                 result = callback(point, order)
             else:
                 result = callback(point)
@@ -440,10 +441,12 @@ def new_drop_cavity_isodensity_callback(
                 drho = result.drho
                 d2rho = getattr(result, "d2rho", None)
                 d3rho = getattr(result, "d3rho", None)
+                d4rho = getattr(result, "d4rho", None)
             else:
                 rho, drho = result[0], result[1]
                 d2rho = result[2] if len(result) > 2 else None
                 d3rho = result[3] if len(result) > 3 else None
+                d4rho = result[4] if len(result) > 4 else None
 
             drho = np.asarray(drho, dtype=np.float64)
             if drho.shape != (3,):
@@ -471,6 +474,19 @@ def new_drop_cavity_isodensity_callback(
                         "Isodensity callback third derivative must have shape (3, 3, 3)"
                     )
                 np.frombuffer(ffi.buffer(d3rho_ptr, 216), dtype=np.float64)[:] = d3rho.ravel(
+                    order="C"
+                )
+            if want_fourth:
+                if d4rho is None:
+                    raise ValueError(
+                        "Isodensity callback did not return the requested fourth derivative"
+                    )
+                d4rho = np.asarray(d4rho, dtype=np.float64)
+                if d4rho.shape != (3, 3, 3, 3):
+                    raise ValueError(
+                        "Isodensity callback fourth derivative must have shape (3, 3, 3, 3)"
+                    )
+                np.frombuffer(ffi.buffer(d4rho_ptr, 648), dtype=np.float64)[:] = d4rho.ravel(
                     order="C"
                 )
         except BaseException as exc:

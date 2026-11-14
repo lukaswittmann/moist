@@ -264,7 +264,11 @@ contains
       ! Screened exterior points can return a zero sentinel instead of the LSF
       ! Full-scan evaluation preserves the zero set and its spatial normals
       call self%lsf_model%set_screening_threshold(0.0_wp)
-      call self%lsf_model%update(self%mol, self%radii)
+      call self%lsf_model%update(self%mol, self%radii, error)
+      if (allocated(error)) then
+         call self%clear_surface()
+         return
+      end if
       call self%ctx%timer%start("Marching tetrahedra", category=cat_properties)
       call build_mt_mesh(self%lsf_model, self%sphxyz, self%param%spacing, self%mesh, error, &
          & nthreads=self%ctx%get_num_threads())

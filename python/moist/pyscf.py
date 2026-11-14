@@ -315,7 +315,28 @@ class PySCFHost:
                         + t[i2[a][c], i1[b]]
                         + t[i2[b][c], i1[a]]
                     )
-        return rho, drho, d2rho, d3rho
+        if order < 4:
+            return rho, drho, d2rho, d3rho
+
+        # Leibniz over four indices: the (4,0) split, the four (3,1) splits
+        # and the three (2,2) splits, each with its mirror image folded into
+        # the factor of two by the symmetry of t.
+        d4rho = np.empty((3, 3, 3, 3))
+        for a in range(3):
+            for b in range(3):
+                for c in range(3):
+                    for d in range(3):
+                        d4rho[a, b, c, d] = 2.0 * (
+                            t[_component_index((a, b, c, d)), 0]
+                            + t[_component_index((a, b, c)), i1[d]]
+                            + t[_component_index((a, b, d)), i1[c]]
+                            + t[_component_index((a, c, d)), i1[b]]
+                            + t[_component_index((b, c, d)), i1[a]]
+                            + t[i2[a][b], i2[c][d]]
+                            + t[i2[a][c], i2[b][d]]
+                            + t[i2[a][d], i2[b][c]]
+                        )
+        return rho, drho, d2rho, d3rho, d4rho
 
     # ------------------------------------------------------------------
     # electrostatics: what a potential request asks for

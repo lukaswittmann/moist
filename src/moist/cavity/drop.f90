@@ -860,7 +860,8 @@ contains
       if (allocated(self%lambda2_rArB)) deallocate (self%lambda2_rArB)
 
       !> Refresh LSF geometry caches
-      call self%lsf_model%update(self%mol, self%radii)
+      call self%lsf_model%update(self%mol, self%radii, error)
+      if (allocated(error)) return
 
       !* --------------------------------- Setup phase -------------------------------- *!
       d0 = self%ctx%timer%current_depth()

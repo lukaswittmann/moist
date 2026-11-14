@@ -1447,8 +1447,9 @@ contains
    !> @param[out] drho    Density spatial gradient
    !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL)
    !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL)
+   !> @param[out] d4rho   Density fourth spatial derivative (Fortran (3,3,3,3), or NULL)
    !> @returns            0 while healthy, `ctx%fail_status` once failing
-   function iso_switchable_callback(context, point, rho, drho, d2rho, d3rho) &
+   function iso_switchable_callback(context, point, rho, drho, d2rho, d3rho, d4rho) &
       result(status) bind(C)
       type(c_ptr), value :: context
       real(c_double), intent(in) :: point(3)
@@ -1456,14 +1457,15 @@ contains
       real(c_double), intent(out) :: drho(3)
       type(c_ptr), value :: d2rho
       type(c_ptr), value :: d3rho
+      type(c_ptr), value :: d4rho
       integer(c_int) :: status
 
       type(iso_cb_ctx), pointer :: ctx
-      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
-      real(c_double) :: d2rho_l(3, 3), d3rho_l(3, 3, 3)
-      real(c_double) :: d(3), g
-      integer :: iatom, i, j, k, ncalls
-      logical :: want_hess, want_third
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :), fptr(:, :, :, :)
+      real(c_double) :: d2rho_l(3, 3), d3rho_l(3, 3, 3), d4rho_l(3, 3, 3, 3)
+      real(c_double) :: d(3), g, a2
+      integer :: iatom, i, j, k, l, ncalls
+      logical :: want_hess, want_third, want_fourth
 
       if (.not. c_associated(context)) then
          status = -1_c_int
@@ -1484,11 +1486,14 @@ contains
       status = 0_c_int
       want_hess = c_associated(d2rho)
       want_third = c_associated(d3rho)
+      want_fourth = c_associated(d4rho)
 
       rho = 0.0_c_double
       drho = 0.0_c_double
       d2rho_l = 0.0_c_double
       d3rho_l = 0.0_c_double
+      d4rho_l = 0.0_c_double
+      a2 = cb_a*cb_a
 
       do iatom = 1, 3
          d = point - cb_centers(:, iatom)
@@ -1498,7 +1503,7 @@ contains
          if (want_hess) then
             do j = 1, 3
                do i = 1, 3
-                  d2rho_l(i, j) = d2rho_l(i, j) + (4.0_c_double*cb_a*cb_a*d(i)*d(j) &
+                  d2rho_l(i, j) = d2rho_l(i, j) + (4.0_c_double*a2*d(i)*d(j) &
                                                    - 2.0_c_double*cb_a*delta(i, j))*g
                end do
             end do
@@ -1509,9 +1514,30 @@ contains
                   do i = 1, 3
                      d3rho_l(i, j, k) = d3rho_l(i, j, k) &
                                         + (-8.0_c_double*cb_a**3*d(i)*d(j)*d(k) &
-                                           + 4.0_c_double*cb_a*cb_a*(d(i)*delta(j, k) &
-                                                                     + d(j)*delta(i, k) &
-                                                                     + d(k)*delta(i, j)))*g
+                                           + 4.0_c_double*a2*(d(i)*delta(j, k) &
+                                                              + d(j)*delta(i, k) &
+                                                              + d(k)*delta(i, j)))*g
+                  end do
+               end do
+            end do
+         end if
+         if (want_fourth) then
+            do l = 1, 3
+               do k = 1, 3
+                  do j = 1, 3
+                     do i = 1, 3
+                        d4rho_l(i, j, k, l) = d4rho_l(i, j, k, l) &
+                                              + (16.0_c_double*a2*a2*d(i)*d(j)*d(k)*d(l) &
+                                                 - 8.0_c_double*a2*cb_a*(delta(i, j)*d(k)*d(l) &
+                                                                         + delta(i, k)*d(j)*d(l) &
+                                                                         + delta(i, l)*d(j)*d(k) &
+                                                                         + delta(j, k)*d(i)*d(l) &
+                                                                         + delta(j, l)*d(i)*d(k) &
+                                                                         + delta(k, l)*d(i)*d(j)) &
+                                                 + 4.0_c_double*a2*(delta(i, j)*delta(k, l) &
+                                                                    + delta(i, k)*delta(j, l) &
+                                                                    + delta(i, l)*delta(j, k)))*g
+                     end do
                   end do
                end do
             end do
@@ -1526,6 +1552,10 @@ contains
       if (want_third) then
          call c_f_pointer(d3rho, tptr, [3, 3, 3])
          tptr = d3rho_l
+      end if
+      if (want_fourth) then
+         call c_f_pointer(d4rho, fptr, [3, 3, 3, 3])
+         fptr = d4rho_l
       end if
 
    end function iso_switchable_callback

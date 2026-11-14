@@ -57,6 +57,7 @@ tests = [
   'moz_potential_lj',
   'moz_potential_oplsaa',
   'moz_solvent',
+  'cavity_drop_gaussian_scatter',
   'cavity_drop_primitives',
   'cavity_drop_cfc',
   'cavity_drop_lsf',

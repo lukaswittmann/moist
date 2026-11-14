@@ -1528,11 +1528,13 @@ struct iso_callback_ctx {
 
 static int iso_gaussian_callback(void* context, const double* point,
                                  double* rho_out, double* drho_out,
-                                 double* d2rho_out, double* d3rho_out)
+                                 double* d2rho_out, double* d3rho_out,
+                                 double* d4rho_out)
 {
     struct iso_callback_ctx* ctx = (struct iso_callback_ctx*)context;
     const int want_hess = (d2rho_out != NULL);
     const int want_third = (d3rho_out != NULL);
+    const int want_fourth = (d4rho_out != NULL);
 
     atomic_fetch_add(&ctx->calls, 1);
     if (want_hess) atomic_fetch_add(&ctx->calls_with_hess, 1);
@@ -1542,8 +1544,10 @@ static int iso_gaussian_callback(void* context, const double* point,
     double drho[3] = {0.0, 0.0, 0.0};
     double d2rho[9];
     double d3rho[27];
+    double d4rho[81];
     if (want_hess) for (int i = 0; i < 9; i++) d2rho[i] = 0.0;
     if (want_third) for (int i = 0; i < 27; i++) d3rho[i] = 0.0;
+    if (want_fourth) for (int i = 0; i < 81; i++) d4rho[i] = 0.0;
 
     for (int A = 0; A < ctx->natoms; A++) {
         double d[3];
@@ -1580,6 +1584,29 @@ static int iso_gaussian_callback(void* context, const double* point,
                 }
             }
         }
+        if (want_fourth) {
+            const double a2 = ctx->a * ctx->a;
+            for (int i = 0; i < 3; i++) {
+                for (int j = 0; j < 3; j++) {
+                    for (int k = 0; k < 3; k++) {
+                        for (int l = 0; l < 3; l++) {
+                            const double dij = (i == j) ? 1.0 : 0.0;
+                            const double dik = (i == k) ? 1.0 : 0.0;
+                            const double dil = (i == l) ? 1.0 : 0.0;
+                            const double djk = (j == k) ? 1.0 : 0.0;
+                            const double djl = (j == l) ? 1.0 : 0.0;
+                            const double dkl = (k == l) ? 1.0 : 0.0;
+                            d4rho[27 * l + 9 * k + 3 * j + i] +=
+                                (16.0 * a2 * a2 * d[i] * d[j] * d[k] * d[l]
+                                 - 8.0 * a2 * ctx->a * (dij * d[k] * d[l] + dik * d[j] * d[l]
+                                                        + dil * d[j] * d[k] + djk * d[i] * d[l]
+                                                        + djl * d[i] * d[k] + dkl * d[i] * d[j])
+                                 + 4.0 * a2 * (dij * dkl + dik * djl + dil * djk)) * g;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /* Bare density; moist subtracts ctx->rho_iso (handed at construction) and
@@ -1588,6 +1615,7 @@ static int iso_gaussian_callback(void* context, const double* point,
     for (int i = 0; i < 3; i++) drho_out[i] = drho[i];
     if (want_hess) for (int i = 0; i < 9; i++) d2rho_out[i] = d2rho[i];
     if (want_third) for (int i = 0; i < 27; i++) d3rho_out[i] = d3rho[i];
+    if (want_fourth) for (int i = 0; i < 81; i++) d4rho_out[i] = d4rho[i];
 
     return 0;   /* success; any nonzero value would abort the cavity build */
 }
@@ -1943,7 +1971,8 @@ struct iso_fail_ctx {
 
 static int iso_failing_callback(void* context, const double* point,
                                 double* rho_out, double* drho_out,
-                                double* d2rho_out, double* d3rho_out)
+                                double* d2rho_out, double* d3rho_out,
+                                double* d4rho_out)
 {
     struct iso_fail_ctx* ctx = (struct iso_fail_ctx*)context;
 
@@ -1951,7 +1980,7 @@ static int iso_failing_callback(void* context, const double* point,
     if (n > ctx->fail_after) return ctx->status;
 
     return iso_gaussian_callback(&ctx->base, point, rho_out, drho_out,
-                                 d2rho_out, d3rho_out);
+                                 d2rho_out, d3rho_out, d4rho_out);
 }
 
 int test_isodensity_callback_failure(void)

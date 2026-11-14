@@ -27,6 +27,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
    !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_surface_weights_type, build_seed_state, seed_state_ok, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
@@ -102,7 +103,8 @@ contains
       !> Effective position adjoint seen by every seed
       real(wp) :: w_xyz_local(3)
       !> iSwig switching-gradient scratch
-      real(wp), allocatable :: f1_rA_pt(:, :), anchor_xi_zero(:, :)
+      real(wp), allocatable :: f1_rA_pt(:, :)
+      type(iswig_workspace_type) :: iswig_work
 
       !> Effective primitive surface adjoints
       type(drop_surface_weights_type) :: eff
@@ -139,7 +141,7 @@ contains
       !$omp& vjp_pt, phi0, phi1_r, phi2_rr, lambda_val, &
       !$omp& kkt_rhs, kkt_info, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
-      !$omp& w_xyz_local, f1_rA_pt, anchor_xi_zero, lsf_error)
+      !$omp& w_xyz_local, f1_rA_pt, iswig_work, lsf_error)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
 
@@ -147,7 +149,7 @@ contains
       allocate (vjp_pt(3, self%nsph), source=0.0_wp)
       allocate (active_idx(self%nsph))
       allocate (f1_rA_pt(3, self%nsph), source=0.0_wp)
-      allocate (anchor_xi_zero(3, self%nsph), source=0.0_wp)
+      call iswig_work%init(self%iswig)
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
@@ -243,8 +245,8 @@ contains
          ! the full (3, nsph) gradient, so this channel costs the same in both
          ! modes. anchor_xi has no nuclear dependence, matching forward.f90
          if (abs(eff%w_f(igrid)) > seed_weight_tol) then
-            f1_rA_pt = self%iswig%swi1_rA(anchor, owner_idx, self%anchor_xi0(igrid), &
-                                          anchor_xi_zero)
+            call self%iswig%swi1_rA(anchor, owner_idx, self%anchor_xi0(igrid), &
+                                    iswig_work, f1_rA_pt)
             grad_threads(:, :, thread_slot) = grad_threads(:, :, thread_slot) &
                                               + eff%w_f(igrid)*f1_rA_pt
          end if
@@ -252,7 +254,7 @@ contains
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, vjp_pt, active_idx, f1_rA_pt, anchor_xi_zero)
+      deallocate (lsf3_rrr, vjp_pt, active_idx, f1_rA_pt)
       !$omp end parallel
 
       if (abort%requested) then
