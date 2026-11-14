@@ -115,7 +115,7 @@ contains
       type(error_type), allocatable, intent(out), optional :: error
 
       self%name = "GOSTSHYP"
-      self%description = "Gaussians On Surface Tesserae To Simulate HYdrostatic Pressure"
+      self%description = "Gaussians On Surface Tesserae Simulate HYdrostatic Pressure"
       self%pressure = pressure
       if (present(param)) self%param = param
       if (present(ctx)) self%ctx => ctx
