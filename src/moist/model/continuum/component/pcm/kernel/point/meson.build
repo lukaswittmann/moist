@@ -8,3 +8,11 @@ srcs += files(
   'slic.f90',
   'ssvpe.f90',
 )
+subdir('conductor')
+subdir('dpcm')
+subdir('dpcm_original')
+subdir('iefpcm')
+subdir('lpb')
+subdir('nonlocal')
+subdir('slic')
+subdir('ssvpe')
