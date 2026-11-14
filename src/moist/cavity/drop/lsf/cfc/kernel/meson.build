@@ -1,12 +1,13 @@
 srcs += files(
-  'hess.f90',
-  'hvp.f90',
   'lift.f90',
-  'nucr.f90',
-  'rad.f90',
-  'rhvp.f90',
-  'spat.f90',
-  'tang.f90',
-  'term.f90',
   'vjp.f90',
 )
+subdir('hessian')
+subdir('hvp')
+subdir('nuclear')
+subdir('nucrad')
+subdir('radius')
+subdir('radius2')
+subdir('spatial')
+subdir('tangent')
+subdir('term')

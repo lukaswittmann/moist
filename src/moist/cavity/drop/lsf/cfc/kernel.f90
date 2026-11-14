@@ -387,6 +387,54 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: pd4_rrrr(3, 3, 3, 3)
    end subroutine cfc_atomic_term_eval
 
+   !> Faded term of `cfc_atomic_term_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Maximum derivative order to accumulate (0..4); a larger value is
+   !>                          treated as 4
+   !> @param[inout] pd0        Pseudo-density value accumulator
+   !> @param[inout] pd1_r      d^1 K / d(d_a)^1 accumulator (fully symmetric)
+   !> @param[inout] pd2_rr     d^2 K / d(d_a)^2 accumulator (fully symmetric)
+   !> @param[inout] pd3_rrr    d^3 K / d(d_a)^3 accumulator (fully symmetric)
+   !> @param[inout] pd4_rrrr   d^4 K / d(d_a)^4 accumulator (fully symmetric)
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_term_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                              pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Maximum derivative order to accumulate (0..4); a larger value is treated as 4
+      integer, intent(in) :: max_deriv
+      !> Pseudo-density value accumulator
+      real(wp), intent(inout) :: pd0
+      !> d^1 K / d(d_a)^1 accumulator (fully symmetric)
+      real(wp), intent(inout) :: pd1_r(3)
+      !> d^2 K / d(d_a)^2 accumulator (fully symmetric)
+      real(wp), intent(inout) :: pd2_rr(3, 3)
+      !> d^3 K / d(d_a)^3 accumulator (fully symmetric)
+      real(wp), intent(inout) :: pd3_rrr(3, 3, 3)
+      !> d^4 K / d(d_a)^4 accumulator (fully symmetric)
+      real(wp), intent(inout) :: pd4_rrrr(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_term_eval_faded
+
    !> Accumulate one pair's contribution to PD, split by displacement vector.
    !>
    !> Computes ``c (1 - vec(s_a).vec(s_b))**m exp(a2 (s_a + s_b - 2))`` with
@@ -510,6 +558,110 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: pd4_bbbb(3, 3, 3, 3)
    end subroutine cfc_pair_term_eval
 
+   !> Faded term of `cfc_pair_term_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Maximum derivative order to accumulate (0..4); a larger value is
+   !>                          treated as 4
+   !> @param[inout] pd0        Pseudo-density value accumulator
+   !> @param[inout] pd1_a      d^1 K / d(d_a)^1 d(d_b)^0 accumulator (no index symmetry)
+   !> @param[inout] pd1_b      d^1 K / d(d_a)^0 d(d_b)^1 accumulator (no index symmetry)
+   !> @param[inout] pd2_aa     d^2 K / d(d_a)^2 d(d_b)^0 accumulator (symmetric in the first 2
+   !>                          indices)
+   !> @param[inout] pd2_ab     d^2 K / d(d_a)^1 d(d_b)^1 accumulator (no index symmetry)
+   !> @param[inout] pd2_bb     d^2 K / d(d_a)^0 d(d_b)^2 accumulator (symmetric in the last 2
+   !>                          indices)
+   !> @param[inout] pd3_aaa    d^3 K / d(d_a)^3 d(d_b)^0 accumulator (symmetric in the first 3
+   !>                          indices)
+   !> @param[inout] pd3_aab    d^3 K / d(d_a)^2 d(d_b)^1 accumulator (symmetric in the first 2
+   !>                          indices)
+   !> @param[inout] pd3_abb    d^3 K / d(d_a)^1 d(d_b)^2 accumulator (symmetric in the last 2
+   !>                          indices)
+   !> @param[inout] pd3_bbb    d^3 K / d(d_a)^0 d(d_b)^3 accumulator (symmetric in the last 3
+   !>                          indices)
+   !> @param[inout] pd4_aaaa   d^4 K / d(d_a)^4 d(d_b)^0 accumulator (symmetric in the first 4
+   !>                          indices)
+   !> @param[inout] pd4_aaab   d^4 K / d(d_a)^3 d(d_b)^1 accumulator (symmetric in the first 3
+   !>                          indices)
+   !> @param[inout] pd4_aabb   d^4 K / d(d_a)^2 d(d_b)^2 accumulator (symmetric within each index
+   !>                          group)
+   !> @param[inout] pd4_abbb   d^4 K / d(d_a)^1 d(d_b)^3 accumulator (symmetric in the last 3
+   !>                          indices)
+   !> @param[inout] pd4_bbbb   d^4 K / d(d_a)^0 d(d_b)^4 accumulator (symmetric in the last 4
+   !>                          indices)
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_term_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                            fade_width, max_deriv, pd0, pd1_a, pd1_b, pd2_aa, &
+                                            pd2_ab, pd2_bb, pd3_aaa, pd3_aab, pd3_abb, pd3_bbb, &
+                                            pd4_aaaa, pd4_aaab, pd4_aabb, pd4_abbb, pd4_bbbb, &
+                                            sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Maximum derivative order to accumulate (0..4); a larger value is treated as 4
+      integer, intent(in) :: max_deriv
+      !> Pseudo-density value accumulator
+      real(wp), intent(inout) :: pd0
+      !> d^1 K / d(d_a)^1 d(d_b)^0 accumulator (no index symmetry)
+      real(wp), intent(inout) :: pd1_a(3)
+      !> d^1 K / d(d_a)^0 d(d_b)^1 accumulator (no index symmetry)
+      real(wp), intent(inout) :: pd1_b(3)
+      !> d^2 K / d(d_a)^2 d(d_b)^0 accumulator (symmetric in the first 2 indices)
+      real(wp), intent(inout) :: pd2_aa(3, 3)
+      !> d^2 K / d(d_a)^1 d(d_b)^1 accumulator (no index symmetry)
+      real(wp), intent(inout) :: pd2_ab(3, 3)
+      !> d^2 K / d(d_a)^0 d(d_b)^2 accumulator (symmetric in the last 2 indices)
+      real(wp), intent(inout) :: pd2_bb(3, 3)
+      !> d^3 K / d(d_a)^3 d(d_b)^0 accumulator (symmetric in the first 3 indices)
+      real(wp), intent(inout) :: pd3_aaa(3, 3, 3)
+      !> d^3 K / d(d_a)^2 d(d_b)^1 accumulator (symmetric in the first 2 indices)
+      real(wp), intent(inout) :: pd3_aab(3, 3, 3)
+      !> d^3 K / d(d_a)^1 d(d_b)^2 accumulator (symmetric in the last 2 indices)
+      real(wp), intent(inout) :: pd3_abb(3, 3, 3)
+      !> d^3 K / d(d_a)^0 d(d_b)^3 accumulator (symmetric in the last 3 indices)
+      real(wp), intent(inout) :: pd3_bbb(3, 3, 3)
+      !> d^4 K / d(d_a)^4 d(d_b)^0 accumulator (symmetric in the first 4 indices)
+      real(wp), intent(inout) :: pd4_aaaa(3, 3, 3, 3)
+      !> d^4 K / d(d_a)^3 d(d_b)^1 accumulator (symmetric in the first 3 indices)
+      real(wp), intent(inout) :: pd4_aaab(3, 3, 3, 3)
+      !> d^4 K / d(d_a)^2 d(d_b)^2 accumulator (symmetric within each index group)
+      real(wp), intent(inout) :: pd4_aabb(3, 3, 3, 3)
+      !> d^4 K / d(d_a)^1 d(d_b)^3 accumulator (symmetric in the last 3 indices)
+      real(wp), intent(inout) :: pd4_abbb(3, 3, 3, 3)
+      !> d^4 K / d(d_a)^0 d(d_b)^4 accumulator (symmetric in the last 4 indices)
+      real(wp), intent(inout) :: pd4_bbbb(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_term_eval_faded
+
    !> Accumulate the nuclear directional derivative of the spatial derivatives.
    !>
    !> Given one displacement direction per atom, this returns
@@ -572,6 +724,54 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> sum_A v_A . d/dr_A of the order-3 spatial derivative
       real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
    end subroutine cfc_atomic_tangent_eval
+
+   !> Faded term of `cfc_atomic_tangent_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A v_A . d/dr_A of the order-0 spatial derivative
+   !> @param[inout] tg1_r      sum_A v_A . d/dr_A of the order-1 spatial derivative
+   !> @param[inout] tg2_rr     sum_A v_A . d/dr_A of the order-2 spatial derivative
+   !> @param[inout] tg3_rrr    sum_A v_A . d/dr_A of the order-3 spatial derivative
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_tangent_eval_faded(d_a, R_a, a1, fade_start, fade_width, v_a, &
+                                                 max_deriv, tg0, tg1_r, tg2_rr, tg3_rrr, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A v_A . d/dr_A of the order-0 spatial derivative
+      real(wp), intent(inout) :: tg0
+      !> sum_A v_A . d/dr_A of the order-1 spatial derivative
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A v_A . d/dr_A of the order-2 spatial derivative
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A v_A . d/dr_A of the order-3 spatial derivative
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_tangent_eval_faded
 
    !> Accumulate the nuclear directional derivative of the spatial derivatives.
    !>
@@ -647,6 +847,70 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> sum_A v_A . d/dr_A of the order-3 spatial derivative
       real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
    end subroutine cfc_pair_tangent_eval
+
+   !> Faded term of `cfc_pair_tangent_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    v_b        Nuclear displacement direction of atom b
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A v_A . d/dr_A of the order-0 spatial derivative
+   !> @param[inout] tg1_r      sum_A v_A . d/dr_A of the order-1 spatial derivative
+   !> @param[inout] tg2_rr     sum_A v_A . d/dr_A of the order-2 spatial derivative
+   !> @param[inout] tg3_rrr    sum_A v_A . d/dr_A of the order-3 spatial derivative
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_tangent_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                               fade_width, v_a, v_b, max_deriv, tg0, tg1_r, &
+                                               tg2_rr, tg3_rrr, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Nuclear displacement direction of atom b
+      real(wp), intent(in) :: v_b(3)
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A v_A . d/dr_A of the order-0 spatial derivative
+      real(wp), intent(inout) :: tg0
+      !> sum_A v_A . d/dr_A of the order-1 spatial derivative
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A v_A . d/dr_A of the order-2 spatial derivative
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A v_A . d/dr_A of the order-3 spatial derivative
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_tangent_eval_faded
 
    !> Accumulate a nuclear Hessian-vector product, plus the tangent ladder.
    !>
@@ -743,6 +1007,78 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> retained nuclear component of atom a
       real(wp), intent(inout) :: hvp2_rr_a(3, 3, 3)
    end subroutine cfc_atomic_hvp_eval
+
+   !> Faded term of `cfc_atomic_hvp_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A v_A . d/dr_A of the order-0 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg1_r      sum_A v_A . d/dr_A of the order-1 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg2_rr     sum_A v_A . d/dr_A of the order-2 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg3_rrr    sum_A v_A . d/dr_A of the order-3 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] hvp0_a     sum_B v_B . d2/(dr_a dr_B) of the order-0 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[inout] hvp1_r_a   sum_B v_B . d2/(dr_a dr_B) of the order-1 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[inout] hvp2_rr_a  sum_B v_B . d2/(dr_a dr_B) of the order-2 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_hvp_eval_faded(d_a, R_a, a1, fade_start, fade_width, v_a, &
+                                             max_deriv, tg0, tg1_r, tg2_rr, tg3_rrr, hvp0_a, &
+                                             hvp1_r_a, hvp2_rr_a, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A v_A . d/dr_A of the order-0 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg0
+      !> sum_A v_A . d/dr_A of the order-1 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A v_A . d/dr_A of the order-2 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A v_A . d/dr_A of the order-3 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-0 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp0_a(3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-1 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp1_r_a(3, 3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-2 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp2_rr_a(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_hvp_eval_faded
 
    !> Accumulate a nuclear Hessian-vector product, plus the tangent ladder.
    !>
@@ -868,6 +1204,109 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: hvp2_rr_b(3, 3, 3)
    end subroutine cfc_pair_hvp_eval
 
+   !> Faded term of `cfc_pair_hvp_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    v_b        Nuclear displacement direction of atom b
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A v_A . d/dr_A of the order-0 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg1_r      sum_A v_A . d/dr_A of the order-1 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg2_rr     sum_A v_A . d/dr_A of the order-2 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] tg3_rrr    sum_A v_A . d/dr_A of the order-3 spatial derivative (free by-product
+   !>                          of the HVP; see the note above)
+   !> @param[inout] hvp0_a     sum_B v_B . d2/(dr_a dr_B) of the order-0 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[inout] hvp0_b     sum_B v_B . d2/(dr_b dr_B) of the order-0 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom b
+   !> @param[inout] hvp1_r_a   sum_B v_B . d2/(dr_a dr_B) of the order-1 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[inout] hvp1_r_b   sum_B v_B . d2/(dr_b dr_B) of the order-1 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom b
+   !> @param[inout] hvp2_rr_a  sum_B v_B . d2/(dr_a dr_B) of the order-2 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom a
+   !> @param[inout] hvp2_rr_b  sum_B v_B . d2/(dr_b dr_B) of the order-2 spatial derivative;
+   !>                          trailing index is the retained nuclear component of atom b
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_hvp_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, fade_width, &
+                                           v_a, v_b, max_deriv, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                           hvp0_a, hvp0_b, hvp1_r_a, hvp1_r_b, hvp2_rr_a, &
+                                           hvp2_rr_b, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Nuclear displacement direction of atom b
+      real(wp), intent(in) :: v_b(3)
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A v_A . d/dr_A of the order-0 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg0
+      !> sum_A v_A . d/dr_A of the order-1 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A v_A . d/dr_A of the order-2 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A v_A . d/dr_A of the order-3 spatial derivative (free by-product of the HVP; see the
+      !> note above)
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-0 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp0_a(3)
+      !> sum_B v_B . d2/(dr_b dr_B) of the order-0 spatial derivative; trailing index is the
+      !> retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp0_b(3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-1 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp1_r_a(3, 3)
+      !> sum_B v_B . d2/(dr_b dr_B) of the order-1 spatial derivative; trailing index is the
+      !> retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp1_r_b(3, 3)
+      !> sum_B v_B . d2/(dr_a dr_B) of the order-2 spatial derivative; trailing index is the
+      !> retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp2_rr_a(3, 3, 3)
+      !> sum_B v_B . d2/(dr_b dr_B) of the order-2 spatial derivative; trailing index is the
+      !> retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp2_rr_b(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_hvp_eval_faded
+
    !> Accumulate one pair's contribution to PD and its spatial derivatives.
    !>
    !> The assembled form of `cfc_pair_term_eval`: the sum over the 2**k
@@ -940,6 +1379,67 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: pd4_rrrr(3, 3, 3, 3)
    end subroutine cfc_pair_spatial_eval
 
+   !> Faded term of `cfc_pair_spatial_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Maximum derivative order to accumulate (0..4); a larger value is
+   !>                          treated as 4
+   !> @param[inout] pd0        Accumulated order-0 spatial derivative of PD
+   !> @param[inout] pd1_r      Accumulated order-1 spatial derivative of PD
+   !> @param[inout] pd2_rr     Accumulated order-2 spatial derivative of PD
+   !> @param[inout] pd3_rrr    Accumulated order-3 spatial derivative of PD
+   !> @param[inout] pd4_rrrr   Accumulated order-4 spatial derivative of PD
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_spatial_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                               fade_width, max_deriv, pd0, pd1_r, pd2_rr, &
+                                               pd3_rrr, pd4_rrrr, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Maximum derivative order to accumulate (0..4); a larger value is treated as 4
+      integer, intent(in) :: max_deriv
+      !> Accumulated order-0 spatial derivative of PD
+      real(wp), intent(inout) :: pd0
+      !> Accumulated order-1 spatial derivative of PD
+      real(wp), intent(inout) :: pd1_r(3)
+      !> Accumulated order-2 spatial derivative of PD
+      real(wp), intent(inout) :: pd2_rr(3, 3)
+      !> Accumulated order-3 spatial derivative of PD
+      real(wp), intent(inout) :: pd3_rrr(3, 3, 3)
+      !> Accumulated order-4 spatial derivative of PD
+      real(wp), intent(inout) :: pd4_rrrr(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_spatial_eval_faded
+
    !> Accumulate the uncontracted nuclear derivative of the spatial derivatives.
    !>
    !> Given no direction vector, this returns, for each center A of this atom,
@@ -1005,6 +1505,55 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> d/dr_a of the order-3 spatial derivative; trailing index is the nuclear component of atom a
       real(wp), intent(inout) :: qn3_rrr_a(3, 3, 3, 3)
    end subroutine cfc_atomic_nuclear_eval
+
+   !> Faded term of `cfc_atomic_nuclear_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] qn0_a      d/dr_a of the order-0 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn1_r_a    d/dr_a of the order-1 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn2_rr_a   d/dr_a of the order-2 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn3_rrr_a  d/dr_a of the order-3 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_nuclear_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                                 qn0_a, qn1_r_a, qn2_rr_a, qn3_rrr_a, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> d/dr_a of the order-0 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn0_a(3)
+      !> d/dr_a of the order-1 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn1_r_a(3, 3)
+      !> d/dr_a of the order-2 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn2_rr_a(3, 3, 3)
+      !> d/dr_a of the order-3 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn3_rrr_a(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_nuclear_eval_faded
 
    !> Accumulate the uncontracted nuclear derivative of the spatial derivatives.
    !>
@@ -1098,6 +1647,85 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: qn3_rrr_b(3, 3, 3, 3)
    end subroutine cfc_pair_nuclear_eval
 
+   !> Faded term of `cfc_pair_nuclear_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] qn0_a      d/dr_a of the order-0 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn0_b      d/dr_b of the order-0 spatial derivative; trailing index is the
+   !>                          nuclear component of atom b
+   !> @param[inout] qn1_r_a    d/dr_a of the order-1 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn1_r_b    d/dr_b of the order-1 spatial derivative; trailing index is the
+   !>                          nuclear component of atom b
+   !> @param[inout] qn2_rr_a   d/dr_a of the order-2 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn2_rr_b   d/dr_b of the order-2 spatial derivative; trailing index is the
+   !>                          nuclear component of atom b
+   !> @param[inout] qn3_rrr_a  d/dr_a of the order-3 spatial derivative; trailing index is the
+   !>                          nuclear component of atom a
+   !> @param[inout] qn3_rrr_b  d/dr_b of the order-3 spatial derivative; trailing index is the
+   !>                          nuclear component of atom b
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_nuclear_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                               fade_width, max_deriv, qn0_a, qn0_b, qn1_r_a, &
+                                               qn1_r_b, qn2_rr_a, qn2_rr_b, qn3_rrr_a, qn3_rrr_b, &
+                                               sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> d/dr_a of the order-0 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn0_a(3)
+      !> d/dr_b of the order-0 spatial derivative; trailing index is the nuclear component of atom b
+      real(wp), intent(inout) :: qn0_b(3)
+      !> d/dr_a of the order-1 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn1_r_a(3, 3)
+      !> d/dr_b of the order-1 spatial derivative; trailing index is the nuclear component of atom b
+      real(wp), intent(inout) :: qn1_r_b(3, 3)
+      !> d/dr_a of the order-2 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn2_rr_a(3, 3, 3)
+      !> d/dr_b of the order-2 spatial derivative; trailing index is the nuclear component of atom b
+      real(wp), intent(inout) :: qn2_rr_b(3, 3, 3)
+      !> d/dr_a of the order-3 spatial derivative; trailing index is the nuclear component of atom a
+      real(wp), intent(inout) :: qn3_rrr_a(3, 3, 3, 3)
+      !> d/dr_b of the order-3 spatial derivative; trailing index is the nuclear component of atom b
+      real(wp), intent(inout) :: qn3_rrr_b(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_nuclear_eval_faded
+
    !> Accumulate the uncontracted two-nucleus derivative of the spatial ones.
    !>
    !> Given no direction vector, this returns, for each ordered pair of centers
@@ -1167,6 +1795,54 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> components of atoms a and a
       real(wp), intent(inout) :: qq2_rr_aa(3, 3, 3, 3)
    end subroutine cfc_atomic_hessian_eval
+
+   !> Faded term of `cfc_atomic_hessian_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] qq0_aa     d2/(dr_a dr_a) of the order-0 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[inout] qq1_r_aa   d2/(dr_a dr_a) of the order-1 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[inout] qq2_rr_aa  d2/(dr_a dr_a) of the order-2 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_hessian_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                                 qq0_aa, qq1_r_aa, qq2_rr_aa, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dr_a dr_a) of the order-0 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq0_aa(3, 3)
+      !> d2/(dr_a dr_a) of the order-1 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq1_r_aa(3, 3, 3)
+      !> d2/(dr_a dr_a) of the order-2 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq2_rr_aa(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_hessian_eval_faded
 
    !> Accumulate the uncontracted two-nucleus derivative of the spatial ones.
    !>
@@ -1278,6 +1954,98 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: qq2_rr_bb(3, 3, 3, 3)
    end subroutine cfc_pair_hessian_eval
 
+   !> Faded term of `cfc_pair_hessian_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] qq0_aa     d2/(dr_a dr_a) of the order-0 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[inout] qq0_ab     d2/(dr_a dr_b) of the order-0 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and b
+   !> @param[inout] qq0_bb     d2/(dr_b dr_b) of the order-0 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms b and b
+   !> @param[inout] qq1_r_aa   d2/(dr_a dr_a) of the order-1 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[inout] qq1_r_ab   d2/(dr_a dr_b) of the order-1 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and b
+   !> @param[inout] qq1_r_bb   d2/(dr_b dr_b) of the order-1 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms b and b
+   !> @param[inout] qq2_rr_aa  d2/(dr_a dr_a) of the order-2 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and a
+   !> @param[inout] qq2_rr_ab  d2/(dr_a dr_b) of the order-2 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms a and b
+   !> @param[inout] qq2_rr_bb  d2/(dr_b dr_b) of the order-2 spatial derivative; the two trailing
+   !>                          indices are the nuclear components of atoms b and b
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_hessian_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                               fade_width, max_deriv, qq0_aa, qq0_ab, qq0_bb, &
+                                               qq1_r_aa, qq1_r_ab, qq1_r_bb, qq2_rr_aa, &
+                                               qq2_rr_ab, qq2_rr_bb, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dr_a dr_a) of the order-0 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq0_aa(3, 3)
+      !> d2/(dr_a dr_b) of the order-0 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and b
+      real(wp), intent(inout) :: qq0_ab(3, 3)
+      !> d2/(dr_b dr_b) of the order-0 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms b and b
+      real(wp), intent(inout) :: qq0_bb(3, 3)
+      !> d2/(dr_a dr_a) of the order-1 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq1_r_aa(3, 3, 3)
+      !> d2/(dr_a dr_b) of the order-1 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and b
+      real(wp), intent(inout) :: qq1_r_ab(3, 3, 3)
+      !> d2/(dr_b dr_b) of the order-1 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms b and b
+      real(wp), intent(inout) :: qq1_r_bb(3, 3, 3)
+      !> d2/(dr_a dr_a) of the order-2 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and a
+      real(wp), intent(inout) :: qq2_rr_aa(3, 3, 3, 3)
+      !> d2/(dr_a dr_b) of the order-2 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms a and b
+      real(wp), intent(inout) :: qq2_rr_ab(3, 3, 3, 3)
+      !> d2/(dr_b dr_b) of the order-2 spatial derivative; the two trailing indices are the nuclear
+      !> components of atoms b and b
+      real(wp), intent(inout) :: qq2_rr_bb(3, 3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_hessian_eval_faded
+
    !> Accumulate the radius derivative of the spatial derivatives.
    !>
    !> Given no direction vector, this returns, for each center A of this atom,
@@ -1351,6 +2119,59 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> nuclear index
       real(wp), intent(inout) :: rd3_rrr_a(3, 3, 3)
    end subroutine cfc_atomic_radius_eval
+
+   !> Faded term of `cfc_atomic_radius_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] rd0_a      d/dR_a of the order-0 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd1_r_a    d/dR_a of the order-1 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd2_rr_a   d/dR_a of the order-2 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd3_rrr_a  d/dR_a of the order-3 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_radius_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                                rd0_a, rd1_r_a, rd2_rr_a, rd3_rrr_a, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> d/dR_a of the order-0 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd0_a
+      !> d/dR_a of the order-1 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd1_r_a(3)
+      !> d/dR_a of the order-2 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd2_rr_a(3, 3)
+      !> d/dR_a of the order-3 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd3_rrr_a(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_radius_eval_faded
 
    !> Accumulate the radius derivative of the spatial derivatives.
    !>
@@ -1456,6 +2277,93 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: rd3_rrr_b(3, 3, 3)
    end subroutine cfc_pair_radius_eval
 
+   !> Faded term of `cfc_pair_radius_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] rd0_a      d/dR_a of the order-0 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd0_b      d/dR_b of the order-0 spatial derivative; R_b is atom b's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd1_r_a    d/dR_a of the order-1 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd1_r_b    d/dR_b of the order-1 spatial derivative; R_b is atom b's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd2_rr_a   d/dR_a of the order-2 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd2_rr_b   d/dR_b of the order-2 spatial derivative; R_b is atom b's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd3_rrr_a  d/dR_a of the order-3 spatial derivative; R_a is atom a's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[inout] rd3_rrr_b  d/dR_b of the order-3 spatial derivative; R_b is atom b's radius, so
+   !>                          there is no trailing nuclear index
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_radius_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                              fade_width, max_deriv, rd0_a, rd0_b, rd1_r_a, &
+                                              rd1_r_b, rd2_rr_a, rd2_rr_b, rd3_rrr_a, rd3_rrr_b, &
+                                              sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> d/dR_a of the order-0 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd0_a
+      !> d/dR_b of the order-0 spatial derivative; R_b is atom b's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd0_b
+      !> d/dR_a of the order-1 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd1_r_a(3)
+      !> d/dR_b of the order-1 spatial derivative; R_b is atom b's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd1_r_b(3)
+      !> d/dR_a of the order-2 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd2_rr_a(3, 3)
+      !> d/dR_b of the order-2 spatial derivative; R_b is atom b's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd2_rr_b(3, 3)
+      !> d/dR_a of the order-3 spatial derivative; R_a is atom a's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd3_rrr_a(3, 3, 3)
+      !> d/dR_b of the order-3 spatial derivative; R_b is atom b's radius, so there is no trailing
+      !> nuclear index
+      real(wp), intent(inout) :: rd3_rrr_b(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_radius_eval_faded
+
    !> Accumulate the uncontracted two-*radius* derivative of the spatial ones.
    !>
    !> The radius twin of `*_hessian_eval`.  For each pair of centers (A, B) this
@@ -1521,6 +2429,54 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> no trailing index, radii are scalars
       real(wp), intent(inout) :: rr2_rr_aa(3, 3)
    end subroutine cfc_atomic_radius2_eval
+
+   !> Faded term of `cfc_atomic_radius2_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] rr0_aa     d2/(dR_a dR_a) of the order-0 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr1_r_aa   d2/(dR_a dR_a) of the order-1 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr2_rr_aa  d2/(dR_a dR_a) of the order-2 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_radius2_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                                 rr0_aa, rr1_r_aa, rr2_rr_aa, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dR_a dR_a) of the order-0 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr0_aa
+      !> d2/(dR_a dR_a) of the order-1 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr1_r_aa(3)
+      !> d2/(dR_a dR_a) of the order-2 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr2_rr_aa(3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_radius2_eval_faded
 
    !> Accumulate the uncontracted two-*radius* derivative of the spatial ones.
    !>
@@ -1628,6 +2584,98 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: rr2_rr_bb(3, 3)
    end subroutine cfc_pair_radius2_eval
 
+   !> Faded term of `cfc_pair_radius2_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] rr0_aa     d2/(dR_a dR_a) of the order-0 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr0_ab     d2/(dR_a dR_b) of the order-0 spatial derivative, where R_a and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr0_bb     d2/(dR_b dR_b) of the order-0 spatial derivative, where R_b and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr1_r_aa   d2/(dR_a dR_a) of the order-1 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr1_r_ab   d2/(dR_a dR_b) of the order-1 spatial derivative, where R_a and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr1_r_bb   d2/(dR_b dR_b) of the order-1 spatial derivative, where R_b and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr2_rr_aa  d2/(dR_a dR_a) of the order-2 spatial derivative, where R_a and R_a
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr2_rr_ab  d2/(dR_a dR_b) of the order-2 spatial derivative, where R_a and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[inout] rr2_rr_bb  d2/(dR_b dR_b) of the order-2 spatial derivative, where R_b and R_b
+   !>                          are the atoms' radii; no trailing index, radii are scalars
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_radius2_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                               fade_width, max_deriv, rr0_aa, rr0_ab, rr0_bb, &
+                                               rr1_r_aa, rr1_r_ab, rr1_r_bb, rr2_rr_aa, &
+                                               rr2_rr_ab, rr2_rr_bb, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dR_a dR_a) of the order-0 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr0_aa
+      !> d2/(dR_a dR_b) of the order-0 spatial derivative, where R_a and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr0_ab
+      !> d2/(dR_b dR_b) of the order-0 spatial derivative, where R_b and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr0_bb
+      !> d2/(dR_a dR_a) of the order-1 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr1_r_aa(3)
+      !> d2/(dR_a dR_b) of the order-1 spatial derivative, where R_a and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr1_r_ab(3)
+      !> d2/(dR_b dR_b) of the order-1 spatial derivative, where R_b and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr1_r_bb(3)
+      !> d2/(dR_a dR_a) of the order-2 spatial derivative, where R_a and R_a are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr2_rr_aa(3, 3)
+      !> d2/(dR_a dR_b) of the order-2 spatial derivative, where R_a and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr2_rr_ab(3, 3)
+      !> d2/(dR_b dR_b) of the order-2 spatial derivative, where R_b and R_b are the atoms' radii;
+      !> no trailing index, radii are scalars
+      real(wp), intent(inout) :: rr2_rr_bb(3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_radius2_eval_faded
+
    !> Accumulate the uncontracted mixed nuclear-radius derivative.
    !>
    !> For each ordered pair of centers (A, B) this atom can supply,
@@ -1691,6 +2739,54 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> trailing index is a's nuclear component
       real(wp), intent(inout) :: mx2_rr_aa(3, 3, 3)
    end subroutine cfc_atomic_nucrad_eval
+
+   !> Faded term of `cfc_atomic_nucrad_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] mx0_aa     d2/(dr_a dR_a) of the order-0 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[inout] mx1_r_aa   d2/(dr_a dR_a) of the order-1 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[inout] mx2_rr_aa  d2/(dr_a dR_a) of the order-2 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_nucrad_eval_faded(d_a, R_a, a1, fade_start, fade_width, max_deriv, &
+                                                mx0_aa, mx1_r_aa, mx2_rr_aa, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dr_a dR_a) of the order-0 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx0_aa(3)
+      !> d2/(dr_a dR_a) of the order-1 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx1_r_aa(3, 3)
+      !> d2/(dr_a dR_a) of the order-2 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx2_rr_aa(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_nucrad_eval_faded
 
    !> Accumulate the uncontracted mixed nuclear-radius derivative.
    !>
@@ -1812,6 +2908,114 @@ module moist_cavity_drop_lsf_cfc_kernel
       real(wp), intent(inout) :: mx2_rr_bb(3, 3, 3)
    end subroutine cfc_pair_nucrad_eval
 
+   !> Faded term of `cfc_pair_nucrad_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..2); a larger value
+   !>                          is treated as 2
+   !> @param[inout] mx0_aa     d2/(dr_a dR_a) of the order-0 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[inout] mx0_ab     d2/(dr_a dR_b) of the order-0 spatial derivative, position on atom a
+   !>                          and radius on atom b; trailing index is a's nuclear component
+   !> @param[inout] mx0_ba     d2/(dr_b dR_a) of the order-0 spatial derivative, position on atom b
+   !>                          and radius on atom a; trailing index is b's nuclear component
+   !> @param[inout] mx0_bb     d2/(dr_b dR_b) of the order-0 spatial derivative, position on atom b
+   !>                          and radius on atom b; trailing index is b's nuclear component
+   !> @param[inout] mx1_r_aa   d2/(dr_a dR_a) of the order-1 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[inout] mx1_r_ab   d2/(dr_a dR_b) of the order-1 spatial derivative, position on atom a
+   !>                          and radius on atom b; trailing index is a's nuclear component
+   !> @param[inout] mx1_r_ba   d2/(dr_b dR_a) of the order-1 spatial derivative, position on atom b
+   !>                          and radius on atom a; trailing index is b's nuclear component
+   !> @param[inout] mx1_r_bb   d2/(dr_b dR_b) of the order-1 spatial derivative, position on atom b
+   !>                          and radius on atom b; trailing index is b's nuclear component
+   !> @param[inout] mx2_rr_aa  d2/(dr_a dR_a) of the order-2 spatial derivative, position on atom a
+   !>                          and radius on atom a; trailing index is a's nuclear component
+   !> @param[inout] mx2_rr_ab  d2/(dr_a dR_b) of the order-2 spatial derivative, position on atom a
+   !>                          and radius on atom b; trailing index is a's nuclear component
+   !> @param[inout] mx2_rr_ba  d2/(dr_b dR_a) of the order-2 spatial derivative, position on atom b
+   !>                          and radius on atom a; trailing index is b's nuclear component
+   !> @param[inout] mx2_rr_bb  d2/(dr_b dR_b) of the order-2 spatial derivative, position on atom b
+   !>                          and radius on atom b; trailing index is b's nuclear component
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_nucrad_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                              fade_width, max_deriv, mx0_aa, mx0_ab, mx0_ba, &
+                                              mx0_bb, mx1_r_aa, mx1_r_ab, mx1_r_ba, mx1_r_bb, &
+                                              mx2_rr_aa, mx2_rr_ab, mx2_rr_ba, mx2_rr_bb, sg_a, &
+                                              sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Highest spatial-derivative order to accumulate (0..2); a larger value is treated as 2
+      integer, intent(in) :: max_deriv
+      !> d2/(dr_a dR_a) of the order-0 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx0_aa(3)
+      !> d2/(dr_a dR_b) of the order-0 spatial derivative, position on atom a and radius on atom b;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx0_ab(3)
+      !> d2/(dr_b dR_a) of the order-0 spatial derivative, position on atom b and radius on atom a;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx0_ba(3)
+      !> d2/(dr_b dR_b) of the order-0 spatial derivative, position on atom b and radius on atom b;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx0_bb(3)
+      !> d2/(dr_a dR_a) of the order-1 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx1_r_aa(3, 3)
+      !> d2/(dr_a dR_b) of the order-1 spatial derivative, position on atom a and radius on atom b;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx1_r_ab(3, 3)
+      !> d2/(dr_b dR_a) of the order-1 spatial derivative, position on atom b and radius on atom a;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx1_r_ba(3, 3)
+      !> d2/(dr_b dR_b) of the order-1 spatial derivative, position on atom b and radius on atom b;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx1_r_bb(3, 3)
+      !> d2/(dr_a dR_a) of the order-2 spatial derivative, position on atom a and radius on atom a;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx2_rr_aa(3, 3, 3)
+      !> d2/(dr_a dR_b) of the order-2 spatial derivative, position on atom a and radius on atom b;
+      !> trailing index is a's nuclear component
+      real(wp), intent(inout) :: mx2_rr_ab(3, 3, 3)
+      !> d2/(dr_b dR_a) of the order-2 spatial derivative, position on atom b and radius on atom a;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx2_rr_ba(3, 3, 3)
+      !> d2/(dr_b dR_b) of the order-2 spatial derivative, position on atom b and radius on atom b;
+      !> trailing index is b's nuclear component
+      real(wp), intent(inout) :: mx2_rr_bb(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_nucrad_eval_faded
+
    !> Accumulate the *radius half* of the nuclear directional derivative.
    !>
    !> Given one radius direction per atom, this ADDS
@@ -1890,6 +3094,63 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> accumulated by the tangent/HVP routines
       real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
    end subroutine cfc_atomic_radius_tangent_eval
+
+   !> Faded term of `cfc_atomic_radius_tangent_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    vr_a       Radius direction of atom a
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg1_r      sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg2_rr     sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg3_rrr    sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_radius_tangent_eval_faded(d_a, R_a, a1, fade_start, fade_width, &
+                                                        vr_a, max_deriv, tg0, tg1_r, tg2_rr, &
+                                                        tg3_rrr, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Radius direction of atom a
+      real(wp), intent(in) :: vr_a
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg0
+      !> sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_radius_tangent_eval_faded
 
    !> Accumulate the *radius half* of the nuclear directional derivative.
    !>
@@ -1982,6 +3243,78 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> accumulated by the tangent/HVP routines
       real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
    end subroutine cfc_pair_radius_tangent_eval
+
+   !> Faded term of `cfc_pair_radius_tangent_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    vr_a       Radius direction of atom a
+   !> @param[in]    vr_b       Radius direction of atom b
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg1_r      sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg2_rr     sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[inout] tg3_rrr    sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the
+   !>                          position half accumulated by the tangent/HVP routines
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_radius_tangent_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                                      fade_width, vr_a, vr_b, max_deriv, tg0, &
+                                                      tg1_r, tg2_rr, tg3_rrr, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Radius direction of atom a
+      real(wp), intent(in) :: vr_a
+      !> Radius direction of atom b
+      real(wp), intent(in) :: vr_b
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg0
+      !> sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the position half
+      !> accumulated by the tangent/HVP routines
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_radius_tangent_eval_faded
 
    !> Accumulate everything the joint position/radius Hessian adds to `*_hvp_eval`.
    !>
@@ -2105,6 +3438,100 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> not a correction
       real(wp), intent(inout) :: rh2_rr_a(3, 3)
    end subroutine cfc_atomic_radius_hvp_eval
+
+   !> Faded term of `cfc_atomic_radius_hvp_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    a1         Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    vr_a       Radius direction of atom a
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_atomic_hvp_eval
+   !> @param[inout] tg1_r      sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_atomic_hvp_eval
+   !> @param[inout] tg2_rr     sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_atomic_hvp_eval
+   !> @param[inout] tg3_rrr    sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_atomic_hvp_eval
+   !> @param[inout] hvp0_a     sum_B vr_B d2/(dr_a dR_B) of the order-0 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] hvp1_r_a   sum_B vr_B d2/(dr_a dR_B) of the order-1 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] hvp2_rr_a  sum_B vr_B d2/(dr_a dR_B) of the order-2 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] rh0_a      sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-0 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh1_r_a    sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-1 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh2_rr_a   sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-2 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   pure module subroutine cfc_atomic_radius_hvp_eval_faded(d_a, R_a, a1, fade_start, fade_width, v_a, &
+                                                    vr_a, max_deriv, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                                    hvp0_a, hvp1_r_a, hvp2_rr_a, rh0_a, rh1_r_a, &
+                                                    rh2_rr_a, sg_a)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Atomic-term exponent prefactor a1 (Diedenhofen-Klamt 2018: -15)
+      real(wp), intent(in) :: a1
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Radius direction of atom a
+      real(wp), intent(in) :: vr_a
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the position half
+      !> accumulated by cfc_atomic_hvp_eval
+      real(wp), intent(inout) :: tg0
+      !> sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the position half
+      !> accumulated by cfc_atomic_hvp_eval
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the position half
+      !> accumulated by cfc_atomic_hvp_eval
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the position half
+      !> accumulated by cfc_atomic_hvp_eval
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-0 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp0_a(3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-1 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp1_r_a(3, 3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-2 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp2_rr_a(3, 3, 3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-0 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh0_a
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-1 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh1_r_a(3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-2 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh2_rr_a(3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+   end subroutine cfc_atomic_radius_hvp_eval_faded
 
    !> Accumulate everything the joint position/radius Hessian adds to `*_hvp_eval`.
    !>
@@ -2278,6 +3705,153 @@ module moist_cavity_drop_lsf_cfc_kernel
       !> not a correction
       real(wp), intent(inout) :: rh2_rr_b(3, 3)
    end subroutine cfc_pair_radius_hvp_eval
+
+   !> Faded term of `cfc_pair_radius_hvp_eval`: some center past `fade_start`
+   !>
+   !> - a center beyond its band (`sigma >= fade_start + fade_width`): adds nothing
+   !> - otherwise the faded dispatch; arguments as there, plus sigma of each center
+   !>
+   !> @param[in]    d_a        Displacement r - r_a
+   !> @param[in]    d_b        Displacement r - r_b
+   !> @param[in]    R_a        Radius of atom a
+   !> @param[in]    R_b        Radius of atom b
+   !> @param[in]    a2         Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+   !> @param[in]    c_par      Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+   !> @param[in]    fade_start Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel;
+   !>                          huge(0.0_wp) for no fade
+   !> @param[in]    fade_width Fade band width in sigma, finite and > 0 (read only when a center is
+   !>                          past fade_start)
+   !> @param[in]    v_a        Nuclear displacement direction of atom a
+   !> @param[in]    v_b        Nuclear displacement direction of atom b
+   !> @param[in]    vr_a       Radius direction of atom a
+   !> @param[in]    vr_b       Radius direction of atom b
+   !> @param[in]    max_deriv  Highest spatial-derivative order to accumulate (0..3); a larger value
+   !>                          is treated as 3
+   !> @param[inout] tg0        sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_pair_hvp_eval
+   !> @param[inout] tg1_r      sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_pair_hvp_eval
+   !> @param[inout] tg2_rr     sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_pair_hvp_eval
+   !> @param[inout] tg3_rrr    sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the
+   !>                          position half accumulated by cfc_pair_hvp_eval
+   !> @param[inout] hvp0_a     sum_B vr_B d2/(dr_a dR_B) of the order-0 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] hvp0_b     sum_B vr_B d2/(dr_b dR_B) of the order-0 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom b
+   !> @param[inout] hvp1_r_a   sum_B vr_B d2/(dr_a dR_B) of the order-1 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] hvp1_r_b   sum_B vr_B d2/(dr_b dR_B) of the order-1 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom b
+   !> @param[inout] hvp2_rr_a  sum_B vr_B d2/(dr_a dR_B) of the order-2 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom a
+   !> @param[inout] hvp2_rr_b  sum_B vr_B d2/(dr_b dR_B) of the order-2 spatial derivative, *added*
+   !>                          to the position half; trailing index is the retained nuclear
+   !>                          component of atom b
+   !> @param[inout] rh0_a      sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-0 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh0_b      sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-0 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh1_r_a    sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-1 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh1_r_b    sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-1 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh2_rr_a   sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-2 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[inout] rh2_rr_b   sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-2 spatial
+   !>                          derivative; complete, not a correction
+   !> @param[in]    sg_a       Reduced distance sigma = ||d_a||/R_a - 1 of center a
+   !> @param[in]    sg_b       Reduced distance sigma = ||d_b||/R_b - 1 of center b
+   pure module subroutine cfc_pair_radius_hvp_eval_faded(d_a, d_b, R_a, R_b, a2, c_par, fade_start, &
+                                                  fade_width, v_a, v_b, vr_a, vr_b, max_deriv, &
+                                                  tg0, tg1_r, tg2_rr, tg3_rrr, hvp0_a, hvp0_b, &
+                                                  hvp1_r_a, hvp1_r_b, hvp2_rr_a, hvp2_rr_b, &
+                                                  rh0_a, rh0_b, rh1_r_a, rh1_r_b, rh2_rr_a, &
+                                                  rh2_rr_b, sg_a, sg_b)
+      !> Displacement r - r_a
+      real(wp), intent(in) :: d_a(3)
+      !> Displacement r - r_b
+      real(wp), intent(in) :: d_b(3)
+      !> Radius of atom a
+      real(wp), intent(in) :: R_a
+      !> Radius of atom b
+      real(wp), intent(in) :: R_b
+      !> Pair-term exponent prefactor a2 (Diedenhofen-Klamt 2018: -9)
+      real(wp), intent(in) :: a2
+      !> Pair-term coupling constant c (Diedenhofen-Klamt 2018: 5)
+      real(wp), intent(in) :: c_par
+      !> Fade onset in sigma = ||d||/R - 1, as passed to the strip kernel; huge(0.0_wp) for no fade
+      real(wp), intent(in) :: fade_start
+      !> Fade band width in sigma, finite and > 0 (read only when a center is past fade_start)
+      real(wp), intent(in) :: fade_width
+      !> Nuclear displacement direction of atom a
+      real(wp), intent(in) :: v_a(3)
+      !> Nuclear displacement direction of atom b
+      real(wp), intent(in) :: v_b(3)
+      !> Radius direction of atom a
+      real(wp), intent(in) :: vr_a
+      !> Radius direction of atom b
+      real(wp), intent(in) :: vr_b
+      !> Highest spatial-derivative order to accumulate (0..3); a larger value is treated as 3
+      integer, intent(in) :: max_deriv
+      !> sum_A vr_A d/dR_A of the order-0 spatial derivative, *added* to the position half
+      !> accumulated by cfc_pair_hvp_eval
+      real(wp), intent(inout) :: tg0
+      !> sum_A vr_A d/dR_A of the order-1 spatial derivative, *added* to the position half
+      !> accumulated by cfc_pair_hvp_eval
+      real(wp), intent(inout) :: tg1_r(3)
+      !> sum_A vr_A d/dR_A of the order-2 spatial derivative, *added* to the position half
+      !> accumulated by cfc_pair_hvp_eval
+      real(wp), intent(inout) :: tg2_rr(3, 3)
+      !> sum_A vr_A d/dR_A of the order-3 spatial derivative, *added* to the position half
+      !> accumulated by cfc_pair_hvp_eval
+      real(wp), intent(inout) :: tg3_rrr(3, 3, 3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-0 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp0_a(3)
+      !> sum_B vr_B d2/(dr_b dR_B) of the order-0 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp0_b(3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-1 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp1_r_a(3, 3)
+      !> sum_B vr_B d2/(dr_b dR_B) of the order-1 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp1_r_b(3, 3)
+      !> sum_B vr_B d2/(dr_a dR_B) of the order-2 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom a
+      real(wp), intent(inout) :: hvp2_rr_a(3, 3, 3)
+      !> sum_B vr_B d2/(dr_b dR_B) of the order-2 spatial derivative, *added* to the position half;
+      !> trailing index is the retained nuclear component of atom b
+      real(wp), intent(inout) :: hvp2_rr_b(3, 3, 3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-0 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh0_a
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-0 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh0_b
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-1 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh1_r_a(3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-1 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh1_r_b(3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_a of the order-2 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh2_rr_a(3, 3)
+      !> sum_B (v_B . d/dr_B + vr_B d/dR_B) of d/dR_b of the order-2 spatial derivative; complete,
+      !> not a correction
+      real(wp), intent(inout) :: rh2_rr_b(3, 3)
+      !> Reduced distance sigma = ||d_a||/R_a - 1 of center a
+      real(wp), intent(in) :: sg_a
+      !> Reduced distance sigma = ||d_b||/R_b - 1 of center b
+      real(wp), intent(in) :: sg_b
+   end subroutine cfc_pair_radius_hvp_eval_faded
 
    !> Lift the accumulated pseudo-density tensors to the level set.
    !>
