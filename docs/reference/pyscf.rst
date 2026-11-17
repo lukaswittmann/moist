@@ -20,6 +20,7 @@ does not run SCF; use PySCF's usual ``kernel`` or ``run`` methods.
    )
    mf.kernel()
    gradient = mf.nuc_grad_method().kernel()  # (natoms, 3)
+   hessian = mf.Hessian().kernel()           # (natoms, natoms, 3, 3)
 
 The whole integration is one module, ``moist.pyscf``, which reads top to
 bottom: the AO-basis integrals (:class:`~moist.pyscf.PySCFHost`), the GOSTSHYP
@@ -121,16 +122,22 @@ threads, verbosity and debug for the cavity and model (:ref:`api-context`), and
 ``components`` and ``context``; cavity settings live on the cavity
 configuration, so ``set(nleb=302)`` raises ``TypeError``.
 
-RHF, RKS, UHF and UKS are supported, including density fitting, nuclear gradients,
-atom subsets, and energy/gradient scanners. Existing solver settings are
-preserved. ``copy()`` creates independent MOIST state; ``reset(mol)`` clears it.
-Geometry, basis and density changes invalidate the appropriate caches.
-For one-electron systems, use ``scf.uhf.UHF(mol)``: the ``HF1e`` object from
-``scf.UHF(mol)`` skips the SCF and is rejected.
+RHF, RKS, UHF and UKS are supported, including density fitting (``density_fit()``),
+nuclear gradients and Hessians, atom subsets, and energy/gradient scanners.
+Existing solver settings are preserved. ``copy()`` creates independent MOIST
+state; ``reset(mol)`` clears it. Geometry, basis and density changes invalidate
+the appropriate caches. For one-electron systems, use ``scf.uhf.UHF(mol)``: the
+``HF1e`` object from ``scf.UHF(mol)`` skips the SCF and is rejected.
 
-Attach MOIST once and combine terms in ``components``. ECPs, ROHF, existing
-solvent attachments, Newton SCF, stability, TDDFT, Hessians, post-HF methods and
-GPU execution are not supported by this wrapper.
+Attach MOIST once and combine terms in ``components``. Analytic Hessians require a
+``DROP`` cavity (``SvdW``, ``CFC`` or ``Isodensity``) with ``PV`` and/or
+scalar-trace PCM components (``CPCM``, ``COSMO``, ``IEFPCM``, ``SSVPE``,
+``LPB``); ``ISwiG``, ``GOSTSHYP``, normal-trace PCMs, and fitting schemes
+without a PySCF second-derivative implementation raise ``NotImplementedError``
+in ``mf.Hessian()`` and ``solvation.hvp()``. ECPs, ROHF, existing solvent
+attachments, Newton SCF, stability, TDDFT, post-HF methods and GPU execution are
+not supported by this wrapper (ECPs, X2C, and fractional or complex orbitals are
+also rejected by ``mf.Hessian()``).
 
 Driving a model at a fixed density
 ----------------------------------
@@ -150,16 +157,19 @@ PySCF integrals on the cavity grid:
        [ModelComponentCPCM(80.0)],
        context=context,
    )
-   result = solvation.evaluate(dm)      # energy and Fock contribution
-   gradient = solvation.gradient(dm)    # (natoms, 3), at fixed dm
-   response = solvation.response        # the items MOIST handed back
+   result = solvation.evaluate(dm)               # energy and Fock contribution
+   gradient = solvation.gradient(dm)             # (natoms, 3), at fixed dm
+   hvp_nuc, fock_tan = solvation.hvp(dm, dirs, dm_dirs)
+   hessian = solvation.hessian(dm)               # (natoms, natoms, 3, 3), at fixed dm
+   response = solvation.response                 # the items MOIST handed back
 
 ``gradient_channels(dm)`` returns the same gradient split by route: the terms
 MOIST owns (``model``), the basis-center derivative of the potential
 (``potential``), of the level set (``density``, isodensity cavities only) and
 of the Gaussian moments (``moments``, GOSTSHYP only). The host's own
 contractions walk the response and dispatch on each item:
-``potential_adjoint``, ``density`` and ``gaussian_amplitude``, each present
+``potential_adjoint``, ``density`` and ``gaussian_amplitude`` (and
+``potential_adjoint_tangent`` / ``density_tangent`` for ``hvp``), each present
 only when the model produces it; an item the driver does not know raises.
 
 API

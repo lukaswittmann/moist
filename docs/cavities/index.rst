@@ -24,7 +24,7 @@ The remaining constructions serve special purposes, such as reference values for
    +=================================+=============+====================+==================+================================+==============+==========+=========+
    | :doc:`iSwiG <iswig>`            | |yes|       | |no|               | |no|             | |no|                           | surface grid | |yes|    | |soon|  |
    +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
-   | :doc:`DROP <drop>`              | |no|        | |yes|              | |yes|            | |yes|                          | surface grid | |yes|    | |soon|  |
+   | :doc:`DROP <drop>`              | |no|        | |yes|              | |yes|            | |yes|                          | surface grid | |yes|    | |yes|   |
    +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
    | :doc:`Marching tetrahedra <mt>` | |no|        | |yes|              | |yes|            | |part|                         | surface grid | |no|     | |no|    |
    +---------------------------------+-------------+--------------------+------------------+--------------------------------+--------------+----------+---------+
@@ -59,6 +59,11 @@ Concrete cavity types must implement two deferred procedures:
 
 ``get_gradient(error)``
    Prepare or validate the implementation-specific nuclear derivatives.
+
+``get_surface_tangent`` / ``get_hessian``
+   Evaluate directional tangents of surface positions, widths, and weights, and
+   contract second-order surface weights into the nuclear Hessian (supported by
+   DROP).
 
 The base type also provides optional response hooks; ``get_surface_response``
 maps model surface weights to host-response contributions.

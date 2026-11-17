@@ -21,7 +21,7 @@ On grid cavities (iSwiG, DROP) the volume is the divergence-theorem sum
 measured from the nuclear centroid :math:`\mathbf c`.
 The discrete surface leaves :math:`\sum_i a_i \mathbf n_i` nonzero, so a fixed origin would make :math:`V` change under rigid translation.
 
-Its surface weights make the energy fully variational on the :doc:`ρ-DROP isodensity cavity </cavities/isodensity>`; analytic nuclear gradients work on static and isodensity cavities.
+Its surface weights make the energy fully variational on the :doc:`ρ-DROP isodensity cavity </cavities/isodensity>`; analytic nuclear gradients and Hessians work on static and isodensity DROP cavities.
 
 Parameters
 ----------

@@ -33,8 +33,8 @@ Two implementations are available:
 
 **Callback** (``moist_cavity_drop_lsf_isodensity_callback_type``)
    The QM host evaluates the electron density and its spatial derivatives at points requested by MOIST: the host returns :math:`\rho`.
-   The density and its gradient are always requested; the Hessian and third derivative arrive as NULL pointers whenever DROP does not need them, and the callee must (should) skip computing them.
-   The third derivative is needed for the cavity response and for analytic nuclear derivatives.
+   The density and its gradient are always requested; the Hessian, third derivative and fourth derivative arrive as NULL pointers whenever DROP does not need them, and the callee must (should) skip computing them.
+   The third derivative is needed for the cavity response and for analytic nuclear gradients, and the fourth derivative for second-order surface tangents and analytic nuclear Hessians.
    This route is the slower one: per-point call overhead and no vectorization across points.
 
 **Internal** (``moist_cavity_drop_lsf_isodensity_internal_type``)

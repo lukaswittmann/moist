@@ -21,16 +21,21 @@ from moist.interface import (
     CavitySnapshot,
     CavitySnapshotDROP,
     Coupling,
+    DensityTangentRequest,
+    DensityTangentResponse,
     GaussianAmplitudeResponse,
     GaussianMomentRequest,
     GaussianPotentialRequest,
+    GaussianPotentialTangentRequest,
     ModelComponentCOSMO,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     ModelComponentPV,
     DensityResponse,
     PCMSolver,
+    PointPotentialTangentRequest,
     PotentialAdjointResponse,
+    PotentialAdjointTangentResponse,
     RadialPotentialAdjointResponse,
     Response,
     SolvationModel,
@@ -1208,6 +1213,17 @@ _RNG = np.random.default_rng(11)
 @pytest.mark.parametrize("kind,arrays", [
     (PotentialAdjointResponse, {"w_phi": _RNG.standard_normal(_NGRID),
                                "w_dphi_dr": _RNG.standard_normal((_NGRID, 3))}),
+    (PotentialAdjointTangentResponse, {"w_phi": _RNG.standard_normal(_NGRID),
+                                      "dw_phi": _RNG.standard_normal((2, _NGRID)),
+                                      "d_xyz": _RNG.standard_normal((2, _NGRID, 3)),
+                                      "d_xi": _RNG.standard_normal((2, _NGRID))}),
+    (DensityTangentResponse, {"w_rho": _RNG.standard_normal(_NGRID),
+                              "w_grad_rho": _RNG.standard_normal((_NGRID, 3)),
+                              "w_hess_rho": _RNG.standard_normal((_NGRID, 3, 3)),
+                              "dw_rho": _RNG.standard_normal((2, _NGRID)),
+                              "dw_grad_rho": _RNG.standard_normal((2, _NGRID, 3)),
+                              "dw_hess_rho": _RNG.standard_normal((2, _NGRID, 6)),
+                              "d_xyz": _RNG.standard_normal((2, _NGRID, 3))}),
     (GaussianAmplitudeResponse, {"w_overlap": _RNG.standard_normal(_NGRID),
                                  "w_normal_deriv": _RNG.standard_normal(_NGRID)}),
     (AtomicMultipoleAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM),
@@ -1293,7 +1309,8 @@ def test_every_response_item_is_public() -> None:
     from moist.interface import _RESPONSE_ITEMS
 
     assert set(_RESPONSE_ITEMS) == {
-        "potential_adjoint", "density", "gaussian_amplitude", "atomic_multipole_adjoint",
+        "potential_adjoint", "potential_adjoint_tangent", "density", "density_tangent",
+        "gaussian_amplitude", "atomic_multipole_adjoint",
         "atomic_charge_adjoint", "radial_potential_adjoint", "parameter_adjoint",
     }
     for name, kind in _RESPONSE_ITEMS.items():
@@ -1774,3 +1791,448 @@ def test_request_snapshots_are_values(two_requests, diatomic):
     assert not np.array_equal(fresh.width, width)
     np.testing.assert_array_equal(moments.width, width)
     assert moments.missing == {"gt", "pt"}
+
+
+def test_pv_get_hessian_matches_unit_hvp_and_fd(diatomic) -> None:
+    """Host-independent PV get_hessian agrees with two-stage unit HVPs and 4-pt FD."""
+    base = diatomic(2.4)
+    model = SolvationModel(
+        CONTEXT, CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT),
+        [ModelComponentPV(1.5e-3)],
+    )
+    model.update(base)
+    coupling = model.new_coupling()
+    nat = base.natoms
+
+    hess = np.zeros((nat, 3, nat, 3), dtype=np.float64)
+    model.get_hessian(coupling, hess)
+    assert np.allclose(hess.reshape(3 * nat, 3 * nat), hess.reshape(3 * nat, 3 * nat).T, atol=1e-12)
+
+    unit_dirs = np.eye(3 * nat, dtype=np.float64).reshape(3 * nat, nat, 3)
+    model.prepare_hvp_geometry(coupling, unit_dirs)
+    assert list(coupling) == []
+    model.prepare_hvp(coupling)
+    assert list(coupling) == []
+    hvp = np.zeros((3 * nat, nat, 3), dtype=np.float64)
+    resp = model.get_hvp(coupling, hvp)
+    assert list(resp) == []
+    np.testing.assert_allclose(hvp, hess.reshape(3 * nat, nat, 3), atol=1e-12, rtol=1e-12)
+
+    step = 2.0e-4
+    fd_hess = np.zeros_like(hess)
+    for k in range(3 * nat):
+        atom, axis = divmod(k, 3)
+        for off, w in ((-2, 1.0), (-1, -8.0), (1, 8.0), (2, -1.0)):
+            pos = base.positions.copy()
+            pos[atom, axis] += off * step
+            model.update(Structure(base.numbers, pos, charge=base.charge))
+            cpl_t = model.new_coupling()
+            model.prepare_gradient(cpl_t)
+            g = np.zeros((nat, 3), dtype=np.float64)
+            model.get_gradient(cpl_t, g)
+            fd_hess[atom, axis] += w * g / (12.0 * step)
+    np.testing.assert_allclose(hess, fd_hess, atol=1e-9, rtol=1e-8)
+
+
+def _gaussian_potential(pos, z, coords, xi):
+    from scipy.special import erf
+
+    delta = coords[:, None, :] - pos[None, :, :]
+    r2 = np.sum(delta * delta, axis=2)
+    r = np.sqrt(r2)
+    w = xi[:, None]
+    x = w * r
+    sqrt_pi = np.sqrt(np.pi)
+    c0 = (erf(x) - 2.0 * x * np.exp(-x * x) / sqrt_pi) / (r2 * r)
+    return (erf(x) / r) @ z, -np.einsum("A,iAk,iA->ik", z, delta, c0), (2.0 / sqrt_pi) * (np.exp(-x * x) @ z)
+
+
+def test_cpcm_svdw_two_stage_hvp_matches_fd_and_shape_guards(diatomic) -> None:
+    """Two-stage HVP on point-potential CPCM + SvdW validates grid_dir shapes and matches FD."""
+    from scipy.special import erf
+
+    base = diatomic(2.4)
+    z = np.array([1.2, -1.2], dtype=np.float64)
+    model = SolvationModel(
+        CONTEXT,
+        CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT),
+        [ModelComponentCPCM(32.0, parameters=_PCM_DENSE)],
+    )
+    model.update(base)
+    cpl = model.new_coupling()
+    nat = base.natoms
+    rng = np.random.default_rng(7)
+    dirs = rng.standard_normal((2, nat, 3))
+
+    def gaussian_derivs(pos, xi):
+        coords = model.cavity.xyz
+        delta = coords[:, None, :] - pos[None, :, :]
+        r2 = np.sum(delta * delta, axis=2)
+        r = np.sqrt(r2)
+        w = xi[:, None]
+        x = w * r
+        sqrt_pi = np.sqrt(np.pi)
+        psi = erf(x) / r
+        c0 = (erf(x) - 2.0 * x * np.exp(-x * x) / sqrt_pi) / (r2 * r)
+        phi = psi @ z
+        dphi_dr = -np.einsum("A,iAk,iA->ik", z, delta, c0)
+        dphi_dxi = (2.0 / sqrt_pi) * (np.exp(-x * x) @ z)
+        return phi, dphi_dr, dphi_dxi
+
+    def answer_gaussian_tangent(pos, req: GaussianPotentialTangentRequest):
+        delta = req.xyz[:, None, :] - pos[None, :, :]
+        r2 = np.sum(delta * delta, axis=2)
+        r = np.sqrt(r2)
+        w = req.xi[:, None]
+        x = w * r
+        sqrt_pi = np.sqrt(np.pi)
+        exp_x2 = np.exp(-x * x)
+        c0 = (erf(x) - 2.0 * x * exp_x2 / sqrt_pi) / (r2 * r)
+        c1 = (4.0 * w**3 * exp_x2 / sqrt_pi - 3.0 * c0) / r2
+        dc0_dxi = 4.0 * w**2 * exp_x2 / sqrt_pi
+        dpsi_dxi = 2.0 * exp_x2 / sqrt_pi
+        u = req.d_xyz[:, :, None, :] - req.dirs[:, None, :, :]
+        ru = np.einsum("iAk,jiAk->jiA", delta, u)
+        d_phi = np.einsum("A,iA,jiA->ji", z, -c0, ru) + (
+            dpsi_dxi @ z
+        )[None, :] * req.d_xi
+        d_dphi_dr = (
+            -np.einsum("A,iA,jiAk->jik", z, c0, u)
+            - np.einsum("A,iA,jiA,iAk->jik", z, c1, ru, delta)
+            - np.einsum("A,iA,iAk->ik", z, dc0_dxi, delta)[None, :, :] * req.d_xi[:, :, None]
+        )
+        d_dphi_dxi = -np.einsum("A,iA,jiA->ji", z, dc0_dxi, ru) - (
+            (4.0 * req.xi[:, None] / sqrt_pi) * r2 * exp_x2 @ z
+        )[None, :] * req.d_xi
+        return d_phi, d_dphi_dr, d_dphi_dxi
+
+    model.prepare_hvp_geometry(cpl, dirs)
+    assert list(cpl) == []
+    model.prepare_hvp(cpl)
+    hvp = np.zeros((2, nat, 3), dtype=np.float64)
+    seen = []
+    for req in cpl:
+        seen.append(type(req))
+        if isinstance(req, moist.NuclearChargesRequest):
+            cpl.answer(z=z)
+        elif isinstance(req, GaussianPotentialTangentRequest):
+            assert isinstance(req.d_xyz, np.ndarray) and req.d_xyz.shape == (2, model.cavity.ngrid, 3)
+            with raises(ValueError, match="gaussian_potential_tangent: d_phi must have shape"):
+                cpl.answer(d_phi=np.zeros((1, model.cavity.ngrid)))
+            d_phi, d_dphi_dr, d_dphi_dxi = answer_gaussian_tangent(base.positions, req)
+            cpl.answer(d_phi=d_phi, d_dphi_dr=d_dphi_dr, d_dphi_dxi=d_dphi_dxi)
+        elif isinstance(req, GaussianPotentialRequest):
+            phi, dphi_dr, dphi_dxi = gaussian_derivs(base.positions, model.cavity.xi0)
+            cpl.answer(phi=phi, dphi_dr=dphi_dr, dphi_dxi=dphi_dxi)
+    assert GaussianPotentialTangentRequest in seen
+    resp = model.get_hvp(cpl, hvp)
+    items = list(resp)
+    assert len(items) == 1 and isinstance(items[0], PotentialAdjointTangentResponse)
+
+    # Analytic 1st derivatives in this test omit the electronic part since charges are purely nuclear.
+    step = 2.0e-4
+    fd_hvp = np.zeros_like(hvp)
+    for idir in range(2):
+        for off, w in ((-2, 1.0), (-1, -8.0), (1, 8.0), (2, -1.0)):
+            pos_t = base.positions + off * step * dirs[idir]
+            model.update(Structure(base.numbers, pos_t, charge=base.charge))
+            cpl_t = model.new_coupling()
+            model.prepare_gradient(cpl_t)
+            for req in cpl_t:
+                if isinstance(req, moist.NuclearChargesRequest):
+                    cpl_t.answer(z=z)
+                elif isinstance(req, GaussianPotentialRequest):
+                    phi, dphi_dr, dphi_dxi = gaussian_derivs(pos_t, model.cavity.xi0)
+                    cpl_t.answer(phi=phi, dphi_dr=dphi_dr, dphi_dxi=dphi_dxi)
+            g = np.zeros((nat, 3), dtype=np.float64)
+            model.get_gradient(cpl_t, g)
+            fd_hvp[idir] += w * g / (12.0 * step)
+    np.testing.assert_allclose(hvp, fd_hvp, atol=1e-9, rtol=1e-8)
+
+
+def test_cpcm_callback_isodensity_two_stage_hvp_matches_fd(diatomic) -> None:
+    """Two-stage HVP on CPCM + callback Isodensity verifies DensityTangentRequest and Response."""
+    from scipy.special import erf
+
+    base = diatomic(2.4)
+    z = np.array([1.1, -1.1], dtype=np.float64)
+    alpha = np.array([0.28, 0.32], dtype=np.float64)
+    diag_d = np.array([0.35, 0.30], dtype=np.float64)
+    scale = 100.0
+    iso_params = moist.IsodensityParameters(rho_iso=1.0e-3, scale=scale, core_fill=False)
+
+    def make_density_source(pos):
+        def eval_s(point, order):
+            p = np.asarray(point, dtype=np.float64)
+            rho = 0.0
+            grad = np.zeros(3)
+            hess = np.zeros((3, 3))
+            d3 = np.zeros((3, 3, 3))
+            d4 = np.zeros((3, 3, 3, 3))
+            for A in range(len(pos)):
+                d = p - pos[A]
+                b = 2.0 * alpha[A]
+                g = diag_d[A] * np.exp(-b * np.dot(d, d))
+                # 1D Hermite polynomials along x, y, z up to order 4
+                hx = [[1.0, -2 * b * d[k], (4 * b * b * d[k] * d[k] - 2 * b),
+                       (-8 * b**3 * d[k]**3 + 12 * b * b * d[k]),
+                       (16 * b**4 * d[k]**4 - 48 * b**3 * d[k]**2 + 12 * b * b)] for k in range(3)]
+                rho += g
+                if order >= 1:
+                    for i in range(3):
+                        grad[i] += g * hx[i][1]
+                if order >= 2:
+                    for i in range(3):
+                        for j in range(3):
+                            idx = [0, 0, 0]
+                            idx[i] += 1; idx[j] += 1
+                            hess[i, j] += g * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+                if order >= 3:
+                    for i in range(3):
+                        for j in range(3):
+                            for k in range(3):
+                                idx = [0, 0, 0]
+                                idx[i] += 1; idx[j] += 1; idx[k] += 1
+                                d3[i, j, k] += g * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+                if order >= 4:
+                    for i in range(3):
+                        for j in range(3):
+                            for k in range(3):
+                                for l in range(3):
+                                    idx = [0, 0, 0]
+                                    idx[i] += 1; idx[j] += 1; idx[k] += 1; idx[l] += 1
+                                    d4[i, j, k, l] += g * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+            res = [rho, grad]
+            if order >= 2:
+                res.append(hess)
+            if order >= 3:
+                res.append(d3)
+            if order >= 4:
+                res.append(d4)
+            return tuple(res)
+        return eval_s
+
+    def density_center_deriv(p, pos, dpos):
+        # Partial derivative wrt pos moving by dpos at fixed p, orders 0..3
+        val0 = 0.0
+        val1 = np.zeros(3)
+        val2 = np.zeros((3, 3))
+        val3 = np.zeros((3, 3, 3))
+        for A in range(len(pos)):
+            d = p - pos[A]
+            b = 2.0 * alpha[A]
+            g = diag_d[A] * np.exp(-b * np.dot(d, d))
+            hx = [[1.0, -2 * b * d[k], (4 * b * b * d[k] * d[k] - 2 * b),
+                   (-8 * b**3 * d[k]**3 + 12 * b * b * d[k]),
+                   (16 * b**4 * d[k]**4 - 48 * b**3 * d[k]**2 + 12 * b * b)] for k in range(3)]
+            for c in range(3):
+                # -d/dp_c since d/dR_Ac = -d/dp_c
+                shift = -dpos[A, c] * g
+                idx1 = [0, 0, 0]; idx1[c] += 1
+                val0 += shift * hx[0][idx1[0]] * hx[1][idx1[1]] * hx[2][idx1[2]]
+                for i in range(3):
+                    idx = idx1.copy(); idx[i] += 1
+                    val1[i] += shift * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+                for i in range(3):
+                    for j in range(3):
+                        idx = idx1.copy(); idx[i] += 1; idx[j] += 1
+                        val2[i, j] += shift * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+                for i in range(3):
+                    for j in range(3):
+                        for k in range(3):
+                            idx = idx1.copy(); idx[i] += 1; idx[j] += 1; idx[k] += 1
+                            val3[i, j, k] += shift * hx[0][idx[0]] * hx[1][idx[1]] * hx[2][idx[2]]
+        return val0, val1, val2, val3
+
+    sym2 = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
+    sym3 = ((0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 1, 1), (0, 1, 2),
+            (0, 2, 2), (1, 1, 1), (1, 1, 2), (1, 2, 2), (2, 2, 2))
+
+    model = SolvationModel(
+        CONTEXT,
+        CavityDROP(lsf=Isodensity(parameters=iso_params), parameters=_DROP_NLEB26,
+                   source=make_density_source(base.positions), pass_order=True, context=CONTEXT),
+        [ModelComponentCPCM(32.0, parameters=_PCM_DENSE)],
+    )
+    model.update(base)
+    cpl = model.new_coupling()
+    nat = base.natoms
+    dirs = np.array([[[0.2, -0.1, 0.3], [-0.2, 0.1, -0.3]]], dtype=np.float64)
+
+    model.prepare_hvp_geometry(cpl, dirs)
+    for req in cpl:
+        assert isinstance(req, DensityTangentRequest)
+        ngrid = req.xyz.shape[0]
+        d_rho = np.zeros((1, ngrid))
+        d_grad = np.zeros((1, ngrid, 3))
+        d_hess = np.zeros((1, ngrid, 6))
+        d_d3 = np.zeros((1, ngrid, 10))
+        for i in range(ngrid):
+            v0, v1, v2, v3 = density_center_deriv(req.xyz[i], base.positions, dirs[0])
+            d_rho[0, i] = v0
+            d_grad[0, i] = v1
+            d_hess[0, i] = [v2[a, b] for a, b in sym2]
+            d_d3[0, i] = [v3[a, b, c] for a, b, c in sym3]
+        cpl.answer(d_rho=d_rho, d_grad_rho=d_grad, d_hess_rho=d_hess, d_d3_rho=d_d3)
+
+    def ans_pot(m_cur, pos, cpl_cur):
+        for req in cpl_cur:
+            if isinstance(req, moist.NuclearChargesRequest):
+                cpl_cur.answer(z=z)
+            elif isinstance(req, GaussianPotentialRequest):
+                coords = m_cur.cavity.xyz
+                delta = coords[:, None, :] - pos[None, :, :]
+                r2 = np.sum(delta * delta, axis=2)
+                r = np.sqrt(r2)
+                w = m_cur.cavity.xi0[:, None]
+                x = w * r
+                sqrt_pi = np.sqrt(np.pi)
+                c0 = (erf(x) - 2.0 * x * np.exp(-x * x) / sqrt_pi) / (r2 * r)
+                cpl_cur.answer(
+                    phi=(erf(x) / r) @ z,
+                    dphi_dr=-np.einsum("A,iAk,iA->ik", z, delta, c0),
+                    dphi_dxi=(2.0 / sqrt_pi) * (np.exp(-x * x) @ z),
+                )
+            elif isinstance(req, GaussianPotentialTangentRequest):
+                delta = req.xyz[:, None, :] - pos[None, :, :]
+                r2 = np.sum(delta * delta, axis=2)
+                r = np.sqrt(r2)
+                w = req.xi[:, None]
+                x = w * r
+                sqrt_pi = np.sqrt(np.pi)
+                exp_x2 = np.exp(-x * x)
+                c0 = (erf(x) - 2.0 * x * exp_x2 / sqrt_pi) / (r2 * r)
+                c1 = (4.0 * w**3 * exp_x2 / sqrt_pi - 3.0 * c0) / r2
+                dc0_dxi = 4.0 * w**2 * exp_x2 / sqrt_pi
+                dpsi_dxi = 2.0 * exp_x2 / sqrt_pi
+                u = req.d_xyz[:, :, None, :] - req.dirs[:, None, :, :]
+                ru = np.einsum("iAk,jiAk->jiA", delta, u)
+                cpl_cur.answer(
+                    d_phi=np.einsum("A,iA,jiA->ji", z, -c0, ru) + (dpsi_dxi @ z)[None, :] * req.d_xi,
+                    d_dphi_dr=(
+                        -np.einsum("A,iA,jiAk->jik", z, c0, u)
+                        - np.einsum("A,iA,jiA,iAk->jik", z, c1, ru, delta)
+                        - np.einsum("A,iA,iAk->ik", z, dc0_dxi, delta)[None, :, :] * req.d_xi[:, :, None]
+                    ),
+                    d_dphi_dxi=-np.einsum("A,iA,jiA->ji", z, dc0_dxi, ru)
+                    - ((4.0 * req.xi[:, None] / sqrt_pi) * r2 * exp_x2 @ z)[None, :] * req.d_xi,
+                )
+
+    model.prepare_hvp(cpl)
+    ans_pot(model, base.positions, cpl)
+    hvp = np.zeros((1, nat, 3), dtype=np.float64)
+    resp = model.get_hvp(cpl, hvp)
+    dens_items = [it for it in resp if isinstance(it, DensityTangentResponse)]
+    assert len(dens_items) == 1
+    ditem = dens_items[0]
+    w2 = ditem.w_hess_rho.transpose(2, 1, 0)
+    dw2 = np.zeros((3, 3, len(ditem.w_rho)))
+    for k, (a, b) in enumerate(sym2):
+        dw2[a, b] = dw2[b, a] = ditem.dw_hess_rho[0, :, k]
+    # Add host density-route HVP: d/dt sum_{i,A} (w0 d0/dRA + w1 d1/dRA + w2 d2/dRA)
+    xyz = model.cavity.xyz
+    for atom in range(nat):
+        for axis in range(3):
+            e = np.zeros((nat, 3)); e[atom, axis] = 1.0
+            for i in range(len(xyz)):
+                p = xyz[i]
+                r0, r1, r2_v, r3_v = density_center_deriv(p, base.positions, e)
+                dA = p - base.positions[atom]
+                b = 2.0 * alpha[atom]
+                g = diag_d[atom] * np.exp(-b * np.dot(dA, dA))
+                hx = [[1.0, -2 * b * dA[c], (4 * b * b * dA[c] * dA[c] - 2 * b),
+                       (-8 * b**3 * dA[c]**3 + 12 * b * b * dA[c]),
+                       (16 * b**4 * dA[c]**4 - 48 * b**3 * dA[c]**2 + 12 * b * b)] for c in range(3)]
+                val = (
+                    ditem.dw_rho[0, i] * r0
+                    + np.dot(ditem.dw_grad_rho[0, i], r1)
+                    + np.sum(dw2[:, :, i] * r2_v)
+                    + ditem.w_rho[i] * np.dot(ditem.d_xyz[0, i], r1)
+                    + np.einsum("a,ab,b->", ditem.w_grad_rho[i], r2_v, ditem.d_xyz[0, i])
+                    + np.einsum("ab,abc,c->", w2[:, :, i], r3_v, ditem.d_xyz[0, i])
+                )
+                # Center-center derivative d/dR_{atom,axis} d/d(dirs[0]) -> +dirs[0, atom, c] * d/dp_{axis,c}
+                for c in range(3):
+                    coef = dirs[0, atom, c] * g
+                    if coef == 0.0:
+                        continue
+                    def deriv(tupl):
+                        cnt = [0, 0, 0]
+                        for q in tupl:
+                            cnt[q] += 1
+                        return coef * hx[0][cnt[0]] * hx[1][cnt[1]] * hx[2][cnt[2]]
+                    val += ditem.w_rho[i] * deriv((axis, c))
+                    for a in range(3):
+                        val += ditem.w_grad_rho[i, a] * deriv((axis, c, a))
+                        for b2 in range(3):
+                            val += w2[a, b2, i] * deriv((axis, c, a, b2))
+                hvp[0, atom, axis] += val
+
+    # 4-pt central FD of total nuclear gradient (model + host density gradient)
+    step = 2.0e-4
+    fd_hvp = np.zeros((nat, 3), dtype=np.float64)
+    for off, wt in ((-2, 1.0), (-1, -8.0), (1, 8.0), (2, -1.0)):
+        pos_t = base.positions + off * step * dirs[0]
+        m_t = SolvationModel(
+            CONTEXT,
+            CavityDROP(lsf=Isodensity(parameters=iso_params), parameters=_DROP_NLEB26,
+                       source=make_density_source(pos_t), pass_order=True, context=CONTEXT),
+            [ModelComponentCPCM(32.0, parameters=_PCM_DENSE)],
+        )
+        m_t.update(Structure(base.numbers, pos_t, charge=base.charge))
+        c_t = m_t.new_coupling()
+        m_t.prepare_response(c_t)
+        ans_pot(m_t, pos_t, c_t)
+        resp_r = m_t.get_response(c_t)
+        (d_r,) = [it for it in resp_r if isinstance(it, DensityResponse)]
+        m_t.prepare_gradient(c_t)
+        ans_pot(m_t, pos_t, c_t)
+        g_t = np.zeros((nat, 3))
+        m_t.get_gradient(c_t, g_t)
+        xyz_t = m_t.cavity.xyz
+        w2_t = d_r.w_hess_rho.transpose(2, 1, 0)
+        for atom in range(nat):
+            for axis in range(3):
+                e = np.zeros((nat, 3)); e[atom, axis] = 1.0
+                for i in range(len(xyz_t)):
+                    r0, r1, r2_v, _ = density_center_deriv(xyz_t[i], pos_t, e)
+                    g_t[atom, axis] += (
+                        d_r.w_rho[i] * r0
+                        + np.dot(d_r.w_grad_rho[i], r1)
+                        + np.sum(w2_t[:, :, i] * r2_v)
+                    )
+        fd_hvp += wt * g_t / (12.0 * step)
+    np.testing.assert_allclose(hvp[0], fd_hvp, atol=1e-8, rtol=1e-7)
+
+
+def test_second_order_refusals(diatomic) -> None:
+    """Unsupported cavities/components refuse cleanly via SolvationModel."""
+    mol = diatomic(2.4)
+    nat = mol.natoms
+    hess = np.zeros((nat, 3, nat, 3), dtype=np.float64)
+    dirs = np.zeros((1, nat, 3), dtype=np.float64)
+
+    cpcm = SolvationModel(CONTEXT, CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT),
+                          [ModelComponentCPCM(32.0)])
+    cpcm.update(mol)
+    cpl = cpcm.new_coupling()
+    with raises(RuntimeError):
+        cpcm.get_hessian(cpl, hess)
+    with raises(RuntimeError):
+        cpcm.prepare_hvp(cpl)
+
+    iswig = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentPV(1.0e-3)])
+    iswig.update(mol)
+    cpl_i = iswig.new_coupling()
+    with raises(RuntimeError):
+        iswig.get_hessian(cpl_i, hess)
+    with raises(RuntimeError):
+        iswig.prepare_hvp_geometry(cpl_i, dirs)
+
+    gost = SolvationModel(CONTEXT, CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT),
+                          [ModelComponentGOSTSHYP(1.0e-5)])
+    gost.update(mol)
+    cpl_g = gost.new_coupling()
+    with raises(RuntimeError):
+        gost.prepare_hvp_geometry(cpl_g, dirs)

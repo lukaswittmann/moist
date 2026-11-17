@@ -644,3 +644,48 @@ def test_python_requirements_fails_closed_on_unexpected_import_error(monkeypatch
         main(["numpy"])
     if isinstance(caught.value, SystemExit):
         assert caught.value.code not in (None, 0)
+
+
+def test_second_order_model_library_wrappers(water) -> None:
+    """Native HVP/Hessian library wrappers enforce buffers and match 4-pt FD."""
+    from moist import library
+    from moist.configuration import SvdW
+
+    numbers, positions = water
+    structure = Structure(numbers, positions)
+    cavity = CavityDROP(lsf=SvdW(), parameters=DROPParameters(nleb=26), context=CONTEXT)
+    model = SolvationModel(CONTEXT, cavity, [ModelComponentPV(1.2e-3)])
+    model.update(structure)
+    coupling = model.new_coupling()
+    resp = library.new_response()
+    nat = len(numbers)
+
+    # Dense PV Hessian vs unit HVP columns
+    hess = np.zeros((nat, 3, nat, 3), dtype=np.float64)
+    library.get_model_hessian(model._model, coupling._handle, nat, hess)
+    assert np.allclose(hess.reshape(3 * nat, 3 * nat), hess.reshape(3 * nat, 3 * nat).T, atol=1e-12)
+
+    unit_dirs = np.eye(3 * nat, dtype=np.float64).reshape(3 * nat, nat, 3)
+    library.prepare_model_hvp_geometry(model._model, coupling._handle, nat, unit_dirs)
+    assert not library.next_coupling_request(coupling._handle)
+    library.prepare_model_hvp(model._model, coupling._handle)
+    assert not library.next_coupling_request(coupling._handle)
+    hvp = np.zeros((3 * nat, nat, 3), dtype=np.float64)
+    library.get_model_hvp(model._model, coupling._handle, resp, nat, 3 * nat, hvp)
+    np.testing.assert_allclose(hvp, hess.reshape(3 * nat, nat, 3), atol=1e-12, rtol=1e-12)
+
+    # Accumulator and direction shape guards
+    with raises(ValueError, match="dirs must have shape"):
+        library.prepare_model_hvp_geometry(
+            model._model, coupling._handle, nat, np.zeros((2, nat, 2), dtype=np.float64)
+        )
+    ro = np.zeros((nat, 3, nat, 3), dtype=np.float64)
+    ro.setflags(write=False)
+    with raises(ValueError, match="writable"):
+        library.get_model_hessian(model._model, coupling._handle, nat, ro)
+    with raises(ValueError, match="hvp must have shape"):
+        library.get_model_hvp(
+            model._model, coupling._handle, resp, nat, 3, np.zeros((2, nat, 3), dtype=np.float64)
+        )
+    with raises(RuntimeError):
+        library.prepare_model_hvp(model._model, coupling._handle)

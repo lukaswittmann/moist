@@ -289,6 +289,17 @@ Grid inputs are read from ``model.cavity``.
    for item in response:
        ...  # contract each item with the basis-center derivatives, as above
 
+   model.prepare_hvp_geometry(coupling, dirs)  # dirs: (ndir, natoms, 3)
+   for request in coupling:  # DensityTangentRequest if cavity follows density
+       ...
+   model.prepare_hvp(coupling)
+   for request in coupling:  # PointPotentialTangentRequest / GaussianPotentialTangentRequest
+       ...
+   hvp = np.zeros((ndir, natoms, 3))
+   response = model.get_hvp(coupling, hvp)
+   for item in response:  # PotentialAdjointTangentResponse, DensityTangentResponse
+       ...
+
 Each request is a snapshot taken when it is yielded: ``name`` is a class
 attribute, ``missing`` the frozenset of output names missing at that moment,
 ``GaussianMomentRequest.width`` an immutable copy of the widths and
@@ -303,8 +314,8 @@ or asymmetric ``dcart``) leave any previous answer intact; native rejections
 earlier submissions and skipping later ones. A ``break`` leaves the pass for the next loop to resume;
 a loop that ran to the end lets the next one start a new pass.
 
-A ``Response`` is a plain value copied out of the native result: iterating it yields the items the model produced, in native order, as ``PotentialAdjointResponse``, ``DensityResponse``, ``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``, ``AtomicChargeAdjointResponse``, ``RadialPotentialAdjointResponse`` or ``ParameterAdjointResponse``.
-Each item has the native item name as its ``name`` class attribute and its arrays as attributes named as their Fortran components, with the dimensions reversed.
+A ``Response`` is a plain value copied out of the native result: iterating it yields the items the model produced, in native order, as ``PotentialAdjointResponse``, ``PotentialAdjointTangentResponse``, ``DensityResponse``, ``DensityTangentResponse``, ``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``, ``AtomicChargeAdjointResponse``, ``RadialPotentialAdjointResponse`` or ``ParameterAdjointResponse``.
+Each item has the native item name as its ``name`` class attribute and its arrays as attributes named as their Fortran components, with the dimensions reversed. Host-independent continuum models also expose ``model.get_hessian(coupling, hessian)`` into ``(natoms, 3, natoms, 3)``.
 ``AtomicMultipoleAdjointResponse`` arrays the model did not compute are ``None``. ``ParameterAdjointResponse`` holds scalars ``dg_deps``, ... (``dE/dp`` of the model parameters, ``None`` for a parameter the model lacks, ``as_dict()`` for the present ones) and appears only with ``PCMParameters(parameter_derivatives=True)``.
 The :doc:`pyscf` module drives these loops for PySCF.
 

@@ -547,3 +547,15 @@ active GOSTSHYP requires reverse mode.
 On a density-dependent cavity, retain the response-phase density weights
 before calling ``get_gradient``, which replaces the response items. Use those
 weights for the additional host contractions described in :ref:`coupling-response`.
+
+Two-stage directional Hessian-vector products (and dense Hessians for
+host-independent models on DROP) follow the same protocol after the gradient
+phase: stage ``model%prepare_hvp_geometry(coupling, dirs, error)`` with
+``dirs(3, nat, ndir)``, answer any ``density_tangent`` request, stage
+``model%prepare_hvp(coupling, error)``, answer any ``point_potential_tangent``
+or ``gaussian_potential_tangent`` request, and call
+``model%get_hvp(coupling, response, hvp, error)`` to add into
+``hvp(3, nat, ndir)`` and emit ``potential_adjoint_tangent`` (and
+``density_tangent`` on density-backed cavities). Host-independent continuum
+models also provide ``model%get_hessian(coupling, hessian, error)`` into
+``hessian(3, nat, 3, nat)``.

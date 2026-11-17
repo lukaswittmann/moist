@@ -676,6 +676,36 @@ def prepare_model_gradient(
     )
 
 
+def prepare_model_hvp_geometry(
+    model: ModelHandle,
+    coupling: CouplingHandle,
+    natoms: int,
+    dirs: np.ndarray,
+) -> None:
+    """Stage Hessian-vector product stage 1 for ``dirs[ndir,natoms,3]``."""
+
+    _native_array(dirs, "dirs")
+    if dirs.ndim != 3 or dirs.shape[1:] != (int(natoms), 3):
+        raise ValueError(f"dirs must have shape (ndir, {int(natoms)}, 3)")
+    error_check(lib.moist_prepare_model_hvp_geometry)(
+        model.handle,
+        coupling.handle,
+        int(natoms),
+        int(dirs.shape[0]),
+        _cast("double*", dirs),
+    )
+
+
+def prepare_model_hvp(
+    model: ModelHandle, coupling: CouplingHandle
+) -> None:
+    """Stage Hessian-vector product stage 2 after stage 1 is complete."""
+
+    error_check(lib.moist_prepare_model_hvp)(
+        model.handle, coupling.handle
+    )
+
+
 def _accumulator(value, shape, name):
     """Require writable native buffers; never silently copy an accumulator."""
     if not isinstance(value, np.ndarray) or value.dtype != np.dtype(np.float64):
@@ -725,6 +755,33 @@ def get_model_gradient(model, coupling, response, natoms, gradient) -> None:
     error_check(lib.moist_get_model_gradient)(
         model.handle, coupling.handle, response.handle, int(natoms),
         _cast("double*", gradient),
+    )
+
+
+def get_model_hvp(model, coupling, response, natoms, ndir, hvp) -> None:
+    """Accumulate the native HVP columns into ``hvp[ndir,natoms,3]``.
+
+    ``response`` is cleared and refilled with the second-order host items.
+    """
+    _accumulator(hvp, (int(ndir), int(natoms), 3), "hvp")
+    error_check(lib.moist_get_model_hvp)(
+        model.handle,
+        coupling.handle,
+        response.handle,
+        int(natoms),
+        int(ndir),
+        _cast("double*", hvp),
+    )
+
+
+def get_model_hessian(model, coupling, natoms, hessian) -> None:
+    """Accumulate the dense nuclear Hessian into ``hessian[natoms,3,natoms,3]``."""
+    _accumulator(hessian, (int(natoms), 3, int(natoms), 3), "hessian")
+    error_check(lib.moist_get_model_hessian)(
+        model.handle,
+        coupling.handle,
+        int(natoms),
+        _cast("double*", hessian),
     )
 
 

@@ -19,7 +19,7 @@ DROP is independent of the particular surface definition; currently available:
  - :doc:`COSMO Fine Cavity (CFC-DROP) <cfc>`.
 
 During the projection and weighting procedure, DROP applies smooth switching functions, handles multiple projection branches in concave regions, and uses spatial screening to keep the construction differentiable and efficient.
-This makes the cavity suitable for continuum-solvation models that require smooth surface areas, polarization energies, and gradients, such as CPCM and pressure-based cavity terms.
+This makes the cavity suitable for continuum-solvation models that require smooth surface areas, polarization energies, gradients, and Hessians, such as CPCM and pressure-based cavity terms.
 
 .. _fig-drop-scheme:
 

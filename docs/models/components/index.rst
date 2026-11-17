@@ -14,23 +14,23 @@ Supported features
    |                                     +--------+--------------------+----------+----------+                         |                             |
    |                                     | Energy | Fock               | Gradient | Hessian  |                         |                             |
    +=====================================+========+====================+==========+==========+=========================+=============================+
-   | :doc:`CPCM <pcm/cpcm>`              | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`CPCM <pcm/cpcm>`              | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`COSMO <pcm/cosmo>`            | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`COSMO <pcm/cosmo>`            | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`IEF-PCM <pcm/iefpcm>`         | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`IEF-PCM <pcm/iefpcm>`         | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`SS(V)PE <pcm/ssvpe>`          | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`SS(V)PE <pcm/ssvpe>`          | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`DPCM <pcm/dpcm>`              | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`DPCM <pcm/dpcm>`              | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`LPB <pcm/lpb>`                | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |light|                     |
+   | :doc:`LPB <pcm/lpb>`                | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |light|                     |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`SLIC <pcm/slic>`              | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |no|                        |
+   | :doc:`SLIC <pcm/slic>`              | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |no|                        |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`NLE <pcm/nonlocal>`           | |yes|  | |yes|              | |yes|    | |soon|   | |yes|                   | |no|                        |
+   | :doc:`NLE <pcm/nonlocal>`           | |yes|  | |yes|              | |yes|    | |yes|    | |yes|                   | |no|                        |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
-   | :doc:`PV <pressure/pv>`             | |yes|  | |light| [#pvfock]_ | |yes|    | |no|     | |yes|                   | |no|                        |
+   | :doc:`PV <pressure/pv>`             | |yes|  | |light| [#pvfock]_ | |yes|    | |yes|    | |yes|                   | |no|                        |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
    | :doc:`GOSTSHYP <pressure/gostshyp>` | |yes|  | |yes|              | |yes|    | |no|     | |yes|                   | |no|                        |
    +-------------------------------------+--------+--------------------+----------+----------+-------------------------+-----------------------------+
@@ -45,8 +45,9 @@ Energies
    The energy and its Fock-matrix contribution in the SCF.
 
 Nuclear derivatives
-   Analytic nuclear gradients and Hessians.
-   The PCM components already provide the surface-weight tangents a Hessian needs.
+   Analytic nuclear gradients and Hessians (on DROP cavities; all nine PCM
+   components and PV expose directional HVPs and second-order surface-weight
+   tangents in the channel API).
 
 Cavity response
    Surface weights, the derivatives of the energy with respect to the surface quantities.

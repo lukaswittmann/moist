@@ -154,9 +154,24 @@ The table uses Fortran shapes; C and Python reverse the dimensions, so ``dphi_dr
    * - ``density_matrix``
      - the request's own ``nbasis``; the basis order of ``moist_get_isodensity_cart_layout``
      - ``dcart(nbasis, nbasis)``, symmetric
+   * - ``density_tangent``
+     - ``xyz(3, ngrid)``, ``dirs(3, natom, ndir)``
+     - ``d_rho(ngrid, ndir)``, ``d_grad_rho(3, ngrid, ndir)``,
+       ``d_hess_rho(6, ngrid, ndir)``, ``d_d3_rho(10, ngrid, ndir)``
+   * - ``point_potential_tangent``
+     - ``xyz``, ``d_xyz(3, ngrid, ndir)``, ``dirs(3, natom, ndir)``
+     - ``d_phi(ngrid, ndir)``, ``d_dphi_dr(3, ngrid, ndir)``,
+       ``d_d2phi_dr2(6, ngrid, ndir)``
+   * - ``gaussian_potential_tangent``
+     - ``xyz``, ``xi(ngrid)``, ``d_xyz(3, ngrid, ndir)``, ``d_xi(ngrid, ndir)``,
+       ``dirs(3, natom, ndir)``
+     - ``d_phi(ngrid, ndir)``, ``d_dphi_dr(3, ngrid, ndir)``,
+       ``d_dphi_dxi(ngrid, ndir)``, ``d_d2phi_dr2(6, ngrid, ndir)``,
+       ``d_d2phi_dr_dxi(3, ngrid, ndir)``
 
 Both potential requests carry the total nuclear plus electronic potential.
 ``dphi_dr`` is its derivative with respect to the evaluation point, without a charge multiplication or electric-field sign change. ``d2phi_dr2`` is its spatial Hessian; ``d2phi_dr_dxi`` differentiates that same spatial derivative with respect to the Gaussian inverse width ``xi``.
+The ``*_tangent`` requests supply batched directional derivatives along the host/surface perturbation ``dirs(3, natom, ndir)``, with ``d_xyz`` and ``d_xi`` moving the cavity surface in Stage 2; symmetric 6- and 10-component tensors (``d_hess_rho``, ``d_d2phi_dr2``, ``d_d3_rho``) are packed ``[xx, xy, xz, yy, yz, zz]`` and ``[xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz]``.
 
 On a Gaussian surface, PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fock matrix and nuclear gradient, including the normal derivative :math:`v_n=\mathbf n\cdot\nabla\phi` needed by some variants. ``dphi_dxi`` differentiates the inverse length ``xi`` in bohr**-1, not the exponent ``xi**2``.
 PCM requests ``point_potential`` instead on point surfaces, and on Gaussian surfaces when its ``point_potential`` option is set; the host then uses the bare Coulomb operator in all three places, and the surface operator stays Gaussian.
@@ -203,6 +218,16 @@ The host contracts each with its own derivative of the quantity it is conjugate 
    * - ``gaussian_amplitude``
      - ``w_overlap(ngrid)``, ``w_normal_deriv(ngrid)``
      - A GOSTSHYP component is present
+   * - ``potential_adjoint_tangent``
+     - ``w_phi(ngrid)``, ``dw_phi(ngrid, ndir)``, ``w_dphi_dr(3, ngrid)``,
+       ``dw_dphi_dr(3, ngrid, ndir)``, ``d_xyz(3, ngrid, ndir)``,
+       ``d_xi(ngrid, ndir)``
+     - Any electrostatic component is present, HVP phase
+   * - ``density_tangent``
+     - ``w_rho(ngrid)``, ``w_grad_rho(3, ngrid)``, ``w_hess_rho(3, 3, ngrid)``,
+       ``dw_rho(ngrid, ndir)``, ``dw_grad_rho(3, ngrid, ndir)``,
+       ``dw_hess_rho(6, ngrid, ndir)``, ``d_xyz(3, ngrid, ndir)``
+     - The cavity surface follows the host density, HVP phase
 
 The potential adjoint ``w_phi = dE/dphi`` is the induced surface charge of a stationary PCM (CPCM, COSMO); a non-symmetric response matrix (IEF-PCM, SS(V)PE) emits the symmetrized adjoint instead, which the host contracts identically. Variants that use :math:`v_n` also return ``w_dphi_dr``. Otherwise this field is absent from the native field list and is ``None`` in Python. The host contracts this vector with its derivative of the raw spatial potential gradient, including the electronic contribution to the Fock matrix and the nuclear contribution to the gradient.
 Density adjoints already include the level-set scale; do not apply it again.
@@ -247,6 +272,9 @@ Evaluation does not consume answers.
      - Clear answers except build inputs, select energy, reset the cursor.
    * - ``prepare_response`` / ``prepare_gradient``
      - Retain answers, select the phase, reset the cursor.
+   * - ``prepare_hvp_geometry`` / ``prepare_hvp``
+     - Stage HVP Stage 1 (density tangents at fixed surface for ``dirs``) and Stage 2
+       (surface tangents ``d_xyz``/``d_xi`` and potential tangents), resetting the cursor.
    * - ``next()`` returns true
      - Move the cursor to the next request, in declaration order, with an
        output the staged phase requires and no valid answer for it.
@@ -281,7 +309,7 @@ For a new host density, follow the SCF workflow above.
 Energy and gradient accumulation
 --------------------------------
 
-``get_energy`` and ``get_gradient`` add their contribution to caller-owned accumulators in every language. Initialize them to zero for a fresh result, or to an existing contribution to add MOIST's term.
+``get_energy``, ``get_gradient``, ``get_hvp`` and ``get_hessian`` add their contribution to caller-owned accumulators in every language. Initialize them to zero for a fresh result, or to an existing contribution to add MOIST's term.
 Repeated calls add repeated contributions; on failure the accumulator is unchanged.
 Responses are replaced by the current phase's items; they are not accumulators.
 

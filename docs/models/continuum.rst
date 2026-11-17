@@ -132,6 +132,7 @@ The ``model_continuum_type`` owns one cavity and an ordered list of components:
 3. ``get_energy`` sums and stores each component's contribution in its ``energy`` field (:doc:`/reference/fields`).
 4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gaussian_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
 5. ``get_gradient`` adds the direct nuclear terms, contracts the gradient-side surface weights through the cavity, and refills the response with the same direct items.
+6. Two-stage HVP evaluation stages ``prepare_hvp_geometry`` (host density tangents at fixed surface) followed by ``prepare_hvp`` (surface tangents and electrostatic tangents), then calls ``get_hvp`` to accumulate directional HVP columns and emit ``potential_adjoint_tangent`` / ``density_tangent`` response items. Host-independent models on DROP also support ``get_hessian``.
 
 Writing a Component
 -------------------
@@ -148,4 +149,6 @@ Components may also override default hooks:
 - ``get_surface_weights`` accumulates the component's own cavity surface weights;
 - ``get_host_surface_weights`` folds the weights the host answered into the same accumulator;
 - ``get_gradient_surface_weights`` does the same for the gradient path, and defaults to ``get_surface_weights``;
-- ``get_direct_gradient`` adds nuclear-gradient terms that do not flow through the surface.
+- ``get_direct_gradient`` adds nuclear-gradient terms that do not flow through the surface;
+- ``supports_hessian`` and ``needs_hvp_coupling`` advertise second-order capability and whether Stage-2 HVP coupling answers are needed (``reset_hvp`` resets per-batch HVP state);
+- ``get_hessian_surface_weights``, ``get_direct_hessian``, and ``get_trace_response_tangent`` accumulate second-order surface-weight tangents, non-surface Hessian-vector columns, and direct response tangents.

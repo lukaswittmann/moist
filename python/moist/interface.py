@@ -191,6 +191,35 @@ class PotentialAdjointResponse(_ImmutableArrayValue):
 
 
 @dataclass(frozen=True)
+class PotentialAdjointTangentResponse(_ImmutableArrayValue):
+    """Second-order potential adjoint item of a solvation HVP response.
+
+    ``w_phi``
+        ``(ngrid,)`` primal potential adjoints ``dE/dphi_i``.
+    ``dw_phi``
+        ``(ndir, ngrid)`` total directional tangents ``d(w_phi_i)/dt``.
+    ``d_xyz``
+        ``(ndir, ngrid, 3)`` surface grid point tangents ``d(r_i)/dt``.
+    ``w_dphi_dr``
+        Optional ``(ngrid, 3)`` primal normal-trace weights.
+    ``dw_dphi_dr``
+        Optional ``(ndir, ngrid, 3)`` directional tangents of normal-trace weights.
+    ``d_xi``
+        Optional ``(ndir, ngrid)`` Gaussian width tangents ``d(xi_i)/dt``.
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "potential_adjoint_tangent"
+
+    w_phi: np.ndarray
+    dw_phi: np.ndarray
+    d_xyz: np.ndarray
+    w_dphi_dr: Optional[np.ndarray] = None
+    dw_dphi_dr: Optional[np.ndarray] = None
+    d_xi: Optional[np.ndarray] = None
+
+
+@dataclass(frozen=True)
 class DensityResponse(_ImmutableArrayValue):
     """Density item of a solvation response.
 
@@ -222,6 +251,32 @@ class DensityResponse(_ImmutableArrayValue):
     w_rho: np.ndarray
     w_grad_rho: np.ndarray
     w_hess_rho: np.ndarray
+
+
+@dataclass(frozen=True)
+class DensityTangentResponse(_ImmutableArrayValue):
+    """Second-order density item of a solvation HVP response.
+
+    ``w_rho``, ``w_grad_rho``, ``w_hess_rho``
+        Primal density weights of shapes ``(ngrid,)``, ``(ngrid, 3)``,
+        ``(ngrid, 3, 3)``.
+    ``dw_rho``, ``dw_grad_rho``, ``dw_hess_rho``
+        Directional tangents of shapes ``(ndir, ngrid)``, ``(ndir, ngrid, 3)``,
+        ``(ndir, ngrid, 6)`` packed ``[xx, xy, xz, yy, yz, zz]``.
+    ``d_xyz``
+        ``(ndir, ngrid, 3)`` surface grid point tangents ``d(r_i)/dt``.
+    """
+
+    #: Native item name
+    name: ClassVar[str] = "density_tangent"
+
+    w_rho: np.ndarray
+    w_grad_rho: np.ndarray
+    w_hess_rho: np.ndarray
+    dw_rho: np.ndarray
+    dw_grad_rho: np.ndarray
+    dw_hess_rho: np.ndarray
+    d_xyz: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -355,7 +410,9 @@ class ParameterAdjointResponse:
 #: One item of a solvation response
 _ResponseItem = Union[
     PotentialAdjointResponse,
+    PotentialAdjointTangentResponse,
     DensityResponse,
+    DensityTangentResponse,
     GaussianAmplitudeResponse,
     AtomicMultipoleAdjointResponse,
     AtomicChargeAdjointResponse,
@@ -432,7 +489,9 @@ _RESPONSE_ITEMS = {
     kind.name: kind
     for kind in (
         PotentialAdjointResponse,
+        PotentialAdjointTangentResponse,
         DensityResponse,
+        DensityTangentResponse,
         GaussianAmplitudeResponse,
         AtomicMultipoleAdjointResponse,
         AtomicChargeAdjointResponse,
@@ -1222,6 +1281,150 @@ class GaussianPotentialRequest(CouplingRequest):
     __slots__ = ()
 
 
+def _require_request_inputs(cls, coupling: Coupling, names: tuple[str, ...]) -> dict[str, np.ndarray]:
+    """Read and validate native inputs declared on the current request."""
+    inputs = _read_native_fields(
+        coupling._handle,
+        library.get_coupling_request_field_count,
+        library.get_coupling_request_field_info,
+        library.get_coupling_request_field_real,
+    )
+    missing = [name for name in names if name not in inputs]
+    if missing:
+        raise RuntimeError(
+            f"Coupling request '{cls.name}' does not declare input '{missing[0]}'"
+        )
+    return {name: inputs[name] for name in names}
+
+
+class DensityTangentRequest(CouplingRequest):
+    """Stage-1 bare electron-density directional tangents at fixed surface points."""
+
+    name = "density_tangent"
+    _extent = "grid_dir"
+    _outputs = {"d_rho": (), "d_grad_rho": (3,), "d_hess_rho": (6,), "d_d3_rho": (10,)}
+    __slots__ = ("_xyz", "_dirs")
+
+    def __init__(self, missing: Iterable[str], xyz: np.ndarray, dirs: np.ndarray) -> None:
+        super().__init__(missing)
+        self._xyz = _immutable_array(np.asarray(xyz, dtype=np.float64))
+        self._dirs = _immutable_array(np.asarray(dirs, dtype=np.float64))
+
+    @property
+    def xyz(self) -> np.ndarray:
+        """``(ngrid, 3)`` surface positions in bohr."""
+        return self._xyz
+
+    @property
+    def dirs(self) -> np.ndarray:
+        """``(ndir, natom, 3)`` nuclear direction batch."""
+        return self._dirs
+
+    @classmethod
+    def _inputs(cls, coupling: Coupling) -> dict:
+        return _require_request_inputs(cls, coupling, ("xyz", "dirs"))
+
+
+class PointPotentialTangentRequest(CouplingRequest):
+    """Stage-2 point-potential directional tangents along moving surface and nuclei."""
+
+    name = "point_potential_tangent"
+    _extent = "grid_dir"
+    _outputs = {"d_phi": (), "d_dphi_dr": (3,), "d_d2phi_dr2": (6,)}
+    __slots__ = ("_xyz", "_d_xyz", "_dirs")
+
+    def __init__(
+        self,
+        missing: Iterable[str],
+        xyz: np.ndarray,
+        d_xyz: np.ndarray,
+        dirs: np.ndarray,
+    ) -> None:
+        super().__init__(missing)
+        self._xyz = _immutable_array(np.asarray(xyz, dtype=np.float64))
+        self._d_xyz = _immutable_array(np.asarray(d_xyz, dtype=np.float64))
+        self._dirs = _immutable_array(np.asarray(dirs, dtype=np.float64))
+
+    @property
+    def xyz(self) -> np.ndarray:
+        """``(ngrid, 3)`` surface positions in bohr."""
+        return self._xyz
+
+    @property
+    def d_xyz(self) -> np.ndarray:
+        """``(ndir, ngrid, 3)`` surface position tangents."""
+        return self._d_xyz
+
+    @property
+    def dirs(self) -> np.ndarray:
+        """``(ndir, natom, 3)`` nuclear direction batch."""
+        return self._dirs
+
+    @classmethod
+    def _inputs(cls, coupling: Coupling) -> dict:
+        return _require_request_inputs(cls, coupling, ("xyz", "d_xyz", "dirs"))
+
+
+class GaussianPotentialTangentRequest(CouplingRequest):
+    """Stage-2 Gaussian-potential directional tangents along moving surface and nuclei."""
+
+    name = "gaussian_potential_tangent"
+    _extent = "grid_dir"
+    _outputs = {
+        "d_phi": (),
+        "d_dphi_dr": (3,),
+        "d_dphi_dxi": (),
+        "d_d2phi_dr2": (6,),
+        "d_d2phi_dr_dxi": (3,),
+    }
+    __slots__ = ("_xyz", "_xi", "_d_xyz", "_d_xi", "_dirs")
+
+    def __init__(
+        self,
+        missing: Iterable[str],
+        xyz: np.ndarray,
+        xi: np.ndarray,
+        d_xyz: np.ndarray,
+        d_xi: np.ndarray,
+        dirs: np.ndarray,
+    ) -> None:
+        super().__init__(missing)
+        self._xyz = _immutable_array(np.asarray(xyz, dtype=np.float64))
+        self._xi = _immutable_array(np.asarray(xi, dtype=np.float64))
+        self._d_xyz = _immutable_array(np.asarray(d_xyz, dtype=np.float64))
+        self._d_xi = _immutable_array(np.asarray(d_xi, dtype=np.float64))
+        self._dirs = _immutable_array(np.asarray(dirs, dtype=np.float64))
+
+    @property
+    def xyz(self) -> np.ndarray:
+        """``(ngrid, 3)`` surface positions in bohr."""
+        return self._xyz
+
+    @property
+    def xi(self) -> np.ndarray:
+        """``(ngrid,)`` Gaussian widths in bohr**-1."""
+        return self._xi
+
+    @property
+    def d_xyz(self) -> np.ndarray:
+        """``(ndir, ngrid, 3)`` surface position tangents."""
+        return self._d_xyz
+
+    @property
+    def d_xi(self) -> np.ndarray:
+        """``(ndir, ngrid)`` Gaussian width tangents."""
+        return self._d_xi
+
+    @property
+    def dirs(self) -> np.ndarray:
+        """``(ndir, natom, 3)`` nuclear direction batch."""
+        return self._dirs
+
+    @classmethod
+    def _inputs(cls, coupling: Coupling) -> dict:
+        return _require_request_inputs(cls, coupling, ("xyz", "xi", "d_xyz", "d_xi", "dirs"))
+
+
 class GaussianMomentRequest(CouplingRequest):
     """Independently requested s, p, d and contracted f density moments.
 
@@ -1303,8 +1506,16 @@ class DensityMatrixRequest(CouplingRequest):
 
 
 _REQUEST_CLASSES = {
-    cls.name: cls for cls in (PointPotentialRequest, GaussianPotentialRequest, GaussianMomentRequest,
-                              NuclearChargesRequest, DensityMatrixRequest)
+    cls.name: cls for cls in (
+        PointPotentialRequest,
+        GaussianPotentialRequest,
+        GaussianMomentRequest,
+        NuclearChargesRequest,
+        DensityMatrixRequest,
+        DensityTangentRequest,
+        PointPotentialTangentRequest,
+        GaussianPotentialTangentRequest,
+    )
 }
 
 
@@ -1371,6 +1582,9 @@ class Coupling:
             # The current request carries its own size, read like any input
             nbasis = self._current_kind()._inputs(self)["nbasis"]
             return (nbasis, nbasis)
+        if extent == "grid_dir":
+            ndir = self._current_kind()._inputs(self)["dirs"].shape[0]
+            return (ndir, self._owner._coupling_ngrid())
         return (self._owner._coupling_ngrid(),)
 
     def __iter__(self) -> Iterator[CouplingRequest]:
@@ -1845,6 +2059,19 @@ class SolvationModel:
         self._require_updated()
         library.prepare_model_gradient(self._model, coupling._handle)
 
+    def prepare_hvp_geometry(self, coupling: Coupling, dirs) -> None:
+        """Stage HVP stage 1 for nuclear direction batch ``dirs`` of shape ``(ndir, natoms, 3)``."""
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        dirs_arr = np.ascontiguousarray(dirs, dtype=np.float64)
+        library.prepare_model_hvp_geometry(self._model, coupling._handle, self._natoms, dirs_arr)
+
+    def prepare_hvp(self, coupling: Coupling) -> None:
+        """Stage HVP stage 2 on a coupling whose stage-1 walk is complete."""
+        self._require_updated()
+        library.prepare_model_hvp(self._model, coupling._handle)
+
     def get_energy(self, coupling: Coupling, energy: np.ndarray) -> None:
         """Accumulate the staged energy into a writable float64 scalar array.
 
@@ -1883,3 +2110,34 @@ class SolvationModel:
             self._model, coupling._handle, handle, self._natoms, gradient
         )
         return Response._from_handle(handle)
+
+    def get_hvp(self, coupling: Coupling, hvp: np.ndarray) -> Response:
+        """Accumulate nuclear HVP columns into ``hvp[ndir, natoms, 3]`` and return host response items.
+
+        The accumulator must be a writable C-contiguous float64 array with shape
+        ``(ndir, natoms, 3)``.  Returns :class:`Response` carrying
+        ``potential_adjoint_tangent`` and (when present) ``density_tangent`` items.
+        """
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        ndir = hvp.shape[0] if isinstance(hvp, np.ndarray) and hvp.ndim >= 1 else 0
+        handle = self._response_handle()
+        library.get_model_hvp(
+            self._model, coupling._handle, handle, self._natoms, ndir, hvp
+        )
+        return Response._from_handle(handle)
+
+    def get_hessian(self, coupling: Coupling, hessian: np.ndarray) -> None:
+        """Accumulate the dense nuclear Hessian into ``hessian[natoms, 3, natoms, 3]``.
+
+        Supported only for host-independent continuum models (e.g. PV on a
+        geometric DROP cavity).  Models requiring host tangents refuse and
+        use :meth:`prepare_hvp_geometry`, :meth:`prepare_hvp`, and :meth:`get_hvp`.
+        """
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        library.get_model_hessian(
+            self._model, coupling._handle, self._natoms, hessian
+        )

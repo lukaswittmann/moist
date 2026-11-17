@@ -50,6 +50,7 @@ from .interface import (
     Structure,
     _immutable_array,
 )
+from ._pyscf_hessian import _make_moist_hessian, solvation_hessian, solvation_hvp
 from .context import Context, _resolve_context
 from .density import GaussianBasis
 
@@ -1154,6 +1155,21 @@ class PySCFSolvation:
         """Return the total solvation-energy nuclear gradient at fixed ``dm``, ``(natm, 3)``."""
         return sum(self.gradient_channels(dm).values())
 
+    def hvp(
+        self,
+        dm,
+        dirs=None,
+        dm_dirs=None,
+        *,
+        shared: Optional[dict] = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return directional nuclear HVP ``(ndir, natm, 3)`` and Fock tangent ``(ndir, nao, nao)``."""
+        return solvation_hvp(self, dm, dirs, dm_dirs, shared=shared)
+
+    def hessian(self, dm) -> np.ndarray:
+        """Return fixed-density solvation nuclear Hessian ``(natm, natm, 3, 3)``."""
+        return solvation_hessian(self, dm)
+
 
 # -----------------------------------------------------------------------------
 # The mean-field hook
@@ -1263,6 +1279,20 @@ class _MoistState:
             self.reset()
             raise
 
+    def hvp(self, dm, dirs=None, dm_dirs=None, *, shared=None):
+        try:
+            return self._driver().hvp(dm, dirs, dm_dirs, shared=shared)
+        except Exception:
+            self.reset()
+            raise
+
+    def hessian(self, dm):
+        try:
+            return self._driver().hessian(dm)
+        except Exception:
+            self.reset()
+            raise
+
 
 class _MoistSCF:
     _keys = {"with_moist"}
@@ -1339,15 +1369,20 @@ class _MoistSCF:
 
     Gradients = nuc_grad_method
 
+    def Hessian(self):
+        return _make_moist_hessian(self)
+
     def density_fit(self, *args, **kwargs):
         base = self.undo_moist().density_fit(*args, **kwargs)
         return moist_for_scf(base, cavity=self.with_moist.cavity,
                              components=self.with_moist.components, context=self.with_moist.context)
 
     def _unsupported(self, *args, **kwargs):
-        raise NotImplementedError("MOIST currently supports ground-state SCF and nuclear gradients only")
+        raise NotImplementedError(
+            "MOIST currently supports ground-state SCF, nuclear gradients, and nuclear Hessians only"
+        )
 
-    newton = stability = gen_response = Hessian = _unsupported
+    newton = stability = gen_response = _unsupported
     TDA = TDHF = TDDFT = CasidaTDDFT = _unsupported
     MP2 = CISD = CCSD = CASCI = CASSCF = _unsupported
     to_gpu = to_rhf = to_uhf = to_rks = to_uks = to_ghf = to_gks = _unsupported

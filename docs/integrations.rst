@@ -22,7 +22,8 @@ PySCF
 
 The ``moist.pyscf`` interface attaches MOIST to an existing PySCF calculation
 through ``mf.MOIST(...)``. It supports RHF, RKS, UHF and UKS, including density
-fitting, nuclear gradients, and energy and gradient scanners.
+fitting, nuclear gradients and Hessians, directional HVPs, and energy and
+gradient scanners.
 
 Choose a DROP or iSwiG cavity and combine CPCM, COSMO, pressure-volume and
 GOSTSHYP components. DROP supports SvdW, CFC and electron-isodensity surfaces.

@@ -28,8 +28,17 @@ Its main host-facing calls are:
    Add the nuclear-gradient contribution, and with it the host part of the
    gradient phase.
 
+``get_hvp(coupling, response, hvp, error)``
+   Add directional Hessian-vector products after two-stage HVP staging
+   (``prepare_hvp_geometry`` and ``prepare_hvp``) and fill second-order host
+   response tangents.
+
+``get_hessian(coupling, hessian, error)``
+   Assemble the dense nuclear Hessian of a host-independent continuum model
+   from unit-direction HVPs.
+
 The ``coupling_type`` holds the requests the host answers, visited one at a time with ``next()``, and ``response_type`` the list of items the model hands back, walked the same way; both are described in :doc:`/reference/coupling`.
-The base provides ``new_coupling``, ``release_coupling`` and the ``prepare_*`` calls.
+The base provides ``new_coupling``, ``release_coupling`` and the ``prepare_*`` calls (including ``prepare_hvp_geometry`` and ``prepare_hvp``).
 Concrete models implement ``update``, ``atom_count``, ``declare_pass`` and the three evaluation calls; a model whose update waits for host answers overrides ``build``, calling the base ``model_build`` first.
 ``new_coupling`` requires an updated model and the ``prepare_*`` evaluation calls a built one.
 

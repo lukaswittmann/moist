@@ -297,7 +297,7 @@ def test_unsupported_operations_are_explicit(mol, monkeypatch):
     monkeypatch.setattr(mol, "has_ecp", lambda: True)
     with pytest.raises(ValueError, match="effective core potentials"):
         attach(mol.RHF())
-    for name in ["newton", "stability", "gen_response", "Hessian", "TDA", "TDHF", "TDDFT", "MP2", "CCSD", "to_gpu"]:
+    for name in ["newton", "stability", "gen_response", "TDA", "TDHF", "TDDFT", "MP2", "CCSD", "to_gpu"]:
         with pytest.raises(NotImplementedError):
             getattr(mf, name)()
 

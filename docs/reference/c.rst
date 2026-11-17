@@ -151,7 +151,8 @@ For example, positions and gradients are ``[natoms][3]``; grid vectors are
 of the host loop -- the coupling and response entries below and the cavity
 and model field getters -- take no size: moist reads or writes exactly the documented
 shape, and the host allocates it. ``moist_get_cavity_results``,
-``moist_get_cavity_gaussian``, ``moist_get_model_gradient`` and the
+``moist_get_cavity_gaussian``, ``moist_get_model_gradient``,
+``moist_get_model_hvp``, ``moist_get_model_hessian`` and the
 gradient-tensor getters take ``int``
 capacities, which may exceed the logical size; padding remains untouched.
 The ``moist_contract_*`` entries use the cavity's own ``ngrid`` and ``nsph``.
@@ -328,7 +329,19 @@ including answers submitted earlier in the same pass.
 ``moist_get_model_gradient`` adds into ``gradient[nat_cap][3]`` and fills the
 response with the host part of the gradient phase. For density-dependent
 cavities, retain the response-phase density weights as described in
-:doc:`coupling`. See ``test/api/example.c`` for executable error-handling
+:doc:`coupling`.
+
+For two-stage directional Hessian-vector products and dense Hessians, stage
+``moist_prepare_model_hvp_geometry(error, model, coupling, nat_cap, ndir, dirs)``
+with ``dirs[ndir][nat_cap][3]``, answer any Stage-1 requests, stage
+``moist_prepare_model_hvp(error, model, coupling)``, answer any Stage-2 requests,
+and call ``moist_get_model_hvp(error, model, coupling, response, nat_cap, ndir_cap, hvp)``
+to add into ``hvp[ndir_cap][nat_cap][3]`` and emit ``potential_adjoint_tangent``
+and (on density-backed cavities) ``density_tangent``. Host-independent continuum
+models also support ``moist_get_model_hessian(error, model, coupling, nat_cap, hessian)``
+into ``hessian[nat_cap][3][nat_cap][3]``.
+
+See ``test/api/example.c`` for executable error-handling
 and lifetime examples.
 
 Component energies
@@ -368,7 +381,8 @@ It is empty at verbosity 0 and holds the table from 1; no update prints it on it
 Contracts
 ---------
 
-``moist_get_model_energy`` and ``moist_get_model_gradient`` **accumulate** into
+``moist_get_model_energy``, ``moist_get_model_gradient``, ``moist_get_model_hvp``
+and ``moist_get_model_hessian`` **accumulate** into
 caller-owned buffers; initialize them before the first call. Failure leaves the
 accumulator unchanged. If a component fails during energy evaluation, only
 earlier components' energies remain available.
