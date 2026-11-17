@@ -15,8 +15,10 @@ module moist_cavity_drop
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, update_cavity_base, build_cavity_base, &
       & cavity_declare_pass, surface_adjoint_response_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
-      & coupling_close_view
-   use moist_channels_response, only: response_type, density_response_type, response_accumulate
+      & coupling_close_view, coupling_register, request_require, coupling_get_hvp_dirs, &
+      & density_tangent_request_type, moist_phase_hvp_geometry
+   use moist_channels_response, only: response_type, density_response_type, &
+      & density_tangent_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type, cavity_hessian_exchange_type
    use moist_channels_fields, only: field_query_type
@@ -41,7 +43,10 @@ module moist_cavity_drop
    use moist_utils_mem, only: grow_array, filter_array
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type, &
+      & drop_n_host_jet
+   use moist_cavity_drop_derivatives_field_tangent, only: drop_n_sym2, drop_n_sym3, &
+      & drop_sym2_idx, drop_sym3_idx
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
       & drop_point_scratch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
@@ -270,6 +275,14 @@ module moist_cavity_drop
       procedure :: get_surface_hessian => get_surface_hessian_drop
       !> Public: dense nuclear Hessian of the cavity contribution
       procedure :: get_hessian => get_hessian_drop
+      !> DROP implements second-order surface tangents and Hessians
+      procedure :: supports_hessian => drop_supports_hessian
+      !> Whether the level set emits density response items
+      procedure :: has_density_response => drop_has_density_response
+      !> Read Stage-1 density tangents into the Hessian exchange
+      procedure :: read_hvp_geometry => read_hvp_geometry_drop
+      !> Map exchange LSF adjoint tangents into a density_tangent response item
+      procedure :: get_surface_response_tangent => get_surface_response_tangent_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop
@@ -1216,11 +1229,11 @@ contains
 
    end subroutine project_surface_drop
 
-   !> Declare the build-phase requests of the level set at the cavity scope
+   !> Declare the build-phase and Stage-1 HVP requests of the level set at scope 0
    !>
-   !> @param[in]    self     Cavity instance
-   !> @param[inout] coupling Coupling being declared
-   !> @param[out]   error    Error handling
+   !> @param[in]     self      cavity instance
+   !> @param[in,out] coupling  coupling being declared
+   !> @param[out]    error     error handling
    subroutine declare_coupling_drop(self, coupling, error)
       !> Cavity instance
       class(cavity_type_drop), intent(in) :: self
@@ -1229,7 +1242,29 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      if (allocated(self%lsf_model)) call self%lsf_model%declare_coupling(coupling, error)
+      !> Stage-1 density tangent request and nuclear directions
+      type(density_tangent_request_type) :: req
+      real(wp), allocatable :: dirs(:, :, :)
+
+      if (.not. allocated(self%lsf_model)) return
+      call self%lsf_model%declare_coupling(coupling, error)
+      if (allocated(error)) return
+      if (.not. self%built .or. .not. self%lsf_model%host_defined) return
+      call coupling_get_hvp_dirs(coupling, dirs)
+      if (.not. allocated(dirs)) return
+
+      allocate (req%xyz(3, self%ngrid))
+      if (self%ngrid > 0) req%xyz = self%xyz(:, 1:self%ngrid)
+      call move_alloc(dirs, req%dirs)
+      call request_require(req, moist_phase_hvp_geometry, "d_rho", error)
+      if (allocated(error)) return
+      call request_require(req, moist_phase_hvp_geometry, "d_grad_rho", error)
+      if (allocated(error)) return
+      call request_require(req, moist_phase_hvp_geometry, "d_hess_rho", error)
+      if (allocated(error)) return
+      call request_require(req, moist_phase_hvp_geometry, "d_d3_rho", error)
+      if (allocated(error)) return
+      call coupling_register(coupling, "density_tangent", req, error)
 
    end subroutine declare_coupling_drop
 
@@ -1271,7 +1306,161 @@ contains
    !*                                Second derivatives                                 *!
    !* ================================================================================= *!
 
-   ! Coming soon ;)
+   !> Report second-order surface support for DROP cavities
+   !>
+   !> @param[in] self  DROP cavity instance
+   pure function drop_supports_hessian(self) result(supported)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Second-order support flag
+      logical :: supported
+
+      supported = .true.
+
+   end function drop_supports_hessian
+
+   !> Report whether the level set emits density response items
+   !>
+   !> @param[in] self  DROP cavity instance
+   function drop_has_density_response(self) result(has_density)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Density response flag
+      logical :: has_density
+      !> Unused density chain-rule factor
+      real(wp) :: factor
+
+      has_density = .false.
+      if (allocated(self%lsf_model)) has_density = self%lsf_model%density_adjoint_factor(factor)
+
+   end function drop_has_density_response
+
+   !> Read Stage-1 bare-density tangents from `coupling` into `exchange%host_jets`
+   !>
+   !> @param[in]     self      DROP cavity instance
+   !> @param[in,out] coupling  staged host coupling
+   !> @param[in,out] exchange  Hessian exchange receiving `host_jets`
+   !> @param[out]    error     error handling
+   subroutine read_hvp_geometry_drop(self, coupling, exchange, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Staged host coupling
+      type(coupling_type), intent(inout) :: coupling
+      !> Hessian exchange receiving `host_jets`
+      type(cavity_hessian_exchange_type), intent(inout) :: exchange
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Scoped read view and raw density tangents
+      type(coupling_view_type) :: view
+      real(wp), allocatable :: d_rho(:, :), d_grad_rho(:, :, :)
+      real(wp), allocatable :: d_hess_rho(:, :, :), d_d3_rho(:, :, :)
+      !> Unpacked spatial tensors and chain-rule factor
+      real(wp) :: dv2(3, 3), dv3(3, 3, 3), factor, val
+      integer :: ngrid, ndir, igrid, idir, k, a, b, c
+
+      if (.not. allocated(self%lsf_model)) return
+      if (.not. self%lsf_model%host_defined) return
+      if (.not. self%lsf_model%density_adjoint_factor(factor)) then
+         call fatal_error(error, "Host-defined DROP level set has no density chain-rule factor")
+         return
+      end if
+
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_tangent", "d_rho", d_rho, error)
+      if (.not. allocated(error)) call view%read("density_tangent", "d_grad_rho", d_grad_rho, error)
+      if (.not. allocated(error)) call view%read("density_tangent", "d_hess_rho", d_hess_rho, error)
+      if (.not. allocated(error)) call view%read("density_tangent", "d_d3_rho", d_d3_rho, error)
+      call coupling_close_view(coupling)
+      if (allocated(error)) return
+
+      ngrid = size(d_rho, 1)
+      ndir = size(d_rho, 2)
+      if (allocated(exchange%host_jets)) deallocate (exchange%host_jets)
+      allocate (exchange%host_jets(drop_n_host_jet, ngrid, ndir), source=0.0_wp)
+      do idir = 1, ndir
+         do igrid = 1, ngrid
+            exchange%host_jets(1, igrid, idir) = factor*d_rho(igrid, idir)
+            exchange%host_jets(2:4, igrid, idir) = factor*d_grad_rho(:, igrid, idir)
+            do k = 1, drop_n_sym2
+               a = drop_sym2_idx(1, k)
+               b = drop_sym2_idx(2, k)
+               val = factor*d_hess_rho(k, igrid, idir)
+               dv2(a, b) = val
+               dv2(b, a) = val
+            end do
+            exchange%host_jets(5:13, igrid, idir) = reshape(dv2, [9])
+            do k = 1, drop_n_sym3
+               a = drop_sym3_idx(1, k)
+               b = drop_sym3_idx(2, k)
+               c = drop_sym3_idx(3, k)
+               val = factor*d_d3_rho(k, igrid, idir)
+               dv3(a, b, c) = val
+               dv3(a, c, b) = val
+               dv3(b, a, c) = val
+               dv3(b, c, a) = val
+               dv3(c, a, b) = val
+               dv3(c, b, a) = val
+            end do
+            exchange%host_jets(14:40, igrid, idir) = reshape(dv3, [27])
+         end do
+      end do
+      exchange%have_host_jets = .true.
+
+   end subroutine read_hvp_geometry_drop
+
+   !> Pack LSF adjoint weights and tangents from `exchange` into `density_tangent`
+   !>
+   !> @param[in]     self      DROP cavity instance
+   !> @param[in]     exchange  completed Hessian exchange
+   !> @param[in,out] response  response accumulator
+   !> @param[out]    error     error handling
+   subroutine get_surface_response_tangent_drop(self, exchange, response, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Completed Hessian exchange
+      type(cavity_hessian_exchange_type), intent(in) :: exchange
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Density tangent response item
+      type(density_tangent_response_type) :: item
+      real(wp) :: factor
+      integer :: ngrid, ndir, k, a, b
+
+      if (.not. allocated(self%lsf_model)) return
+      if (.not. self%lsf_model%density_adjoint_factor(factor)) return
+      if (.not. (exchange%want_outputs .and. exchange%want_lsf)) then
+         call fatal_error(error, "get_surface_response_tangent_drop: exchange LSF outputs are missing")
+         return
+      end if
+
+      ngrid = size(exchange%dw_value, 1)
+      ndir = size(exchange%dw_value, 2)
+      allocate (item%w_rho(ngrid))
+      allocate (item%w_grad_rho(3, ngrid))
+      allocate (item%w_hess_rho(3, 3, ngrid))
+      allocate (item%dw_rho(ngrid, ndir))
+      allocate (item%dw_grad_rho(3, ngrid, ndir))
+      allocate (item%dw_hess_rho(drop_n_sym2, ngrid, ndir))
+      allocate (item%d_xyz(3, ngrid, ndir))
+
+      item%w_rho = factor*exchange%w_value
+      item%w_grad_rho = factor*exchange%w_gradient
+      item%w_hess_rho = factor*exchange%w_hessian
+      item%dw_rho = factor*exchange%dw_value
+      item%dw_grad_rho = factor*exchange%dw_gradient
+      do k = 1, drop_n_sym2
+         a = drop_sym2_idx(1, k)
+         b = drop_sym2_idx(2, k)
+         item%dw_hess_rho(k, :, :) = factor*exchange%dw_hessian(a, b, :, :)
+      end do
+      item%d_xyz = exchange%d_xyz
+      call response_accumulate(response, item, error)
+
+   end subroutine get_surface_response_tangent_drop
 
    !* ================================================================================= *!
    !*                            Grids and cashing/screening                            *!

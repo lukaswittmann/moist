@@ -22,12 +22,12 @@ module moist_model_type
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
       & moist_phase_energy, moist_phase_response, moist_phase_gradient, moist_phase_build, &
-      & coupling_arm, coupling_invalidate, coupling_check_mandatory
+      & coupling_arm, coupling_invalidate, coupling_check_mandatory, coupling_clear_hvp
 
    implicit none(type, external)
    private
 
-   public :: solvation_model_type, model_build
+   public :: solvation_model_type, model_build, invalidate_model, model_release_coupling
 
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
@@ -59,6 +59,10 @@ module moist_model_type
       procedure(get_model_energy), deferred :: get_energy
       procedure(get_model_response), deferred :: get_response
       procedure(get_model_gradient), deferred :: get_gradient
+      !> Evaluate Hessian-vector products and second-order response tangents
+      procedure :: get_hvp => model_get_hvp_default
+      !> Evaluate the dense nuclear Hessian of a host-independent model
+      procedure :: get_hessian => model_get_hessian_default
 
       !* ----------------------------- Evaluation domain ------------------------------ *!
 
@@ -82,6 +86,10 @@ module moist_model_type
       procedure :: prepare_response => model_prepare_response
       !> Stage the gradient phase
       procedure :: prepare_gradient => model_prepare_gradient
+      !> Stage HVP stage 1: host level-set/density tangents at fixed surface
+      procedure :: prepare_hvp_geometry => model_prepare_hvp_geometry_default
+      !> Stage HVP stage 2: surface tangents and host potential/trace tangents
+      procedure :: prepare_hvp => model_prepare_hvp_default
 
       !* ------------------------------ State and guards ------------------------------ *!
 
@@ -401,6 +409,7 @@ contains
       call self%require_owned(coupling, error)
       if (allocated(error)) return
       if (phase == moist_phase_energy) call coupling_invalidate(coupling, keep_build=.true.)
+      call coupling_clear_hvp(coupling)
       call self%declare_pass(coupling, error)
       if (allocated(error)) return
       call coupling_arm(coupling, phase, error)
@@ -457,6 +466,86 @@ contains
       call self%stage(coupling, moist_phase_gradient, error)
 
    end subroutine model_prepare_gradient
+
+   !> Default Stage-1 HVP staging refusal for model families without Hessians
+   !>
+   !> @param[in,out] self      solvation model
+   !> @param[in,out] coupling  host coupling
+   !> @param[in]     dirs      nuclear directions `(3, nat, ndir)`
+   !> @param[out]    error     error handling
+   subroutine model_prepare_hvp_geometry_default(self, coupling, dirs, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Host coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model family does not support Hessian-vector products")
+
+   end subroutine model_prepare_hvp_geometry_default
+
+   !> Default Stage-2 HVP staging refusal for model families without Hessians
+   !>
+   !> @param[in,out] self      solvation model
+   !> @param[in,out] coupling  host coupling
+   !> @param[out]    error     error handling
+   subroutine model_prepare_hvp_default(self, coupling, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Host coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model family does not support Hessian-vector products")
+
+   end subroutine model_prepare_hvp_default
+
+   !> Default HVP evaluation refusal for model families without Hessians
+   !>
+   !> @param[in,out] self      solvation model
+   !> @param[in,out] coupling  host coupling
+   !> @param[in,out] response  response accumulator, untouched
+   !> @param[in,out] hvp       nuclear HVP accumulator, untouched
+   !> @param[out]    error     error handling
+   subroutine model_get_hvp_default(self, coupling, response, hvp, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Host coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
+      !> Nuclear HVP accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model family does not support Hessian-vector products")
+
+   end subroutine model_get_hvp_default
+
+   !> Default dense nuclear-Hessian refusal for model families without Hessians
+   !>
+   !> @param[in,out] self      solvation model
+   !> @param[in,out] coupling  host coupling
+   !> @param[in,out] hessian   nuclear Hessian accumulator, untouched
+   !> @param[out]    error     error handling
+   subroutine model_get_hessian_default(self, coupling, hessian, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Host coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Nuclear Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model family does not support nuclear Hessians")
+
+   end subroutine model_get_hessian_default
 
    !* ================================================================================= *!
    !*                                 State and guards                                  *!

@@ -9,6 +9,7 @@ module moist_model_continuum_component_pv
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_channels_response, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_utils_prettyprint, only: prettyprinter
 
    implicit none(type, external)
@@ -26,6 +27,8 @@ module moist_model_continuum_component_pv
       procedure :: get_response => pv_get_response
       procedure :: get_gradient => pv_get_gradient
       procedure :: get_surface_weights => pv_get_surface_weights
+      procedure :: supports_hessian => pv_supports_hessian
+      procedure :: get_hessian_surface_weights => pv_get_hessian_surface_weights
       !> Print the pressure
       procedure :: print_inputs => pv_print_inputs
    end type model_continuum_component_pv
@@ -199,6 +202,92 @@ contains
       call acc%add_surface_weights(error, w_a=w_a, w_xyz=w_xyz, w_n=w_n, w_c=w_c)
 
    end subroutine pv_get_surface_weights
+
+   !> Report second-order support for the pressure-volume component
+   !>
+   !> @param[in] self  component instance
+   pure function pv_supports_hessian(self) result(supported)
+      !> Component instance
+      class(model_continuum_component_pv), intent(in) :: self
+      !> Second-order support flag
+      logical :: supported
+
+      supported = .true.
+
+   end function pv_supports_hessian
+
+   !> Add directional tangents of the pressure-scaled total-volume surface adjoints
+   !>
+   !> @param[in,out] self      component instance
+   !> @param[in]     coupling  scoped host data, unused
+   !> @param[in]     cavity    live model cavity
+   !> @param[in]     dirs      nuclear directions `(3, nsph, nblk)`
+   !> @param[in]     tangent   surface tangent of the block
+   !> @param[in,out] dacc      surface-adjoint tangent per direction `(nblk)`
+   !> @param[out]    error     error handling
+   !> @param[in]     first     global index of the block's first direction, optional
+   subroutine pv_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, dacc, &
+                                             error, first)
+      !> Component instance
+      class(model_continuum_component_pv), intent(inout) :: self
+      !> Scoped host data
+      class(coupling_view_type), intent(in) :: coupling
+      !> Live model cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Surface-adjoint tangent per direction
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Global index of the block's first direction
+      integer, intent(in), optional :: first
+
+      !> Tangents of grid point area, position, normal, and volume-origin adjoints
+      real(wp), allocatable :: dw_a(:), dw_xyz(:, :), dw_n(:, :)
+      real(wp) :: origin(3), dc(3), dr(3), r_rel(3), dw_c(3), p3
+      integer :: ngrid, ndir, igrid, idir
+
+      if (self%pressure == 0.0_wp) return
+      if (.not. allocated(cavity%a) .or. .not. allocated(cavity%xyz) .or. &
+          .not. allocated(cavity%normal0) .or. .not. allocated(cavity%sphxyz)) then
+         call fatal_error(error, "Cavity volume surface data are incomplete")
+         return
+      end if
+      ngrid = cavity%ngrid
+      ndir = size(dirs, 3)
+      if (size(dacc) /= ndir .or. .not. tangent%is_initialized() .or. tangent%ndir() /= ndir) then
+         call fatal_error(error, "PV Hessian surface-tangent shape mismatch")
+         return
+      end if
+      if (size(dirs, 1) /= 3 .or. size(dirs, 2) /= cavity%nsph) then
+         call fatal_error(error, "PV Hessian direction shape mismatch")
+         return
+      end if
+
+      origin = cavity%get_volume_origin()
+      p3 = self%pressure/3.0_wp
+      allocate (dw_a(ngrid), dw_xyz(3, ngrid), dw_n(3, ngrid))
+      do idir = 1, ndir
+         dc = sum(dirs(:, :cavity%nsph, idir), dim=2)/real(max(1, cavity%nsph), wp)
+         dw_c = 0.0_wp
+         do igrid = 1, ngrid
+            r_rel = cavity%xyz(:, igrid) - origin
+            dr = tangent%d_xyz(:, igrid, idir) - dc
+            dw_a(igrid) = p3*(dot_product(dr, cavity%normal0(:, igrid)) + &
+                              dot_product(r_rel, tangent%d_n(:, igrid, idir)))
+            dw_xyz(:, igrid) = p3*(tangent%d_a(igrid, idir)*cavity%normal0(:, igrid) + &
+                                   cavity%a(igrid)*tangent%d_n(:, igrid, idir))
+            dw_n(:, igrid) = p3*(tangent%d_a(igrid, idir)*r_rel + cavity%a(igrid)*dr)
+            dw_c = dw_c - dw_xyz(:, igrid)
+         end do
+         call dacc(idir)%add_surface_weights(error, w_a=dw_a, w_xyz=dw_xyz, w_n=dw_n, w_c=dw_c)
+         if (allocated(error)) return
+      end do
+
+   end subroutine pv_get_hessian_surface_weights
 
    !> Add the pressure-scaled cavity-volume nuclear gradient
    !>

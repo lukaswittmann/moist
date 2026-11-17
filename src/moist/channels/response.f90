@@ -30,6 +30,7 @@ module moist_channels_response
 
    public :: response_item_type, response_type
    public :: potential_adjoint_response_type, density_response_type
+   public :: potential_adjoint_tangent_response_type, density_tangent_response_type
    public :: gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type
    public :: atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
    public :: parameter_adjoint_response_type
@@ -295,6 +296,61 @@ module moist_channels_response
       procedure, private :: add => parameter_adjoint_add
       procedure, private :: clear => parameter_adjoint_clear
    end type parameter_adjoint_response_type
+
+   !> Second-order HVP tangent of the potential adjoint on the cavity grid
+   !>
+   !> Produced by `get_hvp` for electrostatic components: base weights and their
+   !> directional tangents along `dirs`, together with the surface motion `d_xyz`
+   !> (and `d_xi` for Gaussian potential integrals) needed by the host to complete
+   !> nuclear Hessian-vector columns and Fock-matrix tangents
+   type, extends(response_item_type) :: potential_adjoint_tangent_response_type
+      !> Base potential weights dE/dphi (ngrid)
+      real(wp), allocatable :: w_phi(:)
+      !> Directional tangent of w_phi (ngrid, ndir)
+      real(wp), allocatable :: dw_phi(:, :)
+      !> Base spatial-derivative weights dE/d(grad phi) (3, ngrid), when normal trace is used
+      real(wp), allocatable :: w_dphi_dr(:, :)
+      !> Directional tangent of w_dphi_dr (3, ngrid, ndir), when normal trace is used
+      real(wp), allocatable :: dw_dphi_dr(:, :, :)
+      !> Surface position tangents (3, ngrid, ndir), shared across components
+      real(wp), allocatable :: d_xyz(:, :, :)
+      !> Gaussian width tangents (ngrid, ndir), when Gaussian potential is used
+      real(wp), allocatable :: d_xi(:, :)
+   contains
+      procedure :: name => potential_adjoint_tangent_name
+      procedure :: list_fields => potential_adjoint_tangent_list_fields
+      procedure, private :: add => potential_adjoint_tangent_add
+      procedure, private :: clear => potential_adjoint_tangent_clear
+   end type potential_adjoint_tangent_response_type
+
+   !> Second-order HVP tangent of the solute density weights on the cavity grid
+   !>
+   !> Produced by `get_hvp` when the cavity geometry depends on the host density
+   !> (both isodensity variants), with the `dS/drho = -scale` factor already folded
+   !> in. `dw_hess_rho` stores the 6 unique entries `[xx, xy, xz, yy, yz, zz]`
+   !> (unscaled symmetric matrix elements `w(a, b) = w(b, a)`) so every field stays
+   !> within rank <= 3
+   type, extends(response_item_type) :: density_tangent_response_type
+      !> Base density weights (ngrid)
+      real(wp), allocatable :: w_rho(:)
+      !> Base density-gradient weights (3, ngrid)
+      real(wp), allocatable :: w_grad_rho(:, :)
+      !> Base symmetrised density-Hessian weights (3, 3, ngrid)
+      real(wp), allocatable :: w_hess_rho(:, :, :)
+      !> Directional tangent of w_rho (ngrid, ndir)
+      real(wp), allocatable :: dw_rho(:, :)
+      !> Directional tangent of w_grad_rho (3, ngrid, ndir)
+      real(wp), allocatable :: dw_grad_rho(:, :, :)
+      !> Directional tangent of symmetrised w_hess_rho packed [xx, xy, xz, yy, yz, zz] (6, ngrid, ndir)
+      real(wp), allocatable :: dw_hess_rho(:, :, :)
+      !> Surface position tangents (3, ngrid, ndir)
+      real(wp), allocatable :: d_xyz(:, :, :)
+   contains
+      procedure :: name => density_tangent_name
+      procedure :: list_fields => density_tangent_list_fields
+      procedure, private :: add => density_tangent_add
+      procedure, private :: clear => density_tangent_clear
+   end type density_tangent_response_type
 
    !> Placeholder `response%item()` returns outside a `next()` window; no arrays
    type, extends(response_item_type) :: no_response_item_type
@@ -951,6 +1007,203 @@ contains
       if (allocated(self%dg_dphi)) deallocate (self%dg_dphi)
 
    end subroutine radial_potential_adjoint_clear
+
+   !* ============================================================================== *!
+   !*                      Potential adjoint tangent item                            *!
+   !* ============================================================================== *!
+
+   !> Copy or verify a shared geometry-tangent rank-2 array across components
+   subroutine share_matrix(acc, val, item, array, error)
+      real(wp), allocatable, intent(inout) :: acc(:, :)
+      real(wp), allocatable, intent(in) :: val(:, :)
+      character(len=*), intent(in) :: item, array
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. allocated(val)) return
+      if (.not. allocated(acc)) then
+         acc = val
+         return
+      end if
+      if (any(shape(acc) /= shape(val))) then
+         call shape_mismatch(item, array, error)
+         return
+      end if
+      if (any(acc /= val)) then
+         call fatal_error(error, "Response item '"//item//"': shared '"//array// &
+            & "' differs across accumulated components")
+      end if
+   end subroutine share_matrix
+
+   !> Copy or verify a shared geometry-tangent rank-3 array across components
+   subroutine share_tensor3(acc, val, item, array, error)
+      real(wp), allocatable, intent(inout) :: acc(:, :, :)
+      real(wp), allocatable, intent(in) :: val(:, :, :)
+      character(len=*), intent(in) :: item, array
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. allocated(val)) return
+      if (.not. allocated(acc)) then
+         acc = val
+         return
+      end if
+      if (any(shape(acc) /= shape(val))) then
+         call shape_mismatch(item, array, error)
+         return
+      end if
+      if (any(acc /= val)) then
+         call fatal_error(error, "Response item '"//item//"': shared '"//array// &
+            & "' differs across accumulated components")
+      end if
+   end subroutine share_tensor3
+
+   !> Name of the potential adjoint tangent item
+   function potential_adjoint_tangent_name(self) result(name)
+      class(potential_adjoint_tangent_response_type), intent(in) :: self
+      character(len=response_name_len) :: name
+
+      name = "potential_adjoint_tangent"
+   end function potential_adjoint_tangent_name
+
+   !> Declare the potential adjoint tangent arrays
+   subroutine potential_adjoint_tangent_list_fields(self, query)
+      class(potential_adjoint_tangent_response_type), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("w_phi", "dE/dphi on the cavity grid (ngrid)", self%w_phi)
+      call query%add_real2("dw_phi", "Tangent of dE/dphi along directions (ngrid, ndir)", self%dw_phi)
+      call query%add_real2("w_dphi_dr", "dE/d(grad phi) on the cavity grid (3, ngrid)", self%w_dphi_dr)
+      call query%add_real3("dw_dphi_dr", "Tangent of dE/d(grad phi) along directions (3, ngrid, ndir)", &
+         & self%dw_dphi_dr)
+      call query%add_real3("d_xyz", "Surface position tangents (3, ngrid, ndir)", self%d_xyz)
+      call query%add_real2("d_xi", "Gaussian width tangents (ngrid, ndir)", self%d_xi)
+   end subroutine potential_adjoint_tangent_list_fields
+
+   !> Accumulate another potential adjoint tangent item
+   subroutine potential_adjoint_tangent_add(self, other, error)
+      class(potential_adjoint_tangent_response_type), intent(inout) :: self
+      class(response_item_type), intent(in) :: other
+      type(error_type), allocatable, intent(out) :: error
+      type(potential_adjoint_tangent_response_type) :: tmp
+
+      select type (other)
+      type is (potential_adjoint_tangent_response_type)
+         select type (self)
+         type is (potential_adjoint_tangent_response_type)
+            tmp = self
+            call share_tensor3(tmp%d_xyz, other%d_xyz, "potential_adjoint_tangent", "d_xyz", error)
+            if (allocated(error)) return
+            call share_matrix(tmp%d_xi, other%d_xi, "potential_adjoint_tangent", "d_xi", error)
+            if (allocated(error)) return
+            call accumulate_vector(tmp%w_phi, other%w_phi, "potential_adjoint_tangent", "w_phi", error)
+            if (allocated(error)) return
+            call accumulate_matrix(tmp%dw_phi, other%dw_phi, "potential_adjoint_tangent", "dw_phi", error)
+            if (allocated(error)) return
+            call accumulate_matrix(tmp%w_dphi_dr, other%w_dphi_dr, "potential_adjoint_tangent", &
+               & "w_dphi_dr", error)
+            if (allocated(error)) return
+            call accumulate_tensor3(tmp%dw_dphi_dr, other%dw_dphi_dr, "potential_adjoint_tangent", &
+               & "dw_dphi_dr", error)
+            if (allocated(error)) return
+            self = tmp
+         class default
+            call type_mismatch("potential_adjoint_tangent", error)
+         end select
+      class default
+         call type_mismatch("potential_adjoint_tangent", error)
+      end select
+   end subroutine potential_adjoint_tangent_add
+
+   !> Clear the potential adjoint tangent item
+   subroutine potential_adjoint_tangent_clear(self)
+      class(potential_adjoint_tangent_response_type), intent(inout) :: self
+
+      if (allocated(self%w_phi)) deallocate (self%w_phi)
+      if (allocated(self%dw_phi)) deallocate (self%dw_phi)
+      if (allocated(self%w_dphi_dr)) deallocate (self%w_dphi_dr)
+      if (allocated(self%dw_dphi_dr)) deallocate (self%dw_dphi_dr)
+      if (allocated(self%d_xyz)) deallocate (self%d_xyz)
+      if (allocated(self%d_xi)) deallocate (self%d_xi)
+   end subroutine potential_adjoint_tangent_clear
+
+   !* ============================================================================== *!
+   !*                         Density tangent item                                   *!
+   !* ============================================================================== *!
+
+   !> Name of the density tangent item
+   function density_tangent_name(self) result(name)
+      class(density_tangent_response_type), intent(in) :: self
+      character(len=response_name_len) :: name
+
+      name = "density_tangent"
+   end function density_tangent_name
+
+   !> Declare the density tangent arrays
+   subroutine density_tangent_list_fields(self, query)
+      class(density_tangent_response_type), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("w_rho", "dE/drho on the cavity grid (ngrid)", self%w_rho)
+      call query%add_real2("w_grad_rho", "dE/d(grad rho) on the cavity grid (3, ngrid)", self%w_grad_rho)
+      call query%add_real3("w_hess_rho", "Symmetrised dE/d(hess rho) on the cavity grid (3, 3, ngrid)", &
+         & self%w_hess_rho)
+      call query%add_real2("dw_rho", "Tangent of w_rho along directions (ngrid, ndir)", self%dw_rho)
+      call query%add_real3("dw_grad_rho", "Tangent of w_grad_rho along directions (3, ngrid, ndir)", &
+         & self%dw_grad_rho)
+      call query%add_real3("dw_hess_rho", &
+         & "Tangent of symmetrised w_hess_rho packed [xx,xy,xz,yy,yz,zz] (6, ngrid, ndir)", &
+         & self%dw_hess_rho)
+      call query%add_real3("d_xyz", "Surface position tangents (3, ngrid, ndir)", self%d_xyz)
+   end subroutine density_tangent_list_fields
+
+   !> Accumulate another density tangent item
+   subroutine density_tangent_add(self, other, error)
+      class(density_tangent_response_type), intent(inout) :: self
+      class(response_item_type), intent(in) :: other
+      type(error_type), allocatable, intent(out) :: error
+      type(density_tangent_response_type) :: tmp
+
+      select type (other)
+      type is (density_tangent_response_type)
+         select type (self)
+         type is (density_tangent_response_type)
+            tmp = self
+            call share_tensor3(tmp%d_xyz, other%d_xyz, "density_tangent", "d_xyz", error)
+            if (allocated(error)) return
+            call accumulate_vector(tmp%w_rho, other%w_rho, "density_tangent", "w_rho", error)
+            if (allocated(error)) return
+            call accumulate_matrix(tmp%w_grad_rho, other%w_grad_rho, "density_tangent", "w_grad_rho", error)
+            if (allocated(error)) return
+            call accumulate_tensor3(tmp%w_hess_rho, other%w_hess_rho, "density_tangent", "w_hess_rho", error)
+            if (allocated(error)) return
+            call accumulate_matrix(tmp%dw_rho, other%dw_rho, "density_tangent", "dw_rho", error)
+            if (allocated(error)) return
+            call accumulate_tensor3(tmp%dw_grad_rho, other%dw_grad_rho, "density_tangent", &
+               & "dw_grad_rho", error)
+            if (allocated(error)) return
+            call accumulate_tensor3(tmp%dw_hess_rho, other%dw_hess_rho, "density_tangent", &
+               & "dw_hess_rho", error)
+            if (allocated(error)) return
+            self = tmp
+         class default
+            call type_mismatch("density_tangent", error)
+         end select
+      class default
+         call type_mismatch("density_tangent", error)
+      end select
+   end subroutine density_tangent_add
+
+   !> Clear the density tangent item
+   subroutine density_tangent_clear(self)
+      class(density_tangent_response_type), intent(inout) :: self
+
+      if (allocated(self%w_rho)) deallocate (self%w_rho)
+      if (allocated(self%w_grad_rho)) deallocate (self%w_grad_rho)
+      if (allocated(self%w_hess_rho)) deallocate (self%w_hess_rho)
+      if (allocated(self%dw_rho)) deallocate (self%dw_rho)
+      if (allocated(self%dw_grad_rho)) deallocate (self%dw_grad_rho)
+      if (allocated(self%dw_hess_rho)) deallocate (self%dw_hess_rho)
+      if (allocated(self%d_xyz)) deallocate (self%d_xyz)
+   end subroutine density_tangent_clear
 
    !* ============================================================================== *!
    !*                              Placeholder item                                  *!

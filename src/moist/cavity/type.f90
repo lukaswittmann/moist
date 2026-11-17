@@ -183,6 +183,14 @@ module moist_cavity_type
       procedure :: get_surface_hessian => get_cavity_surface_hessian_default
       !> Dense nuclear Hessian of accumulated surface-observable adjoints
       procedure :: get_hessian => get_cavity_hessian_default
+      !> Whether the cavity implements second-order surface tangents and Hessians
+      procedure :: supports_hessian => cavity_supports_hessian_default
+      !> Whether the cavity emits a density response item (isodensity level sets)
+      procedure :: has_density_response => cavity_has_density_response_default
+      !> Read Stage-1 level-set/density tangents from a coupling into an exchange
+      procedure :: read_hvp_geometry => read_cavity_hvp_geometry_default
+      !> Map exchange LSF adjoint tangents into host response items
+      procedure :: get_surface_response_tangent => get_cavity_surface_response_tangent_default
       !> Whether the surface geometry responds to the host field (DROP), so that
       !> host surface weights are consumed in the response phase
       procedure :: has_field_dependent_geometry => cavity_field_dependent_default
@@ -808,6 +816,68 @@ contains
                        "(dense nuclear Hessian of the cavity contribution)")
 
    end subroutine get_cavity_hessian_default
+
+   !> Default second-order support query
+   !>
+   !> @param[in] self  cavity instance
+   pure function cavity_supports_hessian_default(self) result(supported)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Whether second-order surface operations are implemented
+      logical :: supported
+
+      supported = .false.
+
+   end function cavity_supports_hessian_default
+
+   !> Default density-response query
+   !>
+   !> @param[in] self  cavity instance
+   function cavity_has_density_response_default(self) result(has_density)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Whether the cavity emits density response items
+      logical :: has_density
+
+      has_density = .false.
+
+   end function cavity_has_density_response_default
+
+   !> Default Stage-1 HVP geometry reader (no-op for cavities without host LSF tangents)
+   !>
+   !> @param[in]     self      cavity instance
+   !> @param[in,out] coupling  host coupling
+   !> @param[in,out] exchange  Hessian exchange container
+   !> @param[out]    error     error handling
+   subroutine read_cavity_hvp_geometry_default(self, coupling, exchange, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Host coupling
+      type(coupling_type), intent(inout) :: coupling
+      !> Hessian exchange container
+      type(cavity_hessian_exchange_type), intent(inout) :: exchange
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine read_cavity_hvp_geometry_default
+
+   !> Default surface response-tangent hook (no-op for cavities without density response)
+   !>
+   !> @param[in]     self      cavity instance
+   !> @param[in]     exchange  Hessian exchange container
+   !> @param[in,out] response  response accumulator
+   !> @param[out]    error     error handling
+   subroutine get_cavity_surface_response_tangent_default(self, exchange, response, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Hessian exchange container
+      type(cavity_hessian_exchange_type), intent(in) :: exchange
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_cavity_surface_response_tangent_default
 
    !> Default geometry query: the surface does not respond to the host field
    !>

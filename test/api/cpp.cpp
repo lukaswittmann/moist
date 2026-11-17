@@ -143,8 +143,21 @@ int main()
     if (moist_next_coupling_request(error, coupling)) return fail(__LINE__);
     moist_build_model(error, model, coupling);
     if (moist_check_error(error) != moist_success) return fail(__LINE__);
+    double hessian[9] = {0.0};
+    moist_get_model_hessian(error, model, coupling, 1, hessian);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
+    const double dirs[3] = {0.0, 0.0, 1.0};
+    double hvp[3] = {0.0};
+    moist_prepare_model_hvp_geometry(error, model, coupling, 1, 1, dirs);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
+    if (moist_next_coupling_request(error, coupling)) return fail(__LINE__);
+    moist_prepare_model_hvp(error, model, coupling);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
+    if (moist_next_coupling_request(error, coupling)) return fail(__LINE__);
     moist_response response = moist_new_response(error);
     if (!response || moist_check_error(error) != moist_success) return fail(__LINE__);
+    moist_get_model_hvp(error, model, coupling, response, 1, 1, hvp);
+    if (moist_check_error(error) != moist_success) return fail(__LINE__);
     if (!delete_handle(coupling, "coupling") ||
         !delete_handle(response, "response") ||
         !delete_handle(component, "component") ||

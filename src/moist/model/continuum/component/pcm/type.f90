@@ -10,14 +10,21 @@ module moist_model_continuum_component_pcm_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      & parameter_adjoint_response_type, response_accumulate
+      & potential_adjoint_tangent_response_type, parameter_adjoint_response_type, &
+      & response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_request_type, &
-      & point_potential_request_type, gaussian_potential_request_type, nuclear_charge_request_type, &
-      & moist_phase_energy, moist_phase_response, moist_phase_gradient, coupling_register, request_require
+      & point_potential_request_type, gaussian_potential_request_type, &
+      & point_potential_tangent_request_type, gaussian_potential_tangent_request_type, &
+      & nuclear_charge_request_type, moist_phase_energy, moist_phase_response, &
+      & moist_phase_gradient, moist_phase_hvp, coupling_register, request_require, &
+      & coupling_get_hvp_dirs, coupling_get_hvp_surface_tangent
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_model_continuum_component_pcm_elstat, only: &
       & pcm_elstat_direct_gradient, &
-      & pcm_elstat_normal_direct_gradient
+      & pcm_elstat_normal_direct_gradient, &
+      & pcm_elstat_direct_hessian, &
+      & pcm_elstat_normal_direct_hessian
    use moist_utils_timer, only: cat_energy
    use moist_model_continuum_component_pcm_solvers, only: pcm_storage_dense, &
       & pcm_storage_matrix_free
@@ -29,9 +36,13 @@ module moist_model_continuum_component_pcm_type
    public :: model_continuum_component_pcm
    public :: pcm_solver_type
    public :: solver_type
-   public :: pcm_tangent_block, pcm_tangent_require
+   public :: pcm_tangent_block, pcm_tangent_require, pcm_tangent_require_batch
    public :: pcm_component_declare_coupling
    public :: pcm_component_list_fields
+
+   !> Packed symmetric `(3, 3)` index pairs `[xx, xy, xz, yy, yz, zz]`
+   integer, parameter :: sym2_idx(2, 6) = reshape([ &
+      & 1, 1, 1, 2, 1, 3, 2, 2, 2, 3, 3, 3], [2, 6])
 
    !> One-block kernel direction of a surface channel, zero when unallocated
    interface pcm_tangent_block
@@ -125,6 +136,12 @@ module moist_model_continuum_component_pcm_type
       !> discretization is the separate concern of the concrete models
       logical :: gaussian_potential = .false.
 
+      !> Tangents of `potential_adjoint` for the active HVP batch `(ngrid, ndir)`
+      real(wp), allocatable :: dw_phi_hvp(:, :)
+
+      !> Tangents of `normal_trace_adjoint` for the active HVP batch `(ngrid, ndir)`
+      real(wp), allocatable :: dw_vn_hvp(:, :)
+
    contains
 
       !> Request normals when the model uses a normal potential trace
@@ -172,11 +189,32 @@ module moist_model_continuum_component_pcm_type
       !> Directional derivative of the operator surface weights and trace adjoints
       procedure :: surface_weight_tangent => pcm_component_surface_weight_tangent
 
+      !> Batched directional derivative of the operator surface weights and trace adjoints
+      procedure :: surface_weight_tangent_batch => pcm_component_surface_weight_tangent_batch
+
       !> Nuclear gradient contributions that bypass the cavity surface
       procedure :: get_direct_gradient => pcm_component_get_direct_gradient
 
       !> Fold the host's direct trace-geometry weights into the accumulator
       procedure :: get_host_surface_weights => pcm_component_get_host_surface_weights
+
+      !> PCM components implement second-order Hessians
+      procedure :: supports_hessian => pcm_component_supports_hessian
+
+      !> PCM components require Stage-2 potential-tangent coupling answers
+      procedure :: needs_hvp_coupling => pcm_component_needs_hvp_coupling
+
+      !> Reset per-batch HVP adjoint tangents
+      procedure :: reset_hvp => pcm_component_reset_hvp
+
+      !> Accumulate directional tangents of operator and host surface weights
+      procedure :: get_hessian_surface_weights => pcm_component_get_hessian_surface_weights
+
+      !> Accumulate direct nuclear HVP columns
+      procedure :: get_direct_hessian => pcm_component_get_direct_hessian
+
+      !> Emit `potential_adjoint_tangent` response item
+      procedure :: get_trace_response_tangent => pcm_component_get_trace_response_tangent
 
       !> Declare the potential and the host surface weights
       procedure :: declare_coupling => pcm_component_declare_coupling
@@ -988,6 +1026,130 @@ contains
       call fatal_error(error, "PCM component does not implement the surface weight tangent")
    end subroutine pcm_component_surface_weight_tangent
 
+   !> Default batched surface weight tangent delegating per direction
+   !>
+   !> @param[in,out] self    PCM component with current charges
+   !> @param[in]     cavity  cavity the operators were assembled on
+   !> @param[in]     tangent surface direction batch
+   !> @param[in]     dphi    potential-trace directions (ngrid, nblk)
+   !> @param[in,out] dacc    surface-adjoint tangent accumulators (nblk)
+   !> @param[out]    dw_phi  tangents of `potential_adjoint` (ngrid, nblk)
+   !> @param[out]    error   error handling
+   !> @param[in]     dvn     normal-trace directions (ngrid, nblk), optional
+   !> @param[out]    dw_vn   tangents of `normal_trace_adjoint` (ngrid, nblk), optional
+   subroutine pcm_component_surface_weight_tangent_batch(self, cavity, tangent, dphi, dacc, &
+         & dw_phi, error, dvn, dw_vn)
+      !> PCM component with current charges
+      class(model_continuum_component_pcm), intent(inout) :: self
+      !> Cavity the operators were assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction batch
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Potential-trace directions
+      real(wp), intent(in) :: dphi(:, :)
+      !> Surface-adjoint tangent accumulators
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Tangents of the potential adjoint
+      real(wp), allocatable, intent(out) :: dw_phi(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace directions
+      real(wp), intent(in), optional :: dvn(:, :)
+      !> Tangents of the normal-trace adjoint
+      real(wp), allocatable, intent(out), optional :: dw_vn(:, :)
+
+      type(cavity_surface_adjoint_type) :: dir_acc
+      real(wp), allocatable :: dw_phi_col(:), dw_vn_col(:)
+      integer :: ngrid, nblk, jdir
+      logical :: want_vn
+
+      call pcm_tangent_require_batch(self, cavity, tangent, dphi, dacc, error, dvn)
+      if (allocated(error)) return
+      ngrid = cavity%ngrid
+      nblk = size(dphi, 2)
+      want_vn = present(dw_vn) .and. self%uses_normal_trace()
+      allocate (dw_phi(ngrid, nblk), source=0.0_wp)
+      if (want_vn) allocate (dw_vn(ngrid, nblk), source=0.0_wp)
+
+      do jdir = 1, nblk
+         call dir_acc%init(ngrid)
+         dir_acc%w_xyz = tangent%d_xyz(:, :, jdir)
+         dir_acc%w_n = tangent%d_n(:, :, jdir)
+         dir_acc%w_a = tangent%d_a(:, jdir)
+         dir_acc%w_w = tangent%d_w(:, jdir)
+         dir_acc%w_f = tangent%d_f(:, jdir)
+         dir_acc%w_xi = tangent%d_xi(:, jdir)
+         if (tangent%have_curvature) then
+            dir_acc%w_k1 = tangent%d_k1(:, jdir)
+            dir_acc%w_k2 = tangent%d_k2(:, jdir)
+         end if
+         if (present(dvn)) then
+            call self%surface_weight_tangent(cavity, dir_acc, dphi(:, jdir), dacc(jdir), &
+               & dw_phi_col, error, dvn=dvn(:, jdir), dw_vn=dw_vn_col)
+         else
+            call self%surface_weight_tangent(cavity, dir_acc, dphi(:, jdir), dacc(jdir), &
+               & dw_phi_col, error, dw_vn=dw_vn_col)
+         end if
+         call dir_acc%destroy()
+         if (allocated(error)) return
+         dw_phi(:, jdir) = dw_phi_col
+         if (want_vn .and. allocated(dw_vn_col)) dw_vn(:, jdir) = dw_vn_col
+      end do
+   end subroutine pcm_component_surface_weight_tangent_batch
+
+   !> Check preconditions of a batched surface weight tangent
+   !>
+   !> @param[in]  self    PCM component
+   !> @param[in]  cavity  cavity the operators were assembled on
+   !> @param[in]  tangent surface direction batch
+   !> @param[in]  dphi    potential-trace directions (ngrid, nblk)
+   !> @param[in]  dacc    surface-adjoint accumulators (nblk)
+   !> @param[out] error   allocated on stale charges or shape mismatch
+   !> @param[in]  dvn     optional normal-trace directions (ngrid, nblk)
+   subroutine pcm_tangent_require_batch(self, cavity, tangent, dphi, dacc, error, dvn)
+      !> PCM component
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Cavity the operators were assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction batch
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Potential-trace directions
+      real(wp), intent(in) :: dphi(:, :)
+      !> Surface-adjoint accumulators
+      type(cavity_surface_adjoint_type), intent(in) :: dacc(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace directions
+      real(wp), intent(in), optional :: dvn(:, :)
+
+      integer :: ngrid, nblk
+
+      if (.not. self%charges_valid .or. .not. allocated(self%q)) then
+         call fatal_error(error, "PCM tangent needs charges solved on the current traces")
+         return
+      end if
+      ngrid = cavity%ngrid
+      if (ngrid /= size(self%q)) then
+         call fatal_error(error, "PCM tangent cavity grid does not match the operators")
+         return
+      end if
+      if (.not. tangent%is_initialized()) then
+         call fatal_error(error, "PCM tangent direction batch is not initialized")
+         return
+      end if
+      nblk = size(dphi, 2)
+      if (nblk < 1 .or. tangent%ndir() /= nblk .or. size(tangent%d_xyz, 2) /= ngrid .or. &
+          size(dphi, 1) /= ngrid .or. size(dacc) /= nblk) then
+         call fatal_error(error, "PCM tangent batch shape mismatch")
+         return
+      end if
+      if (present(dvn)) then
+         if (any(shape(dvn) /= [ngrid, nblk])) then
+            call fatal_error(error, "PCM tangent normal-trace batch shape mismatch")
+         end if
+      end if
+   end subroutine pcm_tangent_require_batch
+
    !> Check the preconditions of a surface weight tangent
    !>
    !> @param[in]  self   PCM component
@@ -1139,6 +1301,328 @@ contains
       end if
    end subroutine pcm_component_get_host_surface_weights
 
+   !> Report second-order support for PCM components
+   pure function pcm_component_supports_hessian(self) result(supported)
+      class(model_continuum_component_pcm), intent(in) :: self
+      logical :: supported
+
+      supported = .true.
+   end function pcm_component_supports_hessian
+
+   !> Report that PCM components require Stage-2 potential-tangent coupling answers
+   pure function pcm_component_needs_hvp_coupling(self) result(needed)
+      class(model_continuum_component_pcm), intent(in) :: self
+      logical :: needed
+
+      needed = .true.
+   end function pcm_component_needs_hvp_coupling
+
+   !> Allocate and zero HVP adjoint-tangent buffers for `(ngrid, ndir)`
+   subroutine pcm_component_reset_hvp(self, ngrid, ndir)
+      class(model_continuum_component_pcm), intent(inout) :: self
+      integer, intent(in) :: ngrid, ndir
+
+      if (allocated(self%dw_phi_hvp)) deallocate (self%dw_phi_hvp)
+      if (allocated(self%dw_vn_hvp)) deallocate (self%dw_vn_hvp)
+      allocate (self%dw_phi_hvp(ngrid, ndir), source=0.0_wp)
+      if (self%uses_normal_trace()) allocate (self%dw_vn_hvp(ngrid, ndir), source=0.0_wp)
+   end subroutine pcm_component_reset_hvp
+
+   !> Accumulate directional tangents of operator and host surface weights
+   subroutine pcm_component_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, &
+                                                        dacc, error, first)
+      class(model_continuum_component_pcm), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      class(cavity_type), intent(in) :: cavity
+      real(wp), intent(in) :: dirs(:, :, :)
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: first
+
+      real(wp), allocatable :: w_phi(:), w_vn(:), dphi_blk(:, :), dvn_blk(:, :)
+      real(wp), allocatable :: dw_phi_blk(:, :), dw_vn_blk(:, :)
+      real(wp), allocatable :: dphi_dr(:, :), dphi_dxi(:), d2phi_dr2(:, :, :), d2phi_dr_dxi(:, :)
+      real(wp), allocatable :: d_phi(:, :), d_dphi_dr(:, :, :), d_dphi_dxi(:, :)
+      real(wp), allocatable :: d_d2phi_dr2(:, :, :), d_d2phi_dr_dxi(:, :, :)
+      real(wp), allocatable :: hw_xyz(:, :), hw_n(:, :), hw_xi(:)
+      real(wp) :: dhess(3, 3), val
+      integer :: ngrid, nblk, total_ndir, ilo, ihi, jdir, idir, i, k, a, b
+      logical :: gaussian, normal
+
+      ngrid = cavity%ngrid
+      nblk = size(dirs, 3)
+      ilo = 1
+      if (present(first)) ilo = first
+      ihi = ilo + nblk - 1
+      if (size(dacc) /= nblk .or. .not. tangent%is_initialized() .or. tangent%ndir() /= nblk) then
+         call fatal_error(error, "PCM Hessian surface-tangent shape mismatch")
+         return
+      end if
+
+      call self%ensure_charges(coupling, cavity, error)
+      if (allocated(error)) return
+      call self%potential_adjoint(w_phi, error)
+      if (allocated(error)) return
+
+      gaussian = self%uses_gaussian_potential(cavity)
+      normal = self%uses_normal_trace()
+      if (normal) then
+         if (.not. allocated(cavity%normal0)) then
+            call fatal_error(error, "PCM normal trace requires cavity normals")
+            return
+         end if
+         call self%normal_trace_adjoint(w_vn, error)
+         if (allocated(error)) return
+      end if
+
+      call coupling%read("potential", "dphi_dr", dphi_dr, error)
+      if (allocated(error)) return
+      if (gaussian) then
+         call coupling%read("potential", "dphi_dxi", dphi_dxi, error)
+         if (allocated(error)) return
+      end if
+      if (normal) then
+         call coupling%read("potential", "d2phi_dr2", d2phi_dr2, error)
+         if (allocated(error)) return
+         if (gaussian) then
+            call coupling%read("potential", "d2phi_dr_dxi", d2phi_dr_dxi, error)
+            if (allocated(error)) return
+         end if
+      end if
+
+      call coupling%read("potential_tangent", "d_phi", d_phi, error)
+      if (allocated(error)) return
+      call coupling%read("potential_tangent", "d_dphi_dr", d_dphi_dr, error)
+      if (allocated(error)) return
+      if (gaussian) then
+         call coupling%read("potential_tangent", "d_dphi_dxi", d_dphi_dxi, error)
+         if (allocated(error)) return
+      end if
+      if (normal) then
+         call coupling%read("potential_tangent", "d_d2phi_dr2", d_d2phi_dr2, error)
+         if (allocated(error)) return
+         if (gaussian) then
+            call coupling%read("potential_tangent", "d_d2phi_dr_dxi", d_d2phi_dr_dxi, error)
+            if (allocated(error)) return
+         end if
+      end if
+
+      total_ndir = size(d_phi, 2)
+      if (ilo < 1 .or. ihi > total_ndir) then
+         call fatal_error(error, "PCM potential-tangent direction slice out of bounds")
+         return
+      end if
+      if (.not. allocated(self%dw_phi_hvp)) then
+         call self%reset_hvp(ngrid, total_ndir)
+      else if (size(self%dw_phi_hvp, 1) /= ngrid .or. size(self%dw_phi_hvp, 2) < ihi) then
+         call self%reset_hvp(ngrid, total_ndir)
+      end if
+
+      allocate (dphi_blk(ngrid, nblk), source=d_phi(:, ilo:ihi))
+      allocate (hw_xyz(3, ngrid))
+      if (gaussian) allocate (hw_xi(ngrid))
+      if (normal) then
+         allocate (dvn_blk(ngrid, nblk), hw_n(3, ngrid))
+         do jdir = 1, nblk
+            idir = ilo + jdir - 1
+            do i = 1, ngrid
+               dvn_blk(i, jdir) = dot_product(tangent%d_n(:, i, jdir), dphi_dr(:, i)) &
+                  & + dot_product(cavity%normal0(:, i), d_dphi_dr(:, i, idir))
+            end do
+         end do
+         call self%surface_weight_tangent_batch(cavity, tangent, dphi_blk, dacc, &
+            & dw_phi_blk, error, dvn=dvn_blk, dw_vn=dw_vn_blk)
+      else
+         call self%surface_weight_tangent_batch(cavity, tangent, dphi_blk, dacc, &
+            & dw_phi_blk, error)
+      end if
+      if (allocated(error)) return
+
+      self%dw_phi_hvp(:, ilo:ihi) = dw_phi_blk
+      if (normal) self%dw_vn_hvp(:, ilo:ihi) = dw_vn_blk
+
+      do jdir = 1, nblk
+         idir = ilo + jdir - 1
+
+         do i = 1, ngrid
+            hw_xyz(:, i) = dw_phi_blk(i, jdir)*dphi_dr(:, i) + w_phi(i)*d_dphi_dr(:, i, idir)
+         end do
+         if (gaussian) then
+            do i = 1, ngrid
+               hw_xi(i) = dw_phi_blk(i, jdir)*dphi_dxi(i) + w_phi(i)*d_dphi_dxi(i, idir)
+            end do
+         end if
+
+         if (normal) then
+            do i = 1, ngrid
+               do k = 1, 6
+                  a = sym2_idx(1, k)
+                  b = sym2_idx(2, k)
+                  val = d_d2phi_dr2(k, i, idir)
+                  dhess(a, b) = val
+                  dhess(b, a) = val
+               end do
+               hw_xyz(:, i) = hw_xyz(:, i) &
+                  & + dw_vn_blk(i, jdir)*matmul(transpose(d2phi_dr2(:, :, i)), cavity%normal0(:, i)) &
+                  & + w_vn(i)*(matmul(transpose(d2phi_dr2(:, :, i)), tangent%d_n(:, i, jdir)) &
+                  &            + matmul(dhess, cavity%normal0(:, i)))
+               hw_n(:, i) = dw_vn_blk(i, jdir)*dphi_dr(:, i) + w_vn(i)*d_dphi_dr(:, i, idir)
+               if (gaussian) then
+                  hw_xi(i) = hw_xi(i) &
+                     & + dw_vn_blk(i, jdir)*dot_product(cavity%normal0(:, i), d2phi_dr_dxi(:, i)) &
+                     & + w_vn(i)*(dot_product(tangent%d_n(:, i, jdir), d2phi_dr_dxi(:, i)) &
+                     &            + dot_product(cavity%normal0(:, i), d_d2phi_dr_dxi(:, i, idir)))
+               end if
+            end do
+            if (gaussian) then
+               call dacc(jdir)%add_surface_weights(error, w_xyz=hw_xyz, w_n=hw_n, w_xi=hw_xi)
+            else
+               call dacc(jdir)%add_surface_weights(error, w_xyz=hw_xyz, w_n=hw_n)
+            end if
+         else
+            if (gaussian) then
+               call dacc(jdir)%add_surface_weights(error, w_xyz=hw_xyz, w_xi=hw_xi)
+            else
+               call dacc(jdir)%add_surface_weights(error, w_xyz=hw_xyz)
+            end if
+         end if
+         if (allocated(error)) return
+      end do
+
+   end subroutine pcm_component_get_hessian_surface_weights
+
+   !> Accumulate direct nuclear HVP columns of PCM electrostatics
+   subroutine pcm_component_get_direct_hessian(self, coupling, cavity, dirs, tangent, &
+                                               hvp, error, first)
+      class(model_continuum_component_pcm), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      class(cavity_type), intent(in) :: cavity
+      real(wp), intent(in) :: dirs(:, :, :)
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      real(wp), intent(inout) :: hvp(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: first
+
+      real(wp), allocatable :: za(:), w_phi(:), w_vn(:), w_grad(:, :), dw_grad(:, :, :)
+      integer :: nat, ngrid, nblk, ilo, ihi, i, jdir
+      logical :: gaussian
+
+      nat = self%mol_solu%nat
+      ngrid = cavity%ngrid
+      nblk = size(dirs, 3)
+      ilo = 1
+      if (present(first)) ilo = first
+      ihi = ilo + nblk - 1
+      if (any(shape(hvp) /= [3, nat, nblk]) .or. any(shape(dirs) /= [3, nat, nblk])) then
+         call fatal_error(error, "[pcm_component_get_direct_hessian] HVP shape mismatch")
+         return
+      end if
+      if (.not. allocated(self%dw_phi_hvp)) then
+         call fatal_error(error, "PCM direct Hessian requires get_hessian_surface_weights first")
+         return
+      end if
+      if (size(self%dw_phi_hvp, 1) /= ngrid .or. size(self%dw_phi_hvp, 2) < ihi) then
+         call fatal_error(error, "PCM direct Hessian adjoint-tangent shape mismatch")
+         return
+      end if
+
+      call self%potential_adjoint(w_phi, error)
+      if (allocated(error)) return
+      call read_host_nuclear_charges(coupling, nat, za, error)
+      if (allocated(error)) return
+
+      gaussian = self%uses_gaussian_potential(cavity)
+      if (gaussian) then
+         call pcm_elstat_direct_hessian(cavity%xyz, self%mol_solu%xyz, w_phi, &
+            & self%dw_phi_hvp(:, ilo:ihi), za, tangent%d_xyz, dirs, hvp, error, &
+            & xi=cavity%xi0, d_xi=tangent%d_xi)
+      else
+         call pcm_elstat_direct_hessian(cavity%xyz, self%mol_solu%xyz, w_phi, &
+            & self%dw_phi_hvp(:, ilo:ihi), za, tangent%d_xyz, dirs, hvp, error)
+      end if
+      if (allocated(error)) return
+
+      if (self%uses_normal_trace()) then
+         if (.not. allocated(cavity%normal0) .or. .not. allocated(self%dw_vn_hvp)) then
+            call fatal_error(error, "PCM normal direct Hessian requires cavity normals and dw_vn")
+            return
+         end if
+         call self%normal_trace_adjoint(w_vn, error)
+         if (allocated(error)) return
+         allocate (w_grad(3, ngrid), dw_grad(3, ngrid, nblk))
+         do i = 1, ngrid
+            w_grad(:, i) = w_vn(i)*cavity%normal0(:, i)
+            do jdir = 1, nblk
+               dw_grad(:, i, jdir) = self%dw_vn_hvp(i, ilo + jdir - 1)*cavity%normal0(:, i) &
+                  & + w_vn(i)*tangent%d_n(:, i, jdir)
+            end do
+         end do
+         if (gaussian) then
+            call pcm_elstat_normal_direct_hessian(cavity%xyz, self%mol_solu%xyz, w_grad, &
+               & dw_grad, za, tangent%d_xyz, dirs, hvp, error, xi=cavity%xi0, d_xi=tangent%d_xi)
+         else
+            call pcm_elstat_normal_direct_hessian(cavity%xyz, self%mol_solu%xyz, w_grad, &
+               & dw_grad, za, tangent%d_xyz, dirs, hvp, error)
+         end if
+      end if
+
+   end subroutine pcm_component_get_direct_hessian
+
+   !> Emit `potential_adjoint_tangent` response item after HVP traversal
+   subroutine pcm_component_get_trace_response_tangent(self, coupling, cavity, tangent, &
+                                                       response, error)
+      class(model_continuum_component_pcm), intent(inout) :: self
+      class(coupling_view_type), intent(in) :: coupling
+      class(cavity_type), intent(in) :: cavity
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      type(response_type), intent(inout) :: response
+      type(error_type), allocatable, intent(out) :: error
+
+      type(potential_adjoint_tangent_response_type) :: item
+      real(wp), allocatable :: w_vn(:)
+      integer :: ngrid, ndir, i, idir
+
+      ngrid = cavity%ngrid
+      ndir = tangent%ndir()
+      if (.not. allocated(self%dw_phi_hvp)) then
+         call fatal_error(error, "PCM trace response tangent requires HVP evaluation first")
+         return
+      end if
+      if (any(shape(self%dw_phi_hvp) /= [ngrid, ndir])) then
+         call fatal_error(error, "PCM trace response tangent shape mismatch")
+         return
+      end if
+
+      call self%potential_adjoint(item%w_phi, error)
+      if (allocated(error)) return
+      allocate (item%dw_phi, source=self%dw_phi_hvp)
+      allocate (item%d_xyz, source=tangent%d_xyz)
+      if (self%uses_gaussian_potential(cavity)) then
+         allocate (item%d_xi, source=tangent%d_xi)
+      end if
+
+      if (self%uses_normal_trace()) then
+         if (.not. allocated(cavity%normal0) .or. .not. allocated(self%dw_vn_hvp)) then
+            call fatal_error(error, "PCM normal trace response tangent requires normals and dw_vn")
+            return
+         end if
+         call self%normal_trace_adjoint(w_vn, error)
+         if (allocated(error)) return
+         allocate (item%w_dphi_dr(3, ngrid), item%dw_dphi_dr(3, ngrid, ndir))
+         do i = 1, ngrid
+            item%w_dphi_dr(:, i) = w_vn(i)*cavity%normal0(:, i)
+            do idir = 1, ndir
+               item%dw_dphi_dr(:, i, idir) = self%dw_vn_hvp(i, idir)*cavity%normal0(:, i) &
+                  & + w_vn(i)*tangent%d_n(:, i, idir)
+            end do
+         end do
+      end if
+
+      call response_accumulate(response, item, error)
+
+   end subroutine pcm_component_get_trace_response_tangent
+
    !* ================================================================================= *!
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
@@ -1164,8 +1648,9 @@ contains
       type(coupling_type), intent(inout) :: coupling
       !> Registration error
       type(error_type), allocatable, intent(out) :: error
-      class(coupling_request_type), allocatable :: potential
+      class(coupling_request_type), allocatable :: potential, pot_tan
       type(nuclear_charge_request_type) :: charges
+      real(wp), allocatable :: dirs(:, :, :), d_xyz(:, :, :), d_xi(:, :)
       logical :: normal, field, gaussian
 
       normal = self%uses_normal_trace()
@@ -1192,6 +1677,12 @@ contains
       if (allocated(error)) return
       call request_require(potential, moist_phase_gradient, "d2phi_dr2", normal, error)
       if (allocated(error)) return
+      call request_require(potential, moist_phase_hvp, "phi", error)
+      if (allocated(error)) return
+      call request_require(potential, moist_phase_hvp, "dphi_dr", error)
+      if (allocated(error)) return
+      call request_require(potential, moist_phase_hvp, "d2phi_dr2", normal, error)
+      if (allocated(error)) return
       if (gaussian) then
          call request_require(potential, moist_phase_response, "dphi_dxi", field, error)
          if (allocated(error)) return
@@ -1201,12 +1692,69 @@ contains
          if (allocated(error)) return
          call request_require(potential, moist_phase_gradient, "d2phi_dr_dxi", normal, error)
          if (allocated(error)) return
+         call request_require(potential, moist_phase_hvp, "dphi_dxi", error)
+         if (allocated(error)) return
+         call request_require(potential, moist_phase_hvp, "d2phi_dr_dxi", normal, error)
+         if (allocated(error)) return
       end if
       call coupling_register(coupling, "potential", potential, error)
       if (allocated(error)) return
       call request_require(charges, moist_phase_gradient, "z", error)
       if (allocated(error)) return
+      call request_require(charges, moist_phase_hvp, "z", error)
+      if (allocated(error)) return
       call coupling_register(coupling, "nuclear_charges", charges, error)
+      if (allocated(error)) return
+
+      if (.not. cavity%is_built()) return
+      call coupling_get_hvp_dirs(coupling, dirs)
+      call coupling_get_hvp_surface_tangent(coupling, d_xyz, d_xi)
+      if (.not. (allocated(dirs) .and. allocated(d_xyz))) return
+
+      if (gaussian) then
+         block
+            type(gaussian_potential_tangent_request_type) :: req
+            allocate (req%xyz(3, cavity%ngrid), req%xi(cavity%ngrid))
+            if (cavity%ngrid > 0) then
+               req%xyz = cavity%xyz(:, 1:cavity%ngrid)
+               req%xi = cavity%xi0(1:cavity%ngrid)
+            end if
+            call move_alloc(d_xyz, req%d_xyz)
+            if (allocated(d_xi)) then
+               call move_alloc(d_xi, req%d_xi)
+            else
+               allocate (req%d_xi(cavity%ngrid, size(dirs, 3)), source=0.0_wp)
+            end if
+            call move_alloc(dirs, req%dirs)
+            allocate (pot_tan, source=req)
+         end block
+         call request_require(pot_tan, moist_phase_hvp, "d_phi", error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_dphi_dr", error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_dphi_dxi", error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_d2phi_dr2", normal, error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_d2phi_dr_dxi", normal, error)
+         if (allocated(error)) return
+      else
+         block
+            type(point_potential_tangent_request_type) :: req
+            allocate (req%xyz(3, cavity%ngrid))
+            if (cavity%ngrid > 0) req%xyz = cavity%xyz(:, 1:cavity%ngrid)
+            call move_alloc(d_xyz, req%d_xyz)
+            call move_alloc(dirs, req%dirs)
+            allocate (pot_tan, source=req)
+         end block
+         call request_require(pot_tan, moist_phase_hvp, "d_phi", error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_dphi_dr", error)
+         if (allocated(error)) return
+         call request_require(pot_tan, moist_phase_hvp, "d_d2phi_dr2", normal, error)
+         if (allocated(error)) return
+      end if
+      call coupling_register(coupling, "potential_tangent", pot_tan, error)
    end subroutine pcm_component_declare_coupling
 
 end module moist_model_continuum_component_pcm_type

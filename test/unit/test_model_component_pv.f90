@@ -19,6 +19,7 @@ module test_model_component_pv
    use moist_channels_response, only: response_type
    use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -57,6 +58,7 @@ contains
          & new_unittest("pv_sphere_volume", test_pv_sphere_volume), &
          & new_unittest("pv_nuclear_gradient", test_pv_nuclear_gradient), &
          & new_unittest("pv_surface_weights", test_pv_surface_weights), &
+         & new_unittest("pv_hessian_surface_weights", test_pv_hessian_surface_weights), &
          & new_unittest("pv_translation_invariance", test_pv_translation_invariance), &
          & new_unittest("pv_zero_pressure_short_circuit", test_pv_short_circuit), &
          & new_unittest("pv_lifecycle_guards", test_pv_guards) &
@@ -891,5 +893,118 @@ contains
          & more="rejected PV gradient left the accumulator untouched")
 
    end subroutine test_pv_guards
+
+   !> Directional response of PV surface adjoints (including moving volume origin) vs FD
+   subroutine test_pv_hessian_surface_weights(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol, mol_disp
+      type(cavity_type_drop) :: cavity, trial
+      type(model_continuum_component_pv) :: pv_component
+      type(coupling_type) :: coupling
+      type(cavity_surface_tangent_type) :: tangent
+      type(cavity_surface_adjoint_type), allocatable :: dacc(:)
+      type(cavity_surface_adjoint_type) :: w_disp, fd
+      real(wp) :: normals(3, ngrid_sw), xyz_mol(3, 2), dirs(3, 2, 2), dev
+      integer :: igrid, idir, ioff, iaxis, iatom
+
+      real(wp), parameter :: pressure = 2.5_wp
+      real(wp), parameter :: step = 1.0e-3_wp
+      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
+      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+      real(wp), parameter :: tol = 1.0e-10_wp
+
+      call new_context(ctx, verbosity=0)
+      normals = fixture_radial_normals()
+      xyz_mol = reshape([0.3_wp, -0.4_wp, 0.2_wp, -1.1_wp, 0.8_wp, -0.5_wp], [3, 2])
+      call new(mol, [6, 8], xyz_mol)
+      do idir = 1, 2
+         do iatom = 1, 2
+            do iaxis = 1, 3
+               dirs(iaxis, iatom, idir) = 0.35_wp*cos(0.4_wp*iaxis + 0.9_wp*iatom - 1.2_wp*idir)
+            end do
+         end do
+      end do
+
+      cavity%ngrid = ngrid_sw
+      cavity%nsph = 2
+      allocate (cavity%sphxyz, source=xyz_mol)
+      allocate (cavity%a, source=sw_areas)
+      allocate (cavity%xi0, source=sw_xis)
+      allocate (cavity%f, source=sw_fs)
+      allocate (cavity%xyz, source=sw_xyz)
+      allocate (cavity%normal0, source=normals)
+      allocate (cavity%total_volume, source=1.0_wp)
+
+      call new_component_pv(pv_component, pressure, ctx=ctx)
+      call pv_component%update(mol, cavity, err)
+      if (allocated(err)) then
+         call test_failed(error, "PV update failed: "//err%message)
+         return
+      end if
+
+      call tangent%init(ngrid_sw, 2, .false.)
+      do idir = 1, 2
+         do igrid = 1, ngrid_sw
+            tangent%d_a(igrid, idir) = 0.3_wp*sin(0.7_wp*igrid + 1.1_wp*idir)
+            tangent%d_xi(igrid, idir) = 0.2_wp*cos(0.5_wp*igrid + idir)
+            tangent%d_f(igrid, idir) = 0.1_wp*sin(0.9_wp*igrid - idir)
+            do iaxis = 1, 3
+               tangent%d_xyz(iaxis, igrid, idir) = 0.4_wp*cos(0.3_wp*igrid + 0.8_wp*iaxis + idir)
+               tangent%d_n(iaxis, igrid, idir) = 0.25_wp*sin(0.6_wp*igrid + 1.3_wp*iaxis - idir)
+            end do
+         end do
+      end do
+
+      allocate (dacc(2))
+      do idir = 1, 2
+         call dacc(idir)%init(ngrid_sw)
+      end do
+      call pv_component%get_hessian_surface_weights(component_view(coupling), cavity, dirs, &
+         & tangent, dacc, err)
+      if (allocated(err)) then
+         call test_failed(error, "PV second-order surface weights failed: "//err%message)
+         return
+      end if
+
+      do idir = 1, 2
+         call fd%init(ngrid_sw)
+         do ioff = 1, size(OFFSET)
+            trial = cavity
+            mol_disp = mol
+            mol_disp%xyz = mol%xyz + real(OFFSET(ioff), wp)*step*dirs(:, :, idir)
+            trial%sphxyz = mol_disp%xyz
+            trial%a = cavity%a + real(OFFSET(ioff), wp)*step*tangent%d_a(:, idir)
+            trial%xi0 = cavity%xi0 + real(OFFSET(ioff), wp)*step*tangent%d_xi(:, idir)
+            trial%f = cavity%f + real(OFFSET(ioff), wp)*step*tangent%d_f(:, idir)
+            trial%xyz = cavity%xyz + real(OFFSET(ioff), wp)*step*tangent%d_xyz(:, :, idir)
+            trial%normal0 = cavity%normal0 + real(OFFSET(ioff), wp)*step*tangent%d_n(:, :, idir)
+            call w_disp%init(ngrid_sw)
+            call pv_component%get_surface_weights(component_view(coupling), trial, w_disp, err)
+            if (allocated(err)) then
+               call test_failed(error, "PV surface weights on displaced surface failed: "//err%message)
+               return
+            end if
+            fd%w_a = fd%w_a + COEFF(ioff)*w_disp%w_a/step
+            fd%w_xyz = fd%w_xyz + COEFF(ioff)*w_disp%w_xyz/step
+            fd%w_n = fd%w_n + COEFF(ioff)*w_disp%w_n/step
+            fd%w_c = fd%w_c + COEFF(ioff)*w_disp%w_c/step
+         end do
+
+         dev = max(maxval(abs(dacc(idir)%w_a - fd%w_a)), &
+            & maxval(abs(dacc(idir)%w_xyz - fd%w_xyz)), &
+            & maxval(abs(dacc(idir)%w_n - fd%w_n)), &
+            & maxval(abs(dacc(idir)%w_c - fd%w_c)))
+         call check(error, dev, 0.0_wp, thr=tol, &
+            & message="PV adjoint response differs from differenced surface weights")
+         if (allocated(error)) return
+         call check(error, max(maxval(abs(dacc(idir)%w_xi)), maxval(abs(dacc(idir)%w_f)), &
+            & maxval(abs(dacc(idir)%w_w)), maxval(abs(dacc(idir)%w_k1)), &
+            & maxval(abs(dacc(idir)%w_k2))), 0.0_wp, thr=0.0_wp, &
+            & message="PV adjoint response wrote to an unused channel")
+         if (allocated(error)) return
+      end do
+   end subroutine test_pv_hessian_surface_weights
 
 end module test_model_component_pv

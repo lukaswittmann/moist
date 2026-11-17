@@ -4,17 +4,22 @@ module moist_model_continuum_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_utils_timer, only: cat_build
-   use moist_cavity_type, only: cavity_type
+   use moist_utils_timer, only: cat_build, cat_hessian
+   use moist_cavity_type, only: cavity_type, surface_adjoint_response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type, &
+      & cavity_hessian_exchange_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
-   use moist_model_type, only: solvation_model_type, model_build
+   use moist_model_type, only: solvation_model_type, model_build, invalidate_model, &
+      & model_release_coupling
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & moist_phase_energy, moist_phase_response, &
-      & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
-      & coupling_snapshot, coupling_check_mandatory, &
+      & moist_phase_gradient, moist_phase_hvp_geometry, moist_phase_hvp, &
+      & coupling_begin_registration, coupling_set_scope, &
+      & coupling_snapshot, coupling_arm, coupling_check_mandatory, &
+      & coupling_set_hvp_dirs, coupling_set_hvp_surface_tangent, coupling_get_hvp_dirs, &
       & coupling_make_view, coupling_close_view
 
    implicit none(type, external)
@@ -40,6 +45,10 @@ module moist_model_continuum_type
       logical :: configured = .false.
       !> Force the legacy forward nuclear-gradient path
       logical :: force_forward_gradient = .false.
+      !> Cached Stage-1 surface/LSF tangent exchange for the active HVP batch
+      type(cavity_hessian_exchange_type), private :: hvp_exchange
+      !> Borrowed pointer to the coupling owning the active HVP batch
+      type(coupling_type), pointer, private :: hvp_coupling => null()
    contains
       final :: destroy_model
       procedure :: atom_count => model_atom_count
@@ -58,9 +67,15 @@ module moist_model_continuum_type
       procedure :: defers_build => continuum_defers_build
       !> Read the build phase, then complete a cavity that waited for it and the components
       procedure :: build => continuum_build
+      procedure :: invalidate => continuum_invalidate
+      procedure :: release_coupling => continuum_release_coupling
       procedure :: get_energy => continuum_get_energy
       procedure :: get_response => continuum_get_response
       procedure :: get_gradient => continuum_get_gradient
+      procedure :: prepare_hvp_geometry => continuum_prepare_hvp_geometry
+      procedure :: prepare_hvp => continuum_prepare_hvp
+      procedure :: get_hvp => continuum_get_hvp
+      procedure :: get_hessian => continuum_get_hessian
       !> Declare the cavity and component requests of one coupling pass
       procedure :: declare_pass => declare_continuum_pass
       !> Publish the fields of the owned cavity
@@ -70,6 +85,14 @@ module moist_model_continuum_type
       !> Print the radii of the current structure
       procedure :: print_radii => continuum_print_radii
    end type model_continuum_type
+
+   !> Adjoint response adapter binding the model's components and coupling into cavity Hessian traversal
+   type, extends(surface_adjoint_response_type) :: continuum_adjoint_response_type
+      type(solvation_component_slot), pointer :: components(:) => null()
+      type(coupling_type), pointer :: coupling => null()
+   contains
+      procedure :: apply => continuum_adjoint_response_apply
+   end type continuum_adjoint_response_type
 
 contains
 
@@ -265,6 +288,8 @@ contains
 
       ! Built completely by `update`, components included
       if (.not. self%defers_build()) return
+      call self%hvp_exchange%destroy()
+      nullify (self%hvp_coupling)
       call clear_component_energies(self)
       call self%cavity%build(coupling, error)
       if (allocated(error)) return
@@ -503,6 +528,350 @@ contains
    end subroutine continuum_get_gradient
 
    !* ================================================================================= *!
+   !*                                Second derivatives                                 *!
+   !* ================================================================================= *!
+
+   !> Clear cached HVP state alongside model invalidation
+   subroutine continuum_invalidate(self)
+      class(model_continuum_type), intent(inout) :: self
+
+      call self%hvp_exchange%destroy()
+      nullify (self%hvp_coupling)
+      call invalidate_model(self)
+   end subroutine continuum_invalidate
+
+   !> Clear cached HVP state if its coupling is released
+   subroutine continuum_release_coupling(self, coupling)
+      class(model_continuum_type), intent(inout), target :: self
+      type(coupling_type), pointer, intent(inout) :: coupling
+
+      if (associated(coupling)) then
+         if (associated(self%hvp_coupling, coupling)) then
+            call self%hvp_exchange%destroy()
+            nullify (self%hvp_coupling)
+         end if
+      end if
+      call model_release_coupling(self, coupling)
+   end subroutine continuum_release_coupling
+
+   !> Check that the cavity and every component support reverse-mode nuclear Hessians
+   subroutine require_hessian_ready(self, error)
+      class(model_continuum_type), intent(in) :: self
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=:), allocatable :: label
+      integer :: i
+
+      call self%require_built(error)
+      if (allocated(error)) return
+      if (self%force_forward_gradient) then
+         call fatal_error(error, "Continuum-model Hessian is the derivative of the reverse-mode"// &
+                          " gradient; the forward gradient path has none")
+         return
+      end if
+      if (.not. self%cavity%supports_hessian()) then
+         call fatal_error(error, "This cavity does not support nuclear Hessians")
+         return
+      end if
+      do i = 1, size(self%components)
+         if (.not. self%components(i)%item%supports_hessian()) then
+            label = "This"
+            if (allocated(self%components(i)%item%name)) then
+               label = trim(self%components(i)%item%name)
+            end if
+            call fatal_error(error, label//" component does not support nuclear Hessians")
+            return
+         end if
+      end do
+   end subroutine require_hessian_ready
+
+   !> Accumulate primal reverse-mode gradient surface weights across all components
+   subroutine accumulate_gradient_surface_weights(self, coupling, acc, error)
+      class(model_continuum_type), intent(inout) :: self
+      type(coupling_type), intent(inout), target :: coupling
+      type(cavity_surface_adjoint_type), intent(out) :: acc
+      type(error_type), allocatable, intent(out) :: error
+
+      type(coupling_view_type) :: view
+      integer :: i
+
+      call acc%init(self%cavity%ngrid)
+      do i = 1, size(self%components)
+         call coupling_make_view(coupling, i, view)
+         call self%components(i)%item%get_gradient_surface_weights(view, self%cavity, acc, error)
+         call coupling_close_view(coupling)
+         if (allocated(error)) return
+      end do
+   end subroutine accumulate_gradient_surface_weights
+
+   !> Stage HVP stage 1: host level-set/density tangents at fixed base surface
+   subroutine continuum_prepare_hvp_geometry(self, coupling, dirs, error)
+      class(model_continuum_type), intent(inout), target :: self
+      type(coupling_type), intent(inout), target :: coupling
+      real(wp), intent(in) :: dirs(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call require_hessian_ready(self, error)
+      if (allocated(error)) return
+      if (size(dirs, 1) /= 3 .or. size(dirs, 2) /= self%cavity%nsph .or. size(dirs, 3) < 1) then
+         call fatal_error(error, "Continuum-model HVP direction shape mismatch")
+         return
+      end if
+
+      call self%hvp_exchange%destroy()
+      nullify (self%hvp_coupling)
+      call coupling_set_hvp_dirs(coupling, dirs)
+      call self%declare_pass(coupling, error)
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_hvp_geometry, error)
+      if (allocated(error)) return
+      self%hvp_coupling => coupling
+   end subroutine continuum_prepare_hvp_geometry
+
+   !> Stage HVP stage 2: compute surface tangents and stage potential/trace tangents
+   subroutine continuum_prepare_hvp(self, coupling, error)
+      class(model_continuum_type), intent(inout), target :: self
+      type(coupling_type), intent(inout), target :: coupling
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: dirs(:, :, :)
+      logical :: want_curv
+      integer :: ngrid, ndir, i
+
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call require_hessian_ready(self, error)
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_hvp_geometry, error)
+      if (allocated(error)) return
+      if (.not. associated(self%hvp_coupling, coupling)) then
+         call fatal_error(error, "prepare_hvp requires the coupling staged by prepare_hvp_geometry")
+         return
+      end if
+      call coupling_get_hvp_dirs(coupling, dirs)
+      if (.not. allocated(dirs)) then
+         call fatal_error(error, "prepare_hvp: missing HVP directions on coupling")
+         return
+      end if
+
+      call self%cavity%read_hvp_geometry(coupling, self%hvp_exchange, error)
+      if (allocated(error)) return
+
+      ngrid = self%cavity%ngrid
+      ndir = size(dirs, 3)
+      want_curv = allocated(self%cavity%k1) .and. allocated(self%cavity%k2)
+      call self%hvp_exchange%tangent%init(ngrid, ndir, want_curv)
+      if (allocated(self%hvp_exchange%d_wbranch)) deallocate (self%hvp_exchange%d_wbranch)
+      allocate (self%hvp_exchange%d_wbranch(ngrid, ndir), source=0.0_wp)
+      if (ngrid > 0) then
+         if (self%hvp_exchange%have_host_jets) then
+            call self%cavity%get_surface_tangent(dirs, self%hvp_exchange%tangent, error, &
+               & d_wbranch=self%hvp_exchange%d_wbranch, host_jets=self%hvp_exchange%host_jets)
+         else
+            call self%cavity%get_surface_tangent(dirs, self%hvp_exchange%tangent, error, &
+               & d_wbranch=self%hvp_exchange%d_wbranch)
+         end if
+         if (allocated(error)) then
+            call self%hvp_exchange%destroy()
+            nullify (self%hvp_coupling)
+            return
+         end if
+      end if
+      self%hvp_exchange%have_tangent = .true.
+
+      if (allocated(self%cavity%xi0)) then
+         call coupling_set_hvp_surface_tangent(coupling, self%hvp_exchange%tangent%d_xyz, &
+            & self%hvp_exchange%tangent%d_xi)
+      else
+         call coupling_set_hvp_surface_tangent(coupling, self%hvp_exchange%tangent%d_xyz)
+      end if
+      call self%declare_pass(coupling, error)
+      if (allocated(error)) return
+      do i = 1, size(self%components)
+         call self%components(i)%item%reset_hvp(ngrid, ndir)
+      end do
+      call coupling_arm(coupling, moist_phase_hvp, error)
+   end subroutine continuum_prepare_hvp
+
+   !> Evaluate nuclear Hessian-vector products and second-order response tangents
+   subroutine continuum_get_hvp(self, coupling, response, hvp, error)
+      class(model_continuum_type), intent(inout), target :: self
+      type(coupling_type), intent(inout), target :: coupling
+      type(response_type), intent(inout) :: response
+      real(wp), intent(inout) :: hvp(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: dirs(:, :, :), local(:, :, :)
+      type(response_type) :: local_resp
+      type(cavity_surface_adjoint_type) :: acc
+      type(continuum_adjoint_response_type) :: omega
+      type(coupling_view_type) :: view
+      integer :: ngrid, ndir, i, d0
+
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call require_hessian_ready(self, error)
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_hvp, error)
+      if (allocated(error)) return
+      if (.not. associated(self%hvp_coupling, coupling) .or. .not. self%hvp_exchange%have_tangent) then
+         call fatal_error(error, "get_hvp requires a coupling prepared by prepare_hvp")
+         return
+      end if
+      call coupling_get_hvp_dirs(coupling, dirs)
+      if (.not. allocated(dirs)) then
+         call fatal_error(error, "get_hvp: missing HVP directions on coupling")
+         return
+      end if
+      if (any(shape(hvp) /= shape(dirs))) then
+         call fatal_error(error, "Continuum-model Hessian-vector product shape mismatch")
+         return
+      end if
+
+      d0 = self%ctx%timer%current_depth()
+      call self%ctx%timer%start("Model HVP", category=cat_hessian)
+
+      ngrid = self%cavity%ngrid
+      ndir = size(dirs, 3)
+      do i = 1, size(self%components)
+         call self%components(i)%item%reset_hvp(ngrid, ndir)
+      end do
+      call self%hvp_exchange%init_outputs(ngrid, ndir, self%cavity%has_density_response())
+
+      call accumulate_gradient_surface_weights(self, coupling, acc, error)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      omega%components => self%components
+      omega%coupling => coupling
+      allocate (local, mold=hvp)
+      local = 0.0_wp
+      call self%cavity%get_surface_hessian(acc, dirs, local, error, omega_v=omega, &
+         & exchange=self%hvp_exchange)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      if (ngrid > 0) then
+         do i = 1, size(self%components)
+            call coupling_make_view(coupling, i, view)
+            call self%components(i)%item%get_trace_response_tangent(view, self%cavity, &
+               & self%hvp_exchange%tangent, local_resp, error)
+            call coupling_close_view(coupling)
+            if (allocated(error)) then
+               call self%ctx%timer%unwind(d0)
+               return
+            end if
+         end do
+         call self%cavity%get_surface_response_tangent(self%hvp_exchange, local_resp, error)
+         if (allocated(error)) then
+            call self%ctx%timer%unwind(d0)
+            return
+         end if
+      end if
+
+      call self%ctx%timer%stop("Model HVP")
+
+      call response_clear(response)
+      response = local_resp
+      hvp = hvp + local
+   end subroutine continuum_get_hvp
+
+   !> Evaluate the dense nuclear Hessian of a host-independent continuum model
+   subroutine continuum_get_hessian(self, coupling, hessian, error)
+      class(model_continuum_type), intent(inout), target :: self
+      type(coupling_type), intent(inout), target :: coupling
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), allocatable :: local(:, :, :, :)
+      type(cavity_surface_adjoint_type) :: acc
+      type(continuum_adjoint_response_type) :: omega
+      integer :: i, d0
+
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call require_hessian_ready(self, error)
+      if (allocated(error)) return
+      if (any(shape(hessian) /= [3, self%cavity%nsph, 3, self%cavity%nsph])) then
+         call fatal_error(error, "Continuum-model Hessian shape mismatch")
+         return
+      end if
+      if (self%cavity%has_density_response()) then
+         call fatal_error(error, "Density-dependent cavities require the two-stage HVP"// &
+                          " protocol (prepare_hvp_geometry / prepare_hvp / get_hvp)")
+         return
+      end if
+      do i = 1, size(self%components)
+         if (self%components(i)%item%needs_hvp_coupling()) then
+            call fatal_error(error, trim(self%components(i)%item%name)// &
+                             " requires the two-stage HVP protocol"// &
+                             " (prepare_hvp_geometry / prepare_hvp / get_hvp)")
+            return
+         end if
+      end do
+
+      d0 = self%ctx%timer%current_depth()
+      call self%ctx%timer%start("Model Hessian", category=cat_hessian)
+
+      call accumulate_gradient_surface_weights(self, coupling, acc, error)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      omega%components => self%components
+      omega%coupling => coupling
+      allocate (local(3, self%cavity%nsph, 3, self%cavity%nsph), source=0.0_wp)
+      call self%cavity%get_hessian(acc, local, error, omega_v=omega)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      call self%ctx%timer%stop("Model Hessian")
+
+      hessian = hessian + local
+   end subroutine continuum_get_hessian
+
+   !> Apply component surface-weight tangents and direct nuclear HVP for one direction block
+   subroutine continuum_adjoint_response_apply(self, cavity, dirs, tangent, dacc, hvp_direct, &
+                                               error, first)
+      class(continuum_adjoint_response_type), intent(inout) :: self
+      class(cavity_type), intent(in) :: cavity
+      real(wp), intent(in) :: dirs(:, :, :)
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      real(wp), intent(inout) :: hvp_direct(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      integer, intent(in), optional :: first
+
+      type(coupling_view_type) :: view
+      integer :: i
+
+      if (.not. associated(self%components) .or. .not. associated(self%coupling)) then
+         call fatal_error(error, "Continuum-model adjoint response is not bound")
+         return
+      end if
+      do i = 1, size(self%components)
+         call coupling_make_view(self%coupling, i, view)
+         call self%components(i)%item%get_hessian_surface_weights(view, cavity, dirs, tangent, &
+                                                                  dacc, error, first=first)
+         call coupling_close_view(self%coupling)
+         if (allocated(error)) return
+         call coupling_make_view(self%coupling, i, view)
+         call self%components(i)%item%get_direct_hessian(view, cavity, dirs, tangent, &
+                                                         hvp_direct, error, first=first)
+         call coupling_close_view(self%coupling)
+         if (allocated(error)) return
+      end do
+   end subroutine continuum_adjoint_response_apply
+
+   !* ================================================================================= *!
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
@@ -550,6 +919,8 @@ contains
    subroutine destroy_model(self)
       !> Model being destroyed
       type(model_continuum_type), intent(inout) :: self
+      call self%hvp_exchange%destroy()
+      nullify (self%hvp_coupling)
       call self%clear_couplings()
    end subroutine destroy_model
 

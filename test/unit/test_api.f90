@@ -41,6 +41,8 @@ module test_api
       & get_model_component_field_count_api, get_model_component_field_info_api, &
       & get_model_component_field_about_api, get_model_component_field_real_api, &
       & general_model_prepare_energy_api, general_model_get_energy_api, &
+      & general_model_prepare_hvp_geometry_api, general_model_prepare_hvp_api, &
+      & general_model_get_hvp_api, general_model_get_hessian_api, &
       & get_model_component_description_api, get_model_parameters_text_api, new_cpcm_component_api
    use moist_model_continuum, only: model_continuum_type
    use moist_channels_fields, only: field_query_type, field_real
@@ -608,7 +610,8 @@ contains
                   new_unittest("pcm_spatial_weights_are_optional_fields", test_pcm_spatial_fields), &
                   new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
-                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs) &
+                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs), &
+                  new_unittest("model_hvp_and_hessian_guards", test_model_hvp_guards) &
                   ]
 
    end subroutine collect_api
@@ -4667,6 +4670,137 @@ contains
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_gradient_optional_outputs
+
+   !> Defensive guards on HVP and dense Hessian C entry points
+   subroutine test_model_hvp_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vlsf, vdrop, vmodel, vfresh, vpv, vcpl, vresp
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      real(c_double), target :: dirs(3, 2, 2), bad_dirs(3, 2, 1), hvp(3, 2, 2), hess(3, 2, 3, 2)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      allocate (err)
+      verror = c_loc(err)
+      vcpl = c_null_ptr
+      vresp = c_null_ptr
+      vfresh = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      vlsf = moist_new_svdw_lsf(verror, c_null_ptr)
+      vdrop = drop_on_context(verror, vlsf, c_null_ptr, c_null_ptr)
+      call moist_delete_lsf(vlsf)
+      vmodel = model_on_context(verror, vdrop)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpv)
+      call update_model_through_api(verror, vmodel, vmol)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         vcpl = new_coupling_api(verror, vmodel)
+         vresp = new_response_api(verror)
+         vfresh = model_on_context(verror, vdrop)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Coupling/response setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         dirs = 0.0_c_double
+         dirs(3, 1, 1) = 1.0_c_double
+         dirs(3, 2, 2) = 1.0_c_double
+
+         ! prepare_model_hvp_geometry guards
+         call general_model_prepare_hvp_geometry_api(verror, vfresh, vcpl, 2_c_int, 2_c_int, c_loc(dirs))
+         call expect_error(error, err, "[moist_prepare_model_hvp_geometry] Solvation model must be updated first")
+         if (allocated(error)) exit checks
+
+         call general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, 2_c_int, 0_c_int, c_loc(dirs))
+         call expect_error(error, err, "[moist_prepare_model_hvp_geometry] Direction count 'ndir' must be positive")
+         if (allocated(error)) exit checks
+
+         call general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, 2_c_int, 2_c_int, c_null_ptr)
+         call expect_error(error, err, "[moist_prepare_model_hvp_geometry] Null directions pointer provided")
+         if (allocated(error)) exit checks
+
+         call general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, 1_c_int, 2_c_int, c_loc(dirs))
+         call expect_error(error, err, "[moist_prepare_model_hvp_geometry] Array capacity is too small for 'dirs'")
+         if (allocated(error)) exit checks
+
+         bad_dirs = 0.0_c_double
+         bad_dirs(1, 1, 1) = ieee_value(0.0_c_double, ieee_quiet_nan)
+         call general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, 2_c_int, 1_c_int, c_loc(bad_dirs))
+         call expect_error(error, err, "[moist_prepare_model_hvp_geometry] Non-finite value in 'dirs'")
+         if (allocated(error)) exit checks
+
+         ! prepare_model_hvp before prepare_model_hvp_geometry
+         call general_model_prepare_hvp_api(verror, vmodel, vcpl)
+         call expect_error(error, err, "[moist_prepare_model_hvp] prepare_hvp requires a coupling staged by prepare_hvp_geometry")
+         if (allocated(error)) exit checks
+
+         ! Stage valid HVP geometry and HVP
+         call general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, 2_c_int, 2_c_int, c_loc(dirs))
+         call expect_success(error, err, "prepare_model_hvp_geometry")
+         if (allocated(error)) exit checks
+         call general_model_prepare_hvp_api(verror, vmodel, vcpl)
+         call expect_success(error, err, "prepare_model_hvp")
+         if (allocated(error)) exit checks
+
+         ! get_model_hvp guards
+         hvp = sentinel
+         call general_model_get_hvp_api(verror, vfresh, vcpl, vresp, 2_c_int, 2_c_int, c_loc(hvp))
+         call expect_error(error, err, "[moist_get_model_hvp] Solvation model must be updated first")
+         call check_untouched(error, any(hvp /= sentinel), "hvp of an unupdated model")
+         if (allocated(error)) exit checks
+
+         call general_model_get_hvp_api(verror, vmodel, vcpl, vresp, 2_c_int, 2_c_int, c_null_ptr)
+         call expect_error(error, err, "[moist_get_model_hvp] Null hvp pointer provided")
+         if (allocated(error)) exit checks
+
+         call general_model_get_hvp_api(verror, vmodel, vcpl, vresp, 1_c_int, 2_c_int, c_loc(hvp))
+         call expect_error(error, err, "[moist_get_model_hvp] Array capacity is too small for 'hvp'")
+         call check_untouched(error, any(hvp /= sentinel), "hvp with short atom capacity")
+         if (allocated(error)) exit checks
+
+         call general_model_get_hvp_api(verror, vmodel, vcpl, vresp, 2_c_int, 1_c_int, c_loc(hvp))
+         call expect_error(error, err, "[moist_get_model_hvp] Direction capacity is too small for 'hvp'")
+         call check_untouched(error, any(hvp /= sentinel), "hvp with short direction capacity")
+         if (allocated(error)) exit checks
+
+         ! get_model_hessian guards
+         hess = sentinel
+         call general_model_get_hessian_api(verror, vfresh, vcpl, 2_c_int, c_loc(hess))
+         call expect_error(error, err, "[moist_get_model_hessian] Solvation model must be updated first")
+         call check_untouched(error, any(hess /= sentinel), "hessian of an unupdated model")
+         if (allocated(error)) exit checks
+
+         call general_model_get_hessian_api(verror, vmodel, vcpl, 2_c_int, c_null_ptr)
+         call expect_error(error, err, "[moist_get_model_hessian] Null hessian pointer provided")
+         if (allocated(error)) exit checks
+
+         call general_model_get_hessian_api(verror, vmodel, vcpl, 1_c_int, c_loc(hess))
+         call expect_error(error, err, "[moist_get_model_hessian] Array capacity is too small for 'hessian'")
+         call check_untouched(error, any(hess /= sentinel), "hessian with short atom capacity")
+         if (allocated(error)) exit checks
+      end block checks
+
+      call delete_coupling_api(vcpl)
+      call delete_response_api(vresp)
+      call delete_solvation_model_api(vfresh)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call moist_delete_cavity(vdrop)
+      call moist_delete_structure(vmol)
+      deallocate (err)
+
+   end subroutine test_model_hvp_guards
 
    !* ================================================================================= *!
    !*                              Test double procedures                               *!

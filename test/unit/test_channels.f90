@@ -5,17 +5,23 @@ module test_channels
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & coupling_request_type, coupling_registry_type, point_potential_request_type, &
-      & gaussian_potential_request_type, gaussian_moment_request_type, &
+      & gaussian_potential_request_type, point_potential_tangent_request_type, &
+      & gaussian_potential_tangent_request_type, density_tangent_request_type, &
+      & gaussian_moment_request_type, &
       & atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type, &
       & nuclear_charge_request_type, density_matrix_request_type, moist_phase_build, &
-      & coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom, coupling_extent_request_pair, &
+      & coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom, &
+      & coupling_extent_request_pair, coupling_extent_grid_dir, &
       & current_output_extent, current_request, answer_flat, moist_phase_energy, &
-      & moist_phase_response, moist_phase_gradient, request_name_len, coupling_register, &
+      & moist_phase_response, moist_phase_gradient, moist_phase_hvp_geometry, moist_phase_hvp, &
+      & request_name_len, coupling_register, &
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
+      & coupling_set_hvp_dirs, coupling_set_hvp_surface_tangent, coupling_clear_hvp, &
       & coupling_make_view, coupling_close_view, moist_n_phases
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, &
+      & potential_adjoint_tangent_response_type, density_tangent_response_type, &
       & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
       & parameter_adjoint_response_type, current_response_item, response_accumulate, response_clear
@@ -148,7 +154,9 @@ contains
          new_unittest("build_answers_survive_energy_invalidation", test_build_answers_kept), &
          new_unittest("density_matrix_runs_over_its_own_size", test_density_matrix_size), &
          new_unittest("density_matrix_sizes_are_inputs", test_density_matrix_size_inputs), &
-         new_unittest("build_staging_messages", test_build_staging_messages)]
+         new_unittest("build_staging_messages", test_build_staging_messages), &
+         new_unittest("hvp_tangent_requests_and_grid_dir_extent", test_hvp_tangent_requests), &
+         new_unittest("hvp_response_tangent_items", test_hvp_response_tangent_items)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -4014,5 +4022,268 @@ contains
       call check(error, err%message, "build requires a coupling staged by prepare_build; "// &
          & "this coupling is staged for the energy phase")
    end subroutine test_build_staging_messages
+
+   !> Two-stage HVP tangent requests, `grid_dir` extents, flat answers, and `coupling_clear_hvp`
+   subroutine test_hvp_tangent_requests(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(point_potential_request_type) :: pot
+      type(density_tangent_request_type) :: dtan
+      type(gaussian_potential_tangent_request_type) :: gtan, gtan_dup
+      type(field_query_type) :: query
+      real(wp), allocatable :: phi_read(:), d_rho_read(:, :), d_d3_read(:, :, :), d_d2phi_read(:, :, :)
+      real(wp) :: dirs(3, 1, 2), xyz(3, 2), xi(2), d_xyz(3, 2, 2), d_xi(2, 2)
+      real(wp) :: d_rho(2, 2), d_grad_rho(3, 2, 2), d_hess_rho(6, 2, 2), d_d3_rho(10, 2, 2)
+      real(wp) :: d_phi(2, 2), d_dphi_dr(3, 2, 2), d_dphi_dxi(2, 2), d_d2phi_dr2(6, 2, 2), d_d2phi_dr_dxi(3, 2, 2)
+      integer :: extent, nfield
+
+      dirs = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp], [3, 1, 2])
+      xyz = reshape([0.1_wp, 0.2_wp, 0.3_wp, -0.4_wp, 0.5_wp, -0.6_wp], [3, 2])
+      xi = [0.7_wp, 0.9_wp]
+      d_xyz = 0.25_wp
+      d_xi = -0.1_wp
+
+      ! Stage-1 staging diagnostics
+      call coupling_check_mandatory(coupling, moist_phase_hvp_geometry, err)
+      call check(error, allocated(err), more="unstaged coupling passed hvp_geometry check")
+      if (allocated(error)) return
+      call check(error, err%message, &
+         & "prepare_hvp requires a coupling staged by prepare_hvp_geometry; this coupling is not staged")
+      if (allocated(error)) return
+      deallocate (err)
+
+      call coupling_set_hvp_dirs(coupling, dirs)
+      call coupling_set_hvp_surface_tangent(coupling, d_xyz, d_xi)
+
+      dtan%xyz = xyz
+      dtan%dirs = dirs
+      call request_require(dtan, moist_phase_hvp_geometry, "d_rho", err)
+      if (.not. allocated(err)) call request_require(dtan, moist_phase_hvp_geometry, "d_grad_rho", err)
+      if (.not. allocated(err)) call request_require(dtan, moist_phase_hvp_geometry, "d_hess_rho", err)
+      if (.not. allocated(err)) call request_require(dtan, moist_phase_hvp_geometry, "d_d3_rho", err)
+      call check_moist_error(error, err, "dtan require")
+      if (allocated(error)) return
+
+      call request_require(pot, moist_phase_energy, "phi", err)
+      if (.not. allocated(err)) call request_require(pot, moist_phase_hvp, "phi", err)
+      call check_moist_error(error, err, "pot require")
+      if (allocated(error)) return
+
+      gtan%xyz = xyz
+      gtan%xi = xi
+      gtan%d_xyz = d_xyz
+      gtan%d_xi = d_xi
+      gtan%dirs = dirs
+      gtan_dup = gtan
+      call request_require(gtan, moist_phase_hvp, "d_phi", err)
+      if (.not. allocated(err)) call request_require(gtan, moist_phase_hvp, "d_dphi_dr", err)
+      if (.not. allocated(err)) call request_require(gtan, moist_phase_hvp, "d_dphi_dxi", err)
+      if (.not. allocated(err)) call request_require(gtan_dup, moist_phase_hvp, "d_d2phi_dr2", err)
+      if (.not. allocated(err)) call request_require(gtan_dup, moist_phase_hvp, "d_d2phi_dr_dxi", err)
+      call check_moist_error(error, err, "gtan require")
+      if (allocated(error)) return
+
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 0)
+      call coupling_register(coupling, "density_tangent", dtan, err)
+      call check_moist_error(error, err, "register dtan")
+      if (allocated(error)) return
+      call coupling_set_scope(coupling, 1)
+      call coupling_register(coupling, "potential", pot, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "potential_tangent", gtan, err)
+      call check_moist_error(error, err, "register scope 1")
+      if (allocated(error)) return
+      call coupling_set_scope(coupling, 2)
+      call coupling_register(coupling, "potential_tangent", gtan_dup, err)
+      call check_moist_error(error, err, "register shared scope 2")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2, natom=1)
+
+      ! Answer primal phi in energy phase
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "arm energy")
+      if (allocated(error)) return
+      call check(error, coupling%next(), more="expected potential request")
+      if (allocated(error)) return
+      call coupling%answer("phi", [3.0_wp, 4.0_wp], err)
+      call check_moist_error(error, err, "answer phi")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="unexpected second energy request")
+      if (allocated(error)) return
+
+      ! Stage 1: density_tangent
+      call coupling_arm(coupling, moist_phase_hvp_geometry, err)
+      call check_moist_error(error, err, "arm hvp_geometry")
+      if (allocated(error)) return
+      call check(error, coupling%next(), more="expected density_tangent request")
+      if (allocated(error)) return
+      call current_output_extent(coupling, "d_d3_rho", extent, err)
+      call check_moist_error(error, err, "d_d3_rho extent")
+      if (allocated(error)) return
+      call check(error, extent, 4, "grid_dir extent is ngrid * ndir")
+      if (allocated(error)) return
+
+      d_rho = reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp], [2, 2])
+      d_grad_rho = 0.5_wp
+      d_hess_rho = -0.25_wp
+      d_d3_rho = reshape([(real(extent, wp), extent=1, 40)], [10, 2, 2])
+      call coupling%answer("d_rho", d_rho, err)
+      if (.not. allocated(err)) call coupling%answer("d_grad_rho", d_grad_rho, err)
+      if (.not. allocated(err)) call coupling%answer("d_hess_rho", d_hess_rho, err)
+      if (.not. allocated(err)) call answer_flat(coupling, "d_d3_rho", reshape(d_d3_rho, [40]), err)
+      call check_moist_error(error, err, "answer density_tangent")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="unexpected second hvp_geometry request")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_hvp_geometry, err)
+      call check_moist_error(error, err, "check mandatory hvp_geometry")
+      if (allocated(error)) return
+
+      ! Stage 2: potential_tangent (primal phi reused from energy!)
+      call coupling_arm(coupling, moist_phase_hvp, err)
+      call check_moist_error(error, err, "arm hvp")
+      if (allocated(error)) return
+      call check(error, coupling%next(), more="expected gaussian_potential_tangent request")
+      if (allocated(error)) return
+      call query%enumerate()
+      block
+         class(coupling_request_type), allocatable :: item
+         item = coupling%request()
+         call item%list_fields(query)
+      end block
+      nfield = query%nfield
+      call check(error, nfield, 5, "gaussian_potential_tangent exposes 5 inputs")
+      if (allocated(error)) return
+
+      d_phi = 1.5_wp
+      d_dphi_dr = -0.5_wp
+      d_dphi_dxi = 0.75_wp
+      d_d2phi_dr2 = reshape([(0.1_wp*real(extent, wp), extent=1, 24)], [6, 2, 2])
+      d_d2phi_dr_dxi = 0.2_wp
+      call coupling%answer("d_phi", d_phi, err)
+      if (.not. allocated(err)) call coupling%answer("d_dphi_dr", d_dphi_dr, err)
+      if (.not. allocated(err)) call coupling%answer("d_dphi_dxi", d_dphi_dxi, err)
+      if (.not. allocated(err)) call coupling%answer("d_d2phi_dr2", d_d2phi_dr2, err)
+      if (.not. allocated(err)) call coupling%answer("d_d2phi_dr_dxi", d_d2phi_dr_dxi, err)
+      call check_moist_error(error, err, "answer potential_tangent")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="shared potential_tangent must visit once")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_hvp, err)
+      call check_moist_error(error, err, "check mandatory hvp")
+      if (allocated(error)) return
+
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_tangent", "d_rho", d_rho_read, err)
+      if (.not. allocated(err)) call view%read("density_tangent", "d_d3_rho", d_d3_read, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "read density_tangent")
+      if (allocated(error)) return
+      call check(error, all(d_rho_read == d_rho) .and. all(d_d3_read == d_d3_rho), &
+         & more="density_tangent read back mismatch")
+      if (allocated(error)) return
+
+      call coupling_make_view(coupling, 2, view)
+      call view%read("potential_tangent", "d_d2phi_dr2", d_d2phi_read, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "read shared potential_tangent")
+      if (allocated(error)) return
+      call check(error, all(d_d2phi_read == d_d2phi_dr2), more="d_d2phi_dr2 read back mismatch")
+      if (allocated(error)) return
+
+      ! Clearing HVP drops directional answers while preserving primal phi
+      call coupling_clear_hvp(coupling)
+      call coupling_make_view(coupling, 1, view)
+      call view%read("potential", "phi", phi_read, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "primal phi survives coupling_clear_hvp")
+      if (allocated(error)) return
+      call check(error, all(phi_read == [3.0_wp, 4.0_wp]), more="primal phi altered")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("density_tangent", "d_rho", d_rho_read, err)
+      call coupling_close_view(coupling)
+      call check(error, allocated(err), more="directional answer survived coupling_clear_hvp")
+   end subroutine test_hvp_tangent_requests
+
+   !> Accumulation and field listing of `potential_adjoint_tangent` and `density_tangent`
+   subroutine test_hvp_response_tangent_items(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(response_type) :: resp
+      type(potential_adjoint_tangent_response_type) :: p1, p2, p_bad
+      type(density_tangent_response_type) :: d1
+      type(field_query_type) :: query
+      class(response_item_type), allocatable :: item
+
+      allocate (p1%w_phi(2), source=[1.0_wp, 2.0_wp])
+      allocate (p1%dw_phi(2, 2), source=0.5_wp)
+      allocate (p1%d_xyz(3, 2, 2), source=0.25_wp)
+      allocate (p1%d_xi(2, 2), source=-0.1_wp)
+
+      allocate (p2%w_phi(2), source=[3.0_wp, 4.0_wp])
+      allocate (p2%dw_phi(2, 2), source=1.5_wp)
+      allocate (p2%w_dphi_dr(3, 2), source=0.2_wp)
+      allocate (p2%dw_dphi_dr(3, 2, 2), source=-0.3_wp)
+      allocate (p2%d_xyz(3, 2, 2), source=0.25_wp)
+      allocate (p2%d_xi(2, 2), source=-0.1_wp)
+
+      call response_accumulate(resp, p1, err)
+      if (.not. allocated(err)) call response_accumulate(resp, p2, err)
+      call check_moist_error(error, err, "accumulate potential_adjoint_tangent")
+      if (allocated(error)) return
+
+      ! Conflicting shared d_xyz must fail cleanly
+      p_bad = p1
+      p_bad%d_xyz(1, 1, 1) = 99.0_wp
+      call response_accumulate(resp, p_bad, err)
+      call check(error, allocated(err), more="conflicting shared d_xyz was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+
+      allocate (d1%w_rho(2), source=1.0_wp)
+      allocate (d1%w_grad_rho(3, 2), source=2.0_wp)
+      allocate (d1%w_hess_rho(3, 3, 2), source=3.0_wp)
+      allocate (d1%dw_rho(2, 2), source=4.0_wp)
+      allocate (d1%dw_grad_rho(3, 2, 2), source=5.0_wp)
+      allocate (d1%dw_hess_rho(6, 2, 2), source=6.0_wp)
+      allocate (d1%d_xyz(3, 2, 2), source=0.25_wp)
+      call response_accumulate(resp, d1, err)
+      call check_moist_error(error, err, "accumulate density_tangent")
+      if (allocated(error)) return
+
+      call check(error, resp%next(), more="missing potential_adjoint_tangent")
+      if (allocated(error)) return
+      item = resp%item()
+      call check(error, trim(item%name()), "potential_adjoint_tangent")
+      if (allocated(error)) return
+      select type (item)
+      type is (potential_adjoint_tangent_response_type)
+         call check(error, all(item%w_phi == [4.0_wp, 6.0_wp]) .and. all(item%dw_phi == 2.0_wp), &
+            & more="potential_adjoint_tangent sum mismatch")
+         if (allocated(error)) return
+         call check(error, allocated(item%w_dphi_dr) .and. allocated(item%dw_dphi_dr), &
+            & more="normal-trace channels lost during accumulation")
+         if (allocated(error)) return
+      class default
+         call test_failed(error, "wrong item type")
+         return
+      end select
+      call query%enumerate()
+      call item%list_fields(query)
+      call check(error, query%nfield, 6, "potential_adjoint_tangent lists 6 fields")
+      if (allocated(error)) return
+
+      call check(error, resp%next(), more="missing density_tangent")
+      if (allocated(error)) return
+      item = resp%item()
+      call check(error, trim(item%name()), "density_tangent")
+      if (allocated(error)) return
+      call query%enumerate()
+      call item%list_fields(query)
+      call check(error, query%nfield, 7, "density_tangent lists 7 fields")
+   end subroutine test_hvp_response_tangent_items
 
 end module test_channels

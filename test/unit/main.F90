@@ -90,9 +90,11 @@ program tester
    use test_model_component_pcm_regression, only: collect_model_component_pcm_regression
    use test_model_component_pcm_vacuum, only: collect_model_component_pcm_vacuum
    use test_model_component_pcm_kernel_variants, only: collect_model_component_pcm_kernel_variants
+   use test_model_component_pcm_hessian, only: collect_model_component_pcm_hessian
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_continuum, only: collect_model_continuum
+   use test_model_continuum_hessian, only: collect_model_continuum_hessian
    use test_model_coupling, only: collect_model_coupling
 
    implicit none(type, external)
@@ -192,9 +194,11 @@ program tester
       & new_testsuite("model_component_pcm_vacuum", collect_model_component_pcm_vacuum), &
       & new_testsuite("model_component_pcm_kernel_variants", &
          collect_model_component_pcm_kernel_variants), &
+      & new_testsuite("model_component_pcm_hessian", collect_model_component_pcm_hessian), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_continuum", collect_model_continuum), &
+      & new_testsuite("model_continuum_hessian", collect_model_continuum_hessian), &
       & new_testsuite("model_coupling", collect_model_coupling) &
       & ]
 

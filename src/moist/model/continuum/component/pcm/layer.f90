@@ -5,9 +5,11 @@ module moist_model_continuum_component_pcm_layer
    use moist_cavity_type, only: cavity_type
    use moist_output_citations, only: citation
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_channels_coupling, only: coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, solver_type, &
-      & pcm_tangent_block, pcm_tangent_require, pcm_component_list_fields
+      & pcm_tangent_block, pcm_tangent_require, pcm_tangent_require_batch, &
+      & pcm_component_list_fields
    use moist_channels_fields, only: field_query_type
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver, pcm_block_jacobi, pcm_check_finite
@@ -42,6 +44,7 @@ module moist_model_continuum_component_pcm_layer
       procedure :: get_surface_weights => layer_get_surface_weights
       procedure :: get_gradient_surface_weights => layer_get_gradient_surface_weights
       procedure :: surface_weight_tangent => layer_surface_weight_tangent
+      procedure :: surface_weight_tangent_batch => layer_surface_weight_tangent_batch
       procedure :: list_fields => layer_list_fields
       procedure(assemble_layer_iface), deferred :: assemble_layer
       procedure(solve_layer_iface), deferred :: solve_layer
@@ -491,6 +494,96 @@ contains
       dw_phi = hvp_v(:, 1)
       if (present(dw_vn) .and. self%uses_normal_trace()) dw_vn = hvp_vn(:, 1)
    end subroutine layer_surface_weight_tangent
+
+   !> Batched directional derivative of the layer weights and trace adjoints
+   !>
+   !> @param[in,out] self     layer component with current charges
+   !> @param[in]     cavity   cavity the operators were assembled on
+   !> @param[in]     tangent  surface direction batch
+   !> @param[in]     dphi     potential-trace directions (ngrid, nblk)
+   !> @param[in,out] dacc     surface-adjoint tangent accumulators (nblk)
+   !> @param[out]    dw_phi   tangents of the symmetrized potential adjoint (ngrid, nblk)
+   !> @param[out]    error    allocated on failure
+   !> @param[in]     dvn      normal-trace directions (ngrid, nblk), optional
+   !> @param[out]    dw_vn    tangents of the normal-trace adjoint (ngrid, nblk), optional
+   subroutine layer_surface_weight_tangent_batch(self, cavity, tangent, dphi, dacc, dw_phi, &
+         & error, dvn, dw_vn)
+      !> Layer component with current charges
+      class(pcm_layer_base), intent(inout) :: self
+      !> Cavity the operators were assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction batch
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Potential-trace directions
+      real(wp), intent(in) :: dphi(:, :)
+      !> Surface-adjoint tangent accumulators
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Tangents of the potential adjoint
+      real(wp), allocatable, intent(out) :: dw_phi(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace directions
+      real(wp), intent(in), optional :: dvn(:, :)
+      !> Tangents of the normal-trace adjoint
+      real(wp), allocatable, intent(out), optional :: dw_vn(:, :)
+
+      real(wp), allocatable :: dr(:, :, :), dn(:, :, :), dk1(:, :), dk2(:, :), dxi(:, :), &
+         & df(:, :), da(:, :), dv(:, :), dvn_block(:, :)
+      real(wp), allocatable :: hvp_r(:, :, :), hvp_n(:, :, :), hvp_k1(:, :), hvp_k2(:, :), &
+         & hvp_xi(:, :), hvp_f(:, :), hvp_a(:, :), hvp_vn(:, :)
+      type(cavity_surface_adjoint_type) :: scratch
+      integer :: ngrid, nblk, jdir
+
+      call pcm_tangent_require_batch(self, cavity, tangent, dphi, dacc, error, dvn)
+      if (allocated(error)) return
+      if (self%smeared .neqv. allocated(cavity%xi0)) then
+         call fatal_error(error, "Layer PCM surface kind does not match the cavity")
+         return
+      end if
+      ngrid = cavity%ngrid
+      nblk = size(dphi, 2)
+      allocate (dr(3, ngrid, nblk), source=tangent%d_xyz)
+      allocate (dn(3, ngrid, nblk), source=tangent%d_n)
+      if (tangent%have_curvature) then
+         allocate (dk1(ngrid, nblk), source=tangent%d_k1)
+         allocate (dk2(ngrid, nblk), source=tangent%d_k2)
+      else
+         allocate (dk1(ngrid, nblk), dk2(ngrid, nblk), source=0.0_wp)
+      end if
+      allocate (dxi(ngrid, nblk), source=tangent%d_xi)
+      allocate (df(ngrid, nblk), source=tangent%d_f)
+      allocate (da(ngrid, nblk), source=tangent%d_a)
+      allocate (dv(ngrid, nblk), source=dphi)
+      if (present(dvn)) then
+         allocate (dvn_block(ngrid, nblk), source=dvn)
+      else
+         allocate (dvn_block(ngrid, nblk), source=0.0_wp)
+      end if
+      allocate (hvp_r(3, ngrid, nblk), hvp_n(3, ngrid, nblk), source=0.0_wp)
+      allocate (hvp_k1(ngrid, nblk), hvp_k2(ngrid, nblk), hvp_xi(ngrid, nblk), hvp_f(ngrid, nblk), &
+         & hvp_a(ngrid, nblk), dw_phi(ngrid, nblk), hvp_vn(ngrid, nblk), source=0.0_wp)
+
+      call scratch%init(ngrid)
+      call self%layer_weights(cavity, scratch, error)
+      call scratch%destroy()
+      if (allocated(error)) return
+      call self%layer_tangent(dr, dn, dk1, dk2, dxi, df, da, dv, dvn_block, hvp_r, hvp_n, &
+         & hvp_k1, hvp_k2, hvp_xi, hvp_f, hvp_a, dw_phi, hvp_vn, error)
+      if (allocated(error)) return
+      do jdir = 1, nblk
+         if (self%smeared) then
+            call dacc(jdir)%add_surface_weights(error, w_xyz=hvp_r(:, :, jdir), &
+               & w_n=hvp_n(:, :, jdir), w_k1=hvp_k1(:, jdir), w_k2=hvp_k2(:, jdir), &
+               & w_xi=hvp_xi(:, jdir), w_f=hvp_f(:, jdir), w_a=hvp_a(:, jdir))
+         else
+            call dacc(jdir)%add_surface_weights(error, w_xyz=hvp_r(:, :, jdir), &
+               & w_n=hvp_n(:, :, jdir), w_k1=hvp_k1(:, jdir), w_k2=hvp_k2(:, jdir), &
+               & w_a=hvp_a(:, jdir))
+         end if
+         if (allocated(error)) return
+      end do
+      if (present(dw_vn) .and. self%uses_normal_trace()) allocate (dw_vn, source=hvp_vn)
+   end subroutine layer_surface_weight_tangent_batch
 
    !> Add derivatives of vn = n dot grad(phi) with respect to the surface
    subroutine layer_add_host_normal_weights(self, coupling, cavity, acc, error)

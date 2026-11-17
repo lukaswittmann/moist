@@ -2806,10 +2806,18 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_prepare_model_response");
     moist_prepare_model_gradient(error, NULL, NULL);
     REQUIRE_ORIGIN("moist_prepare_model_gradient");
+    moist_prepare_model_hvp_geometry(error, NULL, NULL, 0, 0, NULL);
+    REQUIRE_ORIGIN("moist_prepare_model_hvp_geometry");
+    moist_prepare_model_hvp(error, NULL, NULL);
+    REQUIRE_ORIGIN("moist_prepare_model_hvp");
     moist_get_model_response(error, NULL, NULL, NULL);
     REQUIRE_ORIGIN("moist_get_model_response");
     moist_get_model_gradient(error, NULL, NULL, NULL, 0, NULL);
     REQUIRE_ORIGIN("moist_get_model_gradient");
+    moist_get_model_hvp(error, NULL, NULL, NULL, 0, 0, NULL);
+    REQUIRE_ORIGIN("moist_get_model_hvp");
+    moist_get_model_hessian(error, NULL, NULL, 0, NULL);
+    REQUIRE_ORIGIN("moist_get_model_hessian");
     moist_get_model_component_count(error, NULL, NULL);
     REQUIRE_ORIGIN("moist_get_model_component_count");
     moist_get_model_component_field_real(error, NULL, 0, "energy", &value);
@@ -4808,6 +4816,314 @@ cleanup:
 
 #undef REQUIRE
 
+#define REQUIRE(cond) do { if (!(cond)) { \
+    printf("  FAIL: %s (line %d)\n", #cond, __LINE__); goto cleanup; } } while (0)
+
+static void point_nuclear_primitives(int ngrid, const double *xyz, const double *positions,
+                                     double *phi, double *dphi_dr)
+{
+    for (int i = 0; i < ngrid; ++i) {
+        double p = 0.0, gx = 0.0, gy = 0.0, gz = 0.0;
+        for (int a = 0; a < H2O_NATOMS; ++a) {
+            const double dx = xyz[3 * i + 0] - positions[3 * a + 0];
+            const double dy = xyz[3 * i + 1] - positions[3 * a + 1];
+            const double dz = xyz[3 * i + 2] - positions[3 * a + 2];
+            const double r2 = dx * dx + dy * dy + dz * dz;
+            const double r = sqrt(r2);
+            const double inv_r3 = 1.0 / (r2 * r);
+            p += h2o_charges[a] / r;
+            gx -= h2o_charges[a] * dx * inv_r3;
+            gy -= h2o_charges[a] * dy * inv_r3;
+            gz -= h2o_charges[a] * dz * inv_r3;
+        }
+        phi[i] = p;
+        dphi_dr[3 * i + 0] = gx;
+        dphi_dr[3 * i + 1] = gy;
+        dphi_dr[3 * i + 2] = gz;
+    }
+}
+
+static void point_nuclear_tangents(int ngrid, int ndir, const double *xyz,
+                                   const double *positions, const double *dirs,
+                                   const double *d_xyz, double *dphi, double *d2phi_dr)
+{
+    for (int d = 0; d < ndir; ++d) {
+        const double *dir_d = dirs + (size_t)d * 3 * H2O_NATOMS;
+        const double *dxyz_d = d_xyz + (size_t)d * 3 * ngrid;
+        double *dphi_d = dphi + (size_t)d * ngrid;
+        double *d2_d = d2phi_dr + (size_t)d * 3 * ngrid;
+        for (int i = 0; i < ngrid; ++i) {
+            double dp = 0.0, dgx = 0.0, dgy = 0.0, dgz = 0.0;
+            for (int a = 0; a < H2O_NATOMS; ++a) {
+                const double dx = xyz[3 * i + 0] - positions[3 * a + 0];
+                const double dy = xyz[3 * i + 1] - positions[3 * a + 1];
+                const double dz = xyz[3 * i + 2] - positions[3 * a + 2];
+                const double ux = dxyz_d[3 * i + 0] - dir_d[3 * a + 0];
+                const double uy = dxyz_d[3 * i + 1] - dir_d[3 * a + 1];
+                const double uz = dxyz_d[3 * i + 2] - dir_d[3 * a + 2];
+                const double r2 = dx * dx + dy * dy + dz * dz;
+                const double r = sqrt(r2);
+                const double inv_r3 = 1.0 / (r2 * r);
+                const double inv_r5 = inv_r3 / r2;
+                const double du = dx * ux + dy * uy + dz * uz;
+                dp -= h2o_charges[a] * du * inv_r3;
+                dgx += h2o_charges[a] * (-ux * inv_r3 + 3.0 * dx * du * inv_r5);
+                dgy += h2o_charges[a] * (-uy * inv_r3 + 3.0 * dy * du * inv_r5);
+                dgz += h2o_charges[a] * (-uz * inv_r3 + 3.0 * dz * du * inv_r5);
+            }
+            dphi_d[i] = dp;
+            d2_d[3 * i + 0] = dgx;
+            d2_d[3 * i + 1] = dgy;
+            d2_d[3 * i + 2] = dgz;
+        }
+    }
+}
+
+static int eval_point_cpcm_gradient(moist_error error, const double *positions,
+                                    double *grad_out)
+{
+    const int nleb = 50;
+    moist_structure mol = moist_new_structure(error, H2O_NATOMS, h2o_numbers, positions,
+                                              NULL, NULL, NULL);
+    moist_cavity cav = fixture_drop(error, &nleb, NULL, NULL, NULL, NULL, NULL,
+                                    NULL, NULL, NULL, NULL, NULL, NULL);
+    moist_pcm_options pcm_opt;
+    moist_init_pcm_options(error, &pcm_opt, sizeof pcm_opt);
+    pcm_opt.solver = moist_pcm_solver_dense;
+    pcm_opt.point_potential = true;
+    moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_opt);
+    moist_model model = moist_new_model(error, fixture_context, cav);
+    moist_coupling cpl = NULL;
+    moist_response resp = moist_new_response(error);
+    double *xyz = NULL, *phi = NULL, *dphi_dr = NULL;
+    int ngrid = 0, nsph = 0, failed = 1;
+    if (!mol || !cav || !pcm || !model || !resp || moist_check_error(error)) goto done;
+    moist_add_model_component(error, model, pcm);
+    host_update_model(error, model, &cpl, mol, NULL, NULL);
+    if (moist_check_error(error)) goto done;
+    {
+        moist_cavity borrowed = moist_get_model_cavity(error, model);
+        moist_get_cavity_sizes(error, borrowed, &ngrid, &nsph);
+        moist_delete_cavity(&borrowed);
+    }
+    if (moist_check_error(error) || ngrid < 1) goto done;
+    xyz = malloc((size_t)3 * ngrid * sizeof(double));
+    phi = malloc((size_t)ngrid * sizeof(double));
+    dphi_dr = malloc((size_t)3 * ngrid * sizeof(double));
+    if (!xyz || !phi || !dphi_dr) goto done;
+    moist_get_model_field_real(error, model, "xyz", xyz);
+    if (moist_check_error(error)) goto done;
+    point_nuclear_primitives(ngrid, xyz, positions, phi, dphi_dr);
+    moist_prepare_model_gradient(error, model, cpl);
+    while (moist_next_coupling_request(error, cpl)) {
+        char req_name[MOIST_NAME_MAX + 1];
+        moist_get_coupling_request_name(error, cpl, req_name);
+        if (strcmp(req_name, "point_potential") == 0) {
+            moist_answer_coupling_request(error, cpl, "phi", phi);
+            moist_answer_coupling_request(error, cpl, "dphi_dr", dphi_dr);
+        } else if (strcmp(req_name, "nuclear_charges") == 0) {
+            moist_answer_coupling_request(error, cpl, "z", h2o_charges);
+        }
+    }
+    memset(grad_out, 0, 3 * H2O_NATOMS * sizeof(double));
+    moist_get_model_gradient(error, model, cpl, resp, H2O_NATOMS, grad_out);
+    if (!moist_check_error(error)) failed = 0;
+done:
+    free(xyz); free(phi); free(dphi_dr);
+    moist_delete_response(&resp);
+    moist_delete_coupling(&cpl);
+    moist_delete_model(&model);
+    moist_delete_component(&pcm);
+    moist_delete_cavity(&cav);
+    moist_delete_structure(&mol);
+    return failed;
+}
+
+/* Second-order C protocol: dense PV Hessian and two-stage CPCM HVP vs FD */
+int test_coupling_protocol_hvp(void)
+{
+    printf("Start test: second-order coupling protocol (PV Hessian and CPCM HVP)\n");
+    const int nleb = 50, ndir = 2;
+    moist_error error = moist_new_error();
+    moist_structure mol = make_h2o(error);
+    moist_cavity cav = fixture_drop(error, &nleb, NULL, NULL, NULL, NULL, NULL,
+                                    NULL, NULL, NULL, NULL, NULL, NULL);
+    moist_component pv = moist_new_pv_component(error, NULL, 2.5e-3);
+    moist_model pv_model = NULL, pcm_model = NULL;
+    moist_component pcm = NULL;
+    moist_coupling pv_cpl = NULL, pcm_cpl = NULL;
+    moist_response resp = moist_new_response(error);
+    double *xyz = NULL, *d_xyz = NULL, *dirs_echo = NULL;
+    double *phi = NULL, *dphi_dr = NULL, *dphi = NULL, *d2phi_dr = NULL;
+    double *w_phi = NULL, *dw_phi = NULL, *resp_dxyz = NULL;
+    double pv_hess[9 * 9] = {0.0}, pv_dirs[9 * 9] = {0.0}, pv_hvp[9 * 9] = {0.0};
+    double dirs[2 * 9] = {0.0}, hvp[2 * 9] = {0.0};
+    int ngrid = 0, nsph = 0, failed = 1;
+    bool more = false;
+
+    REQUIRE(mol && cav && pv && resp && !moist_check_error(error));
+    pv_model = moist_new_model(error, fixture_context, cav);
+    REQUIRE(pv_model && !moist_check_error(error));
+    moist_add_model_component(error, pv_model, pv);
+    host_update_model(error, pv_model, &pv_cpl, mol, NULL, NULL);
+    REQUIRE(!moist_check_error(error));
+
+    /* 1. PV dense Hessian == 9-direction HVP and is symmetric + translation-invariant */
+    moist_get_model_hessian(error, pv_model, pv_cpl, H2O_NATOMS, pv_hess);
+    REQUIRE(!moist_check_error(error));
+    for (int d = 0; d < 9; ++d) pv_dirs[d * 9 + d] = 1.0;
+    moist_prepare_model_hvp_geometry(error, pv_model, pv_cpl, H2O_NATOMS, 9, pv_dirs);
+    REQUIRE(!moist_check_error(error) && !moist_next_coupling_request(error, pv_cpl));
+    moist_prepare_model_hvp(error, pv_model, pv_cpl);
+    REQUIRE(!moist_check_error(error) && !moist_next_coupling_request(error, pv_cpl));
+    moist_get_model_hvp(error, pv_model, pv_cpl, resp, H2O_NATOMS, 9, pv_hvp);
+    REQUIRE(!moist_check_error(error) && !moist_next_response_item(error, resp));
+    for (int r = 0; r < 9; ++r) {
+        for (int c = 0; c < 9; ++c) {
+            /* Fortran (3,nat,3,nat) -> C [nat][3][nat][3], so column d is pv_hess[d*9 + r] */
+            REQUIRE(fabs(pv_hess[c * 9 + r] - pv_hvp[c * 9 + r]) <= 1e-12);
+            REQUIRE(fabs(pv_hess[c * 9 + r] - pv_hess[r * 9 + c]) <= 1e-12);
+        }
+    }
+
+    /* 2. CPCM (point_potential) HVP through the two-stage cursor protocol vs central FD */
+    {
+        moist_pcm_options pcm_opt;
+        moist_init_pcm_options(error, &pcm_opt, sizeof pcm_opt);
+        pcm_opt.solver = moist_pcm_solver_dense;
+        pcm_opt.point_potential = true;
+        pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_opt);
+    }
+    pcm_model = moist_new_model(error, fixture_context, cav);
+    REQUIRE(pcm && pcm_model && !moist_check_error(error));
+    moist_add_model_component(error, pcm_model, pcm);
+    host_update_model(error, pcm_model, &pcm_cpl, mol, NULL, NULL);
+    REQUIRE(!moist_check_error(error));
+
+    /* Dense Hessian must be refused on a host-dependent PCM model */
+    moist_get_model_hessian(error, pcm_model, pcm_cpl, H2O_NATOMS, pv_hess);
+    if (expect_failure(&error, "requires the two-stage HVP protocol",
+                       "get_hessian on CPCM")) goto cleanup;
+
+    {
+        moist_cavity borrowed = moist_get_model_cavity(error, pcm_model);
+        moist_get_cavity_sizes(error, borrowed, &ngrid, &nsph);
+        moist_delete_cavity(&borrowed);
+    }
+    REQUIRE(!moist_check_error(error) && ngrid > 1 && nsph == H2O_NATOMS);
+
+    /* Two non-trivial nuclear displacement directions */
+    dirs[0 * 9 + 0] =  0.30; dirs[0 * 9 + 2] = -0.25; dirs[0 * 9 + 4] =  0.40; dirs[0 * 9 + 8] = 0.15;
+    dirs[1 * 9 + 1] = -0.35; dirs[1 * 9 + 3] =  0.20; dirs[1 * 9 + 5] = -0.30; dirs[1 * 9 + 7] = 0.25;
+
+    xyz = malloc((size_t)3 * ngrid * sizeof(double));
+    d_xyz = malloc((size_t)ndir * 3 * ngrid * sizeof(double));
+    dirs_echo = malloc((size_t)ndir * 3 * H2O_NATOMS * sizeof(double));
+    phi = malloc((size_t)ngrid * sizeof(double));
+    dphi_dr = malloc((size_t)3 * ngrid * sizeof(double));
+    dphi = malloc((size_t)ndir * ngrid * sizeof(double));
+    d2phi_dr = malloc((size_t)ndir * 3 * ngrid * sizeof(double));
+    w_phi = malloc((size_t)ngrid * sizeof(double));
+    dw_phi = malloc((size_t)ndir * ngrid * sizeof(double));
+    resp_dxyz = malloc((size_t)ndir * 3 * ngrid * sizeof(double));
+    REQUIRE(xyz && d_xyz && dirs_echo && phi && dphi_dr && dphi && d2phi_dr &&
+            w_phi && dw_phi && resp_dxyz);
+
+    /* Stage 1: geometric DROP cavity asks for nothing */
+    moist_prepare_model_hvp_geometry(error, pcm_model, pcm_cpl, H2O_NATOMS, ndir, dirs);
+    REQUIRE(!moist_check_error(error));
+    more = moist_next_coupling_request(error, pcm_cpl);
+    REQUIRE(!moist_check_error(error) && !more);
+
+    /* Stage 2: point_potential, nuclear_charges, point_potential_tangent */
+    moist_prepare_model_hvp(error, pcm_model, pcm_cpl);
+    REQUIRE(!moist_check_error(error));
+    while (moist_next_coupling_request(error, pcm_cpl)) {
+        char req_name[MOIST_NAME_MAX + 1];
+        moist_get_coupling_request_name(error, pcm_cpl, req_name);
+        REQUIRE(!moist_check_error(error));
+        if (strcmp(req_name, "point_potential") == 0) {
+            moist_get_model_field_real(error, pcm_model, "xyz", xyz);
+            REQUIRE(!moist_check_error(error));
+            point_nuclear_primitives(ngrid, xyz, h2o_positions, phi, dphi_dr);
+            moist_answer_coupling_request(error, pcm_cpl, "phi", phi);
+            REQUIRE(!moist_check_error(error));
+            moist_answer_coupling_request(error, pcm_cpl, "dphi_dr", dphi_dr);
+            REQUIRE(!moist_check_error(error));
+        } else if (strcmp(req_name, "nuclear_charges") == 0) {
+            moist_answer_coupling_request(error, pcm_cpl, "z", h2o_charges);
+            REQUIRE(!moist_check_error(error));
+        } else if (strcmp(req_name, "point_potential_tangent") == 0) {
+            moist_get_coupling_request_field_real(error, pcm_cpl, "xyz", xyz);
+            REQUIRE(!moist_check_error(error));
+            moist_get_coupling_request_field_real(error, pcm_cpl, "d_xyz", d_xyz);
+            REQUIRE(!moist_check_error(error));
+            moist_get_coupling_request_field_real(error, pcm_cpl, "dirs", dirs_echo);
+            REQUIRE(!moist_check_error(error));
+            REQUIRE(memcmp(dirs_echo, dirs, sizeof dirs) == 0);
+            point_nuclear_tangents(ngrid, ndir, xyz, h2o_positions, dirs, d_xyz, dphi, d2phi_dr);
+            moist_answer_coupling_request(error, pcm_cpl, "d_phi", dphi);
+            REQUIRE(!moist_check_error(error));
+            moist_answer_coupling_request(error, pcm_cpl, "d_dphi_dr", d2phi_dr);
+            REQUIRE(!moist_check_error(error));
+        } else {
+            printf("  FAIL: unexpected HVP request '%s'\n", req_name);
+            goto cleanup;
+        }
+    }
+
+    moist_get_model_hvp(error, pcm_model, pcm_cpl, resp, H2O_NATOMS, ndir, hvp);
+    REQUIRE(!moist_check_error(error));
+
+    /* Inspect potential_adjoint_tangent response item */
+    REQUIRE(walk_to_item(error, resp, "potential_adjoint_tangent") == 1);
+    moist_get_response_field_real(error, resp, "w_phi", w_phi);
+    REQUIRE(!moist_check_error(error));
+    moist_get_response_field_real(error, resp, "dw_phi", dw_phi);
+    REQUIRE(!moist_check_error(error));
+    moist_get_response_field_real(error, resp, "d_xyz", resp_dxyz);
+    REQUIRE(!moist_check_error(error));
+    REQUIRE(memcmp(resp_dxyz, d_xyz, (size_t)ndir * 3 * ngrid * sizeof(double)) == 0);
+
+    /* Compare analytic HVP against central finite differences of get_model_gradient */
+    {
+        const double step = 1.0e-5;
+        for (int d = 0; d < ndir; ++d) {
+            double pos_p[9], pos_m[9], gp[9], gm[9];
+            for (int k = 0; k < 9; ++k) {
+                pos_p[k] = h2o_positions[k] + step * dirs[d * 9 + k];
+                pos_m[k] = h2o_positions[k] - step * dirs[d * 9 + k];
+            }
+            REQUIRE(!eval_point_cpcm_gradient(error, pos_p, gp));
+            REQUIRE(!eval_point_cpcm_gradient(error, pos_m, gm));
+            for (int k = 0; k < 9; ++k) {
+                const double fd = (gp[k] - gm[k]) / (2.0 * step);
+                REQUIRE(fabs(hvp[d * 9 + k] - fd) <= 5.0e-6);
+            }
+        }
+    }
+
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    free(xyz); free(d_xyz); free(dirs_echo);
+    free(phi); free(dphi_dr); free(dphi); free(d2phi_dr);
+    free(w_phi); free(dw_phi); free(resp_dxyz);
+    moist_delete_response(&resp);
+    moist_delete_coupling(&pv_cpl);
+    moist_delete_coupling(&pcm_cpl);
+    moist_delete_model(&pv_model);
+    moist_delete_model(&pcm_model);
+    moist_delete_component(&pv);
+    moist_delete_component(&pcm);
+    moist_delete_cavity(&cav);
+    moist_delete_structure(&mol);
+    moist_delete_error(&error);
+    return failed;
+}
+
+#undef REQUIRE
+
 static const struct {
     const char* name;
     int (*fn)(void);
@@ -4844,6 +5160,7 @@ static const struct {
     {"coupling_protocol_drop_cavity",        test_coupling_protocol_drop_cavity},
     {"coupling_protocol_density_cavity",     test_coupling_protocol_density_cavity},
     {"coupling_protocol_gostshyp",           test_coupling_protocol_gostshyp},
+    {"coupling_protocol_hvp",                test_coupling_protocol_hvp},
 };
 
 int main(void)

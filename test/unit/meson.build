@@ -99,9 +99,11 @@ tests = [
   'model_component_pcm_regression',
   'model_component_pcm_vacuum',
   'model_component_pcm_kernel_variants',
+  'model_component_pcm_hessian',
   'model_component_gostshyp',
   'model_component_pv',
   'model_continuum',
+  'model_continuum_hessian',
   'model_coupling',
 ]
 test_timeouts = {}
@@ -109,7 +111,9 @@ test_timeouts = {}
 # Ranked by CI runtime
 test_priority = {
   'cavity_drop_hessian_e2e': 10,
+  'model_continuum_hessian': 9,
   'cavity_drop_projection': 9,
+  'model_component_pcm_hessian': 8,
   'model_component_pcm_derivatives': 8,
   'cavity_drop_hessian_fixed': 7,
   'math_grid_3d_invariance': 7,

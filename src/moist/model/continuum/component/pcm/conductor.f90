@@ -9,10 +9,11 @@ module moist_model_continuum_component_pcm_conductor
    use moist_utils_timer, only: cat_setup, cat_solve
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_model_continuum_component_pcm_type, only: model_continuum_component_pcm, &
       & solver_type, moist_pcm_parameters_type, pcm_tangent_block, pcm_tangent_require, &
-      & pcm_component_declare_coupling
+      & pcm_tangent_require_batch, pcm_component_declare_coupling
    use moist_model_continuum_component_pcm_solvers, only: pcm_solver, pcm_dense_solver, &
       & pcm_gmres_solver, pcm_check_finite
    use pcmgen_gauss_conductor, only: conductor_state, &
@@ -44,6 +45,7 @@ module moist_model_continuum_component_pcm_conductor
       procedure :: get_parameter_adjoint => conductor_get_parameter_adjoint
       procedure :: get_gradient_surface_weights => conductor_get_gradient_surface_weights
       procedure :: surface_weight_tangent => conductor_surface_weight_tangent
+      procedure :: surface_weight_tangent_batch => conductor_surface_weight_tangent_batch
       procedure :: declare_coupling => conductor_declare_coupling
    end type model_continuum_component_pcm_conductor
 
@@ -422,6 +424,84 @@ contains
       if (allocated(error)) return
       dw_phi = hvp_v(:, 1)
    end subroutine conductor_surface_weight_tangent
+
+   !> Batched directional derivative of the conductor weights and surface charges
+   !>
+   !> @param[in,out] self     conductor component with current charges
+   !> @param[in]     cavity   cavity the operator was assembled on
+   !> @param[in]     tangent  surface direction batch
+   !> @param[in]     dphi     potential-trace directions (ngrid, nblk)
+   !> @param[in,out] dacc     surface-adjoint tangent accumulators (nblk)
+   !> @param[out]    dw_phi   tangents of the surface charges (ngrid, nblk)
+   !> @param[out]    error    allocated on failure
+   !> @param[in]     dvn      normal-trace directions, ignored
+   !> @param[out]    dw_vn    normal-trace adjoint tangents, never allocated
+   subroutine conductor_surface_weight_tangent_batch(self, cavity, tangent, dphi, dacc, &
+         & dw_phi, error, dvn, dw_vn)
+      !> Conductor component with current charges
+      class(model_continuum_component_pcm_conductor), intent(inout) :: self
+      !> Cavity the operator was assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Surface direction batch
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Potential-trace directions
+      real(wp), intent(in) :: dphi(:, :)
+      !> Surface-adjoint tangent accumulators
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Tangents of the surface charges
+      real(wp), allocatable, intent(out) :: dw_phi(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Normal-trace directions
+      real(wp), intent(in), optional :: dvn(:, :)
+      !> Tangents of the normal-trace adjoint
+      real(wp), allocatable, intent(out), optional :: dw_vn(:, :)
+
+      real(wp), allocatable :: dr(:, :, :), dxi(:, :), df(:, :), da(:, :), dv(:, :)
+      real(wp), allocatable :: hvp_r(:, :, :), hvp_xi(:, :), hvp_f(:, :), hvp_a(:, :)
+      real(wp), allocatable :: w_xyz(:, :), w_xi(:), w_f(:), w_a(:)
+      integer :: ngrid, nblk, jdir
+
+      call pcm_tangent_require_batch(self, cavity, tangent, dphi, dacc, error, dvn)
+      if (allocated(error)) return
+      if (self%smeared .neqv. allocated(cavity%xi0)) then
+         call fatal_error(error, "Conductor PCM surface kind does not match the cavity")
+         return
+      end if
+      ngrid = cavity%ngrid
+      nblk = size(dphi, 2)
+      allocate (dr(3, ngrid, nblk), source=tangent%d_xyz)
+      allocate (dv(ngrid, nblk), source=dphi)
+      allocate (hvp_r(3, ngrid, nblk), dw_phi(ngrid, nblk), w_xyz(3, ngrid), source=0.0_wp)
+      if (self%smeared) then
+         allocate (dxi(ngrid, nblk), source=tangent%d_xi)
+         allocate (df(ngrid, nblk), source=tangent%d_f)
+         allocate (hvp_xi(ngrid, nblk), hvp_f(ngrid, nblk), source=0.0_wp)
+         allocate (w_xi(ngrid), w_f(ngrid))
+         call conductor_weights(self%gauss, w_xyz, w_xi, w_f, error)
+         if (allocated(error)) return
+         call conductor_tangent(self%gauss, dr, dxi, df, dv, hvp_r, hvp_xi, hvp_f, dw_phi, error)
+         if (allocated(error)) return
+         do jdir = 1, nblk
+            call dacc(jdir)%add_surface_weights(error, w_xyz=hvp_r(:, :, jdir), &
+               & w_xi=hvp_xi(:, jdir), w_f=hvp_f(:, jdir))
+            if (allocated(error)) return
+         end do
+      else
+         allocate (da(ngrid, nblk), source=tangent%d_a)
+         allocate (hvp_a(ngrid, nblk), source=0.0_wp)
+         allocate (w_a(ngrid))
+         call conductor_point_weights(self%point, w_xyz, w_a, error)
+         if (allocated(error)) return
+         call conductor_point_tangent(self%point, dr, da, dv, hvp_r, hvp_a, dw_phi, error)
+         if (allocated(error)) return
+         do jdir = 1, nblk
+            call dacc(jdir)%add_surface_weights(error, w_xyz=hvp_r(:, :, jdir), &
+               & w_a=hvp_a(:, jdir))
+            if (allocated(error)) return
+         end do
+      end if
+   end subroutine conductor_surface_weight_tangent_batch
 
    !> Include host trace geometry weights in the nuclear gradient
    subroutine conductor_get_gradient_surface_weights(self, coupling, cavity, acc, error)

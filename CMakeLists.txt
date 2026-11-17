@@ -341,9 +341,9 @@ if(MOIST_TESTS)
     model_component_pcm_electrostatics model_component_pcm_solvers
     model_component_pcm_interface model_component_pcm_derivatives
     model_component_pcm_references model_component_pcm_regression
-    model_component_pcm_vacuum model_component_pcm_kernel_variants
+    model_component_pcm_vacuum model_component_pcm_kernel_variants model_component_pcm_hessian
     model_component_gostshyp model_component_pv
-    model_continuum channels model_coupling
+    model_continuum model_continuum_hessian channels model_coupling
   )
   # Each run as a selected test, outside test-drive's OpenMP team
   set(moist_test_selected_utils_prettylistprint_threaded independent_rows)

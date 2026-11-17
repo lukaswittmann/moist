@@ -29,11 +29,15 @@ module moist
       model_continuum_component_pv, new_component_pv, &
       model_continuum_component_gostshyp, new_component_gostshyp, solver_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
-      point_potential_request_type, gaussian_potential_request_type, gaussian_moment_request_type, &
+      point_potential_request_type, gaussian_potential_request_type, &
+      point_potential_tangent_request_type, gaussian_potential_tangent_request_type, &
+      density_tangent_request_type, gaussian_moment_request_type, &
       atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type, &
       nuclear_charge_request_type, density_matrix_request_type
    use moist_channels_response, only: response_type, response_item_type, &
-      & potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type, &
+      & potential_adjoint_response_type, density_response_type, &
+      & potential_adjoint_tangent_response_type, density_tangent_response_type, &
+      & gaussian_amplitude_response_type, &
       & atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type, &
       & radial_potential_adjoint_response_type, parameter_adjoint_response_type
    use moist_channels_fields, only: field_query_type, field_info_type, &
@@ -68,10 +72,13 @@ module moist
    public :: model_continuum_component_gostshyp, new_component_gostshyp, solver_type
    public :: coupling_type, coupling_request_type
    public :: point_potential_request_type, gaussian_potential_request_type, gaussian_moment_request_type
+   public :: point_potential_tangent_request_type, gaussian_potential_tangent_request_type
+   public :: density_tangent_request_type
    public :: atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type
    public :: nuclear_charge_request_type, density_matrix_request_type
    public :: response_type, response_item_type
    public :: potential_adjoint_response_type, density_response_type, gaussian_amplitude_response_type
+   public :: potential_adjoint_tangent_response_type, density_tangent_response_type
    public :: atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type
    public :: radial_potential_adjoint_response_type, parameter_adjoint_response_type
    public :: field_query_type, field_info_type, field_real, field_int, field_bool, field_max_rank

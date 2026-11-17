@@ -14,7 +14,8 @@ module moist_api
    use moist_model_type, only: solvation_model_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
-      & current_request, answer_flat, output_name_len, coupling_extent_grid_atom
+      & current_request, answer_flat, output_name_len, coupling_extent_grid_atom, &
+      & coupling_get_hvp_dirs
    use moist_channels_response, only: response_type, response_item_type, current_response_item
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_elstat, only: &
@@ -393,8 +394,10 @@ module moist_api
    public :: new_response_api, delete_response_api
    public :: general_model_prepare_energy_api, general_model_prepare_response_api
    public :: general_model_prepare_gradient_api
+   public :: general_model_prepare_hvp_geometry_api, general_model_prepare_hvp_api
    public :: general_model_get_energy_api, general_model_get_response_api
    public :: general_model_get_gradient_api
+   public :: general_model_get_hvp_api, general_model_get_hessian_api
    public :: next_coupling_request_api, coupling_request_name_api
    public :: coupling_request_missing_api
    public :: coupling_answer_api
@@ -3882,6 +3885,71 @@ contains
 
    end subroutine general_model_prepare_gradient_api
 
+   !> Stage HVP stage 1 for `ndir` nuclear directions
+   subroutine general_model_prepare_hvp_geometry_api(verror, vmodel, vcpl, nat_cap, ndir, c_dirs) &
+         & bind(C, name=namespace//"prepare_model_hvp_geometry")
+      type(c_ptr), value :: verror, vmodel, vcpl, c_dirs
+      integer(c_int), value :: nat_cap, ndir
+      type(vp_error), pointer :: error
+      class(solvation_model_type), pointer :: model
+      type(vp_coupling), pointer :: cpl
+      real(c_double), pointer :: dirs_view(:, :, :)
+      real(wp), allocatable :: dirs_buf(:, :, :)
+      integer :: nat
+      type(error_type), allocatable :: model_error
+
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_hvp_geometry", error, model, cpl)
+      if (.not. associated(cpl)) return
+      if (.not. model%is_updated()) then
+         call api_error(error%ptr, "prepare_model_hvp_geometry", &
+                        "Solvation model must be updated first")
+         return
+      end if
+      nat = model%atom_count()
+      if (ndir < 1) then
+         call api_error(error%ptr, "prepare_model_hvp_geometry", &
+                        "Direction count 'ndir' must be positive")
+         return
+      end if
+      if (.not. c_associated(c_dirs)) then
+         call api_error(error%ptr, "prepare_model_hvp_geometry", &
+                        "Null directions pointer provided")
+         return
+      end if
+      if (nat_cap < nat) then
+         call api_error(error%ptr, "prepare_model_hvp_geometry", &
+                        "Array capacity is too small for 'dirs' - use the atom count of the structure")
+         return
+      end if
+      call c_f_pointer(c_dirs, dirs_view, [3, int(nat_cap), int(ndir)])
+      allocate (dirs_buf(3, nat, int(ndir)))
+      dirs_buf = real(dirs_view(:, :nat, :), wp)
+      if (.not. all(ieee_is_finite(dirs_buf))) then
+         call api_error(error%ptr, "prepare_model_hvp_geometry", &
+                        "Non-finite value in 'dirs'")
+         return
+      end if
+      call model%prepare_hvp_geometry(cpl%ptr, dirs_buf, model_error)
+      if (allocated(model_error)) call api_error(error%ptr, "prepare_model_hvp_geometry", model_error%message)
+
+   end subroutine general_model_prepare_hvp_geometry_api
+
+   !> Stage HVP stage 2 after stage-1 requests have been answered
+   subroutine general_model_prepare_hvp_api(verror, vmodel, vcpl) &
+         & bind(C, name=namespace//"prepare_model_hvp")
+      type(c_ptr), value :: verror, vmodel, vcpl
+      type(vp_error), pointer :: error
+      class(solvation_model_type), pointer :: model
+      type(vp_coupling), pointer :: cpl
+      type(error_type), allocatable :: model_error
+
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_hvp", error, model, cpl)
+      if (.not. associated(cpl)) return
+      call model%prepare_hvp(cpl%ptr, model_error)
+      if (allocated(model_error)) call api_error(error%ptr, "prepare_model_hvp", model_error%message)
+
+   end subroutine general_model_prepare_hvp_api
+
    !> Solvation energy of a solvation model from a staged coupling
    !>
    !> A missing required output of the energy phase, including one whose answer
@@ -4045,6 +4113,113 @@ contains
       gradient(:, :nat) = gradient(:, :nat) + real(local, c_double)
 
    end subroutine general_model_get_gradient_api
+
+   !> Nuclear Hessian-vector products and second-order response items from a staged coupling
+   subroutine general_model_get_hvp_api(verror, vmodel, vcpl, vresp, nat_cap, ndir_cap, c_hvp) &
+         & bind(C, name=namespace//"get_model_hvp")
+      type(c_ptr), value :: verror, vmodel, vcpl, vresp, c_hvp
+      integer(c_int), value :: nat_cap, ndir_cap
+      type(vp_error), pointer :: error
+      class(solvation_model_type), pointer :: model
+      type(vp_coupling), pointer :: cpl
+      type(vp_response), pointer :: resp
+      real(c_double), pointer :: hvp_view(:, :, :)
+      real(wp), allocatable :: dirs(:, :, :), local(:, :, :)
+      integer :: nat, ndir
+      type(error_type), allocatable :: model_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+
+      call api_solvation_model(vmodel, "get_model_hvp", model, error%ptr)
+      if (allocated(error%ptr)) return
+      call api_coupling_handle(vcpl, "get_model_hvp", cpl, error%ptr)
+      if (allocated(error%ptr)) return
+      call api_response_handle(vresp, "get_model_hvp", resp, error%ptr)
+      if (allocated(error%ptr)) return
+
+      if (.not. model%is_updated()) then
+         call api_error(error%ptr, "get_model_hvp", "Solvation model must be updated first")
+         return
+      end if
+      nat = model%atom_count()
+      if (.not. c_associated(c_hvp)) then
+         call api_error(error%ptr, "get_model_hvp", "Null hvp pointer provided")
+         return
+      end if
+      if (nat_cap < nat) then
+         call api_error(error%ptr, "get_model_hvp", &
+                        "Array capacity is too small for 'hvp' - use the atom count of the structure")
+         return
+      end if
+      call coupling_get_hvp_dirs(cpl%ptr, dirs)
+      ndir = 1
+      if (allocated(dirs)) ndir = size(dirs, 3)
+      if (ndir_cap < ndir) then
+         call api_error(error%ptr, "get_model_hvp", &
+                        "Direction capacity is too small for 'hvp'")
+         return
+      end if
+
+      allocate (local(3, nat, ndir), source=0.0_wp)
+      call model%get_hvp(cpl%ptr, resp%ptr, local, model_error)
+      if (allocated(model_error)) then
+         call api_error(error%ptr, "get_model_hvp", model_error%message)
+         return
+      end if
+      call c_f_pointer(c_hvp, hvp_view, [3, int(nat_cap), int(ndir_cap)])
+      hvp_view(:, :nat, :ndir) = hvp_view(:, :nat, :ndir) + real(local, c_double)
+
+   end subroutine general_model_get_hvp_api
+
+   !> Dense nuclear Hessian of a host-independent continuum model
+   subroutine general_model_get_hessian_api(verror, vmodel, vcpl, nat_cap, c_hessian) &
+         & bind(C, name=namespace//"get_model_hessian")
+      type(c_ptr), value :: verror, vmodel, vcpl, c_hessian
+      integer(c_int), value :: nat_cap
+      type(vp_error), pointer :: error
+      class(solvation_model_type), pointer :: model
+      type(vp_coupling), pointer :: cpl
+      real(c_double), pointer :: hess_view(:, :, :, :)
+      real(wp), allocatable :: local(:, :, :, :)
+      integer :: nat
+      type(error_type), allocatable :: model_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+
+      call api_solvation_model(vmodel, "get_model_hessian", model, error%ptr)
+      if (allocated(error%ptr)) return
+      call api_coupling_handle(vcpl, "get_model_hessian", cpl, error%ptr)
+      if (allocated(error%ptr)) return
+
+      if (.not. model%is_updated()) then
+         call api_error(error%ptr, "get_model_hessian", "Solvation model must be updated first")
+         return
+      end if
+      nat = model%atom_count()
+      if (.not. c_associated(c_hessian)) then
+         call api_error(error%ptr, "get_model_hessian", "Null hessian pointer provided")
+         return
+      end if
+      if (nat_cap < nat) then
+         call api_error(error%ptr, "get_model_hessian", &
+                        "Array capacity is too small for 'hessian' - use the atom count of the structure")
+         return
+      end if
+
+      allocate (local(3, nat, 3, nat), source=0.0_wp)
+      call model%get_hessian(cpl%ptr, local, model_error)
+      if (allocated(model_error)) then
+         call api_error(error%ptr, "get_model_hessian", model_error%message)
+         return
+      end if
+      call c_f_pointer(c_hessian, hess_view, [3, int(nat_cap), 3, int(nat_cap)])
+      hess_view(:, :nat, :, :nat) = hess_view(:, :nat, :, :nat) + real(local, c_double)
+
+   end subroutine general_model_get_hessian_api
 
    !> Advance to the next request with a missing output of the staged phase
    !>

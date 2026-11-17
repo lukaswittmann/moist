@@ -19,6 +19,14 @@ module moist_model_continuum_component_pcm_elstat
    public :: pcm_elstat_nuclear_gradient
    public :: pcm_elstat_direct_gradient
    public :: pcm_elstat_normal_direct_gradient
+   public :: pcm_elstat_direct_hessian
+   public :: pcm_elstat_normal_direct_hessian
+   public :: pcm_elstat_potential_derivatives
+   public :: pcm_elstat_potential_tangent
+
+   !> Packed symmetric `(3, 3)` index pairs `[xx, xy, xz, yy, yz, zz]`
+   integer, parameter :: sym2_idx(2, 6) = reshape([ &
+      & 1, 1, 1, 2, 1, 3, 2, 2, 2, 3, 3, 3], [2, 6])
 
 contains
 
@@ -247,5 +255,380 @@ contains
 
       grad_rA(:, :) = grad_rA + acc
    end subroutine pcm_elstat_nuclear_gradient
+
+   !> Radial kernel coefficients `c0`, `c1`, `c2` of `psi(r, xi) = erf(xi*r)/r` or `1/r`
+   pure subroutine elstat_radial_kernels(r2, has_xi, xi_i, c0, c1, c2, exp_x2)
+      real(wp), intent(in) :: r2
+      logical, intent(in) :: has_xi
+      real(wp), intent(in) :: xi_i
+      real(wp), intent(out) :: c0, c1, c2, exp_x2
+
+      real(wp) :: r, x, x2, aterm, sqrt_pi, xi2, xi3, xi5, xi7
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      c0 = 0.0_wp
+      c1 = 0.0_wp
+      c2 = 0.0_wp
+      exp_x2 = 0.0_wp
+      if (has_xi) then
+         r = sqrt(r2)
+         x = xi_i*r
+         x2 = x*x
+         exp_x2 = exp(-x2)
+         xi2 = xi_i*xi_i
+         xi3 = xi2*xi_i
+         xi5 = xi3*xi2
+         xi7 = xi5*xi2
+         if (abs(x) < 0.15_wp) then
+            c0 = (4.0_wp*xi3/sqrt_pi)*(1.0_wp/3.0_wp - x2/5.0_wp + x2*x2/14.0_wp &
+               & - x2**3/54.0_wp + x2**4/264.0_wp - x2**5/1560.0_wp + x2**6/10800.0_wp)
+            c1 = -(8.0_wp*xi5/sqrt_pi)*(1.0_wp/5.0_wp - x2/7.0_wp + x2*x2/18.0_wp &
+               & - x2**3/66.0_wp + x2**4/312.0_wp - x2**5/1800.0_wp + x2**6/12240.0_wp)
+            c2 = (16.0_wp*xi7/sqrt_pi)*(1.0_wp/7.0_wp - x2/9.0_wp + x2*x2/22.0_wp &
+               & - x2**3/78.0_wp + x2**4/360.0_wp - x2**5/2040.0_wp + x2**6/13680.0_wp)
+         else
+            aterm = erf(x) - 2.0_wp*x*exp_x2/sqrt_pi
+            c0 = aterm/(r2*r)
+            c1 = 4.0_wp*xi3*exp_x2/(sqrt_pi*r2) - 3.0_wp*aterm/(r2*r2*r)
+            c2 = 15.0_wp*aterm/(r2*r2*r2*r) - 4.0_wp*xi3*exp_x2*(5.0_wp + 2.0_wp*x2)/(sqrt_pi*r2*r2)
+         end if
+      else
+         if (r2 <= 1.0e-30_wp) return
+         r = sqrt(r2)
+         c0 = 1.0_wp/(r2*r)
+         c1 = -3.0_wp/(r2*r2*r)
+         c2 = 15.0_wp/(r2*r2*r2*r)
+      end if
+
+   end subroutine elstat_radial_kernels
+
+   !> Directional derivative of [[pcm_elstat_direct_gradient]] along moving surface & nuclei
+   !>
+   !> @param[in]     xyz       surface positions `(3, ngrid)`
+   !> @param[in]     sphxyz    atomic sphere centers `(3, nsph)`
+   !> @param[in]     w_phi     potential adjoint `(ngrid)`
+   !> @param[in]     dw_phi    potential-adjoint tangents `(ngrid, ndir)`
+   !> @param[in]     za        nuclear charges `(nsph)`
+   !> @param[in]     d_xyz     surface position tangents `(3, ngrid, ndir)`
+   !> @param[in]     dirs      nuclear directions `(3, nsph, ndir)`
+   !> @param[in,out] hvp_rA    nuclear HVP accumulator `(3, nsph, ndir)`
+   !> @param[out]    error     error handling
+   !> @param[in]     xi        Gaussian inverse lengths `(ngrid)`, optional
+   !> @param[in]     d_xi      Gaussian width tangents `(ngrid, ndir)`, optional
+   subroutine pcm_elstat_direct_hessian(xyz, sphxyz, w_phi, dw_phi, za, d_xyz, dirs, &
+                                        hvp_rA, error, xi, d_xi)
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :)
+      real(wp), intent(in) :: w_phi(:), dw_phi(:, :), za(:)
+      real(wp), intent(in) :: d_xyz(:, :, :), dirs(:, :, :)
+      real(wp), intent(inout) :: hvp_rA(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: xi(:), d_xi(:, :)
+
+      integer :: i, katom, idir, ngrid, nsph, ndir
+      logical :: has_xi
+      real(wp) :: rvec(3), uvec(3), r2, c0, c1, c2, exp_x2, xi_i, dxi_i, sqrt_pi, dc0_dxi
+
+      ngrid = size(w_phi)
+      nsph = size(za)
+      ndir = size(dirs, 3)
+      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          size(dw_phi, 1) /= ngrid .or. size(dw_phi, 2) /= ndir .or. &
+          size(d_xyz, 1) /= 3 .or. size(d_xyz, 2) /= ngrid .or. size(d_xyz, 3) /= ndir .or. &
+          size(dirs, 1) /= 3 .or. size(dirs, 2) /= nsph .or. &
+          size(hvp_rA, 1) /= 3 .or. size(hvp_rA, 2) /= nsph .or. size(hvp_rA, 3) /= ndir) then
+         call fatal_error(error, "pcm_elstat_direct_hessian: array shape mismatch")
+         return
+      end if
+      has_xi = present(xi)
+      if (has_xi) then
+         if (size(xi) /= ngrid) then
+            call fatal_error(error, "pcm_elstat_direct_hessian: width shape mismatch")
+            return
+         end if
+         if (present(d_xi)) then
+            if (size(d_xi, 1) /= ngrid .or. size(d_xi, 2) /= ndir) then
+               call fatal_error(error, "pcm_elstat_direct_hessian: width-tangent shape mismatch")
+               return
+            end if
+         end if
+      end if
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      do katom = 1, nsph
+         do i = 1, ngrid
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            if (.not. has_xi .and. r2 <= 1.0e-30_wp) cycle
+            xi_i = 0.0_wp
+            if (has_xi) xi_i = xi(i)
+            call elstat_radial_kernels(r2, has_xi, xi_i, c0, c1, c2, exp_x2)
+            dc0_dxi = 0.0_wp
+            if (has_xi) dc0_dxi = 4.0_wp*xi_i*xi_i*exp_x2/sqrt_pi
+            do idir = 1, ndir
+               uvec = d_xyz(:, i, idir) - dirs(:, katom, idir)
+               dxi_i = 0.0_wp
+               if (has_xi .and. present(d_xi)) dxi_i = d_xi(i, idir)
+               hvp_rA(:, katom, idir) = hvp_rA(:, katom, idir) + za(katom)*( &
+                  & dw_phi(i, idir)*c0*rvec + w_phi(i)*( &
+                  & c0*uvec + c1*dot_product(rvec, uvec)*rvec + dxi_i*dc0_dxi*rvec))
+            end do
+         end do
+      end do
+
+   end subroutine pcm_elstat_direct_hessian
+
+   !> Directional derivative of [[pcm_elstat_normal_direct_gradient]] along moving surface & nuclei
+   !>
+   !> @param[in]     xyz       surface positions `(3, ngrid)`
+   !> @param[in]     sphxyz    atomic sphere centers `(3, nsph)`
+   !> @param[in]     w_grad    normal-trace spatial weights `w_vn * n` `(3, ngrid)`
+   !> @param[in]     dw_grad   tangents `dw_vn * n + w_vn * d_n` `(3, ngrid, ndir)`
+   !> @param[in]     za        nuclear charges `(nsph)`
+   !> @param[in]     d_xyz     surface position tangents `(3, ngrid, ndir)`
+   !> @param[in]     dirs      nuclear directions `(3, nsph, ndir)`
+   !> @param[in,out] hvp_rA    nuclear HVP accumulator `(3, nsph, ndir)`
+   !> @param[out]    error     error handling
+   !> @param[in]     xi        Gaussian inverse lengths `(ngrid)`, optional
+   !> @param[in]     d_xi      Gaussian width tangents `(ngrid, ndir)`, optional
+   subroutine pcm_elstat_normal_direct_hessian(xyz, sphxyz, w_grad, dw_grad, za, d_xyz, dirs, &
+                                               hvp_rA, error, xi, d_xi)
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :)
+      real(wp), intent(in) :: w_grad(:, :), dw_grad(:, :, :), za(:)
+      real(wp), intent(in) :: d_xyz(:, :, :), dirs(:, :, :)
+      real(wp), intent(inout) :: hvp_rA(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: xi(:), d_xi(:, :)
+
+      integer :: i, katom, idir, ngrid, nsph, ndir
+      logical :: has_xi
+      real(wp) :: rvec(3), uvec(3), wvec(3), dwvec(3), r2, c0, c1, c2, exp_x2
+      real(wp) :: xi_i, dxi_i, sqrt_pi, dc0_dxi, rw, ru, wu, rdw
+
+      ngrid = size(w_grad, 2)
+      nsph = size(za)
+      ndir = size(dirs, 3)
+      if (size(w_grad, 1) /= 3 .or. size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          size(dw_grad, 1) /= 3 .or. size(dw_grad, 2) /= ngrid .or. size(dw_grad, 3) /= ndir .or. &
+          size(d_xyz, 1) /= 3 .or. size(d_xyz, 2) /= ngrid .or. size(d_xyz, 3) /= ndir .or. &
+          size(dirs, 1) /= 3 .or. size(dirs, 2) /= nsph .or. &
+          size(hvp_rA, 1) /= 3 .or. size(hvp_rA, 2) /= nsph .or. size(hvp_rA, 3) /= ndir) then
+         call fatal_error(error, "pcm_elstat_normal_direct_hessian: array shape mismatch")
+         return
+      end if
+      has_xi = present(xi)
+      if (has_xi) then
+         if (size(xi) /= ngrid) then
+            call fatal_error(error, "pcm_elstat_normal_direct_hessian: width shape mismatch")
+            return
+         end if
+         if (present(d_xi)) then
+            if (size(d_xi, 1) /= ngrid .or. size(d_xi, 2) /= ndir) then
+               call fatal_error(error, "pcm_elstat_normal_direct_hessian: width-tangent shape mismatch")
+               return
+            end if
+         end if
+      end if
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      do katom = 1, nsph
+         do i = 1, ngrid
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            if (.not. has_xi .and. r2 <= 1.0e-30_wp) cycle
+            xi_i = 0.0_wp
+            if (has_xi) xi_i = xi(i)
+            call elstat_radial_kernels(r2, has_xi, xi_i, c0, c1, c2, exp_x2)
+            dc0_dxi = 0.0_wp
+            if (has_xi) dc0_dxi = 4.0_wp*xi_i*xi_i*exp_x2/sqrt_pi
+            wvec = w_grad(:, i)
+            rw = dot_product(rvec, wvec)
+            do idir = 1, ndir
+               uvec = d_xyz(:, i, idir) - dirs(:, katom, idir)
+               dwvec = dw_grad(:, i, idir)
+               ru = dot_product(rvec, uvec)
+               wu = dot_product(wvec, uvec)
+               rdw = dot_product(rvec, dwvec)
+               dxi_i = 0.0_wp
+               if (has_xi .and. present(d_xi)) dxi_i = d_xi(i, idir)
+               hvp_rA(:, katom, idir) = hvp_rA(:, katom, idir) + za(katom)*( &
+                  & c0*dwvec + c1*rdw*rvec + c1*(ru*wvec + rw*uvec + wu*rvec) &
+                  & + c2*rw*ru*rvec + dxi_i*dc0_dxi*(wvec - 2.0_wp*xi_i*xi_i*rw*rvec))
+            end do
+         end do
+      end do
+
+   end subroutine pcm_elstat_normal_direct_hessian
+
+   !> Point- or Gaussian-charge electrostatic potential and its surface derivatives
+   subroutine pcm_elstat_potential_derivatives(xyz, sphxyz, za, phi, dphi_dr, error, &
+                                               xi, dphi_dxi, d2phi_dr2, d2phi_dr_dxi)
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :), za(:)
+      real(wp), intent(out) :: phi(:), dphi_dr(:, :)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: xi(:)
+      real(wp), intent(out), optional :: dphi_dxi(:), d2phi_dr2(:, :, :), d2phi_dr_dxi(:, :)
+
+      integer :: i, katom, a, b, ngrid, nsph
+      logical :: has_xi
+      real(wp) :: rvec(3), r2, r, x, x2, psi, c0, c1, c2, exp_x2, xi_i, sqrt_pi, dc0_dxi
+
+      ngrid = size(phi)
+      nsph = size(za)
+      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          size(dphi_dr, 1) /= 3 .or. size(dphi_dr, 2) /= ngrid) then
+         call fatal_error(error, "pcm_elstat_potential_derivatives: array shape mismatch")
+         return
+      end if
+      has_xi = present(xi)
+      if (has_xi) then
+         if (size(xi) /= ngrid) then
+            call fatal_error(error, "pcm_elstat_potential_derivatives: width shape mismatch")
+            return
+         end if
+      end if
+
+      phi = 0.0_wp
+      dphi_dr = 0.0_wp
+      if (present(dphi_dxi)) dphi_dxi = 0.0_wp
+      if (present(d2phi_dr2)) d2phi_dr2 = 0.0_wp
+      if (present(d2phi_dr_dxi)) d2phi_dr_dxi = 0.0_wp
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      do i = 1, ngrid
+         xi_i = 0.0_wp
+         if (has_xi) xi_i = xi(i)
+         do katom = 1, nsph
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            if (.not. has_xi .and. r2 <= 1.0e-30_wp) cycle
+            call elstat_radial_kernels(r2, has_xi, xi_i, c0, c1, c2, exp_x2)
+            r = sqrt(r2)
+            if (has_xi) then
+               x = xi_i*r
+               x2 = x*x
+               if (abs(x) < 0.05_wp) then
+                  psi = (2.0_wp*xi_i/sqrt_pi)*(1.0_wp - x2/3.0_wp + x2*x2/10.0_wp - x2**3/42.0_wp)
+               else
+                  psi = erf(x)/r
+               end if
+            else
+               psi = 1.0_wp/r
+            end if
+            phi(i) = phi(i) + za(katom)*psi
+            dphi_dr(:, i) = dphi_dr(:, i) - za(katom)*c0*rvec
+            if (has_xi .and. present(dphi_dxi)) then
+               dphi_dxi(i) = dphi_dxi(i) + za(katom)*(2.0_wp/sqrt_pi)*exp_x2
+            end if
+            if (present(d2phi_dr2)) then
+               do b = 1, 3
+                  do a = 1, 3
+                     d2phi_dr2(a, b, i) = d2phi_dr2(a, b, i) - za(katom)*c1*rvec(a)*rvec(b)
+                  end do
+                  d2phi_dr2(b, b, i) = d2phi_dr2(b, b, i) - za(katom)*c0
+               end do
+            end if
+            if (has_xi .and. present(d2phi_dr_dxi)) then
+               dc0_dxi = 4.0_wp*xi_i*xi_i*exp_x2/sqrt_pi
+               d2phi_dr_dxi(:, i) = d2phi_dr_dxi(:, i) - za(katom)*dc0_dxi*rvec
+            end if
+         end do
+      end do
+
+   end subroutine pcm_elstat_potential_derivatives
+
+   !> Total directional tangents of [[pcm_elstat_potential_derivatives]] along moving surface & nuclei
+   subroutine pcm_elstat_potential_tangent(xyz, sphxyz, za, d_xyz, dirs, d_phi, d_dphi_dr, &
+                                           error, xi, d_xi, d_dphi_dxi, d_d2phi_dr2, d_d2phi_dr_dxi)
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :), za(:)
+      real(wp), intent(in) :: d_xyz(:, :, :), dirs(:, :, :)
+      real(wp), intent(out) :: d_phi(:, :), d_dphi_dr(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: xi(:), d_xi(:, :)
+      real(wp), intent(out), optional :: d_dphi_dxi(:, :), d_d2phi_dr2(:, :, :), d_d2phi_dr_dxi(:, :, :)
+
+      integer :: i, katom, idir, k, a, b, ngrid, nsph, ndir
+      logical :: has_xi
+      real(wp) :: rvec(3), uvec(3), r2, c0, c1, c2, exp_x2, xi_i, dxi_i, sqrt_pi
+      real(wp) :: ru, dc0_dxi, dpsi_dxi, entry, diag_delta
+
+      ngrid = size(d_phi, 1)
+      ndir = size(d_phi, 2)
+      nsph = size(za)
+      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          size(d_xyz, 1) /= 3 .or. size(d_xyz, 2) /= ngrid .or. size(d_xyz, 3) /= ndir .or. &
+          size(dirs, 1) /= 3 .or. size(dirs, 2) /= nsph .or. size(dirs, 3) /= ndir .or. &
+          size(d_dphi_dr, 1) /= 3 .or. size(d_dphi_dr, 2) /= ngrid .or. size(d_dphi_dr, 3) /= ndir) then
+         call fatal_error(error, "pcm_elstat_potential_tangent: array shape mismatch")
+         return
+      end if
+      has_xi = present(xi)
+      if (has_xi) then
+         if (size(xi) /= ngrid) then
+            call fatal_error(error, "pcm_elstat_potential_tangent: width shape mismatch")
+            return
+         end if
+      end if
+
+      d_phi = 0.0_wp
+      d_dphi_dr = 0.0_wp
+      if (present(d_dphi_dxi)) d_dphi_dxi = 0.0_wp
+      if (present(d_d2phi_dr2)) d_d2phi_dr2 = 0.0_wp
+      if (present(d_d2phi_dr_dxi)) d_d2phi_dr_dxi = 0.0_wp
+
+      sqrt_pi = sqrt(acos(-1.0_wp))
+      do i = 1, ngrid
+         xi_i = 0.0_wp
+         if (has_xi) xi_i = xi(i)
+         do katom = 1, nsph
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            if (.not. has_xi .and. r2 <= 1.0e-30_wp) cycle
+            call elstat_radial_kernels(r2, has_xi, xi_i, c0, c1, c2, exp_x2)
+            dc0_dxi = 0.0_wp
+            dpsi_dxi = 0.0_wp
+            if (has_xi) then
+               dc0_dxi = 4.0_wp*xi_i*xi_i*exp_x2/sqrt_pi
+               dpsi_dxi = 2.0_wp*exp_x2/sqrt_pi
+            end if
+            do idir = 1, ndir
+               uvec = d_xyz(:, i, idir) - dirs(:, katom, idir)
+               ru = dot_product(rvec, uvec)
+               dxi_i = 0.0_wp
+               if (has_xi .and. present(d_xi)) dxi_i = d_xi(i, idir)
+
+               d_phi(i, idir) = d_phi(i, idir) + za(katom)*(-c0*ru + dxi_i*dpsi_dxi)
+               d_dphi_dr(:, i, idir) = d_dphi_dr(:, i, idir) - za(katom)*( &
+                  & c0*uvec + c1*ru*rvec + dxi_i*dc0_dxi*rvec)
+
+               if (has_xi .and. present(d_dphi_dxi)) then
+                  d_dphi_dxi(i, idir) = d_dphi_dxi(i, idir) - za(katom)*( &
+                     & dc0_dxi*ru + dxi_i*(4.0_wp*xi_i/sqrt_pi)*r2*exp_x2)
+               end if
+               if (present(d_d2phi_dr2)) then
+                  do k = 1, 6
+                     a = sym2_idx(1, k)
+                     b = sym2_idx(2, k)
+                     diag_delta = 0.0_wp
+                     if (a == b) diag_delta = 1.0_wp
+                     entry = c1*ru*diag_delta + c2*ru*rvec(a)*rvec(b) &
+                        & + c1*(uvec(a)*rvec(b) + rvec(a)*uvec(b)) &
+                        & + dxi_i*dc0_dxi*(diag_delta - 2.0_wp*xi_i*xi_i*rvec(a)*rvec(b))
+                     d_d2phi_dr2(k, i, idir) = d_d2phi_dr2(k, i, idir) - za(katom)*entry
+                  end do
+               end if
+               if (has_xi .and. present(d_d2phi_dr_dxi)) then
+                  d_d2phi_dr_dxi(:, i, idir) = d_d2phi_dr_dxi(:, i, idir) - za(katom)*( &
+                     & dc0_dxi*(uvec - 2.0_wp*xi_i*xi_i*ru*rvec) &
+                     & + dxi_i*(8.0_wp*xi_i/sqrt_pi)*exp_x2*(1.0_wp - xi_i*xi_i*r2)*rvec)
+               end if
+            end do
+         end do
+      end do
+
+   end subroutine pcm_elstat_potential_tangent
 
 end module moist_model_continuum_component_pcm_elstat

@@ -35,22 +35,27 @@ module moist_channels_coupling
    public :: coupling_type, coupling_view_type, coupling_registry_type
    public :: coupling_request_type
    public :: point_potential_request_type, gaussian_potential_request_type
+   public :: point_potential_tangent_request_type, gaussian_potential_tangent_request_type
+   public :: density_tangent_request_type
    public :: gaussian_moment_request_type, atomic_multipole_request_type
    public :: atomic_charge_request_type, radial_potential_request_type
    public :: nuclear_charge_request_type, density_matrix_request_type
    public :: coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom
-   public :: coupling_extent_request_pair
+   public :: coupling_extent_request_pair, coupling_extent_grid_dir
    public :: current_request, answer_flat, current_output_extent
    public :: coupling_register, request_require
    public :: coupling_begin_registration, coupling_set_scope, coupling_snapshot
    public :: coupling_arm, coupling_invalidate, coupling_check_mandatory
+   public :: coupling_set_hvp_dirs, coupling_set_hvp_surface_tangent
+   public :: coupling_get_hvp_dirs, coupling_get_hvp_surface_tangent, coupling_clear_hvp
    public :: coupling_make_view, coupling_close_view
    public :: moist_phase_energy, moist_phase_response, moist_phase_gradient, moist_phase_build
+   public :: moist_phase_hvp_geometry, moist_phase_hvp
    public :: moist_n_phases
    public :: request_name_len, output_name_len
 
    !> Supported phases, numbered in the order a host runs them
-   integer, parameter :: moist_n_phases = 4
+   integer, parameter :: moist_n_phases = 6
    !> No phase is staged
    integer, parameter :: moist_phase_none = 0
    !> Build phase: host state pushed before the domain is built
@@ -61,6 +66,10 @@ module moist_channels_coupling
    integer, parameter :: moist_phase_response = 3
    !> Nuclear gradient phase
    integer, parameter :: moist_phase_gradient = 4
+   !> Hessian-vector product stage 1: host level-set/density tangents at fixed surface
+   integer, parameter :: moist_phase_hvp_geometry = 5
+   !> Hessian-vector product stage 2: host potential/trace tangents along moving surface
+   integer, parameter :: moist_phase_hvp = 6
 
    !> Diagnostic name capacity
    integer, parameter :: request_name_len = 32
@@ -79,6 +88,8 @@ module moist_channels_coupling
    !> Trailing extent kind: pairs over a size the request carries as an input,
    !> (n, n), e.g. the basis functions of the `density_matrix`
    integer, parameter :: coupling_extent_request_pair = 4
+   !> Trailing extent kind: evaluation points times directions, (ngrid, ndir)
+   integer, parameter :: coupling_extent_grid_dir = 5
 
    !> Largest caller rank of an output: its leading extents and two trailing ones
    integer, parameter :: max_rank = max_lead + 2
@@ -194,6 +205,56 @@ module moist_channels_coupling
       procedure :: name => gaussian_potential_name
       procedure, private :: declare => gaussian_potential_declare
    end type gaussian_potential_request_type
+
+   !> Directional tangent of the point_potential calculation along moving surface & nuclei
+   !>
+   !> Inputs: xyz(3, ngrid), d_xyz(3, ngrid, ndir), dirs(3, natom, ndir)
+   !> Outputs: d_phi(ngrid, ndir), d_dphi_dr(3, ngrid, ndir), d_d2phi_dr2(6, ngrid, ndir)
+   !>          with d_d2phi_dr2 packed symmetrically as [xx, xy, xz, yy, yz, zz]
+   type, extends(coupling_request_type) :: point_potential_tangent_request_type
+      real(wp), allocatable :: xyz(:, :)
+      real(wp), allocatable :: d_xyz(:, :, :)
+      real(wp), allocatable :: dirs(:, :, :)
+   contains
+      procedure :: name => point_potential_tangent_name
+      procedure :: list_fields => point_potential_tangent_list_fields
+      procedure, private :: declare => point_potential_tangent_declare
+      procedure, private :: same_inputs => point_potential_tangent_same_inputs
+   end type point_potential_tangent_request_type
+
+   !> Directional tangent of the gaussian_potential calculation along moving surface & nuclei
+   !>
+   !> Inputs: xyz(3, ngrid), xi(ngrid), d_xyz(3, ngrid, ndir), d_xi(ngrid, ndir), dirs(3, natom, ndir)
+   !> Outputs: d_phi(ngrid, ndir), d_dphi_dr(3, ngrid, ndir), d_dphi_dxi(ngrid, ndir),
+   !>          d_d2phi_dr2(6, ngrid, ndir), d_d2phi_dr_dxi(3, ngrid, ndir)
+   type, extends(coupling_request_type) :: gaussian_potential_tangent_request_type
+      real(wp), allocatable :: xyz(:, :)
+      real(wp), allocatable :: xi(:)
+      real(wp), allocatable :: d_xyz(:, :, :)
+      real(wp), allocatable :: d_xi(:, :)
+      real(wp), allocatable :: dirs(:, :, :)
+   contains
+      procedure :: name => gaussian_potential_tangent_name
+      procedure :: list_fields => gaussian_potential_tangent_list_fields
+      procedure, private :: declare => gaussian_potential_tangent_declare
+      procedure, private :: same_inputs => gaussian_potential_tangent_same_inputs
+   end type gaussian_potential_tangent_request_type
+
+   !> Partial directional tangent of the bare electron density at fixed surface points
+   !>
+   !> Inputs: xyz(3, ngrid), dirs(3, natom, ndir)
+   !> Outputs: d_rho(ngrid, ndir), d_grad_rho(3, ngrid, ndir),
+   !>          d_hess_rho(6, ngrid, ndir) [xx, xy, xz, yy, yz, zz],
+   !>          d_d3_rho(10, ngrid, ndir) [xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz]
+   type, extends(coupling_request_type) :: density_tangent_request_type
+      real(wp), allocatable :: xyz(:, :)
+      real(wp), allocatable :: dirs(:, :, :)
+   contains
+      procedure :: name => density_tangent_name
+      procedure :: list_fields => density_tangent_list_fields
+      procedure, private :: declare => density_tangent_declare
+      procedure, private :: same_inputs => density_tangent_same_inputs
+   end type density_tangent_request_type
 
    !> Unit-integral Gaussian moments: gt, pt(3, ngrid), mt(3, 3, ngrid), rt(3, ngrid)
    !>
@@ -346,6 +407,14 @@ module moist_channels_coupling
       !> Number of solute atoms, the extent of the per-atom outputs; `no_extent`
       !> when the snapshot gave none
       integer :: natom = no_extent
+      !> Number of directions in the current HVP batch; `no_extent` outside HVP
+      integer :: ndir = no_extent
+      !> Nuclear direction batch (3, natom, ndir) of the current HVP pass
+      real(wp), allocatable :: hvp_dirs(:, :, :)
+      !> Stage-1 surface position tangent (3, ngrid, ndir) of the current HVP pass
+      real(wp), allocatable :: hvp_d_xyz(:, :, :)
+      !> Stage-1 Gaussian width tangent (ngrid, ndir) of the current HVP pass
+      real(wp), allocatable :: hvp_d_xi(:, :)
       !> Request of the host walk; zero before the first and after the last
       integer :: cursor = 0
    contains
@@ -494,7 +563,8 @@ contains
       ext = coupling_extent_grid
       if (present(extent)) ext = extent
       if (ext /= coupling_extent_grid .and. ext /= coupling_extent_atom &
-         & .and. ext /= coupling_extent_grid_atom .and. ext /= coupling_extent_request_pair) then
+         & .and. ext /= coupling_extent_grid_atom .and. ext /= coupling_extent_request_pair &
+         & .and. ext /= coupling_extent_grid_dir) then
          call fatal_error(error, trim(self%name())//": output '"//name//"' has an unknown extent kind")
          return
       end if
@@ -848,6 +918,179 @@ contains
       if (allocated(error)) return
       call self%add("d2phi_dr_dxi", [3], error)
    end subroutine gaussian_potential_declare
+
+   !> Name of the point_potential_tangent calculation
+   function point_potential_tangent_name(self) result(name)
+      class(point_potential_tangent_request_type), intent(in) :: self
+      character(len=request_name_len) :: name
+      name = "point_potential_tangent"
+   end function point_potential_tangent_name
+
+   !> Outputs of the point_potential_tangent calculation
+   subroutine point_potential_tangent_declare(self, error)
+      class(point_potential_tangent_request_type), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      call self%add("d_phi", error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_dphi_dr", [3], error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_d2phi_dr2", [6], error, extent=coupling_extent_grid_dir)
+   end subroutine point_potential_tangent_declare
+
+   !> Inputs of the point_potential_tangent calculation
+   subroutine point_potential_tangent_list_fields(self, query)
+      class(point_potential_tangent_request_type), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+      call query%add_real2("xyz", "Surface positions in bohr (3, ngrid)", self%xyz)
+      call query%add_real3("d_xyz", "Surface position tangents (3, ngrid, ndir)", self%d_xyz)
+      call query%add_real3("dirs", "Nuclear direction batch (3, natom, ndir)", self%dirs)
+   end subroutine point_potential_tangent_list_fields
+
+   !> Input equality for point_potential_tangent
+   function point_potential_tangent_same_inputs(self, other) result(equal)
+      class(point_potential_tangent_request_type), intent(in) :: self
+      class(coupling_request_type), intent(in) :: other
+      logical :: equal
+      equal = .false.
+      select type (other)
+      type is (point_potential_tangent_request_type)
+         equal = same_real2(self%xyz, other%xyz) .and. &
+            & same_real3(self%d_xyz, other%d_xyz) .and. &
+            & same_real3(self%dirs, other%dirs)
+      end select
+   end function point_potential_tangent_same_inputs
+
+   !> Name of the gaussian_potential_tangent calculation
+   function gaussian_potential_tangent_name(self) result(name)
+      class(gaussian_potential_tangent_request_type), intent(in) :: self
+      character(len=request_name_len) :: name
+      name = "gaussian_potential_tangent"
+   end function gaussian_potential_tangent_name
+
+   !> Outputs of the gaussian_potential_tangent calculation
+   subroutine gaussian_potential_tangent_declare(self, error)
+      class(gaussian_potential_tangent_request_type), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      call self%add("d_phi", error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_dphi_dr", [3], error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_dphi_dxi", error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_d2phi_dr2", [6], error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_d2phi_dr_dxi", [3], error, extent=coupling_extent_grid_dir)
+   end subroutine gaussian_potential_tangent_declare
+
+   !> Inputs of the gaussian_potential_tangent calculation
+   subroutine gaussian_potential_tangent_list_fields(self, query)
+      class(gaussian_potential_tangent_request_type), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+      call query%add_real2("xyz", "Surface positions in bohr (3, ngrid)", self%xyz)
+      call query%add_real("xi", "Gaussian widths in bohr**(-1) (ngrid)", self%xi)
+      call query%add_real3("d_xyz", "Surface position tangents (3, ngrid, ndir)", self%d_xyz)
+      call query%add_real2("d_xi", "Gaussian width tangents (ngrid, ndir)", self%d_xi)
+      call query%add_real3("dirs", "Nuclear direction batch (3, natom, ndir)", self%dirs)
+   end subroutine gaussian_potential_tangent_list_fields
+
+   !> Input equality for gaussian_potential_tangent
+   function gaussian_potential_tangent_same_inputs(self, other) result(equal)
+      class(gaussian_potential_tangent_request_type), intent(in) :: self
+      class(coupling_request_type), intent(in) :: other
+      logical :: equal
+      equal = .false.
+      select type (other)
+      type is (gaussian_potential_tangent_request_type)
+         equal = same_real2(self%xyz, other%xyz) .and. &
+            & same_real1(self%xi, other%xi) .and. &
+            & same_real3(self%d_xyz, other%d_xyz) .and. &
+            & same_real2(self%d_xi, other%d_xi) .and. &
+            & same_real3(self%dirs, other%dirs)
+      end select
+   end function gaussian_potential_tangent_same_inputs
+
+   !> Name of the density_tangent calculation
+   function density_tangent_name(self) result(name)
+      class(density_tangent_request_type), intent(in) :: self
+      character(len=request_name_len) :: name
+      name = "density_tangent"
+   end function density_tangent_name
+
+   !> Outputs of the density_tangent calculation
+   subroutine density_tangent_declare(self, error)
+      class(density_tangent_request_type), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
+      call self%add("d_rho", error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_grad_rho", [3], error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_hess_rho", [6], error, extent=coupling_extent_grid_dir)
+      if (allocated(error)) return
+      call self%add("d_d3_rho", [10], error, extent=coupling_extent_grid_dir)
+   end subroutine density_tangent_declare
+
+   !> Inputs of the density_tangent calculation
+   subroutine density_tangent_list_fields(self, query)
+      class(density_tangent_request_type), intent(in) :: self
+      type(field_query_type), intent(inout) :: query
+      call query%add_real2("xyz", "Surface positions in bohr (3, ngrid)", self%xyz)
+      call query%add_real3("dirs", "Nuclear direction batch (3, natom, ndir)", self%dirs)
+   end subroutine density_tangent_list_fields
+
+   !> Input equality for density_tangent
+   function density_tangent_same_inputs(self, other) result(equal)
+      class(density_tangent_request_type), intent(in) :: self
+      class(coupling_request_type), intent(in) :: other
+      logical :: equal
+      equal = .false.
+      select type (other)
+      type is (density_tangent_request_type)
+         equal = same_real2(self%xyz, other%xyz) .and. &
+            & same_real3(self%dirs, other%dirs)
+      end select
+   end function density_tangent_same_inputs
+
+   !> Compare optional rank-1 real input arrays
+   pure logical function same_real1(a, b) result(equal)
+      real(wp), allocatable, intent(in) :: a(:), b(:)
+      if (allocated(a) .neqv. allocated(b)) then
+         equal = .false.
+      else if (.not. allocated(a)) then
+         equal = .true.
+      else if (size(a) /= size(b)) then
+         equal = .false.
+      else
+         equal = all(a == b)
+      end if
+   end function same_real1
+
+   !> Compare optional rank-2 real input arrays
+   pure logical function same_real2(a, b) result(equal)
+      real(wp), allocatable, intent(in) :: a(:, :), b(:, :)
+      if (allocated(a) .neqv. allocated(b)) then
+         equal = .false.
+      else if (.not. allocated(a)) then
+         equal = .true.
+      else if (any(shape(a) /= shape(b))) then
+         equal = .false.
+      else
+         equal = all(a == b)
+      end if
+   end function same_real2
+
+   !> Compare optional rank-3 real input arrays
+   pure logical function same_real3(a, b) result(equal)
+      real(wp), allocatable, intent(in) :: a(:, :, :), b(:, :, :)
+      if (allocated(a) .neqv. allocated(b)) then
+         equal = .false.
+      else if (.not. allocated(a)) then
+         equal = .true.
+      else if (any(shape(a) /= shape(b))) then
+         equal = .false.
+      else
+         equal = all(a == b)
+      end if
+   end function same_real3
 
    !> Name of the gaussian_moments calculation
    !>
@@ -1240,27 +1483,36 @@ contains
    !> @param[in,out] coupling Collection to refresh
    !> @param[in] ngrid Evaluation point count, the extent of per-point outputs
    !> @param[in] natom Solute atom count, the extent of per-atom outputs
-   subroutine coupling_snapshot(coupling, ngrid, natom)
+   subroutine coupling_snapshot(coupling, ngrid, natom, ndir)
       !> Collection to refresh
       class(coupling_type), intent(inout) :: coupling
       !> Evaluation point count
       integer, intent(in), optional :: ngrid
       !> Solute atom count
       integer, intent(in), optional :: natom
+      !> Direction batch count
+      integer, intent(in), optional :: ndir
       !> Recorded counts
-      integer :: npoint, nsite
+      integer :: npoint, nsite, ndirection
       !> Which counts changed, by extent kind; a request-sized output follows none
-      logical :: changed(4)
+      logical :: changed(5)
       integer :: i, j
       npoint = no_extent
       if (present(ngrid)) npoint = ngrid
       nsite = no_extent
       if (present(natom)) nsite = natom
+      ndirection = no_extent
+      if (present(ndir)) then
+         ndirection = ndir
+      else if (allocated(coupling%hvp_dirs)) then
+         ndirection = size(coupling%hvp_dirs, 3)
+      end if
       call coupling%compact()
       changed(coupling_extent_grid) = coupling%ngrid /= npoint
       changed(coupling_extent_atom) = coupling%natom /= nsite
       changed(coupling_extent_grid_atom) = changed(coupling_extent_grid) .or. changed(coupling_extent_atom)
       changed(coupling_extent_request_pair) = .false.
+      changed(coupling_extent_grid_dir) = changed(coupling_extent_grid) .or. (coupling%ndir /= ndirection)
       if (any(changed)) then
          coupling%epoch = coupling%epoch + 1_int64
          coupling%phase = moist_phase_none
@@ -1277,6 +1529,7 @@ contains
       end if
       coupling%ngrid = npoint
       coupling%natom = nsite
+      coupling%ndir = ndirection
    end subroutine coupling_snapshot
 
    !> Invalidate the answers, the staging and any outstanding scoped view
@@ -1296,10 +1549,74 @@ contains
       coupling%epoch = coupling%epoch + 1_int64
       coupling%phase = moist_phase_none
       coupling%cursor = 0
+      coupling%ndir = no_extent
+      if (allocated(coupling%hvp_dirs)) deallocate (coupling%hvp_dirs)
+      if (allocated(coupling%hvp_d_xyz)) deallocate (coupling%hvp_d_xyz)
+      if (allocated(coupling%hvp_d_xi)) deallocate (coupling%hvp_d_xi)
       do i = 1, coupling%n_requests()
          call coupling%requests(i)%item%invalidate(keep_build)
       end do
    end subroutine coupling_invalidate
+
+   !> Clear the current HVP direction batch and invalidate directional answers
+   !> while preserving primal build, energy, response and gradient answers
+   subroutine coupling_clear_hvp(coupling)
+      class(coupling_type), intent(inout) :: coupling
+      integer :: i, j
+      coupling%epoch = coupling%epoch + 1_int64
+      coupling%phase = moist_phase_none
+      coupling%cursor = 0
+      coupling%ndir = no_extent
+      if (allocated(coupling%hvp_dirs)) deallocate (coupling%hvp_dirs)
+      if (allocated(coupling%hvp_d_xyz)) deallocate (coupling%hvp_d_xyz)
+      if (allocated(coupling%hvp_d_xi)) deallocate (coupling%hvp_d_xi)
+      do i = 1, coupling%n_requests()
+         associate (item => coupling%requests(i)%item)
+            do j = 1, item%n_outputs()
+               if (item%outputs(j)%extent /= coupling_extent_grid_dir) cycle
+               item%outputs(j)%available = .false.
+               item%outputs(j)%kept = .false.
+            end do
+         end associate
+      end do
+   end subroutine coupling_clear_hvp
+
+   !> Record a new nuclear direction batch for Stage 1 of HVP
+   subroutine coupling_set_hvp_dirs(coupling, dirs)
+      class(coupling_type), intent(inout) :: coupling
+      real(wp), intent(in) :: dirs(:, :, :)
+      call coupling_clear_hvp(coupling)
+      coupling%hvp_dirs = dirs
+      coupling%ndir = size(dirs, 3)
+   end subroutine coupling_set_hvp_dirs
+
+   !> Record Stage-1 surface tangents for Stage 2 of HVP
+   subroutine coupling_set_hvp_surface_tangent(coupling, d_xyz, d_xi)
+      class(coupling_type), intent(inout) :: coupling
+      real(wp), intent(in) :: d_xyz(:, :, :)
+      real(wp), intent(in), optional :: d_xi(:, :)
+      coupling%hvp_d_xyz = d_xyz
+      if (allocated(coupling%hvp_d_xi)) deallocate (coupling%hvp_d_xi)
+      if (present(d_xi)) coupling%hvp_d_xi = d_xi
+   end subroutine coupling_set_hvp_surface_tangent
+
+   !> Read the staged HVP direction batch, if any
+   subroutine coupling_get_hvp_dirs(coupling, dirs)
+      class(coupling_type), intent(in) :: coupling
+      real(wp), allocatable, intent(out) :: dirs(:, :, :)
+      if (allocated(coupling%hvp_dirs)) dirs = coupling%hvp_dirs
+   end subroutine coupling_get_hvp_dirs
+
+   !> Read the staged Stage-1 surface tangents, if any
+   subroutine coupling_get_hvp_surface_tangent(coupling, d_xyz, d_xi)
+      class(coupling_type), intent(in) :: coupling
+      real(wp), allocatable, intent(out) :: d_xyz(:, :, :)
+      real(wp), allocatable, intent(out), optional :: d_xi(:, :)
+      if (allocated(coupling%hvp_d_xyz)) d_xyz = coupling%hvp_d_xyz
+      if (present(d_xi)) then
+         if (allocated(coupling%hvp_d_xi)) d_xi = coupling%hvp_d_xi
+      end if
+   end subroutine coupling_get_hvp_surface_tangent
 
    !> Stage the phase requirements and start a new host walk
    !>
@@ -1531,6 +1848,9 @@ contains
       case (coupling_extent_request_pair)
          n = self%requests(i)%item%pair_size()
          if (n >= 0) n = n*n
+      case (coupling_extent_grid_dir)
+         n = no_extent
+         if (self%ngrid >= 0 .and. self%ndir >= 0) n = self%ngrid*self%ndir
       case default
          n = self%ngrid
       end select
@@ -1538,8 +1858,8 @@ contains
 
    !> Caller-side shape of one output: its leading extents, then the trailing ones
    !>
-   !> The trailing extents are (ngrid), (natom) or (ngrid, natom) of the
-   !> snapshot, or the request's own (n, n), by the output's extent kind
+   !> The trailing extents are (ngrid), (natom), (ngrid, natom) or (ngrid, ndir)
+   !> of the snapshot, or the request's own (n, n), by the output's extent kind
    !>
    !> @param[in] self Collection to inspect
    !> @param[in] i Slot index
@@ -1568,6 +1888,8 @@ contains
             dims(rank + 1:rank + 2) = [self%ngrid, self%natom]
          case (coupling_extent_request_pair)
             dims(rank + 1:rank + 2) = self%requests(i)%item%pair_size()
+         case (coupling_extent_grid_dir)
+            dims(rank + 1:rank + 2) = [self%ngrid, self%ndir]
          case default
             dims(rank + 1) = self%ngrid
          end select
@@ -1575,8 +1897,8 @@ contains
       end associate
    end subroutine shape_of
 
-   !> Number of trailing extents of an extent kind: two for (ngrid, natom) and
-   !> request-sized pairs, else one
+   !> Number of trailing extents of an extent kind: two for (ngrid, natom),
+   !> (ngrid, ndir) and request-sized pairs, else one
    !>
    !> @param[in] extent Trailing extent kind of the output
    pure function trailing_rank(extent) result(rank)
@@ -1585,7 +1907,8 @@ contains
       !> Number of trailing extents
       integer :: rank
       rank = 1
-      if (extent == coupling_extent_grid_atom .or. extent == coupling_extent_request_pair) rank = 2
+      if (extent == coupling_extent_grid_atom .or. extent == coupling_extent_request_pair &
+         & .or. extent == coupling_extent_grid_dir) rank = 2
    end function trailing_rank
 
    !> Refusal of an output whose count the snapshot did not give
@@ -1598,7 +1921,7 @@ contains
       !> Trailing extent kind of the output
       integer, intent(in) :: extent
       !> Why the output is refused, blank padded
-      character(len=64) :: reason
+      character(len=72) :: reason
       select case (extent)
       case (coupling_extent_atom)
          reason = "needs an atom count; the snapshot has none"
@@ -1606,6 +1929,8 @@ contains
          reason = "needs a point and an atom count; the snapshot lacks at least one"
       case (coupling_extent_request_pair)
          reason = "needs a size from its request; the request has none"
+      case (coupling_extent_grid_dir)
+         reason = "needs a point and a direction count; the snapshot lacks at least one"
       case default
          reason = "needs a point count; the snapshot has none"
       end select
@@ -1869,7 +2194,7 @@ contains
       !> Phase index
       integer, intent(in) :: phase
       !> Phase name, blank padded
-      character(len=8) :: name
+      character(len=16) :: name
       select case (phase)
       case (moist_phase_energy)
          name = "energy"
@@ -1879,6 +2204,10 @@ contains
          name = "gradient"
       case (moist_phase_build)
          name = "build"
+      case (moist_phase_hvp_geometry)
+         name = "hvp_geometry"
+      case (moist_phase_hvp)
+         name = "hvp"
       case default
          name = "none"
       end select
@@ -1893,12 +2222,15 @@ contains
       !> Phase index
       integer, intent(in) :: phase
       !> Consumer name, blank padded
-      character(len=16) :: name
-      if (phase == moist_phase_build) then
+      character(len=24) :: name
+      select case (phase)
+      case (moist_phase_build)
          name = "build"
-      else
-         name = "get_"//phase_name(phase)
-      end if
+      case (moist_phase_hvp_geometry)
+         name = "prepare_hvp"
+      case default
+         name = "get_"//trim(phase_name(phase))
+      end select
    end function phase_consumer
 
    !* ================================================================================= *!

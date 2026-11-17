@@ -879,6 +879,28 @@ moist_prepare_model_gradient(moist_error error,
                              moist_model model,
                              moist_coupling coupling) moist_API_SUFFIX__V_1_0;
 
+/// Stage Hessian-vector product stage 1 for `ndir` nuclear directions (`dirs`
+/// row-major `(ndir, nat_cap, 3)`). On density-backed DROP cavities this stages
+/// `"density_tangent"` (`d_rho`, `d_grad_rho`, `d_hess_rho`, `d_d3_rho` at
+/// fixed base surface `xyz`); on geometric cavities the walk is empty
+moist_API_ENTRY void moist_API_CALL
+moist_prepare_model_hvp_geometry(moist_error error,
+                                 moist_model model,
+                                 moist_coupling coupling,
+                                 int nat_cap,
+                                 int ndir,
+                                 const double* dirs /* : row-major (ndir, nat_cap, 3) */) moist_API_SUFFIX__V_1_0;
+
+/// Stage Hessian-vector product stage 2 on a coupling whose stage-1 walk is
+/// complete: computes and caches the cavity surface tangents (`d_xyz`, `d_xi`,
+/// ...) and stages `"point_potential_tangent"` or
+/// `"gaussian_potential_tangent"` (plus any still-missing `"potential"` or
+/// `"nuclear_charges"` outputs)
+moist_API_ENTRY void moist_API_CALL
+moist_prepare_model_hvp(moist_error error,
+                        moist_model model,
+                        moist_coupling coupling) moist_API_SUFFIX__V_1_0;
+
 /// Solvation energy from a staged coupling. Fails by name on a coupling not
 /// staged for the energy phase and on an unanswered required output,
 /// including one whose answer was rejected. Adds the energy contribution to
@@ -917,6 +939,31 @@ moist_get_model_gradient(moist_error error,
                          int nat_cap,
                          double* gradient /* : row-major (nat_cap, 3) */) moist_API_SUFFIX__V_1_0;
 
+/// Nuclear Hessian-vector products from a coupling staged by
+/// moist_prepare_model_hvp, plus second-order host response items in `response`
+/// (`"potential_adjoint_tangent"` and, on density-backed cavities,
+/// `"density_tangent"`). `hvp` is row-major `(ndir_cap, nat_cap, 3)` and
+/// accumulates in place; untouched on failure
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_hvp(moist_error error,
+                    moist_model model,
+                    moist_coupling coupling,
+                    moist_response response,
+                    int nat_cap,
+                    int ndir_cap,
+                    double* hvp /* : row-major (ndir_cap, nat_cap, 3) */) moist_API_SUFFIX__V_1_0;
+
+/// Dense nuclear Hessian of a host-independent continuum model (e.g. PV on a
+/// geometric DROP cavity). `hessian` is row-major `(nat_cap, 3, nat_cap, 3)`
+/// and accumulates in place; untouched on failure. Models requiring host
+/// tangents refuse and direct callers to the two-stage HVP entry points
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_hessian(moist_error error,
+                        moist_model model,
+                        moist_coupling coupling,
+                        int nat_cap,
+                        double* hessian /* : row-major (nat_cap, 3, nat_cap, 3) */) moist_API_SUFFIX__V_1_0;
+
 /// Advance to the next request with a missing output of the staged phase
 /// Returns false after the last one, rewinding so that the next call starts a
 /// new pass, and on any failure, so it can drive a while loop: check error
@@ -942,7 +989,12 @@ moist_get_coupling_request_missing(moist_error error, moist_coupling coupling, c
 /// d2phi_dr2, mt: [ngrid][3][3].
 /// per atom: q, z: [natom], mu: [natom][3], theta: [natom][3][3]; over the
 /// basis: dcart: [nbasis][nbasis], symmetric, with nbasis the request's own
-/// input "nbasis". moist reads exactly that many
+/// input "nbasis"; over directions and grid points (HVP stages):
+/// d_phi, d_dphi_dxi, d_rho: [ndir][ngrid];
+/// d_dphi_dr, d_d2phi_dr_dxi, d_grad_rho: [ndir][ngrid][3];
+/// d_d2phi_dr2, d_hess_rho: [ndir][ngrid][6] packed [xx, xy, xz, yy, yz, zz];
+/// d_d3_rho: [ndir][ngrid][10] packed [xxx, xxy, xxz, xyy, xyz, xzz, yyy, yyz, yzz, zzz].
+/// moist reads exactly that many
 /// values. An error when no request is current,
 /// for an unknown output, a NULL buffer or a non-finite value. A rejected
 /// output stays missing until a valid retry; other outputs are unaffected
@@ -1057,6 +1109,15 @@ moist_get_response_item_name(moist_error error, moist_response response,
 ///     `parameter_derivatives` is true (default false), and only in the response
 ///     phase, never in a gradient read; a host that stops on unknown items must
 ///     not enable it
+///   "potential_adjoint_tangent": "w_phi" [ngrid], "dw_phi" [ndir][ngrid],
+///     optional "w_dphi_dr" [ngrid][3] and "dw_dphi_dr" [ndir][ngrid][3],
+///     "d_xyz" [ndir][ngrid][3], and (for Gaussian potential integrals) "d_xi"
+///     [ndir][ngrid], produced by moist_get_model_hvp
+///   "density_tangent": "w_rho" [ngrid], "w_grad_rho" [ngrid][3], "w_hess_rho"
+///     [ngrid][3][3], "dw_rho" [ndir][ngrid], "dw_grad_rho" [ndir][ngrid][3],
+///     "dw_hess_rho" [ndir][ngrid][6] packed [xx, xy, xz, yy, yz, zz], and
+///     "d_xyz" [ndir][ngrid][3], produced by moist_get_model_hvp on
+///     density-backed cavities
 
 /// Number of named arrays of the current response item
 moist_API_ENTRY void moist_API_CALL

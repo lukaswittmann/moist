@@ -7,13 +7,15 @@ module moist_model_continuum_component_type
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_channels_response, only: response_type
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, moist_phase_energy, &
-      & moist_phase_response, moist_phase_gradient, coupling_begin_registration, &
-      & coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate
+      & moist_phase_response, moist_phase_gradient, moist_phase_hvp, coupling_begin_registration, &
+      & coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate, &
+      & coupling_set_hvp_dirs, coupling_set_hvp_surface_tangent, coupling_clear_hvp
 
    implicit none(type, external)
    private
@@ -69,6 +71,18 @@ module moist_model_continuum_component_type
       procedure :: get_gradient_surface_weights => get_component_gradient_weights_default
       !> Accumulate nuclear-gradient terms that do not flow through the surface
       procedure :: get_direct_gradient => get_component_direct_gradient_default
+      !> Whether the component implements second-order Hessian hooks
+      procedure :: supports_hessian => component_supports_hessian_default
+      !> Whether the component requires Stage-2 HVP coupling answers
+      procedure :: needs_hvp_coupling => component_needs_hvp_coupling_default
+      !> Reset per-batch HVP state on the component before traversal
+      procedure :: reset_hvp => reset_component_hvp_default
+      !> Accumulate directional tangents of the gradient surface weights
+      procedure :: get_hessian_surface_weights => get_component_hessian_weights_default
+      !> Accumulate non-surface nuclear Hessian-vector columns
+      procedure :: get_direct_hessian => get_component_direct_hessian_default
+      !> Accumulate directional tangents of the direct trace response
+      procedure :: get_trace_response_tangent => get_component_trace_response_tangent_default
       !> Declare the host requests this component reads (none by default)
       procedure :: declare_coupling => declare_component_coupling_default
       !> Build the coupling of a bare component driven without a model
@@ -81,6 +95,8 @@ module moist_model_continuum_component_type
       procedure :: prepare_response => prepare_component_response
       !> Stage the gradient phase
       procedure :: prepare_gradient => prepare_component_gradient
+      !> Stage the HVP phase of a bare component given directions and surface tangents
+      procedure :: prepare_hvp => prepare_component_hvp
       !> Solvent-independent settings; null for a component without any
       procedure :: parameters => component_parameters_default
       !> Print the solvent and physical inputs (none by default)
@@ -361,6 +377,140 @@ contains
 
    end subroutine get_component_direct_gradient_default
 
+   !> Default second-order support query
+   !>
+   !> @param[in] self  solvation component
+   pure function component_supports_hessian_default(self) result(supported)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in) :: self
+      !> Second-order support flag
+      logical :: supported
+
+      supported = .false.
+
+   end function component_supports_hessian_default
+
+   !> Default Stage-2 HVP coupling requirement query
+   !>
+   !> @param[in] self  solvation component
+   pure function component_needs_hvp_coupling_default(self) result(needed)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in) :: self
+      !> Stage-2 coupling requirement flag
+      logical :: needed
+
+      needed = .false.
+
+   end function component_needs_hvp_coupling_default
+
+   !> Default no-op HVP state reset before a direction batch
+   !>
+   !> @param[in,out] self   solvation component
+   !> @param[in]     ngrid  surface point count
+   !> @param[in]     ndir   direction count
+   subroutine reset_component_hvp_default(self, ngrid, ndir)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Surface point count
+      integer, intent(in) :: ngrid
+      !> Direction count
+      integer, intent(in) :: ndir
+
+   end subroutine reset_component_hvp_default
+
+   !> Default refusal for second-order surface weights
+   !>
+   !> @param[in,out] self      solvation component
+   !> @param[in]     coupling  scoped host data
+   !> @param[in]     cavity    live cavity
+   !> @param[in]     dirs      nuclear directions `(3, nat, nblk)`
+   !> @param[in]     tangent   surface tangent of the block
+   !> @param[in,out] dacc      surface-adjoint tangent per direction `(nblk)`
+   !> @param[out]    error     error handling
+   !> @param[in]     first     global index of the block's first direction, optional
+   subroutine get_component_hessian_weights_default(self, coupling, cavity, dirs, tangent, &
+                                                    dacc, error, first)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Scoped host data
+      class(coupling_view_type), intent(in) :: coupling
+      !> Live cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Surface-adjoint tangent per direction
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Global index of the block's first direction
+      integer, intent(in), optional :: first
+
+      character(len=:), allocatable :: label
+
+      label = "This"
+      if (allocated(self%name)) label = trim(self%name)
+      call fatal_error(error, label//" component does not implement second-order surface weights")
+
+   end subroutine get_component_hessian_weights_default
+
+   !> Default no-op hook for non-surface nuclear Hessian-vector columns
+   !>
+   !> @param[in,out] self      solvation component
+   !> @param[in]     coupling  scoped host data
+   !> @param[in]     cavity    live cavity
+   !> @param[in]     dirs      nuclear directions `(3, nat, nblk)`
+   !> @param[in]     tangent   surface tangent of the block
+   !> @param[in,out] hvp       nuclear HVP accumulator `(3, nat, nblk)`
+   !> @param[out]    error     error handling
+   !> @param[in]     first     global index of the block's first direction, optional
+   subroutine get_component_direct_hessian_default(self, coupling, cavity, dirs, tangent, &
+                                                   hvp, error, first)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Scoped host data
+      class(coupling_view_type), intent(in) :: coupling
+      !> Live cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Nuclear HVP accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Global index of the block's first direction
+      integer, intent(in), optional :: first
+
+   end subroutine get_component_direct_hessian_default
+
+   !> Default no-op hook for trace response tangents
+   !>
+   !> @param[in,out] self      solvation component
+   !> @param[in]     coupling  scoped host data
+   !> @param[in]     cavity    live cavity
+   !> @param[in]     tangent   surface tangent of the direction batch
+   !> @param[in,out] response  response accumulator
+   !> @param[out]    error     error handling
+   subroutine get_component_trace_response_tangent_default(self, coupling, cavity, tangent, &
+                                                           response, error)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Scoped host data
+      class(coupling_view_type), intent(in) :: coupling
+      !> Live cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Surface tangent of the direction batch
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_trace_response_tangent_default
+
    !> Default component-side declaration: the component reads no host request
    !>
    !> @param[in]    self     Solvation component
@@ -479,6 +629,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (phase == moist_phase_energy) call coupling_invalidate(coupling, keep_build=.true.)
+      call coupling_clear_hvp(coupling)
       call declare_component_pass(self, cavity, coupling, error)
       if (allocated(error)) return
       call coupling_arm(coupling, phase, error)
@@ -544,6 +695,56 @@ contains
       call self%stage(cavity, coupling, moist_phase_gradient, error)
 
    end subroutine prepare_component_gradient
+
+   !> Stage the HVP phase of a bare component's coupling
+   !>
+   !> @param[in,out] self      solvation component
+   !> @param[in]     cavity    built cavity
+   !> @param[in,out] coupling  coupling built by `new_coupling`
+   !> @param[in]     dirs      nuclear directions `(3, nat, ndir)`
+   !> @param[in]     tangent   surface tangent of `dirs`
+   !> @param[out]    error     error handling
+   subroutine prepare_component_hvp(self, cavity, coupling, dirs, tangent, error)
+      !> Solvation component
+      class(model_continuum_component_type), intent(inout) :: self
+      !> Built cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Coupling built by `new_coupling`
+      type(coupling_type), intent(inout), target :: coupling
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of `dirs`
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call cavity%require_built(error)
+      if (allocated(error)) return
+      if (.not. self%supports_hessian()) then
+         call fatal_error(error, trim(self%name)//" component does not support Hessians")
+         return
+      end if
+      if (size(dirs, 1) /= 3 .or. size(dirs, 2) /= cavity%nsph .or. size(dirs, 3) < 1) then
+         call fatal_error(error, "Component HVP direction shape mismatch")
+         return
+      end if
+      if (.not. tangent%is_initialized() .or. tangent%ndir() /= size(dirs, 3)) then
+         call fatal_error(error, "Component HVP surface tangent shape mismatch")
+         return
+      end if
+
+      call coupling_set_hvp_dirs(coupling, dirs)
+      if (allocated(cavity%xi0)) then
+         call coupling_set_hvp_surface_tangent(coupling, tangent%d_xyz, tangent%d_xi)
+      else
+         call coupling_set_hvp_surface_tangent(coupling, tangent%d_xyz)
+      end if
+      call declare_component_pass(self, cavity, coupling, error)
+      if (allocated(error)) return
+      call self%reset_hvp(cavity%ngrid, size(dirs, 3))
+      call coupling_arm(coupling, moist_phase_hvp, error)
+
+   end subroutine prepare_component_hvp
 
    !* ================================================================================= *!
    !*                                    Printout                                     *!
