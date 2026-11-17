@@ -50,6 +50,15 @@ program tester
    use test_cavity_iswig, only: collect_cavity_iswig
    use test_cavity_drop_gaussian_scatter, only: collect_cavity_drop_gaussian_scatter
    use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
+   use test_cavity_drop_kkt, only: collect_cavity_drop_kkt
+   use test_cavity_drop_field_tangent, only: collect_cavity_drop_field_tangent
+   use test_cavity_drop_hessian_fixed, only: collect_cavity_drop_hessian_fixed
+   use test_cavity_drop_tangent_forward, only: collect_cavity_drop_tangent_forward
+   use test_cavity_drop_hessian_response, only: collect_cavity_drop_hessian_response
+   use test_cavity_drop_hessian_e2e, only: collect_cavity_drop_hessian_e2e
+   use test_cavity_drop_hessian_omega, only: collect_cavity_drop_hessian_omega
+   use test_cavity_drop_weights_tangent, only: collect_cavity_drop_weights_tangent
+   use test_cavity_drop_branching, only: collect_cavity_drop_branching
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
@@ -141,6 +150,15 @@ program tester
       & new_testsuite("moz_solvent", collect_moz_solvent), &
       & new_testsuite("cavity_drop_gaussian_scatter", collect_cavity_drop_gaussian_scatter), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
+      & new_testsuite("cavity_drop_kkt", collect_cavity_drop_kkt), &
+      & new_testsuite("cavity_drop_field_tangent", collect_cavity_drop_field_tangent), &
+      & new_testsuite("cavity_drop_hessian_fixed", collect_cavity_drop_hessian_fixed), &
+      & new_testsuite("cavity_drop_tangent_forward", collect_cavity_drop_tangent_forward), &
+      & new_testsuite("cavity_drop_hessian_response", collect_cavity_drop_hessian_response), &
+      & new_testsuite("cavity_drop_hessian_e2e", collect_cavity_drop_hessian_e2e), &
+      & new_testsuite("cavity_drop_hessian_omega", collect_cavity_drop_hessian_omega), &
+      & new_testsuite("cavity_drop_weights_tangent", collect_cavity_drop_weights_tangent), &
+      & new_testsuite("cavity_drop_branching", collect_cavity_drop_branching), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &

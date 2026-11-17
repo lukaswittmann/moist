@@ -61,6 +61,7 @@ module moist_cli
       logical :: json = .false.
 
       logical :: grad = .false.
+      logical :: hess = .false.
       logical :: numgrad = .false.
 
       logical :: read_parameters = .false.
@@ -320,6 +321,10 @@ subroutine get_arguments(config, error)
 
       if (args%has_key("grad")) then
          call args%get("grad", config%grad)
+      end if
+
+      if (args%has_key("hess")) then
+         call args%get("hess", config%hess)
       end if
 
       if (args%has_key("dump")) then
@@ -704,6 +709,9 @@ contains
          group_idx=grp_technical)
       call p%add_argument("-g", "--grad", action="store_true", &
          help="Calculate cavity gradients", &
+         group_idx=grp_technical)
+      call p%add_argument("--hess", action="store_true", &
+         help="Calculate the dense nuclear Hessian of the total cavity surface area", &
          group_idx=grp_technical)
       call p%add_argument("--dump", action="store_true", &
          dest="dump", &

@@ -59,6 +59,15 @@ tests = [
   'moz_solvent',
   'cavity_drop_gaussian_scatter',
   'cavity_drop_primitives',
+  'cavity_drop_kkt',
+  'cavity_drop_field_tangent',
+  'cavity_drop_hessian_fixed',
+  'cavity_drop_tangent_forward',
+  'cavity_drop_hessian_response',
+  'cavity_drop_hessian_e2e',
+  'cavity_drop_hessian_omega',
+  'cavity_drop_weights_tangent',
+  'cavity_drop_branching',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
   'cavity_drop_lsf_reference',
@@ -99,8 +108,10 @@ test_timeouts = {}
 
 # Ranked by CI runtime
 test_priority = {
+  'cavity_drop_hessian_e2e': 10,
   'cavity_drop_projection': 9,
   'model_component_pcm_derivatives': 8,
+  'cavity_drop_hessian_fixed': 7,
   'math_grid_3d_invariance': 7,
   'math_grid_3d_derivatives': 6,
   'cavity_drop_gradient': 5,

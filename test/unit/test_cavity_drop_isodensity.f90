@@ -52,6 +52,7 @@ module test_cavity_drop_isodensity
       moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_mc, only: cavity_type_mc, new_cavity_mc
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
@@ -192,6 +193,7 @@ contains
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
                   new_unittest("exclusion_radius_ignores_host_charges", test_exclusion_radius_host_charges), &
+                  new_unittest("internal_hessian_needs_host", test_internal_hessian_needs_host), &
                   new_unittest("internal_update_needs_basis_atoms", test_internal_update_atoms), &
                   new_unittest("core_fill_removes_dip", test_core_fill_dip), &
                   new_unittest("core_fill_fd", test_core_fill_fd), &
@@ -4478,5 +4480,68 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_rebuild_drops_derivatives
+
+   !> A density-defined level set must refuse a nuclear Hessian without the exchange
+   subroutine test_internal_hessian_needs_host(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(cavity_type_drop) :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_surface_adjoint_type) :: acc
+      type(structure_type) :: mol
+      type(moist_iso_gto_type) :: gto
+      type(mctc_error), allocatable :: cav_error, merr
+      integer, allocatable :: sh_nprim(:)
+      real(wp), allocatable :: dcart(:, :), hess(:, :, :, :)
+
+      call build_test(gto, 1, error, mol, dcart)
+      if (allocated(error)) return
+      sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
+      call lsf%new(gto%sh_atom, gto%sh_l, sh_nprim, gto%exps, gto%coeffs, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type( &
+                   rho_iso=rho_iso_ref, scale=lsf_scale), error=merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+
+      call check(error, lsf%host_defined, &
+                 "the internal isodensity level set must declare itself host-defined")
+      if (allocated(error)) return
+
+      call new_context(ctx, verbosity=0)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf, &
+                           error=cav_error, &
+                           param=moist_cavity_drop_parameters_type(num_leb=26, tolerance=1.0e-10_wp), &
+                           ctx=ctx)
+      if (allocated(cav_error)) then
+         call test_failed(error, "failed to build the internal isodensity cavity: " &
+                          //cav_error%message)
+         return
+      end if
+
+      call update_iso_cavity(cavity, mol, dcart, real(mol%num(mol%id), wp), cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "failed to project the internal isodensity cavity: " &
+                          //cav_error%message)
+         return
+      end if
+
+      call acc%init(cavity%ngrid)
+      allocate (hess(3, mol%nat, 3, mol%nat), source=0.0_wp)
+      call cavity%get_hessian(acc, hess, cav_error)
+
+      if (.not. allocated(cav_error)) then
+         call test_failed(error, "the internal isodensity Hessian ran without the"// &
+                          " second-order host exchange")
+         return
+      end if
+      if (index(cav_error%message, "second-order host exchange") == 0) then
+         call test_failed(error, "refused for the wrong reason: "//cav_error%message)
+         return
+      end if
+   end subroutine test_internal_hessian_needs_host
 
 end module test_cavity_drop_isodensity

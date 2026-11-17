@@ -8,11 +8,12 @@
 !>   in the reverse implementation are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
-   use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_cavity_drop_derivatives_kernel, only: next_branch_group, &
+      & max_branch_group_size
    use moist_cavity_type, only: add_volume_origin_gradient
    implicit none(type, external)
 
@@ -76,8 +77,8 @@ contains
       logical :: do_timing
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type) :: abort
-      !> Per-thread LSF evaluation failure, handed to the latch
-      type(error_type), allocatable :: lsf_error
+      !> Per-thread failure on its way to the latch
+      type(error_type), allocatable :: worker_error
 
       !> Pre-resolved timer handles for the per-grid point hot loop
       integer :: h_grad, h_prim, h_pos, h_disp, h_dist, h_norm, h_cpj, h_gw, &
@@ -98,9 +99,8 @@ contains
       !> KKT system
       real(wp) :: lambda_val
       real(wp) :: G_lagrangian(3), H_lagrangian(3, 3)
-      real(wp) :: kkt_rhs(4, 1)
-      real(wp) :: rhs_vec(4)
-      integer(lapack_ik) :: kkt_info
+      !> Factorization reused by every solve at this grid point
+      type(drop_kkt_factor_type) :: kkt_fac
       real(wp), allocatable :: kkt_rhs_batch(:, :)
 
       !> swi: Rho derivatives
@@ -184,8 +184,9 @@ contains
       ! Branch-weight post-pass state (serial, after main loop)
       ! Softmax weights_grad takes dphi in (nparam, nbranch) layout with
       ! nparam = 3 * nsph, flattening (iatom, iaxis) -> (iatom - 1) * 3 + iaxis
-      integer :: igroup_start, igroup_end, group_size, m_branch, im_grid
-      integer :: owner_m, k_param
+      integer :: igroup_cursor, igroup_start, igroup_end, group_size, m_branch, im_grid
+      integer :: owner_m, k_param, nbranch_max
+      logical :: have_group
       real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
       real(wp) :: area_fac_m, rn_m, dwleb_branch, da_branch, dv_branch
       real(wp) :: xi_fac_m
@@ -301,8 +302,7 @@ contains
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
       !$omp& iatom, iaxis, jaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
       !$omp& lsf1_rA, lsf2_r_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
-      !$omp& G_lagrangian, H_lagrangian, kkt_rhs, rhs_vec, &
-      !$omp& kkt_info, rho_unit, &
+      !$omp& G_lagrangian, H_lagrangian, kkt_fac, rho_unit, &
       !$omp& delta_matrix, r_iI_vec, r_iI_norm, r_hat_dot_r, &
       !$omp& grad_r_hat_dot_r, alpha_coeff, g_vec, g_norm_sq, g_norm, A_mat, &
       !$omp& t1_vec, t2_vec, y1, y2, cross_vec, &
@@ -323,7 +323,7 @@ contains
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
       !$omp& Hq1_curv, Hq2_curv, S11_curv, S12_curv, S22_curv, half_diff_curv, &
       !$omp& disc_curv, dH_curv, dS11_c, dS12_c, dS22_c, dKM_c, d_disc_c, &
-      !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, lsf_error, do_timing)
+      !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, worker_error, do_timing)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
@@ -364,9 +364,9 @@ contains
          phi2_r_rA = slots%phi(thread_slot)%f2_r_rA(point, anchor, owner_idx)
 
          ! Compute SSD on-the-fly for this point
-         call slots%lsf(thread_slot)%lsf%prepare(point, lsf_error)
-         if (allocated(lsf_error)) then
-            call abort%latch_error(lsf_error, igrid)
+         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             !$omp cancel do
             cycle
          end if
@@ -432,9 +432,17 @@ contains
          end do
 
          ! Single factorization + solve for all RHS
-         call drop_kkt_solve(H_lagrangian, lsf1_r, kkt_rhs_batch(:, 1:3*n_active), kkt_info)
-         if (kkt_info /= 0_lapack_ik) then
-            call abort%latch_message("[Error] Bordered KKT sensitivity solve failed", igrid)
+         call kkt_fac%factor(H_lagrangian, lsf1_r, "compute_gradient_drop", &
+                             worker_error, igrid)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
+            !$omp cancel do
+            cycle
+         end if
+         call kkt_fac%solve(kkt_rhs_batch(:, 1:3*n_active), "compute_gradient_drop", &
+                            worker_error, igrid)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             !$omp cancel do
             cycle
          end if
@@ -526,13 +534,19 @@ contains
 
          dn_dR_buf = 0.0_wp
 
-         ! Screening: lsf2_r_rA and xyz1_rA are zero for inactive atoms
+         ! `lsf2_r_rA` is active-slot indexed -- slot `lsf_slot(i)` belongs to
+         ! atom `active_idx(i)` -- so it must go through `gather_lsf_partials`
+         ! like every other read of it; indexing it by atom is only the identity
+         ! while nothing is screened. `xyz1_rA` is atom indexed and zero for
+         ! inactive atoms.
          do i = 1, n_active
             iatom = active_idx(i)
+            call gather_lsf_partials(lsf_slot(i), lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+                                     s1_rA, s2_r_rA, s3_rr_rA)
             do iaxis = 1, 3
                ! Total derivative of grad(S) w.r.t. r_A:
                ! d(grad(S))/dr_A = ( d^2 S/ dr dr_A) + ( d^2 S/ dr^2 ) * ( dr/ dr_A)
-               dg_dR = lsf2_r_rA(:, iaxis, iatom) &
+               dg_dR = s2_r_rA(:, iaxis) &
                        + matmul(lsf2_rr, self%xyz1_rA(:, iaxis, iatom, igrid))
 
                ! Normal derivative:
@@ -954,6 +968,7 @@ contains
 
       deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
+      call iswig_work%destroy()
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
       !$omp end parallel
 
@@ -981,26 +996,23 @@ contains
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
       if (self%ngrid > 0 .and. any(self%branch_count(1:self%ngrid) > 1)) then
-         allocate (branch_phi(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dphi(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
-         allocate (branch_weights(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dweights(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
+         ! The scratch is indexed by the group's run length, so it is sized by
+         ! the largest run the walk below can produce and not by
+         ! maxval(branch_count) -- the per-point branch counter is a different
+         ! quantity that only happens to agree on a well-formed grid
+         nbranch_max = max_branch_group_size(self%branch_count(1:self%ngrid), &
+                                             self%anchor_id(1:self%ngrid))
+         allocate (branch_phi(nbranch_max), source=0.0_wp)
+         allocate (branch_dphi(3*self%nsph, nbranch_max), source=0.0_wp)
+         allocate (branch_weights(nbranch_max), source=0.0_wp)
+         allocate (branch_dweights(3*self%nsph, nbranch_max), source=0.0_wp)
 
-         igroup_start = 1
-         do while (igroup_start <= self%ngrid)
-            if (self%branch_count(igroup_start) <= 1) then
-               igroup_start = igroup_start + 1
-               cycle
-            end if
-
-            ! Extend group while anchor_id stays the same
-            igroup_end = igroup_start
-            do while (igroup_end < self%ngrid)
-               if (self%anchor_id(igroup_end + 1) /= self%anchor_id(igroup_start)) exit
-               igroup_end = igroup_end + 1
-            end do
+         igroup_cursor = 1
+         do
+            call next_branch_group(self%branch_count(1:self%ngrid), &
+                                   self%anchor_id(1:self%ngrid), igroup_cursor, &
+                                   igroup_start, igroup_end, have_group)
+            if (.not. have_group) exit
             group_size = igroup_end - igroup_start + 1
 
             ! Gather phi and dphi for every branch
@@ -1084,8 +1096,6 @@ contains
                   end do
                end do
             end do
-
-            igroup_start = igroup_end + 1
          end do
 
          deallocate (branch_phi, branch_dphi, branch_weights, branch_dweights)

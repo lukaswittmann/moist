@@ -37,6 +37,8 @@ module moist_cavity_surface_adjoint
       procedure :: init => init_surface_adjoint
       !> Reset every allocated surface-adjoint channel to zero
       procedure :: zero => zero_surface_adjoint
+      !> Release every surface-adjoint channel
+      procedure :: destroy => destroy_surface_adjoint
       procedure :: size => surface_adjoint_size
       !> Add any supplied surface-adjoint channels
       procedure :: add_surface_weights
@@ -236,5 +238,24 @@ contains
       if (allocated(self%w_xi)) ngrid = size(self%w_xi)
 
    end function surface_adjoint_size
+
+   !> Release every surface-adjoint channel
+   !>
+   !> @param[inout] self  Surface-adjoint accumulator
+   subroutine destroy_surface_adjoint(self)
+      !> Surface-adjoint accumulator
+      class(cavity_surface_adjoint_type), intent(inout) :: self
+
+      if (allocated(self%w_xyz)) deallocate (self%w_xyz)
+      if (allocated(self%w_w)) deallocate (self%w_w)
+      if (allocated(self%w_xi)) deallocate (self%w_xi)
+      if (allocated(self%w_f)) deallocate (self%w_f)
+      if (allocated(self%w_a)) deallocate (self%w_a)
+      if (allocated(self%w_n)) deallocate (self%w_n)
+      if (allocated(self%w_k1)) deallocate (self%w_k1)
+      if (allocated(self%w_k2)) deallocate (self%w_k2)
+      if (allocated(self%w_c)) deallocate (self%w_c)
+
+   end subroutine destroy_surface_adjoint
 
 end module moist_cavity_surface_adjoint

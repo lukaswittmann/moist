@@ -58,6 +58,8 @@ contains
                   ! Adjoint tests
                   new_unittest("adjoint_channels_fd", test_adjoint_channels_fd), &
                   new_unittest("adjoint_area_channels", test_adjoint_area_channels), &
+                  ! Screening tests
+                  new_unittest("screened_normal_fd", test_screened_normal_fd), &
                   ! Branching tests (more expensive but kept for now)
                   new_unittest("cross_branching", test_cross_branching), &
                   new_unittest("branching_xyz_totals", test_branching_xyz_totals) &
@@ -1635,6 +1637,165 @@ contains
       call check(error, maxval(abs(w_lsf2 - w_lsf2_ref)), 0.0_wp, &
                  thr=ADJ_EQ_THR, more="derived Hessian surface-weight channel")
    end subroutine test_adjoint_area_channels
+
+   !> Surface-normal gradients on a grid where LSF screening drops atoms
+   subroutine test_screened_normal_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: NCHAIN = 10
+      real(wp), parameter :: SCREEN_THR = 1.0E-6_wp
+      real(wp), parameter :: SCREEN_ABS = 1.0E-9_wp
+
+      type(structure_type) :: mol, mol_fd
+      type(cavity_type_drop), allocatable :: cavity
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_context_type), target :: ctx
+
+      real(wp), allocatable :: an_normal(:, :, :, :), st_normal(:, :, :)
+      logical, allocatable :: ref_conv(:), st_ok(:, :)
+      integer, allocatable :: numbering_to_idx(:)
+      integer :: num(NCHAIN)
+      real(wp) :: xyz(ndim, NCHAIN)
+      real(wp) :: fd_coeff(4), fd_delta(4), d_normal(ndim), dev, worst
+      integer :: iat, idir, igrid, jgrid, istep, ngrid_set, nsph
+      integer :: num_idn, idx_map, ncompared, nscreened, nact
+
+      fd_coeff = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/(12.0_wp*STEP_SIZE)
+      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*STEP_SIZE
+
+      do iat = 1, NCHAIN
+         num(iat) = merge(6, 8, mod(iat, 2) == 1)
+         xyz(1, iat) = 0.30_wp*real(iat, wp)
+         xyz(2, iat) = 0.25_wp*real(mod(iat, 3), wp)
+         xyz(3, iat) = 2.85_wp*real(iat - 1, wp)
+      end do
+      call new(mol, num, xyz)
+
+      allocate (cavity)
+      block
+         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+         call svdw_template%new(moist_cavity_drop_lsf_svdw_param_type( &
+                                blend_k=k, blend_3b=blend_3b))
+         call new_context(ctx, verbosity=0)
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error, &
+                              param=moist_cavity_drop_parameters_type( &
+                              num_leb=26, tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
+                              proj_level=PROJ_LEVEL, wleb_prune_level=4, do_normal=.true.), &
+                              ctx=ctx)
+      end block
+      if (allocated(cavity_error)) then
+         call test_failed(error, "failed to initialize cavity: "//cavity_error%message)
+         return
+      end if
+
+      cavity%lsf_model%screening_threshold = SCREEN_THR
+
+      call cavity%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "failed to build cavity: "//cavity_error%message)
+         return
+      end if
+
+      ngrid_set = cavity%ngrid
+      nsph = cavity%nsph
+      if (ngrid_set == 0) then
+         call test_failed(error, "empty grid")
+         return
+      end if
+
+      call build_numbering_map(cavity%numbering(1:ngrid_set), numbering_to_idx)
+      allocate (ref_conv(ngrid_set), source=.false.)
+      do igrid = 1, ngrid_set
+         ref_conv(igrid) = cavity%converged(igrid)
+      end do
+
+      nscreened = 0
+      call cavity%lsf_model%update(cavity%mol, cavity%radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "LSF update failed: "//cavity_error%message)
+         return
+      end if
+      do igrid = 1, ngrid_set
+         call cavity%lsf_model%prepare(cavity%xyz(:, igrid), cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, "screening probe failed: "//cavity_error%message)
+            return
+         end if
+         nact = cavity%lsf_model%active_count()
+         if (nact < nsph) nscreened = nscreened + 1
+      end do
+      call check(error, nscreened > 0, &
+                 "no grid point is screened; the fixture cannot see the defect")
+      if (allocated(error)) return
+
+      call cavity%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "forward gradient failed: "//cavity_error%message)
+         return
+      end if
+      if (.not. allocated(cavity%normal1_rA)) then
+         call test_failed(error, "normal derivatives were not computed")
+         return
+      end if
+
+      allocate (an_normal(ndim, ndim, nsph, ngrid_set), source=0.0_wp)
+      do igrid = 1, ngrid_set
+         do iat = 1, nsph
+            do idir = 1, ndim
+               an_normal(:, idir, iat, igrid) = cavity%normal1_rA(:, iat, idir, igrid)
+            end do
+         end do
+      end do
+
+      allocate (st_normal(ndim, ngrid_set, 4), st_ok(ngrid_set, 4))
+      worst = 0.0_wp
+      ncompared = 0
+      do iat = 1, nsph
+         do idir = 1, ndim
+            st_normal = 0.0_wp
+            st_ok = .false.
+            do istep = 1, 4
+               mol_fd = mol
+               mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + fd_delta(istep)
+               call cavity%update(mol_fd, error=cavity_error)
+               if (allocated(cavity_error)) then
+                  call test_failed(error, "FD cavity rebuild failed: "//cavity_error%message)
+                  return
+               end if
+               do jgrid = 1, cavity%ngrid
+                  num_idn = cavity%numbering(jgrid)
+                  if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
+                  idx_map = numbering_to_idx(num_idn)
+                  if (idx_map <= 0) cycle
+                  st_normal(:, idx_map, istep) = cavity%normal0(:, jgrid)
+                  st_ok(idx_map, istep) = cavity%converged(jgrid)
+               end do
+            end do
+
+            do igrid = 1, ngrid_set
+               if (.not. (ref_conv(igrid) .and. all(st_ok(igrid, :)))) cycle
+               d_normal = matmul(st_normal(:, igrid, :), fd_coeff)
+               dev = maxval(abs(an_normal(:, idir, iat, igrid) - d_normal))
+               ncompared = ncompared + 1
+               worst = max(worst, dev)
+               if (dev > SCREEN_ABS) then
+                  call test_failed(error, "screened normal gradient does not match its "// &
+                                   "finite difference at grid point "//to_string(igrid)// &
+                                   ", atom "//to_string(iat)//", axis "//to_string(idir)// &
+                                   ": deviation "//to_string(dev))
+                  return
+               end if
+            end do
+         end do
+      end do
+
+      call check(error, ncompared > 100, &
+                 "screened normal gradient was never compared")
+      if (allocated(error)) return
+      call check(error, worst < SCREEN_ABS, "screened normal gradient exceeds its bound")
+   end subroutine test_screened_normal_fd
 
    !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
 

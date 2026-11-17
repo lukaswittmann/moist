@@ -25,6 +25,8 @@ module moist_cavity_type
    use moist_radius_type, only: radius_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type, &
+      & cavity_hessian_exchange_type
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
       & moist_phase_build, coupling_begin_registration, coupling_set_scope, coupling_snapshot, &
@@ -37,6 +39,8 @@ module moist_cavity_type
    private
 
    public :: cavity_type, list_cavity_fields_base, add_volume_origin_gradient
+   public :: surface_adjoint_response_type
+   public :: cavity_surface_tangent_type, cavity_hessian_exchange_type
    public :: update_cavity_base, build_cavity_base, cavity_declare_pass, clear_cavity_surface_base
    public :: write_cavity_xyz_debug, write_cavity_csv_debug, write_cavity_pqr_debug
 
@@ -173,6 +177,12 @@ module moist_cavity_type
       procedure, non_overridable :: get_surface_gradient => get_cavity_surface_gradient
       !> Contract the per-point surface channels into the nuclear gradient
       procedure :: contract_surface_gradient => contract_cavity_surface_gradient_default
+      !> Forward tangent of every surface observable along nuclear directions
+      procedure :: get_surface_tangent => get_cavity_surface_tangent_default
+      !> Hessian-vector product of accumulated surface-observable adjoints
+      procedure :: get_surface_hessian => get_cavity_surface_hessian_default
+      !> Dense nuclear Hessian of accumulated surface-observable adjoints
+      procedure :: get_hessian => get_cavity_hessian_default
       !> Whether the surface geometry responds to the host field (DROP), so that
       !> host surface weights are consumed in the response phase
       procedure :: has_field_dependent_geometry => cavity_field_dependent_default
@@ -205,8 +215,47 @@ module moist_cavity_type
 
    end type cavity_type
 
+   !> Adjoint response of a model along a batch of nuclear directions
+   !>
+   !> Handed to [[cavity_type:get_surface_hessian]] and [[cavity_type:get_hessian]]
+   !> when the surface adjoints themselves move with the nuclei: the cavity calls
+   !> `apply` once per direction block with the surface tangent of that block,
+   !> folds the returned `dacc` into the response half of its Hessian traversal,
+   !> and adds `hvp_direct` (plus any volume-origin tangent `dacc(idir)%w_c`)
+   !> onto the HVP columns.
+   type, abstract :: surface_adjoint_response_type
+   contains
+      !> Fill the surface-adjoint response and non-surface HVP columns of a block
+      procedure(surface_adjoint_response_apply), deferred :: apply
+   end type surface_adjoint_response_type
+
    ! Abstract interfaces for deferred procedures
    abstract interface
+
+      !> Fill the surface-adjoint response and non-surface HVP columns of a block
+      !>
+      !> @param[inout] self        Response object
+      !> @param[in]    cavity      Cavity the tangent was taken on
+      !> @param[in]    dirs        Nuclear directions of the block (3, nsph, nblk)
+      !> @param[in]    tangent     Surface tangent of the block
+      !> @param[inout] dacc        Surface-adjoint response per direction (nblk)
+      !> @param[inout] hvp_direct  Non-surface Hessian columns of the block (3, nsph, nblk)
+      !> @param[out]   error       Error handling
+      !> @param[in]    first       Global index of the block's first direction, optional
+      subroutine surface_adjoint_response_apply(self, cavity, dirs, tangent, dacc, &
+                                                hvp_direct, error, first)
+         import :: surface_adjoint_response_type, cavity_type, cavity_surface_tangent_type
+         import :: cavity_surface_adjoint_type, wp, error_type
+         implicit none(type, external)
+         class(surface_adjoint_response_type), intent(inout) :: self
+         class(cavity_type), intent(in) :: cavity
+         real(wp), intent(in) :: dirs(:, :, :)
+         type(cavity_surface_tangent_type), intent(in) :: tangent
+         type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+         real(wp), intent(inout) :: hvp_direct(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: first
+      end subroutine surface_adjoint_response_apply
 
       !> Take a new structure and do everything that needs no host state
       !>
@@ -671,6 +720,94 @@ contains
       call fatal_error(error, "This cavity does not provide a reverse-mode surface gradient")
 
    end subroutine contract_cavity_surface_gradient_default
+
+   !> Default forward-mode surface tangent hook
+   !>
+   !> @param[in]    self        Cavity instance
+   !> @param[in]    dirs        Nuclear directions, unused
+   !> @param[inout] tangent     Surface tangent, unchanged
+   !> @param[out]   error       Error handling
+   !> @param[out]   d_wbranch   Branch-weight tangent, unused
+   !> @param[in]    contracted  Contracted LSF tangent flag, unused
+   !> @param[in]    host_jets   Host partial LSF jet tangents, unused
+   subroutine get_cavity_surface_tangent_default(self, dirs, tangent, error, &
+                                                 d_wbranch, contracted, host_jets)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent
+      type(cavity_surface_tangent_type), intent(inout) :: tangent
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Optional branch-weight tangent
+      real(wp), intent(out), optional :: d_wbranch(:, :)
+      !> Optional contracted LSF tangent flag
+      logical, intent(in), optional :: contracted
+      !> Optional host partial LSF jet tangents
+      real(wp), intent(in), optional :: host_jets(:, :, :)
+
+      call fatal_error(error, "This cavity does not provide get_surface_tangent "// &
+                       "(forward-mode tangent of the surface observables)")
+
+   end subroutine get_cavity_surface_tangent_default
+
+   !> Default reverse-mode surface Hessian-vector product hook
+   !>
+   !> @param[in]    self      Cavity instance
+   !> @param[in]    acc       Surface-observable adjoints, unused
+   !> @param[in]    dirs      Nuclear directions, unused
+   !> @param[inout] hvp       Hessian-vector product accumulator, unchanged
+   !> @param[out]   error     Error handling
+   !> @param[inout] omega_v   Surface-adjoint response of the model, unused
+   !> @param[inout] exchange  Second-order host/stage-1 exchange, unused
+   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error, omega_v, exchange)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Hessian-vector product accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host/stage-1 exchange
+      type(cavity_hessian_exchange_type), intent(inout), optional :: exchange
+
+      call fatal_error(error, "This cavity does not provide get_surface_hessian "// &
+                       "(reverse-mode surface Hessian-vector products)")
+
+   end subroutine get_cavity_surface_hessian_default
+
+   !> Default dense nuclear-Hessian hook
+   !>
+   !> @param[in]    self      Cavity instance
+   !> @param[in]    acc       Surface-observable adjoints, unused
+   !> @param[inout] hessian   Nuclear-Hessian accumulator, unchanged
+   !> @param[out]   error     Error handling
+   !> @param[inout] omega_v   Surface-adjoint response of the model, unused
+   !> @param[inout] exchange  Second-order host/stage-1 exchange, unused
+   subroutine get_cavity_hessian_default(self, acc, hessian, error, omega_v, exchange)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host/stage-1 exchange
+      type(cavity_hessian_exchange_type), intent(inout), optional :: exchange
+
+      call fatal_error(error, "This cavity does not provide get_hessian "// &
+                       "(dense nuclear Hessian of the cavity contribution)")
+
+   end subroutine get_cavity_hessian_default
 
    !> Default geometry query: the surface does not respond to the host field
    !>

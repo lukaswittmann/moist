@@ -13,11 +13,12 @@ module moist_cavity_drop
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base, update_cavity_base, build_cavity_base, &
-      & cavity_declare_pass
+      & cavity_declare_pass, surface_adjoint_response_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_make_view, &
       & coupling_close_view
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type, cavity_hessian_exchange_type
    use moist_channels_fields, only: field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -41,15 +42,36 @@ module moist_cavity_drop
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
-   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
+   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient, &
+      & cat_hessian
 
    implicit none(type, external)
    private
 
    public :: cavity_type_drop
    public :: new_cavity_drop
+   public :: prepare_surface_weights
+   public :: drop_hvp_chunk_dirs
+   public :: drop_hvp_per_dir_max, drop_hvp_apply_min
+   public :: drop_fixed_none, drop_fixed_rank4, drop_fixed_per_dir
+
+   !> Nuclear directions carried by one block of the surface-Hessian traversal
+   integer, parameter :: drop_hvp_chunk_dirs = 192
+
+   !> Most directions a Hessian-vector product runs its fixed channel per direction for
+   integer, parameter :: drop_hvp_per_dir_max = 12
+
+   !> Directions from which the per-direction fixed channel uses `vjp_f2_rArB_apply`
+   integer, parameter :: drop_hvp_apply_min = 3
+
+   !> Modes of the fixed-adjoint channel of the surface Hessian traversal
+   integer, parameter :: drop_fixed_none = 0
+   integer, parameter :: drop_fixed_rank4 = 1
+   integer, parameter :: drop_fixed_per_dir = 2
 
    !> DROP cavity type
    type, extends(cavity_type) :: cavity_type_drop
@@ -234,6 +256,20 @@ module moist_cavity_drop
       procedure :: has_field_dependent_geometry => drop_field_dependent
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: contract_surface_gradient => get_surface_gradient_drop
+      !> Internal: fixed-adjoint half of the surface Hessian, on folded weights
+      procedure :: get_surface_hessian_fixed => get_surface_hessian_fixed_drop
+      !> Internal: the same half along supplied directions, one column each
+      procedure :: get_surface_hessian_fixed_dirs => get_surface_hessian_fixed_dirs_drop
+      !> Internal: forward tangent of the four grid scalars the Hessian's weight fold reads
+      procedure :: get_surface_scalar_tangent => get_surface_tangent_drop
+      !> Forward tangent of every surface observable along nuclear directions
+      procedure :: get_surface_tangent => get_surface_tangent_full_drop
+      !> Internal: adjoint-response half of the surface Hessian (J^T omega_v)
+      procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
+      !> Public: surface Hessian-vector products (both halves)
+      procedure :: get_surface_hessian => get_surface_hessian_drop
+      !> Public: dense nuclear Hessian of the cavity contribution
+      procedure :: get_hessian => get_hessian_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop
@@ -289,7 +325,6 @@ module moist_cavity_drop
    end type cavity_type_drop
 
    interface
-
       !* ============================================================================== *!
       !*               Internal DROP routines (should not be used outside)               *!
       !* ============================================================================== *!
@@ -464,6 +499,22 @@ module moist_cavity_drop
          type(drop_seed_state_type), intent(inout) :: state
       end subroutine fill_seed_state
 
+      !> [deriv/grid_driver.f90] Shared per-grid-point prologue of the DROP
+      !> derivative traversals
+      module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
+                                            want_curvature, context, abort, pt, ok)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_worker_slots_type), intent(inout) :: slots
+         integer, intent(in) :: thread_slot
+         integer, intent(in) :: igrid
+         logical, intent(in) :: want_curvature
+         character(len=*), intent(in) :: context
+         type(drop_abort_latch_type), intent(inout) :: abort
+         type(drop_point_scratch_type), intent(inout) :: pt
+         logical, intent(out) :: ok
+      end subroutine drop_point_prologue
+
       !> Contract surface weights to per-grid LSF adjoint weights
       !>
       !> @param[in]  self       DROP cavity instance
@@ -504,6 +555,126 @@ module moist_cavity_drop
          real(wp), intent(inout) :: gradient(:, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_gradient_drop
+
+      !> [deriv/hessian_traverse.f90] Fixed-adjoint half of the surface Hessian
+      module subroutine get_surface_hessian_fixed_drop(self, eff, hessian, error)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_fixed_drop
+
+      !> [deriv/hessian_traverse.f90] Per-direction fixed-adjoint half of the surface Hessian
+      module subroutine get_surface_hessian_fixed_dirs_drop(self, eff, dirs, hvp, error)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_fixed_dirs_drop
+
+      !> [deriv/hessian_traverse.f90] Refuse a mis-shaped direction set or column accumulator
+      module subroutine check_direction_set(self, dirs, hvp, context, error)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(in) :: hvp(:, :, :)
+         character(len=*), intent(in) :: context
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine check_direction_set
+
+      !> [deriv/tangent_forward.f90] Pass 1: forward tangent of the surface map
+      module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
+                                                 d_wbranch, error, contracted)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
+         type(error_type), allocatable, intent(out) :: error
+         logical, intent(in), optional :: contracted
+      end subroutine get_surface_tangent_drop
+
+      !> [deriv/tangent_forward.f90] Forward tangent of every surface observable
+      module subroutine get_surface_tangent_full_drop(self, dirs, tangent, error, &
+                                                      d_wbranch, contracted, host_jets)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         type(cavity_surface_tangent_type), intent(inout) :: tangent
+         type(error_type), allocatable, intent(out) :: error
+         real(wp), intent(out), optional :: d_wbranch(:, :)
+         logical, intent(in), optional :: contracted
+         real(wp), intent(in), optional :: host_jets(:, :, :)
+      end subroutine get_surface_tangent_full_drop
+
+      !> [deriv/tangent_forward.f90] Shared core of the two tangent accessors
+      module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
+                                                  error, d_wbranch, contracted, host_jets)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         logical, intent(in) :: want_curvature
+         type(cavity_surface_tangent_type), intent(inout) :: tangent
+         type(error_type), allocatable, intent(out) :: error
+         real(wp), intent(out), optional :: d_wbranch(:, :)
+         logical, intent(in), optional :: contracted
+         real(wp), intent(in), optional :: host_jets(:, :, :)
+      end subroutine drop_surface_tangent_core
+
+      !> [deriv/hessian_traverse.f90] Adjoint-response half of the surface Hessian
+      module subroutine get_surface_hessian_response_drop(self, acc, eff, dirs, hvp, error)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_response_drop
+
+      !> [deriv/hessian_traverse.f90] Both halves of the surface Hessian, one traversal
+      module subroutine drop_hessian_traverse(self, eff, fixed_mode, want_response, &
+                                              context, acc, dirs, hess_fixed, hvp, error, &
+                                              omega_v, exchange)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         integer, intent(in) :: fixed_mode
+         logical, intent(in) :: want_response
+         character(len=*), intent(in) :: context
+         type(cavity_surface_adjoint_type), intent(in), optional :: acc
+         real(wp), intent(in), optional :: dirs(:, :, :)
+         real(wp), intent(inout), optional :: hess_fixed(:, :, :, :)
+         real(wp), intent(inout), optional :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         type(cavity_hessian_exchange_type), intent(inout), optional :: exchange
+      end subroutine drop_hessian_traverse
+
+      !> [deriv/hessian.f90] Surface Hessian-vector products
+      module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v, exchange)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         type(cavity_hessian_exchange_type), intent(inout), optional :: exchange
+      end subroutine get_surface_hessian_drop
+
+      !> [deriv/hessian.f90] Dense nuclear Hessian of the cavity contribution
+      module subroutine get_hessian_drop(self, acc, hessian, error, omega_v, exchange)
+         implicit none(type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         type(cavity_hessian_exchange_type), intent(inout), optional :: exchange
+      end subroutine get_hessian_drop
 
    end interface
 

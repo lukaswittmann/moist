@@ -4,6 +4,7 @@ subdir('mt')
 srcs += files(
   'type.f90',
   'surface_adjoint.f90',
+  'surface_tangent.f90',
   'diagnostic.f90',
   'numsa.f90',
   'bornzeta.f90',

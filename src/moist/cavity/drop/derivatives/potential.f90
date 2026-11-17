@@ -2,12 +2,10 @@
 !>
 !> Shares the sensitivity kernel with [[moist_cavity_drop_derivatives_kernel]]
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_math_lapack_kinds, only: lapack_ik
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_surface_weights_type, build_seed_state, seed_state_ok
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
-      & seed_jet_basis
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
+   use moist_cavity_drop_derivatives_seeds, only: seed_normal_channel, seed_jet_basis
    implicit none(type, external)
 
 contains
@@ -84,98 +82,69 @@ contains
       !> Error allocated on failure
       type(error_type), allocatable, intent(out) :: error
 
-      !> Local level-set evaluator
-      type(lsf_thread_slot) :: lsf_slot
-      type(moist_cavity_drop_objective_phi_type) :: phi
-      !> Point sensitivity state
-      type(drop_seed_state_type) :: state
+      !> Level-set clone and objective used to rebuild the per-point jet; one
+      !> slot, because this traversal is serial
+      type(drop_worker_slots_type) :: slots
+      !> Per-thread state of the grid point being opened
+      type(drop_point_scratch_type) :: pt
+      !> Failure latch of the prologue; read and cleared by this loop itself
+      type(drop_abort_latch_type) :: abort
+      !> Whether the shared prologue cleared the point
+      logical :: point_ok
       !> Grid index
       integer :: igrid
-      !> Kernel degeneracy status
-      integer :: status
-      !> Projected point, anchor and owner sphere
-      real(wp) :: point(3), anchor(3)
-      integer :: owner_idx
-      !> Level-set jet at the projected point
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> Objective jet at the projected point
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
-      !> Lagrange multiplier of the projection
-      real(wp) :: lambda_val
-      !> Bordered KKT sensitivity system
-      real(wp) :: kkt_rhs(4, 4)
-      integer(lapack_ik) :: kkt_info
-      !> Local LSF adjoints from 13 jet seeds
+      !> Point-local level-set adjoints built from the 13 jet seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
-      !> Effective surface adjoints
+      !> Folded surface adjoints and the branch objective adjoint
       type(drop_surface_weights_type) :: eff
       real(wp) :: w_xyz_local(3)
 
+      call self%require_context(error)
+      if (allocated(error)) return
       call check_surface_adjoint(self, acc, "contract_surface_lsf_weights", error)
       if (allocated(error)) return
 
       ! Density variations leave anchor-only switching fixed
       call prepare_surface_weights(self, acc, .false., eff)
 
-      allocate (lsf_slot%lsf, source=self%lsf_model)
-      call lsf_slot%lsf%set_max_deriv(3)
-      call phi%set_parameters(self%param)
-      call phi%set_input(self%mol, self%radii)
-      allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
+      ! One slot rather than the context's team: nothing below is parallel, and
+      ! a clone carries the level set's screened-derivative cache with it
+      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii, &
+                      nthreads=1)
+      call pt%init(self%nsph, self%iswig, want_seed_batch=.true.)
+      call abort%reset()
 
       w_lsf0 = 0.0_wp
       w_lsf1 = 0.0_wp
       w_lsf2 = 0.0_wp
 
       do igrid = 1, self%ngrid
-         point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
-         owner_idx = self%owner(igrid)
-         lambda_val = self%lambda0(igrid)
+         call drop_point_prologue(self, slots, 1, igrid, eff%have_wk, &
+                                  "contract_surface_lsf_weights", abort, pt, point_ok)
+         if (.not. point_ok) then
+            if (allocated(abort%error)) then
+               call move_alloc(abort%error, error)
+               call pt%destroy()
+               return
+            end if
+            call abort%reset()
+            cycle
+         end if
 
-         call lsf_slot%lsf%prepare(point, error)
-         if (allocated(error)) return
-         call lsf_slot%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call phi%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
-
-         state%lsf1_r = lsf1_r
-         state%lsf2_rr = lsf2_rr
-         state%lsf3_rrr = lsf3_rrr
-         state%lambda_val = lambda_val
-         call fill_seed_state(self, igrid, eff%have_wk, state)
-
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
-
-         if (status /= seed_state_ok) cycle
-
-         ! For usable points, fold normal adjoints into gradient and position weights
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
-         call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
+         call seed_normal_channel(pt%state, eff, igrid, pt%state%lsf2_rr, w_lsf1_pt, w_xyz_local)
 
-         ! Solve value and gradient sensitivities together; Hessian seeds do not move the point
-         kkt_rhs = 0.0_wp
-         kkt_rhs(4, 1) = -1.0_wp
-         kkt_rhs(1, 2) = lambda_val
-         kkt_rhs(2, 3) = lambda_val
-         kkt_rhs(3, 4) = lambda_val
-         call drop_kkt_solve(phi2_rr - lambda_val*lsf2_rr, lsf1_r, kkt_rhs, kkt_info)
-         if (kkt_info /= 0_lapack_ik) then
-            call fatal_error(error, &
-                             "contract_surface_lsf_weights: KKT sensitivity solve failed")
-            return
-         end if
-
-         call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
+         call seed_jet_basis(pt%state, eff, igrid, pt%phi1_r, pt%kkt_rhs, w_xyz_local, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
 
          w_lsf0(igrid) = w_lsf0(igrid) + w_lsf0_pt
          w_lsf1(:, igrid) = w_lsf1(:, igrid) + w_lsf1_pt
          w_lsf2(:, :, igrid) = w_lsf2(:, :, igrid) + w_lsf2_pt
       end do
+
+      call pt%destroy()
 
    end subroutine contract_surface_lsf_weights
 
