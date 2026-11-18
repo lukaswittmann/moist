@@ -63,7 +63,12 @@ module moist_cavity_drop_lsf_sses_native
       !> Third spatial derivative
       real(wp) :: third(3, 3, 3) = 0.0_wp
    end type moment_state_type
-   
+
+   !> Subnormal and negligible-weight flush floor
+   real(wp), parameter :: small = sqrt(tiny(1.0_wp))
+   !> Shifted Boltzmann exponent cutoff matching `small`
+   real(wp), parameter :: exp_small_cut = -log(small)
+
 contains
 
    !> Initialize immutable geometry and per-thread workspace
@@ -210,26 +215,38 @@ contains
       real(wp), intent(out) :: lo
       !> Shifted Boltzmann sum
       real(wp), intent(out) :: total
-      real(wp) :: dv(3), weight, inverse
+      real(wp) :: dv(3), weight, inverse, rtau, arg
       integer :: atom, i, j
       lo = huge(1.0_wp)
       do atom = 1, state%n
          state%w(atom) = state%q(atom) + 2.0_wp*dot_product(u, state%v(:, atom))
          lo = min(lo, state%w(atom))
       end do
+      rtau = 1.0_wp/state%tau
       total = 0.0_wp
       do atom = 1, state%n
-         state%w(atom) = exp(-(state%w(atom) - lo)/state%tau)
+         arg = (state%w(atom) - lo)*rtau
+         if (arg > exp_small_cut) then
+            state%w(atom) = 0.0_wp
+            cycle
+         end if
+         state%w(atom) = exp(-arg)
+         if (state%w(atom) < small) then
+            state%w(atom) = 0.0_wp
+            cycle
+         end if
          total = total + state%w(atom)
       end do
       m = 0.0_wp
       do atom = 1, state%n
+         if (state%w(atom) == 0.0_wp) cycle
          m = m + state%w(atom)*state%v(:, atom)
       end do
       inverse = 1.0_wp/total
       m = m*inverse
       c = 0.0_wp
       do atom = 1, state%n
+         if (state%w(atom) == 0.0_wp) cycle
          dv = state%v(:, atom) - m
          weight = state%w(atom)*inverse
          do j = 1, 3
@@ -442,6 +459,7 @@ contains
       integer :: atom, i, j, k, column, pivots(3)
       cm3 = 0.0_wp
       do atom = 1, state%n
+         if (state%w(atom) == 0.0_wp) cycle
          dv = state%v(:, atom) - state%m
          weight = state%w(atom)/state%total
          do k = 1, 3
@@ -601,7 +619,14 @@ contains
       b = unit + transpose(du)
       bs = matmul(b, unit - state%sensitivity)
       lift = unit + du
+      if (present(gc0)) gc0(:, 1:state%n) = 0.0_wp
+      if (present(gc1) .and. order >= 1) gc1(:, :, 1:state%n) = 0.0_wp
+      if (present(gc2) .and. order >= 2) gc2(:, :, :, 1:state%n) = 0.0_wp
+      if (present(gr0)) gr0(1:state%n) = 0.0_wp
+      if (present(gr1) .and. order >= 1) gr1(:, 1:state%n) = 0.0_wp
+      if (present(gr2) .and. order >= 2) gr2(:, :, 1:state%n) = 0.0_wp
       do a = 1, state%n
+         if (state%w(a) == 0.0_wp) cycle
          wa = state%w(a)/state%total
          h = state%v(:, a) + u
          da = state%v(:, a) - state%m

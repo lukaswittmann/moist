@@ -9,6 +9,12 @@ module moist_cavity_drop_lsf_sses_kernel
    implicit none(type, external)
    private
    public :: sses_evaluate, sses_jets, sses_moment
+
+   !> Subnormal and negligible-weight flush floor
+   real(wp), parameter :: small = sqrt(tiny(1.0_wp))
+   !> Shifted Boltzmann exponent cutoff matching `small`
+   real(wp), parameter :: exp_small_cut = -log(small)
+
 contains
 
    !> Converge the moment variable from a cold start
@@ -149,8 +155,9 @@ contains
       type(sses_jet_type), intent(out), optional :: gc(:, :)
       !> Radius derivative jets dF/dr(a)
       type(sses_jet_type), intent(out), optional :: gr(:)
-      type(sses_jet_type), allocatable :: v(:, :), q(:), w(:), exponent(:), slope(:)
+      type(sses_jet_type), allocatable :: v(:, :), q(:), w(:), slope(:)
       type(sses_jet_type) :: rad, root, y(3), u(3), d, rd, z, m(3), residual(3), shift
+      real(wp), allocatable :: e0(:)
       real(wp) :: mean(3), covariance(3, 3), dv(3), t(3, 3), jac(3, 3), inverse(3, 3), scalar_d, correction(3), rtau
       integer :: n, i, j, k, degree, coefficient
       integer, parameter :: counts(0:4) = [1, 6, 21, 56, 126]
@@ -159,6 +166,10 @@ contains
       n = size(radii)
       if (n < 1 .or. order < 0 .or. order > 4) return
       if (.not. ieee_is_finite(tau) .or. tau <= 0.0_wp) return
+      if (.not. all(ieee_is_finite(point)) .or. .not. all(ieee_is_finite(centers))) return
+      if (.not. all(ieee_is_finite(radii)) .or. .not. all(ieee_is_finite(y0))) return
+      if (.not. ieee_is_finite(probe) .or. .not. ieee_is_finite(epsilon)) return
+      if (.not. all(ieee_is_finite(ps)) .or. .not. all(ieee_is_finite(cs)) .or. .not. all(ieee_is_finite(rs))) return
       allocate (v(3, n), q(n))
       if (present(gr)) allocate (slope(n))
       do i = 1, n
@@ -182,7 +193,7 @@ contains
          valid = all(ieee_is_finite(result%c))
          return
       end if
-      allocate (w(n), exponent(n))
+      allocate (w(n), e0(n))
       rtau = 1.0_wp/tau
       do j = 1, 3
          y(j) = jet_constant(y0(j), order)
@@ -192,10 +203,12 @@ contains
       ! Scalar moment Jacobian J = I + 2/tau C T at the converged moment
       mean = 0.0_wp
       do i = 1, n
+         if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) cycle
          mean = mean + w(i)%c(0)*v(:, i)%c(0)
       end do
       covariance = 0.0_wp
       do i = 1, n
+         if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) cycle
          dv = v(:, i)%c(0) - mean
          do k = 1, 3
             covariance(:, k) = covariance(:, k) + w(i)%c(0)*dv*dv(k)
@@ -217,6 +230,7 @@ contains
          do j = 1, 3
             m(j) = jet_constant(0.0_wp, order)
             do i = 1, n
+               if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) cycle
                m(j) = m(j) + w(i)*v(j, i)
             end do
             residual(j) = y(j) - m(j)
@@ -233,6 +247,12 @@ contains
       valid = all(ieee_is_finite(result%c))
       if (present(gc)) then
          do i = 1, n
+            if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) then
+               do j = 1, 3
+                  gc(j, i) = jet_constant(0.0_wp, order)
+               end do
+               cycle
+            end if
             do j = 1, 3
                gc(j, i) = -2.0_wp*w(i)*(v(j, i) + u(j))
                valid = valid .and. all(ieee_is_finite(gc(j, i)%c))
@@ -242,6 +262,10 @@ contains
       if (present(gr)) then
          ! Constant tau: the radius enters only through q_a
          do i = 1, n
+            if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) then
+               gr(i) = jet_constant(0.0_wp, order)
+               cycle
+            end if
             gr(i) = w(i)*slope(i)
             valid = valid .and. all(ieee_is_finite(gr(i)%c))
          end do
@@ -249,7 +273,9 @@ contains
    contains
       !> Stable shifted Boltzmann weights and regularized probe displacement
       subroutine weights()
-         type(sses_jet_type) :: rz
+         type(sses_jet_type) :: rz, exponent_i
+         real(wp) :: e_lo, arg0
+         integer :: imin
          d = jet_constant(epsilon**2, order)
          do j = 1, 3
             d = d + y(j)*y(j)
@@ -259,20 +285,39 @@ contains
             u(j) = probe*y(j)*rd
          end do
          do i = 1, n
-            exponent(i) = q(i)
-            do j = 1, 3
-               exponent(i) = exponent(i) + 2.0_wp*u(j)*v(j, i)
-            end do
+            e0(i) = q(i)%c(0) + 2.0_wp*(u(1)%c(0)*v(1, i)%c(0) &
+                                        + u(2)%c(0)*v(2, i)%c(0) &
+                                        + u(3)%c(0)*v(3, i)%c(0))
          end do
          ! Remove the full common Taylor jet, avoiding large far-field cancellations
-         shift = exponent(minloc(exponent%c(0), dim=1))
+         imin = minloc(e0, dim=1)
+         if (imin < 1) imin = 1
+         e_lo = e0(imin)
+         shift = q(imin)
+         do j = 1, 3
+            shift = shift + 2.0_wp*u(j)*v(j, imin)
+         end do
          z = jet_constant(0.0_wp, order)
          do i = 1, n
-            w(i) = exp(-((exponent(i) - shift)*rtau))
+            arg0 = (e0(i) - e_lo)*rtau
+            if (arg0 > exp_small_cut) then
+               w(i) = jet_constant(0.0_wp, order)
+               cycle
+            end if
+            exponent_i = q(i)
+            do j = 1, 3
+               exponent_i = exponent_i + 2.0_wp*u(j)*v(j, i)
+            end do
+            w(i) = exp(-((exponent_i - shift)*rtau))
+            if (w(i)%c(0) < small) then
+               w(i) = jet_constant(0.0_wp, order)
+               cycle
+            end if
             z = z + w(i)
          end do
          rz = 1.0_wp/z
          do i = 1, n
+            if (w(i)%constant .and. w(i)%c(0) == 0.0_wp) cycle
             w(i) = w(i)*rz
          end do
       end subroutine weights
