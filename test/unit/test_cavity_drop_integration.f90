@@ -60,8 +60,6 @@ module test_cavity_drop_integration
    integer, parameter :: NUM_LEB = 194
    !> DROP convergence tolerance
    real(wp), parameter :: PROJ_TOL = 1.0e-12_wp
-   !> Projection iteration cap
-   integer, parameter :: PROJ_MAXITER = 1000
    !> Projection level, 1 = SLSQP only
    integer, parameter :: PROJ_LEVEL = 1
 
@@ -407,7 +405,7 @@ contains
       allocate (cavity)
       call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf_template, &
          error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-         proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
+         proj_level=PROJ_LEVEL), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, "new_cavity_drop failed for "//case_to_string(c)// &
                           ": "//trim(cavity_error%message))

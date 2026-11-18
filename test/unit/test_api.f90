@@ -1572,6 +1572,10 @@ contains
       integer(c_int), parameter :: numbers(3) = [8, 1, 1]
       !> Lebedev order, kept small so the build stays cheap
       integer(c_int), target :: nleb
+      !> Callback level set handle
+      type(c_ptr) :: lsf
+      !> Isodensity options (like this bc ifx does not like a target dummy inside a BLOCK)
+      type(iso_options), target :: options
 
       nleb = 26_c_int
       ctx%calls = 0
@@ -1580,15 +1584,11 @@ contains
       verror = c_loc(err)
 
       vmol = moist_new_structure(verror, 3_c_int, numbers, cb_centers)
-      block
-         type(c_ptr) :: lsf
-         type(iso_options), target :: options
-         options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double, 1_c_int)
-         lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
-                                                 c_loc(ctx), c_loc(options))
-         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
-         call moist_delete_lsf(lsf)
-      end block
+      options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double, 1_c_int)
+      lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
+                                              c_loc(ctx), c_loc(options))
+      vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
+      call moist_delete_lsf(lsf)
       call update_cavity_through_api(verror, vcav, vmol)
 
    end subroutine run_iso_callback_update
