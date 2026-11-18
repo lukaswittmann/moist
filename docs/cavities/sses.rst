@@ -150,7 +150,7 @@ Field scaling for DROP
 The positive numerical multiplier ``scale`` (default 1, CLI ``--lsf-scale``) sets :math:`S=\mathrm{scale}\,F` and scales all derivatives equally.
 It preserves the zero surface, normals and curvatures, but affects DROP's numerical switches and projection tolerances.
 
-DROP's critical-gradient switch transitions from zero to full weight between :math:`\|\nabla S\|=0.25` and :math:`0.6`.
+DROP's critical-gradient switch transitions from zero to full weight between :math:`\|\nabla S\|=0.1` and :math:`0.6`.
 Increasing the scale reduces suppression of regions with small raw gradients; genuinely critical points remain suppressed.
 Projection tolerances are absolute in :math:`S`, so large scales tighten the effective tolerance on :math:`F`.
 Excessive scaling can cause projection failure and dropped grid points when that tolerance falls below floating-point precision.

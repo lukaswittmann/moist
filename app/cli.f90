@@ -62,9 +62,6 @@ module moist_cli
       logical :: grad = .false.
       logical :: numgrad = .false.
 
-      logical :: read_parameters = .false.
-      character(256) :: parameters_path = ""
-
       logical :: writeenergy = .false.
 
       integer :: verbosity = 4
@@ -129,7 +126,6 @@ contains
 
       character(len=:), allocatable :: version_string
       character(len=32) :: command
-      character(len=256) :: str_tmp
       integer :: verbose_count, quiet_count
       logical :: show_citation, show_license
 
@@ -246,12 +242,6 @@ contains
 
          if (args%has_key("writeenergy")) then
             call args%get("writeenergy", config%writeenergy)
-         end if
-
-         if (args%has_key("parameters_path")) then
-            call args%get("parameters_path", str_tmp)
-            config%parameters_path = trim(adjustl(str_tmp))
-            if (len_trim(config%parameters_path) > 0) config%read_parameters = .true.
          end if
 
       case ("cavity")
@@ -492,14 +482,6 @@ contains
          call p%add_argument("-w", "--writeenergy", action="store_true", &
                              help="Write energy to .GSOLV file", &
                              group_idx=grp_io)
-         call p%add_argument("-p", "--parameters", &
-                             default_val="", &
-                             print_default=.false., &
-                             dest="parameters_path", &
-                             metavar="PATH", &
-                             help="Path to custom model parameters file", &
-                             group_idx=grp_io)
-
          call p%add_argument("--numgrad", action="store_true", &
                              help="Calculate numerical gradients", &
                              group_idx=grp_advanced)
@@ -782,9 +764,10 @@ contains
                              default_val=defaults%wleb_prune_level, &
                              action=not_less_than(0), &
                              dest="drop_wleb_prune_level", metavar="INT", &
-                             help="Smooth weight switching level (0=off, 1-4=increasing)", &
+                             help="Smooth weight switching level (0=off, 1-6=increasing)", &
                              choices=[character(len=26) :: "0=off", "1=1E-12/1E-10", &
-                                      "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4"], &
+                                      "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4", &
+                                      "5=1E-4/1E-2", "6=1E-2/1E0"], &
                              print_choices=.true., &
                              group_idx=grp_technical)
          call p%add_argument("--fine", action="store_true", &

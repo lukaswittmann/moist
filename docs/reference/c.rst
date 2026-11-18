@@ -377,9 +377,7 @@ earlier components' energies remain available.
 The full derivative tensors of ``moist_get_cavity_gradient`` are diagnostic facilities. Normal host integration
 uses model gradients and response weights, keeping cavity-motion contractions
 inside MOIST. Their dimensions reverse the native axes exactly; consult the
-header for each axis's meaning. The ``r_iI1_rA`` and ``rho1_rA`` outputs of
-``moist_get_cavity_gradient`` accept ``NULL`` and exist only for a cavity
-built with ``do_fine``; asking for one that was not computed is an error.
+header for each axis's meaning.
 
 .. _isodensity-build-c:
 

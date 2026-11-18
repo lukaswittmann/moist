@@ -102,9 +102,7 @@ class CavitySnapshotDROP(CavitySnapshot):
         Grid points allocated per sphere before pruning.
     ``wleb``
         ``(ngrid,)`` Lebedev quadrature weights.
-    ``r_iI0``
-        ``(ngrid,)`` distance from each grid point to its owner sphere center.
-    ``rho``
+    ``pdist``
         ``(ngrid,)`` distance each point was projected from its anchor.
     ``numbering``
         ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
@@ -116,11 +114,13 @@ class CavitySnapshotDROP(CavitySnapshot):
         is one-based, and ``branch_count`` counts the *surviving* branches in
         the point's anchor group -- so ``branch_count > 1`` marks the branched
         points and a point whose siblings were filtered away reports one.
-        ``branch`` can have gaps: the canonical index is assigned before the
-        final weight cut, and ``branch_count`` is the surviving row count
-        ``offset[i + 1] - offset[i]`` of the anchor.
+        ``branch`` is the position of the point among the rows of its
+        anchor, without gaps, and ``branch_count`` is the row count
+        ``offset[i + 1] - offset[i]`` of the anchor. Every row has an area
+        of its own.
     ``wbranch``
-        ``(ngrid,)`` branch weights, one for an unbranched point.
+        ``(ngrid,)`` branch weights, the gate of the point included; the
+        gate alone for an unbranched point.
     ``offset``, ``anchor_of_row``
         DROP row layout, both zero-based: ``offset`` ``(nmax + 1,)`` holds the
         first row of each anchor, so anchor ``i`` owns rows
@@ -134,8 +134,7 @@ class CavitySnapshotDROP(CavitySnapshot):
 
     nmax: int
     wleb: np.ndarray
-    r_iI0: np.ndarray
-    rho: np.ndarray
+    pdist: np.ndarray
     numbering: np.ndarray
     anchor_id: np.ndarray
     branch: np.ndarray
@@ -932,8 +931,7 @@ class CavityISwiG(_CavityGenericBase):
 _DROP_SNAPSHOT_FIELDS = _GRID_INPUT_FIELDS + (
     "nmax",
     "wleb",
-    "r_iI0",
-    "rho",
+    "pdist",
     "numbering",
     "anchor_id",
     "branch",
@@ -1019,12 +1017,8 @@ class _CavityDROPBase(Cavity):
         return self.snapshot().wleb
 
     @property
-    def r_iI0(self) -> np.ndarray:
-        return self.snapshot().r_iI0
-
-    @property
-    def rho(self) -> np.ndarray:
-        return self.snapshot().rho
+    def pdist(self) -> np.ndarray:
+        return self.snapshot().pdist
 
 
 class _CavityDROPBorrowed(_CavityDROPBase):

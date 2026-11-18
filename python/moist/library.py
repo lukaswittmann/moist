@@ -1247,10 +1247,12 @@ def get_cavity_gaussian(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
 def compute_anchor_gradient(cavity: CavityHandle) -> None:
     """Compute the anchor-only nuclear derivatives of a DROP cavity.
 
-    Restricts every grid point's nuclear coupling to its owner atom's rigid
-    anchor motion. For a callback level set the field's own nuclear partials
-    are zero, so this is the entire nuclear route moist can see; the host adds
-    the field route by contracting the LSF adjoints with its own ``dS/dR``.
+    Holds the level set field fixed in space: every grid point moves with its
+    owner atom's anchor, and the switching still follows the neighbouring
+    atoms. For a callback level set the field's own nuclear partials are zero,
+    so this equals the full gradient and is the entire nuclear route moist can
+    see; the host adds the field route by contracting the LSF adjoints with its
+    own ``dS/dR``.
     """
 
     error_check(lib.moist_compute_anchor_gradient)(cavity.handle)
