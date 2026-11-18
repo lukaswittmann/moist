@@ -2,7 +2,7 @@
 module test_cavity_drop_lsf_screening
    use mctc_env, only: wp
    use test_helpers, only: det_rand
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    use moist_cavity_drop_lsf_screening, only: cell_list_type
    implicit none(type, external)
    private
@@ -31,7 +31,8 @@ contains
                   new_unittest("saturated_reach", test_saturated_reach), &
                   new_unittest("sparse_geometry_memory", test_sparse_geometry), &
                   new_unittest("huge_query_returns_all", test_huge_query), &
-                  new_unittest("empty_and_single", test_empty_and_single) &
+                  new_unittest("empty_and_single", test_empty_and_single), &
+                  new_unittest("merge_and_fallback_sort_agree", test_merge_and_fallback_sort) &
                   ]
    end subroutine collect_cavity_drop_lsf_screening
 
@@ -190,6 +191,58 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_box_vs_bruteforce
+
+   !> A result buffer with room to merge the cell runs and one without, which
+   !> sorts the whole result instead, return the same ids
+   !>
+   !> - without room the merge sort runs in the buffer's tail while that holds
+   !>   half the result, else the introsort
+   !> - the sample must hold many-cell results on the run merge and on both
+   !>   fallback sorts
+   subroutine test_merge_and_fallback_sort(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cell_list_type) :: cells
+      real(wp), allocatable :: xyz(:, :), reach(:)
+      real(wp) :: lo(3), hi(3), h(3)
+      integer :: wide(2*nat_fixture), tight(nat_fixture), ref(nat_fixture)
+      integer :: nwide, ntight, nref, iq, state, n_merge, n_tail, n_intro
+
+      state = 11
+      call random_atoms(nat_fixture, xyz, reach, state)
+      call cells%build(xyz, reach, full_scan_below=0)
+      n_merge = 0
+      n_tail = 0
+      n_intro = 0
+      do iq = 1, nquery
+         call random_box(lo, hi, state)
+         ! Every fourth box around the middle of the cube, most of the atoms in it
+         if (mod(iq, 4) == 0) then
+            call det_rand(h, state, 6.0_wp, 15.0_wp)
+            lo = 15.0_wp - h
+            hi = 15.0_wp + h
+         end if
+         call cells%query_box(lo, hi, wide, nwide)
+         call cells%query_box(lo, hi, tight, ntight)
+         call brute_box(xyz, reach, lo, hi, ref, nref)
+         call check_same(error, wide, nwide, ref, nref, "query_box with room to merge")
+         if (allocated(error)) return
+         call check_same(error, tight, ntight, ref, nref, "query_box with the exact buffer")
+         if (allocated(error)) return
+         if (2*ntight <= nat_fixture) then
+            if (ntight > 1) n_merge = n_merge + 1
+         else if (nat_fixture - ntight >= ntight/2) then
+            n_tail = n_tail + 1
+         else
+            n_intro = n_intro + 1
+         end if
+      end do
+      call check(error, n_merge > nquery/10 .and. n_tail > nquery/100 .and. n_intro > nquery/100, &
+                 "sample does not reach every path: "//to_string(n_merge)//" merged, " &
+                 //to_string(n_tail)//" merge-sorted in the tail, "//to_string(n_intro) &
+                 //" introsorted")
+   end subroutine test_merge_and_fallback_sort
 
    !> Random balls equal brute force
    subroutine test_sphere_vs_bruteforce(error)

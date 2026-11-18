@@ -24,11 +24,6 @@
 !>     end     <icase>
 !>
 !> Rank-2 components are stored flattened in array (column-major) order
-!>
-!> The data is committed data, produced from the cavity implementations as
-!> of 2026-09-30 on macOS arm64. Regenerating it is a deliberate act, done with
-!> a throwaway patch that dumps the snapshot in the layout above, never
-!> something this test can do
 module test_cavity_reference
    use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: mctc_error => error_type

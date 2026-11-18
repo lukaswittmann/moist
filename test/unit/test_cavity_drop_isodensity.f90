@@ -8,7 +8,8 @@
 !>     analytic derivative order against a 4-point central FD of the analytic
 !>     previous order (Richardson
 !>     extrapolated for the third order); plus the radial screening, which must not
-!>     perturb any evaluated quantity beyond its own threshold
+!>     perturb any evaluated quantity beyond its own threshold, and the internal
+!>     function order (atom by atom, most diffuse shell first)
 !>
 !>   * the two isodensity LSF backends: the internal
 !>     [[moist_cavity_drop_lsf_isodensity_internal_type]] (moist evaluates the
@@ -64,7 +65,7 @@ module test_cavity_drop_isodensity
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
-   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
+   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type, to_string
    implicit none(type, external)
    private
 
@@ -190,6 +191,7 @@ contains
 
       testsuite = [ &
                   new_unittest("gto_value_reference", test_gto_value_reference), &
+                  new_unittest("gto_shell_order", test_gto_shell_order), &
                   new_unittest("gto_mulliken_reference", test_gto_mulliken_reference), &
                   new_unittest("gto_grad_fd", test_gto_grad_fd), &
                   new_unittest("gto_hess_fd", test_gto_hess_fd), &
@@ -638,6 +640,65 @@ contains
          end do
       end do
    end function rho_reference
+
+   !> Internal function order: atom by atom, most diffuse shell first
+   !>
+   !> - shells of two atoms given interleaved and out of exponent order
+   !> - the smallest primitive exponent orders a contracted shell: shell 1
+   !>   (0.7, 0.4) comes before shell 4 (0.5), the other way round by the
+   !>   first exponent
+   !> - shells 3 and 6 tie at 0.2 and keep their input order
+   !> - the cartesian function offsets follow that order, 1, 3 and 6 per s, p and d
+   subroutine test_gto_shell_order(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Owner atom, angular momentum and primitive count of shells 1-6
+      integer, parameter :: sh_atom(6) = [1, 2, 1, 1, 2, 1]
+      integer, parameter :: sh_l(6) = [0, 1, 1, 0, 0, 2]
+      integer, parameter :: sh_nprim(6) = [2, 1, 1, 1, 1, 1]
+      !> Primitive exponents, smallest per shell 0.4, 1.0, 0.2, 0.5, 0.3 and 0.2
+      real(wp), parameter :: exps(7) = [0.7_wp, 0.4_wp, 1.0_wp, 0.2_wp, 0.5_wp, 0.3_wp, 0.2_wp]
+      !> Shells of atom 1, then of atom 2, each most diffuse first
+      integer, parameter :: expected_shell(6) = [3, 6, 1, 4, 5, 2]
+      !> First function of shells 1-6 minus one, along `expected_shell`
+      integer, parameter :: expected_foff(6) = [9, 12, 0, 10, 11, 3]
+
+      type(moist_iso_gto_type) :: gto
+      type(mctc_error), allocatable :: merr
+      real(wp) :: coeffs(size(exps))
+
+      coeffs = 1.0_wp
+      call gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, merr, basis=moist_iso_basis%cartesian)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, all(gto%atom_soff == [0, 4, 6]), "atom_soff is not the CSR of 4 and 2 shells")
+      if (allocated(error)) return
+      call check(error, all(gto%atom_shell == expected_shell), "shell order "// &
+         join_ints(gto%atom_shell)//" instead of "//join_ints(expected_shell))
+      if (allocated(error)) return
+      call check(error, gto%nfun == 15 .and. all(gto%sh_foff == expected_foff), "function offsets "// &
+         join_ints(gto%sh_foff)//" instead of "//join_ints(expected_foff))
+
+   contains
+
+      !> Comma-separated integers of a short list
+      function join_ints(vals) result(text)
+         !> Integers
+         integer, intent(in) :: vals(:)
+         !> Joined text
+         character(len=:), allocatable :: text
+
+         integer :: k
+
+         text = to_string(vals(1))
+         do k = 2, size(vals)
+            text = text//", "//to_string(vals(k))
+         end do
+      end function join_ints
+   end subroutine test_gto_shell_order
 
    !> Analytic density value matches the independent direct evaluation
    subroutine test_gto_value_reference(error)

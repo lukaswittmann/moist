@@ -2,6 +2,8 @@
 !> pre-pcmgen implementation
 !>
 !> - Not a reference: re-pin when a deliberate numerical change moves them
+!> - DROP/CPCM and DROP/COSMO on But14diol re-pinned 2026-11-18 after the
+!>   DROP gate redesign
 !> - Fingerprints: sum, absolute sum, sin and cos projections of each array
 !> - Explicit dense solves preserve the direct-solver baseline
 module test_model_component_pcm_regression
@@ -14,7 +16,7 @@ module test_model_component_pcm_regression
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
@@ -34,7 +36,7 @@ module test_model_component_pcm_regression
    !> Rows: iSwiG/CPCM, iSwiG/COSMO, DROP/CPCM, DROP/COSMO
    real(wp), parameter :: energy_ref(8) = [ &
                           -5.1479216499987563e-2_wp, -5.1152799554327810e-2_wp, &
-                          -3.3650328153411443e-2_wp, -3.3436959767428234e-2_wp, &
+                          -3.3650328153369893e-2_wp, -3.3436959767386948e-2_wp, &
                           -1.4341653734303421e-1_wp, -1.4250716864515180e-1_wp, &
                           -1.1050910182684498e-1_wp, -1.0980839101696072e-1_wp]
    !> Sum, absolute sum, sin projection and cos projection of the surface charges.
@@ -43,10 +45,10 @@ module test_model_component_pcm_regression
                                                 1.1480374893988068e-2_wp, -2.6256526865012586e-2_wp, &
                                                 2.3173766583087403e-5_wp, 1.3193636527788433e+0_wp, &
                                                 1.1407580683766851e-2_wp, -2.6090040739433893e-2_wp, &
-                                                1.3409842830724620e-4_wp, 1.0834284873798639e+0_wp, &
-                                                1.5609891375757875e-2_wp, 9.4358561497290307e-3_wp, &
-                                                1.3324814342786543e-4_wp, 1.0765587360173647e+0_wp, &
-                                                1.5510912925591381e-2_wp, 9.3760257258514983e-3_wp, &
+                                                1.3409842932499990e-4_wp, 1.0834284873554736e+0_wp, &
+                                                7.4181380761828113e-3_wp, 3.1693787082843557e-3_wp, &
+                                                1.3324814443898387e-4_wp, 1.0765587359931268e+0_wp, &
+                                                7.3711015022421339e-3_wp, 3.1492824638592338e-3_wp, &
                                                 1.6550689601669459e-3_wp, 1.8783032443252865e+0_wp, &
                                                 -7.1917654405905500e-2_wp, -5.1809274083117209e-2_wp, &
                                                 1.6445745783256134e-3_wp, 1.8663933892474505e+0_wp, &
@@ -182,7 +184,8 @@ contains
                        blend_k=2.5_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
          call new_cavity_drop(drop, ctx=ctx, radius_model=default_cpcm_radii(), &
                               lsf_model=svdw, error=err, param=moist_cavity_drop_parameters_type( &
-                              num_leb=110, tolerance=1.0e-10_wp, proj_maxiter=1000, proj_level=1))
+                              num_leb=110, tolerance=1.0e-10_wp, solve=drop_solve_parameters_type(max_iter=1000), &
+                              proj_level=1))
          if (allocated(err)) then
             call test_failed(error, err%message)
             return
@@ -259,7 +262,7 @@ contains
          end if
       end if
       ngrid_ref = 997
-      if (cavity_kind == "drop") ngrid_ref = 1001
+      if (cavity_kind == "drop") ngrid_ref = 999
       if (icase > 4) ngrid_ref = 669
       if (icase > 6) ngrid_ref = 670
       call check(error, cavity%ngrid, ngrid_ref, message="native golden cavity grid changed")

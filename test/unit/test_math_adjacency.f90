@@ -262,23 +262,25 @@ contains
 
    !> Duplicate distances must survive sorting intact
    !>
-   !> qsort is not stable and switches from insertion sort to quicksort
-   !> partitioning above 24 elements, so this fixture builds a row of 40
-   !> neighbours made of 20 distances that each occur twice
+   !> The row sort insertion-sorts rows below 64 entries and merges runs above,
+   !> so this fixture builds a row of 80 neighbours made of 40 distances that
+   !> each occur twice
    subroutine test_sorted_equidistant_ties(error)
       type(error_type), allocatable, intent(out) :: error
+      !> Covers the origin's 80 neighbours, the farthest at 4 bohr
+      real(wp), parameter :: cutoff = 4.05_wp
       type(adjacency_list_type) :: nlist
-      real(wp) :: xyz(3, 41)
+      real(wp) :: xyz(3, 81)
       integer :: m, k, start, cnt
 
       ! Point 1 at the origin; mirrored pairs at +-0.1*m along x
       xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
-      do m = 1, 20
+      do m = 1, 40
          xyz(:, 2*m) = [0.1_wp*real(m, wp), 0.0_wp, 0.0_wp]
          xyz(:, 2*m + 1) = [-0.1_wp*real(m, wp), 0.0_wp, 0.0_wp]
       end do
 
-      call nlist%init(cutoff=2.05_wp, sorted=.true.)
+      call nlist%init(cutoff=cutoff, sorted=.true.)
       call nlist%update(xyz)
 
       call check_csr_invariants(error, nlist, size(xyz, 2))
@@ -286,7 +288,7 @@ contains
 
       start = nlist%inl(1)
       cnt = nlist%nnl(1)
-      call check(error, cnt == 40, "Origin must see all 40 mirrored points")
+      call check(error, cnt == 80, "Origin must see all 80 mirrored points")
       if (allocated(error)) return
 
       do k = 2, cnt
@@ -296,7 +298,7 @@ contains
       end do
 
       ! Each distance occurs exactly twice, and no id may be lost or repeated
-      do m = 1, 20
+      do m = 1, 40
          call check(error, count(abs(nlist%dist(start + 1:start + cnt) &
                                      - 0.1_wp*real(m, wp)) <= thr) == 2, &
                     "Each mirrored distance must appear exactly twice")
@@ -309,7 +311,7 @@ contains
          if (allocated(error)) return
       end do
 
-      call check_all_rows_bruteforce(error, nlist, xyz, 2.05_wp)
+      call check_all_rows_bruteforce(error, nlist, xyz, cutoff)
       if (allocated(error)) return
 
       call nlist%destroy()

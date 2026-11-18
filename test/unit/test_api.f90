@@ -760,12 +760,9 @@ contains
                                    [0.0_c_double, 0.0_c_double, 0.1173_c_double, &
                                     0.0_c_double, 1.4309_c_double, -0.9370_c_double, &
                                     0.0_c_double, -1.4309_c_double, -0.9370_c_double], [3, 3])
-      !> Lebedev order, kept small so the build stays cheap
-      integer(c_int), target :: nleb
 
       ngrid = 0
       nsph = 0
-      nleb = 26_c_int
 
       allocate (err)
       verror = c_loc(err)
@@ -1570,14 +1567,11 @@ contains
       type(iso_cb_ctx), intent(inout), target :: ctx
 
       integer(c_int), parameter :: numbers(3) = [8, 1, 1]
-      !> Lebedev order, kept small so the build stays cheap
-      integer(c_int), target :: nleb
       !> Callback level set handle
       type(c_ptr) :: lsf
       !> Isodensity options (like this bc ifx does not like a target dummy inside a BLOCK)
       type(iso_options), target :: options
 
-      nleb = 26_c_int
       ctx%calls = 0
 
       allocate (err)
