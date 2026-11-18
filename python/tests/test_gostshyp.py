@@ -97,6 +97,8 @@ EPSILON = 80.0
 NLEB = 26
 #: Cavity projection tolerance
 PROJ_TOL = 1e-12
+#: Local projection with a short reach (bohr) for the frozen-field FD (faster)
+LOCAL_PROJECTION = dict(proj_level=1, branch_reach_on=2.83, branch_reach_off=4.72)
 
 #: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
@@ -267,11 +269,11 @@ def reference_density(system: str, basis: str):
     return mean_field.make_rdm1()
 
 
-def cavity_config(rho_iso=None):
-    """The isodensity DROP configuration the wall is built on."""
+def cavity_config(rho_iso=None, **drop):
+    """The isodensity DROP configuration the wall is built on; ``drop`` overrides DROP settings."""
     lsf = Isodensity() if rho_iso is None else Isodensity(
         parameters=IsodensityParameters(rho_iso=rho_iso))
-    return DROP(lsf=lsf, parameters=DROPParameters(nleb=NLEB, tolerance=PROJ_TOL))
+    return DROP(lsf=lsf, parameters=DROPParameters(nleb=NLEB, tolerance=PROJ_TOL, **drop))
 
 
 def host_build(owner, host, coupling=None):
@@ -285,11 +287,16 @@ def host_build(owner, host, coupling=None):
     return coupling
 
 
-def make_wall(mol, positions=None, *, dm, pressure=PRESSURE, rho_iso=None, parameters=None):
-    """Host plus an evaluated GOSTSHYP driver ("wall") at ``dm``, optionally displaced."""
+def make_wall(mol, positions=None, *, dm, pressure=PRESSURE, rho_iso=None, parameters=None, cavity=None):
+    """Host plus an evaluated GOSTSHYP driver ("wall") at ``dm``, optionally displaced.
+
+    ``cavity`` replaces the default ``cavity_config(rho_iso)``
+    """
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    wall = PySCFSolvation(mol, cavity_config(rho_iso), [ModelComponentGOSTSHYP(pressure, parameters=parameters)],
+    if cavity is None:
+        cavity = cavity_config(rho_iso)
+    wall = PySCFSolvation(mol, cavity, [ModelComponentGOSTSHYP(pressure, parameters=parameters)],
                           context=CONTEXT)
     wall.evaluate(dm)
     return wall.host, wall
@@ -577,6 +584,14 @@ def test_params_update_drops_the_previous_surfaces_moments():
 
     :meth:`PySCFSolvation.evaluate` always re-supplies immediately; only a
     host driving the model by hand hits this.
+
+    The update shifts the whole solute rigidly: every point moves while the
+    point count cannot change, since the gates that drop points depend on
+    relative geometry only. The energy check moves one atom instead, as a
+    rigid shift leaves the energy unchanged.
+
+    The stale set lives in the evaluated coupling; a fresh coupling never
+    held one and only shows that missing moments are reported.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -585,16 +600,27 @@ def test_params_update_drops_the_previous_surfaces_moments():
     original_xyz = wall.model.cavity.xyz.copy()
     original_ngrid = wall.model.cavity.ngrid
 
-    displaced = mol.atom_coords()
-    displaced[0, 2] += 0.05
+    # Vacuous unless the evaluated coupling would hand its moments on: at a
+    # fixed geometry the response staging reuses them and asks for nothing.
+    wall.model.prepare_response(wall.coupling)
+    assert not list(wall.coupling), "response staging does not reuse the evaluated moments"
+    wall.model.get_response(wall.coupling)
+
+    shift = np.array([0.05, -0.03, 0.04])
     numbers = np.asarray(mol.atom_charges(), dtype=np.int64)
-    wall.model.update(Structure(numbers, displaced))
+    wall.model.update(Structure(numbers, mol.atom_coords() + shift))
     host_build(wall.model, host)
 
     # Vacuous unless the surface really moved while keeping its point count --
     # exactly the case a shape check cannot distinguish.
-    assert wall.model.cavity.ngrid == original_ngrid
-    assert not np.allclose(wall.model.cavity.xyz, original_xyz)
+    assert wall.model.cavity.ngrid == original_ngrid, "rigid shift changed the point count"
+    moved_by = np.linalg.norm(wall.model.cavity.xyz - original_xyz, axis=1)
+    assert moved_by.min() > 0.5 * np.linalg.norm(shift), "a surface point did not move"
+
+    # The previous surface's moments, at unchanged extents, are not reused
+    wall.model.prepare_response(wall.coupling)
+    with pytest.raises(RuntimeError, match="gaussian_moments: missing required outputs"):
+        wall.model.get_response(wall.coupling)
 
     coupling = wall.model.new_coupling()
     wall.model.prepare_energy(coupling)
@@ -603,6 +629,8 @@ def test_params_update_drops_the_previous_surfaces_moments():
         wall.model.get_energy(coupling, energy)
 
     # Going through the wrapper re-supplies, and the energy tracks the geometry.
+    displaced = mol.atom_coords()
+    displaced[0, 2] += 0.05
     _host2, moved = make_wall(mol, displaced, dm=dm)
     assert moved.energy != pytest.approx(before, rel=1e-9)
 
@@ -832,14 +860,15 @@ def test_gradient_surface_channel_matches_fd(system, basis):
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
-    host, wall = make_wall(mol, dm=dm)
+    host, wall = make_wall(mol, dm=dm, cavity=cavity_config(**LOCAL_PROJECTION))
     analytic = wall.gradient_channels(dm)["model"].flatten(order="C")
     numbers = np.asarray(mol.atom_charges(), dtype=np.int64)
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
         # Only the callback can hold it: the internal density follows the structure.
-        model = SolvationModel(CONTEXT, cavity_config().build(source=host), [ModelComponentGOSTSHYP(PRESSURE)])
+        model = SolvationModel(CONTEXT, cavity_config(**LOCAL_PROJECTION).build(source=host),
+                               [ModelComponentGOSTSHYP(PRESSURE)])
         model.update(Structure(numbers, displaced))
         host_build(model, host)
         return component_energy(model, mol, dm), model.cavity.ngrid
