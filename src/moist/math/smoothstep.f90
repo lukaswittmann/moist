@@ -1,17 +1,17 @@
-!> Smoothstep (switching) functions `S: R -> [0, 1]` on a band `[from, to]`
+!> Smoothstep (switching) functions `S: R -> [0, 1]` between `x_off` and `x_on`
 !>
 !> All smoothsteps share the abstract base type [[moist_math_smoothstep_type]], which
 !> provides chain-rule helpers for propagating derivatives through the smoothstep
 !>
-!> Orientation follows `from`/`to`:
-!>   from < to -> rising 0 -> 1 on [from, to]; from > to -> falling 1 -> 0 on [to, from]
-!>   exactly 0/1 outside the band, all derivatives exactly 0 there
+!> Orientation follows `x_off`/`x_on`:
+!>   x_off < x_on -> rising 0 -> 1 on [x_off, x_on]; x_off > x_on -> falling 1 -> 0 on [x_on, x_off]
+!>   exactly 0 on the x_off plateau and 1 on the x_on plateau, all derivatives exactly 0 there
 !>
 !> Implemented functions:
 !>
 !> * [[moist_math_smoothstep_polynomial_type]] - polynomial smoothstep, `C^n` at both ends
 !>
-!>     lo = min(from, to); hi = max(from, to); t = clamp((x - lo)/(hi - lo), 0, 1)
+!>     lo = min(x_off, x_on); hi = max(x_off, x_on); t = clamp((x - lo)/(hi - lo), 0, 1)
 !>     S_n(t) = t^(n+1) sum_{k=0}^{n} C(n+k, k) C(2n+1, n-k) (-t)^k,  degree 2n+1
 !>     coefficients of t^(n+1), ..., t^(2n+1):
 !>       S_1: 3, -2
@@ -22,7 +22,7 @@
 !>
 !> * [[moist_math_smoothstep_sigmoid_type]] - partition-of-unity bump
 !>
-!>     Xlo = min(from, to); Xhi = max(from, to); W = Xhi - Xlo
+!>     Xlo = min(x_off, x_on); Xhi = max(x_off, x_on); W = Xhi - Xlo
 !>     u(X) = 1                                        if X <= Xlo
 !>          = 0                                        if X >= Xhi
 !>          = (Xhi - X) / W                            otherwise
@@ -36,7 +36,7 @@
 !>
 !> * [[moist_math_smoothstep_erf_type]] - erf-based bump
 !>
-!>     lo = min(from, to); hi = max(from, to)
+!>     lo = min(x_off, x_on); hi = max(x_off, x_on)
 !>     B(x) = 0                                        if x <= lo
 !>          = 1                                        if x >= hi
 !>          = 0.5 * (1 + erf(arg(x)))                 otherwise
@@ -111,15 +111,15 @@ module moist_math_smoothstep
 
    !> Erf-based bump smoothstep
    !>
-   !> Transitions from 0 to 1 on the interval [from, to] using
+   !> Transitions from 0 at `x_off` to 1 at `x_on` using
    !> a compact-support bump construction
    !>
    !> - No production consumer, exercised by the unit tests only
    type, extends(moist_math_smoothstep_type) :: moist_math_smoothstep_erf_type
-      !> Start of transition region (0 before)
-      real(wp) :: from = 0.0_wp
-      !> End of transition region (1 after)
-      real(wp) :: to = 1.0_wp
+      !> Off-edge of transition region (0 at and beyond x_off)
+      real(wp) :: x_off = 0.0_wp
+      !> On-edge of transition region (1 at and beyond x_on)
+      real(wp) :: x_on = 1.0_wp
       !> Dimensionless bump steepness parameter
       real(wp) :: k = 1.0_wp
    contains
@@ -128,14 +128,14 @@ module moist_math_smoothstep
 
    !> Partition-of-unity bump smoothstep
    !>
-   !> Transitions from 0 to 1 on the interval [from, to] using
+   !> Transitions from 0 at `x_off` to 1 at `x_on` using
    !> mutually-vanishing exponentials `A(u) = exp(-aHi/u^pHi)` and
    !> `B(u) = exp(-aLo/(1-u)^pLo)` glued as `B/(A+B)`
    type, extends(moist_math_smoothstep_type) :: moist_math_smoothstep_sigmoid_type
-      !> Start of transition region (0 before)
-      real(wp) :: from = 0.0_wp
-      !> End of transition region (1 after)
-      real(wp) :: to = 1.0_wp
+      !> Off-edge of transition region (0 at and beyond x_off)
+      real(wp) :: x_off = 0.0_wp
+      !> On-edge of transition region (1 at and beyond x_on)
+      real(wp) :: x_on = 1.0_wp
       !> Exponent controlling sharpness of the upper plateau entry
       real(wp) :: p_hi = 2.0_wp
       !> Prefactor controlling sharpness of the upper plateau entry
@@ -153,10 +153,10 @@ module moist_math_smoothstep
    !> - Integer coefficients; plateau values exactly 0/1 and derivatives exactly 0
    !> - Derivatives through order 4
    type, extends(moist_math_smoothstep_type) :: moist_math_smoothstep_polynomial_type
-      !> Start of transition region (0 before)
-      real(wp) :: from = 0.0_wp
-      !> End of transition region (1 after)
-      real(wp) :: to = 1.0_wp
+      !> Off-edge of transition region (0 at and beyond x_off)
+      real(wp) :: x_off = 0.0_wp
+      !> On-edge of transition region (1 at and beyond x_on)
+      real(wp) :: x_on = 1.0_wp
       !> Continuity order n, 1..5; 0 until constructed
       integer :: order = 0
       !> Polynomial degree 2n+1; -1 until constructed
@@ -175,47 +175,47 @@ contains
 
    !> Construct a new erf-bump smoothstep
    !>
-   !> If from < to: transitions 0 -> 1 on [from, to]
-   !> If from > to: transitions 1 -> 0 on [to, from]
+   !> If x_off < x_on: transitions 0 -> 1 on [x_off, x_on]
+   !> If x_off > x_on: transitions 1 -> 0 on [x_on, x_off]
    !>
-   !> @param[inout] self      Smoothstep instance to initialise
-   !> @param[in]    from_val  Start value of the transition region
-   !> @param[in]    to_val    End value of the transition region
-   !> @param[in]    k_val     Optional bump steepness parameter
-   subroutine new_smoothstep_erf(self, from_val, to_val, k_val)
+   !> @param[inout] self   Smoothstep instance to initialise
+   !> @param[in]    x_off  Off-edge of the transition region (S = 0)
+   !> @param[in]    x_on   On-edge of the transition region (S = 1)
+   !> @param[in]    k      Optional bump steepness parameter
+   subroutine new_smoothstep_erf(self, x_off, x_on, k)
       class(moist_math_smoothstep_erf_type), intent(inout) :: self
-      !> Start of transition region
-      real(wp), intent(in) :: from_val
-      !> End of transition region
-      real(wp), intent(in) :: to_val
+      !> Off-edge of transition region
+      real(wp), intent(in) :: x_off
+      !> On-edge of transition region
+      real(wp), intent(in) :: x_on
       !> Optional bump steepness parameter
-      real(wp), intent(in), optional :: k_val
+      real(wp), intent(in), optional :: k
 
-      self%from = from_val
-      self%to = to_val
+      self%x_off = x_off
+      self%x_on = x_on
       self%k = 1.0_wp
-      if (present(k_val)) self%k = k_val
+      if (present(k)) self%k = k
 
    end subroutine new_smoothstep_erf
 
    !> Construct a new sigmoid bump smoothstep
    !>
-   !> If from < to: transitions 0 -> 1 on [from, to]
-   !> If from > to: transitions 1 -> 0 on [to, from]
+   !> If x_off < x_on: transitions 0 -> 1 on [x_off, x_on]
+   !> If x_off > x_on: transitions 1 -> 0 on [x_on, x_off]
    !>
-   !> @param[inout] self      Smoothstep instance to initialise
-   !> @param[in]    from_val  Start value of the transition region
-   !> @param[in]    to_val    End value of the transition region
-   !> @param[in]    p_hi      Optional upper plateau exponent
-   !> @param[in]    a_hi      Optional upper plateau prefactor
-   !> @param[in]    p_lo      Optional lower plateau exponent
-   !> @param[in]    a_lo      Optional lower plateau prefactor
-   subroutine new_smoothstep_sigmoid(self, from_val, to_val, p_hi, a_hi, p_lo, a_lo)
+   !> @param[inout] self   Smoothstep instance to initialise
+   !> @param[in]    x_off  Off-edge of the transition region (S = 0)
+   !> @param[in]    x_on   On-edge of the transition region (S = 1)
+   !> @param[in]    p_hi   Optional upper plateau exponent
+   !> @param[in]    a_hi   Optional upper plateau prefactor
+   !> @param[in]    p_lo   Optional lower plateau exponent
+   !> @param[in]    a_lo   Optional lower plateau prefactor
+   subroutine new_smoothstep_sigmoid(self, x_off, x_on, p_hi, a_hi, p_lo, a_lo)
       class(moist_math_smoothstep_sigmoid_type), intent(inout) :: self
-      !> Start of transition region
-      real(wp), intent(in) :: from_val
-      !> End of transition region
-      real(wp), intent(in) :: to_val
+      !> Off-edge of transition region
+      real(wp), intent(in) :: x_off
+      !> On-edge of transition region
+      real(wp), intent(in) :: x_on
       !> Optional upper plateau exponent (default 2)
       real(wp), intent(in), optional :: p_hi
       !> Optional upper plateau prefactor (default 1)
@@ -225,8 +225,8 @@ contains
       !> Optional lower plateau prefactor (default 1)
       real(wp), intent(in), optional :: a_lo
 
-      self%from = from_val
-      self%to = to_val
+      self%x_off = x_off
+      self%x_on = x_on
       self%p_hi = 2.0_wp
       self%a_hi = 1.0_wp
       self%p_lo = 2.0_wp
@@ -240,23 +240,23 @@ contains
 
    !> Construct a new polynomial smoothstep `S_n`
    !>
-   !> If from < to: transitions 0 -> 1 on [from, to]
-   !> If from > to: transitions 1 -> 0 on [to, from]
+   !> If x_off < x_on: transitions 0 -> 1 on [x_off, x_on]
+   !> If x_off > x_on: transitions 1 -> 0 on [x_on, x_off]
    !>
    !> - Coefficients `(-1)^k C(n+k, k) C(2n+1, n-k)` of `t^(n+1+k)`, k = 0..n, in integers
    !> - t-derivative tables by exact integer differentiation
    !> - `order` outside 1..5 is an `error stop`
    !>
-   !> @param[inout] self      Smoothstep instance to initialise
-   !> @param[in]    from_val  Start value of the transition region
-   !> @param[in]    to_val    End value of the transition region
-   !> @param[in]    order     Optional continuity order n, 1..5 (default 4)
-   subroutine new_smoothstep_polynomial(self, from_val, to_val, order)
+   !> @param[inout] self   Smoothstep instance to initialise
+   !> @param[in]    x_off  Off-edge of the transition region (S = 0)
+   !> @param[in]    x_on   On-edge of the transition region (S = 1)
+   !> @param[in]    order  Optional continuity order n, 1..5 (default 4)
+   subroutine new_smoothstep_polynomial(self, x_off, x_on, order)
       class(moist_math_smoothstep_polynomial_type), intent(inout) :: self
-      !> Start of transition region
-      real(wp), intent(in) :: from_val
-      !> End of transition region
-      real(wp), intent(in) :: to_val
+      !> Off-edge of transition region
+      real(wp), intent(in) :: x_off
+      !> On-edge of transition region
+      real(wp), intent(in) :: x_on
       !> Optional continuity order n (default 4)
       integer, intent(in), optional :: order
       integer(int64) :: binom(0:max_degree, 0:max_degree)
@@ -283,8 +283,8 @@ contains
          icoef(n + 1 + k) = merge(1_int64, -1_int64, mod(k, 2) == 0)*binom(n + k, k)*binom(degree, n - k)
       end do
 
-      self%from = from_val
-      self%to = to_val
+      self%x_off = x_off
+      self%x_on = x_on
       self%order = n
       self%degree = degree
       self%coef = 0.0_wp
@@ -333,8 +333,8 @@ contains
 
       if (present(f3) .or. present(f4)) error stop "moist smoothstep: erf type has no third/fourth derivative"
 
-      lo = min(self%from, self%to)
-      hi = max(self%from, self%to)
+      lo = min(self%x_off, self%x_on)
+      hi = max(self%x_off, self%x_on)
       width = hi - lo
       if (width <= epsilon(1.0_wp)) then
          if (x0 <= lo) then
@@ -376,7 +376,7 @@ contains
       end if
 
       direction = 1.0_wp
-      if (self%from > self%to) direction = -1.0_wp
+      if (self%x_off > self%x_on) direction = -1.0_wp
 
       f0 = merge(bump, 1.0_wp - bump, direction > 0.0_wp)
 
@@ -421,8 +421,8 @@ contains
 
       if (present(f3) .or. present(f4)) error stop "moist smoothstep: sigmoid type has no third/fourth derivative"
 
-      lo = min(self%from, self%to)
-      hi = max(self%from, self%to)
+      lo = min(self%x_off, self%x_on)
+      hi = max(self%x_off, self%x_on)
       width = hi - lo
       p_hi = self%p_hi
       a_hi = self%a_hi
@@ -487,7 +487,7 @@ contains
       end if
 
       direction = 1.0_wp
-      if (self%from > self%to) direction = -1.0_wp
+      if (self%x_off > self%x_on) direction = -1.0_wp
 
       f0 = merge(bump, 1.0_wp - bump, direction > 0.0_wp)
 
@@ -534,10 +534,10 @@ contains
       degree = self%degree
       if (degree < 0) error stop "moist smoothstep: polynomial type used before new_smoothstep_polynomial"
 
-      lo = min(self%from, self%to)
-      hi = max(self%from, self%to)
+      lo = min(self%x_off, self%x_on)
+      hi = max(self%x_off, self%x_on)
       width = hi - lo
-      direction = merge(-1.0_wp, 1.0_wp, self%from > self%to)
+      direction = merge(-1.0_wp, 1.0_wp, self%x_off > self%x_on)
 
       if (width <= epsilon(1.0_wp)) then
          bump = merge(0.0_wp, 1.0_wp, x0 <= lo)
@@ -604,8 +604,8 @@ contains
 
    !> Evaluate the smoothstep value via the abstract `eval` hook
    !>
-   !> When from < to the value rises smoothly from 0 to 1
-   !> When from > to the value falls smoothly from 1 to 0
+   !> When x_off < x_on the value rises smoothly from 0 to 1
+   !> When x_off > x_on the value falls smoothly from 1 to 0
    !>
    !> @param[in] self  Smoothstep instance
    !> @param[in] x0    Input value
