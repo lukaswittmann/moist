@@ -1,12 +1,11 @@
-!> Counting-sort-based argsort for integer bucket keys
+!> Stable counting argsort of small non-negative integer keys
 !>
-!> Produces a permutation array `perm` such that `keys(perm(1)) <= keys(perm(2)) <= ...`
-!> in a single O(N) pass, adapted from the int8 radix sort pattern in
-!> fortran-lang/stdlib (which degenerates to counting sort for 8-bit keys)
-!>
-!> Designed for spatial bucket indices (0..n_buckets-1) where n_buckets is
-!> small (typically <= 256); the sort is stable, atoms with the same bucket
-!> appear in perm in their original order
+!> - `perm(j)` is the position of the j-th entry in key order; equal keys keep
+!>   their input order
+!> - O(n + nkey) for keys in `0 .. size(counts) - 1`
+!> - the counters are the caller's workspace (a fixed-size local array), so
+!>   nothing is allocated per call
+!> - stdlib has no counterpart: its `radix_sort` sorts values, not indices
 module moist_math_sorter_counting
    implicit none(type, external)
    private
@@ -15,44 +14,41 @@ module moist_math_sorter_counting
 
 contains
 
-   !> Build a permutation that sorts atoms by their integer bucket keys
+   !> Permutation that sorts entries by their integer keys, stably
    !>
-   !> After the call, `perm(j)` is the original index of the j-th atom in
-   !> sorted order; bucket values must lie in `[0, max_bucket]`
-   !>
-   !> @param[in]  buckets     Per-element bucket index, range [0, max_bucket]
-   !> @param[in]  max_bucket  Largest valid bucket value
-   !> @param[out] perm        Output permutation array (same size as buckets)
-   pure subroutine counting_argsort(buckets, max_bucket, perm)
-      !> Per-element spatial bucket (0-based)
-      integer, intent(in) :: buckets(:)
-      !> Upper bound of bucket range (inclusive)
-      integer, intent(in) :: max_bucket
-      !> Output permutation: perm(j) = original index of the j-th sorted element
-      integer, intent(out) :: perm(:)
+   !> @param[in]  keys   Key of each entry, `0 .. size(counts) - 1`
+   !> @param[out] perm   Entries in key order, `perm(1:size(keys))`
+   !> @param[out] counts Workspace, one counter per key value, undefined on return
+   pure subroutine counting_argsort(keys, perm, counts)
+      !> Key of each entry
+      integer, intent(in), contiguous :: keys(:)
+      !> Entries in key order
+      integer, intent(out), contiguous :: perm(:)
+      !> Workspace, one counter per key value
+      integer, intent(out), contiguous :: counts(0:)
 
-      integer :: i, j, n
-      integer, allocatable :: counts(:), offsets(:)
+      integer :: i, k, top, c, nxt
 
-      n = size(buckets)
-      allocate (counts(0:max_bucket), offsets(0:max_bucket))
-
-      ! Count occurrences per bucket
+      if (size(perm) < size(keys)) error stop "counting_argsort: perm is smaller than keys"
+      top = size(counts) - 1
+      if (minval(keys) < 0 .or. maxval(keys) > top) then
+         error stop "counting_argsort: key outside 0 .. size(counts) - 1"
+      end if
       counts = 0
-      do i = 1, n
-         counts(buckets(i)) = counts(buckets(i)) + 1
+      do i = 1, size(keys)
+         counts(keys(i)) = counts(keys(i)) + 1
       end do
-
-      ! Prefix sum: counts -> scatter offsets
-      offsets(0) = 0
-      do j = 1, max_bucket
-         offsets(j) = offsets(j - 1) + counts(j - 1)
+      ! Exclusive prefix sum: slots before each key
+      c = 0
+      do k = 0, top
+         nxt = c + counts(k)
+         counts(k) = c
+         c = nxt
       end do
-
-      ! Scatter: build permutation in sorted order (stable)
-      do i = 1, n
-         offsets(buckets(i)) = offsets(buckets(i)) + 1
-         perm(offsets(buckets(i))) = i
+      ! Scatter in input order, so equal keys keep it
+      do i = 1, size(keys)
+         counts(keys(i)) = counts(keys(i)) + 1
+         perm(counts(keys(i))) = i
       end do
    end subroutine counting_argsort
 

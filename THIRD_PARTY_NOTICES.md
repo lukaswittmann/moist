@@ -18,6 +18,7 @@ it below.
 | LSQR | `src/moist/math/linalg/lsqr/` | jacobwilliams/LSQR (tag 1.1.0) | M. Saunders (SOL, Stanford); modern Fortran by J. Williams | BSD-3-Clause (+ CPL-1.0 original, + LAPACK BSD) | `src/moist/math/linalg/lsqr/LICENSE` |
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
+| Fortran stdlib sorting (`ord_sort`, `sort`, `sort_index`, `sort_adjoint`) | `src/moist/math/sorter/merge.f90`, `introsort.f90`, `argsort.f90` | fortran-lang/stdlib (tag v0.8.1, `src/sorting/`), ported by hand to default integer and `real(wp)`, changes listed in each file header | stdlib contributors; `ord_sort`/`sort_index` translate the Rust `slice.rs` merge sort (The Rust Project Developers, Apache-2.0 OR MIT); `sort` is D. R. Musser's introsort (Softw. Pract. Exper. 27, 983 (1997)) | MIT | `src/moist/math/sorter/LICENSE` |
 
 They are unmodified except for two OpenMP fixes in FINUFFT's `spread.hpp` and `makeplan.hpp`.
 See each directory's `PROVENANCE.md` for the exact file list, origin, pinned revision and local patches.

@@ -1,5 +1,6 @@
 srcs += files(
+  'argsort.f90',
   'counting.f90',
-  'heapsort.f90',
-  'quicksort.f90',
+  'introsort.f90',
+  'merge.f90',
 )

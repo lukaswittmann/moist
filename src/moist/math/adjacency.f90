@@ -19,8 +19,8 @@
 !> call nlist%destroy()
 !> ```
 module moist_math_adjacency
-   use mctc_env, only: wp, error_type
-   use moist_math_sorter_quicksort, only: qsort
+   use mctc_env, only: wp
+   use moist_math_sorter, only: sort_adjoint
 !$ use omp_lib, only: omp_get_max_threads
    implicit none(type, external)
    private
@@ -269,19 +269,14 @@ contains
       !$omp end parallel do
       if (mismatch) error stop "adjacency_list: count and fill passes disagree"
 
-      ! Optionally sort each point's neighbours by ascending distance
+      ! Optionally sort each point's neighbours by ascending distance, ties in fill order
       if (self%sorted) then
-         mismatch = .false.
          !$omp parallel do num_threads(nt) default(none) schedule(dynamic, 64) &
-         !$omp& shared(npoints, inl, nnl, nlat, dist) private(i) reduction(.or.:mismatch)
+         !$omp& shared(npoints, inl, nnl, nlat, dist) private(i)
          do i = 1, npoints
-            if (nnl(i) > 1) then
-               if (.not. sort_row(dist(inl(i) + 1:inl(i) + nnl(i)), nlat(inl(i) + 1:inl(i) + nnl(i)))) &
-                  mismatch = .true.
-            end if
+            call sort_adjoint(dist(inl(i) + 1:inl(i) + nnl(i)), nlat(inl(i) + 1:inl(i) + nnl(i)))
          end do
          !$omp end parallel do
-         if (mismatch) error stop "adjacency_list: dist/nlat slice bounds diverged"
       end if
 
       call move_csr(self, inl, nnl, nlat, dist)
@@ -327,25 +322,6 @@ contains
          end do
       end do
    end subroutine cell_stencil
-
-   !> Sort one row by ascending distance, carrying the neighbour indices along
-   !>
-   !> @param[inout] dist  Row distances
-   !> @param[inout] nlat  Row neighbour indices
-   !> @return       ok    False if qsort rejected the companion array
-   function sort_row(dist, nlat) result(ok)
-      !> Row distances
-      real(wp), intent(inout) :: dist(:)
-      !> Row neighbour indices
-      integer, intent(inout) :: nlat(:)
-      !> False if qsort rejected the companion array
-      logical :: ok
-
-      type(error_type), allocatable :: sort_error
-
-      call qsort(dist, nlat, sort_error)
-      ok = .not. allocated(sort_error)
-   end function sort_row
 
    !> Move locally built CSR arrays into the list
    !>
