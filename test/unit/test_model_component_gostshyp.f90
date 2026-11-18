@@ -67,6 +67,7 @@ contains
          & new_unittest("gostshyp_regularized_weights", test_gostshyp_regularized_weights), &
          & new_unittest("gostshyp_surface_weights", test_gostshyp_surface_weights), &
          & new_unittest("gostshyp_switched_weights", test_gostshyp_switched_weights), &
+         & new_unittest("gostshyp_zero_area_row", test_gostshyp_zero_area_row), &
          & new_unittest("gostshyp_switching_factor_is_inert", test_gostshyp_w_f_zero), &
          & new_unittest("gostshyp_zero_pressure_short_circuit", test_gostshyp_short_circuit), &
          & new_unittest("gostshyp_lifecycle_guards", test_gostshyp_guards), &
@@ -611,6 +612,88 @@ contains
 
       call check_gostshyp_surface_weights(error, moist_gostshyp_parameters_type(), areas)
    end subroutine test_gostshyp_switched_weights
+
+   !> A row without area: requested at zero width,
+   !> no amplitude, no surface adjoint, everything else finite
+   subroutine test_gostshyp_zero_area_row(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Native diagnostic
+      type(moist_error_type), allocatable :: err
+      !> Row without area
+      integer, parameter :: irow = 7
+      !> Fixture normals
+      real(wp) :: normals(3, ngrid_sw)
+      !> Fixture, pressure component and context
+      type(structure_type) :: mol
+      type(cavity_type_drop) :: cavity
+      type(coupling_type), target :: coupling
+      type(model_continuum_component_gostshyp) :: component
+      type(moist_context_type), target :: ctx
+      !> Host amplitudes, surface adjoint and energy
+      type(response_type) :: response
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
+      type(cavity_adjoint_type) :: weights
+      real(wp) :: energy
+      !> Position of the fixture atom
+      real(wp) :: xyz_mol(3, 1)
+
+      xyz_mol(:, 1) = 0.0_wp
+      call new (mol, [1], xyz_mol)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
+      call build_fixture_surface(cavity, normals)
+      cavity%a(irow) = 0.0_wp
+      call component%update(mol, cavity, err)
+      call check(error, .not. allocated(err), more="update")
+      if (allocated(error)) return
+      call component%new_coupling(cavity, coupling, err)
+      call check(error, .not. allocated(err), more="coupling setup")
+      if (allocated(error)) return
+      call component%prepare_energy(cavity, coupling, err)
+      call check(error, .not. allocated(err), more="energy staging")
+      if (allocated(error)) return
+      do while (coupling%next())
+         select type (request => coupling%request())
+         type is (gaussian_moment_request_type)
+            call check(error, request%width(irow), 0.0_wp, thr=0.0_wp, &
+               & more="zero-area row requested at a nonzero width")
+            if (allocated(error)) return
+         end select
+      end do
+
+      call set_model_moments(coupling, cavity%xyz)
+      energy = 0.0_wp
+      call component%get_energy(component_view(coupling), cavity, energy, err)
+      call check(error, .not. allocated(err), more="energy")
+      if (allocated(error)) return
+      call check(error, ieee_is_finite(energy) .and. abs(energy) > 0.0_wp, &
+         & more="energy is not finite or vanishes")
+      if (allocated(error)) return
+      call component%get_response(component_view(coupling), cavity, response, err)
+      call check(error, .not. allocated(err), more="response")
+      if (allocated(error)) return
+      call copy_gaussian_amplitude(response, amplitude)
+      call check(error, all(ieee_is_finite(amplitude%w_overlap)), more="amplitude is not finite")
+      if (allocated(error)) return
+      call check(error, amplitude%w_overlap(irow), 0.0_wp, thr=0.0_wp, &
+         & more="zero-area row carries an amplitude")
+      if (allocated(error)) return
+      call check(error, abs(amplitude%w_overlap(1)) > 0.0_wp, more="a regular row carries no amplitude")
+      if (allocated(error)) return
+
+      call weights%init(ngrid_sw)
+      call component%get_surface_weights(component_view(coupling), cavity, weights, err)
+      call check(error, .not. allocated(err), more="surface weights")
+      if (allocated(error)) return
+      call check(error, all(ieee_is_finite(weights%w_a)) .and. all(ieee_is_finite(weights%w_xyz)) &
+         & .and. all(ieee_is_finite(weights%w_n)), more="surface adjoint is not finite")
+      if (allocated(error)) return
+      call check(error, maxval(abs(weights%w_a)) > 0.0_wp, more="GOSTSHYP wrote no area weights")
+      if (allocated(error)) return
+      call check(error, weights%w_a(irow) == 0.0_wp .and. all(weights%w_xyz(:, irow) == 0.0_wp) &
+         & .and. all(weights%w_n(:, irow) == 0.0_wp), more="zero-area row carries a surface adjoint")
+   end subroutine test_gostshyp_zero_area_row
 
    !> Geometry derivatives of one fixture against fourth-order differences
    !>

@@ -146,13 +146,13 @@ contains
       type(moist_math_smoothstep_polynomial_type), intent(out) :: sw
       !> Continuity order n
       integer, intent(in) :: order
-      !> Rising (from < to) or falling orientation
+      !> Rising (x_off < x_on) or falling orientation
       logical, intent(in) :: rising
 
       if (rising) then
-         call new_smoothstep_polynomial(sw, band_a, band_b, order)
+         call new_smoothstep_polynomial(sw, x_off=band_a, x_on=band_b, order=order)
       else
-         call new_smoothstep_polynomial(sw, band_b, band_a, order)
+         call new_smoothstep_polynomial(sw, x_off=band_b, x_on=band_a, order=order)
       end if
    end subroutine make_polynomial
 
@@ -470,7 +470,7 @@ contains
       type(moist_math_smoothstep_erf_type) :: e1, e2
 
       call new_smoothstep_erf(e1, -0.5_wp, 0.5_wp)
-      call new_smoothstep_erf(e2, 2.0_wp, 0.5_wp, 0.7_wp)
+      call new_smoothstep_erf(e2, x_off=2.0_wp, x_on=0.5_wp, k=0.7_wp)
       call check_pinned(error, e1, -0.15_wp, [3.10979211464817752e-2_wp, 1.04389116265920179_wp, &
          & 2.50883470675889022e1_wp], "erf rising 1")
       if (allocated(error)) return
@@ -495,7 +495,7 @@ contains
       type(moist_math_smoothstep_sigmoid_type) :: s1, s2
 
       call new_smoothstep_sigmoid(s1, 0.0_wp, 1.0_wp)
-      call new_smoothstep_sigmoid(s2, 1.5_wp, 0.25_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=1.3_wp, a_lo=0.9_wp)
+      call new_smoothstep_sigmoid(s2, x_off=1.5_wp, x_on=0.25_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=1.3_wp, a_lo=0.9_wp)
       call check_pinned(error, s1, 0.05_wp, [0.0_wp, 0.0_wp, 0.0_wp], "sigmoid rising lower saturation")
       if (allocated(error)) return
       call check_pinned(error, s1, 0.3_wp, [1.15019392821386643e-4_wp, 9.18956493757581289e-3_wp, &

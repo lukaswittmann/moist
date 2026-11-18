@@ -75,7 +75,7 @@ module test_api
       real(c_double) :: core_radius_fraction = 0.5_c_double
    end type iso_options
 
-   !> Frozen DROP options layout exercised through the C interface
+   !> DROP options layout exercised through the C interface, as `moist_drop_options`
    type, bind(C) :: drop_options
       !> Caller layout size
       integer(c_size_t) :: struct_size
@@ -90,11 +90,15 @@ module test_api
       !> Projection refinement level
       integer(c_int) :: proj_level
       !> Branch-selection smoothing weight
-      real(c_double) :: branch_weight_s
+      real(c_double) :: branch_dpdist_max
       !> Grid density kernel length
       real(c_double) :: rho_grid_h
       !> Lebedev pruning level
       integer(c_int) :: wleb_prune_level
+      !> Reach gate band (Bohr)
+      real(c_double) :: branch_reach_on, branch_reach_off
+      !> Horizon switch band
+      real(c_double) :: w_0hor_off, w_0hor_on
    end type drop_options
 
    !> Test double: a cavity whose arrays the test fills by hand
@@ -606,8 +610,7 @@ contains
                   new_unittest("response_fields_describe_the_current_item", test_response_fields), &
                   new_unittest("pcm_spatial_weights_are_optional_fields", test_pcm_spatial_fields), &
                   new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
-                  new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
-                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs) &
+                  new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small) &
                   ]
 
    end subroutine collect_api
@@ -2417,7 +2420,7 @@ contains
          case (2)
             options%rho_grid_h = 0.0_c_double
          case (3)
-            options%branch_weight_s = -1.0_c_double
+            options%branch_dpdist_max = -1.0_c_double
          case (4)
             options%proj_maxiter = 0_c_int
          case (5)
@@ -2673,9 +2676,9 @@ contains
       integer(c_int), allocatable :: owner(:), dims(:)
       character(kind=c_char), allocatable :: name(:)
       !> Gradient outputs
-      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), vec1_rA(:, :, :), &
+      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), &
          & xi1_rA(:, :, :), a_i1_rA(:, :, :), v_i1_rA(:, :, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), xyz1_rA(:, :, :, :)
+         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :)
 
       select case (family)
       case ("get_cavity_results")
@@ -2726,14 +2729,14 @@ contains
                                       a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
       case ("get_cavity_gradient")
          allocate (A_tot1_rA(3, 1), V_tot1_rA(3, 1), asph1_rA(3, 1, 1), vsph1_rA(3, 1, 1), &
-                   xyz1_rA(3, 3, 1, 1), r_iI1_rA(3, 1, 1), vec1_rA(3, 1, 1))
+                   xyz1_rA(3, 3, 1, 1))
          if (omit == 1) deallocate (A_tot1_rA)
          if (omit == 2) deallocate (V_tot1_rA)
          if (omit == 3) deallocate (asph1_rA)
          if (omit == 4) deallocate (vsph1_rA)
          if (omit == 5) deallocate (xyz1_rA)
          call get_cavity_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, vec1_rA)
+                                      asph1_rA, vsph1_rA, xyz1_rA)
       case default
          error stop "test_api: unhandled family"
       end select
@@ -4522,7 +4525,7 @@ contains
       !> Undersized caller buffers
       real(c_double), allocatable :: xyz1_rA(:, :, :, :), xi1_rA(:, :, :), a_i1_rA(:, :, :), &
          & v_i1_rA(:, :, :), A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
+         & vsph1_rA(:, :, :)
       !> Zero surface weights, unit charges and the contracted gradient
       real(c_double), allocatable, target :: w_phi(:), w_xyz(:, :), za(:), grad(:, :)
       real(c_double), parameter :: sentinel = -12345.0_c_double
@@ -4557,15 +4560,13 @@ contains
             exit checks
          end if
          allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
-                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid - 1), &
-                   r_iI1_rA(3, nsph, ngrid - 1), rho1_rA(3, nsph, ngrid - 1), source=sentinel)
+                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid - 1), source=sentinel)
          call get_cavity_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, rho1_rA)
+                                      asph1_rA, vsph1_rA, xyz1_rA)
          call expect_error(error, err, "[moist_get_cavity_gradient] Array capacity is too small")
          call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel) &
             & .or. any(asph1_rA /= sentinel) .or. any(vsph1_rA /= sentinel) &
-            & .or. any(xyz1_rA /= sentinel) .or. any(r_iI1_rA /= sentinel) &
-            & .or. any(rho1_rA /= sentinel), "cavity gradient buffers")
+            & .or. any(xyz1_rA /= sentinel), "cavity gradient buffers")
          if (allocated(error)) exit checks
 
          ! The PCM contraction runs to completion on the same cavity: zero
@@ -4585,71 +4586,6 @@ contains
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_gradient_capacity_too_small
-
-   !> The cavity-gradient reader hands out r_iI1_rA and rho1_rA only when the
-   !> cavity computed them
-   !>
-   !> - computing the gradient switches no property flag on
-   !> - without `do_fine` both outputs may be omitted (NULL from C)
-   !> - a buffer for an uncomputed one is refused by name, nothing is written
-   subroutine test_gradient_optional_outputs(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(vp_error), pointer :: err
-      type(c_ptr) :: verror, vmol, vcav
-      integer(c_int) :: ngrid, nsph
-      !> Caller buffers
-      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
-         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
-      real(c_double), parameter :: sentinel = -12345.0_c_double
-
-      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
-      if (allocated(error)) then
-         call drop_water_cavity(err, vmol, vcav)
-         return
-      end if
-
-      checks: block
-         call compute_cavity_gradient_api(verror, vcav)
-         if (allocated(err%ptr)) then
-            call test_failed(error, "compute_cavity_gradient failed: "//err%ptr%message)
-            exit checks
-         end if
-         allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
-                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid), &
-                   r_iI1_rA(3, nsph, ngrid), rho1_rA(3, nsph, ngrid), source=sentinel)
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA=r_iI1_rA)
-         call expect_error(error, err, "[moist_get_cavity_gradient] r_iI1_rA was not computed")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
-            & .or. any(r_iI1_rA /= sentinel), "gradient buffers with an uncomputed r_iI1_rA")
-         if (allocated(error)) exit checks
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA, rho1_rA=rho1_rA)
-         call expect_error(error, err, "[moist_get_cavity_gradient] rho1_rA was not computed")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(rho1_rA /= sentinel), &
-            & "gradient buffers with an uncomputed rho1_rA")
-         if (allocated(error)) exit checks
-
-         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
-                                      asph1_rA, vsph1_rA, xyz1_rA)
-         if (allocated(err%ptr)) then
-            call test_failed(error, "get_cavity_gradient without the optional outputs failed: "// &
-               & err%ptr%message)
-            exit checks
-         end if
-         call check(error, all(ieee_is_finite(A_tot1_rA)) .and. all(ieee_is_finite(xyz1_rA)) .and. &
-            & any(A_tot1_rA /= sentinel) .and. all(xyz1_rA /= sentinel), &
-            & more="required gradient outputs were not filled")
-         if (allocated(error)) exit checks
-         call check(error, all(r_iI1_rA == sentinel) .and. all(rho1_rA == sentinel), &
-            & more="omitted optional outputs were written")
-      end block checks
-
-      call drop_water_cavity(err, vmol, vcav)
-
-   end subroutine test_gradient_optional_outputs
 
    !* ================================================================================= *!
    !*                              Test double procedures                               *!

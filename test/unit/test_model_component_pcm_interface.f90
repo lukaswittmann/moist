@@ -340,7 +340,7 @@ contains
             if (allocated(error)) return
             drop%param%do_normal = had_normal
             drop%param%do_curvature = had_curvature
-            drop%param%do_rho = .true.
+            drop%param%do_grid_density = .true.
             call new_continuum_model(model, ctx, drop, err)
             call check(error,.not. allocated(err))
             if (allocated(error)) return
@@ -356,8 +356,8 @@ contains
                if (allocated(error)) return
                call check(error, cavity%param%do_curvature .eqv. (had_curvature .or. kind >= 3))
                if (allocated(error)) return
-               call check(error, cavity%param%do_rho .and. .not. cavity%param%do_fine &
-                  & .and. .not. cavity%param%do_grid_density .and. .not. cavity%param%do_r_iI)
+               call check(error, cavity%param%do_grid_density .and. .not. cavity%param%do_fine &
+                  & .and. .not. cavity%param%do_atomarea)
                if (allocated(error)) return
                call cavity%configure(normal=.false., curvature=.false., error=err)
                call check(error,.not. allocated(err))
@@ -424,7 +424,7 @@ contains
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call lsf%new()
       call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=lsf, error=err, &
-         & param=moist_cavity_drop_parameters_type(num_leb=14, do_rho=.true.))
+         & param=moist_cavity_drop_parameters_type(num_leb=14, do_grid_density=.true.))
       call check(error,.not. allocated(err))
       if (allocated(error)) return
       call new_cavity_iswig(iswig, radius_model=default_cpcm_radii(), error=err, &
@@ -463,7 +463,7 @@ contains
             end associate
             select type (cavity => model%cavity)
             type is (cavity_type_drop)
-               call check(error, cavity%param%do_rho .and. allocated(cavity%rho))
+               call check(error, cavity%param%do_grid_density .and. allocated(cavity%rho_grid))
                if (allocated(error)) return
                call check(error,.not. cavity%param%do_fine)
                if (allocated(error)) return

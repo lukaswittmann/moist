@@ -7,7 +7,7 @@
 !> names a wrong staging or a missing output
 module test_model_coupling
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: moist_error_type => error_type
@@ -65,7 +65,6 @@ module test_model_coupling
    real(wp), parameter :: drop_blend_k = 2.5_wp
    real(wp), parameter :: drop_blend_3b = 1.0_wp
    real(wp), parameter :: drop_proj_tol = 1.0e-14_wp
-   integer, parameter :: drop_proj_maxiter = 1000
    integer, parameter :: drop_proj_level = 1
    integer, parameter :: drop_prune_level = 4
 
@@ -483,8 +482,9 @@ contains
                                                                             blend_3b=drop_blend_3b))
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             & error=err, param=moist_cavity_drop_parameters_type( &
-            & num_leb=nleb_drop, tolerance=drop_proj_tol, proj_maxiter=drop_proj_maxiter, &
-            & proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, do_fine=.true.), ctx=ctx)
+            & num_leb=nleb_drop, tolerance=drop_proj_tol, &
+            & proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, &
+            & do_fine=.true.), ctx=ctx)
       end block
       if (failed(error, err, "DROP setup")) return
 
