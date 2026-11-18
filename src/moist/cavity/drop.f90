@@ -77,7 +77,7 @@ module moist_cavity_drop
 
       !* ------------------------------ Integration grid ------------------------------ *!
 
-      !> Final Lebedev quadrature weights (ngrid)
+      !> Lebedev quadrature weights scaled by the CP Jacobian (ngrid)
       real(wp), allocatable :: wleb(:)
       !> Raw Lebedev quadrature weights (3, nsph, ngrid)
       real(wp), allocatable :: wleb1_rA(:, :, :)
@@ -97,15 +97,8 @@ module moist_cavity_drop
 
       !* ---------------------------- Geometric quantities ---------------------------- *!
 
-      !> Distance from anchor to projected point
-      real(wp), allocatable :: rho(:)
-      !> Per-gridpoint derivatives of rho w.r.t. nuclear coordinates (3, nsph, ngrid)
-      real(wp), allocatable :: rho1_rA(:, :, :)
-
-      !> Distance from sphere center to grid point
-      real(wp), allocatable :: r_iI0(:)
-      !> Gridpoint-owner distance derivatives r_iI1_rA (3, nsph, ngrid)
-      real(wp), allocatable :: r_iI1_rA(:, :, :)
+      !> Distance from anchor to projected point (Bohr; ngrid)
+      real(wp), allocatable :: pdist(:)
 
       !> Surface normal gradient at grid points (3, nsph, 3, ngrid)
       real(wp), allocatable :: normal1_rA(:, :, :, :)
@@ -157,10 +150,15 @@ module moist_cavity_drop
       type(moist_math_smoothstep_sigmoid_type) :: f_crit
       !> Focal/branching point switching function
       type(moist_math_smoothstep_sigmoid_type) :: f_foc
-      !> Lebedev weight pruning function (suppresses near-zero weights)
+      !> Horizon switch on the signed `n_surf . n_sph`
+      type(moist_math_smoothstep_sigmoid_type) :: f_hor
+      !> Reach gate on the projection distance
+      type(moist_math_smoothstep_sigmoid_type) :: f_reach
+      !> Lebedev weight pruning function (suppresses near-zero weights, optional)
       type(moist_math_smoothstep_sigmoid_type) :: f_wleb
 
-      !> Weight switching values per point (ngrid)
+      !> Gate `f_crit * f_foc * f_hor * f_reach` (times the prune switch)
+      !> per point (ngrid); part of `wbranch`
       real(wp), allocatable :: w_f0(:)
       !> Individual switching function component derivatives (3, nsph, ngrid)
       real(wp), allocatable :: w_f1_rA(:, :, :)
@@ -173,15 +171,26 @@ module moist_cavity_drop
       !> Branch weight model for handling degenerate branches
       type(branch_weight_type) :: branch_weight
 
-      !> Canonical branch index of each row within its anchor (ngrid)
+      ! TODO: the following will either be removed at some point or moved to a projection disgnostics
+      !       type; currently it is used in some tests
+      !> Anchors searched by the seeder in the last projection, those of them
+      !> searched beyond the window of a fully open local point
+      integer :: n_searched = 0, n_extended = 0
+      !> Anchors searched to the reach from the start
+      integer :: n_full_reach = 0
+      !> Largest search radius of an anchor in the last projection (Bohr)
+      real(wp) :: pdist_search_max = 0.0_wp
+
+      !> Position of each row among the rows of its anchor, in canonical order (ngrid)
       integer, allocatable :: branch(:)
-      !> Branch weight per grid point (ngrid) (1 = default/unbranched)
+      !> Branch weight per grid point (ngrid), the gate `w_f0` included
       real(wp), allocatable :: wbranch(:)
       !> Projection-objective value phi at each surviving grid point (ngrid)
-      !> Used by the branch-weight softmax gradient to recover per-branch
+      !> Used by the branch-weight gradient to recover per-branch
       !> phi values once the main-loop KKT solve has produced dr/dR_A
       real(wp), allocatable :: phi0(:)
 
+      !> Lagrange multiplier
       real(wp), allocatable :: lambda0(:)
       !> Per-gridpoint derivatives of lambda w.r.t. nuclear coordinates (3, nsph, ngrid)
       real(wp), allocatable :: lambda1_rA(:, :, :)
@@ -318,9 +327,9 @@ module moist_cavity_drop
          implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
-         !> Restrict each grid point's active atom to its owner (anchor motion
-         !> only); used for callback/isodensity LSFs whose field nuclear
-         !> derivatives are identically zero
+         !> Frozen field: drop the level set's nuclear partials, each grid point
+         !> moves with its owner's anchor only; equal to the full gradient for
+         !> callback LSFs
          logical, intent(in), optional :: anchor_only
       end subroutine compute_gradient_drop
 
@@ -368,12 +377,14 @@ module moist_cavity_drop
       !> @param[in]    igrid          Grid point to describe
       !> @param[in]    want_curvature Whether the curvature invariants are needed
       !> @param[inout] state          Seed state
-      module subroutine fill_seed_state(self, igrid, want_curvature, state)
+      !> @param[out]   reach_da       Reach-gate partial in the anchor
+      module subroutine fill_seed_state(self, igrid, want_curvature, state, reach_da)
          implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          integer, intent(in) :: igrid
          logical, intent(in) :: want_curvature
          type(drop_seed_state_type), intent(inout) :: state
+         real(wp), intent(out), optional :: reach_da(3)
       end subroutine fill_seed_state
 
       !> Contract surface weights to per-grid LSF adjoint weights
@@ -502,30 +513,36 @@ contains
       else
          self%label = "DROP"
       end if
-      !> Push the cavity-derived screening threshold and cell-list cutoff into the LSF
+
+      !> Put the cavity-derived screening threshold and cell-list cutoff into the LSF
       self%lsf_model%screening_threshold = self%param%screening_threshold
       call self%lsf_model%set_full_scan_below(self%param%cell_grid_full_scan_below)
 
       !> Set up weight switching function
-      call new_smoothstep_sigmoid(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
+      call new_smoothstep_sigmoid(self%f_crit, self%param%w_0ls_off, self%param%w_0ls_on, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
-
-      call new_smoothstep_sigmoid(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
+      call new_smoothstep_sigmoid(self%f_foc, self%param%w_0tra_off, self%param%w_0tra_on, &
+                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
+                                 a_lo=self%param%w_0ls_a)
+      call new_smoothstep_sigmoid(self%f_hor, self%param%hor_off, self%param%hor_on, &
+                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
+                                 a_lo=self%param%w_0ls_a)
+      call new_smoothstep_sigmoid(self%f_reach, self%param%reach_off, self%param%reach_on, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
 
       !> Set up Lebedev weight switching function (optional)
-      if (self%param%wleb_prune_level > 0) then
+      if (self%param%finalize%wleb_prune) then
          call new_smoothstep_sigmoid(self%f_wleb, &
-                                    self%param%wleb_prune_from, self%param%wleb_prune_to)
+                                    self%param%finalize%wleb_prune_off, self%param%finalize%wleb_prune_on)
       end if
 
       !> Set up hard-sphere gaussians function (iSwiG)
       call new_iswig(self%iswig, self%param%iswig_xi_born)
 
       !> Set up branch weight model
-      call self%branch_weight%init(self%param%branch_weight_s)
+      call self%branch_weight%init(self%param%branch_dpdist_max, self%param%phi_alpha)
 
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
@@ -770,15 +787,12 @@ contains
       if (allocated(self%branch)) deallocate (self%branch)
       if (allocated(self%wbranch)) deallocate (self%wbranch)
       if (allocated(self%phi0)) deallocate (self%phi0)
-      if (allocated(self%rho)) deallocate (self%rho)
-      if (allocated(self%r_iI0)) deallocate (self%r_iI0)
+      if (allocated(self%pdist)) deallocate (self%pdist)
       if (allocated(self%cpjac_scal0)) deallocate (self%cpjac_scal0)
       if (allocated(self%w_f0)) deallocate (self%w_f0)
       if (allocated(self%wleb)) deallocate (self%wleb)
       if (allocated(self%wleb1_rA)) deallocate (self%wleb1_rA)
       if (allocated(self%cpjac_scal1_rA)) deallocate (self%cpjac_scal1_rA)
-      if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
-      if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
       if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
       if (allocated(self%k1_rA)) deallocate (self%k1_rA)
       if (allocated(self%k2_rA)) deallocate (self%k2_rA)
@@ -824,7 +838,7 @@ contains
       call self%ctx%timer%start("Switching func.")
       call self%anchor%compute_switching(self%iswig, self%ctx%get_num_threads())
       if (self%ctx%verbosity(4)) then
-         n_iswig_removed = count(self%anchor%f0 < self%param%wleb_cut)
+         n_iswig_removed = count(self%anchor%f0 < self%param%finalize%wleb_cut)
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Pre-filter:")
@@ -837,7 +851,7 @@ contains
 
       !> Pre-filter points below switching cutoff (reduces projection workload)
       call self%ctx%timer%start("Pre-filter")
-      call self%anchor%filter(self%param%wleb_cut, nremoved)
+      call self%anchor%filter(self%param%finalize%wleb_cut, nremoved)
       if (self%ctx%verbosity(4)) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
@@ -852,7 +866,8 @@ contains
       call self%project_all_points(error)
       if (.not. allocated(error)) then
          call self%lsf_model%check_surface(self%xyz(:, 1:self%ngrid), &
-                                           self%f(1:self%ngrid) >= self%param%wleb_cut, error)
+                                           self%anchor%f0(self%anchor_of_row(1:self%ngrid)) &
+                                           >= self%param%finalize%wleb_cut, error)
       end if
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
@@ -1089,7 +1104,7 @@ contains
          return
       end if
 
-      write (unit, "(a)") "ngrid,numbering,x,y,z,owner,area,switch_f,w_leb,rho_scal0,rad,r_iI0,rho,"// &
+      write (unit, "(a)") "ngrid,numbering,x,y,z,owner,area,switch_f,w_leb,rho_scal0,rad,pdist,"// &
          "anch_x,anch_y,anch_z,n_x,n_y,n_z,rho_grid,rho_grid_anchor,KM,KG,cpjac_scal"
 
       nan = ieee_value(nan, ieee_quiet_nan)
@@ -1109,7 +1124,7 @@ contains
          if (allocated(self%KG)) val_KG = self%KG(i)
          if (allocated(self%cpjac_scal0)) val_cpjac = self%cpjac_scal0(i)
 
-         write (unit, '(i0,",",i0,22(",",g0))') &
+         write (unit, '(i0,",",i0,21(",",g0))') &
             i, &
             self%numbering(i), &
             self%xyz(1, i), self%xyz(2, i), self%xyz(3, i), &
@@ -1118,8 +1133,7 @@ contains
             self%f(i), &
             self%wleb(i), val_rho_scal, &
             self%radii(self%owner(i)), &
-            self%r_iI0(i), &
-            self%rho(i), &
+            self%pdist(i), &
             self%anchor%xyz(:, self%anchor_of_row(i)), &
             self%normal0(1, i), self%normal0(2, i), self%normal0(3, i), &
             val_rho_grid, val_rho_grid_anchor, &
@@ -1179,9 +1193,9 @@ contains
       if (allocated(self%offset)) then
          row_int = self%offset(self%anchor_of_row(1:self%ngrid) + 1) &
             & - self%offset(self%anchor_of_row(1:self%ngrid))
-         call query%add_int("branch_count", "Surviving branches in the point's anchor group (ngrid)", row_int)
+         call query%add_int("branch_count", "Rows in the point's anchor group (ngrid)", row_int)
       end if
-      call query%add_real("wbranch", "Branch weight, 1 when unbranched (ngrid)", self%wbranch)
+      call query%add_real("wbranch", "Branch weight with the gate w_f0, equal to it when unbranched (ngrid)", self%wbranch)
 
       !> Quadrature and projection geometry
       call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
@@ -1193,15 +1207,14 @@ contains
          row_real2 = self%anchor%xyz(:, self%anchor_of_row(1:self%ngrid))
          call query%add_real2("anchorxyz", "Unprojected anchor coordinates, bohr (3, ngrid)", row_real2)
       end if
-      call query%add_real("rho", "Anchor-to-projected-point distance, bohr (ngrid)", self%rho)
-      call query%add_real("r_iI0", "Owner sphere center to grid point distance, bohr (ngrid)", self%r_iI0)
+      call query%add_real("pdist", "Anchor-to-projected-point distance, bohr (ngrid)", self%pdist)
       call query%add_real("phi0", "Projection objective value at the point (ngrid)", self%phi0)
       call query%add_real("lambda0", "Projection Lagrange multiplier at the point (ngrid)", self%lambda0)
       call query%add_real("cpjac_scal0", "Closest-point Jacobian scaling (ngrid)", self%cpjac_scal0)
       call query%add_real("rho_scal0", "Grid point density scaling (ngrid)", self%rho_scal0)
 
       !> Switching functions
-      call query%add_real("w_f0", "Weight switching value per point (ngrid)", self%w_f0)
+      call query%add_real("w_f0", "Critical-gradient, focal, horizon and reach gate per point (ngrid)", self%w_f0)
       if (allocated(self%anchor%f0)) then
          row_real = self%anchor%f0(self%anchor_of_row(1:self%ngrid))
          call query%add_real("iswig_f0", "iSwiG switching value per point (ngrid)", row_real)
@@ -1241,8 +1254,7 @@ contains
       if (allocated(self%xi0)) deallocate (self%xi0)
       if (allocated(self%f)) deallocate (self%f)
       if (allocated(self%wleb)) deallocate (self%wleb)
-      if (allocated(self%rho)) deallocate (self%rho)
-      if (allocated(self%r_iI0)) deallocate (self%r_iI0)
+      if (allocated(self%pdist)) deallocate (self%pdist)
       if (allocated(self%normal0)) deallocate (self%normal0)
       if (allocated(self%numbering)) deallocate (self%numbering)
       if (allocated(self%v)) deallocate (self%v)
@@ -1263,10 +1275,9 @@ contains
       if (allocated(self%anchor_of_row)) deallocate (self%anchor_of_row)
       if (allocated(self%wbranch)) deallocate (self%wbranch)
       if (allocated(self%phi0)) deallocate (self%phi0)
+      if (allocated(self%w_f0)) deallocate (self%w_f0)
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
-      if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
-      if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
       if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
       if (allocated(self%a_i1_rA)) deallocate (self%a_i1_rA)
       if (allocated(self%v1_rA)) deallocate (self%v1_rA)
