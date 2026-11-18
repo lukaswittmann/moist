@@ -391,10 +391,16 @@ contains
    !>   S_ab = (1/||g||) * t_a^T * H * t_b
    !> whose eigenvalues are the principal curvatures
    !>
+   !> A point whose gradient norm is at most `1e-14` has no normal; its shape
+   !> operator is zero, so [[analyze_cavity]] counts it as flat
+   !>
    !> @param[inout] self Cavity with projected grid points
    module subroutine compute_curvature(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
+      !> Gradient norm at and below which a point has no normal, as in the
+      !> finalize's CP Jacobian; a batched jet leaves ~1e-17 at a symmetric zero
+      real(wp), parameter :: g_norm_floor = 1.0e-14_wp
       type(drop_worker_slots_type) :: slots
       integer :: igrid, thread_slot
       !> Tile index, tile count, tile width, first grid point, size and column
@@ -471,6 +477,15 @@ contains
             ! Gradient magnitude
             g_norm_sq = g_vec(1)*g_vec(1) + g_vec(2)*g_vec(2) + g_vec(3)*g_vec(3)
             g_norm = sqrt(g_norm_sq)
+            ! Gradient at the rounding level: critical point of S, no normal;
+            ! a zero shape operator, so the point counts as flat
+            if (.not. g_norm > g_norm_floor) then
+               self%k1(igrid) = 0.0_wp
+               self%k2(igrid) = 0.0_wp
+               self%KM(igrid) = 0.0_wp
+               self%KG(igrid) = 0.0_wp
+               cycle
+            end if
             inv_g_norm = 1.0_wp/g_norm
 
             ! Unit surface normal
@@ -593,11 +608,11 @@ contains
       real(wp) :: sum_area, w_sum
       real(wp) :: r_probe_harmonic, r_probe_mean, r_probe_min, r_probe_max, r_probe_stdev
       real(wp) :: k1_lo, k1_hi, k1_mean, k2_lo, k2_hi, k2_mean
-      real(wp) :: area_convex, area_saddle, area_pit, area_total
-      real(wp) :: pct_convex, pct_saddle, pct_pit
+      real(wp) :: area_convex, area_saddle, area_pit, area_flat, area_total
+      real(wp) :: pct_convex, pct_saddle, pct_pit, pct_flat
       real(wp), allocatable :: r_probe_vals(:), r_probe_weights(:)
       integer  :: n_probe, n_k2_any_neg
-      integer  :: n_convex, n_saddle, n_pit
+      integer  :: n_convex, n_saddle, n_pit, n_flat
 
       ! Watershed-based patch probe-radius analysis
       integer, parameter :: PATCH_RIDGE = -1
@@ -637,17 +652,18 @@ contains
 
          n_probe = 0
          n_k2_any_neg = 0
-         n_convex = 0; n_saddle = 0; n_pit = 0
-         area_convex = 0.0_wp; area_saddle = 0.0_wp; area_pit = 0.0_wp
+         n_convex = 0; n_saddle = 0; n_pit = 0; n_flat = 0
+         area_convex = 0.0_wp; area_saddle = 0.0_wp; area_pit = 0.0_wp; area_flat = 0.0_wp
 
          allocate (r_probe_vals(ngrid), r_probe_weights(ngrid))
 
          do i = 1, ngrid
 
-            ! Four-quadrant classification of (k1, k2) signs:
+            ! Classification of (k1, k2) signs:
             !  - convex  (k1>0, k2>0): atom-like (convex in both directions)
             !  - saddle  (k1>0, k2<0): probe rolling in a 2-atom crease
             !  - pit     (k1<0, k2<0): spherical pocket at a 3+ atom junction
+            !  - flat    (k1 or k2 zero): no curvature in one direction
             if (self%k1(i) > 0.0_wp .and. self%k2(i) > 0.0_wp) then
                n_convex = n_convex + 1
                area_convex = area_convex + self%a(i)
@@ -658,8 +674,8 @@ contains
                n_pit = n_pit + 1
                area_pit = area_pit + self%a(i)
             else
-               call fatal_error(error, "Invalid curvature regime")
-               return
+               n_flat = n_flat + 1
+               area_flat = area_flat + self%a(i)
             end if
 
             if (self%k2(i) < 0.0_wp) n_k2_any_neg = n_k2_any_neg + 1
@@ -694,13 +710,14 @@ contains
                                      *(r_probe_vals(1:n_probe) - r_probe_mean)**2)/w_sum)
          end if
 
-         area_total = area_convex + area_saddle + area_pit
+         area_total = area_convex + area_saddle + area_pit + area_flat
          if (area_total > 0.0_wp) then
             pct_convex = 100.0_wp*area_convex/area_total
             pct_saddle = 100.0_wp*area_saddle/area_total
             pct_pit = 100.0_wp*area_pit/area_total
+            pct_flat = 100.0_wp*area_flat/area_total
          else
-            pct_convex = 0.0_wp; pct_saddle = 0.0_wp; pct_pit = 0.0_wp
+            pct_convex = 0.0_wp; pct_saddle = 0.0_wp; pct_pit = 0.0_wp; pct_flat = 0.0_wp
          end if
 
          pp = new_prettyprinter(unit=self%ctx%unit)
@@ -715,6 +732,7 @@ contains
          call pp%kv2("Convex  (k1>0, k2>0)", area_convex, "Bohr^2", pct_convex, "%")
          call pp%kv2("Saddle  (k1>0, k2<0)", area_saddle, "Bohr^2", pct_saddle, "%")
          call pp%kv2("Pit     (k1<0, k2<0)", area_pit, "Bohr^2", pct_pit, "%")
+         if (n_flat > 0) call pp%kv2("Flat    (k1 or k2 = 0)", area_flat, "Bohr^2", pct_flat, "%")
          call pp%pop()
 
          call pp%push("Probe-region filter  k2 < -1/r_A_max")
