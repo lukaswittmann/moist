@@ -281,9 +281,13 @@ typedef struct {
     double tolerance;
     int proj_maxiter;
     int proj_level;
-    double branch_weight_s;
+    double branch_dpdist_max;
     double rho_grid_h;
     int wleb_prune_level;
+    double branch_reach_on; /* Reach gate open up to this distance (bohr); both -1: the default band */
+    double branch_reach_off; /* Reach gate closed from this distance (bohr); bounds the search */
+    double w_0hor_off; /* Horizon switch off-edge in n_surf . n_sph */
+    double w_0hor_on; /* Horizon switch on-edge; 0 switches the horizon factor off */
     /* --- end of 1.0 layout --- */
 } moist_drop_options;
 
@@ -1488,10 +1492,12 @@ moist_API_ENTRY void moist_API_CALL
 moist_compute_cavity_gradient(moist_error error,
                               moist_cavity cavity) moist_API_SUFFIX__V_1_0;
 
-/// Compute anchor-only nuclear derivatives (callback/isodensity LSF, DROP-specific)
+/// Compute anchor-only nuclear derivatives (frozen field, DROP-specific)
 /// Must be called after moist_update_cavity and before the *_rA contractions
-/// Restricts each grid point's nuclear coupling to its owner atom's rigid anchor
-/// motion (the level set field's nuclear derivatives are zero for callback LSFs)
+/// Holds the level set field fixed in space: each grid point moves with its
+/// owner atom's anchor, the switching still follows the neighbouring atoms;
+/// equal to moist_compute_cavity_gradient for callback LSFs, whose field has
+/// no nuclear derivatives (the host adds the density response itself)
 moist_API_ENTRY void moist_API_CALL
 moist_compute_anchor_gradient(moist_error error,
                               moist_cavity cavity) moist_API_SUFFIX__V_1_0;
@@ -1540,11 +1546,6 @@ moist_get_anchor_gradient(moist_error error,
 ///   asph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere areas (perturbed atom, owner, xyz)
 ///   vsph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere volumes (perturbed atom, owner, xyz)
 ///   xyz1_rA   row-major (ngrid_cap, nsph_cap, 3, 3) - grid point position derivatives (grid, atom, perturbed_xyz, xyz)
-///   r_iI1_rA  row-major (ngrid_cap, nsph_cap, 3) - gradient of grid-owner distances (optional)
-///   rho1_rA   row-major (ngrid_cap, nsph_cap, 3) - gradient of rho (anchor-to-surface distance) (optional)
-/// The two optional outputs accept NULL. They are computed only for a cavity
-/// built with do_fine; a buffer for one that was not computed is an error and
-/// nothing is written
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_gradient(moist_error error,
                           moist_cavity cavity,
@@ -1558,15 +1559,14 @@ moist_get_cavity_gradient(moist_error error,
                           double* V_tot1_rA /* : row-major (nsph_cap, 3) */,
                           double* asph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
                           double* vsph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
-                          double* xyz1_rA /* : row-major (ngrid_cap, nsph_cap, 3, 3) */,
-                          double* r_iI1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */,
-                          double* rho1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */) moist_API_SUFFIX__V_1_0;
+                          double* xyz1_rA /* : row-major (ngrid_cap, nsph_cap, 3, 3) */) moist_API_SUFFIX__V_1_0;
 
 /// Contract DROP surface weights to per-grid LSF adjoint weights (DROP-specific)
 /// Includes the projected-coordinate response from w_xyz and the electronic
-/// xi path through wleb, cpjac, and the critical-gradient/focus switches
-/// Exported w_f is the anchor-only iSwiG overlap and has no electronic
-/// LSF response for fixed nuclei
+/// xi path through wleb and cpjac
+/// The anchor part of the switching value is an iSwiG overlap without an
+/// electronic LSF response for fixed nuclei; w_f and w_a still contribute
+/// through the branch weight, which carries the critical-gradient/focus gate
 /// Uses cavity-internal ngrid for array extents
 /// Arrays (row-major order; see the layout convention at the top of this header):
 ///   w_xi[ngrid]                        - xi derivative weights
@@ -1612,6 +1612,9 @@ moist_contract_surface_lsf_weights_extended(
 /// Contract direct nuclear and electronic PCM terms
 /// Must call moist_compute_cavity_gradient first
 /// Uses cavity-internal ngrid and nsph for array extents
+/// The nuclear-charge term uses the point-charge potential of the surface
+/// points, as QM codes do for the electrostatic potential integrals of a
+/// Gaussian PCM
 /// Arrays (row-major order; see the layout convention at the top of this header):
 ///   w_phi[ngrid]                       - potential adjoint dE/dphi_i (surface charge q_i of a stationary PCM)
 ///   w_xyz     row-major (ngrid, 3)        - total dE_host/dr_i (nuclear + electronic)
