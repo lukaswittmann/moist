@@ -32,6 +32,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_work_type, &
                                                    moist_iso_gto_tile_type, moist_iso_gto_tile_width
    use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4
+   use moist_math_sorter, only: counting_argsort
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius, &
@@ -702,6 +703,8 @@ contains
       real(wp) :: lo(ndim), hi(ndim)
       !> Cell of one point per axis
       integer :: cell(ndim)
+      !> Counters of the cell sort, on the stack: nothing allocated per batch
+      integer :: counts(0:ncell**ndim - 1)
       integer :: i, ax, b, n
 
       n = size(points, 2)
@@ -732,49 +735,13 @@ contains
             end do
          end do
       end do
-      call cell_argsort(key, perm)
+      call counting_argsort(key(1:n), perm(1:n), counts)
       if (.not. (tile_spread(points, width, perm) < tile_spread(points, width))) then
          do i = 1, n
             perm(i) = i
          end do
       end if
    end subroutine tile_order
-
-   !> Stable counting argsort of the Morton cells, fixed-size counters
-   !>
-   !> - `perm(j)` is the column of the j-th point in cell order
-   !> - one counter per cell of the `2^order_bits` grid on the stack, nothing
-   !>   allocated per batch
-   !>
-   !> @param[in]  key   Morton cell of each column, 0..ncell**3 - 1 (n)
-   !> @param[out] perm  Columns in cell order (n)
-   pure subroutine cell_argsort(key, perm)
-      !> Morton cell of each column
-      integer, intent(in) :: key(:)
-      !> Columns in cell order
-      integer, intent(out) :: perm(:)
-
-      !> Cells per axis
-      integer, parameter :: ncell = 2**order_bits
-      !> Scatter offset of each cell
-      integer :: offset(0:ncell**ndim - 1)
-      integer :: i, j, c, nxt
-
-      offset = 0
-      do i = 1, size(key)
-         offset(key(i)) = offset(key(i)) + 1
-      end do
-      c = 0
-      do j = 0, ncell**ndim - 1
-         nxt = c + offset(j)
-         offset(j) = c
-         c = nxt
-      end do
-      do i = 1, size(key)
-         offset(key(i)) = offset(key(i)) + 1
-         perm(offset(key(i))) = i
-      end do
-   end subroutine cell_argsort
 
    !> Summed bounding-box diagonal of the tiles of a column order
    !>

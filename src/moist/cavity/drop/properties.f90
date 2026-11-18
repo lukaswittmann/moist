@@ -7,7 +7,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_properties
       & surface_jet_tile
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   use moist_math_sorter_quicksort, only: qsort
+   use moist_math_sorter, only: sort_adjoint
    implicit none(type, external)
 
 contains
@@ -623,7 +623,6 @@ contains
       integer :: first_p, j_pid
       logical :: multi_patches
       real(wp) :: rp_amean, rp_harmonic, rp_min, rp_max, patch_area_total
-      type(error_type), allocatable :: sort_error
       type(prettylistprinter) :: plp
       !> Neighbour list of the watershed, local to the diagnostic
       type(adjacency_list_type) :: adj
@@ -777,8 +776,8 @@ contains
                end if
             end do
 
-            ! Sort eligible points by ascending k2 (deepest concavity first)
-            if (n_eligible > 1) call qsort(eligible_k2, eligible_idx, sort_error)
+            ! Sort eligible points by ascending k2
+            call sort_adjoint(eligible_k2, eligible_idx)
 
             allocate (patch_id(ngrid), source=0)
             allocate (patch_area(ngrid), source=0.0_wp)

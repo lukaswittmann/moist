@@ -48,6 +48,7 @@ module moist_cavity_drop_lsf_isodensity_gto
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_math_blas, only: gemm, gemv
+   use moist_math_sorter, only: sort_adjoint
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
@@ -654,7 +655,7 @@ contains
 
    contains
 
-      !> Stable insertion sort of one atom's shells by smallest exponent
+      !> Stable sort of one atom's shells by smallest exponent
       !>
       !> - the most diffuse shell reaches furthest, so the shells inside their
       !>   radial cutoff at any point are, up to coefficient effects, a prefix
@@ -664,20 +665,13 @@ contains
          !> Shell indices of one atom
          integer, intent(inout) :: shells(:)
 
-         integer :: i, j, moving
-         real(wp) :: key
+         real(wp) :: key(size(shells))
+         integer :: i
 
-         do i = 2, size(shells)
-            moving = shells(i)
-            key = smallest_exponent(moving)
-            j = i - 1
-            do while (j >= 1)
-               if (smallest_exponent(shells(j)) <= key) exit
-               shells(j + 1) = shells(j)
-               j = j - 1
-            end do
-            shells(j + 1) = moving
+         do i = 1, size(shells)
+            key(i) = smallest_exponent(shells(i))
          end do
+         call sort_adjoint(key, shells)
       end subroutine sort_diffuse_first
 
       !> Smallest primitive exponent of a shell

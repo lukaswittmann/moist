@@ -116,8 +116,7 @@ module moist_cavity_drop_lsf_base
    use mctc_io, only: structure_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_cavity_drop_lsf_screening, only: cell_list_type
-   use moist_math_sorter_heapsort, only: heapsort
-   use moist_math_sorter_counting, only: counting_argsort
+   use moist_math_sorter, only: counting_argsort, sort
    implicit none(type, external)
    private
 
@@ -850,6 +849,8 @@ contains
       integer, parameter :: n_buckets = nbx*nby*nbz
       !> Per-atom spatial bucket (0..n_buckets-1)
       integer, allocatable :: buckets(:)
+      !> Counters of the bucket sort
+      integer :: counts(0:n_buckets - 1)
 
       if (allocated(sorted_to_orig)) deallocate (sorted_to_orig)
       if (allocated(orig_to_sorted)) deallocate (orig_to_sorted)
@@ -887,7 +888,7 @@ contains
          buckets(i) = bx + by*nbx + bz*nbx*nby
       end do
 
-      call counting_argsort(buckets, n_buckets - 1, sorted_to_orig)
+      call counting_argsort(buckets, sorted_to_orig, counts)
       do j = 1, n
          orig_to_sorted(sorted_to_orig(j)) = j
       end do
@@ -1218,7 +1219,7 @@ contains
    !> The batch contract's canonical order: atoms outside a point's reach add
    !> exact zeros in that order, which is what makes tiling invisible
    !>
-   !> - already ascending lists are copied, others heapsorted in place
+   !> - already ascending lists are copied, others sorted in place ([[sort]])
    !> - contract: unique ids in 1..ncenters; a repeated or out-of-range id is a
    !>   caller bug and aborts (`error stop`), checked after the sort
    !> - allocation-free; `size(out) >= size(ids)`
@@ -1247,7 +1248,7 @@ contains
          out(i) = ids(i)
          if (i > 1) ascending = ascending .and. ids(i - 1) <= ids(i)
       end do
-      if (.not. ascending) call heapsort(out(1:n))
+      if (.not. ascending) call sort(out(1:n))
       if (n == 0) return
       if (out(1) < 1 .or. out(n) > ncenters) then
          error stop "moist DROP LSF: candidate id outside 1..ncenters"
