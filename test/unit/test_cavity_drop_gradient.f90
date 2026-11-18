@@ -3,20 +3,18 @@ module test_cavity_drop_gradient
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use test_helpers, only: fill_legacy_radii, build_numbering_map
+   use test_helpers, only: build_numbering_map
+   use test_cavity_drop_fd, only: check_drop_row_gradient, drop_fd_param, drop_fd_svdw
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_packed, only: packed_index
-   use moist_cavity_drop_branching, only: branch_weight_type, softmax_weights
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_radii, only: default_cpcm_radii
-   use moist_data_radii_legacy, only: get_radius_func
    use mstore, only: get_structure
    use moist_context, only: moist_context_type, new_context
-   use, intrinsic :: iso_fortran_env, only: error_unit
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
@@ -30,13 +28,20 @@ module test_cavity_drop_gradient
    integer, parameter :: NUM_LEB = 50
 
    real(wp), parameter :: STEP_SIZE = 2.5E-4_wp
-   real(wp), parameter :: ABS_THR = 5.0E-9_wp
-   real(wp), parameter :: REL_THR = 5.0E-8_wp
-   real(wp), parameter :: ABS_THRPRINT = 5.0E-9_wp
 
    real(wp), parameter :: PROJ_TOL = 1E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
+   integer, parameter :: PROJ_MAXITER = 50
    integer, parameter :: PROJ_LEVEL = 1
+
+   !> Near-umbilic guard of the adjoint channel test; at k1 == k2 the individual
+   !> principal curvatures are not differentiable, so such grid points are skipped
+   !> for the k channels
+   real(wp), parameter :: CURV_GAP_THR = 5.0e-2_wp
+   !> Thresholds of the adjoint channel test
+   real(wp), parameter :: ADJ_ABS = 5.0e-11_wp
+   real(wp), parameter :: ADJ_REL = 5.0e-10_wp
+   !> Area-channel equivalence
+   real(wp), parameter :: ADJ_EQ_THR = 1.0e-13_wp
 
 contains
 
@@ -65,19 +70,22 @@ contains
       ! Create single oxygen atom
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
 
-      call do_test(error, mol)
+      call check_drop_row_gradient(error, mol)
    end subroutine test_single_atom
 
    !> Test gradient for a dimer
    subroutine test_dimer(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
+      type(moist_cavity_drop_parameters_type) :: param
 
-      ! Create dimer (two oxygen atoms)
+      ! Create dimer (two carbon atoms)
       call new(mol, [6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
                                      6.0_wp, 1.1_wp, 0.0_wp], [3, 2]))
 
-      call do_test(error, mol, blend_k_override=2.0_wp, nleb_override=194, proj_level_override=1)
+      param = drop_fd_param()
+      param%num_leb = 194
+      call check_drop_row_gradient(error, mol, param=param, lsf=drop_fd_svdw(blend_k=2.0_wp))
    end subroutine test_dimer
 
    !> Test gradient for Amino20x4 GLY_xab
@@ -87,7 +95,7 @@ contains
 
       call get_structure(mol, "Amino20x4", "GLY_xab")
 
-      call do_test(error, mol)
+      call check_drop_row_gradient(error, mol)
    end subroutine test_amino20x4_gly_xab
 
    !> Test gradient for MB16-43 01
@@ -97,7 +105,7 @@ contains
 
       call get_structure(mol, "MB16-43", "01")
 
-      call do_test(error, mol)
+      call check_drop_row_gradient(error, mol)
    end subroutine test_mb16_43_01
 
    !> Test gradient for But14diol 1
@@ -107,7 +115,7 @@ contains
 
       call get_structure(mol, "But14diol", "1")
 
-      call do_test(error, mol)
+      call check_drop_row_gradient(error, mol)
    end subroutine test_but14diol_1
 
    !> Test gradient for IL16 008
@@ -117,942 +125,8 @@ contains
 
       call get_structure(mol, "IL16", "008")
 
-      call do_test(error, mol)
+      call check_drop_row_gradient(error, mol)
    end subroutine test_il16_008
-
-   !> Translate an mctc_error message into the testdrive error_type so the
-   !> check assertion framework can pick it up
-   subroutine fatal_error_from_mctc(error, msg)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: msg
-      allocate (error)
-      error%message = msg
-      error%stat = 1
-   end subroutine fatal_error_from_mctc
-
-   !> Test gradient of gridpoints w.r.t. atomic positions
-   subroutine do_test(error, mol, blend_k_override, blend_3b_override, nleb_override, proj_level_override)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-      !> Molecular structure
-      type(structure_type), intent(in) :: mol
-      !> Optional override for blending steepness parameter
-      real(wp), intent(in), optional :: blend_k_override
-      !> Optional override for blending blend_3b parameter
-      real(wp), intent(in), optional :: blend_3b_override
-      !> Optional override for Lebedev grid size
-      integer, intent(in), optional :: nleb_override
-      !> Optional override for projection level
-      integer, intent(in), optional :: proj_level_override
-
-      type(structure_type) :: mol_fd
-      type(cavity_type_drop), allocatable :: cavity
-      real(wp), allocatable :: en_xyz1_rA(:, :, :, :)
-      real(wp), allocatable :: num_xyz1_rA(:, :, :, :)
-      real(wp), allocatable :: nn_xyz(:, :), n_xyz(:, :)
-      real(wp), allocatable :: p_xyz(:, :), pp_xyz(:, :)
-      real(wp), allocatable :: nnn_xyz(:, :), ppp_xyz(:, :)
-      integer, allocatable :: ref_numbering(:), numbering_to_idx(:)
-      logical, allocatable :: valid_gridpoint_ref(:)
-      logical, allocatable :: valid_gridpoint(:, :, :)  ! Validity per (idir, iat, igrid)
-      integer :: iat, idir, jdir, igrid, ngrid_set, jgrid, num_idn, idx_map
-      real(wp) :: diff, max_diff
-      real(wp) :: blend_k_local
-      real(wp) :: blend_3b_local
-      integer :: nleb_local, proj_level_local
-
-      logical, allocatable :: nn_converged(:, :, :), n_converged(:, :, :), &
-                              p_converged(:, :, :), pp_converged(:, :, :), &
-                              nnn_converged(:, :, :), ppp_converged(:, :, :)
-      integer, allocatable :: num_nn(:, :, :), num_n(:, :, :), num_p(:, :, :), num_pp(:, :, :)
-      integer, allocatable :: num_nnn(:, :, :), num_ppp(:, :, :)
-      type(mctc_error), allocatable :: cavity_error
-
-      ! r_iI gradient arrays (r_iI from gridpoint to its owning atom)
-      real(wp), allocatable :: en_r_iI1_rA(:, :, :)
-      real(wp), allocatable :: num_r_iI1_rA(:, :, :)
-      real(wp), allocatable :: nn_r_iI(:), n_r_iI(:)
-      real(wp), allocatable :: p_r_iI(:), pp_r_iI(:)
-      real(wp), allocatable :: nnn_r_iI(:), ppp_r_iI(:)
-
-      ! Surface area gradient arrays
-      real(wp), allocatable :: en_area1_rA(:, :, :)
-      real(wp), allocatable :: num_area1_rA(:, :, :)
-      real(wp), allocatable :: nn_area(:), n_area(:)
-      real(wp), allocatable :: p_area(:), pp_area(:)
-      real(wp), allocatable :: nnn_area(:), ppp_area(:)
-
-      ! Switching function gradient arrays
-      real(wp), allocatable :: en_iswig1_rA(:, :, :)
-      real(wp), allocatable :: num_iswig1_rA(:, :, :)
-      real(wp), allocatable :: nn_iswig(:), n_iswig(:)
-      real(wp), allocatable :: p_iswig(:), pp_iswig(:)
-      real(wp), allocatable :: nnn_iswig(:), ppp_iswig(:)
-
-      ! Volume gradient arrays
-      real(wp), allocatable :: en_volume1_rA(:, :, :)
-      real(wp), allocatable :: num_volume1_rA(:, :, :)
-      real(wp), allocatable :: nn_volume(:), n_volume(:)
-      real(wp), allocatable :: p_volume(:), pp_volume(:)
-      real(wp), allocatable :: nnn_volume(:), ppp_volume(:)
-
-      ! Jacobian scaling gradient arrays
-      real(wp), allocatable :: en_cpjac1_rA(:, :, :)
-      real(wp), allocatable :: num_cpjac1_rA(:, :, :)
-      real(wp), allocatable :: nn_cpjac(:), n_cpjac(:)
-      real(wp), allocatable :: p_cpjac(:), pp_cpjac(:)
-      real(wp), allocatable :: nnn_cpjac(:), ppp_cpjac(:)
-
-      ! Lebedev weight gradient arrays
-      real(wp), allocatable :: en_wleb1_rA(:, :, :)
-      real(wp), allocatable :: num_wleb1_rA(:, :, :)
-      real(wp), allocatable :: nn_wleb(:), n_wleb(:)
-      real(wp), allocatable :: p_wleb(:), pp_wleb(:)
-      real(wp), allocatable :: nnn_wleb(:), ppp_wleb(:)
-
-      ! Gaussian width (xi) gradient arrays
-      real(wp), allocatable :: en_xi1_rA(:, :, :)
-      real(wp), allocatable :: num_xi1_rA(:, :, :)
-      real(wp), allocatable :: nn_xi(:), n_xi(:)
-      real(wp), allocatable :: p_xi(:), pp_xi(:)
-      real(wp), allocatable :: nnn_xi(:), ppp_xi(:)
-
-      ! w_f switching function gradient arrays
-      real(wp), allocatable :: en_w_f1_rA(:, :, :)
-      real(wp), allocatable :: num_w_f1_rA(:, :, :)
-      real(wp), allocatable :: nn_w_f0(:), n_w_f0(:)
-      real(wp), allocatable :: p_w_f0(:), pp_w_f0(:)
-      real(wp), allocatable :: nnn_w_f0(:), ppp_w_f0(:)
-
-      ! Surface normal gradient arrays (normal has 3 components)
-      real(wp), allocatable :: en_normal1_rA(:, :, :, :)
-      real(wp), allocatable :: num_normal1_rA(:, :, :, :)
-      real(wp), allocatable :: nn_normal(:, :), n_normal(:, :)
-      real(wp), allocatable :: p_normal(:, :), pp_normal(:, :)
-      real(wp), allocatable :: nnn_normal(:, :), ppp_normal(:, :)
-      integer :: kdir
-      !> Local run context borrowed by the cavities built here
-      type(moist_context_type), target :: ctx
-
-      !> Initialize cavity with configurable blending and Lebedev grid
-      call new_context(ctx, nthreads=0, verbosity=0)
-
-      blend_k_local = k
-      if (present(blend_k_override)) blend_k_local = blend_k_override
-      blend_3b_local = blend_3b
-      if (present(blend_3b_override)) blend_3b_local = blend_3b_override
-      nleb_local = NUM_LEB
-      if (present(nleb_override)) nleb_local = nleb_override
-      proj_level_local = PROJ_LEVEL
-      if (present(proj_level_override)) proj_level_local = proj_level_override
-      allocate (cavity)
-      block
-         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
-            blend_3b=blend_3b_local))
-         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_local, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4), ctx=ctx)
-      end block
-      if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
-      if (allocated(error)) return
-      ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
-      ! to magnitudes where FD noise dominate
-      call cavity%update(mol, error=cavity_error)
-      if (allocated(cavity_error)) call test_failed(error, "Failed to build cavity: "//cavity_error%message)
-      if (allocated(error)) return
-      ngrid_set = cavity%ngrid
-
-      allocate (ref_numbering(ngrid_set))
-      if (ngrid_set > 0) ref_numbering = cavity%numbering(1:ngrid_set)
-      call build_numbering_map(ref_numbering, numbering_to_idx)
-
-      ! Store reference convergence status before finite differences
-      allocate (valid_gridpoint_ref(ngrid_set), source=.false.)
-      do jgrid = 1, cavity%ngrid
-         num_idn = cavity%numbering(jgrid)
-         if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-         idx_map = numbering_to_idx(num_idn)
-         if (idx_map <= 0) cycle
-         valid_gridpoint_ref(idx_map) = .true.
-      end do
-
-      !> Get analytic gradients
-      call cavity%get_gradient(cavity_error)
-      if (allocated(cavity_error)) then
-         call test_failed(error, cavity_error%message)
-         return
-      end if
-
-      if (.not. allocated(cavity%xyz1_rA)) then
-         call test_failed(error, "xyz1_rA not allocated after get_gradient")
-         return
-      end if
-
-      allocate (en_xyz1_rA(ndim, ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_r_iI1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_iswig1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_area1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_volume1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_cpjac1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_wleb1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_w_f1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_xi1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
-      allocate (en_normal1_rA(ndim, mol%nat, ndim, ngrid_set), source=0.0_wp)
-
-      ! Fill analytical derivatives mapped onto reference numbering
-      do jgrid = 1, cavity%ngrid
-         num_idn = cavity%numbering(jgrid)
-         if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-         idx_map = numbering_to_idx(num_idn)
-         if (idx_map <= 0) cycle
-         en_xyz1_rA(:, :, :, idx_map) = cavity%xyz1_rA(:, :, :, jgrid)
-         en_r_iI1_rA(:, :, idx_map) = cavity%r_iI1_rA(:, :, jgrid)
-         en_iswig1_rA(:, :, idx_map) = cavity%f1_rA(:, :, jgrid)
-         en_area1_rA(:, :, idx_map) = cavity%a_i1_rA(:, :, jgrid)
-         en_volume1_rA(:, :, idx_map) = cavity%v1_rA(:, :, jgrid)
-         en_cpjac1_rA(:, :, idx_map) = cavity%cpjac_scal1_rA(:, :, jgrid)
-         en_wleb1_rA(:, :, idx_map) = cavity%wleb1_rA(:, :, jgrid)
-         en_w_f1_rA(:, :, idx_map) = cavity%w_f1_rA(:, :, jgrid)
-         en_xi1_rA(:, :, idx_map) = cavity%xi1_rA(:, :, jgrid)
-         en_normal1_rA(:, :, :, idx_map) = cavity%normal1_rA(:, :, :, jgrid)
-      end do
-
-      allocate (num_xyz1_rA(ndim, ndim, mol%nat, ngrid_set))
-      allocate (nn_xyz(ndim, ngrid_set))
-      allocate (n_xyz(ndim, ngrid_set))
-      allocate (p_xyz(ndim, ngrid_set))
-      allocate (pp_xyz(ndim, ngrid_set))
-      allocate (nnn_xyz(ndim, ngrid_set))
-      allocate (ppp_xyz(ndim, ngrid_set))
-
-      allocate (num_r_iI1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_r_iI(ngrid_set))
-      allocate (n_r_iI(ngrid_set))
-      allocate (p_r_iI(ngrid_set))
-      allocate (pp_r_iI(ngrid_set))
-      allocate (nnn_r_iI(ngrid_set))
-      allocate (ppp_r_iI(ngrid_set))
-
-      allocate (num_iswig1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_iswig(ngrid_set))
-      allocate (n_iswig(ngrid_set))
-      allocate (p_iswig(ngrid_set))
-      allocate (pp_iswig(ngrid_set))
-      allocate (nnn_iswig(ngrid_set))
-      allocate (ppp_iswig(ngrid_set))
-
-      allocate (num_area1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_area(ngrid_set))
-      allocate (n_area(ngrid_set))
-      allocate (p_area(ngrid_set))
-      allocate (pp_area(ngrid_set))
-      allocate (nnn_area(ngrid_set))
-      allocate (ppp_area(ngrid_set))
-
-      allocate (num_volume1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_volume(ngrid_set))
-      allocate (n_volume(ngrid_set))
-      allocate (p_volume(ngrid_set))
-      allocate (pp_volume(ngrid_set))
-      allocate (nnn_volume(ngrid_set))
-      allocate (ppp_volume(ngrid_set))
-
-      allocate (num_cpjac1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_cpjac(ngrid_set))
-      allocate (n_cpjac(ngrid_set))
-      allocate (p_cpjac(ngrid_set))
-      allocate (pp_cpjac(ngrid_set))
-      allocate (nnn_cpjac(ngrid_set))
-      allocate (ppp_cpjac(ngrid_set))
-
-      allocate (num_wleb1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_wleb(ngrid_set))
-      allocate (n_wleb(ngrid_set))
-      allocate (p_wleb(ngrid_set))
-      allocate (pp_wleb(ngrid_set))
-      allocate (nnn_wleb(ngrid_set))
-      allocate (ppp_wleb(ngrid_set))
-
-      allocate (num_w_f1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_w_f0(ngrid_set))
-      allocate (n_w_f0(ngrid_set))
-      allocate (p_w_f0(ngrid_set))
-      allocate (pp_w_f0(ngrid_set))
-      allocate (nnn_w_f0(ngrid_set))
-      allocate (ppp_w_f0(ngrid_set))
-
-      allocate (num_xi1_rA(ndim, mol%nat, ngrid_set))
-      allocate (nn_xi(ngrid_set))
-      allocate (n_xi(ngrid_set))
-      allocate (p_xi(ngrid_set))
-      allocate (pp_xi(ngrid_set))
-      allocate (nnn_xi(ngrid_set))
-      allocate (ppp_xi(ngrid_set))
-
-      allocate (num_normal1_rA(ndim, mol%nat, ndim, ngrid_set))
-      allocate (nn_normal(ndim, ngrid_set))
-      allocate (n_normal(ndim, ngrid_set))
-      allocate (p_normal(ndim, ngrid_set))
-      allocate (pp_normal(ndim, ngrid_set))
-      allocate (nnn_normal(ndim, ngrid_set))
-      allocate (ppp_normal(ndim, ngrid_set))
-
-      ! Huge tensors that contain converged and numbering info for all gridpoints
-      allocate (nn_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (n_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (p_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (pp_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (nnn_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (ppp_converged(ndim, mol%nat, ngrid_set), source=.false.)
-      allocate (num_nn(ndim, mol%nat, ngrid_set), source=0)
-      allocate (num_n(ndim, mol%nat, ngrid_set), source=0)
-      allocate (num_p(ndim, mol%nat, ngrid_set), source=0)
-      allocate (num_pp(ndim, mol%nat, ngrid_set), source=0)
-      allocate (num_nnn(ndim, mol%nat, ngrid_set), source=0)
-      allocate (num_ppp(ndim, mol%nat, ngrid_set), source=0)
-
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            ! Initialize arrays to zero
-            nn_xyz = 0.0_wp
-            n_xyz = 0.0_wp
-            p_xyz = 0.0_wp
-            pp_xyz = 0.0_wp
-            nnn_xyz = 0.0_wp
-            ppp_xyz = 0.0_wp
-            nn_r_iI = 0.0_wp
-            n_r_iI = 0.0_wp
-            p_r_iI = 0.0_wp
-            pp_r_iI = 0.0_wp
-            nnn_r_iI = 0.0_wp
-            ppp_r_iI = 0.0_wp
-            nn_iswig = 0.0_wp
-            n_iswig = 0.0_wp
-            p_iswig = 0.0_wp
-            pp_iswig = 0.0_wp
-            nnn_iswig = 0.0_wp
-            ppp_iswig = 0.0_wp
-            nn_area = 0.0_wp
-            n_area = 0.0_wp
-            p_area = 0.0_wp
-            pp_area = 0.0_wp
-            nnn_area = 0.0_wp
-            ppp_area = 0.0_wp
-            nn_volume = 0.0_wp
-            n_volume = 0.0_wp
-            p_volume = 0.0_wp
-            pp_volume = 0.0_wp
-            nnn_volume = 0.0_wp
-            ppp_volume = 0.0_wp
-            nn_cpjac = 0.0_wp
-            n_cpjac = 0.0_wp
-            p_cpjac = 0.0_wp
-            pp_cpjac = 0.0_wp
-            nnn_cpjac = 0.0_wp
-            ppp_cpjac = 0.0_wp
-            nn_wleb = 0.0_wp
-            n_wleb = 0.0_wp
-            p_wleb = 0.0_wp
-            pp_wleb = 0.0_wp
-            nnn_wleb = 0.0_wp
-            ppp_wleb = 0.0_wp
-            nn_w_f0 = 0.0_wp
-            n_w_f0 = 0.0_wp
-            p_w_f0 = 0.0_wp
-            pp_w_f0 = 0.0_wp
-            nnn_w_f0 = 0.0_wp
-            ppp_w_f0 = 0.0_wp
-            nn_xi = 0.0_wp
-            n_xi = 0.0_wp
-            p_xi = 0.0_wp
-            pp_xi = 0.0_wp
-            nnn_xi = 0.0_wp
-            ppp_xi = 0.0_wp
-            nn_normal = 0.0_wp
-            n_normal = 0.0_wp
-            p_normal = 0.0_wp
-            pp_normal = 0.0_wp
-            nnn_normal = 0.0_wp
-            ppp_normal = 0.0_wp
-
-            ! -3h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) - 3.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               nnn_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               nnn_converged(idir, iat, idx_map) = .true.
-               num_nnn(idir, iat, idx_map) = num_idn
-               nnn_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               nnn_iswig(idx_map) = cavity%f(jgrid)
-               nnn_area(idx_map) = cavity%a(jgrid)
-               nnn_volume(idx_map) = cavity%v(jgrid)
-               nnn_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               nnn_wleb(idx_map) = cavity%wleb(jgrid)
-               nnn_w_f0(idx_map) = cavity%w_f0(jgrid)
-               nnn_xi(idx_map) = cavity%xi0(jgrid)
-               nnn_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! -2h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) - 2.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               nn_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               nn_converged(idir, iat, idx_map) = .true.
-               num_nn(idir, iat, idx_map) = num_idn
-               nn_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               nn_iswig(idx_map) = cavity%f(jgrid)
-               nn_area(idx_map) = cavity%a(jgrid)
-               nn_volume(idx_map) = cavity%v(jgrid)
-               nn_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               nn_wleb(idx_map) = cavity%wleb(jgrid)
-               nn_w_f0(idx_map) = cavity%w_f0(jgrid)
-               nn_xi(idx_map) = cavity%xi0(jgrid)
-               nn_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! -1h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) - 1.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               n_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               n_converged(idir, iat, idx_map) = .true.
-               num_n(idir, iat, idx_map) = num_idn
-               n_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               n_iswig(idx_map) = cavity%f(jgrid)
-               n_area(idx_map) = cavity%a(jgrid)
-               n_volume(idx_map) = cavity%v(jgrid)
-               n_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               n_wleb(idx_map) = cavity%wleb(jgrid)
-               n_w_f0(idx_map) = cavity%w_f0(jgrid)
-               n_xi(idx_map) = cavity%xi0(jgrid)
-               n_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! +1h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + 1.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               p_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               p_converged(idir, iat, idx_map) = .true.
-               num_p(idir, iat, idx_map) = num_idn
-               p_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               p_iswig(idx_map) = cavity%f(jgrid)
-               p_area(idx_map) = cavity%a(jgrid)
-               p_volume(idx_map) = cavity%v(jgrid)
-               p_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               p_wleb(idx_map) = cavity%wleb(jgrid)
-               p_w_f0(idx_map) = cavity%w_f0(jgrid)
-               p_xi(idx_map) = cavity%xi0(jgrid)
-               p_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! +2h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + 2.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               pp_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               pp_converged(idir, iat, idx_map) = .true.
-               num_pp(idir, iat, idx_map) = num_idn
-               pp_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               pp_iswig(idx_map) = cavity%f(jgrid)
-               pp_area(idx_map) = cavity%a(jgrid)
-               pp_volume(idx_map) = cavity%v(jgrid)
-               pp_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               pp_wleb(idx_map) = cavity%wleb(jgrid)
-               pp_w_f0(idx_map) = cavity%w_f0(jgrid)
-               pp_xi(idx_map) = cavity%xi0(jgrid)
-               pp_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! +3h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + 3.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-            if (allocated(error)) return
-            do jgrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(jgrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_map = numbering_to_idx(num_idn)
-               if (idx_map <= 0) cycle
-               ppp_xyz(:, idx_map) = cavity%xyz(:, jgrid)
-               ppp_converged(idir, iat, idx_map) = .true.
-               num_ppp(idir, iat, idx_map) = num_idn
-               ppp_r_iI(idx_map) = cavity%r_iI0(jgrid)
-               ppp_iswig(idx_map) = cavity%f(jgrid)
-               ppp_area(idx_map) = cavity%a(jgrid)
-               ppp_volume(idx_map) = cavity%v(jgrid)
-               ppp_cpjac(idx_map) = cavity%cpjac_scal0(jgrid)
-               ppp_wleb(idx_map) = cavity%wleb(jgrid)
-               ppp_w_f0(idx_map) = cavity%w_f0(jgrid)
-               ppp_xi(idx_map) = cavity%xi0(jgrid)
-               ppp_normal(:, idx_map) = cavity%normal0(:, jgrid)
-            end do
-
-            ! O(h^6) central difference, as hessian_fixed: with the 79 branched anchors of the
-            ! level-3 cross the O(h^4) truncation error exceeds REL_THR (cpjac 8.6e-8 relative)
-            num_xyz1_rA(:, idir, iat, :) = &
-               (45.0_wp*(p_xyz(:, :) - n_xyz(:, :)) - 9.0_wp*(pp_xyz(:, :) - nn_xyz(:, :)) &
-                + (ppp_xyz(:, :) - nnn_xyz(:, :))) &
-               /(60.0_wp*STEP_SIZE)
-
-            num_r_iI1_rA(idir, iat, :) = &
-               (45.0_wp*(p_r_iI(:) - n_r_iI(:)) - 9.0_wp*(pp_r_iI(:) - nn_r_iI(:)) &
-                + (ppp_r_iI(:) - nnn_r_iI(:))) &
-               /(60.0_wp*STEP_SIZE)
-
-            num_iswig1_rA(idir, iat, :) = &
-               (45.0_wp*(p_iswig(:) - n_iswig(:)) - 9.0_wp*(pp_iswig(:) - nn_iswig(:)) &
-                + (ppp_iswig(:) - nnn_iswig(:))) &
-               /(60.0_wp*STEP_SIZE)
-
-            num_area1_rA(idir, iat, :) = &
-               (45.0_wp*(p_area(:) - n_area(:)) - 9.0_wp*(pp_area(:) - nn_area(:)) &
-                + (ppp_area(:) - nnn_area(:))) &
-               /(60.0_wp*STEP_SIZE)
-
-            num_volume1_rA(idir, iat, :) = &
-               (45.0_wp*(p_volume(:) - n_volume(:)) - 9.0_wp*(pp_volume(:) - nn_volume(:)) &
-                + (ppp_volume(:) - nnn_volume(:))) &
-               /(60.0_wp*STEP_SIZE)
-            num_cpjac1_rA(idir, iat, :) = &
-               (45.0_wp*(p_cpjac(:) - n_cpjac(:)) - 9.0_wp*(pp_cpjac(:) - nn_cpjac(:)) &
-                + (ppp_cpjac(:) - nnn_cpjac(:))) &
-               /(60.0_wp*STEP_SIZE)
-            num_wleb1_rA(idir, iat, :) = &
-               (45.0_wp*(p_wleb(:) - n_wleb(:)) - 9.0_wp*(pp_wleb(:) - nn_wleb(:)) &
-                + (ppp_wleb(:) - nnn_wleb(:))) &
-               /(60.0_wp*STEP_SIZE)
-            num_w_f1_rA(idir, iat, :) = &
-               (45.0_wp*(p_w_f0(:) - n_w_f0(:)) - 9.0_wp*(pp_w_f0(:) - nn_w_f0(:)) &
-                + (ppp_w_f0(:) - nnn_w_f0(:))) &
-               /(60.0_wp*STEP_SIZE)
-            num_xi1_rA(idir, iat, :) = &
-               (45.0_wp*(p_xi(:) - n_xi(:)) - 9.0_wp*(pp_xi(:) - nn_xi(:)) &
-                + (ppp_xi(:) - nnn_xi(:))) &
-               /(60.0_wp*STEP_SIZE)
-            num_normal1_rA(idir, iat, :, :) = &
-               (45.0_wp*(p_normal(:, :) - n_normal(:, :)) - 9.0_wp*(pp_normal(:, :) - nn_normal(:, :)) &
-                + (ppp_normal(:, :) - nnn_normal(:, :))) &
-               /(60.0_wp*STEP_SIZE)
-         end do
-      end do
-
-      ! Build comprehensive validity tracking array
-      ! A gridpoint is valid only if:
-      ! 1. It converged in the reference configuration
-      ! 2. It exists (numbering > 0) in all 6 FD steps
-      ! 3. It converged in all 6 FD steps
-      allocate (valid_gridpoint(ndim, mol%nat, ngrid_set), source=.false.)
-
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Start with reference convergence
-               valid_gridpoint(idir, iat, igrid) = valid_gridpoint_ref(igrid)
-
-               ! Check all 6 FD steps: must exist (numbering > 0) AND converged
-               if (valid_gridpoint(idir, iat, igrid)) then
-                  valid_gridpoint(idir, iat, igrid) = &
-                     (num_nn(idir, iat, igrid) > 0 .and. nn_converged(idir, iat, igrid)) .and. &
-                     (num_n(idir, iat, igrid) > 0 .and. n_converged(idir, iat, igrid)) .and. &
-                     (num_p(idir, iat, igrid) > 0 .and. p_converged(idir, iat, igrid)) .and. &
-                     (num_pp(idir, iat, igrid) > 0 .and. pp_converged(idir, iat, igrid)) .and. &
-                     (num_nnn(idir, iat, igrid) > 0 .and. nnn_converged(idir, iat, igrid)) .and. &
-                     (num_ppp(idir, iat, igrid) > 0 .and. ppp_converged(idir, iat, igrid))
-               end if
-            end do
-         end do
-      end do
-
-      !> Compare analytic vs numeric for valid gridpoints only; every nuclear direction must
-      !  retain at least a single point each FD step
-      !  Without this, no points left would indicate a pass!
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            call check(error, count(valid_gridpoint(idir, iat, :)) > 0, &
-                       "No valid FD comparisons for atom "//to_string(iat)// &
-                       " direction "//to_string(idir))
-            if (allocated(error)) return
-            do igrid = 1, ngrid_set
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-               call check(error, &
-                          all(ieee_is_finite(num_xyz1_rA(:, idir, iat, igrid))) .and. &
-                          ieee_is_finite(num_r_iI1_rA(idir, iat, igrid)) .and. &
-                          all(ieee_is_finite(num_normal1_rA(idir, iat, :, igrid))) .and. &
-                          ieee_is_finite(num_cpjac1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_wleb1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_w_f1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_xi1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_iswig1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_area1_rA(idir, iat, igrid)) .and. &
-                          ieee_is_finite(num_volume1_rA(idir, iat, igrid)), &
-                          "Non-finite FD reference for atom "//to_string(iat)// &
-                          " direction "//to_string(idir)//" point "//to_string(igrid))
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 1: Gridpoint positions
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do jdir = 1, ndim
-               do igrid = 1, ngrid_set
-                  ! Skip invalid gridpoints (missing or failed convergence)
-                  if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-                  diff = abs(en_xyz1_rA(jdir, idir, iat, igrid) &
-                             - num_xyz1_rA(jdir, idir, iat, igrid))
-                  max_diff = max(max_diff, diff)
-
-                  if (diff > ABS_THRPRINT) then
-                     write (*, "(A,I6,I6,I6,I6,4ES15.5)") "gridpoint: ", &
-                        iat, idir, jdir, igrid, &
-                        en_xyz1_rA(jdir, idir, iat, igrid), &
-                        num_xyz1_rA(jdir, idir, iat, igrid), &
-                        en_xyz1_rA(jdir, idir, iat, igrid) &
-                        - num_xyz1_rA(jdir, idir, iat, igrid), &
-                        en_xyz1_rA(jdir, idir, iat, igrid) &
-                        /(en_xyz1_rA(jdir, idir, iat, igrid) &
-                          - num_xyz1_rA(jdir, idir, iat, igrid))
-                  end if
-
-                  call check(error, en_xyz1_rA(jdir, idir, iat, igrid), &
-                             num_xyz1_rA(jdir, idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                             more="Grid point position gradient mismatch")
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
-
-      ! Test 2: r_iIs
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_r_iI1_rA(idir, iat, igrid) &
-                          - num_r_iI1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "r_iI: ", &
-                     iat, idir, igrid, &
-                     en_r_iI1_rA(idir, iat, igrid), &
-                     num_r_iI1_rA(idir, iat, igrid), &
-                     en_r_iI1_rA(idir, iat, igrid) &
-                     - num_r_iI1_rA(idir, iat, igrid), &
-                     en_r_iI1_rA(idir, iat, igrid) &
-                     /(en_r_iI1_rA(idir, iat, igrid) &
-                       - num_r_iI1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_r_iI1_rA(idir, iat, igrid), &
-                          num_r_iI1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="r_iI gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 3: Surface normals
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do kdir = 1, ndim
-               do igrid = 1, ngrid_set
-                  ! Skip invalid gridpoints
-                  if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-                  diff = abs(en_normal1_rA(kdir, iat, idir, igrid) &
-                             - num_normal1_rA(idir, iat, kdir, igrid))
-                  max_diff = max(max_diff, diff)
-
-                  if (diff > ABS_THRPRINT) then
-                     write (*, "(A,I6,I6,I6,I6,3ES15.5)") "normal: ", &
-                        iat, idir, kdir, igrid, &
-                        en_normal1_rA(kdir, iat, idir, igrid), &
-                        num_normal1_rA(idir, iat, kdir, igrid), &
-                        en_normal1_rA(kdir, iat, idir, igrid) &
-                        - num_normal1_rA(idir, iat, kdir, igrid)
-                  end if
-
-                  call check(error, en_normal1_rA(kdir, iat, idir, igrid), &
-                             num_normal1_rA(idir, iat, kdir, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                             more="Surface normal gradient mismatch")
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
-
-      ! Test 7: Jacobian scaling
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_cpjac1_rA(idir, iat, igrid) &
-                          - num_cpjac1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "cpjac: ", &
-                     iat, idir, igrid, &
-                     en_cpjac1_rA(idir, iat, igrid), &
-                     num_cpjac1_rA(idir, iat, igrid), &
-                     en_cpjac1_rA(idir, iat, igrid) &
-                     - num_cpjac1_rA(idir, iat, igrid), &
-                     en_cpjac1_rA(idir, iat, igrid) &
-                     /(en_cpjac1_rA(idir, iat, igrid) &
-                       - num_cpjac1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_cpjac1_rA(idir, iat, igrid), &
-                          num_cpjac1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Jacobian scaling gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 8: Lebedev weights
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_wleb1_rA(idir, iat, igrid) &
-                          - num_wleb1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THR) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "wleb: ", &
-                     iat, idir, igrid, &
-                     en_wleb1_rA(idir, iat, igrid), &
-                     num_wleb1_rA(idir, iat, igrid), &
-                     en_wleb1_rA(idir, iat, igrid) &
-                     - num_wleb1_rA(idir, iat, igrid), &
-                     en_wleb1_rA(idir, iat, igrid) &
-                     /(en_wleb1_rA(idir, iat, igrid) &
-                       - num_wleb1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_wleb1_rA(idir, iat, igrid), &
-                          num_wleb1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Lebedev weight gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! w_f switching function gradient
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_w_f1_rA(idir, iat, igrid) &
-                          - num_w_f1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "w_f: ", &
-                     iat, idir, igrid, &
-                     en_w_f1_rA(idir, iat, igrid), &
-                     num_w_f1_rA(idir, iat, igrid), &
-                     en_w_f1_rA(idir, iat, igrid) &
-                     - num_w_f1_rA(idir, iat, igrid), &
-                     en_w_f1_rA(idir, iat, igrid) &
-                     /(en_w_f1_rA(idir, iat, igrid) &
-                       - num_w_f1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_w_f1_rA(idir, iat, igrid), &
-                          num_w_f1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="w_f switching function gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 9: Gaussian width (xi) derivatives
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_xi1_rA(idir, iat, igrid) &
-                          - num_xi1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "xi: ", &
-                     iat, idir, igrid, &
-                     en_xi1_rA(idir, iat, igrid), &
-                     num_xi1_rA(idir, iat, igrid), &
-                     en_xi1_rA(idir, iat, igrid) &
-                     - num_xi1_rA(idir, iat, igrid), &
-                     en_xi1_rA(idir, iat, igrid) &
-                     /(en_xi1_rA(idir, iat, igrid) &
-                       - num_xi1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_xi1_rA(idir, iat, igrid), &
-                          num_xi1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Gaussian width (xi) gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 3d: iSwiG switching function
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_iswig1_rA(idir, iat, igrid) &
-                          - num_iswig1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "iswig: ", &
-                     iat, idir, igrid, &
-                     en_iswig1_rA(idir, iat, igrid), &
-                     num_iswig1_rA(idir, iat, igrid), &
-                     en_iswig1_rA(idir, iat, igrid) &
-                     - num_iswig1_rA(idir, iat, igrid), &
-                     en_iswig1_rA(idir, iat, igrid) &
-                     /(en_iswig1_rA(idir, iat, igrid) &
-                       - num_iswig1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_iswig1_rA(idir, iat, igrid), &
-                          num_iswig1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Switching function gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 4: Surface areas
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_area1_rA(idir, iat, igrid) &
-                          - num_area1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THRPRINT) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "area: ", &
-                     iat, idir, igrid, &
-                     en_area1_rA(idir, iat, igrid), &
-                     num_area1_rA(idir, iat, igrid), &
-                     en_area1_rA(idir, iat, igrid) &
-                     - num_area1_rA(idir, iat, igrid), &
-                     en_area1_rA(idir, iat, igrid) &
-                     /(en_area1_rA(idir, iat, igrid) &
-                       - num_area1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_area1_rA(idir, iat, igrid), &
-                          num_area1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Surface area gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-      ! Test 6: Volumes
-      max_diff = 0.0_wp
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid_set
-               ! Skip invalid gridpoints
-               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
-
-               diff = abs(en_volume1_rA(idir, iat, igrid) &
-                          - num_volume1_rA(idir, iat, igrid))
-               max_diff = max(max_diff, diff)
-
-               if (diff > ABS_THR) then
-                  write (*, "(A,I6,I6,I6,4ES15.5)") "volume: ", &
-                     iat, idir, igrid, &
-                     en_volume1_rA(idir, iat, igrid), &
-                     num_volume1_rA(idir, iat, igrid), &
-                     en_volume1_rA(idir, iat, igrid) &
-                     - num_volume1_rA(idir, iat, igrid), &
-                     en_volume1_rA(idir, iat, igrid) &
-                     /(en_volume1_rA(idir, iat, igrid) &
-                       - num_volume1_rA(idir, iat, igrid))
-               end if
-
-               call check(error, en_volume1_rA(idir, iat, igrid), &
-                          num_volume1_rA(idir, iat, igrid), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                          more="Volume gradient mismatch")
-               if (allocated(error)) return
-            end do
-         end do
-      end do
-
-   end subroutine do_test
 
    !> Finite-difference validation of the optional surface-adjoint channels
    !> w_n, w_k1, and w_k2 of contract_surface_lsf_weights
@@ -1068,7 +142,7 @@ contains
    !>
    !> which is finite-differenced here by rebuilding the cavity at +-h and +-2h
    !> and reading the forward normals and principal curvatures back per grid point
-   !> (matched through the persistent grid numbering, as in do_test)
+   !> (matched through the persistent grid numbering, as in [[check_drop_row_gradient]])
    !>
    !> Every channel is contracted on its own *and* all three together: the normal
    !> channel folds a Hessian coupling (H @ dS-gradient weight) into the effective
@@ -1080,20 +154,8 @@ contains
 
       !> Adjoint channel combinations probed: w_n, w_k1, w_k2, and all three
       integer, parameter :: NCHAN = 4
-      !> Near-umbilic guard. At k1 == k2 the individual principal curvatures are
-      !> not differentiable, so such grid points are skipped for the k channels
-      real(wp), parameter :: CURV_GAP_THR = 5.0e-2_wp
-      !> FD-vs-analytic thresholds for this test. The measured worst-case
-      !> deviations are 6.4e-12 (w_n), 2.1e-12 (w_k1), 2.1e-12 (w_k2), and
-      !> 6.3e-12 (all three) against adjoint magnitudes up to ~0.5, i.e. the
-      !> agreement is limited by the 4-point FD roundoff floor at STEP_SIZE
-      !> These bounds keep roughly one order of magnitude of headroom, far below
-      !> the suite-wide ABS_THR/REL_THR used for the cheaper forward gradients
-      real(wp), parameter :: ADJ_ABS = 5.0e-11_wp
-      real(wp), parameter :: ADJ_REL = 5.0e-10_wp
 
       type(structure_type) :: mol, mol_fd
-      real(wp), allocatable :: radii(:)
       type(cavity_type_drop), allocatable :: cavity
       type(mctc_error), allocatable :: cavity_error
       type(mctc_error), allocatable :: lsf_err
@@ -1109,7 +171,7 @@ contains
       real(wp), allocatable :: ref_k1(:), ref_k2(:)
       real(wp), allocatable :: st_normal(:, :, :), st_k1(:, :), st_k2(:, :)
       integer, allocatable :: ref_owner(:), numbering_to_idx(:)
-      logical, allocatable :: ref_conv(:), st_ok(:, :), valid(:, :, :)
+      logical, allocatable :: st_ok(:, :), valid(:, :, :)
 
       real(wp) :: fd_coeff(4), fd_delta(4)
       real(wp) :: d_normal(ndim), d_k1, d_k2, rhs
@@ -1128,9 +190,6 @@ contains
                                        0.00_wp, 0.00_wp, 4.60_wp, &
                                        2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
       !> The curvature channels need the forward principal curvatures; the
       !> normals are stored by the projection regardless
       allocate (cavity)
@@ -1140,8 +199,8 @@ contains
          call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-            do_curvature=.true., do_normal=.true.), ctx=ctx)
+            solve=drop_solve_parameters_type(max_iter=PROJ_MAXITER), proj_level=PROJ_LEVEL, &
+            wleb_prune_level=4, do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
@@ -1162,16 +221,9 @@ contains
 
       !> Reference bookkeeping: persistent numbering -> reference grid index
       call build_numbering_map(cavity%numbering(1:ngrid_set), numbering_to_idx)
-      allocate (ref_conv(ngrid_set), source=.false.)
-      allocate (ref_owner(ngrid_set), source=0)
-      allocate (ref_k1(ngrid_set), source=0.0_wp)
-      allocate (ref_k2(ngrid_set), source=0.0_wp)
-      do igrid = 1, ngrid_set
-         ref_conv(igrid) = .true.
-         ref_owner(igrid) = cavity%owner(igrid)
-         ref_k1(igrid) = cavity%k1(igrid)
-         ref_k2(igrid) = cavity%k2(igrid)
-      end do
+      ref_owner = cavity%owner(1:ngrid_set)
+      ref_k1 = cavity%k1(1:ngrid_set)
+      ref_k2 = cavity%k2(1:ngrid_set)
 
       !> Arbitrary, distinct, non-proportional surface adjoint weights
       allocate (w_n(ndim, ngrid_set), w_k1(ngrid_set), w_k2(ngrid_set))
@@ -1239,7 +291,6 @@ contains
       allocate (lsf1_rA(ndim, nsph), lsf2_r_rA(ndim, ndim, nsph))
       allocate (lsf3_rr_rA(6, ndim, nsph))
       do igrid = 1, ngrid_set
-         if (.not. ref_conv(igrid)) cycle
          call lsf%prepare(cavity%xyz(:, igrid), lsf_err)
          if (allocated(lsf_err)) then
             call test_failed(error, "LSF prepare failed: "//lsf_err%message)
@@ -1299,7 +350,7 @@ contains
             end do
 
             do igrid = 1, ngrid_set
-               valid(idir, iat, igrid) = ref_conv(igrid) .and. all(st_ok(igrid, :))
+               valid(idir, iat, igrid) = all(st_ok(igrid, :))
                if (.not. valid(idir, iat, igrid)) cycle
 
                d_normal = matmul(st_normal(:, igrid, :), fd_coeff)
@@ -1351,12 +402,14 @@ contains
    end subroutine test_adjoint_channels_fd
 
    !> The area and integration-weight adjoint channels must be equivalent to the
-   !> `w_xi` weights they fold into
+   !> `w_xi` and `w_f` weights they fold into
    !>
-   !> A DROP point area is `a = wleb * f / xi**2`, so a weight on `a` and a
-   !> weight on `wleb` both reach the level set only through
-   !> `w_xi <- -2*(a*w_a + wleb*w_w)/xi0`. Feeding `w_a`/`w_w` to the accumulator
-   !> and feeding the pre-folded `w_xi` directly must therefore produce the same
+   !> A DROP point area is `a = R**2 * wleb * f` with `wleb ~ 1/xi**2`, so a
+   !> weight on `a` and a weight on `wleb` reach the level set through
+   !> `w_xi <- -2*(a*w_a + wleb*w_w)/xi0`, and the one on `a` also through the
+   !> switching value, `w_f <- R**2*wleb*w_a`, whose gate follows the level set.
+   !> Feeding `w_a`/`w_w` to the accumulator and feeding the pre-folded weights
+   !> directly must therefore produce the same
    !> contraction, at all three LSF orders. Not a finite-difference test: the two
    !> paths run the same kernel on algebraically identical input, so they agree
    !> to roundoff
@@ -1365,7 +418,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
       type(cavity_type_drop), allocatable :: cavity
       type(mctc_error), allocatable :: cavity_error
       type(moist_context_type), target :: ctx
@@ -1377,17 +429,11 @@ contains
       real(wp), allocatable :: w_lsf0_ref(:), w_lsf1_ref(:, :), w_lsf2_ref(:, :, :)
       integer :: igrid, ngrid_set
 
-      !> The two paths differ only by the order of a handful of flops
-      real(wp), parameter :: ADJ_EQ_THR = 1.0e-13_wp
-
       !> Same asymmetric cluster as `test_adjoint_channels_fd`
       call new(mol, [8, 6, 1], reshape([ &
                                        0.00_wp, 0.00_wp, 0.00_wp, &
                                        0.00_wp, 0.00_wp, 4.60_wp, &
                                        2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
 
       allocate (cavity)
       block
@@ -1396,8 +442,8 @@ contains
          call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-            do_curvature=.true., do_normal=.true.), ctx=ctx)
+            solve=drop_solve_parameters_type(max_iter=PROJ_MAXITER), proj_level=PROJ_LEVEL, &
+            wleb_prune_level=4, do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
@@ -1428,6 +474,7 @@ contains
          return
       end if
       acc_ref%w_xi = -2.0_wp*(cavity%a*acc%w_a + cavity%wleb*acc%w_w)/cavity%xi0
+      acc_ref%w_f = cavity%radii(cavity%owner)**2*cavity%wleb*acc%w_a
 
       allocate (w_lsf0(ngrid_set), w_lsf1(ndim, ngrid_set), &
                 w_lsf2(ndim, ndim, ngrid_set))
@@ -1463,7 +510,5 @@ contains
       call check(error, maxval(abs(w_lsf2 - w_lsf2_ref)), 0.0_wp, &
                  thr=ADJ_EQ_THR, more="derived Hessian surface-weight channel")
    end subroutine test_adjoint_area_channels
-
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
 
 end module test_cavity_drop_gradient
