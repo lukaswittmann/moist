@@ -531,14 +531,16 @@ contains
                if (allocated(error)) return
                n = self%fallback%n_points
                call reserve_queue(nnear, nnear_seeds + n)
-               self%near_seeds(:, nnear_seeds + 1:nnear_seeds + n) = self%fallback%points(:, 1:n)
+               ! `points` stays unallocated until the first seed
+               if (n > 0) self%near_seeds(:, nnear_seeds + 1:nnear_seeds + n) = self%fallback%points(:, 1:n)
                self%near_reach(e) = self%fallback%reach
             else
                call self%seeder%seed(self%lsf, request, error)
                if (allocated(error)) return
                n = self%seeder%n_points
                call reserve_queue(nnear, nnear_seeds + n)
-               self%near_seeds(:, nnear_seeds + 1:nnear_seeds + n) = self%seeder%points(:, 1:n)
+               ! `points` stays unallocated until the first seed
+               if (n > 0) self%near_seeds(:, nnear_seeds + 1:nnear_seeds + n) = self%seeder%points(:, 1:n)
                self%near_reach(e) = self%seeder%reach
             end if
             self%near_first(e) = nnear_seeds + 1
