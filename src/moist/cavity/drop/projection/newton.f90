@@ -41,14 +41,14 @@
 !>     iterate beyond the level set's screening reach
 !>   - captured, with `capture_duplicates`: an unscaled step whose prediction
 !>     `x + dx` lies within `capture_distance` of an earlier accepted column of
-!>     the same run; the column is a duplicate of that foot and stops unevaluated
+!>     the same run; the column is a duplicate of that point and stops unevaluated
 !>
 !> Capture:
 !>   - captors are accepted columns of the same run, whose status no solve
 !>     changes, so a decision depends neither on other runs nor on other
-!>     pending columns, and the first column of a foot in run order survives
+!>     pending columns, and the first column of a point in run order survives
 !>   - a merely converged column captures nothing: several starts can meet at
-!>     a saddle that the polish escape sends to different feet
+!>     a saddle that the polish escape sends to different points
 !>
 !> Unreached columns (no atom within the screening reach, outputs unspecified):
 !>   - a start point: `point_failed_unreached`, routine for far shell seeds; an
@@ -61,6 +61,7 @@ module moist_cavity_drop_projection_newton
    use mctc_env, only: error_type, fatal_error
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_packed, only: packed_index
+   use moist_cavity_drop_projection_parameters, only: drop_solve_parameters_type
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, &
                                                 point_captured, &
@@ -70,43 +71,20 @@ module moist_cavity_drop_projection_newton
    implicit none(type, external)
    private
 
-   public :: newton_config_type, newton_scratch_type, newton_solve_batch
+   public :: newton_scratch_type, newton_solve_batch
    public :: newton_solve_4x4
 
    !> Armijo coefficient of the backtracking on `||F||`
    real(wp), parameter :: armijo_c = 1.0e-4_wp
    !> Squared gradient norm below which the constraint is degenerate
    real(wp), parameter :: grad2_floor = 1.0e-28_wp
-   !> Distance (Bohr) within which a Newton prediction lands on an accepted foot
+   !> Distance (Bohr) within which a Newton prediction lands on an accepted point
    !>
-   !> - far above `branch_sep_cut` (default `1e-8`), within which the finalize
-   !>   merges two feet, so a duplicate start stops rounds before it converges
-   !> - well below the separation of distinct feet on near-degenerate arcs,
+   !> - far above `branch%sep_cut` (at least `1e-6`), within which the finalize
+   !>   merges two points, so a duplicate start stops rounds before it converges
+   !> - well below the separation of distinct points on near-degenerate arcs,
    !>   which can be a few `1e-3`
    real(wp), parameter :: capture_distance = 1.0e-4_wp
-
-   !> Newton settings
-   ! TODO: good idea to introduce a new type here with drop parameters again?
-   type :: newton_config_type
-      !> Anchor objective weight `w`
-      real(wp) :: phi_alpha = 0.5_wp
-      !> Residual tolerance; `0.1 tol` is the step tolerance
-      real(wp) :: tol = 1.0e-10_wp
-      !> Step budget per point
-      integer :: max_iter = 150
-      !> `||F||` below which a point switches to the full system
-      real(wp) :: switch_fnorm = 1.0e-3_wp
-      !> Cheap steps after which a point switches to the full system
-      integer :: max_cheap_steps = 50
-      !> Smallest line-search step, accepted unconditionally
-      real(wp) :: ls_floor = 0.1_wp
-      !> Longest spatial Newton step before the line search (Bohr)
-      real(wp) :: max_step = 1.0_wp
-      !> Margin of the merit penalty over the multiplier, `mu >= |lambda+| + margin`
-      real(wp) :: merit_margin = 1.0_wp
-      !> Stop a column whose prediction lands on an earlier accepted column of its run
-      logical :: capture_duplicates = .false.
-   end type newton_config_type
 
    !> Per-thread Newton scratch, column- and list-indexed, grown geometrically
    type :: newton_scratch_type
@@ -151,23 +129,25 @@ contains
    !> - columns start from their stored `x` and `lambda`; a column whose start
    !>   is exactly its run's anchor also records the anchor jet in the run
    !> - on return each processed column is `point_converged` with `S`, `gradS`,
-   !>   `hessS`, `phi`, `rho` and `normal` of its final iterate, `point_captured`
+   !>   `hessS`, `phi`, `pdist` and `normal` of its final iterate, `point_captured`
    !>   (with `capture_duplicates`), or one of the `point_failed_*` codes
    !>
    !> @param[inout] batch        Points to solve
    !> @param[inout] lsf          Thread-local level set
    !> @param[in]    cfg          Newton settings
+   !> @param[in]    phi_alpha    Anchor objective weight `w`
    !> @param[inout] scratch      Per-thread scratch
    !> @param[out]   error        LSF evaluation failure or unreached anchor (build-fatal)
    !> @param[in]    first        First column (default 1)
    !> @param[in]    last         Last column (default `batch%n`)
    !> @param[out]   stage1_steps Cheap steps per column (diagnostic)
    !> @param[out]   stage2_steps Full steps per column (diagnostic)
-   subroutine newton_solve_batch(batch, lsf, cfg, scratch, error, first, last, &
+   subroutine newton_solve_batch(batch, lsf, cfg, phi_alpha, scratch, error, first, last, &
                                  stage1_steps, stage2_steps)
       type(projection_batch_type), intent(inout) :: batch
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      type(newton_config_type), intent(in) :: cfg
+      type(drop_solve_parameters_type), intent(in) :: cfg
+      real(wp), intent(in) :: phi_alpha
       type(newton_scratch_type), intent(inout) :: scratch
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: first
@@ -176,7 +156,7 @@ contains
       integer, intent(inout), optional :: stage2_steps(:)
 
       integer :: j0, j1, j, k, nact, nkeep, nls, m1, m, irun
-      real(wp) :: w, a(3), fnew, dzmax, dzfloor, step(4), merit_new, mu_full
+      real(wp) :: w, a(3), fnew, dzmax, dzfloor, step(4), merit_new, mu_full, g_len
       logical :: ok, accept
       character(len=16) :: buffer
 
@@ -186,7 +166,7 @@ contains
       if (present(last)) j1 = last
       if (j1 < j0) return
       call reserve_scratch(scratch, j1)
-      w = cfg%phi_alpha
+      w = phi_alpha
 
       !> Start: one order-1 evaluation of every pending column
       nact = 0
@@ -307,7 +287,7 @@ contains
                end if
             end if
             scratch%mu(j) = max(scratch%mu(j), abs(batch%lambda(j) + step(4)) + cfg%merit_margin)
-            ! A scaled step is no prediction of the foot
+            ! A scaled step is no prediction of the point
             if (cfg%capture_duplicates .and. norm2(step(1:3)) < cfg%max_step) then
                if (lands_on_accepted(batch, scratch%prev_accepted, j, batch%x(:, j) + step(1:3))) then
                   batch%status(j) = point_captured
@@ -428,9 +408,15 @@ contains
          if (present(stage2_steps)) stage2_steps(j) = scratch%n2(j)
          if (batch%status(j) /= point_converged) cycle
          a = batch%run_xyz(:, batch%run_of(j))
-         batch%rho(j) = norm2(batch%x(:, j) - a)
+         batch%pdist(j) = norm2(batch%x(:, j) - a)
          batch%phi(j) = 0.5_wp*w*sum((batch%x(:, j) - a)**2)
-         batch%normal(:, j) = batch%gradS(:, j)/norm2(batch%gradS(:, j))
+         ! Zero gradient: anchor on a critical point of S, no normal; f_crit closes the point
+         g_len = norm2(batch%gradS(:, j))
+         if (g_len > 0.0_wp) then
+            batch%normal(:, j) = batch%gradS(:, j)/g_len
+         else
+            batch%normal(:, j) = 0.0_wp
+         end if
       end do
    end subroutine newton_solve_batch
 
@@ -546,7 +532,7 @@ contains
    !> @param[in] batch         Points
    !> @param[in] prev_accepted Previous accepted column of the same run, 0 for none
    !> @param[in] j             Column
-   !> @param[in] x_pred        Predicted foot of column `j`
+   !> @param[in] x_pred        Predicted point of column `j`
    pure function lands_on_accepted(batch, prev_accepted, j, x_pred) result(landed)
       type(projection_batch_type), intent(in) :: batch
       integer, intent(in) :: prev_accepted(:)
