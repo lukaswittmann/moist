@@ -326,10 +326,11 @@ if(MOIST_TESTS)
     math_grid_3d_integration
     math_grid_3d_invariance
     cavity_drop_phi cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference cavity_drop_lsf_screening
-    cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint cavity_drop_potential
+    cavity_drop_isodensity cavity_drop_gradient cavity_drop_branching cavity_drop_nuclear_adjoint
+    cavity_drop_potential
     cavity_drop_integration cavity_drop_anchor cavity_drop_projector
     cavity_drop_projection
-    cavity_drop_cpcm cavity_drop_properties
+    cavity_drop_properties
     cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
@@ -388,12 +389,16 @@ if(MOIST_TESTS)
     radial_trafo_one_per_thread partition_grid_threaded)
   set(moist_test_selected_cavity_drop_nuclear_adjoint
     all_channels single_channels branching_channels branching_xi_fd
+    branching_f_fd reach_gate_channels forward_pair_channels
+    sibling_gate_channels forward_screened_neighbour forward_screened_owner
+    forward_isodensity_owner forward_frozen_field
     model_forward_reverse cosmo_model_forward_reverse shape_guard
     thread_count_invariance)
 
   set(moist_test_srcs
     "${_unit}/main.F90"
     "${_unit}/test_helpers.f90"
+    "${_unit}/test_cavity_drop_fd.f90"
     "${_unit}/test_pcm_conductor_probe.f90"
     "${_unit}/test_moz_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"

@@ -42,6 +42,9 @@ module moist_cavity_drop_projection_polish
    real(wp), parameter :: tol_eig_base = 1.0e-10_wp
    !> Third directional derivative of the Lagrangian above which a flat point is an inflection
    real(wp), parameter :: tol_D3 = 1.0e-8_wp
+   !> Largest objective drop an escape step must achieve; less is ok for a step with a smaller
+   !> curvature-based gain at the threshold
+   real(wp), parameter :: escape_drop_max = 1.0e-10_wp
 
 contains
 
@@ -425,7 +428,7 @@ contains
       real(wp) :: T_mat(3, 2), t1(3), t2(3), g_tan(2), H_lagrangian(6), R_reduced(2, 2), Ht1(3), Ht2(3)
       real(wp) :: delta_r(3), alpha, directional_deriv, norm_g_tan
       real(wp) :: mu_min, mu_max, v_min(2), v_max(2), s_tan(2), eig_tol, D3_ddd
-      real(wp) :: r_cand(3), lambda_cand, phi_cand
+      real(wp) :: r_cand(3), lambda_cand, phi_cand, drop_min
       integer :: iter, ls_iter, isign, nsign
       logical :: converged, ls_success, at_saddle, escaping, have_trial, unreached
 
@@ -554,7 +557,9 @@ contains
 
             if (escaping) then
                ! No first-order decrease to demand off a stationary point: the objective must drop
-               ls_success = phi_trial < phi_curr - 1.0e-10_wp
+               drop_min = max(16.0_wp*epsilon(phi_curr)*abs(phi_curr), &
+                              min(escape_drop_max, 0.25_wp*eig_tol*alpha**2))
+               ls_success = phi_trial < phi_curr - drop_min
             else
                ! Sufficient decrease; a bare decrease accepts the overshoot of a long Newton step
                ls_success = phi_trial <= phi_curr + cfg%escape_armijo_c*alpha*directional_deriv

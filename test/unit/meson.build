@@ -71,7 +71,6 @@ tests = [
   'cavity_drop_anchor',
   'cavity_drop_projector',
   'cavity_drop_projection',
-  'cavity_drop_cpcm',
   'cavity_drop_properties',
   'cavity_iswig',
   'cavity_numsa',
@@ -154,6 +153,9 @@ test_selected = {
   ],
   'cavity_drop_nuclear_adjoint': [
     'all_channels', 'single_channels', 'branching_channels', 'branching_xi_fd',
+    'branching_f_fd', 'reach_gate_channels', 'forward_pair_channels',
+    'sibling_gate_channels', 'forward_screened_neighbour', 'forward_screened_owner',
+    'forward_isodensity_owner', 'forward_frozen_field',
     'model_forward_reverse', 'cosmo_model_forward_reverse', 'shape_guard',
     'thread_count_invariance',
   ],
@@ -163,6 +165,7 @@ test_selected = {
 test_srcs = files(
   'main.F90',
   'test_helpers.f90',
+  'test_cavity_drop_fd.f90',
   'test_pcm_conductor_probe.f90',
   'test_moz_fixtures.f90',
   'test_model_component_helper.f90',

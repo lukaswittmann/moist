@@ -21,19 +21,25 @@
 module test_cavity_drop_nuclear_adjoint
 !$ use omp_lib, only: omp_in_parallel
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_branch_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
-   use test_helpers, only: get_test_cross, fd6_offsets
+   use test_helpers, only: get_test_cross, fd6_offsets, get_test_cube, nudge_structure, get_test_forward_pair, &
+                           get_test_sibling_gate
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_tile, only: surface_tile_width
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type
+   use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
+   use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_double, c_int, c_funloc, c_null_ptr, c_associated, c_f_pointer
    use moist_cavity_adjoint, only: cavity_adjoint_type
-   use moist_radii, only: default_cpcm_radii
+   use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
    use moist_channels_coupling, only: coupling_type
@@ -60,7 +66,6 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: NUM_LEB = 50
 
    real(wp), parameter :: PROJ_TOL = 1E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
    integer, parameter :: PROJ_LEVEL = 1
 
    !> Absolute forward-versus-reverse bound across all channels
@@ -76,8 +81,8 @@ module test_cavity_drop_nuclear_adjoint
    !> Below this the reference gradient is too small to carry a relative test
    real(wp), parameter :: VACUITY_THR = 1.0E-6_wp
 
-   !> Softmax scale for the branching test
-   real(wp), parameter :: BRANCH_SOFTMAX_S = 0.5_wp
+   !> Branch window for the branching test
+   real(wp), parameter :: BRANCH_DPDIST_MAX = 3.7_wp
 
    !> Branching-width finite-difference step
    real(wp), parameter :: XI_FD_STEP = 1.0E-4_wp
@@ -94,6 +99,20 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: CH_XYZ = 5, CH_N = 6, CH_K1 = 7, CH_K2 = 8
    integer, parameter :: NCHAN = 8
 
+   !> SvdW fade onset of [[test_forward_screened_neighbour]] (e-folds); band end
+   !> 4.5*0.4/5.5 = 0.327 Bohr past a sphere
+   real(wp), parameter :: NB_FADE = 0.4_wp
+   !> Reach gate of the same fixture (Bohr): closed before the fade band end, so
+   !> a point stays inside its owner's reach
+   real(wp), parameter :: NB_REACH_ON = 0.2_wp, NB_REACH_OFF = 0.32_wp
+   !> Finite-difference bound of the same fixture
+   real(wp), parameter :: NB_FD_TOL = 2.0e-4_wp
+   !> Smallest area gradient the screened neighbours must carry, five times the bound
+   real(wp), parameter :: NB_AREA_MIN = 5.0_wp*NB_FD_TOL
+
+   !> Centers of the callback density of [[test_forward_isodensity_owner]] (Bohr)
+   real(wp), parameter :: density_centers(3, 2) = reshape([0.0_wp, 0.0_wp, -1.4_wp, 0.3_wp, 0.0_wp, 1.5_wp], [3, 2])
+
 contains
 
    !> Register the reverse-mode nuclear gradient tests
@@ -108,6 +127,14 @@ contains
                   new_unittest("single_channels", test_single_channels), &
                   new_unittest("branching_channels", test_branching_channels), &
                   new_unittest("branching_xi_fd", test_branching_xi_fd), &
+                  new_unittest("branching_f_fd", test_branching_f_fd), &
+                  new_unittest("reach_gate_channels", test_reach_gate_channels), &
+                  new_unittest("forward_pair_channels", test_forward_pair_channels), &
+                  new_unittest("sibling_gate_channels", test_sibling_gate_channels), &
+                  new_unittest("forward_screened_neighbour", test_forward_screened_neighbour), &
+                  new_unittest("forward_screened_owner", test_forward_screened_owner), &
+                  new_unittest("forward_isodensity_owner", test_forward_isodensity_owner), &
+                  new_unittest("forward_frozen_field", test_forward_frozen_field), &
                   new_unittest("model_forward_reverse", test_model_forward_reverse), &
                   new_unittest("cosmo_model_forward_reverse", test_cosmo_model_forward_reverse), &
                   new_unittest("shape_guard", test_shape_guard), &
@@ -130,7 +157,7 @@ contains
    !>
    !> The default fixture is asymmetric, so its multistart seeds all refine to
    !> one minimum and `branch_count` never exceeds one -- which leaves the
-   !> softmax reverse pass and its explicit owner term completely untested
+   !> branch-weight reverse pass and its explicit owner term completely untested
    !> A near-symmetric dimer under multistart projection does branch, and
    !> [[run_equivalence]] asserts that it actually did
    subroutine test_branching_channels(error)
@@ -177,26 +204,56 @@ contains
 
    !> Finite-difference check of the Gaussian-width channel under branching
    !>
-   !> `test_branching_channels` only proves the reverse path matches the
-   !> forward one. Both apply a branch-weight correction to `xi` that no
-   !> shipped fixture ever exercised, so this pins the pair against an
-   !> independent 6-point stencil on the scalar functional
+   !> The width carries no branch weight, but its rows still come from a branched
+   !> projection, so it is pinned on the branching fixture as well
+   subroutine test_branching_xi_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_branching_fd(CH_XI, error)
+
+   end subroutine test_branching_xi_fd
+
+   !> Finite-difference check of the switching channel under branching
    !>
-   !>   L(R) = sum_i w_i * xi_i(R)
+   !> `f = f_anchor * wbranch` is where the branch weight enters, so this is the
+   !> FD check of the branch-weight reverse pass and forward post-pass
+   subroutine test_branching_f_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_branching_fd(CH_F, error)
+
+   end subroutine test_branching_f_fd
+
+   !> Finite-difference check of one per-point channel under branching
+   !>
+   !> `test_branching_channels` only proves the reverse path matches the
+   !> forward one. This pins both against an independent 6-point stencil on
+   !> the scalar functional
+   !>
+   !>   L(R) = sum_i w_i * q_i(R),   q = xi or f
    !>
    !> Grid points are filtered and reordered on every rebuild, so the weights
    !> are keyed on the persistent `cavity%numbering` and restricted to points
    !> that survive at every stencil geometry -- otherwise a point appearing or
    !> vanishing would put a step discontinuity into L
-   subroutine test_branching_xi_fd(error)
+   !>
+   !> @param[in]  channel `CH_XI` or `CH_F`
+   !> @param[out] error   Error handle
+   subroutine run_branching_fd(channel, error)
+      !> `CH_XI` or `CH_F`
+      integer, intent(in) :: channel
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
       !> O(h^6) central-difference stencil: with the 79 branched anchors of the
       !> level-3 cross the O(h^4) truncation error exceeds XI_FD_REL (2.3e-8)
       integer, parameter :: NSTEP = 6
-      !> Coordinate with a nonzero branching-width response
+      !> Coordinate along which the branch weights respond
       integer, parameter :: FD_ATOM = 5, FD_AXIS = 3
+      !> Smallest stencil derivative of a branch weight that counts as a response
+      real(wp), parameter :: BRANCH_RESPONSE_THR = 1.0E-3_wp
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -206,13 +263,23 @@ contains
       type(structure_type) :: mol, mol_fd
 
       real(wp) :: fd_delta(NSTEP)
-      real(wp), allocatable :: grad_ana(:, :), wmap(:), xi_store(:, :), w_xi(:)
+      real(wp), allocatable :: grad_ana(:, :), wmap(:), q_store(:, :), wb_store(:, :), w_q(:)
+      character(len=:), allocatable :: label
       logical, allocatable :: have(:, :), usable(:), in_ref(:)
       !> Branch count per persistent numbering at each stencil geometry
       integer, allocatable :: bc_store(:, :)
-      real(wp) :: num_deriv, ana_deriv, diff
+      real(wp) :: num_deriv, ana_deriv, diff, dwb, dwb_max
       integer :: max_num, istep, igrid, inum, ngrid, ncommon, nphantom
 
+      select case (channel)
+      case (CH_XI)
+         label = "xi"
+      case (CH_F)
+         label = "f"
+      case default
+         call test_failed(error, "no FD check for channel "//to_string(channel))
+         return
+      end select
       fd_delta = fd6_offsets*XI_FD_STEP
 
       call fixture_geometry(.true., mol)
@@ -230,11 +297,12 @@ contains
       do inum = 1, max_num
          wmap(inum) = ramp(inum, 0)
       end do
-      allocate (xi_store(max_num, NSTEP), source=0.0_wp)
+      allocate (q_store(max_num, NSTEP), source=0.0_wp)
+      allocate (wb_store(max_num, NSTEP), source=0.0_wp)
       allocate (have(max_num, NSTEP), source=.false.)
       allocate (bc_store(max_num, NSTEP), source=0)
 
-      ! Collect xi at each stencil geometry, keyed on the persistent numbering
+      ! Collect the channel at each stencil geometry, keyed on the persistent numbering
       do istep = 1, NSTEP
          mol_fd = mol
          mol_fd%xyz(FD_AXIS, FD_ATOM) = mol_fd%xyz(FD_AXIS, FD_ATOM) + fd_delta(istep)
@@ -246,7 +314,12 @@ contains
                inum = cavity_fd%numbering(igrid)
                if (inum < 1 .or. inum > max_num) cycle
                have(inum, istep) = .true.
-               xi_store(inum, istep) = cavity_fd%xi0(igrid)
+               if (channel == CH_XI) then
+                  q_store(inum, istep) = cavity_fd%xi0(igrid)
+               else
+                  q_store(inum, istep) = cavity_fd%f(igrid)
+               end if
+               wb_store(inum, istep) = cavity_fd%wbranch(igrid)
                bc_store(inum, istep) = cavity_fd%offset(cavity_fd%anchor_of_row(igrid) + 1) &
                                         - cavity_fd%offset(cavity_fd%anchor_of_row(igrid))
             end do
@@ -280,7 +353,7 @@ contains
                              to_string(bc_store(inum, 1))//", "//to_string(bc_store(inum, 2))// &
                              ", "//to_string(bc_store(inum, 3))//", "//to_string(bc_store(inum, 4))// &
                              ", "//to_string(bc_store(inum, 5))//", "//to_string(bc_store(inum, 6))// &
-                             ", so its xi is compared across different branch weightings")
+                             ", so its "//label//" is compared across different branch sets")
             return
          end if
       end do
@@ -292,30 +365,49 @@ contains
          return
       end if
 
-      ! Pair nearby widths before summing to avoid subtracting large functionals
+      ! The branch weights must actually move along the coordinate
+      dwb_max = 0.0_wp
+      do inum = 1, max_num
+         if (.not. usable(inum)) cycle
+         dwb = (45.0_wp*(wb_store(inum, 3) - wb_store(inum, 4)) - &
+                9.0_wp*(wb_store(inum, 2) - wb_store(inum, 5)) + &
+                (wb_store(inum, 1) - wb_store(inum, 6)))/(60.0_wp*XI_FD_STEP)
+         dwb_max = max(dwb_max, abs(dwb))
+      end do
+      if (dwb_max <= BRANCH_RESPONSE_THR) then
+         call test_failed(error, "no branch weight responds along the FD coordinate (max |dw| "// &
+                          to_string(dwb_max)//")")
+         return
+      end if
+
+      ! Pair nearby values before summing to avoid subtracting large functionals
       num_deriv = 0.0_wp
       do inum = 1, max_num
          if (.not. usable(inum)) cycle
          num_deriv = num_deriv + wmap(inum)* &
-                     (45.0_wp*(xi_store(inum, 3) - xi_store(inum, 4)) - &
-                      9.0_wp*(xi_store(inum, 2) - xi_store(inum, 5)) + &
-                      (xi_store(inum, 1) - xi_store(inum, 6)))/(60.0_wp*XI_FD_STEP)
+                     (45.0_wp*(q_store(inum, 3) - q_store(inum, 4)) - &
+                      9.0_wp*(q_store(inum, 2) - q_store(inum, 5)) + &
+                      (q_store(inum, 1) - q_store(inum, 6)))/(60.0_wp*XI_FD_STEP)
       end do
       if (.not. ieee_is_finite(num_deriv)) then
-         call test_failed(error, "branching xi FD reference is not finite")
+         call test_failed(error, "branching "//label//" FD reference is not finite")
          return
       end if
 
       ! Analytic side: same restricted weights through the reverse path
-      allocate (w_xi(ngrid), source=0.0_wp)
+      allocate (w_q(ngrid), source=0.0_wp)
       do igrid = 1, ngrid
          inum = cavity%numbering(igrid)
          if (inum >= 1 .and. inum <= max_num) then
-            if (usable(inum)) w_xi(igrid) = wmap(inum)
+            if (usable(inum)) w_q(igrid) = wmap(inum)
          end if
       end do
       call acc%init(ngrid)
-      call acc%add_surface_weights(cav_error, w_xi=w_xi)
+      if (channel == CH_XI) then
+         call acc%add_surface_weights(cav_error, w_xi=w_q)
+      else
+         call acc%add_surface_weights(cav_error, w_f=w_q)
+      end if
       if (allocated(cav_error)) then
          call test_failed(error, "add_surface_weights failed: "//cav_error%message)
          return
@@ -335,20 +427,19 @@ contains
       end if
 
       if (.not. ieee_is_finite(ana_deriv)) then
-         call test_failed(error, "branching xi analytic derivative is not finite")
+         call test_failed(error, "branching "//label//" analytic derivative is not finite")
          return
       end if
       diff = abs(ana_deriv - num_deriv)
       if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
-         call test_failed(error, "branching xi gradient disagrees with finite differences: "// &
+         call test_failed(error, "branching "//label//" gradient disagrees with finite differences: "// &
                           "analytic "//to_string(ana_deriv)//" numeric "//to_string(num_deriv)// &
                           " (common points "//to_string(ncommon)//")")
          return
       end if
 
-      ! Same stencil against the forward path. The branch post-pass has to
-      ! reach xi1_rA as well as wleb1_rA and a_i1_rA -- it originally did not,
-      ! and nothing caught it because no shipped fixture branches
+      ! Same stencil against the forward path, whose branch post-pass adds the
+      ! branch-weight response to f1_rA
       call cavity%get_gradient(cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "forward gradient failed: "//cav_error%message)
@@ -356,22 +447,26 @@ contains
       end if
       ana_deriv = 0.0_wp
       do igrid = 1, ngrid
-         ana_deriv = ana_deriv + w_xi(igrid)*cavity%xi1_rA(FD_AXIS, FD_ATOM, igrid)
+         if (channel == CH_XI) then
+            ana_deriv = ana_deriv + w_q(igrid)*cavity%xi1_rA(FD_AXIS, FD_ATOM, igrid)
+         else
+            ana_deriv = ana_deriv + w_q(igrid)*cavity%f1_rA(FD_AXIS, FD_ATOM, igrid)
+         end if
       end do
 
       if (.not. ieee_is_finite(ana_deriv)) then
-         call test_failed(error, "forward xi1_rA derivative is not finite under branching")
+         call test_failed(error, "forward "//label//" derivative is not finite under branching")
          return
       end if
       diff = abs(ana_deriv - num_deriv)
       if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
-         call test_failed(error, "forward xi1_rA disagrees with finite differences under "// &
+         call test_failed(error, "forward "//label//" derivative disagrees with finite differences under "// &
                           "branching: analytic "//to_string(ana_deriv)// &
                           " numeric "//to_string(num_deriv))
          return
       end if
 
-   end subroutine test_branching_xi_fd
+   end subroutine run_branching_fd
 
    !> CPCM and PV gradients through the forward and reverse model paths
    subroutine test_model_forward_reverse(error)
@@ -679,24 +774,15 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(cavity_adjoint_type) :: acc
-      type(mctc_error), allocatable :: cav_error
-
-      !> Reverse-mode and forward-mode gradients
-      real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
-      !> Grid extents and loop indices
-      integer :: ngrid, nsph, igrid, iatom, iaxis, ich
-      !> Comparison bookkeeping
-      real(wp) :: diff, scale, worst
-      integer :: worst_atom, worst_axis
+      !> Grid extent
+      integer :: ngrid
 
       call build_fixture(cavity, ctx, branching, error)
       if (allocated(error)) return
 
       ngrid = cavity%ngrid
-      nsph = cavity%nsph
 
-      ! Without real branching the softmax reverse pass and its explicit owner
+      ! Without real branching the branch-weight reverse pass and its explicit owner
       ! term are dead code here, so the branching variant must prove it branched
       if (branching) then
          if (.not. allocated(cavity%offset)) then
@@ -705,13 +791,590 @@ contains
          end if
          if (.not. any(cavity%offset(2:cavity%anchor%ngrid + 1) - cavity%offset(1:cavity%anchor%ngrid) > 1)) then
             call test_failed(error, "branching fixture did not branch; "// &
-                             "the softmax channel would go untested (ngrid "// &
+                             "the branch-weight channel would go untested (ngrid "// &
                              to_string(ngrid)//", max branch_count "// &
                              to_string(maxval(cavity%offset(2:cavity%anchor%ngrid + 1) &
                                               - cavity%offset(1:cavity%anchor%ngrid)))//")")
             return
          end if
       end if
+
+      call compare_paths(cavity, channels, label, error)
+
+   end subroutine run_equivalence
+
+   !> Largest response of a row weight to the gate of a partly open sibling row
+   !>
+   !> @param[in] cavity Built cavity
+   !> @return    live   `max |d w_m / d g_l|`, `l /= m` rows of one anchor, `0 < g_l < 1`
+   function sibling_gate_response(cavity) result(live)
+      type(cavity_type_drop), intent(in) :: cavity
+      real(wp) :: live
+
+      integer :: ia, r0, n, m, l
+      real(wp), allocatable :: w(:), jac_phi(:, :), jac_gate(:, :)
+
+      live = 0.0_wp
+      do ia = 1, cavity%anchor%ngrid
+         r0 = cavity%offset(ia)
+         n = cavity%offset(ia + 1) - r0
+         if (n < 2) cycle
+         allocate (w(n), jac_phi(n, n), jac_gate(n, n))
+         call cavity%branch_weight%weights_jac(cavity%phi0(r0 + 1:r0 + n), cavity%w_f0(r0 + 1:r0 + n), &
+                                               w, jac_phi, jac_gate)
+         do l = 1, n
+            if (.not. (cavity%w_f0(r0 + l) > 0.0_wp .and. cavity%w_f0(r0 + l) < 1.0_wp)) cycle
+            do m = 1, n
+               if (m /= l) live = max(live, abs(jac_gate(m, l)))
+            end do
+         end do
+         deallocate (w, jac_phi, jac_gate)
+      end do
+   end function sibling_gate_response
+
+   !> Every channel with many rows inside the reach band, whose direct response
+   !> to the anchor (the owner) the reverse path adds
+   subroutine test_reach_gate_channels(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      integer :: i, nband
+      real(wp) :: f
+
+      call get_test_cube(2.5093779394_wp, mol)
+      call build_switch_fixture(cavity, ctx, mol, 5.5_wp, 0.2_wp, error, reach_on=0.2_wp, reach_off=1.2_wp)
+      if (allocated(error)) return
+      nband = 0
+      do i = 1, cavity%ngrid
+         f = cavity%f_reach%f0(cavity%pdist(i))
+         if (f > 0.0_wp .and. f < 1.0_wp) nband = nband + 1
+      end do
+      if (nband == 0) then
+         call test_failed(error, "fixture has no row inside the reach band")
+         return
+      end if
+      call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "reach gate", error)
+
+   end subroutine test_reach_gate_channels
+
+   !> Every channel on anchors that share between two forward-facing points under
+   !> the default switches, on and off the mirror geometry
+   subroutine test_forward_pair_channels(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      real(wp) :: dz
+      integer :: i
+
+      do i = 1, 2
+         dz = merge(0.0_wp, 0.06_wp, i == 1)
+         call get_test_forward_pair(dz, mol)
+         call build_switch_fixture(cavity, ctx, mol, 2.0_wp, 0.2_wp, error)
+         if (allocated(error)) return
+         if (.not. any(cavity%offset(2:cavity%anchor%ngrid + 1) - cavity%offset(1:cavity%anchor%ngrid) > 1)) then
+            call test_failed(error, "forward pair did not branch")
+            return
+         end if
+         call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "forward pair", error)
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_forward_pair_channels
+
+   !> Every channel on the five-atom fixture whose anchors hold a partly open
+   !> point next to a forward-facing row, under the default switches
+   subroutine test_sibling_gate_channels(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+
+      call get_test_sibling_gate(mol)
+      call build_switch_fixture(cavity, ctx, mol, 1.5_wp, 0.2_wp, error)
+      if (allocated(error)) return
+      if (.not. sibling_gate_response(cavity) > 1.0e-2_wp) then
+         call test_failed(error, "fixture has no partly open row that moves a sibling weight")
+         return
+      end if
+      call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "sibling gate", error)
+
+   end subroutine test_sibling_gate_channels
+
+   !> Every channel and the total area gradient where a switching neighbour of an
+   !> anchor is not LSF-active at the projected point
+   !>
+   !> - SvdW fade band of 0.33 Bohr past the sphere, shorter than the reach of
+   !>   the switching function: the neighbour has no level set partial at the
+   !>   point, yet the switching value of the row moves with it
+   !> - reach gate closed at 0.32 Bohr, inside the fade band: every owner stays
+   !>   LSF-active, so only the neighbour path is under test
+   !> - finite differences: the short band makes the level set stiff, the 4-point
+   !>   stencil at 1e-4 Bohr is off by 3e-5 (falling as h^4); the screened
+   !>   neighbours carry 1.9e-3, which a gradient without them is off by
+   subroutine test_forward_screened_neighbour(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      integer :: n_owner, n_neighbour
+      real(wp), allocatable :: area_nb(:, :)
+
+      call fixture_geometry(.false., mol)
+      call build_screened_fixture(cavity, ctx, mol, NB_FADE, error, NB_REACH_ON, NB_REACH_OFF)
+      if (allocated(error)) return
+      call count_screened(cavity, n_owner, n_neighbour, error)
+      if (allocated(error)) return
+      if (n_neighbour == 0 .or. n_owner /= 0) then
+         call test_failed(error, "fixture needs rows with a screened switching neighbour and no screened owner: "// &
+                          to_string(n_neighbour)//", "//to_string(n_owner))
+         return
+      end if
+      call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "screened neighbour", error)
+      if (allocated(error)) return
+      ! The screened neighbours must carry more area gradient than the bound hides
+      call count_screened(cavity, n_owner, n_neighbour, error, area_nb)
+      if (allocated(error)) return
+      if (.not. maxval(abs(area_nb)) > NB_AREA_MIN) then
+         call test_failed(error, "screened neighbours carry too little area gradient for the finite-difference "// &
+                          "bound: "//to_string(maxval(abs(area_nb))))
+         return
+      end if
+      call check_area_fd(cavity, mol, NB_FADE, NB_FD_TOL, error, NB_REACH_ON, NB_REACH_OFF)
+
+   end subroutine test_forward_screened_neighbour
+
+   !> Every channel and the total area gradient where the owner of an anchor is
+   !> not LSF-active at the projected point
+   !>
+   !> - SvdW fade band of 0.16 Bohr past the sphere: an anchor just inside a
+   !>   neighbour sphere projects onto that sphere, out of reach of its owner,
+   !>   whose motion still carries the anchor
+   !> - finite differences: off by 2e-6 at 1e-4 Bohr; a gradient without the
+   !>   owner seed is off by 0.4
+   subroutine test_forward_screened_owner(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      integer :: n_owner, n_neighbour
+
+      call fixture_geometry(.false., mol)
+      call build_screened_fixture(cavity, ctx, mol, 0.2_wp, error)
+      if (allocated(error)) return
+      call count_screened(cavity, n_owner, n_neighbour, error)
+      if (allocated(error)) return
+      if (n_owner == 0) then
+         call test_failed(error, "fixture has no row whose owner is screened at the projected point")
+         return
+      end if
+      call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "screened owner", error)
+      if (allocated(error)) return
+      call check_area_fd(cavity, mol, 0.2_wp, 1.0e-5_wp, error)
+
+   end subroutine test_forward_screened_owner
+
+   !> Every channel on a callback isodensity level set, which has no active atom
+   !> and no nuclear partial: the anchors still move with their owners
+   !>
+   !> - the full forward gradient equals the anchor-only one
+   subroutine test_forward_isodensity_owner(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      class(radius_type), allocatable :: radii
+      type(mctc_error), allocatable :: cav_error
+      real(wp), allocatable :: xyz1(:, :, :, :), a1(:, :, :), area1(:, :)
+
+      call new(mol, [10, 10], density_centers)
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new_radii_custom_atoms([4.0_wp, 4.0_wp], radii, cav_error)
+      if (.not. allocated(cav_error)) then
+         call lsf%new(callback_ptr=c_funloc(two_center_density), context=c_null_ptr, &
+                      param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+         allocate (cavity)
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=cav_error, &
+                              param=moist_cavity_drop_parameters_type(num_leb=302, do_fine=.true.), ctx=ctx)
+      end if
+      if (.not. allocated(cav_error)) call cavity%update(mol, error=cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "failed to build cavity: "//cav_error%message)
+         return
+      end if
+      if (cavity%ngrid == 0) then
+         call test_failed(error, "empty grid")
+         return
+      end if
+
+      call compare_paths(cavity, [CH_XI, CH_F, CH_A, CH_W, CH_XYZ, CH_N, CH_K1, CH_K2], "callback isodensity", error)
+      if (allocated(error)) return
+      xyz1 = cavity%xyz1_rA
+      a1 = cavity%a_i1_rA
+      area1 = cavity%A_tot1_rA
+      if (.not. maxval(abs(xyz1)) > 0.1_wp) then
+         call test_failed(error, "the projected points do not move with the atoms")
+         return
+      end if
+      call cavity%compute_anchor_gradient(cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "anchor gradient failed: "//cav_error%message)
+         return
+      end if
+      call check(error, maxval(abs(cavity%xyz1_rA - xyz1)) <= 1.0e-14_wp &
+                 .and. maxval(abs(cavity%a_i1_rA - a1)) <= 1.0e-14_wp &
+                 .and. maxval(abs(cavity%A_tot1_rA - area1)) <= 1.0e-12_wp, &
+                 "full and anchor-only forward gradients differ on a level set without nuclear partials")
+
+   end subroutine test_forward_isodensity_owner
+
+   !> Anchor-only gradient on a level set with nuclear partials: the field is
+   !> frozen, so every point moves with its owner alone
+   !>
+   !> - control: the full gradient moves points with non-owner atoms
+   subroutine test_forward_frozen_field(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(mctc_error), allocatable :: cav_error
+      real(wp) :: full_other, full_owner, frozen_other, frozen_owner
+
+      call build_fixture(cavity, ctx, .false., error)
+      if (allocated(error)) return
+      call cavity%get_gradient(cav_error)
+      if (.not. allocated(cav_error)) then
+         call point_motion(cavity, full_other, full_owner)
+         call cavity%compute_anchor_gradient(cav_error)
+      end if
+      if (allocated(cav_error)) then
+         call test_failed(error, "gradient failed: "//cav_error%message)
+         return
+      end if
+      call point_motion(cavity, frozen_other, frozen_owner)
+
+      call check(error, full_other > 1.0e-3_wp, &
+                 "control: the full gradient moves no point with a non-owner atom")
+      if (allocated(error)) return
+      call check(error, frozen_owner > 1.0e-3_wp, "the anchor-only points do not move with their owners")
+      if (allocated(error)) return
+      call check(error, frozen_other == 0.0_wp, &
+                 "the anchor-only gradient moves a point with a non-owner atom: "//to_string(frozen_other))
+
+   end subroutine test_forward_frozen_field
+
+   !> Largest point response to the owner and to any other atom
+   !>
+   !> @param[in]  cavity Cavity holding `xyz1_rA`
+   !> @param[out] other  `max |d r_i / d R_A|`, `A` not the owner of `i`
+   !> @param[out] owner  `max |d r_i / d R_A|`, `A` the owner of `i`
+   subroutine point_motion(cavity, other, owner)
+      type(cavity_type_drop), intent(in) :: cavity
+      real(wp), intent(out) :: other
+      real(wp), intent(out) :: owner
+
+      integer :: igrid, iatom
+      real(wp) :: m
+
+      other = 0.0_wp
+      owner = 0.0_wp
+      do igrid = 1, cavity%ngrid
+         do iatom = 1, cavity%nsph
+            m = maxval(abs(cavity%xyz1_rA(:, :, iatom, igrid)))
+            if (iatom == cavity%owner(igrid)) then
+               owner = max(owner, m)
+            else
+               other = max(other, m)
+            end if
+         end do
+      end do
+   end subroutine point_motion
+
+   !> Density of two Gaussians `exp(-|r - c|^2/2)` at `density_centers`, fixed in space
+   !>
+   !> @param[in]  context Unused
+   !> @param[in]  point   Evaluation point (Bohr)
+   !> @param[out] rho     Density
+   !> @param[out] drho    Gradient
+   !> @param[in]  d2rho   Hessian (3, 3), or NULL
+   !> @param[in]  d3rho   Third derivative (3, 3, 3), or NULL
+   !> @return     status  Zero
+   function two_center_density(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      type(c_ptr), value :: context
+      real(c_double), intent(in) :: point(3)
+      real(c_double), intent(out) :: rho
+      real(c_double), intent(out) :: drho(3)
+      type(c_ptr), value :: d2rho
+      type(c_ptr), value :: d3rho
+      integer(c_int) :: status
+
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+      real(wp) :: g, x(3), delta(3, 3)
+      integer :: ic, i, j, l
+
+      status = 0_c_int
+      if (c_associated(context)) status = 1_c_int
+      delta = 0.0_wp
+      do i = 1, 3
+         delta(i, i) = 1.0_wp
+      end do
+      rho = 0.0_wp
+      drho = 0.0_wp
+      if (c_associated(d2rho)) then
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = 0.0_wp
+      end if
+      if (c_associated(d3rho)) then
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = 0.0_wp
+      end if
+      do ic = 1, size(density_centers, 2)
+         x = point - density_centers(:, ic)
+         g = exp(-0.5_wp*sum(x**2))
+         rho = rho + g
+         drho = drho - x*g
+         if (c_associated(d2rho)) then
+            do j = 1, 3
+               do i = 1, 3
+                  hptr(i, j) = hptr(i, j) + (x(i)*x(j) - delta(i, j))*g
+               end do
+            end do
+         end if
+         if (c_associated(d3rho)) then
+            do l = 1, 3
+               do j = 1, 3
+                  do i = 1, 3
+                     tptr(i, j, l) = tptr(i, j, l) + (-x(i)*x(j)*x(l) + x(i)*delta(j, l) + x(j)*delta(i, l) &
+                                                      + x(l)*delta(i, j))*g
+                  end do
+               end do
+            end do
+         end if
+      end do
+   end function two_center_density
+
+   !> Cavity of the screening fixtures: 302 points, level 4, SvdW with a short fade band
+   !>
+   !> @param[out]   cavity     Built cavity
+   !> @param[inout] ctx        Run context borrowed by the cavity
+   !> @param[in]    mol        Structure
+   !> @param[in]    fade_start Fade onset of the level set in e-folds; the band is half as wide
+   !> @param[out]   error      Error handle
+   !> @param[in]    reach_on   Open edge of the reach gate (default: the library's)
+   !> @param[in]    reach_off  Closed edge of the reach gate (default: the library's)
+   subroutine build_screened_fixture(cavity, ctx, mol, fade_start, error, reach_on, reach_off)
+      type(cavity_type_drop), allocatable, intent(out) :: cavity
+      type(moist_context_type), target, intent(inout) :: ctx
+      type(structure_type), intent(in) :: mol
+      real(wp), intent(in) :: fade_start
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: reach_on, reach_off
+
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(moist_cavity_drop_parameters_type) :: param
+      type(mctc_error), allocatable :: cav_error
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      param = moist_cavity_drop_parameters_type(num_leb=302, tolerance=PROJ_TOL, &
+                                                proj_level=4, do_fine=.true.)
+      if (present(reach_on)) param%branch%reach_on = reach_on
+      if (present(reach_off)) param%branch%reach_off = reach_off
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=5.5_wp, blend_3b=3.0_wp, &
+                                                                         fade_start=fade_start, &
+                                                                         fade_width=0.5_wp*fade_start))
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=cav_error, param=param, ctx=ctx)
+      if (.not. allocated(cav_error)) call cavity%update(mol, error=cav_error)
+      if (allocated(cav_error)) call test_failed(error, "failed to build cavity: "//cav_error%message)
+   end subroutine build_screened_fixture
+
+   !> Forward total area gradient of a screening fixture against 4-point central differences
+   !>
+   !> @param[inout] cavity     Built cavity with its forward gradient
+   !> @param[in]    mol        Reference structure
+   !> @param[in]    fade_start Fade onset of the fixture
+   !> @param[in]    tol        Absolute bound
+   !> @param[out]   error      Error handle
+   !> @param[in]    reach_on   Open edge of the fixture's reach gate (optional)
+   !> @param[in]    reach_off  Closed edge of the fixture's reach gate (optional)
+   subroutine check_area_fd(cavity, mol, fade_start, tol, error, reach_on, reach_off)
+      type(cavity_type_drop), intent(inout) :: cavity
+      type(structure_type), intent(in) :: mol
+      real(wp), intent(in) :: fade_start, tol
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: reach_on, reach_off
+
+      real(wp), parameter :: h = 1.0e-4_wp
+      real(wp), parameter :: steps(4) = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]
+      real(wp), parameter :: weights(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]
+      type(cavity_type_drop), allocatable :: moved
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol_moved
+      real(wp), allocatable :: dA(:, :)
+      real(wp) :: fd
+      integer :: iat, idir, m
+
+      dA = cavity%A_tot1_rA
+      do iat = 1, mol%nat
+         do idir = 1, 3
+            fd = 0.0_wp
+            do m = 1, 4
+               mol_moved = mol
+               mol_moved%xyz(idir, iat) = mol_moved%xyz(idir, iat) + steps(m)*h
+               call build_screened_fixture(moved, ctx, mol_moved, fade_start, error, reach_on, reach_off)
+               if (allocated(error)) return
+               fd = fd + weights(m)*sum(moved%a(1:moved%ngrid))
+            end do
+            fd = fd/(12.0_wp*h)
+            call check(error, dA(idir, iat), fd, thr=tol, &
+                       more="total area gradient, atom "//to_string(iat)//" axis "//to_string(idir))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_area_fd
+
+   !> Rows whose owner, and rows one of whose switching neighbours, is not
+   !> LSF-active at the projected point
+   !>
+   !> @param[in]  cavity      Built cavity
+   !> @param[out] n_owner     Rows whose owner is not LSF-active at the point
+   !> @param[out] n_neighbour Rows with a switching response to an atom that is not
+   !> @param[out] error       Error handle
+   !> @param[out] area_nb     Forward total area gradient restricted to those atoms
+   !>                         (needs the forward gradient)
+   subroutine count_screened(cavity, n_owner, n_neighbour, error, area_nb)
+      type(cavity_type_drop), intent(in) :: cavity
+      integer, intent(out) :: n_owner, n_neighbour
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable, intent(out), optional :: area_nb(:, :)
+
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      type(iswig_workspace_type) :: work
+      type(mctc_error), allocatable :: lsf_error
+      real(wp), allocatable :: grad(:, :)
+      logical, allocatable :: active(:)
+      integer :: i, ia, k, owner
+      logical :: counted
+
+      n_owner = 0
+      n_neighbour = 0
+      if (present(area_nb)) then
+         if (.not. allocated(cavity%a_i1_rA)) then
+            call test_failed(error, "screened neighbour area gradient needs the forward gradient")
+            return
+         end if
+         allocate (area_nb(3, cavity%nsph), source=0.0_wp)
+      end if
+      allocate (lsf, source=cavity%lsf_model)
+      call lsf%set_max_deriv(1)
+      call cavity%iswig%new_workspace(work)
+      allocate (grad(3, cavity%nsph), active(cavity%nsph))
+      do i = 1, cavity%ngrid
+         call lsf%prepare(cavity%xyz(:, i), lsf_error)
+         if (allocated(lsf_error)) then
+            call test_failed(error, "level set failed at a grid point: "//lsf_error%message)
+            return
+         end if
+         active = .false.
+         do k = 1, lsf%active_count()
+            active(lsf%active_atom(k)) = .true.
+         end do
+         ia = cavity%anchor_of_row(i)
+         owner = cavity%owner(i)
+         if (.not. active(owner)) n_owner = n_owner + 1
+         grad = 0.0_wp
+         call cavity%iswig%add_f1_rA(cavity%anchor%xyz(:, ia), owner, cavity%anchor%xi0(ia), 1.0_wp, work, grad)
+         counted = .false.
+         do k = 1, cavity%nsph
+            if (k == owner .or. active(k)) cycle
+            if (all(grad(:, k) == 0.0_wp)) cycle
+            if (.not. counted) n_neighbour = n_neighbour + 1
+            counted = .true.
+            if (present(area_nb)) area_nb(:, k) = area_nb(:, k) + cavity%a_i1_rA(:, k, i)
+         end do
+      end do
+   end subroutine count_screened
+
+   !> Cavity of the switch fixtures: 302 points, level 3, SvdW with three-body weight 3
+   !>
+   !> @param[out]   cavity  Built cavity
+   !> @param[inout] ctx     Run context borrowed by the cavity
+   !> @param[in]    mol     Structure
+   !> @param[in]    blend_k SvdW blending sharpness
+   !> @param[in]    dpdist  Branch window (bohr)
+   !> @param[out]   error   Error handle
+   !> @param[in]    reach_on  Open edge of the reach gate (default: the library's)
+   !> @param[in]    reach_off Closed edge of the reach gate (default: the library's)
+   subroutine build_switch_fixture(cavity, ctx, mol, blend_k, dpdist, error, reach_on, reach_off)
+      type(cavity_type_drop), allocatable, intent(out) :: cavity
+      type(moist_context_type), target, intent(inout) :: ctx
+      type(structure_type), intent(in) :: mol
+      real(wp), intent(in) :: blend_k, dpdist
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: reach_on, reach_off
+
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(moist_cavity_drop_parameters_type) :: param
+      type(mctc_error), allocatable :: cav_error
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      param = moist_cavity_drop_parameters_type(num_leb=302, tolerance=PROJ_TOL, &
+                                                proj_level=3, branch=drop_branch_parameters_type(dpdist_max=dpdist), &
+                                                do_fine=.true.)
+      if (present(reach_on)) param%branch%reach_on = reach_on
+      if (present(reach_off)) param%branch%reach_off = reach_off
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_3b=3.0_wp))
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=cav_error, param=param, ctx=ctx)
+      if (.not. allocated(cav_error)) call cavity%update(mol, error=cav_error)
+      if (allocated(cav_error)) call test_failed(error, "failed to build cavity: "//cav_error%message)
+   end subroutine build_switch_fixture
+
+   !> Compare the reverse contraction of a built cavity against its forward arrays
+   !>
+   !> @param[inout] cavity   Built cavity; its forward arrays are filled here
+   !> @param[in]    channels Channel identifiers to populate
+   !> @param[in]    label    Human-readable channel description
+   !> @param[out]   error    Error handle
+   subroutine compare_paths(cavity, channels, label, error)
+      !> Built cavity
+      type(cavity_type_drop), intent(inout) :: cavity
+      !> Channel identifiers to populate
+      integer, intent(in) :: channels(:)
+      !> Human-readable channel description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_adjoint_type) :: acc
+      type(mctc_error), allocatable :: cav_error
+      !> Reverse-mode and forward-mode gradients
+      real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
+      !> Grid extents and loop indices
+      integer :: ngrid, nsph, igrid, iatom, iaxis, ich
+      !> Comparison bookkeeping
+      real(wp) :: diff, scale, worst
+      integer :: worst_atom, worst_axis
+
+      ngrid = cavity%ngrid
+      nsph = cavity%nsph
 
       ! Forward path: fills every *_rA array the reference contraction reads
       call cavity%get_gradient(cav_error)
@@ -786,7 +1449,7 @@ contains
          end do
       end do
 
-   end subroutine run_equivalence
+   end subroutine compare_paths
 
    !> Populate one surface-adjoint channel with a reproducible weight pattern
    !>
@@ -874,8 +1537,8 @@ contains
    !> The `branching` variant instead uses the five-carbon cross with concave
    !> seams. Branching needs the projector to find sibling minima, which takes
    !> a concave seam and multistart projection -- a plain dimer never branches
-   !> at any Lebedev order or softmax scale -- *and* a softmax flat enough that
-   !> the prune keeps the siblings. The caller asserts `branch_count > 1`
+   !> at any Lebedev order or branch window -- *and* a window wide enough that
+   !> the siblings keep weight. The caller asserts `branch_count > 1`
    !> actually occurred rather than trusting the configuration
    !>
    !> @param[out]   cavity     Constructed cavity
@@ -955,6 +1618,8 @@ contains
       type(mctc_error), allocatable :: cav_error
       integer :: proj_level_loc, nleb_loc, prune_loc
       real(wp) :: blend_k_loc, gamma_loc
+      !> Fixture settings
+      type(moist_cavity_drop_parameters_type) :: param
 
       nleb_loc = NUM_LEB
       prune_loc = 4
@@ -972,7 +1637,7 @@ contains
       call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
-      ! do_fine turns on curvature, normals, r_iI and rho so that every
+      ! do_fine turns on curvature, normals, r_iI and pdist so that every
       ! optional *_rA array the reference contraction reads is allocated
       allocate (cavity)
       block
@@ -980,32 +1645,34 @@ contains
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
                                                                             blend_3b=gamma_loc))
          call new_context(ctx, nthreads=0, verbosity=0)
+         param = moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
+                                                   proj_level=proj_level_loc, &
+                                                   wleb_prune_level=prune_loc, &
+                                                   do_fine=.true.)
+         ! The cross's siblings are backward projections (normal into the anchor
+         ! sphere, c < 0), which the signed horizon switch closes under defaults
+         if (branching) param%w_0hor_on = 0.0_wp
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-                              error=cav_error, &
-                              param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
-                                                                      proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, &
-                                                                      wleb_prune_level=prune_loc, &
-                                                                      do_fine=.true.), ctx=ctx)
+                              error=cav_error, param=param, ctx=ctx)
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)
          return
       end if
 
-      ! Multistart projection finds sibling branches, but the default softmax
-      ! scale (0.0025) is so peaked that the prune in filter.f90 keeps only the
-      ! strongest one and branch_count collapses to 1. Widening the softmax lets
-      ! siblings survive, which is what puts the branch channel under test
+      ! The projection finds sibling branches, but none inside the default
+      ! branch window, so every anchor keeps a single row. Widening the window
+      ! lets siblings share, which is what puts the branch channel under test
       if (branching) then
-         cavity%param%branch_weight_s = BRANCH_SOFTMAX_S
-         ! branch_dphi_max scales with the softmax width, so recompute the
+         cavity%param%branch%dpdist_max = BRANCH_DPDIST_MAX
+         ! The search window follows the branch window, so recompute the
          ! derived parameters rather than leaving a stale admissible set
          call cavity%param%compute_derived(cav_error)
          if (allocated(cav_error)) then
             call test_failed(error, "failed to recompute derived parameters: "//cav_error%message)
             return
          end if
-         call cavity%branch_weight%init(BRANCH_SOFTMAX_S)
+         call cavity%branch_weight%init(BRANCH_DPDIST_MAX, cavity%param%phi_alpha)
       end if
 
       call cavity%update(mol, error=cav_error)

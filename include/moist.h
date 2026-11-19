@@ -284,8 +284,8 @@ typedef struct {
     double branch_dpdist_max;
     double rho_grid_h;
     int wleb_prune_level;
-    double branch_reach_on; /* Reach gate open up to this distance (bohr); both -1: the default band */
-    double branch_reach_off; /* Reach gate closed from this distance (bohr); bounds the search */
+    double branch_reach_on; /* Reach gate open up to this distance (bohr); default 3.78 */
+    double branch_reach_off; /* Reach gate closed from this distance (bohr); default 5.67, bounds the search */
     double w_0hor_off; /* Horizon switch off-edge in n_surf . n_sph */
     double w_0hor_on; /* Horizon switch on-edge; 0 switches the horizon factor off */
     /* --- end of 1.0 layout --- */

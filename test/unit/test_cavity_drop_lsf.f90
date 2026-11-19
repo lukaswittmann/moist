@@ -37,7 +37,7 @@
 !>                                             along `(v, vr)`
 !>   * `radius_pairwise`                       exact HVP contraction of `f*_radrad` and
 !>                                             `f*_rA_rad` at roundoff
-!> FD thresholds: [[fd_abs_thr]], [[radius_fd_thr]], [[high_order_thr]]
+!> FD checks: [[run_fd_check]] table; thresholds [[fd_abs_thr]], [[deep_fd_thr]]
 !>
 !> Normalization:
 !>   * `normalized_f1_rA`                      normalized LSF nuclear grad
@@ -247,7 +247,8 @@ module test_cavity_drop_lsf
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, &
-                           center_at_origin, fd4_scalar, fd6_scalar, det_rand
+                           center_at_origin, det_rand, fd_probe_type, fd_derivative, &
+                           fd_compare
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_vjp_batch_shape_message
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -269,7 +270,7 @@ module test_cavity_drop_lsf
    use moist_context, only: moist_context_type, new_context
    use moist_radii_custom, only: radius_type_custom, new_custom_radii_atoms
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    implicit none(type, external)
    private
 
@@ -348,6 +349,64 @@ module test_cavity_drop_lsf
    real(wp), parameter :: svdw_legacy_blend_k = 3.0_wp
    real(wp), parameter :: svdw_legacy_blend_2b = 1.0_wp
    real(wp), parameter :: svdw_legacy_blend_3b = 1.0_wp
+
+
+   !> Displaced variable of an FD check
+   !>
+   !> - the point, one atom center, one radius, or every center and radius along
+   !>   the joint direction of [[joint_direction]]
+   integer, parameter :: move_point = 1, move_center = 2, move_radius = 3, move_joint = 4
+
+   !> Sampled LSF output of an FD probe
+   !>
+   !> - tensors unpacked, column-major, atom index last and in user space
+   !> - `ch_jet`: `jet_w0 S + jet_w1 . dS/dr + jet_w2 : d2S/dr2`
+   !> - `ch_batch0 + L`: packed order-L outputs of `evaluate_batch`, L = 0..3
+   integer, parameter :: ch_f0 = 1, ch_f1_r = 2, ch_f2_rr = 3, ch_f3_rrr = 4, ch_f1_rA = 5, &
+                         ch_f2_r_rA = 6, ch_f3_rr_rA = 7, ch_f1_rad = 8, ch_f2_r_rad = 9, &
+                         ch_f3_rr_rad = 10, ch_nf0 = 11, ch_jet = 12, ch_batch0 = 13
+
+   !> Jet weight of `S` in `ch_jet`
+   real(wp), parameter :: jet_w0 = 0.73_wp
+   !> Jet weights of `dS/dr` in `ch_jet`
+   real(wp), parameter :: jet_w1(ndim) = [-0.41_wp, 0.88_wp, 0.17_wp]
+   !> Jet weights of `d2S/dr2` in `ch_jet`
+   !>
+   !> - not symmetric; the packed seed carries their symmetric part
+   real(wp), parameter :: jet_w2(ndim, ndim) = reshape([0.29_wp, 0.62_wp, -0.36_wp, &
+                                                        -0.54_wp, 0.08_wp, 0.45_wp, &
+                                                        0.13_wp, -0.77_wp, 0.91_wp], [ndim, ndim])
+
+   !> LSF outputs under one displaced point, atom center, radius or joint direction
+   type, extends(fd_probe_type) :: lsf_probe_type
+      !> LSF, rebound and prepared at every sample
+      class(moist_cavity_drop_lsf_type), pointer :: lsf => null()
+      !> Bound structure
+      type(structure_type) :: mol
+      !> Undisplaced point
+      real(wp) :: point(ndim) = 0.0_wp
+      !> Undisplaced centers [ndim, nat]
+      real(wp), allocatable :: centers(:, :)
+      !> Undisplaced radii [nat]
+      real(wp), allocatable :: radii(:)
+      !> Joint direction, nuclear half [ndim, nat]
+      real(wp), allocatable :: v(:, :)
+      !> Joint direction, radius half [nat]
+      real(wp), allocatable :: vrad(:)
+      !> Displaced variable, `move_*`
+      integer :: move = move_point
+      !> Displaced axis of the point or a center
+      integer :: axis = 0
+      !> Displaced atom
+      integer :: atom = 0
+      !> Centers rebound through `update` instead of `set_centers`
+      logical :: rebuild = .false.
+      !> Sampled outputs, `ch_*`
+      integer, allocatable :: channels(:)
+   contains
+      !> Every sampled output at one displacement
+      procedure :: sample => sample_lsf_probe
+   end type lsf_probe_type
 
 contains
 
@@ -553,7 +612,8 @@ contains
                   new_unittest("sses_envelope_matches_implicit", test_sses_envelope), &
                   new_unittest("sses_generated_spatial_response", test_sses_generated_spatial), &
                   new_unittest("sses_cache_invalidation", test_sses_cache_invalidation), &
-                  new_unittest("sses_thread_clone", test_sses_thread_clone) &
+                  new_unittest("sses_thread_clone", test_sses_thread_clone), &
+                  new_unittest("sses_tiny_weight_flush", test_sses_tiny_weight_flush) &
                   ]
    end subroutine collect_cavity_drop_lsf
 
@@ -641,28 +701,6 @@ contains
       end select
    end subroutine init_lsf
 
-   !> Refresh atom positions without resetting LSF caches or `max_deriv`
-   !>
-   !> Base API `set_centers` needs no concrete dispatch
-   !> `radii` retained for call-site clarity
-   !>
-   !> @param[inout] lsf      polymorphic LSF (must be allocated)
-   !> @param[in]    centers  perturbed positions (3, mol%nat)
-   !> @param[in]    radii    per-atom radii (size mol%nat), unchanged
-   subroutine refresh_ssd(lsf, centers, radii)
-      !> Polymorphic LSF whose geometry is refreshed in place
-      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      !> Perturbed atom positions (3, mol%nat)
-      real(wp), intent(in) :: centers(:, :)
-      !> Per-atom radii (size mol%nat), unchanged by this call
-      real(wp), intent(in) :: radii(:)
-
-      if (size(radii) /= size(centers, 2)) then
-         error stop "refresh_ssd: radii/centers size mismatch"
-      end if
-      call lsf%set_centers(centers)
-   end subroutine refresh_ssd
-
    !> Unpack packed symmetric matrices of trailing indices to full storage
    !>
    !> - the trailing indices of `packed` and `full` are flattened to `m`
@@ -732,6 +770,886 @@ contains
          call test_failed(error, "LSF prepare failed: "//lsf_err%message)
       end if
    end function prepare_failed
+
+   !* ================================================================================= *!
+   !*                         Finite-difference probe and checks                        *!
+   !* ================================================================================= *!
+   !
+   ! One probe samples any set of LSF outputs under any displaced variable;
+   ! [[check_fd_move]] compares the analytic derivative of every output against
+   ! the FD of [[fd_derivative]], one displacement at a time
+
+   !> FD checks of the shared sweep, by name
+   !>
+   !> | name               | displaced  | sampled                         | thresholds | points |
+   !> |--------------------|------------|---------------------------------|------------|--------|
+   !> | `f1_r`             | point      | `f0`                            | fd         | fd     |
+   !> | `f2_rr`            | point      | `f1_r`                          | fd         | fd     |
+   !> | `f3_rrr`           | point      | `f2_rr`                         | fd         | fd     |
+   !> | `f1_rA`            | center     | `f0`                            | fd         | fd     |
+   !> | `f2_r_rA`          | center     | `f1_r`                          | fd         | fd     |
+   !> | `f3_rr_rA`         | center     | `f2_rr`                         | fd         | fd     |
+   !> | `f1_rad`           | radius     | `f0`                            | fd         | fd     |
+   !> | `f2_r_rad`         | radius     | `f1_r`                          | fd         | fd     |
+   !> | `f3_rr_rad`        | radius     | `f2_rr`                         | deep       | fd     |
+   !> | `radrad`           | radius     | `f1_rad`, `f2_r_rad`, `f3_rr_rad` | deep     | fd     |
+   !> | `rA_rad`           | radius     | `f1_rA`, `f2_r_rA`, `f3_rr_rA`  | deep       | fd     |
+   !> | `hvp_rad`          | joint      | `f1_rad`, `f2_r_rad`, `f3_rr_rad` | deep     | fd     |
+   !> | `hvp_rA_joint`     | joint      | `f1_rA`, `f2_r_rA`, `f3_rr_rA`  | deep       | fd     |
+   !> | `f2_rArB`          | center     | `f1_rA`                         | deep       | high   |
+   !> | `f3_r_rArB`        | center     | `f2_r_rA`                       | deep       | high   |
+   !> | `f4_rrrr`          | point      | `f3_rrr`                        | deep       | high   |
+   !> | `f4_rrr_rA`        | center     | `f3_rrr`                        | deep       | high   |
+   !> | `f4_rr_rArB`       | center     | `f3_rr_rA`                      | deep       | high   |
+   !> | `normalized_f1_rA` | center     | normalized `f0`                 | deep       | high   |
+   !>
+   !> Thresholds [[fd_abs_thr]] (fd) or [[deep_fd_thr]] (deep); points [[fd_points]]
+   !> (fd) or [[high_order_points]] (high)
+   !>
+   !> @param[out] error  test failure
+   !> @param[in]  kind   LSF kind
+   !> @param[in]  name   check, a row of the table
+   subroutine run_fd_check(error, kind, name)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> LSF kind
+      character(len=*), intent(in) :: kind
+      !> Check
+      character(len=*), intent(in) :: name
+
+      select case (name)
+      case ("f1_r")
+         call run_fd_sweep(error, kind, move_point, [ch_f0], 1)
+      case ("f2_rr")
+         call run_fd_sweep(error, kind, move_point, [ch_f1_r], 2)
+      case ("f3_rrr")
+         call run_fd_sweep(error, kind, move_point, [ch_f2_rr], 3)
+      case ("f1_rA")
+         call run_fd_sweep(error, kind, move_center, [ch_f0], 3)
+      case ("f2_r_rA")
+         call run_fd_sweep(error, kind, move_center, [ch_f1_r], 3)
+      case ("f3_rr_rA")
+         call run_fd_sweep(error, kind, move_center, [ch_f2_rr], 3)
+      case ("f1_rad")
+         call run_fd_sweep(error, kind, move_radius, [ch_f0], 3)
+      case ("f2_r_rad")
+         call run_fd_sweep(error, kind, move_radius, [ch_f1_r], 3)
+      case ("f3_rr_rad")
+         call run_fd_sweep(error, kind, move_radius, [ch_f2_rr], 3, deep=.true.)
+      case ("radrad")
+         call run_fd_sweep(error, kind, move_radius, [ch_f1_rad, ch_f2_r_rad, ch_f3_rr_rad], 3, deep=.true.)
+      case ("rA_rad")
+         call run_fd_sweep(error, kind, move_radius, [ch_f1_rA, ch_f2_r_rA, ch_f3_rr_rA], 3, deep=.true.)
+      case ("hvp_rad")
+         call run_fd_sweep(error, kind, move_joint, [ch_f1_rad, ch_f2_r_rad, ch_f3_rr_rad], 3, deep=.true.)
+      case ("hvp_rA_joint")
+         call run_fd_sweep(error, kind, move_joint, [ch_f1_rA, ch_f2_r_rA, ch_f3_rr_rA], 3, deep=.true.)
+      case ("f2_rArB")
+         call run_fd_sweep(error, kind, move_center, [ch_f1_rA], 3, deep=.true., high=.true.)
+      case ("f3_r_rArB")
+         call run_fd_sweep(error, kind, move_center, [ch_f2_r_rA], 3, deep=.true., high=.true.)
+      case ("f4_rrrr")
+         call run_fd_sweep(error, kind, move_point, [ch_f3_rrr], 4, deep=.true., high=.true.)
+      case ("f4_rrr_rA")
+         call run_fd_sweep(error, kind, move_center, [ch_f3_rrr], 4, deep=.true., high=.true.)
+      case ("f4_rr_rArB")
+         call run_fd_sweep(error, kind, move_center, [ch_f3_rr_rA], 4, deep=.true., high=.true.)
+      case ("normalized_f1_rA")
+         call run_fd_sweep(error, kind, move_center, [ch_nf0], 2, deep=.true., high=.true.)
+      case default
+         call test_failed(error, "run_fd_check: unknown check '"//name//"'")
+      end select
+   end subroutine run_fd_check
+
+   !> One FD check over structures, SvdW parameter sets and points, 4-point stencil
+   !>
+   !> - point moves keep the fade default; atom moves turn it off
+   !>   ([[fd_user_space_fade]]) and require the identity active list, so user
+   !>   ids index the nuclear and radius outputs
+   !>
+   !> @param[out] error      test failure
+   !> @param[in]  kind       LSF kind
+   !> @param[in]  move       displaced variable, `move_*`
+   !> @param[in]  channels   sampled outputs, `ch_*`
+   !> @param[in]  max_deriv  highest spatial order of the LSF
+   !> @param[in]  deep       [[deep_fd_thr]] instead of [[fd_abs_thr]] (default false)
+   !> @param[in]  high       [[high_order_points]] instead of [[fd_points]] (default false)
+   subroutine run_fd_sweep(error, kind, move, channels, max_deriv, deep, high)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> LSF kind
+      character(len=*), intent(in) :: kind
+      !> Displaced variable
+      integer, intent(in) :: move
+      !> Sampled outputs
+      integer, intent(in) :: channels(:)
+      !> Highest spatial order
+      integer, intent(in) :: max_deriv
+      !> Deep thresholds
+      logical, intent(in), optional :: deep
+      !> High-order sampling points
+      logical, intent(in), optional :: high
+
+      type(structure_type), allocatable :: mols(:)
+      class(moist_cavity_drop_lsf_type), allocatable, target :: lsf
+      type(lsf_probe_type) :: probe
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp) :: thr_abs, thr_rel
+      integer :: icase, isweep, ipt, npts, nblend, ngamma
+
+      thr_abs = fd_abs_thr(kind)
+      thr_rel = fd_rel_thr(kind)
+      if (present(deep)) then
+         if (deep) call deep_fd_thr(kind, thr_abs, thr_rel)
+      end if
+      npts = fd_points(kind)
+      if (present(high)) then
+         if (high) npts = high_order_points(kind)
+      end if
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         call get_test_radii(mols(icase), radii)
+         call get_test_points(mols(icase), points, npts)
+         do isweep = 1, nblend*ngamma
+            if (move == move_point) then
+               call init_lsf_sweep(lsf, mols(icase), radii, max_deriv, kind, isweep)
+            else
+               call init_lsf_sweep(lsf, mols(icase), radii, max_deriv, kind, isweep, &
+                                   fade_enabled=fd_user_space_fade)
+            end if
+            call new_lsf_probe(probe, lsf, mols(icase), radii)
+            do ipt = 1, size(points, 2)
+               probe%point = points(:, ipt)
+               call check_fd_move(error, probe, move, channels, 4, thr_abs, thr_rel, &
+                                  kind//" structure "//to_string(icase)//" point "//to_string(ipt)// &
+                                  " blend "//to_string((isweep - 1)/ngamma + 1)// &
+                                  " gamma "//to_string(mod(isweep - 1, ngamma) + 1), &
+                                  identity=move /= move_point)
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+   end subroutine run_fd_sweep
+
+   !> Analytic derivatives of the sampled outputs against their FD, every displacement of a move
+   !>
+   !> - the probe's LSF is bound to the undisplaced geometry and prepared at
+   !>   `probe%point` (batch outputs need no `prepare`), then displaced per
+   !>   [[sample_lsf_probe]]
+   !> - one [[fd_compare]] per output and displacement, displacements in
+   !>   column-major (axis, atom) order
+   !>
+   !> @param[out]    error     test failure, first in comparison order
+   !> @param[in,out] probe     probe at its undisplaced point
+   !> @param[in]     move      displaced variable, `move_*`
+   !> @param[in]     channels  sampled outputs, `ch_*`
+   !> @param[in]     npoint    stencil points, 4 or 6
+   !> @param[in]     thr_abs   absolute threshold
+   !> @param[in]     thr_rel   relative threshold
+   !> @param[in]     context   kind, structure, point and parameter set of the labels
+   !> @param[in]     identity  require the identity active list
+   !> @param[out]    first     FD of the first output per displacement (optional)
+   subroutine check_fd_move(error, probe, move, channels, npoint, thr_abs, thr_rel, context, &
+                            identity, first)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Probe
+      type(lsf_probe_type), intent(inout) :: probe
+      !> Displaced variable
+      integer, intent(in) :: move
+      !> Sampled outputs
+      integer, intent(in) :: channels(:)
+      !> Stencil points
+      integer, intent(in) :: npoint
+      !> Absolute threshold
+      real(wp), intent(in) :: thr_abs
+      !> Relative threshold
+      real(wp), intent(in) :: thr_rel
+      !> Label context
+      character(len=*), intent(in) :: context
+      !> Identity active list required
+      logical, intent(in) :: identity
+      !> FD of the first output [size, displacements]
+      real(wp), allocatable, intent(out), optional :: first(:, :)
+
+      !> Analytic derivatives, outputs stacked [total size, displacements]
+      real(wp), allocatable :: analytic(:, :)
+      !> Analytic derivative of one output
+      real(wp), allocatable :: block(:, :)
+      real(wp), allocatable :: numeric(:)
+      logical, allocatable :: valid(:)
+      !> Derivative name per output
+      character(len=24) :: names(size(channels))
+      character(len=:), allocatable :: name, shift
+      integer :: nat, ndisp, ic, k, n, d
+
+      nat = probe%mol%nat
+      probe%move = move
+      probe%channels = channels
+      call place_lsf(probe, probe%centers, probe%radii)
+      if (needs_prepare(channels)) then
+         if (prepare_failed(probe%lsf, probe%point, error)) return
+      end if
+      if (identity) then
+         call check_identity_active(error, probe%lsf, nat)
+         if (allocated(error)) return
+      end if
+
+      ndisp = move_count(move, nat)
+      allocate (analytic(sum([(channel_size(channels(ic), nat), ic=1, size(channels))]), ndisp))
+      k = 0
+      do ic = 1, size(channels)
+         call lsf_analytic(error, probe%lsf, channels(ic), move, nat, probe%point, probe%v, &
+                           probe%vrad, block, name)
+         if (allocated(error)) return
+         names(ic) = name
+         analytic(k + 1:k + size(block, 1), :) = block
+         k = k + size(block, 1)
+      end do
+      allocate (numeric(size(analytic, 1)), valid(size(analytic, 1)))
+      if (present(first)) allocate (first(channel_size(channels(1), nat), ndisp))
+
+      do d = 1, ndisp
+         select case (move)
+         case (move_point)
+            probe%axis = d
+            shift = " axis "//to_string(d)
+         case (move_center)
+            probe%atom = (d - 1)/ndim + 1
+            probe%axis = mod(d - 1, ndim) + 1
+            shift = " atom "//to_string(probe%atom)//" axis "//to_string(probe%axis)
+         case (move_radius)
+            probe%atom = d
+            shift = " radius "//to_string(d)
+         case default
+            shift = " joint direction"
+         end select
+         call fd_derivative(probe, STEP_SIZE, npoint, numeric, valid, error)
+         if (allocated(error)) return
+         k = 0
+         do ic = 1, size(channels)
+            n = channel_size(channels(ic), nat)
+            call fd_compare(error, analytic(k + 1:k + n, d), numeric(k + 1:k + n), valid(k + 1:k + n), &
+                            thr_abs, thr_rel, trim(names(ic))//" vs FD, "//context//shift)
+            if (allocated(error)) return
+            k = k + n
+         end do
+         if (present(first)) first(:, d) = numeric(1:size(first, 1))
+      end do
+   end subroutine check_fd_move
+
+   !> Bind a probe to an LSF at the geometry of `mol`
+   !>
+   !> @param[out]    probe  probe, joint direction from [[joint_direction]]
+   !> @param[in,out] lsf    LSF bound to `mol` and `radii`, displaced by the probe
+   !> @param[in]     mol    bound structure
+   !> @param[in]     radii  per-atom radii
+   subroutine new_lsf_probe(probe, lsf, mol, radii)
+      !> Probe
+      type(lsf_probe_type), intent(out) :: probe
+      !> LSF
+      class(moist_cavity_drop_lsf_type), intent(inout), target :: lsf
+      !> Bound structure
+      type(structure_type), intent(in) :: mol
+      !> Per-atom radii
+      real(wp), intent(in) :: radii(:)
+
+      probe%lsf => lsf
+      probe%mol = mol
+      probe%centers = mol%xyz
+      probe%radii = radii
+      allocate (probe%v(ndim, mol%nat), probe%vrad(mol%nat))
+      call joint_direction(mol%nat, probe%v, probe%vrad)
+   end subroutine new_lsf_probe
+
+   !> Sampled outputs with the probe's variable displaced by `t`
+   !>
+   !> @param[in,out] self   probe; its LSF is rebound and prepared
+   !> @param[in]     t      displacement
+   !> @param[out]    vals   outputs stacked in channel order
+   !> @param[out]    valid  every output present
+   !> @param[out]    error  test failure, set if `prepare` or the batch fails
+   subroutine sample_lsf_probe(self, t, vals, valid, error)
+      !> Probe
+      class(lsf_probe_type), intent(inout) :: self
+      !> Displacement
+      real(wp), intent(in) :: t
+      !> Sampled values
+      real(wp), intent(out) :: vals(:)
+      !> Value present
+      logical, intent(out) :: valid(:)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: point(ndim)
+      real(wp), allocatable :: centers(:, :), radii(:)
+
+      point = self%point
+      if (self%move == move_point) then
+         point(self%axis) = self%point(self%axis) + t
+      else
+         centers = self%centers
+         radii = self%radii
+         select case (self%move)
+         case (move_center)
+            centers(self%axis, self%atom) = self%centers(self%axis, self%atom) + t
+         case (move_radius)
+            radii(self%atom) = self%radii(self%atom) + t
+         case default
+            centers = self%centers + t*self%v
+            radii = self%radii + t*self%vrad
+         end select
+         call place_lsf(self, centers, radii)
+      end if
+      call sample_channels(error, self%lsf, self%channels, self%mol%nat, point, vals, mate=self%point)
+      valid = .true.
+   end subroutine sample_lsf_probe
+
+   !> Bind the probe's LSF to centers and radii, as its move requires
+   !>
+   !> - point: unchanged; center: `set_centers`, or `update` when `rebuild`;
+   !>   radius and joint: `update` ([[refresh_joint]])
+   !>
+   !> @param[in,out] self     probe
+   !> @param[in]     centers  atom centers [ndim, nat]
+   !> @param[in]     radii    per-atom radii [nat]
+   subroutine place_lsf(self, centers, radii)
+      !> Probe
+      class(lsf_probe_type), intent(inout) :: self
+      !> Atom centers
+      real(wp), intent(in) :: centers(:, :)
+      !> Per-atom radii
+      real(wp), intent(in) :: radii(:)
+
+      select case (self%move)
+      case (move_point)
+      case (move_center)
+         if (self%rebuild) then
+            call refresh_joint(self%lsf, self%mol, centers, radii)
+         else
+            call self%lsf%set_centers(centers)
+         end if
+      case default
+         call refresh_joint(self%lsf, self%mol, centers, radii)
+      end select
+   end subroutine place_lsf
+
+   !> Sampled outputs of an LSF at a point, stacked in channel order
+   !>
+   !> - accessor outputs after one `prepare`; atom outputs mapped to user
+   !>   space by [[to_user]]
+   !> - batch outputs from a two-column `evaluate_batch` of `point` and `mate`
+   !>   (one column alone runs other strip code); an unreached column fails
+   !>
+   !> @param[out]    error     test failure
+   !> @param[in,out] lsf       LSF at the sampled geometry
+   !> @param[in]     channels  sampled outputs, `ch_*`
+   !> @param[in]     nat       atom count
+   !> @param[in]     point     sampled point
+   !> @param[out]    vals      outputs [sum of [[channel_size]]]
+   !> @param[in]     mate      co-tenant of a batch column (default `point`)
+   subroutine sample_channels(error, lsf, channels, nat, point, vals, mate)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> LSF
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Sampled outputs
+      integer, intent(in) :: channels(:)
+      !> Atom count
+      integer, intent(in) :: nat
+      !> Sampled point
+      real(wp), intent(in) :: point(ndim)
+      !> Outputs
+      real(wp), intent(out) :: vals(:)
+      !> Batch co-tenant
+      real(wp), intent(in), optional :: mate(ndim)
+
+      real(wp) :: s0, g(ndim), p6(6), p10(10), hess(ndim, ndim), t3s(ndim, ndim, ndim)
+      real(wp) :: tile(ndim, 2), b0(2), b1(ndim, 2), b2(6, 2), b3(10, 2), b4(15, 2)
+      !> Nuclear derivatives of orders 1..3, slot space, `p3` packed
+      real(wp) :: t1(ndim, nat), t2(ndim, ndim, nat), p3(6, ndim, nat), t3(ndim, ndim, ndim, nat)
+      !> Radius derivatives of orders 1..3, slot space, `pq3` packed
+      real(wp) :: q1(nat), q2(ndim, nat), pq3(6, nat), q3(ndim, ndim, nat)
+      !> One accessor call per sample for each atom ladder
+      logical :: have_nuclear, have_radius
+      integer :: map(nat), nact, ic, k, n, order, st(2)
+      type(mctc_error), allocatable :: lsf_err
+
+      if (needs_prepare(channels)) then
+         if (prepare_failed(lsf, point, error)) return
+         call active_map_user(lsf, nat, map, nact)
+      end if
+      have_nuclear = .false.
+      have_radius = .false.
+      k = 0
+      do ic = 1, size(channels)
+         n = channel_size(channels(ic), nat)
+         select case (channels(ic))
+         case (ch_f0)
+            call lsf%f0(vals(k + 1))
+         case (ch_nf0)
+            call lsf%normalized_f01_rA(vals(k + 1))
+         case (ch_jet)
+            call lsf%f012_r(lsf0=s0, lsf1_r=g, lsf2_rr=p6)
+            call unpack_sym_matrix(p6, hess, ndim)
+            vals(k + 1) = jet_w0*s0 + sum(jet_w1*g) + sum(jet_w2*hess)
+         case (ch_f1_r)
+            call lsf%f012_r(lsf1_r=vals(k + 1:k + n))
+         case (ch_f2_rr)
+            call lsf%f012_r(lsf2_rr=p6)
+            call unpack_sym_matrix(p6, hess, ndim)
+            vals(k + 1:k + n) = reshape(hess, [n])
+         case (ch_f3_rrr)
+            call lsf%f3_rrr(lsf3_rrr=p10)
+            call unpack_sym_tensor3(p10, t3s, ndim)
+            vals(k + 1:k + n) = reshape(t3s, [n])
+         case (ch_f1_rA, ch_f2_r_rA, ch_f3_rr_rA)
+            if (.not. have_nuclear) call lsf%f3_rr_rA(lsf1_rA=t1, lsf2_r_rA=t2, lsf3_rr_rA=p3)
+            have_nuclear = .true.
+            select case (channels(ic))
+            case (ch_f1_rA)
+               call to_user(ndim, .false., 1, .true., nat, map, nact, t1, vals(k + 1:k + n))
+            case (ch_f2_r_rA)
+               call to_user(ndim**2, .false., 1, .true., nat, map, nact, t2, vals(k + 1:k + n))
+            case default
+               call unpack_pair_batch(p3, t3, ndim*nact)
+               call to_user(ndim**3, .false., 1, .true., nat, map, nact, t3, vals(k + 1:k + n))
+            end select
+         case (ch_f1_rad, ch_f2_r_rad, ch_f3_rr_rad)
+            if (.not. have_radius) call lsf%f3_rr_rad(lsf1_rad=q1, lsf2_r_rad=q2, lsf3_rr_rad=pq3)
+            have_radius = .true.
+            select case (channels(ic))
+            case (ch_f1_rad)
+               call to_user(1, .false., 1, .true., nat, map, nact, q1, vals(k + 1:k + n))
+            case (ch_f2_r_rad)
+               call to_user(ndim, .false., 1, .true., nat, map, nact, q2, vals(k + 1:k + n))
+            case default
+               call unpack_pair_batch(pq3, q3, nact)
+               call to_user(ndim**2, .false., 1, .true., nat, map, nact, q3, vals(k + 1:k + n))
+            end select
+         case default
+            order = channels(ic) - ch_batch0
+            tile(:, 1) = point
+            tile(:, 2) = point
+            if (present(mate)) tile(:, 2) = mate
+            call lsf%evaluate_batch(tile, order, b0, b1, b2, b3, b4, error=lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "evaluate_batch failed: "//lsf_err%message)
+               return
+            end if
+            call batch_status(lsf, st)
+            if (st(1) /= 0) then
+               call test_failed(error, "a sampled batch column is unreached")
+               return
+            end if
+            select case (order)
+            case (0)
+               vals(k + 1) = b0(1)
+            case (1)
+               vals(k + 1:k + n) = b1(:, 1)
+            case (2)
+               vals(k + 1:k + n) = b2(:, 1)
+            case default
+               vals(k + 1:k + n) = b3(:, 1)
+            end select
+         end select
+         k = k + n
+      end do
+   end subroutine sample_channels
+
+   !> Analytic derivative of one sampled output along every displacement of a move, user space
+   !>
+   !> @param[out]    error    test failure, an output without an analytic counterpart
+   !> @param[in,out] lsf      LSF prepared at `point`
+   !> @param[in]     channel  sampled output, `ch_*`
+   !> @param[in]     move     displaced variable, `move_*`
+   !> @param[in]     nat      atom count
+   !> @param[in]     point    evaluation point
+   !> @param[in]     v        joint direction, nuclear half [ndim, nat]
+   !> @param[in]     vrad     joint direction, radius half [nat]
+   !> @param[out]    a        derivative [[[channel_size]], [[move_count]]]
+   !> @param[out]    name     derivative name
+   subroutine lsf_analytic(error, lsf, channel, move, nat, point, v, vrad, a, name)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Sampled output
+      integer, intent(in) :: channel
+      !> Displaced variable
+      integer, intent(in) :: move
+      !> Atom count
+      integer, intent(in) :: nat
+      !> Evaluation point
+      real(wp), intent(in) :: point(ndim)
+      !> Joint direction, nuclear half
+      real(wp), intent(in) :: v(:, :)
+      !> Joint direction, radius half
+      real(wp), intent(in) :: vrad(:)
+      !> Derivative
+      real(wp), allocatable, intent(out) :: a(:, :)
+      !> Derivative name
+      character(len=:), allocatable, intent(out) :: name
+
+      real(wp) :: g(ndim), p6(6), p10(10), p15(15), w2p(6), val
+      real(wp) :: hess(ndim, ndim), t3s(ndim, ndim, ndim), t4s(ndim, ndim, ndim, ndim)
+      real(wp) :: t1(ndim, nat), t2(ndim, ndim, nat), t3(ndim, ndim, ndim, nat), p3(6, ndim, nat)
+      real(wp) :: q1(nat), q2(ndim, nat), q3(ndim, ndim, nat), pq3(6, nat)
+      !> Two-atom tensors, slot space
+      real(wp), allocatable :: x2(:, :, :, :), x3(:, :, :, :, :), x4(:, :, :, :, :, :), px(:, :, :, :, :)
+      integer :: map(nat), nact
+
+      call active_map_user(lsf, nat, map, nact)
+      allocate (a(channel_size(channel, nat), move_count(move, nat)))
+      select case (move)
+      case (move_point)
+         select case (channel)
+         case (ch_f0)
+            name = "f1_r"
+            call lsf%f012_r(lsf1_r=g)
+            a = reshape(g, shape(a))
+         case (ch_f1_r)
+            name = "f2_rr"
+            call lsf%f012_r(lsf2_rr=p6)
+            call unpack_sym_matrix(p6, hess, ndim)
+            a = hess
+         case (ch_f2_rr)
+            name = "f3_rrr"
+            call lsf%f3_rrr(lsf3_rrr=p10)
+            call unpack_sym_tensor3(p10, t3s, ndim)
+            a = reshape(t3s, shape(a))
+         case (ch_f3_rrr)
+            name = "f4_rrrr"
+            call lsf%f4_rrrr(p15)
+            call unpack_sym_tensor4(p15, t4s, ndim)
+            a = reshape(t4s, shape(a))
+         case (ch_batch0 + 0:ch_batch0 + 3)
+            name = "batch order "//to_string(channel - ch_batch0 + 1)
+            call batch_point_derivative(error, lsf, channel - ch_batch0 + 1, point, a)
+         case default
+            call test_failed(error, "lsf_analytic: no point derivative of output "//to_string(channel))
+            return
+         end select
+      case (move_center)
+         select case (channel)
+         case (ch_f0, ch_f1_r, ch_f2_rr)
+            call lsf%f3_rr_rA(lsf1_rA=t1, lsf2_r_rA=t2, lsf3_rr_rA=p3)
+            select case (channel)
+            case (ch_f0)
+               name = "f1_rA"
+               call to_user(1, .false., ndim, .true., nat, map, nact, t1, a)
+            case (ch_f1_r)
+               name = "f2_r_rA"
+               call to_user(ndim, .false., ndim, .true., nat, map, nact, t2, a)
+            case default
+               name = "f3_rr_rA"
+               call unpack_pair_batch(p3, t3, ndim*nact)
+               call to_user(ndim*ndim, .false., ndim, .true., nat, map, nact, t3, a)
+            end select
+         case (ch_f3_rrr)
+            name = "f4_rrr_rA"
+            allocate (px(10, ndim, nat, 1, 1), x4(ndim, ndim, ndim, ndim, nat, 1))
+            call lsf%f4_rrr_rA(px(:, :, :, 1, 1))
+            call unpack_triple_batch(px, x4, ndim*nact)
+            call to_user(ndim**3, .false., ndim, .true., nat, map, nact, x4, a)
+         case (ch_f1_rA)
+            name = "f2_rArB"
+            allocate (x2(ndim, nat, ndim, nat))
+            call lsf%f2_rArB(x2)
+            call to_user(ndim, .true., ndim, .true., nat, map, nact, x2, a)
+         case (ch_f2_r_rA)
+            name = "f3_r_rArB"
+            allocate (x3(ndim, ndim, nat, ndim, nat))
+            call lsf%f3_r_rArB(x3)
+            call to_user(ndim*ndim, .true., ndim, .true., nat, map, nact, x3, a)
+         case (ch_f3_rr_rA)
+            name = "f4_rr_rArB"
+            allocate (px(6, ndim, nat, ndim, nat), x4(ndim, ndim, ndim, nat, ndim, nat))
+            call lsf%f4_rr_rArB(px)
+            call unpack_pair_batch(px, x4, (ndim*nat)**2)
+            call to_user(ndim**3, .true., ndim, .true., nat, map, nact, x4, a)
+         case (ch_nf0)
+            name = "normalized_f1_rA"
+            call lsf%normalized_f01_rA(val, deriv_rA=t1)
+            call to_user(1, .false., ndim, .true., nat, map, nact, t1, a)
+         case (ch_jet)
+            name = "vjp_f1_rA"
+            call pack_sym_part(jet_w2, w2p, ndim)
+            call lsf%vjp_f1_rA(jet_w0, jet_w1, w2p, t1)
+            call to_user(1, .false., ndim, .true., nat, map, nact, t1, a)
+         case default
+            call test_failed(error, "lsf_analytic: no center derivative of output "//to_string(channel))
+            return
+         end select
+      case (move_radius)
+         select case (channel)
+         case (ch_f0, ch_f1_r, ch_f2_rr)
+            call lsf%f3_rr_rad(lsf1_rad=q1, lsf2_r_rad=q2, lsf3_rr_rad=pq3)
+            select case (channel)
+            case (ch_f0)
+               name = "f1_rad"
+               call to_user(1, .false., 1, .true., nat, map, nact, q1, a)
+            case (ch_f1_r)
+               name = "f2_r_rad"
+               call to_user(ndim, .false., 1, .true., nat, map, nact, q2, a)
+            case default
+               name = "f3_rr_rad"
+               call unpack_pair_batch(pq3, q3, nact)
+               call to_user(ndim*ndim, .false., 1, .true., nat, map, nact, q3, a)
+            end select
+         case (ch_f1_rad)
+            name = "f2_radrad"
+            allocate (x2(1, nat, 1, nat))
+            call lsf%f2_radrad(x2(1, :, 1, :))
+            call to_user(1, .true., 1, .true., nat, map, nact, x2, a)
+         case (ch_f2_r_rad)
+            name = "f3_r_radrad"
+            allocate (x2(ndim, nat, 1, nat))
+            call lsf%f3_r_radrad(x2(:, :, 1, :))
+            call to_user(ndim, .true., 1, .true., nat, map, nact, x2, a)
+         case (ch_f3_rr_rad)
+            name = "f4_rr_radrad"
+            allocate (px(6, nat, nat, 1, 1), x3(ndim, ndim, nat, nat, 1))
+            call lsf%f4_rr_radrad(px(:, :, :, 1, 1))
+            call unpack_pair_batch(px, x3, nat*nat)
+            call to_user(ndim*ndim, .true., 1, .true., nat, map, nact, x3, a)
+         case (ch_f1_rA)
+            name = "f2_rA_rad"
+            allocate (x2(ndim, nat, nat, 1))
+            call lsf%f2_rA_rad(x2(:, :, :, 1))
+            call to_user(ndim, .true., 1, .true., nat, map, nact, x2, a)
+         case (ch_f2_r_rA)
+            name = "f3_r_rA_rad"
+            allocate (x2(ndim, ndim, nat, nat))
+            call lsf%f3_r_rA_rad(x2)
+            call to_user(ndim*ndim, .true., 1, .true., nat, map, nact, x2, a)
+         case (ch_f3_rr_rA)
+            name = "f4_rr_rA_rad"
+            allocate (px(6, ndim, nat, nat, 1), x4(ndim, ndim, ndim, nat, nat, 1))
+            call lsf%f4_rr_rA_rad(px(:, :, :, :, 1))
+            call unpack_pair_batch(px, x4, ndim*nat*nat)
+            call to_user(ndim**3, .true., 1, .true., nat, map, nact, x4, a)
+         case (ch_jet)
+            name = "vjp_f1_rad"
+            call pack_sym_part(jet_w2, w2p, ndim)
+            call lsf%vjp_f1_rad(jet_w0, jet_w1, w2p, q1)
+            call to_user(1, .false., 1, .true., nat, map, nact, q1, a)
+         case default
+            call test_failed(error, "lsf_analytic: no radius derivative of output "//to_string(channel))
+            return
+         end select
+      case (move_joint)
+         select case (channel)
+         case (ch_f1_rad)
+            name = "hvp_f1_rad"
+            call lsf%hvp_f1_rad(v, vrad, q1)
+            call to_user(1, .true., 1, .false., nat, map, nact, q1, a)
+         case (ch_f2_r_rad)
+            name = "hvp_f2_r_rad"
+            call lsf%hvp_f2_r_rad(v, vrad, q2)
+            call to_user(ndim, .true., 1, .false., nat, map, nact, q2, a)
+         case (ch_f3_rr_rad)
+            name = "hvp_f3_rr_rad"
+            call lsf%hvp_f3_rr_rad(v, vrad, pq3)
+            call unpack_pair_batch(pq3, q3, nact)
+            call to_user(ndim*ndim, .true., 1, .false., nat, map, nact, q3, a)
+         case (ch_f1_rA)
+            name = "hvp_f1_rA"
+            call lsf%hvp_f1_rA(v, t1, vrad)
+            call to_user(ndim, .true., 1, .false., nat, map, nact, t1, a)
+         case (ch_f2_r_rA)
+            name = "hvp_f2_r_rA"
+            call lsf%hvp_f2_r_rA(v, t2, vrad)
+            call to_user(ndim*ndim, .true., 1, .false., nat, map, nact, t2, a)
+         case (ch_f3_rr_rA)
+            name = "hvp_f3_rr_rA"
+            call lsf%hvp_f3_rr_rA(v, p3, vrad)
+            call unpack_pair_batch(p3, t3, ndim*nact)
+            call to_user(ndim**3, .true., 1, .false., nat, map, nact, t3, a)
+         case default
+            call test_failed(error, "lsf_analytic: no joint derivative of output "//to_string(channel))
+            return
+         end select
+      case default
+         call test_failed(error, "lsf_analytic: unknown move "//to_string(move))
+         return
+      end select
+   end subroutine lsf_analytic
+
+   !> Order-L batch derivative at a point, against the packed order-(L - 1) outputs
+   !>
+   !> - entry `(k, axis)`: packed slot `k` of order L - 1 differentiated along `axis`
+   !>
+   !> @param[out]    error  test failure, set if the batch fails
+   !> @param[in,out] lsf    LSF
+   !> @param[in]     order  derivative order L, 1..4
+   !> @param[in]     point  evaluation point
+   !> @param[out]    a      derivative [packed size of order L - 1, ndim]
+   subroutine batch_point_derivative(error, lsf, order, point, a)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> LSF
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Derivative order
+      integer, intent(in) :: order
+      !> Evaluation point
+      real(wp), intent(in) :: point(ndim)
+      !> Derivative
+      real(wp), intent(out) :: a(:, :)
+
+      real(wp) :: p0(1), p1(ndim, 1), p2(6, 1), p3(10, 1), p4(15, 1)
+      integer :: k, axis, i, j, l
+      type(mctc_error), allocatable :: lsf_err
+
+      call lsf%evaluate_batch(reshape(point, [ndim, 1]), order, p0, p1, p2, p3, p4, error=lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "evaluate_batch at the point failed: "//lsf_err%message)
+         return
+      end if
+      do axis = 1, ndim
+         do k = 1, size(a, 1)
+            select case (order)
+            case (1)
+               a(k, axis) = p1(axis, 1)
+            case (2)
+               a(k, axis) = p2(packed_index(k, axis), 1)
+            case (3)
+               call packed_pair(k, i, j)
+               a(k, axis) = p3(packed_index3(i, j, axis), 1)
+            case default
+               call packed_triple(k, i, j, l)
+               a(k, axis) = p4(packed_index4(i, j, l, axis), 1)
+            end select
+         end do
+      end do
+   end subroutine batch_point_derivative
+
+   !> Scatter active-slot atom indices to user space, zeros for atoms without a slot
+   !>
+   !> - layout `(m1, n1, m2, n2)`; `n1 = nat` if `atom1`, else 1; likewise `n2`
+   !>
+   !> @param[in]  m1     leading extent
+   !> @param[in]  atom1  second index is an atom
+   !> @param[in]  m2     third extent
+   !> @param[in]  atom2  fourth index is an atom
+   !> @param[in]  nat    atom count
+   !> @param[in]  map    user atom of active slot i, first `nact` valid
+   !> @param[in]  nact   active count
+   !> @param[in]  slot   slot-space tensor
+   !> @param[out] user   user-space tensor
+   pure subroutine to_user(m1, atom1, m2, atom2, nat, map, nact, slot, user)
+      !> Leading extent
+      integer, intent(in) :: m1
+      !> Second index is an atom
+      logical, intent(in) :: atom1
+      !> Third extent
+      integer, intent(in) :: m2
+      !> Fourth index is an atom
+      logical, intent(in) :: atom2
+      !> Atom count
+      integer, intent(in) :: nat
+      !> Active slot to user atom
+      integer, intent(in) :: map(:)
+      !> Active count
+      integer, intent(in) :: nact
+      !> Slot-space tensor
+      real(wp), intent(in) :: slot(m1, merge(nat, 1, atom1), m2, merge(nat, 1, atom2))
+      !> User-space tensor
+      real(wp), intent(out) :: user(m1, merge(nat, 1, atom1), m2, merge(nat, 1, atom2))
+
+      integer :: i, j, iu, ju
+
+      user = 0.0_wp
+      do j = 1, merge(nact, 1, atom2)
+         ju = 1
+         if (atom2) ju = map(j)
+         do i = 1, merge(nact, 1, atom1)
+            iu = 1
+            if (atom1) iu = map(i)
+            user(:, iu, :, ju) = slot(:, i, :, j)
+         end do
+      end do
+   end subroutine to_user
+
+   !> Size of one sampled output
+   !>
+   !> @param[in] channel  sampled output, `ch_*`
+   !> @param[in] nat      atom count
+   pure function channel_size(channel, nat) result(n)
+      !> Sampled output
+      integer, intent(in) :: channel
+      !> Atom count
+      integer, intent(in) :: nat
+      !> Size
+      integer :: n
+
+      select case (channel)
+      case (ch_f1_r)
+         n = ndim
+      case (ch_f2_rr)
+         n = ndim**2
+      case (ch_f3_rrr)
+         n = ndim**3
+      case (ch_f1_rA)
+         n = ndim*nat
+      case (ch_f2_r_rA)
+         n = ndim**2*nat
+      case (ch_f3_rr_rA)
+         n = ndim**3*nat
+      case (ch_f1_rad)
+         n = nat
+      case (ch_f2_r_rad)
+         n = ndim*nat
+      case (ch_f3_rr_rad)
+         n = ndim**2*nat
+      case (ch_batch0 + 1)
+         n = ndim
+      case (ch_batch0 + 2)
+         n = 6
+      case (ch_batch0 + 3)
+         n = 10
+      case default
+         n = 1
+      end select
+   end function channel_size
+
+   !> Displacements of one move
+   !>
+   !> @param[in] move  displaced variable, `move_*`
+   !> @param[in] nat   atom count
+   pure function move_count(move, nat) result(n)
+      !> Displaced variable
+      integer, intent(in) :: move
+      !> Atom count
+      integer, intent(in) :: nat
+      !> Displacement count
+      integer :: n
+
+      select case (move)
+      case (move_point)
+         n = ndim
+      case (move_center)
+         n = ndim*nat
+      case (move_radius)
+         n = nat
+      case default
+         n = 1
+      end select
+   end function move_count
+
+   !> Whether some sampled output needs `prepare`; batch outputs do not
+   !>
+   !> @param[in] channels  sampled outputs, `ch_*`
+   pure function needs_prepare(channels) result(needed)
+      !> Sampled outputs
+      integer, intent(in) :: channels(:)
+      !> `prepare` needed
+      logical :: needed
+
+      needed = any(channels < ch_batch0)
+   end function needs_prepare
 
    !* ================================================================================= *!
    !*                              Sign + cutoff checks                                 *!
@@ -977,261 +1895,56 @@ contains
    !> SvdW dispatch for the spatial gradient FD check
    subroutine test_svdw_f1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_r_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f1_r")
    end subroutine test_svdw_f1_r_fd
 
    !> CFC dispatch for the spatial gradient FD check
    subroutine test_cfc_f1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_r_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f1_r")
    end subroutine test_cfc_f1_r_fd
 
    !> SSES dispatch for the spatial gradient FD check
    subroutine test_sses_f1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_r_fd(error, "sses")
+      call run_fd_check(error, "sses", "f1_r")
    end subroutine test_sses_f1_r_fd
-
-   !> grad vs 4-point central FD of f0
-   subroutine run_f1_r_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer  :: icase, ipt, axis, i, iblend, igamma, nblend, ngamma
-      real(wp) :: analytic(ndim), numeric(ndim), point(ndim), shifted(ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      type(mctc_error), allocatable :: lsf_err
-
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 1, kind, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call lsf%f012_r(lsf1_r=analytic)
-                  do axis = 1, ndim
-                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f0(f_pp)
-                     shifted = point; shifted(axis) = point(axis) + STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f0(f_p)
-                     shifted = point; shifted(axis) = point(axis) - STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f0(f_m)
-                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f0(f_mm)
-                     call fd4_scalar(f_pp, f_p, f_m, f_mm, STEP_SIZE, numeric(axis), error)
-                     if (allocated(error)) return
-                  end do
-                  do i = 1, ndim
-                     call check(error, analytic(i), numeric(i), &
-                                thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                     if (allocated(error)) return
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-      end do
-   end subroutine run_f1_r_fd
 
    !> SvdW dispatch for the spatial Hessian FD check
    subroutine test_svdw_f2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rr_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f2_rr")
    end subroutine test_svdw_f2_rr_fd
 
    !> CFC dispatch for the spatial Hessian FD check
    subroutine test_cfc_f2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rr_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f2_rr")
    end subroutine test_cfc_f2_rr_fd
 
    !> SSES dispatch for the spatial Hessian FD check
    subroutine test_sses_f2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rr_fd(error, "sses")
+      call run_fd_check(error, "sses", "f2_rr")
    end subroutine test_sses_f2_rr_fd
-
-   !> Hessian vs 4-point FD of grad
-   subroutine run_f2_rr_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer  :: icase, ipt, axis, i, j, iblend, igamma, nblend, ngamma
-      real(wp) :: analytic(ndim, ndim), numeric(ndim, ndim), point(ndim), shifted(ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim), packed_h(6)
-      type(mctc_error), allocatable :: lsf_err
-
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 2, kind, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call lsf%f012_r(lsf2_rr=packed_h)
-                  call unpack_sym_matrix(packed_h, analytic, ndim)
-                  do axis = 1, ndim
-                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r(lsf1_r=g_pp)
-                     shifted = point; shifted(axis) = point(axis) + STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r(lsf1_r=g_p)
-                     shifted = point; shifted(axis) = point(axis) - STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r(lsf1_r=g_m)
-                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r(lsf1_r=g_mm)
-                     do i = 1, ndim
-                        call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), STEP_SIZE, numeric(i, axis), error)
-                        if (allocated(error)) return
-                     end do
-                  end do
-                  do j = 1, ndim
-                     do i = 1, ndim
-                        call check(error, analytic(i, j), numeric(i, j), &
-                                   thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-      end do
-   end subroutine run_f2_rr_fd
 
    !> SvdW dispatch for the spatial third-derivative FD check
    subroutine test_svdw_f3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rrr_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f3_rrr")
    end subroutine test_svdw_f3_rrr_fd
 
    !> CFC dispatch for the spatial third-derivative FD check
    subroutine test_cfc_f3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rrr_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f3_rrr")
    end subroutine test_cfc_f3_rrr_fd
 
    !> SSES dispatch for the spatial third-derivative FD check
    subroutine test_sses_f3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rrr_fd(error, "sses")
+      call run_fd_check(error, "sses", "f3_rrr")
    end subroutine test_sses_f3_rrr_fd
-
-   !> Third spatial derivative vs FD of Hessian
-   !>
-   !> Both branches use `f3_rrr` to share the internal path at -O3
-   subroutine run_f3_rrr_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer  :: icase, ipt, axis, i, j, k, iblend, igamma, nblend, ngamma
-      real(wp) :: analytic(ndim, ndim, ndim), packed_h(6), packed_t(10)
-      real(wp) :: numeric(ndim, ndim, ndim), point(ndim), shifted(ndim)
-      real(wp) :: hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call lsf%f3_rrr(lsf3_rrr=packed_t)
-                  call unpack_sym_tensor3(packed_t, analytic, ndim)
-                  do axis = 1, ndim
-                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*eps
-                     call lsf%prepare(shifted, lsf_err)
-                     call lsf%f3_rrr(lsf2_rr=packed_h, lsf3_rrr=packed_t)
-                     call unpack_sym_matrix(packed_h, hess_pp, ndim)
-                     shifted = point; shifted(axis) = point(axis) + eps
-                     call lsf%prepare(shifted, lsf_err)
-                     call lsf%f3_rrr(lsf2_rr=packed_h, lsf3_rrr=packed_t)
-                     call unpack_sym_matrix(packed_h, hess_p, ndim)
-                     shifted = point; shifted(axis) = point(axis) - eps
-                     call lsf%prepare(shifted, lsf_err)
-                     call lsf%f3_rrr(lsf2_rr=packed_h, lsf3_rrr=packed_t)
-                     call unpack_sym_matrix(packed_h, hess_m, ndim)
-                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*eps
-                     call lsf%prepare(shifted, lsf_err)
-                     call lsf%f3_rrr(lsf2_rr=packed_h, lsf3_rrr=packed_t)
-                     call unpack_sym_matrix(packed_h, hess_mm, ndim)
-                     do j = 1, ndim
-                        do i = 1, ndim
-                           call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps, &
-                                           numeric(i, j, axis), error)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-                  do k = 1, ndim
-                     do j = 1, ndim
-                        do i = 1, ndim
-                           call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                      thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-      end do
-   end subroutine run_f3_rrr_fd
 
    !* ================================================================================= *!
    !*                          Nuclear-derivative FD tests                              *!
@@ -1240,311 +1953,56 @@ contains
    !> SvdW dispatch for the nuclear gradient FD check
    subroutine test_svdw_f1_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rA_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f1_rA")
    end subroutine test_svdw_f1_rA_fd
 
    !> CFC dispatch for the nuclear gradient FD check
    subroutine test_cfc_f1_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rA_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f1_rA")
    end subroutine test_cfc_f1_rA_fd
 
    !> SSES dispatch for the nuclear gradient FD check
    subroutine test_sses_f1_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rA_fd(error, "sses")
+      call run_fd_check(error, "sses", "f1_rA")
    end subroutine test_sses_f1_rA_fd
-
-   !> Nuclear-position gradient vs FD of f0
-   subroutine run_f1_rA_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, atom, axis, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :)
-      real(wp), allocatable :: dummy_3rd(:, :, :)
-      real(wp) :: numeric, f_pp, f_p, f_m, f_mm
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         allocate (dummy_3rd(6, ndim, mol%nat))
-         centers_base = mol%xyz
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate (analytic(ndim, mol%nat))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rA(lsf1_rA=analytic, lsf3_rr_rA=dummy_3rd)
-                  do atom = 1, mol%nat
-                     do axis = 1, ndim
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f0(f_pp)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f0(f_p)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f0(f_m)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f0(f_mm)
-                        call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
-                        if (allocated(error)) return
-                        call check(error, analytic(axis, atom), numeric, &
-                                   thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-               deallocate (analytic, lsf)
-            end do
-         end do
-         deallocate (centers_base, centers_local, dummy_3rd)
-      end do
-   end subroutine run_f1_rA_fd
 
    !> SvdW dispatch for the mixed spatial-nuclear FD check
    subroutine test_svdw_f2_r_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rA_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f2_r_rA")
    end subroutine test_svdw_f2_r_rA_fd
 
    !> CFC dispatch for the mixed spatial-nuclear FD check
    subroutine test_cfc_f2_r_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rA_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f2_r_rA")
    end subroutine test_cfc_f2_r_rA_fd
 
    !> SSES dispatch for the mixed spatial-nuclear FD check
    subroutine test_sses_f2_r_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rA_fd(error, "sses")
+      call run_fd_check(error, "sses", "f2_r_rA")
    end subroutine test_sses_f2_r_rA_fd
-
-   !> Mixed spatial-nuclear second derivative vs FD of spatial grad
-   subroutine run_f2_r_rA_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, atom, axis, i, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :)
-      real(wp), allocatable :: dummy_3rd(:, :, :)
-      real(wp) :: numeric, g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         allocate (dummy_3rd(6, ndim, mol%nat))
-         centers_base = mol%xyz
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate (analytic(ndim, ndim, mol%nat))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rA(lsf2_r_rA=analytic, lsf3_rr_rA=dummy_3rd)
-                  do atom = 1, mol%nat
-                     do axis = 1, ndim
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf1_r=g_pp)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf1_r=g_p)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf1_r=g_m)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf1_r=g_mm)
-                        do i = 1, ndim
-                           call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, analytic(i, axis, atom), numeric, &
-                                      thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (analytic, lsf)
-            end do
-         end do
-         deallocate (centers_base, centers_local, dummy_3rd)
-      end do
-   end subroutine run_f2_r_rA_fd
 
    !> SvdW dispatch for the mixed third FD check
    subroutine test_svdw_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rA_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f3_rr_rA")
    end subroutine test_svdw_f3_rr_rA_fd
 
    !> CFC dispatch for the mixed third FD check
    subroutine test_cfc_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rA_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f3_rr_rA")
    end subroutine test_cfc_f3_rr_rA_fd
 
    !> SSES dispatch for the mixed third FD check
    subroutine test_sses_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rA_fd(error, "sses")
+      call run_fd_check(error, "sses", "f3_rr_rA")
    end subroutine test_sses_f3_rr_rA_fd
-
-   !> Mixed third derivative (Hess w.r.t. spatial coords, grad w.r.t
-   !> nuclei) vs FD of spatial Hessian
-   subroutine run_f3_rr_rA_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, atom, axis, i, j, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :, :), packed_a(:, :, :)
-      real(wp) :: numeric, hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
-      real(wp) :: packed_h(6)
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         allocate (analytic(ndim, ndim, ndim, mol%nat), packed_a(6, ndim, mol%nat))
-         centers_base = mol%xyz
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rA(lsf3_rr_rA=packed_a)
-                  call unpack_pair_batch(packed_a, analytic, ndim*mol%nat)
-                  do atom = 1, mol%nat
-                     do axis = 1, ndim
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf2_rr=packed_h)
-                        call unpack_sym_matrix(packed_h, hess_pp, ndim)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf2_rr=packed_h)
-                        call unpack_sym_matrix(packed_h, hess_p, ndim)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf2_rr=packed_h)
-                        call unpack_sym_matrix(packed_h, hess_m, ndim)
-                        centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
-                        call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf2_rr=packed_h)
-                        call unpack_sym_matrix(packed_h, hess_mm, ndim)
-                        do j = 1, ndim
-                           do i = 1, ndim
-                              call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps, numeric, &
-                                              error)
-                              if (allocated(error)) return
-                              call check(error, analytic(i, j, axis, atom), numeric, &
-                                         thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                              if (allocated(error)) return
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-         deallocate (centers_base, centers_local, analytic, packed_a)
-      end do
-   end subroutine run_f3_rr_rA_fd
 
    !* ================================================================================= *!
    !*                          Radius-derivative FD tests                               *!
@@ -1552,7 +2010,7 @@ contains
    !
    ! `R_a` denotes radius; `f3_rr_rad` rank equals spatial order
    ! Nuclear FDs use `set_centers`; radius FDs need cached-radii `update`
-   ! `refresh_radii` restores `max_deriv` after the update
+   ! [[refresh_joint]] restores `max_deriv` after the update
    !
    ! SvdW radius derivative rescales one atom's tensors
    ! CFC radius derivative differentiates a two-center kernel
@@ -1560,234 +2018,69 @@ contains
    !> SvdW dispatch for the radius gradient FD check
    subroutine test_svdw_f1_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f1_rad")
    end subroutine test_svdw_f1_rad_fd
 
    !> CFC dispatch for the radius gradient FD check
    subroutine test_cfc_f1_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f1_rad")
    end subroutine test_cfc_f1_rad_fd
 
    !> SSES dispatch for the radius gradient FD check
    subroutine test_sses_f1_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rad_fd(error, "sses")
+      call run_fd_check(error, "sses", "f1_rad")
    end subroutine test_sses_f1_rad_fd
-
-   !> Radius gradient dS/dR_a vs FD of f0
-   subroutine run_f1_rad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      integer  :: icase, ipt, atom, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:)
-      real(wp), allocatable :: dummy_2nd(:, :)
-      real(wp) :: numeric, f_pp, f_p, f_m, f_mm
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (radii_local(mol%nat))
-         allocate (dummy_2nd(6, mol%nat))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate (analytic(mol%nat))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_radii(lsf, mol, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rad(lsf1_rad=analytic, lsf3_rr_rad=dummy_2nd)
-                  do atom = 1, mol%nat
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f0(f_pp)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f0(f_p)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f0(f_m)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f0(f_mm)
-                     call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
-                     if (allocated(error)) return
-                     call check(error, analytic(atom), numeric, &
-                                thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                     if (allocated(error)) return
-                  end do
-               end do
-               deallocate (analytic, lsf)
-            end do
-         end do
-         deallocate (radii_local, dummy_2nd)
-      end do
-   end subroutine run_f1_rad_fd
 
    !> SvdW dispatch for the mixed spatial-radius FD check
    subroutine test_svdw_f2_r_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f2_r_rad")
    end subroutine test_svdw_f2_r_rad_fd
 
    !> CFC dispatch for the mixed spatial-radius FD check
    subroutine test_cfc_f2_r_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f2_r_rad")
    end subroutine test_cfc_f2_r_rad_fd
 
    !> SSES dispatch for the mixed spatial-radius FD check
    subroutine test_sses_f2_r_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rad_fd(error, "sses")
+      call run_fd_check(error, "sses", "f2_r_rad")
    end subroutine test_sses_f2_r_rad_fd
-
-   !> Mixed spatial-radius second derivative vs FD of the spatial gradient
-   subroutine run_f2_r_rad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      integer  :: icase, ipt, atom, i, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :)
-      real(wp), allocatable :: dummy_2nd(:, :)
-      real(wp) :: numeric, g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: eps
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (radii_local(mol%nat))
-         allocate (dummy_2nd(6, mol%nat))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate (analytic(ndim, mol%nat))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_radii(lsf, mol, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rad(lsf2_r_rad=analytic, lsf3_rr_rad=dummy_2nd)
-                  do atom = 1, mol%nat
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf1_r=g_pp)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf1_r=g_p)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf1_r=g_m)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf1_r=g_mm)
-                     do i = 1, ndim
-                        call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps, numeric, error)
-                        if (allocated(error)) return
-                        call check(error, analytic(i, atom), numeric, &
-                                   thr_abs=fd_abs_thr(kind), thr_rel=fd_rel_thr(kind))
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-               deallocate (analytic, lsf)
-            end do
-         end do
-         deallocate (radii_local, dummy_2nd)
-      end do
-   end subroutine run_f2_r_rad_fd
 
    !> SvdW dispatch for the mixed third radius FD check
    subroutine test_svdw_f3_rr_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "f3_rr_rad")
    end subroutine test_svdw_f3_rr_rad_fd
 
    !> CFC dispatch for the mixed third radius FD check
    subroutine test_cfc_f3_rr_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "f3_rr_rad")
    end subroutine test_cfc_f3_rr_rad_fd
 
    !> SSES dispatch for the mixed third radius FD check
    subroutine test_sses_f3_rr_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rad_fd(error, "sses")
+      call run_fd_check(error, "sses", "f3_rr_rad")
    end subroutine test_sses_f3_rr_rad_fd
 
-   !> FD thresholds for deep radius checks
+   !> FD thresholds of the deep radius checks and the shared high-order checks
    !>
-   !> CFC radius derivatives add quotient terms from `1/R_a`
-   !> Nuclear derivatives lack that chain; `f3_rr_rA` clears tighter thresholds
-   !>
-   !> Deep checks miss tight thresholds by 2-3x at `STEP_SIZE`
-   !> Half step clears them, consistent with fourth-order stencil error
-   !> `f1_rad` and `f2_r_rad` retain tight thresholds
+   !> - CFC radius derivatives add quotient terms from `1/R_a`; nuclear
+   !>   derivatives lack that chain, so `f3_rr_rA` clears [[fd_abs_thr]]
+   !> - deep checks miss tight thresholds by 2-3x at `STEP_SIZE`; half the step
+   !>   clears them, consistent with fourth-order stencil error
+   !> - `f1_rad` and `f2_r_rad` retain [[fd_abs_thr]]
    !>
    !> @param[in]  kind    LSF kind
    !> @param[out] thr_abs Absolute threshold
    !> @param[out] thr_rel Relative threshold
-   subroutine radius_fd_thr(kind, thr_abs, thr_rel)
+   subroutine deep_fd_thr(kind, thr_abs, thr_rel)
       !> LSF kind
       character(len=*), intent(in) :: kind
       !> Absolute threshold
@@ -1806,7 +2099,7 @@ contains
          thr_abs = ABS_THR
          thr_rel = REL_THR
       end select
-   end subroutine radius_fd_thr
+   end subroutine deep_fd_thr
 
    !> Absolute FD threshold of the spatial and nuclear checks
    !>
@@ -1834,32 +2127,6 @@ contains
       if (kind == "sses") thr = SSES_REL_THR
    end function fd_rel_thr
 
-   !> FD thresholds of the shared high-order checks
-   !>
-   !> @param[in]  kind    LSF kind
-   !> @param[out] thr_abs Absolute threshold
-   !> @param[out] thr_rel Relative threshold
-   subroutine high_order_thr(kind, thr_abs, thr_rel)
-      !> LSF kind
-      character(len=*), intent(in) :: kind
-      !> Absolute threshold
-      real(wp), intent(out) :: thr_abs
-      !> Relative threshold
-      real(wp), intent(out) :: thr_rel
-
-      select case (kind)
-      case ("cfc")
-         thr_abs = CFC_ABS_THR
-         thr_rel = CFC_REL_THR
-      case ("sses")
-         thr_abs = SSES_ABS_THR
-         thr_rel = SSES_REL_THR
-      case default
-         thr_abs = ABS_THR
-         thr_rel = REL_THR
-      end select
-   end subroutine high_order_thr
-
    !> Sampling points of the high-order checks
    !>
    !> SvdW keeps the default sample of [[get_test_points]]; CFC and SSES use [[fd_points]]
@@ -1878,22 +2145,6 @@ contains
       end if
    end function high_order_points
 
-   !> Number of parameter sets of the high-order sweeps
-   !>
-   !> SvdW sweeps `blend_k` x (`blend_2b`, `blend_3b`); CFC and SSES use one set
-   !>
-   !> @param[in] kind LSF kind
-   pure function sweep_count(kind) result(n)
-      !> LSF kind
-      character(len=*), intent(in) :: kind
-      !> Parameter-set count
-      integer :: n
-      integer :: nblend, ngamma
-
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-      n = nblend*ngamma
-   end function sweep_count
-
    !> Create the LSF of one parameter set of the high-order sweep
    !>
    !> @param[out] lsf       Polymorphic LSF
@@ -1901,7 +2152,7 @@ contains
    !> @param[in]  radii     Per-atom radii
    !> @param[in]  max_deriv Highest derivative order
    !> @param[in]  kind      LSF kind
-   !> @param[in]  isweep    Parameter-set index in `1:sweep_count(kind)`
+   !> @param[in]  isweep    Parameter-set index, `nblend*ngamma` of [[svdw_sweep_sizes]]
    subroutine init_lsf_sweep(lsf, mol, radii, max_deriv, kind, isweep, fade_enabled)
       !> Polymorphic LSF
       class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
@@ -1928,97 +2179,6 @@ contains
                     blend_3b=svdw_sweep_gamma(kind, igamma), fade_enabled=fade_enabled)
    end subroutine init_lsf_sweep
 
-   !> Mixed third derivative d^3S/(dr^2 dR_a) vs FD of the spatial Hessian
-   subroutine run_f3_rr_rad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      integer  :: icase, ipt, atom, i, j, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :), packed_a(:, :)
-      real(wp) :: numeric
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: packed_h(6)
-      real(wp) :: eps, thr_abs, thr_rel
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call radius_fd_thr(kind, thr_abs, thr_rel)
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (radii_local(mol%nat))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate (analytic(ndim, ndim, mol%nat), packed_a(6, mol%nat))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_radii(lsf, mol, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f3_rr_rad(lsf3_rr_rad=packed_a)
-                  call unpack_pair_batch(packed_a, analytic, mol%nat)
-                  do atom = 1, mol%nat
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf2_rr=packed_h)
-                     call unpack_sym_matrix(packed_h, h_pp, ndim)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) + eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf2_rr=packed_h)
-                     call unpack_sym_matrix(packed_h, h_p, ndim)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf2_rr=packed_h)
-                     call unpack_sym_matrix(packed_h, h_m, ndim)
-                     radii_local = radii
-                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
-                     call refresh_radii(lsf, mol, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f012_r(lsf2_rr=packed_h)
-                     call unpack_sym_matrix(packed_h, h_mm, ndim)
-                     do i = 1, ndim
-                        do j = 1, ndim
-                           call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), eps, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, analytic(i, j, atom), numeric, &
-                                      thr_abs=thr_abs, thr_rel=thr_rel)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (analytic, packed_a, lsf)
-            end do
-         end do
-         deallocate (radii_local)
-      end do
-   end subroutine run_f3_rr_rad_fd
-
    !* ================================================================================= *!
    !*                Uncontracted two-radius and nuclear-radius FD tests                *!
    !* ================================================================================= *!
@@ -2036,235 +2196,38 @@ contains
    !> SvdW dispatch for the two-radius block FD check
    subroutine test_svdw_radrad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radrad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "radrad")
    end subroutine test_svdw_radrad_fd
 
    !> CFC dispatch for the two-radius block FD check
    subroutine test_cfc_radrad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radrad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "radrad")
    end subroutine test_cfc_radrad_fd
 
    !> SSES dispatch for the two-radius block FD check
    subroutine test_sses_radrad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radrad_fd(error, "sses")
+      call run_fd_check(error, "sses", "radrad")
    end subroutine test_sses_radrad_fd
-
-   !> `f{2,3,4}_*_radrad` vs a one-radius FD of the whole `f*_rad` ladder
-   subroutine run_radrad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      real(wp), allocatable :: rr2(:, :), rr3(:, :, :), rr4(:, :, :, :)
-      real(wp), allocatable :: l1(:, :), l2(:, :, :), l3(:, :, :, :)
-      real(wp), allocatable :: packed_rr4(:, :, :), packed_l3(:, :, :)
-      integer  :: icase, ipt, atom, other, i, j, istep, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
-      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call radius_fd_thr(kind, thr_abs, thr_rel)
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (radii_local(mol%nat))
-         allocate (rr2(mol%nat, mol%nat), rr3(ndim, mol%nat, mol%nat), &
-                   rr4(ndim, ndim, mol%nat, mol%nat))
-         allocate (l1(mol%nat, 4), l2(ndim, mol%nat, 4), l3(ndim, ndim, mol%nat, 4))
-         allocate (packed_rr4(6, mol%nat, mol%nat), packed_l3(6, mol%nat, 4))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_radii(lsf, mol, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f2_radrad(rr2)
-                  call lsf%f3_r_radrad(rr3)
-                  call lsf%f4_rr_radrad(packed_rr4)
-                  call unpack_pair_batch(packed_rr4, rr4, mol%nat*mol%nat)
-                  do atom = 1, mol%nat
-                     do istep = 1, 4
-                        radii_local = radii
-                        radii_local(atom) = radii_local(atom) + steps(istep)*eps
-                        call refresh_radii(lsf, mol, radii_local)
-                        if (prepare_failed(lsf, point, error)) return
-                        call lsf%f3_rr_rad(lsf1_rad=l1(:, istep), &
-                                           lsf2_r_rad=l2(:, :, istep), &
-                                           lsf3_rr_rad=packed_l3(:, :, istep))
-                        call unpack_pair_batch(packed_l3(:, :, istep), l3(:, :, :, istep), mol%nat)
-                     end do
-                     do other = 1, mol%nat
-                        call fd4_scalar(l1(other, 1), l1(other, 2), l1(other, 3), l1(other, 4), eps, numeric, error)
-                        if (allocated(error)) return
-                        call check(error, rr2(other, atom), numeric, &
-                                   thr_abs=thr_abs, thr_rel=thr_rel)
-                        if (allocated(error)) return
-                        do i = 1, ndim
-                           call fd4_scalar(l2(i, other, 1), l2(i, other, 2), l2(i, other, 3), l2(i, other, 4), eps, &
-                                           numeric, error)
-                           if (allocated(error)) return
-                           call check(error, rr3(i, other, atom), numeric, &
-                                      thr_abs=thr_abs, thr_rel=thr_rel)
-                           if (allocated(error)) return
-                           do j = 1, ndim
-                              call fd4_scalar(l3(i, j, other, 1), l3(i, j, other, 2), l3(i, j, other, 3), &
-                                              l3(i, j, other, 4), eps, numeric, error)
-                              if (allocated(error)) return
-                              call check(error, rr4(i, j, other, atom), numeric, &
-                                         thr_abs=thr_abs, thr_rel=thr_rel)
-                              if (allocated(error)) return
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-         deallocate (radii_local, rr2, rr3, rr4, l1, l2, l3, packed_rr4, packed_l3)
-      end do
-   end subroutine run_radrad_fd
 
    !> SvdW dispatch for the nuclear-radius block FD check
    subroutine test_svdw_rA_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_rA_rad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "rA_rad")
    end subroutine test_svdw_rA_rad_fd
 
    !> CFC dispatch for the nuclear-radius block FD check
    subroutine test_cfc_rA_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_rA_rad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "rA_rad")
    end subroutine test_cfc_rA_rad_fd
 
    !> SSES dispatch for the nuclear-radius block FD check
    subroutine test_sses_rA_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_rA_rad_fd(error, "sses")
+      call run_fd_check(error, "sses", "rA_rad")
    end subroutine test_sses_rA_rad_fd
-
-   !> `f{2,3,4}_*_rA_rad` vs a one-radius FD of the whole `f*_rA` ladder
-   subroutine run_rA_rad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      real(wp), allocatable :: mx2(:, :, :), mx3(:, :, :, :), mx4(:, :, :, :, :)
-      real(wp), allocatable :: n1(:, :, :), n2(:, :, :, :), n3(:, :, :, :, :)
-      real(wp), allocatable :: packed_mx4(:, :, :, :), packed_n3(:, :, :, :)
-      integer  :: icase, ipt, atom, other, s_ax, i, j, istep
-      integer  :: iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
-      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call radius_fd_thr(kind, thr_abs, thr_rel)
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (radii_local(mol%nat))
-         allocate (mx2(ndim, mol%nat, mol%nat), mx3(ndim, ndim, mol%nat, mol%nat), &
-                   mx4(ndim, ndim, ndim, mol%nat, mol%nat))
-         allocate (n1(ndim, mol%nat, 4), n2(ndim, ndim, mol%nat, 4), &
-                   n3(ndim, ndim, ndim, mol%nat, 4))
-         allocate (packed_mx4(6, ndim, mol%nat, mol%nat), packed_n3(6, ndim, mol%nat, 4))
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_radii(lsf, mol, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%f2_rA_rad(mx2)
-                  call lsf%f3_r_rA_rad(mx3)
-                  call lsf%f4_rr_rA_rad(packed_mx4)
-                  call unpack_pair_batch(packed_mx4, mx4, ndim*mol%nat*mol%nat)
-                  do atom = 1, mol%nat
-                     do istep = 1, 4
-                        radii_local = radii
-                        radii_local(atom) = radii_local(atom) + steps(istep)*eps
-                        call refresh_radii(lsf, mol, radii_local)
-                        if (prepare_failed(lsf, point, error)) return
-                        call lsf%f3_rr_rA(lsf1_rA=n1(:, :, istep), &
-                                          lsf2_r_rA=n2(:, :, :, istep), &
-                                          lsf3_rr_rA=packed_n3(:, :, :, istep))
-                        call unpack_pair_batch(packed_n3(:, :, :, istep), n3(:, :, :, :, istep), &
-                                               ndim*mol%nat)
-                     end do
-                     do other = 1, mol%nat
-                        do s_ax = 1, ndim
-                           call fd4_scalar(n1(s_ax, other, 1), n1(s_ax, other, 2), n1(s_ax, other, 3), &
-                                           n1(s_ax, other, 4), eps, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, mx2(s_ax, other, atom), numeric, &
-                                      thr_abs=thr_abs, thr_rel=thr_rel)
-                           if (allocated(error)) return
-                           do i = 1, ndim
-                              call fd4_scalar(n2(i, s_ax, other, 1), n2(i, s_ax, other, 2), n2(i, s_ax, other, 3), &
-                                              n2(i, s_ax, other, 4), eps, numeric, error)
-                              if (allocated(error)) return
-                              call check(error, mx3(i, s_ax, other, atom), numeric, &
-                                         thr_abs=thr_abs, thr_rel=thr_rel)
-                              if (allocated(error)) return
-                              do j = 1, ndim
-                                 call fd4_scalar(n3(i, j, s_ax, other, 1), n3(i, j, s_ax, other, 2), &
-                                                 n3(i, j, s_ax, other, 3), n3(i, j, s_ax, other, 4), eps, numeric, &
-                                                 error)
-                                 if (allocated(error)) return
-                                 call check(error, mx4(i, j, s_ax, other, atom), numeric, &
-                                            thr_abs=thr_abs, thr_rel=thr_rel)
-                                 if (allocated(error)) return
-                              end do
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-         deallocate (radii_local, mx2, mx3, mx4, n1, n2, n3, packed_mx4, packed_n3)
-      end do
-   end subroutine run_rA_rad_fd
 
    !* ================================================================================= *!
    !*                    Joint position/radius Hessian-vector products                  *!
@@ -2508,240 +2471,38 @@ contains
    !> SvdW dispatch for the radius-row HVP FD check
    subroutine test_svdw_hvp_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rad_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "hvp_rad")
    end subroutine test_svdw_hvp_rad_fd
 
    !> CFC dispatch for the radius-row HVP FD check
    subroutine test_cfc_hvp_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rad_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "hvp_rad")
    end subroutine test_cfc_hvp_rad_fd
 
    !> SSES dispatch for the radius-row HVP FD check
    subroutine test_sses_hvp_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rad_fd(error, "sses")
+      call run_fd_check(error, "sses", "hvp_rad")
    end subroutine test_sses_hvp_rad_fd
-
-   !> Radius row `hvp_f*_rad` vs joint-direction FD of the `f*_rad` ladder
-   subroutine run_hvp_rad_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      real(wp), allocatable :: v(:, :), vrad(:)
-      real(wp), allocatable :: a1(:), a2(:, :), a3(:, :, :)
-      real(wp), allocatable :: l1(:, :), l2(:, :, :), l3(:, :, :, :)
-      real(wp), allocatable :: p_a3(:, :), p_l3(:, :, :)
-      integer  :: icase, ipt, atom, i, j, istep, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
-      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call radius_fd_thr(kind, thr_abs, thr_rel)
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         allocate (radii_local(mol%nat), v(ndim, mol%nat), vrad(mol%nat))
-         allocate (a1(mol%nat), a2(ndim, mol%nat), a3(ndim, ndim, mol%nat))
-         allocate (l1(mol%nat, 4), l2(ndim, mol%nat, 4), l3(ndim, ndim, mol%nat, 4))
-         allocate (p_a3(6, mol%nat), p_l3(6, mol%nat, 4))
-         centers_base = mol%xyz
-         call joint_direction(mol%nat, v, vrad)
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_joint(lsf, mol, centers_base, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%hvp_f1_rad(v, vrad, a1)
-                  call lsf%hvp_f2_r_rad(v, vrad, a2)
-                  call lsf%hvp_f3_rr_rad(v, vrad, p_a3)
-                  call unpack_pair_batch(p_a3, a3, mol%nat)
-                  do istep = 1, 4
-                     centers_local = centers_base + steps(istep)*eps*v
-                     radii_local = radii + steps(istep)*eps*vrad
-                     call refresh_joint(lsf, mol, centers_local, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f3_rr_rad(lsf1_rad=l1(:, istep), &
-                                        lsf2_r_rad=l2(:, :, istep), &
-                                        lsf3_rr_rad=p_l3(:, :, istep))
-                     call unpack_pair_batch(p_l3(:, :, istep), l3(:, :, :, istep), mol%nat)
-                  end do
-                  do atom = 1, mol%nat
-                     call fd4_scalar(l1(atom, 1), l1(atom, 2), l1(atom, 3), l1(atom, 4), eps, numeric, error)
-                     if (allocated(error)) return
-                     call check(error, a1(atom), numeric, &
-                                thr_abs=thr_abs, thr_rel=thr_rel)
-                     if (allocated(error)) return
-                     do i = 1, ndim
-                        call fd4_scalar(l2(i, atom, 1), l2(i, atom, 2), l2(i, atom, 3), l2(i, atom, 4), eps, numeric, &
-                                        error)
-                        if (allocated(error)) return
-                        call check(error, a2(i, atom), numeric, &
-                                   thr_abs=thr_abs, thr_rel=thr_rel)
-                        if (allocated(error)) return
-                        do j = 1, ndim
-                           call fd4_scalar(l3(i, j, atom, 1), l3(i, j, atom, 2), l3(i, j, atom, 3), l3(i, j, atom, 4), &
-                                           eps, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, a3(i, j, atom), numeric, &
-                                      thr_abs=thr_abs, thr_rel=thr_rel)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-         deallocate (centers_base, centers_local, radii_local, v, vrad, &
-                     a1, a2, a3, l1, l2, l3, p_a3, p_l3)
-      end do
-   end subroutine run_hvp_rad_fd
 
    !> SvdW dispatch for the joint nuclear-row HVP FD check
    subroutine test_svdw_hvp_rA_joint_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rA_joint_fd(error, "svdw")
+      call run_fd_check(error, "svdw", "hvp_rA_joint")
    end subroutine test_svdw_hvp_rA_joint_fd
 
    !> CFC dispatch for the joint nuclear-row HVP FD check
    subroutine test_cfc_hvp_rA_joint_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rA_joint_fd(error, "cfc")
+      call run_fd_check(error, "cfc", "hvp_rA_joint")
    end subroutine test_cfc_hvp_rA_joint_fd
 
    !> SSES dispatch for the joint nuclear-row HVP FD check
    subroutine test_sses_hvp_rA_joint_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rA_joint_fd(error, "sses")
+      call run_fd_check(error, "sses", "hvp_rA_joint")
    end subroutine test_sses_hvp_rA_joint_fd
-
-   !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`
-   subroutine run_hvp_rA_joint_fd(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      real(wp), allocatable :: v(:, :), vrad(:)
-      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
-      real(wp), allocatable :: n1(:, :, :), n2(:, :, :, :), n3(:, :, :, :, :)
-      real(wp), allocatable :: p_h3(:, :, :), p_n3(:, :, :, :)
-      integer  :: icase, ipt, atom, s_ax, i, j, istep, iblend, igamma, nblend, ngamma
-      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
-      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
-      type(mctc_error), allocatable :: lsf_err
-
-      eps = STEP_SIZE
-      call radius_fd_thr(kind, thr_abs, thr_rel)
-      call svdw_sweep_sizes(kind, nblend, ngamma)
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, fd_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         allocate (radii_local(mol%nat), v(ndim, mol%nat), vrad(mol%nat))
-         allocate (h1(ndim, mol%nat), h2(ndim, ndim, mol%nat), &
-                   h3(ndim, ndim, ndim, mol%nat))
-         allocate (n1(ndim, mol%nat, 4), n2(ndim, ndim, mol%nat, 4), &
-                   n3(ndim, ndim, ndim, mol%nat, 4))
-         allocate (p_h3(6, ndim, mol%nat), p_n3(6, ndim, mol%nat, 4))
-         centers_base = mol%xyz
-         call joint_direction(mol%nat, v, vrad)
-         do iblend = 1, nblend
-            do igamma = 1, ngamma
-               call init_lsf(lsf, mol, radii, 3, kind, &
-                             fade_enabled=fd_user_space_fade, &
-                             blend_k=svdw_sweep_blend(kind, iblend), &
-                             blend_2b=svdw_sweep_2b(kind, igamma), &
-                             blend_3b=svdw_sweep_gamma(kind, igamma))
-               do ipt = 1, size(points, 2)
-                  point = points(:, ipt)
-                  call refresh_joint(lsf, mol, centers_base, radii)
-                  call lsf%prepare(point, lsf_err)
-                  if (allocated(lsf_err)) then
-                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                     return
-                  end if
-                  call check_identity_active(error, lsf, mol%nat)
-                  if (allocated(error)) return
-                  call lsf%hvp_f1_rA(v, h1, vrad)
-                  call lsf%hvp_f2_r_rA(v, h2, vrad)
-                  call lsf%hvp_f3_rr_rA(v, p_h3, vrad)
-                  call unpack_pair_batch(p_h3, h3, ndim*mol%nat)
-                  do istep = 1, 4
-                     centers_local = centers_base + steps(istep)*eps*v
-                     radii_local = radii + steps(istep)*eps*vrad
-                     call refresh_joint(lsf, mol, centers_local, radii_local)
-                     if (prepare_failed(lsf, point, error)) return
-                     call lsf%f3_rr_rA(lsf1_rA=n1(:, :, istep), &
-                                       lsf2_r_rA=n2(:, :, :, istep), &
-                                       lsf3_rr_rA=p_n3(:, :, :, istep))
-                     call unpack_pair_batch(p_n3(:, :, :, istep), n3(:, :, :, :, istep), &
-                                            ndim*mol%nat)
-                  end do
-                  do atom = 1, mol%nat
-                     do s_ax = 1, ndim
-                        call fd4_scalar(n1(s_ax, atom, 1), n1(s_ax, atom, 2), n1(s_ax, atom, 3), n1(s_ax, atom, 4), &
-                                        eps, numeric, error)
-                        if (allocated(error)) return
-                        call check(error, h1(s_ax, atom), numeric, &
-                                   thr_abs=thr_abs, thr_rel=thr_rel)
-                        if (allocated(error)) return
-                        do i = 1, ndim
-                           call fd4_scalar(n2(i, s_ax, atom, 1), n2(i, s_ax, atom, 2), n2(i, s_ax, atom, 3), &
-                                           n2(i, s_ax, atom, 4), eps, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, h2(i, s_ax, atom), numeric, &
-                                      thr_abs=thr_abs, thr_rel=thr_rel)
-                           if (allocated(error)) return
-                           do j = 1, ndim
-                              call fd4_scalar(n3(i, j, s_ax, atom, 1), n3(i, j, s_ax, atom, 2), &
-                                              n3(i, j, s_ax, atom, 3), n3(i, j, s_ax, atom, 4), eps, numeric, error)
-                              if (allocated(error)) return
-                              call check(error, h3(i, j, s_ax, atom), numeric, &
-                                         thr_abs=thr_abs, thr_rel=thr_rel)
-                              if (allocated(error)) return
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-               deallocate (lsf)
-            end do
-         end do
-         deallocate (centers_base, centers_local, radii_local, v, vrad, &
-                     h1, h2, h3, n1, n2, n3, p_h3, p_n3)
-      end do
-   end subroutine run_hvp_rA_joint_fd
 
    !* ================================================================================= *!
    !*                           Prepare at an unreached point                           *!
@@ -3051,29 +2812,6 @@ contains
       call lsf%update(mol_local, radii)
       call lsf%set_max_deriv(3)
    end subroutine refresh_joint
-
-   !> Rebind LSF to perturbed radii
-   !>
-   !> Radius FDs need full `update` for per-atom caches
-   !> Restore `max_deriv` afterward to keep `f012_r` valid
-   !>
-   !> @param[inout] lsf   Polymorphic LSF, rebound in place
-   !> @param[in]    mol   Molecular structure (unchanged)
-   !> @param[in]    radii Perturbed per-atom radii (size mol%nat)
-   subroutine refresh_radii(lsf, mol, radii)
-      !> Polymorphic LSF whose radii are refreshed in place
-      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      !> Molecular structure to rebind to
-      type(structure_type), intent(in) :: mol
-      !> Perturbed per-atom radii
-      real(wp), intent(in) :: radii(:)
-
-      if (size(radii) /= mol%nat) then
-         error stop "refresh_radii: radii/structure size mismatch"
-      end if
-      call lsf%update(mol, radii)
-      call lsf%set_max_deriv(3)
-   end subroutine refresh_radii
 
    !* ================================================================================= *!
    !*                     Candidate cell list versus the full scan                      *!
@@ -3449,645 +3187,119 @@ contains
    !*                       High-order derivative tests, all LSFs                       *!
    !* ================================================================================= *!
    !
-   ! One runner per quantity, dispatched for SvdW, CFC and SSES
+   ! One [[run_fd_check]] row per quantity, dispatched for SvdW, CFC and SSES
    ! SvdW sweeps `blend_k` x (`blend_2b`, `blend_3b`); CFC and SSES use one set
-   ! Thresholds from [[high_order_thr]], points from [[high_order_points]]
+   ! Thresholds from [[deep_fd_thr]], points from [[high_order_points]]
    ! CFC exponents (-15, -9) increase order-4 FD truncation error
    ! Nuclear outputs are active-indexed; threshold 0 and identity guards align indices
 
-   !> SvdW dispatch of [[run_f2_rArB]]
+   !> SvdW dispatch of the `f2_rArB` FD check
    subroutine test_svdw_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rArB(error, "svdw")
+      call run_fd_check(error, "svdw", "f2_rArB")
    end subroutine test_svdw_f2_rArB
 
-   !> CFC dispatch of [[run_f2_rArB]]
+   !> CFC dispatch of the `f2_rArB` FD check
    subroutine test_cfc_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rArB(error, "cfc")
+      call run_fd_check(error, "cfc", "f2_rArB")
    end subroutine test_cfc_f2_rArB
 
-   !> SSES dispatch of [[run_f2_rArB]]
+   !> SSES dispatch of the `f2_rArB` FD check
    subroutine test_sses_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rArB(error, "sses")
+      call run_fd_check(error, "sses", "f2_rArB")
    end subroutine test_sses_f2_rArB
 
-   !> Nuclear-position second derivative `f2_rArB` vs FD of `f1_rA`
-   subroutine run_f2_rArB(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, atomA, axisA, atomB, axisB
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :, :)
-      real(wp), allocatable :: rA_fwd(:, :), rA_fwd2(:, :)
-      real(wp), allocatable :: rA_bwd(:, :), rA_bwd2(:, :)
-      real(wp), allocatable :: dummy_rr_rA(:, :, :)
-      real(wp) :: numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         centers_base = mol%xyz
-         if (allocated(rA_fwd)) deallocate (rA_fwd, rA_fwd2, rA_bwd, rA_bwd2)
-         allocate (rA_fwd(ndim, mol%nat), rA_fwd2(ndim, mol%nat))
-         allocate (rA_bwd(ndim, mol%nat), rA_bwd2(ndim, mol%nat))
-         if (allocated(dummy_rr_rA)) deallocate (dummy_rr_rA)
-         if (allocated(analytic)) deallocate (analytic)
-         allocate (dummy_rr_rA(6, ndim, mol%nat))
-         allocate (analytic(ndim, mol%nat, ndim, mol%nat))
-
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 3, kind, isweep, &
-                                fade_enabled=fd_user_space_fade)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%set_centers(centers_base)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%f2_rArB(analytic)
-               ! Check active shape and identity before user-ID reads
-               call check(error, size(analytic, 2), prim%active_count())
-               if (allocated(error)) return
-               call check(error, prim%active_count(), mol%nat)
-               if (allocated(error)) return
-               do atomA = 1, mol%nat
-                  call check(error, prim%active_atom(atomA), atomA, &
-                             more="unscreened active list must be the identity")
-                  if (allocated(error)) return
-               end do
-               do atomB = 1, mol%nat
-                  do axisB = 1, ndim
-                     centers_local = centers_base
-                     centers_local(axisB, atomB) = centers_local(axisB, atomB) + STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf1_rA=rA_fwd, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, atomB) = centers_local(axisB, atomB) + 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf1_rA=rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, atomB) = centers_local(axisB, atomB) - STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf1_rA=rA_bwd, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, atomB) = centers_local(axisB, atomB) - 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf1_rA=rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
-                     do atomA = 1, mol%nat
-                        do axisA = 1, ndim
-                           call fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), rA_bwd(axisA, atomA), &
-                                           rA_bwd2(axisA, atomA), STEP_SIZE, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, analytic(axisA, atomA, axisB, atomB), numeric, &
-                                      thr_abs=hi_abs, thr_rel=hi_rel)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine run_f2_rArB
-
-   !> SvdW dispatch of [[run_f3_r_rArB]]
+   !> SvdW dispatch of the `f3_r_rArB` FD check
    subroutine test_svdw_f3_r_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_r_rArB(error, "svdw")
+      call run_fd_check(error, "svdw", "f3_r_rArB")
    end subroutine test_svdw_f3_r_rArB
 
-   !> CFC dispatch of [[run_f3_r_rArB]]
+   !> CFC dispatch of the `f3_r_rArB` FD check
    subroutine test_cfc_f3_r_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_r_rArB(error, "cfc")
+      call run_fd_check(error, "cfc", "f3_r_rArB")
    end subroutine test_cfc_f3_r_rArB
 
-   !> SSES dispatch of [[run_f3_r_rArB]]
+   !> SSES dispatch of the `f3_r_rArB` FD check
    subroutine test_sses_f3_r_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_r_rArB(error, "sses")
+      call run_fd_check(error, "sses", "f3_r_rArB")
    end subroutine test_sses_f3_r_rArB
 
-   !> Mixed third derivative `f3_r_rArB` vs FD of `f2_r_rA`
-   subroutine run_f3_r_rArB(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, iA, iB, axisA, axisB, jdir
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :, :, :)
-      real(wp), allocatable :: r_rA_fwd(:, :, :), r_rA_fwd2(:, :, :)
-      real(wp), allocatable :: r_rA_bwd(:, :, :), r_rA_bwd2(:, :, :)
-      real(wp), allocatable :: dummy_rr_rA(:, :, :)
-      real(wp) :: numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         centers_base = mol%xyz
-         if (allocated(r_rA_fwd)) deallocate (r_rA_fwd, r_rA_fwd2, r_rA_bwd, r_rA_bwd2)
-         allocate (r_rA_fwd(ndim, ndim, mol%nat), r_rA_fwd2(ndim, ndim, mol%nat))
-         allocate (r_rA_bwd(ndim, ndim, mol%nat), r_rA_bwd2(ndim, ndim, mol%nat))
-         if (allocated(dummy_rr_rA)) deallocate (dummy_rr_rA)
-         if (allocated(analytic)) deallocate (analytic)
-         allocate (dummy_rr_rA(6, ndim, mol%nat))
-         allocate (analytic(ndim, ndim, mol%nat, ndim, mol%nat))
-
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 3, kind, isweep, &
-                                fade_enabled=fd_user_space_fade)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%set_centers(centers_base)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%f3_r_rArB(analytic)
-               do iB = 1, mol%nat
-                  do axisB = 1, ndim
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf2_r_rA=r_rA_fwd, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf2_r_rA=r_rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf2_r_rA=r_rA_bwd, lsf3_rr_rA=dummy_rr_rA)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf2_r_rA=r_rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
-                     do iA = 1, mol%nat
-                        do axisA = 1, ndim
-                           do jdir = 1, ndim
-                              call fd4_scalar(r_rA_fwd2(jdir, axisA, iA), r_rA_fwd(jdir, axisA, iA), &
-                                              r_rA_bwd(jdir, axisA, iA), r_rA_bwd2(jdir, axisA, iA), STEP_SIZE, numeric, &
-                                              error)
-                              if (allocated(error)) return
-                              call check(error, analytic(jdir, axisA, iA, axisB, iB), numeric, &
-                                         thr_abs=hi_abs, thr_rel=hi_rel)
-                              if (allocated(error)) return
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine run_f3_r_rArB
-
-   !> SvdW dispatch of [[run_f4_rrrr]]
+   !> SvdW dispatch of the `f4_rrrr` FD check
    subroutine test_svdw_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrrr(error, "svdw")
+      call run_fd_check(error, "svdw", "f4_rrrr")
    end subroutine test_svdw_f4_rrrr
 
-   !> CFC dispatch of [[run_f4_rrrr]]
+   !> CFC dispatch of the `f4_rrrr` FD check
    subroutine test_cfc_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrrr(error, "cfc")
+      call run_fd_check(error, "cfc", "f4_rrrr")
    end subroutine test_cfc_f4_rrrr
 
-   !> SSES dispatch of [[run_f4_rrrr]]
+   !> SSES dispatch of the `f4_rrrr` FD check
    subroutine test_sses_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrrr(error, "sses")
+      call run_fd_check(error, "sses", "f4_rrrr")
    end subroutine test_sses_f4_rrrr
 
-   !> Pure spatial fourth derivative `f4_rrrr` vs FD of `f3_rrr`
-   subroutine run_f4_rrrr(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer  :: icase, ipt, axis, i, j, kk
-      real(wp) :: point(ndim), work_point(ndim)
-      real(wp) :: t3_fwd(ndim, ndim, ndim), t3_fwd2(ndim, ndim, ndim)
-      real(wp) :: t3_bwd(ndim, ndim, ndim), t3_bwd2(ndim, ndim, ndim)
-      real(wp) :: analytic(ndim, ndim, ndim, ndim), packed_t(10), packed_q(15)
-      real(wp) :: numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 4, kind, isweep)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%f4_rrrr(packed_q)
-               call unpack_sym_tensor4(packed_q, analytic, ndim)
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + STEP_SIZE
-                  call prim%prepare(work_point, lsf_err)
-                  call prim%f3_rrr(lsf3_rrr=packed_t)
-                  call unpack_sym_tensor3(packed_t, t3_fwd, ndim)
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                  call prim%prepare(work_point, lsf_err)
-                  call prim%f3_rrr(lsf3_rrr=packed_t)
-                  call unpack_sym_tensor3(packed_t, t3_fwd2, ndim)
-                  work_point = point
-                  work_point(axis) = point(axis) - STEP_SIZE
-                  call prim%prepare(work_point, lsf_err)
-                  call prim%f3_rrr(lsf3_rrr=packed_t)
-                  call unpack_sym_tensor3(packed_t, t3_bwd, ndim)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                  call prim%prepare(work_point, lsf_err)
-                  call prim%f3_rrr(lsf3_rrr=packed_t)
-                  call unpack_sym_tensor3(packed_t, t3_bwd2, ndim)
-                  do i = 1, ndim
-                     do j = 1, ndim
-                        do kk = 1, ndim
-                           call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), t3_bwd2(i, j, kk), &
-                                           STEP_SIZE, numeric, error)
-                           if (allocated(error)) return
-                           call check(error, analytic(i, j, kk, axis), numeric, &
-                                      thr_abs=hi_abs, thr_rel=hi_rel)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine run_f4_rrrr
-
-   !> SvdW dispatch of [[run_f4_rrr_rA]]
+   !> SvdW dispatch of the `f4_rrr_rA` FD check
    subroutine test_svdw_f4_rrr_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrr_rA(error, "svdw")
+      call run_fd_check(error, "svdw", "f4_rrr_rA")
    end subroutine test_svdw_f4_rrr_rA
 
-   !> CFC dispatch of [[run_f4_rrr_rA]]
+   !> CFC dispatch of the `f4_rrr_rA` FD check
    subroutine test_cfc_f4_rrr_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrr_rA(error, "cfc")
+      call run_fd_check(error, "cfc", "f4_rrr_rA")
    end subroutine test_cfc_f4_rrr_rA
 
-   !> SSES dispatch of [[run_f4_rrr_rA]]
+   !> SSES dispatch of the `f4_rrr_rA` FD check
    subroutine test_sses_f4_rrr_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rrr_rA(error, "sses")
+      call run_fd_check(error, "sses", "f4_rrr_rA")
    end subroutine test_sses_f4_rrr_rA
 
-   !> Mixed fourth derivative `f4_rrr_rA` (3 r-axes + 1 R-axis) vs FD of `f3_rrr`
-   subroutine run_f4_rrr_rA(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, atom, axis, i, j, kk
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :, :, :), packed_a(:, :, :)
-      real(wp) :: packed_t(10)
-      real(wp) :: t3_fwd(ndim, ndim, ndim), t3_fwd2(ndim, ndim, ndim)
-      real(wp) :: t3_bwd(ndim, ndim, ndim), t3_bwd2(ndim, ndim, ndim)
-      real(wp) :: numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         centers_base = mol%xyz
-         if (allocated(analytic)) deallocate (analytic, packed_a)
-         allocate (analytic(ndim, ndim, ndim, ndim, mol%nat), packed_a(10, ndim, mol%nat))
-
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 4, kind, isweep, &
-                                fade_enabled=fd_user_space_fade)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%set_centers(centers_base)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%f4_rrr_rA(packed_a)
-               call unpack_triple_batch(packed_a, analytic, ndim*mol%nat)
-               do atom = 1, mol%nat
-                  do axis = 1, ndim
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rrr(lsf3_rrr=packed_t)
-                     call unpack_sym_tensor3(packed_t, t3_fwd, ndim)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rrr(lsf3_rrr=packed_t)
-                     call unpack_sym_tensor3(packed_t, t3_fwd2, ndim)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rrr(lsf3_rrr=packed_t)
-                     call unpack_sym_tensor3(packed_t, t3_bwd, ndim)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rrr(lsf3_rrr=packed_t)
-                     call unpack_sym_tensor3(packed_t, t3_bwd2, ndim)
-                     do i = 1, ndim
-                        do j = 1, ndim
-                           do kk = 1, ndim
-                              call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), t3_bwd2(i, j, kk), &
-                                              STEP_SIZE, numeric, error)
-                              if (allocated(error)) return
-                              call check(error, analytic(i, j, kk, axis, atom), numeric, &
-                                         thr_abs=hi_abs, thr_rel=hi_rel)
-                              if (allocated(error)) return
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine run_f4_rrr_rA
-
-   !> SvdW dispatch of [[run_f4_rr_rArB]]
+   !> SvdW dispatch of the `f4_rr_rArB` FD check
    subroutine test_svdw_f4_rr_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rr_rArB(error, "svdw")
+      call run_fd_check(error, "svdw", "f4_rr_rArB")
    end subroutine test_svdw_f4_rr_rArB
 
-   !> CFC dispatch of [[run_f4_rr_rArB]]
+   !> CFC dispatch of the `f4_rr_rArB` FD check
    subroutine test_cfc_f4_rr_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rr_rArB(error, "cfc")
+      call run_fd_check(error, "cfc", "f4_rr_rArB")
    end subroutine test_cfc_f4_rr_rArB
 
-   !> SSES dispatch of [[run_f4_rr_rArB]]
+   !> SSES dispatch of the `f4_rr_rArB` FD check
    subroutine test_sses_f4_rr_rArB(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f4_rr_rArB(error, "sses")
+      call run_fd_check(error, "sses", "f4_rr_rArB")
    end subroutine test_sses_f4_rr_rArB
 
-   !> Mixed fourth derivative `f4_rr_rArB` (2 r-axes + 2 R-axes) vs FD of `f3_rr_rA`
-   subroutine run_f4_rr_rArB(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      integer  :: icase, ipt, iA, iB, axisA, axisB, j, kk
-      real(wp) :: point(ndim)
-      real(wp), allocatable :: analytic(:, :, :, :, :, :)
-      real(wp), allocatable :: rr_rA_fwd(:, :, :, :), rr_rA_fwd2(:, :, :, :)
-      real(wp), allocatable :: rr_rA_bwd(:, :, :, :), rr_rA_bwd2(:, :, :, :)
-      real(wp), allocatable :: packed_a(:, :, :, :, :), packed_rr_rA(:, :, :)
-      real(wp) :: numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         centers_base = mol%xyz
-         if (allocated(analytic)) deallocate (analytic, packed_a, packed_rr_rA)
-         if (allocated(rr_rA_fwd)) deallocate (rr_rA_fwd, rr_rA_fwd2, rr_rA_bwd, rr_rA_bwd2)
-         allocate (analytic(ndim, ndim, ndim, mol%nat, ndim, mol%nat))
-         allocate (packed_a(6, ndim, mol%nat, ndim, mol%nat), packed_rr_rA(6, ndim, mol%nat))
-         allocate (rr_rA_fwd(ndim, ndim, ndim, mol%nat), rr_rA_fwd2(ndim, ndim, ndim, mol%nat))
-         allocate (rr_rA_bwd(ndim, ndim, ndim, mol%nat), rr_rA_bwd2(ndim, ndim, ndim, mol%nat))
-
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 4, kind, isweep, &
-                                fade_enabled=fd_user_space_fade)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%set_centers(centers_base)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%f4_rr_rArB(packed_a)
-               call unpack_pair_batch(packed_a, analytic, ndim*mol%nat*ndim*mol%nat)
-               do iB = 1, mol%nat
-                  do axisB = 1, ndim
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf3_rr_rA=packed_rr_rA)
-                     call unpack_pair_batch(packed_rr_rA, rr_rA_fwd, ndim*mol%nat)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf3_rr_rA=packed_rr_rA)
-                     call unpack_pair_batch(packed_rr_rA, rr_rA_fwd2, ndim*mol%nat)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf3_rr_rA=packed_rr_rA)
-                     call unpack_pair_batch(packed_rr_rA, rr_rA_bwd, ndim*mol%nat)
-                     centers_local = centers_base
-                     centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%f3_rr_rA(lsf3_rr_rA=packed_rr_rA)
-                     call unpack_pair_batch(packed_rr_rA, rr_rA_bwd2, ndim*mol%nat)
-                     do iA = 1, mol%nat
-                        do axisA = 1, ndim
-                           do j = 1, ndim
-                              do kk = 1, ndim
-                                 call fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), rr_rA_fwd(j, kk, axisA, iA), &
-                                                 rr_rA_bwd(j, kk, axisA, iA), rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE, &
-                                                 numeric, error)
-                                 if (allocated(error)) return
-                                 call check(error, analytic(j, kk, axisA, iA, axisB, iB), &
-                                            numeric, thr_abs=hi_abs, thr_rel=hi_rel)
-                                 if (allocated(error)) return
-                              end do
-                           end do
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine run_f4_rr_rArB
-
-   !> SvdW dispatch of [[run_normalized_f1_rA]]
+   !> SvdW dispatch of the `normalized_f1_rA` FD check
    subroutine test_svdw_normalized_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_normalized_f1_rA(error, "svdw")
+      call run_fd_check(error, "svdw", "normalized_f1_rA")
    end subroutine test_svdw_normalized_f1_rA
 
-   !> CFC dispatch of [[run_normalized_f1_rA]]
+   !> CFC dispatch of the `normalized_f1_rA` FD check
    subroutine test_cfc_normalized_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_normalized_f1_rA(error, "cfc")
+      call run_fd_check(error, "cfc", "normalized_f1_rA")
    end subroutine test_cfc_normalized_f1_rA
 
-   !> SSES dispatch of [[run_normalized_f1_rA]]
+   !> SSES dispatch of the `normalized_f1_rA` FD check
    subroutine test_sses_normalized_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_normalized_f1_rA(error, "sses")
+      call run_fd_check(error, "sses", "normalized_f1_rA")
    end subroutine test_sses_normalized_f1_rA
-
-   !> Normalized-LSF nuclear gradient vs FD of the normalized value
-   subroutine run_normalized_f1_rA(error, kind)
-      type(error_type), allocatable, intent(out) :: error
-      character(len=*), intent(in) :: kind
-      real(wp) :: hi_abs, hi_rel
-      integer :: isweep
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: prim
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
-      real(wp), allocatable :: deriv_rA(:, :)
-      integer  :: icase, ipt, atom, axis
-      real(wp) :: point(ndim)
-      real(wp) :: normalized_val
-      real(wp) :: f_forward, f_backward, f_forward2, f_backward2, numeric
-      type(mctc_error), allocatable :: lsf_err
-
-      call high_order_thr(kind, hi_abs, hi_rel)
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points, high_order_points(kind))
-         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
-         centers_base = mol%xyz
-         if (allocated(deriv_rA)) deallocate (deriv_rA)
-         allocate (deriv_rA(ndim, mol%nat))
-
-         do isweep = 1, sweep_count(kind)
-            call init_lsf_sweep(prim, mol, radii, 2, kind, isweep, &
-                                fade_enabled=fd_user_space_fade)
-            do ipt = 1, size(points, 2)
-               point = points(:, ipt)
-               call prim%set_centers(centers_base)
-               call prim%prepare(point, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call prim%normalized_f01_rA(normalized_val, deriv_rA=deriv_rA)
-               do atom = 1, mol%nat
-                  do axis = 1, ndim
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%normalized_f01_rA(f_forward)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%normalized_f01_rA(f_forward2)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%normalized_f01_rA(f_backward)
-                     centers_local = centers_base
-                     centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
-                     call prim%set_centers(centers_local)
-                     call prim%prepare(point, lsf_err)
-                     call prim%normalized_f01_rA(f_backward2)
-                     call fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE, numeric, error)
-                     if (allocated(error)) return
-                     call check(error, deriv_rA(axis, atom), numeric, &
-                                thr_abs=hi_abs, thr_rel=hi_rel)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-         deallocate (centers_base, centers_local)
-      end do
-   end subroutine run_normalized_f1_rA
 
    !> SvdW dispatch of [[run_contracted]]
    subroutine test_svdw_contracted(error)
@@ -4151,7 +3363,7 @@ contains
       faded = .false.
       if (present(fade)) faded = fade
       n_inband = 0
-      call high_order_thr(kind, hi_abs, hi_rel)
+      call deep_fd_thr(kind, hi_abs, hi_rel)
       call get_test_structures(mols)
       do icase = 1, size(mols)
          mol = mols(icase)
@@ -6329,36 +5541,60 @@ contains
    subroutine test_sses_entrant_switch(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
+      !> Probe radius, smoothing length and field scale of the neck
+      real(wp), parameter :: probe = 1.0_wp, eps = 0.1_wp, field_scale = 100.0_wp
       type(moist_cavity_drop_lsf_sses_type) :: lsf
       type(moist_cavity_drop_parameters_type) :: param
       type(moist_math_smoothstep_sigmoid_type) :: critical
       type(structure_type) :: mol
-      real(wp) :: centers(3, 2), point(3), a, y, f, g(3), h(6), norm, tau
-      y = 0.005_wp
+      real(wp) :: centers(3, 2), point(3), a, y, f, g(3), h(6), hess(3, 3), norm, tau
+      ! Neck gradient 2 y (1 + p/sqrt(y^2 + eps^2)) <= 2 y (1 + p/eps): half the off edge
+      y = 0.25_wp*param%w_0ls_off/(1.0_wp + probe/eps)
       ! Midplane zero of two unit atoms: the entropy of equal weights adds tau log 2
-      tau = 2.0_wp*0.1_wp*temperature_length
-      a = sqrt(1.0_wp + 2.0_wp*sqrt(1.01_wp) - 2.0_wp*sqrt(y*y + 0.01_wp) &
+      tau = 2.0_wp*eps*temperature_length
+      a = sqrt(1.0_wp + 2.0_wp*probe*sqrt(1.0_wp + eps**2) - 2.0_wp*probe*sqrt(y*y + eps**2) &
                + tau*log(2.0_wp) - y*y)
       centers = 0.0_wp
       centers(1, :) = [-a, a]
       call new(mol, [1, 1], centers)
-      call lsf%new(moist_cavity_drop_lsf_sses_param_type(probe_radius=1.0_wp, &
-                                                         smoothing_length=0.1_wp, scale=1.0_wp))
+      call lsf%new(moist_cavity_drop_lsf_sses_param_type(probe_radius=probe, &
+                                                         smoothing_length=eps, scale=1.0_wp))
       call lsf%update(mol, [1.0_wp, 1.0_wp])
       point = [0.0_wp, y, 0.0_wp]
       call sses_prepare(lsf, point, error)
       if (allocated(error)) return
       call lsf%f012_r(f, g, h)
-      call new_smoothstep_sigmoid(critical, param%w_0ls_from, param%w_0ls_to, &
+      call unpack_sym_matrix(h, hess, 3)
+      call new_smoothstep_sigmoid(critical, param%w_0ls_off, param%w_0ls_on, &
                                  p_hi=param%w_0ls_p, a_hi=param%w_0ls_a, p_lo=param%w_0ls_p, a_lo=param%w_0ls_a)
       norm = sqrt(sum(g*g))
-      call check(error, abs(f) < 1.0e-12_wp .and. critical%f0(norm) == 0.0_wp)
+      call check(error, abs(f) < 1.0e-12_wp, "midplane point off the zero surface, f = "//to_string(f))
       if (allocated(error)) return
-      lsf%param%scale = 100.0_wp
+      ! Entrant neck: normal off the axis, concave along it, convex around it
+      call check(error, g(2) > 0.0_wp .and. abs(g(1)) + abs(g(3)) < 1.0e-12_wp*norm, &
+                 "neck normal not radial off the atom axis")
+      if (allocated(error)) return
+      call check(error, hess(1, 1) < 0.0_wp .and. hess(3, 3) > 0.0_wp, &
+                 "midplane point is not an entrant saddle, h_xx = "//to_string(hess(1, 1))// &
+                 " h_zz = "//to_string(hess(3, 3)))
+      if (allocated(error)) return
+      call check(error, norm < param%w_0ls_off, "neck |grad S| = "//to_string(norm)// &
+                 " not below the f_crit off edge "//to_string(param%w_0ls_off))
+      if (allocated(error)) return
+      call check(error, field_scale*norm > param%w_0ls_on, &
+                 "scaled neck |grad S| = "//to_string(field_scale*norm)// &
+                 " not above the f_crit on edge "//to_string(param%w_0ls_on))
+      if (allocated(error)) return
+      call check(error, critical%f0(norm) == 0.0_wp, "f_crit keeps the unscaled neck")
+      if (allocated(error)) return
+      lsf%param%scale = field_scale
       call sses_prepare(lsf, point, error)
       if (allocated(error)) return
       call lsf%f012_r(f, g, h)
-      call check(error, abs(f) < 1.0e-10_wp .and. critical%f0(sqrt(sum(g*g))) == 1.0_wp)
+      call check(error, abs(f) < 1.0e-10_wp, "scaled midplane point off the zero surface, f = "//to_string(f))
+      if (allocated(error)) return
+      call check(error, critical%f0(sqrt(sum(g*g))) == 1.0_wp, &
+                 "f_crit not fully open at the scaled neck, |grad S| = "//to_string(sqrt(sum(g*g))))
    end subroutine test_sses_entrant_switch
 
    !> Rigid-motion invariance; without screening a subset prepare keeps every atom
@@ -6720,6 +5956,80 @@ contains
          if (allocated(error)) return
       end do
    end subroutine test_sses_thread_clone
+
+   !> Distant SSES atoms in the < sqrt(tiny) and subnormal exp bands flush to exact zero
+   subroutine test_sses_tiny_weight_flush(error)
+      !> Unit test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_sses_type) :: alone, joint
+      type(structure_type) :: water, pair
+      real(wp), parameter :: thr = 1.0e-13_wp
+      real(wp) :: xyz(3, 4), radii(4), point(3), diff
+      real(wp) :: f, g(3), h(6), fj, gj(3), hj(6)
+      real(wp) :: n1(3, 3), n2(3, 3, 3), n3(6, 3, 3), j1(3, 4), j2(3, 3, 4), j3(6, 3, 4)
+      real(wp) :: r1(3), r2(3, 3), r3(6, 3), k1(4), k2(3, 4), k3(6, 4)
+      real(wp) :: q4(10, 3, 4), p2(3, 4, 3, 4)
+      real(wp) :: xdist(2)
+      integer :: icase
+
+      xyz(:, 1) = [0.0_wp, 0.0_wp, 0.22_wp]
+      xyz(:, 2) = [0.0_wp, 1.43_wp, -0.89_wp]
+      xyz(:, 3) = [0.0_wp, -1.43_wp, -0.89_wp]
+      radii = [2.9_wp, 2.3_wp, 2.3_wp, 4.0_wp]
+      point = [0.5_wp, 0.2_wp, -0.3_wp]
+
+      ! (e_4 - e_min)/tau ~ 390 (< small band) and ~ 725 (IEEE subnormal exp band)
+      xdist = [35.0_wp, 47.0_wp]
+
+      call new(water, [8, 1, 1], xyz(:, 1:3))
+      call alone%new(moist_cavity_drop_lsf_sses_param_type())
+      call alone%set_max_deriv(3)
+      call alone%update(water, radii(1:3))
+      call sses_prepare(alone, point, error)
+      if (allocated(error)) return
+      call alone%f012_r(f, g, h)
+      call alone%f3_rr_rA(n1, n2, n3)
+      call alone%f3_rr_rad(r1, r2, r3)
+
+      do icase = 1, 2
+         xyz(:, 4) = [xdist(icase), 0.0_wp, 0.0_wp]
+         call new(pair, [8, 1, 1, 54], xyz)
+         call joint%new(moist_cavity_drop_lsf_sses_param_type())
+         call joint%set_max_deriv(3)
+         call joint%update(pair, radii)
+         call sses_prepare(joint, point, error)
+         if (allocated(error)) return
+
+         call joint%f012_r(fj, gj, hj)
+         call joint%f3_rr_rA(j1, j2, j3)
+         call joint%f3_rr_rad(k1, k2, k3)
+         call joint%f4_rrr_rA(q4)
+         call joint%f2_rArB(p2)
+
+         diff = max(abs(f - fj), maxval(abs(g - gj)), maxval(abs(h - hj)))
+         diff = max(diff, maxval(abs(n1 - j1(:, 1:3))), maxval(abs(n2 - j2(:, :, 1:3))), &
+                    maxval(abs(n3 - j3(:, :, 1:3))))
+         diff = max(diff, maxval(abs(r1 - k1(1:3))), maxval(abs(r2 - k2(:, 1:3))), &
+                    maxval(abs(r3 - k3(:, 1:3))))
+         call check(error, diff < thr*(1.0_wp + abs(f)), "tiny-weight atom perturbs water field")
+         if (allocated(error)) return
+
+         call check(error, all(j1(:, 4) == 0.0_wp) .and. all(j2(:, :, 4) == 0.0_wp) .and. &
+                    all(j3(:, :, 4) == 0.0_wp), &
+                    "native nuclear derivatives for flushed atom must be exact zero")
+         if (allocated(error)) return
+         call check(error, k1(4) == 0.0_wp .and. all(k2(:, 4) == 0.0_wp) .and. &
+                    all(k3(:, 4) == 0.0_wp), &
+                    "native radius derivatives for flushed atom must be exact zero")
+         if (allocated(error)) return
+         call check(error, all(q4(:, :, 4) == 0.0_wp), &
+                    "jet f4_rrr_rA derivatives for flushed atom must be exact zero")
+         if (allocated(error)) return
+         call check(error, all(p2(:, 4, :, :) == 0.0_wp) .and. all(p2(:, :, :, 4) == 0.0_wp), &
+                    "jet f2_rArB derivatives for flushed atom must be exact zero")
+         if (allocated(error)) return
+      end do
+   end subroutine test_sses_tiny_weight_flush
 
    !> Build a DROP cavity on an SSES field
    !>
@@ -7950,8 +7260,8 @@ contains
    !> - FD: the biting band, points from [[cfc_band_points]] (every atom >= 0.05
    !>   Bohr off both edges, one inside its band; stencil `+-2 STEP_SIZE`); order
    !>   L at the point against the 4-point central FD of order L - 1
-   !>   on the stencil, L = 1..4, both through `evaluate_batch`; CFC FD
-   !>   thresholds
+   !>   on the stencil, L = 1..4, both through `evaluate_batch` (stencil points
+   !>   as two-column strips, see [[sample_channels]]); CFC FD thresholds
    !> - negative control of the FD: the unfaded gradient misses the faded FD by
    !>   more than 100 times the threshold
    subroutine test_cfc_batch_fade_band(error)
@@ -7961,16 +7271,16 @@ contains
       integer, parameter :: n = 37, npts_max = 4
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:), pts(:, :)
-      type(moist_cavity_drop_lsf_cfc_type) :: off, far, near
+      type(moist_cavity_drop_lsf_cfc_type) :: off, far
+      type(moist_cavity_drop_lsf_cfc_type), target :: near
       type(moist_cavity_drop_lsf_cfc_param_type) :: param
-      real(wp) :: points(ndim, n), u(ndim), lo(ndim), hi(ndim), smax, h, miss
+      type(lsf_probe_type) :: probe
+      real(wp) :: points(ndim, n), u(ndim), lo(ndim), hi(ndim), smax, miss
       real(wp) :: a0(n), a1(ndim, n), a2(6, n), a3(10, n), a4(15, n)
       real(wp) :: b0(n), b1(ndim, n), b2(6, n), b3(10, n), b4(15, n)
-      real(wp) :: point(ndim), sten(ndim, 4*ndim), steps(4)
-      real(wp) :: p0(1), p1(ndim, 1), p2(6, 1), p3(10, 1), p4(15, 1)
-      real(wp) :: s0(4*ndim), s1(ndim, 4*ndim), s2(6, 4*ndim), s3(10, 4*ndim)
-      real(wp) :: s4(15, 4*ndim), fd, ana, f(4)
-      integer :: sa(n), sb(n), ss(4*ndim), i, k, order, ipt, axis, istep, ic, a, b, c
+      !> FD of the order-0 batch output per axis
+      real(wp), allocatable :: fd(:, :)
+      integer :: sa(n), sb(n), i, order, ipt
       integer :: state
       type(mctc_error), allocatable :: lsf_err
 
@@ -8042,107 +7352,28 @@ contains
                            0.05_wp, pts)
       call check(error, size(pts, 2) >= npts_max, more="too few points with an atom in the band")
       if (allocated(error)) return
-      h = STEP_SIZE
-      steps = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+      call new_lsf_probe(probe, near, mol, radii)
       miss = 0.0_wp
       do ipt = 1, npts_max
-         point = pts(:, 1 + (ipt - 1)*(size(pts, 2)/npts_max))
-         do axis = 1, ndim
-            do istep = 1, 4
-               ic = istep + 4*(axis - 1)
-               sten(:, ic) = point
-               sten(axis, ic) = point(axis) + steps(istep)*h
-            end do
-         end do
+         probe%point = pts(:, 1 + (ipt - 1)*(size(pts, 2)/npts_max))
          do order = 1, 4
-            call near%evaluate_batch(reshape(point, [ndim, 1]), order, p0, p1, p2, p3, p4, &
-                                     error=lsf_err)
-            if (.not. allocated(lsf_err)) then
-               call near%evaluate_batch(sten, order - 1, s0, s1, s2, s3, s4, &
-                                        error=lsf_err)
-               call batch_status(near, ss)
-            end if
+            call check_fd_move(error, probe, move_point, [ch_batch0 + order - 1], 4, &
+                               CFC_ABS_THR, CFC_REL_THR, "cfc fade band point "//to_string(ipt), &
+                               .false., fd)
+            if (allocated(error)) return
+            if (order > 1) cycle
+            call off%evaluate_batch(reshape(probe%point, [ndim, 1]), 1, a0(1:1), a1(:, 1:1), &
+                                    error=lsf_err)
             if (allocated(lsf_err)) then
-               call test_failed(error, "evaluate_batch in the band failed: "//lsf_err%message)
+               call test_failed(error, "unfaded batch failed: "//lsf_err%message)
                return
             end if
-            if (any(ss /= 0)) then
-               call test_failed(error, "a stencil point inside the band is unreached")
-               return
-            end if
-            ! component k of order L - 1, differenced along `axis`, is the order-L slot
-            do axis = 1, ndim
-               do k = 1, cfc_npack_test(order - 1)
-                  do istep = 1, 4
-                     ic = istep + 4*(axis - 1)
-                     select case (order)
-                     case (1)
-                        f(istep) = s0(ic)
-                     case (2)
-                        f(istep) = s1(k, ic)
-                     case (3)
-                        f(istep) = s2(k, ic)
-                     case default
-                        f(istep) = s3(k, ic)
-                     end select
-                  end do
-                  call fd4_scalar(f(1), f(2), f(3), f(4), h, fd, error)
-                  if (allocated(error)) return
-                  select case (order)
-                  case (1)
-                     ana = p1(axis, 1)
-                  case (2)
-                     ana = p2(packed_index(k, axis), 1)
-                  case (3)
-                     call packed_pair(k, a, b)
-                     ana = p3(packed_index3(a, b, axis), 1)
-                  case default
-                     call packed_triple(k, a, b, c)
-                     ana = p4(packed_index4(a, b, c, axis), 1)
-                  end select
-                  call check(error, ana, fd, thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
-                  if (allocated(error)) then
-                     write (error%message, "(a,i0,a,i0,a,i0,a,i0,a,es12.4,a,es12.4)") &
-                        "fade FD order ", order, " point ", ipt, " axis ", axis, &
-                        " slot ", k, ": analytic ", ana, " FD ", fd
-                     return
-                  end if
-                  if (order == 1) then
-                     call off%evaluate_batch(reshape(point, [ndim, 1]), 1, a0(1:1), &
-                                             a1(:, 1:1), error=lsf_err)
-                     if (allocated(lsf_err)) then
-                        call test_failed(error, "unfaded batch failed: "//lsf_err%message)
-                        return
-                     end if
-                     miss = max(miss, abs(a1(axis, 1) - fd))
-                  end if
-               end do
-            end do
+            miss = max(miss, maxval(abs(a1(:, 1) - fd(1, :))))
          end do
       end do
       call check(error, miss > 100.0_wp*CFC_ABS_THR, &
                  more="the band must change the gradient beyond the FD threshold")
    end subroutine test_cfc_batch_fade_band
-
-   !> Packed component count of a symmetric rank-L spatial tensor, L = 0..3
-   !>
-   !> @param[in] rank Tensor rank
-   !> @returns   n    Packed components
-   pure integer function cfc_npack_test(rank) result(n)
-      !> Tensor rank
-      integer, intent(in) :: rank
-
-      select case (rank)
-      case (0)
-         n = 1
-      case (1)
-         n = 3
-      case (2)
-         n = 6
-      case default
-         n = 10
-      end select
-   end function cfc_npack_test
 
    !> Sorted index pair of packed rank-2 slot `k` (LAPACK upper order)
    !>
@@ -8590,7 +7821,7 @@ contains
       call new(one, [6], reshape([0.0_wp, 0.0_wp, 0.0_wp], [ndim, 1]))
       call init_cfc_param(single, one, [3.0_wp], 1.0e-11_wp, param)
       sigma = start + 0.4_wp*width
-      call new_smoothstep_polynomial(fade, start + width, start, order=4)
+      call new_smoothstep_polynomial(fade, x_off=start + width, x_on=start, order=4)
       call fade%eval(sigma, w)
       expected = -single%param%a1*sigma - log(w)
       call single%evaluate_batch(reshape([3.0_wp*(1.0_wp + sigma), 0.0_wp, 0.0_wp], [ndim, 1]), &
@@ -9286,15 +8517,13 @@ contains
 
       integer, parameter :: npts_max = 6
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), pts(:, :)
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf, off
+      real(wp), allocatable :: radii(:), pts(:, :), n1(:, :)
+      type(moist_cavity_drop_lsf_svdw_type), target :: lsf
+      type(moist_cavity_drop_lsf_svdw_type) :: off
       type(moist_cavity_drop_lsf_svdw_param_type) :: param
-      real(wp) :: point(ndim), shifted(ndim), x_on, delta, h, miss
-      real(wp) :: f(-2:2), g(ndim, -2:2), hs(ndim, ndim, -2:2), packed_h(6), packed_t(10)
-      real(wp) :: g1(ndim), h2(ndim, ndim), d3(ndim, ndim, ndim), goff(ndim)
-      real(wp) :: n1(ndim), n2(ndim, ndim), n3(ndim, ndim, ndim)
-      integer :: ipt, axis, step, i, j
-      type(mctc_error), allocatable :: lsf_err
+      type(lsf_probe_type) :: probe
+      real(wp) :: x_on, delta, miss, goff(ndim)
+      integer :: ipt
 
       call get_structure(mol, "MB16-43", "01")
       call get_test_radii(mol, radii)
@@ -9309,67 +8538,17 @@ contains
       call check(error, size(pts, 2) >= npts_max, more="too few points with an atom in the band")
       if (allocated(error)) return
 
-      h = STEP_SIZE
+      call new_lsf_probe(probe, lsf, mol, radii)
       miss = 0.0_wp
       do ipt = 1, npts_max
-         point = pts(:, 1 + (ipt - 1)*(size(pts, 2)/npts_max))
-         call lsf%prepare(point, lsf_err)
-         if (allocated(lsf_err)) then
-            call test_failed(error, "prepare failed: "//lsf_err%message)
-            return
-         end if
-         call lsf%f3_rrr(lsf1_r=g1, lsf2_rr=packed_h, lsf3_rrr=packed_t)
-         call unpack_sym_matrix(packed_h, h2, ndim)
-         call unpack_sym_tensor3(packed_t, d3, ndim)
-         do axis = 1, ndim
-            do step = -2, 2
-               if (step == 0) cycle
-               shifted = point
-               shifted(axis) = point(axis) + real(step, wp)*h
-               call lsf%prepare(shifted, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "displaced prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call lsf%f3_rrr(lsf0=f(step), lsf1_r=g(:, step), lsf2_rr=packed_h, &
-                               lsf3_rrr=packed_t)
-               call unpack_sym_matrix(packed_h, hs(:, :, step), ndim)
-            end do
-            call fd4_scalar(f(2), f(1), f(-1), f(-2), h, n1(axis), error)
-            if (allocated(error)) return
-            do i = 1, ndim
-               call fd4_scalar(g(i, 2), g(i, 1), g(i, -1), g(i, -2), h, n2(i, axis), error)
-               if (allocated(error)) return
-               do j = 1, ndim
-                  call fd4_scalar(hs(i, j, 2), hs(i, j, 1), hs(i, j, -1), hs(i, j, -2), h, &
-                                  n3(i, j, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do i = 1, ndim
-            call check(error, g1(i), n1(i), thr_abs=fd_abs_thr("svdw"), &
-                       thr_rel=fd_rel_thr("svdw"))
-            if (allocated(error)) return
-            do j = 1, ndim
-               call check(error, h2(i, j), n2(i, j), thr_abs=fd_abs_thr("svdw"), &
-                          thr_rel=fd_rel_thr("svdw"))
-               if (allocated(error)) return
-               do step = 1, ndim
-                  call check(error, d3(i, j, step), n3(i, j, step), thr_abs=fd_abs_thr("svdw"), &
-                             thr_rel=fd_rel_thr("svdw"))
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-
-         call off%prepare(point, lsf_err)
-         if (allocated(lsf_err)) then
-            call test_failed(error, "unfaded prepare failed: "//lsf_err%message)
-            return
-         end if
+         probe%point = pts(:, 1 + (ipt - 1)*(size(pts, 2)/npts_max))
+         call check_fd_move(error, probe, move_point, [ch_f0, ch_f1_r, ch_f2_rr], 4, &
+                            fd_abs_thr("svdw"), fd_rel_thr("svdw"), &
+                            "svdw fade band point "//to_string(ipt), .false., n1)
+         if (allocated(error)) return
+         if (prepare_failed(off, probe%point, error)) return
          call off%f012_r(lsf1_r=goff)
-         miss = max(miss, maxval(abs(goff - n1)))
+         miss = max(miss, maxval(abs(goff - n1(1, :))))
       end do
       call check(error, miss > 100.0_wp*fd_abs_thr("svdw"), &
                  more="the band must change the gradient beyond the FD threshold")
@@ -9393,21 +8572,20 @@ contains
    !>
    !> - MB16-43 01, production threshold; every atom >= 0.05 Bohr off both band
    !>   edges, one inside its band; every stencil `+-3 STEP_SIZE` in one piece
-
    !>   - SvdW: band `a = 4`, `b = 2` e-folds in `d_A` ([[fade_band_points]])
    !>   - CFC: band `a = 5`, `b = 2` e-folds of `u_A`, per atom in sigma
    !>     ([[cfc_band_points]]); the radius rows check the faded radius rule
    !>     `dsigma/dR = -||d||/R**2`, the radius also scaling the band
    !> - one center or radius displaced per stencil, 6-point central FD of
-   !>   `S`, `dS/dr`, `d2S/dr2`, `f1_rA`, `f1_rad` and the weighted jet
+   !>   `S`, the weighted jet `ch_jet`, `dS/dr`, `d2S/dr2`, `f1_rA` and `f1_rad`
    !>   (4-point truncation of the CFC radius rows near a band end: 7e-9 at
-   !>   `STEP_SIZE`, over `CFC_ABS_THR`)
-   !>   `w0 S + w1 . dS/dr + w2 : d2S/dr2`:
-   !>   - centers: `f1_rA`, `f2_r_rA`, `f3_rr_rA`, `f2_rArB`, `vjp_f1_rA`
-   !>   - radii: `f1_rad`, `f2_r_rad`, `f3_rr_rad`, `f2_radrad`, `f2_rA_rad`,
-   !>     `vjp_f1_rad`
-   !>   - joint direction of [[joint_direction]]: `hvp_f1_rA` (with `vrad`),
-   !>     `hvp_f1_rad`
+   !>   `STEP_SIZE`, over `CFC_ABS_THR`):
+   !>   - centers, rebound by `update`: `f1_rA`, `vjp_f1_rA`, `f2_r_rA`,
+   !>     `f3_rr_rA`, `f2_rArB`
+   !>   - radii: `f1_rad`, `vjp_f1_rad`, `f2_r_rad`, `f3_rr_rad`, `f2_rA_rad`,
+   !>     `f2_radrad`
+   !>   - joint direction of [[joint_direction]]: `hvp_f1_rad`, `hvp_f1_rA`
+   !>     (with `vrad`)
    !> - results mapped to user space through `active_atom`; atoms beyond the band
    !>   end (no slot, every one >= 0.05 Bohr off it) carry exact zeros on both sides
    !> - thresholds: SvdW `ABS_THR` / `REL_THR`, CFC `CFC_ABS_THR` / `CFC_REL_THR`
@@ -9423,27 +8601,16 @@ contains
       character(len=*), intent(in) :: kind
 
       integer, parameter :: npts_max = 3
-      real(wp), parameter :: steps(6) = [3.0_wp, 2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp, -3.0_wp]
-      real(wp), parameter :: w0 = 0.73_wp, w1(ndim) = [-0.41_wp, 0.88_wp, 0.17_wp]
-      real(wp), parameter :: w2(ndim, ndim) = reshape([0.29_wp, 0.62_wp, -0.36_wp, &
-                                                       -0.54_wp, 0.08_wp, 0.45_wp, &
-                                                       0.13_wp, -0.77_wp, 0.91_wp], [ndim, ndim])
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), pts(:, :), centers(:, :), rad_local(:), cen_local(:, :)
-      real(wp), allocatable :: v(:, :), vrad(:)
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf, off
+      real(wp), allocatable :: radii(:), pts(:, :), unfaded(:), n_center(:, :), n_radius(:, :)
+      class(moist_cavity_drop_lsf_type), allocatable, target :: lsf
+      class(moist_cavity_drop_lsf_type), allocatable :: off
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw_param
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc_param
-      ! analytic, user space
-      real(wp), allocatable :: a1(:, :), a2(:, :, :), a3(:, :, :, :), ab(:, :, :, :)
-      real(wp), allocatable :: r1(:), r2(:, :), r3(:, :, :), rr(:, :), rx(:, :, :)
-      real(wp), allocatable :: vja(:, :), vjr(:), hva(:, :), hvr(:), o1(:, :), or1(:)
-      ! stencil samples, user space
-      real(wp) :: s0(6), sg(ndim, 6), sh(ndim, ndim, 6), sj(6)
-      real(wp), allocatable :: sa(:, :, :), sr(:, :)
-      real(wp) :: point(ndim), numeric, miss, thr_a, thr_r
-      integer :: ipt, atom, other, dir, istep, i, j, nat
-      logical :: joint
+      type(lsf_probe_type) :: probe
+      character(len=:), allocatable :: context
+      real(wp) :: point(ndim), miss, thr_a, thr_r
+      integer :: ipt, nat
 
       call get_structure(mol, "MB16-43", "01")
       call get_test_radii(mol, radii)
@@ -9468,312 +8635,40 @@ contains
       call check(error, size(pts, 2) >= npts_max, more="too few points with an atom in the band")
       if (allocated(error)) return
 
-      allocate (centers(ndim, nat), cen_local(ndim, nat), rad_local(nat), v(ndim, nat), vrad(nat))
-      allocate (a1(ndim, nat), a2(ndim, ndim, nat), a3(ndim, ndim, ndim, nat), &
-                ab(ndim, nat, ndim, nat), r1(nat), r2(ndim, nat), r3(ndim, ndim, nat), &
-                rr(nat, nat), rx(ndim, nat, nat), vja(ndim, nat), vjr(nat), hva(ndim, nat), &
-                hvr(nat), o1(ndim, nat), or1(nat), sa(ndim, nat, 6), sr(nat, 6))
-      centers = mol%xyz
-      call joint_direction(nat, v, vrad)
-
+      call new_lsf_probe(probe, lsf, mol, radii)
+      probe%rebuild = .true.
+      allocate (unfaded(4*nat))
       miss = 0.0_wp
       do ipt = 1, npts_max
          point = pts(:, 1 + (ipt - 1)*(size(pts, 2)/npts_max))
          ! negative control: the unfaded nuclear and radius gradients at this point
-         call refresh_joint(off, mol, centers, radii)
-         if (prepare_failed(off, point, error)) return
-         call user_f1(off, nat, o1, or1, error)
+         call refresh_joint(off, mol, mol%xyz, radii)
+         call sample_channels(error, off, [ch_f1_rA, ch_f1_rad], nat, point, unfaded)
          if (allocated(error)) return
 
-         call refresh_joint(lsf, mol, centers, radii)
-         call fade_family_analytic(lsf, nat, point, v, vrad, w0, w1, w2, a1, a2, a3, ab, &
-                                   r1, r2, r3, rr, rx, vja, vjr, hva, hvr, error)
+         probe%point = point
+         context = kind//" fade band point "//to_string(ipt)
+         call check_fd_move(error, probe, move_center, [ch_f0, ch_jet, ch_f1_r, ch_f2_rr, ch_f1_rA], &
+                            6, thr_a, thr_r, context, .false., n_center)
          if (allocated(error)) return
-
-         ! dir 1..3: center axis, 4: radius, 5: joint direction (once, atom 1)
-         do atom = 1, nat
-            do dir = 1, 5
-               joint = dir == 5
-               if (joint .and. atom > 1) cycle
-               do istep = 1, 6
-                  cen_local = centers
-                  rad_local = radii
-                  if (dir <= ndim) then
-                     cen_local(dir, atom) = cen_local(dir, atom) + steps(istep)*STEP_SIZE
-                  else if (dir == 4) then
-                     rad_local(atom) = rad_local(atom) + steps(istep)*STEP_SIZE
-                  else
-                     cen_local = cen_local + steps(istep)*STEP_SIZE*v
-                     rad_local = rad_local + steps(istep)*STEP_SIZE*vrad
-                  end if
-                  call refresh_joint(lsf, mol, cen_local, rad_local)
-                  call fade_family_sample(lsf, nat, point, w0, w1, w2, s0(istep), &
-                                          sg(:, istep), sh(:, :, istep), sj(istep), &
-                                          sa(:, :, istep), sr(:, istep), error)
-                  if (allocated(error)) return
-               end do
-               if (joint) then
-                  do other = 1, nat
-                     call fd6_scalar(sr(other, 1), sr(other, 2), sr(other, 3), &
-                                     sr(other, 4), sr(other, 5), sr(other, 6), &
-                                     STEP_SIZE, numeric, error)
-                     if (allocated(error)) return
-                     call check(error, hvr(other), numeric, thr_abs=thr_a, thr_rel=thr_r, &
-                                more="hvp_f1_rad")
-                     if (allocated(error)) return
-                     do i = 1, ndim
-                        call fd6_scalar(sa(i, other, 1), sa(i, other, 2), sa(i, other, 3), &
-                                        sa(i, other, 4), sa(i, other, 5), sa(i, other, 6), &
-                                        STEP_SIZE, numeric, error)
-                        if (allocated(error)) return
-                        call check(error, hva(i, other), numeric, thr_abs=thr_a, &
-                                   thr_rel=thr_r, more="hvp_f1_rA")
-                        if (allocated(error)) return
-                     end do
-                  end do
-                  cycle
-               end if
-
-               ! value, gradient, Hessian and weighted jet of this displacement
-               call fd6_scalar(s0(1), s0(2), s0(3), &
-                               s0(4), s0(5), s0(6), &
-                               STEP_SIZE, numeric, error)
-               if (allocated(error)) return
-               if (dir <= ndim) then
-                  call check(error, a1(dir, atom), numeric, thr_abs=thr_a, thr_rel=thr_r, &
-                             more="f1_rA")
-                  miss = max(miss, abs(o1(dir, atom) - numeric))
-               else
-                  call check(error, r1(atom), numeric, thr_abs=thr_a, thr_rel=thr_r, more="f1_rad")
-                  miss = max(miss, abs(or1(atom) - numeric))
-               end if
-               if (allocated(error)) return
-               call fd6_scalar(sj(1), sj(2), sj(3), &
-                               sj(4), sj(5), sj(6), &
-                               STEP_SIZE, numeric, error)
-               if (allocated(error)) return
-               if (dir <= ndim) then
-                  call check(error, vja(dir, atom), numeric, thr_abs=thr_a, thr_rel=thr_r, &
-                             more="vjp_f1_rA")
-               else
-                  call check(error, vjr(atom), numeric, thr_abs=thr_a, thr_rel=thr_r, &
-                             more="vjp_f1_rad")
-               end if
-               if (allocated(error)) return
-               do i = 1, ndim
-                  call fd6_scalar(sg(i, 1), sg(i, 2), sg(i, 3), &
-                                  sg(i, 4), sg(i, 5), sg(i, 6), &
-                                  STEP_SIZE, numeric, error)
-                  if (allocated(error)) return
-                  if (dir <= ndim) then
-                     call check(error, a2(i, dir, atom), numeric, thr_abs=thr_a, &
-                                thr_rel=thr_r, more="f2_r_rA")
-                  else
-                     call check(error, r2(i, atom), numeric, thr_abs=thr_a, thr_rel=thr_r, &
-                                more="f2_r_rad")
-                  end if
-                  if (allocated(error)) return
-                  do j = 1, ndim
-                     call fd6_scalar(sh(i, j, 1), sh(i, j, 2), sh(i, j, 3), &
-                                     sh(i, j, 4), sh(i, j, 5), sh(i, j, 6), &
-                                     STEP_SIZE, numeric, error)
-                     if (allocated(error)) return
-                     if (dir <= ndim) then
-                        call check(error, a3(i, j, dir, atom), numeric, thr_abs=thr_a, &
-                                   thr_rel=thr_r, more="f3_rr_rA")
-                     else
-                        call check(error, r3(i, j, atom), numeric, thr_abs=thr_a, &
-                                   thr_rel=thr_r, more="f3_rr_rad")
-                     end if
-                     if (allocated(error)) return
-                  end do
-               end do
-
-               ! second atom index: f2_rArB / f2_rA_rad from f1_rA, f2_radrad from f1_rad
-               do other = 1, nat
-                  do i = 1, ndim
-                     call fd6_scalar(sa(i, other, 1), sa(i, other, 2), sa(i, other, 3), &
-                                     sa(i, other, 4), sa(i, other, 5), sa(i, other, 6), &
-                                     STEP_SIZE, numeric, error)
-                     if (allocated(error)) return
-                     if (dir <= ndim) then
-                        call check(error, ab(i, other, dir, atom), numeric, thr_abs=thr_a, &
-                                   thr_rel=thr_r, more="f2_rArB")
-                     else
-                        call check(error, rx(i, other, atom), numeric, thr_abs=thr_a, &
-                                   thr_rel=thr_r, more="f2_rA_rad")
-                     end if
-                     if (allocated(error)) return
-                  end do
-                  if (dir == 4) then
-                     call fd6_scalar(sr(other, 1), sr(other, 2), sr(other, 3), &
-                                     sr(other, 4), sr(other, 5), sr(other, 6), &
-                                     STEP_SIZE, numeric, error)
-                     if (allocated(error)) return
-                     call check(error, rr(other, atom), numeric, thr_abs=thr_a, &
-                                thr_rel=thr_r, more="f2_radrad")
-                     if (allocated(error)) return
-                  end if
-               end do
-            end do
-         end do
+         call check_fd_move(error, probe, move_radius, &
+                            [ch_f0, ch_jet, ch_f1_r, ch_f2_rr, ch_f1_rA, ch_f1_rad], &
+                            6, thr_a, thr_r, context, .false., n_radius)
+         if (allocated(error)) return
+         call check_fd_move(error, probe, move_joint, [ch_f1_rad, ch_f1_rA], 6, thr_a, thr_r, &
+                            context, .false.)
+         if (allocated(error)) return
+         miss = max(miss, maxval(abs(unfaded(1:ndim*nat) - n_center(1, :))), &
+                    maxval(abs(unfaded(ndim*nat + 1:) - n_radius(1, :))))
       end do
       call check(error, miss > 100.0_wp*thr_a, &
                  more="the band must change f1_rA / f1_rad beyond the FD threshold")
    end subroutine run_fade_fd_atom_families
 
-   !> Faded analytic per-atom families at the bound geometry, user space
+   !> Per-atom families with the fade on against FD inside one band piece
    !>
-   !> @param[inout] lsf   Faded SvdW or CFC instance, prepared here
-   !> @param[in]    nat   Atom count; atoms beyond the band end get zeros
-   !> @param[in]    point Evaluation point
-   !> @param[in]    v     Joint direction, nuclear half [ndim, nat]
-   !> @param[in]    vrad  Joint direction, radius half [nat]
-   !> @param[in]    w0    Jet weight of S
-   !> @param[in]    w1    Jet weights of dS/dr
-   !> @param[in]    w2    Jet weights of d2S/dr2
-   !> @param[out]   a1    f1_rA
-   !> @param[out]   a2    f2_r_rA
-   !> @param[out]   a3    f3_rr_rA
-   !> @param[out]   ab    f2_rArB
-   !> @param[out]   r1    f1_rad
-   !> @param[out]   r2    f2_r_rad
-   !> @param[out]   r3    f3_rr_rad
-   !> @param[out]   rr    f2_radrad
-   !> @param[out]   rx    f2_rA_rad
-   !> @param[out]   vja   vjp_f1_rA
-   !> @param[out]   vjr   vjp_f1_rad
-   !> @param[out]   hva   hvp_f1_rA with vrad
-   !> @param[out]   hvr   hvp_f1_rad
-   !> @param[out]   error Test failure
-   subroutine fade_family_analytic(lsf, nat, point, v, vrad, w0, w1, w2, a1, a2, a3, ab, &
-                                   r1, r2, r3, rr, rx, vja, vjr, hva, hvr, error)
-      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      integer, intent(in) :: nat
-      real(wp), intent(in) :: point(ndim), v(:, :), vrad(:), w0, w1(ndim), w2(ndim, ndim)
-      real(wp), intent(out) :: a1(:, :), a2(:, :, :), a3(:, :, :, :), ab(:, :, :, :)
-      real(wp), intent(out) :: r1(:), r2(:, :), r3(:, :, :), rr(:, :), rx(:, :, :)
-      real(wp), intent(out) :: vja(:, :), vjr(:), hva(:, :), hvr(:)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: t1(ndim, nat), t2(ndim, ndim, nat), t3(ndim, ndim, ndim, nat)
-      real(wp) :: tb(ndim, nat, ndim, nat), q1(nat), q2(ndim, nat), q3(ndim, ndim, nat)
-      real(wp) :: qq(nat, nat), qx(ndim, nat, nat)
-      real(wp) :: p3(6, ndim, nat), pq3(6, nat), w2_packed(6)
-      integer :: map(nat), i, j, nact
-
-      if (prepare_failed(lsf, point, error)) return
-      call active_map_user(lsf, nat, map, nact)
-      call lsf%f3_rr_rA(lsf1_rA=t1, lsf2_r_rA=t2, lsf3_rr_rA=p3)
-      call unpack_pair_batch(p3, t3, ndim*nat)
-      call lsf%f2_rArB(tb)
-      call lsf%f3_rr_rad(lsf1_rad=q1, lsf2_r_rad=q2, lsf3_rr_rad=pq3)
-      call unpack_pair_batch(pq3, q3, nat)
-      call lsf%f2_radrad(qq)
-      call lsf%f2_rA_rad(qx)
-      a1 = 0.0_wp
-      a2 = 0.0_wp
-      a3 = 0.0_wp
-      ab = 0.0_wp
-      r1 = 0.0_wp
-      r2 = 0.0_wp
-      r3 = 0.0_wp
-      rr = 0.0_wp
-      rx = 0.0_wp
-      vja = 0.0_wp
-      vjr = 0.0_wp
-      hva = 0.0_wp
-      hvr = 0.0_wp
-      do i = 1, nact
-         a1(:, map(i)) = t1(:, i)
-         a2(:, :, map(i)) = t2(:, :, i)
-         a3(:, :, :, map(i)) = t3(:, :, :, i)
-         r1(map(i)) = q1(i)
-         r2(:, map(i)) = q2(:, i)
-         r3(:, :, map(i)) = q3(:, :, i)
-         do j = 1, nact
-            ab(:, map(i), :, map(j)) = tb(:, i, :, j)
-            rr(map(i), map(j)) = qq(i, j)
-            rx(:, map(i), map(j)) = qx(:, i, j)
-         end do
-      end do
-      ! The weights are not symmetric; the packed seed carries their symmetric part
-      call pack_sym_part(w2, w2_packed, ndim)
-      call lsf%vjp_f1_rA(w0, w1, w2_packed, t1)
-      call lsf%vjp_f1_rad(w0, w1, w2_packed, q1)
-      do i = 1, nact
-         vja(:, map(i)) = t1(:, i)
-         vjr(map(i)) = q1(i)
-      end do
-      ! the directions are indexed by user atom, as the accessors read them
-      call lsf%hvp_f1_rA(v, t1, vrad)
-      call lsf%hvp_f1_rad(v, vrad, q1)
-      do i = 1, nact
-         hva(:, map(i)) = t1(:, i)
-         hvr(map(i)) = q1(i)
-      end do
-   end subroutine fade_family_analytic
-
-   !> One FD stencil sample of the faded families, user space
-   !>
-   !> @param[inout] lsf   Faded SvdW or CFC instance at the displaced geometry
-   !> @param[in]    nat   Atom count; atoms beyond the band end get zeros
-   !> @param[in]    point Evaluation point
-   !> @param[in]    w0    Jet weight of S
-   !> @param[in]    w1    Jet weights of dS/dr
-   !> @param[in]    w2    Jet weights of d2S/dr2
-   !> @param[out]   s0    S
-   !> @param[out]   sg    dS/dr
-   !> @param[out]   sh    d2S/dr2
-   !> @param[out]   sj    Weighted jet
-   !> @param[out]   sa    f1_rA [ndim, nat]
-   !> @param[out]   sr    f1_rad [nat]
-   !> @param[out]   error Test failure
-   subroutine fade_family_sample(lsf, nat, point, w0, w1, w2, s0, sg, sh, sj, sa, sr, error)
-      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      integer, intent(in) :: nat
-      real(wp), intent(in) :: point(ndim), w0, w1(ndim), w2(ndim, ndim)
-      real(wp), intent(out) :: s0, sg(ndim), sh(ndim, ndim), sj, sa(:, :), sr(:)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: t1(ndim, nat), q1(nat), sh_packed(6)
-
-      if (prepare_failed(lsf, point, error)) return
-      call lsf%f012_r(lsf0=s0, lsf1_r=sg, lsf2_rr=sh_packed)
-      call unpack_sym_matrix(sh_packed, sh, ndim)
-      sj = w0*s0 + sum(w1*sg) + sum(w2*sh)
-      call user_f1(lsf, nat, t1, q1, error)
-      if (allocated(error)) return
-      sa = t1
-      sr = q1
-   end subroutine fade_family_sample
-
-   !> `f1_rA` and `f1_rad` of a prepared SvdW or CFC instance, user space
-   !>
-   !> @param[in]  lsf   Prepared SvdW or CFC instance
-   !> @param[in]  nat   Atom count
-   !> @param[out] f1    f1_rA [ndim, nat], zero for atoms beyond the band end
-   !> @param[out] r1    f1_rad [nat], zero for atoms beyond the band end
-   !> @param[out] error Test failure (none set; kept for the call sites)
-   subroutine user_f1(lsf, nat, f1, r1, error)
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
-      integer, intent(in) :: nat
-      real(wp), intent(out) :: f1(:, :), r1(:)
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp) :: t1(ndim, nat), q1(nat), q3(6, nat), t3(6, ndim, nat)
-      integer :: map(nat), i, nact
-
-      call active_map_user(lsf, nat, map, nact)
-      call lsf%f3_rr_rA(lsf1_rA=t1, lsf3_rr_rA=t3)
-      call lsf%f3_rr_rad(lsf1_rad=q1, lsf3_rr_rad=q3)
-      f1 = 0.0_wp
-      r1 = 0.0_wp
-      do i = 1, nact
-         f1(:, map(i)) = t1(:, i)
-         r1(map(i)) = q1(i)
-      end do
-   end subroutine user_f1
+   !> - MB16-43 01, production threshold; every atom >= 0.05 Bohr off both band
+   !>   edges, one inside its band; every stencil `+-3 STEP_SIZE` in one piece
 
    !> Active slot -> user atom map
    !>

@@ -3,15 +3,21 @@
 !> - `fill`: Lebedev layout on every sphere
 !> - `compute_switching`: iSwiG limits of isolated and buried anchors
 !> - `filter`: the pre-filter compacts every anchor array with one permutation
+!> - Lebedev rule: a cavity refuses a rule with negative weights for its anchors
 module test_cavity_drop_anchor
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use moist_cavity_bornzeta, only: get_born_zeta
+   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_anchor, only: drop_anchor_type
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig
+   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_context, only: moist_context_type, new_context
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
+   use moist_radii, only: default_cpcm_radii
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private
@@ -52,7 +58,8 @@ contains
                   new_unittest("filter_keeps_all", test_filter_keeps_all), &
                   new_unittest("filter_keeps_none", test_filter_keeps_none), &
                   new_unittest("filter_skips_unallocated", test_filter_skips_unallocated), &
-                  new_unittest("filter_reports_removed_count", test_filter_removed_count) &
+                  new_unittest("filter_reports_removed_count", test_filter_removed_count), &
+                  new_unittest("negative_weight_lebedev_rejected", test_negative_weight_lebedev) &
                   ]
 
    end subroutine collect_cavity_drop_anchor
@@ -473,6 +480,55 @@ contains
       call check(error, nremoved + anchors%ngrid, n, "removed and kept add up")
 
    end subroutine test_filter_removed_count
+
+   !* ================================================================================= *!
+   !*                             Lebedev rule of the anchors                           *!
+   !* ================================================================================= *!
+
+   !> DROP refuses the 74-point Lebedev rule, which has negative weights
+   !>
+   !> - At construction, where no fitted Born zeta exists for that size
+   !> - In `update`, if the size is changed on a constructed cavity: the
+   !>   Lebedev cache must not hand negative weights to the anchors
+   subroutine test_negative_weight_lebedev(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(moist_error_type), allocatable :: cavity_error
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.4_wp], [3, 2]))
+      call svdw_template%new()
+
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74), ctx=ctx)
+      call check(error, allocated(cavity_error), "DROP was constructed with the 74-point Lebedev rule")
+      if (allocated(error)) return
+      deallocate (cavity, cavity_error)
+
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NLEB), ctx=ctx)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      cavity%param%num_leb = 74
+      call cavity%update(mol, error=cavity_error)
+      if (.not. allocated(cavity_error)) then
+         call test_failed(error, "DROP update accepted the 74-point Lebedev rule")
+         return
+      end if
+      call check(error, index(cavity_error%message, "negative weights") > 0, &
+                 "unexpected error message: "//cavity_error%message)
+
+   end subroutine test_negative_weight_lebedev
 
    !* ================================================================================= *!
    !*                                      Fixture                                      *!

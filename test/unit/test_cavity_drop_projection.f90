@@ -13,18 +13,18 @@ module test_cavity_drop_projection
    use moist_math_linalg, only: setup_tangent_frame
    use moist_math_packed, only: unpack_sym_matrix
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
+                                           drop_polish_parameters_type, drop_finalize_parameters_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, &
                                                 point_captured, point_failed_unreached
-   use moist_cavity_drop_projection_newton, only: newton_config_type, newton_scratch_type, &
-                                                 newton_solve_batch
-   use moist_cavity_drop_projection_polish, only: polish_config_type, polish_batch
+   use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch
+   use moist_cavity_drop_projection_polish, only: polish_batch
    use moist_cavity_drop_projection_finalize, only: dedupe_candidates, canonical_branch_order, &
-                                                   finalize_config_type, finalize_anchor_type, &
+                                                   finalize_anchor_type, &
                                                    finalize_scratch_type, projection_rows_type, &
                                                    finalize_anchor
    use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
@@ -80,7 +80,6 @@ contains
          & new_unittest("octree_search_window", test_search_window), &
          & new_unittest("octree_rigid_motion", test_rigid_motion), &
          & new_unittest("octree_zero_window_on_surface", test_zero_window), &
-         & new_unittest("search_window_validation", test_window_validation), &
          & new_unittest("octree_cluster_dimer", test_dimer_branching), &
          & new_unittest("octree_cluster_cross", test_branching_xyz_cross), &
          & new_unittest("octree_cluster_octahedron", test_octahedral), &
@@ -90,14 +89,15 @@ contains
          & new_unittest("brute_force_broad_window", test_brute_force_broad_window), &
          & new_unittest("stationary_box_bounds", test_stationary_box_bounds), &
          & new_unittest("batch_flush_accumulator", test_batch_accumulator), &
-         & new_unittest("newton_sphere_foot", test_newton_sphere_foot), &
+         & new_unittest("newton_sphere_point", test_newton_sphere_point), &
          & new_unittest("newton_stage_switch", test_newton_stage_switch), &
          & new_unittest("newton_far_seed_unreached", test_newton_far_seed_unreached), &
-         & new_unittest("newton_far_foot", test_newton_far_foot), &
+         & new_unittest("newton_far_point", test_newton_far_point), &
          & new_unittest("polish_escapes_far_pole", test_polish_far_pole), &
          & new_unittest("multistart_capture_stops_duplicates", test_capture_stops_duplicates), &
-         & new_unittest("multistart_capture_keeps_twin_feet", test_capture_keeps_twin_feet), &
+         & new_unittest("multistart_capture_keeps_twin_points", test_capture_keeps_twin_points), &
          & new_unittest("finalize_canonical_order", test_finalize_canonical_order), &
+         & new_unittest("finalize_canonical_order_chain", test_finalize_canonical_order_chain), &
          & new_unittest("finalize_sphere_anchor", test_finalize_sphere_anchor), &
          & new_unittest("finalize_branch_weight_fold", test_finalize_branch_fold), &
          & new_unittest("octree_two_sphere_branches", test_octree_two_sphere), &
@@ -107,7 +107,7 @@ contains
          & new_unittest("octree_surface_patch_coverage", test_octree_surface_patch_coverage), &
          & new_unittest("octree_optional_region_certificate", test_octree_region_certificate), &
          & new_unittest("octree_seed_anchor_within_trace_tolerance", test_octree_trace_on_surface), &
-         & new_unittest("octree_far_verified_foot_radius", test_octree_far_foot_radius), &
+         & new_unittest("octree_far_verified_point_radius", test_octree_far_point_radius), &
          & new_unittest("octree_far_traced_radius", test_octree_far_traced_radius), &
          & new_unittest("octree_seeds_on_sign_change_segments", test_octree_sign_change_seeds), &
          & new_unittest("octree_sign_free_region_no_seeds", test_octree_sign_free_region), &
@@ -115,7 +115,7 @@ contains
          & new_unittest("bad_octree_seed_size", test_bad_octree_seed_size, should_fail=.true.), &
          & new_unittest("bad_octree_budgets", test_bad_octree_budgets, should_fail=.true.), &
          & new_unittest("bad_octree_max_depth", test_bad_octree_max_depth, should_fail=.true.), &
-         & new_unittest("bad_octree_rho_max", test_bad_octree_rho_max, should_fail=.true.), &
+         & new_unittest("bad_octree_pdist_max", test_bad_octree_pdist_max, should_fail=.true.), &
          & new_unittest("bad_octree_negative_slack", test_bad_octree_negative_slack, should_fail=.true.), &
          & new_unittest("bad_octree_depth_cap", test_bad_octree_depth_cap, should_fail=.true.), &
          & new_unittest("bad_octree_survivors", test_bad_octree_survivors, should_fail=.true.), &
@@ -237,7 +237,7 @@ contains
       call check_h2_branches(anchor, expected, error)
    end subroutine test_shallow_minimum
 
-   !> Retain distant strict minima under a window independent of branch weights
+   !> Retain a distant strict minimum inside a wide branch window
    !>
    !> @param[out] error Missing reference minimum
    subroutine test_brute_force_broad_window(error)
@@ -253,10 +253,11 @@ contains
                                                       0.7442321748694862_wp, -3.657313249780524_wp], [3, 2])
 
       call check_h2_branches(anchor, expected, &
-                             error, sigma=0.0025_wp, window=20.0_wp, require_pruning=.true.)
+                             error, dpdist_max=5.0_wp, require_pruning=.true.)
    end subroutine test_brute_force_broad_window
 
-   !> Keep discovery independent of softmax parameters under an explicit window
+   !> Discovery follows the branch window: a wide one finds both minima, a narrow
+   !> one only the near one
    !>
    !> @param[out] error Incorrect search support
    subroutine test_search_window(error)
@@ -271,11 +272,9 @@ contains
                                                       0.3809228455330751_wp, 1.4183515439720356_wp, &
                                                       1.4183515439720356_wp, -1.1316484571542558_wp], [3, 2])
 
-      call check_h2_branches(anchor, expected, error, sigma=0.0025_wp, window=3.2_wp)
+      call check_h2_branches(anchor, expected, error, dpdist_max=5.0_wp)
       if (allocated(error)) return
-      call check_h2_branches(anchor, expected, error, sigma=0.25_wp, window=3.2_wp)
-      if (allocated(error)) return
-      call check_h2_branches(anchor, expected(:, 2:2), error, window=0.02_wp)
+      call check_h2_branches(anchor, expected(:, 2:2), error, dpdist_max=0.01_wp)
    end subroutine test_search_window
 
    !> Retain both minima after rotating and translating the whole geometry
@@ -308,6 +307,8 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Level-4 projection worker
       type(projection_worker_type) :: worker
+      !> Run context
+      type(moist_context_type) :: ctx
       !> Molecular geometry
       type(structure_type) :: mol
       !> Native error
@@ -315,14 +316,14 @@ contains
       !> Atom at the origin and exact point on a unit sphere
       real(wp) :: positions(3, 1), anchor(3)
       !> Returned points
-      real(wp), allocatable :: feet(:, :)
+      real(wp), allocatable :: points(:, :)
       !> Returned point count
       integer :: n_points
 
       positions = 0.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
       call new(mol, [1], positions)
-      param%branch_search_rho2_slack = 0.0_wp
+      param%branch%dpdist_max = 0.0_wp
       param%proj_level = 4
       call param%compute_derived(native_error)
       if (allocated(native_error)) then
@@ -332,47 +333,16 @@ contains
       call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type())
       call lsf%update(mol, [1.0_wp])
       call worker%init(param, lsf, positions, native_error)
-      if (.not. allocated(native_error)) call worker%project_anchor(anchor, 1, n_points, native_error, feet=feet)
+      call new_context(ctx, verbosity=0, nthreads=1)
+      if (.not. allocated(native_error)) call worker%project_anchor(ctx, anchor, 1, n_points, native_error, points=points)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
          return
       end if
       call check(error, n_points, 1)
       if (allocated(error)) return
-      call check(error, norm2(feet(:, 1) - anchor), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, norm2(points(:, 1) - anchor), 0.0_wp, thr=1.0e-14_wp)
    end subroutine test_zero_window
-
-   !> Validate the search sentinel and prevent nonfinite search bounds
-   !>
-   !> @param[out] error Invalid configuration accepted or default changed
-   subroutine test_window_validation(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Parameter set under test
-      type(moist_cavity_drop_parameters_type) :: param
-      !> Native validation result
-      type(moist_error_type), allocatable :: native_error
-
-      call param%compute_derived(native_error)
-      call check(error,.not. allocated(native_error))
-      if (allocated(error)) return
-      call check(error, param%branch_rho2_slack(), &
-                 2.0_wp*param%branch_dphi_max/param%phi_alpha, thr=1.0e-14_wp)
-      if (allocated(error)) return
-      param%branch_search_rho2_slack = -0.5_wp
-      call param%compute_derived(native_error)
-      call check(error, allocated(native_error))
-      if (allocated(error)) return
-      param%branch_search_rho2_slack = ieee_value(0.0_wp, ieee_quiet_nan)
-      call param%compute_derived(native_error)
-      call check(error, allocated(native_error))
-      if (allocated(error)) return
-      call param%init_defaults()
-      call param%compute_derived(native_error)
-      call check(error,.not. allocated(native_error))
-      if (allocated(error)) return
-      call check(error, param%branch_search_rho2_slack, -1.0_wp, thr=1.0e-14_wp)
-   end subroutine test_window_validation
 
    !> Compare the level-4 projection with independently enumerated minima
    !>
@@ -381,16 +351,15 @@ contains
    !> No projected neighbour points enter the production solver
    !>
    !> - the worker runs with the weight cut disabled, so the raw branch set is
-   !>   compared rather than the softmax survivors
+   !>   compared rather than the rows above the cut
    !>
    !> @param[in] anchor Initial point, in Bohr
    !> @param[in] expected Distinct strict minima, shape (3, n), in Bohr
    !> @param[out] error Missing minimum or solver failure
-   !> @param[in] sigma Optional softmax scale
-   !> @param[in] window Optional squared-distance search slack, in Bohr^2
+   !> @param[in] dpdist_max Optional branch window, in Bohr
    !> @param[in] transform Rotate and translate the geometry when true
    !> @param[in] require_pruning Require fewer seeds than the exhaustive reference
-   subroutine check_h2_branches(anchor, expected, error, sigma, window, transform, require_pruning)
+   subroutine check_h2_branches(anchor, expected, error, dpdist_max, transform, require_pruning)
       !> Reference point
       real(wp), intent(in) :: anchor(3)
       !> Independent minima
@@ -398,9 +367,7 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Weight model scale
-      real(wp), intent(in), optional :: sigma
-      !> Search support
-      real(wp), intent(in), optional :: window
+      real(wp), intent(in), optional :: dpdist_max
       !> Apply a rigid motion
       logical, intent(in), optional :: transform
       !> Check algorithmic work reduction on the broad-window fixture
@@ -411,6 +378,8 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Level-4 projection worker
       type(projection_worker_type) :: worker
+      !> Run context
+      type(moist_context_type) :: ctx
       !> Molecular geometry
       type(structure_type) :: mol
       !> Native error
@@ -424,9 +393,9 @@ contains
       !> Returned branch count and matching indices
       integer :: n_points, i, j, n_octree
       !> Distance from one reference minimum to the nearest native branch
-      real(wp) :: distance, rho_start
+      real(wp) :: distance, pdist_start
       !> Returned and unpruned surface-leaf reference points
-      real(wp), allocatable :: feet(:, :), reference(:, :)
+      real(wp), allocatable :: points(:, :), reference(:, :)
       !> Exhaustive surface-leaf count
       integer :: reference_seeds
 
@@ -447,10 +416,12 @@ contains
       end if
       call new(mol, [1, 1], positions)
       param%tolerance = 1.0e-12_wp
-      param%branch_weight_s = 0.25_wp
+      param%branch%dpdist_max = 5.0_wp
       param%proj_level = 4
-      if (present(sigma)) param%branch_weight_s = sigma
-      if (present(window)) param%branch_search_rho2_slack = window
+      ! The reach is no part of these searches: beyond every window they ask for
+      param%branch%reach_on = 10.0_wp
+      param%branch%reach_off = 12.0_wp
+      if (present(dpdist_max)) param%branch%dpdist_max = dpdist_max
       call param%compute_derived(native_error)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
@@ -464,8 +435,9 @@ contains
          call test_failed(error, native_error%message)
          return
       end if
-      worker%fcfg%wleb_cut = -1.0_wp
-      call worker%project_anchor(point, 1, n_points, native_error, feet=feet)
+      worker%finalize%wleb_cut = -1.0_wp
+      call new_context(ctx, verbosity=0, nthreads=1)
+      call worker%project_anchor(ctx, point, 1, n_points, native_error, points=points)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
          return
@@ -475,27 +447,27 @@ contains
       do i = 1, size(expected, 2)
          distance = huge(1.0_wp)
          do j = 1, n_points
-            distance = min(distance, norm2(feet(:, j) - targets(:, i)))
+            distance = min(distance, norm2(points(:, j) - targets(:, i)))
          end do
          call check(error, distance < 1.0e-8_wp, message="Octree missed a strict minimum")
          if (allocated(error)) return
       end do
 
-      rho_start = 0.0_wp
+      pdist_start = 0.0_wp
       n_octree = 0
       select type (seeder => worker%seeder)
       type is (octree_seeder_type)
-         rho_start = seeder%dbg_rho_start
+         pdist_start = seeder%dbg_pdist_start
          n_octree = seeder%n_points
       end select
-      call brute_force_branches(lsf, point, param, rho_start, reference, native_error, reference_seeds)
+      call brute_force_branches(lsf, point, param, pdist_start, reference, native_error, reference_seeds)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
          return
       end if
       call check(error, size(reference, 2), size(expected, 2), message="Brute-force H2 count differs")
       if (allocated(error)) return
-      call check_branch_sets(reference, feet(:, 1:n_points), error)
+      call check_branch_sets(reference, points(:, 1:n_points), error)
       if (allocated(error)) return
       if (present(require_pruning)) then
          if (require_pruning) then
@@ -575,9 +547,11 @@ contains
       type(brute_force_context_type) :: context
       !> Local refinement of every leaf
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: ncfg
-      type(polish_config_type) :: pcfg
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
+      !> Run context
+      type(moist_context_type) :: ctx
       !> Candidate points and multipliers
       real(wp), allocatable :: candidates(:, :), multipliers(:), gradients(:, :), hessians(:, :, :)
       !> Distance-window and deduplication mask
@@ -586,23 +560,25 @@ contains
       real(wp) :: t1(3), t2(3), b11, b12, b22, beta, p(3, 1), v(1), gradient(3)
       !> Seed and accepted point counts
       integer :: i, n, n_strict, icol
+      !> Branch window of the settings
+      type(branch_weight_type) :: bw
 
       if (present(n_seeds)) n_seeds = 0
       context%lsf = lsf
-      call tree%init(error, seed_size=param%octree_seed_size, max_boxes=param%octree_max_boxes, &
-                     max_survivors=param%octree_max_survivors, max_depth=param%octree_max_depth)
+      call tree%init(error, seed_size=param%seed%seed_size, max_boxes=param%seed%max_boxes, &
+                     max_survivors=param%seed%max_survivors, max_depth=param%seed%max_depth)
       if (allocated(error)) return
       p(:, 1) = anchor
       call context%lsf%evaluate_batch(p, 0, v, error=error)
       if (allocated(error)) return
-      call tree%run(anchor, v(1), radius, param%branch_rho2_slack(), brute_force_probe, context, error)
+      call bw%init(param%branch%dpdist_max, param%phi_alpha)
+      call tree%run(anchor, v(1), radius, bw%x_max**2, brute_force_probe, context, error, &
+                    pdist_slack=bw%x_max, pdist_soft=bw%soft)
       if (allocated(error)) return
       if (present(n_seeds)) n_seeds = tree%n_points
 
-      ncfg%phi_alpha = param%phi_alpha
-      ncfg%tol = param%proj_tol
-      ncfg%max_iter = param%proj_maxiter
-      pcfg%phi_alpha = param%phi_alpha
+      ncfg%tol = param%solve%tol
+      ncfg%max_iter = param%solve%max_iter
       call batch%init(tree%n_points + 1, error)
       if (allocated(error)) return
       call batch%begin_run(1, anchor, 1)
@@ -610,9 +586,10 @@ contains
       do i = 1, tree%n_points
          call batch%append(tree%points(:, i), 0.0_wp, icol)
       end do
-      call newton_solve_batch(batch, context%lsf, ncfg, scratch, error)
+      call newton_solve_batch(batch, context%lsf, ncfg, param%phi_alpha, scratch, error)
       if (allocated(error)) return
-      call polish_batch(batch, context%lsf, pcfg, ncfg, scratch, error)
+      call new_context(ctx, verbosity=0, nthreads=1)
+      call polish_batch(ctx, batch, context%lsf, pcfg, ncfg, param%phi_alpha, scratch, error)
       if (allocated(error)) return
 
       allocate (candidates(3, batch%n), multipliers(batch%n), gradients(3, batch%n), hessians(3, 3, batch%n))
@@ -631,7 +608,8 @@ contains
          return
       end if
       allocate (keep(n))
-      call dedupe_candidates(candidates(:, 1:n), anchor, param%branch_sep_cut, param%branch_rho2_slack(), keep)
+      call dedupe_candidates(candidates(:, 1:n), anchor, param%branch%sep_cut, bw%x_max**2, keep, &
+                             pdist_slack=bw%x_max, pdist_soft=bw%soft)
       n_strict = 0
       do i = 1, n
          if (.not. keep(i)) cycle
@@ -943,7 +921,19 @@ contains
       !> Row bounds and total reference count
       integer, allocatable :: first(:), last(:)
       integer :: aid, j, total
+      !> Settings with the fine level-4 octree of the compared rows
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Branch window of the settings
+      type(branch_weight_type) :: bw
 
+      param = cavity%param
+      param%proj_level = 4
+      call param%compute_derived(native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call bw%init(param%branch%dpdist_max, param%phi_alpha)
       call row_bounds(rows, cavity%anchor%ngrid, first, last)
       total = 0
       do aid = 1, cavity%anchor%ngrid
@@ -953,8 +943,9 @@ contains
          do j = first(aid), last(aid)
             radius = min(radius, sum((rows%xyz(:, j) - anchor)**2))
          end do
-         radius = sqrt(radius + cavity%param%branch_rho2_slack())
-         call brute_force_branches(lsf, anchor, cavity%param, radius, reference, native_error)
+         ! No search goes beyond the reach
+         radius = min(bw%pdist_max(sqrt(radius)), param%branch%reach_off)
+         call brute_force_branches(lsf, anchor, param, radius, reference, native_error)
          if (allocated(native_error)) then
             call test_failed(error, native_error%message)
             return
@@ -996,7 +987,6 @@ contains
       integer :: nremoved
 
       param%num_leb = nleb
-      param%proj_maxiter = 500
       param%tolerance = 1.0e-12_wp
       call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_3b=1.0_wp))
       call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf, &
@@ -1014,7 +1004,7 @@ contains
       call cavity%anchor%fill(cavity%sphxyz, cavity%radii, cavity%ang_grid, cavity%ang_weight)
       call cavity%iswig%update(mol, cavity%radii, wleb_max=maxval(cavity%anchor%wleb0))
       call cavity%anchor%compute_switching(cavity%iswig, ctx%get_num_threads())
-      call cavity%anchor%filter(cavity%param%wleb_cut, nremoved)
+      call cavity%anchor%filter(cavity%param%finalize%wleb_cut, nremoved)
       lsf%screening_threshold = cavity%param%screening_threshold
       call lsf%update(mol, cavity%radii)
    end subroutine build_cluster_anchors
@@ -1046,12 +1036,15 @@ contains
 
       param = cavity%param
       param%proj_level = level
+      ! The octree preset follows the level
+      call param%compute_derived(error)
+      if (allocated(error)) return
       call worker%init(param, cavity%lsf_model, cavity%mol%xyz, error)
       if (allocated(error)) return
-      worker%fcfg%wleb_cut = -1.0_wp
+      worker%finalize%wleb_cut = -1.0_wp
       allocate (nrows(cavity%anchor%ngrid), lost(cavity%anchor%ngrid))
       slots = [(i, i=1, cavity%anchor%ngrid)]
-      call worker%process_chunk(slots, cavity%anchor%xyz(:, 1:cavity%anchor%ngrid), &
+      call worker%process_chunk(cavity%ctx, slots, cavity%anchor%xyz(:, 1:cavity%anchor%ngrid), &
                                 cavity%anchor%owner(1:cavity%anchor%ngrid), &
                                 cavity%anchor%wleb0(1:cavity%anchor%ngrid), &
                                 cavity%anchor%f0(1:cavity%anchor%ngrid), nrows, lost, error)
@@ -1075,7 +1068,7 @@ contains
       logical :: relevant
 
       relevant = abs(cavity%anchor%wleb0(rows%anchor(i))*cavity%anchor%f0(rows%anchor(i))* &
-                     rows%cpjac(i)*rows%w_f(i)) > cavity%param%wleb_cut
+                     rows%cpjac(i)*rows%w_f(i)) > cavity%param%finalize%wleb_cut
    end function relevant_row
 
    !> Verify surface membership, stationarity, and strict local minimality
@@ -1236,21 +1229,21 @@ contains
       call check(error, next - 1, batch%n, "runs cover every column")
    end subroutine check_runs_contiguous
 
-   !> Newton from the anchor lands on the analytic foot of a single-atom sphere
+   !> Newton from the anchor lands on the analytic point of a single-atom sphere
    !>
-   !> @param[out] error Wrong foot or multiplier
-   subroutine test_newton_sphere_foot(error)
+   !> @param[out] error Wrong point or multiplier
+   subroutine test_newton_sphere_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Single-atom level set
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points and solver state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: cfg
+      type(drop_solve_parameters_type) :: cfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
-      !> Sphere radius, anchors, feet
-      real(wp) :: rs, anchors(3, 4), foot(3), u(3), residual(3)
+      !> Sphere radius, anchors, points
+      real(wp) :: rs, anchors(3, 4), point(3), u(3), residual(3)
       !> Steps per stage
       integer :: n1(4), n2(4)
       !> Anchor and column
@@ -1270,7 +1263,7 @@ contains
          call batch%begin_run(k, anchors(:, k), 1)
          call batch%append(anchors(:, k), 0.0_wp, icol)
       end do
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed, stage1_steps=n1, stage2_steps=n2)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1280,15 +1273,15 @@ contains
          call check(error, batch%status(k), point_converged, "anchor converges")
          if (allocated(error)) return
          u = unit_vector(anchors(:, k))
-         foot = rs*u
-         call check(error, norm2(batch%x(:, k) - foot) < 1.0e-9_wp, "foot is the radial projection")
+         point = rs*u
+         call check(error, norm2(batch%x(:, k) - point) < 1.0e-9_wp, "point is the radial projection")
          if (allocated(error)) return
          call check(error, abs(batch%S(k)) < 1.0e-10_wp, "final jet is on the surface")
          if (allocated(error)) return
-         residual = cfg%phi_alpha*(batch%x(:, k) - anchors(:, k)) - batch%lambda(k)*batch%gradS(:, k)
+         residual = default_phi_alpha()*(batch%x(:, k) - anchors(:, k)) - batch%lambda(k)*batch%gradS(:, k)
          call check(error, norm2(residual) < 1.0e-9_wp, "final multiplier is stationary")
          if (allocated(error)) return
-         call check(error, abs(batch%rho(k) - abs(norm2(anchors(:, k)) - rs)) < 1.0e-9_wp, "rho")
+         call check(error, abs(batch%pdist(k) - abs(norm2(anchors(:, k)) - rs)) < 1.0e-9_wp, "pdist")
          if (allocated(error)) return
          call check(error, abs(abs(dot_product(batch%normal(:, k), u)) - 1.0_wp) < 1.0e-10_wp, &
                     "normal is radial")
@@ -1300,7 +1293,7 @@ contains
          call check(error, n1(k) + n2(k) <= 20, "converges in a handful of steps")
          if (allocated(error)) return
       end do
-   end subroutine test_newton_sphere_foot
+   end subroutine test_newton_sphere_point
 
    !> A seed beyond the level set reach fails alone, its run's anchor seed still converges
    !>
@@ -1312,7 +1305,7 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points and solver state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: cfg
+      type(drop_solve_parameters_type) :: cfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, far seed and its value
@@ -1337,7 +1330,7 @@ contains
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol_anchor)
       call batch%append(far(:, 1), 0.0_wp, icol_far)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1349,35 +1342,35 @@ contains
       call check(error, ieee_is_nan(batch%S(icol_far)), "unreached jet is never stored")
    end subroutine test_newton_far_seed_unreached
 
-   !> Newton from an anchor far outside the sphere walks the whole distance to its foot
+   !> Newton from an anchor far outside the sphere walks the whole distance to its point
    !>
-   !> - the foot lies more than 15 Bohr from the anchor along x, many `max_step`
+   !> - the point lies more than 15 Bohr from the anchor along x, many `max_step`
    !>   steps away
    !>
-   !> @param[out] error Far foot not reached
-   subroutine test_newton_far_foot(error)
+   !> @param[out] error Far point not reached
+   subroutine test_newton_far_point(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Single-atom level set
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points and solver state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: cfg
+      type(drop_solve_parameters_type) :: cfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
-      !> Sphere radius, anchor, analytic foot and anchor value
-      real(wp) :: rs, anchor(3, 1), foot(3), v(1)
+      !> Sphere radius, anchor, analytic point and anchor value
+      real(wp) :: rs, anchor(3, 1), point(3), v(1)
       !> Column
       integer :: icol
-      !> Absolute foot tolerance (Bohr)
+      !> Absolute point tolerance (Bohr)
       real(wp), parameter :: tol = 1.0e-9_wp
 
       call sphere_lsf(lsf, rs, error)
       if (allocated(error)) return
 
       anchor(:, 1) = [rs + 18.0_wp, 0.0_wp, 0.0_wp]
-      foot = [rs, 0.0_wp, 0.0_wp]
-      call check(error, abs(anchor(1, 1) - foot(1)) > 15.0_wp, "fixture foot lies beyond 15 Bohr")
+      point = [rs, 0.0_wp, 0.0_wp]
+      call check(error, abs(anchor(1, 1) - point(1)) > 15.0_wp, "fixture point lies beyond 15 Bohr")
       if (allocated(error)) return
       call lsf%evaluate_batch(anchor, 0, v, error=failed)
       if (allocated(failed)) then
@@ -1390,19 +1383,19 @@ contains
       call batch%init(4, failed)
       call batch%begin_run(1, anchor(:, 1), 1)
       call batch%append(anchor(:, 1), 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
       end if
       call check(error, batch%status(icol), point_converged, "far anchor converges")
       if (allocated(error)) return
-      call check(error, norm2(batch%x(:, icol) - foot) <= tol .or. &
-                 norm2(batch%x(:, icol) - foot) <= 10.0_wp*tol*rs, "foot is the radial projection")
+      call check(error, norm2(batch%x(:, icol) - point) <= tol .or. &
+                 norm2(batch%x(:, icol) - point) <= 10.0_wp*tol*rs, "point is the radial projection")
       if (allocated(error)) return
-      call check(error, abs(batch%rho(icol) - 18.0_wp) <= tol .or. &
-                 abs(batch%rho(icol) - 18.0_wp) <= 10.0_wp*tol*18.0_wp, "rho is the full distance")
-   end subroutine test_newton_far_foot
+      call check(error, abs(batch%pdist(icol) - 18.0_wp) <= tol .or. &
+                 abs(batch%pdist(icol) - 18.0_wp) <= 10.0_wp*tol*18.0_wp, "pdist is the full distance")
+   end subroutine test_newton_far_point
 
    !> The stage-1 exits: residual threshold, the cheap-step budget, and a zero
    !> budget
@@ -1415,7 +1408,7 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points and solver state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: cfg
+      type(drop_solve_parameters_type) :: cfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, seed
@@ -1433,10 +1426,10 @@ contains
       !> (from the anchor itself the radial cheap step is already exact on a sphere)
       anchor = [rs + 1.0_wp, 0.0_wp, 0.0_wp]
       seed = rs*[cos(0.3_wp), sin(0.3_wp), 0.0_wp]
-      cfg = newton_config_type(switch_fnorm=0.1_wp, max_cheap_steps=100)
+      cfg = drop_solve_parameters_type(switch_fnorm=0.1_wp, max_cheap_steps=100)
       call batch%begin_run(1, anchor, 1)
       call batch%append(seed, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed, stage1_steps=n1, stage2_steps=n2)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
       call check_stage_run(error, "residual switch", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 1, 20)
       if (allocated(error)) return
 
@@ -1444,20 +1437,20 @@ contains
       call batch%clear()
       anchor = [3.0_wp*rs, 0.0_wp, 0.0_wp]
       seed = rs*[cos(0.5_wp), sin(0.5_wp), 0.0_wp]
-      cfg = newton_config_type(switch_fnorm=0.0_wp, max_cheap_steps=3)
+      cfg = drop_solve_parameters_type(switch_fnorm=0.0_wp, max_cheap_steps=3)
       call batch%begin_run(1, anchor, 1)
       call batch%append(seed, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed, stage1_steps=n1, stage2_steps=n2)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
       call check_stage_run(error, "cheap-step budget", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 3, 3)
       if (allocated(error)) return
 
       !> No cheap step at all
       call batch%clear()
       anchor = [rs + 1.0_wp, 0.3_wp, -0.2_wp]
-      cfg = newton_config_type(max_cheap_steps=0)
+      cfg = drop_solve_parameters_type(max_cheap_steps=0)
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed, stage1_steps=n1, stage2_steps=n2)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
       call check_stage_run(error, "budget switch", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 0, 0)
    end subroutine test_newton_stage_switch
 
@@ -1467,12 +1460,12 @@ contains
    !> @param[in]  label  Case label
    !> @param[in]  failed Native Newton failure
    !> @param[in]  batch  Solved batch
-   !> @param[in]  foot   Analytic foot
+   !> @param[in]  point   Analytic point
    !> @param[in]  n1     Cheap steps taken
    !> @param[in]  n2     Full steps taken
    !> @param[in]  n1_min Fewest cheap steps expected
    !> @param[in]  n1_max Most cheap steps expected
-   subroutine check_stage_run(error, label, failed, batch, foot, n1, n2, n1_min, n1_max)
+   subroutine check_stage_run(error, label, failed, batch, point, n1, n2, n1_min, n1_max)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Case label
@@ -1481,8 +1474,8 @@ contains
       type(moist_error_type), allocatable, intent(in) :: failed
       !> Solved batch
       type(projection_batch_type), intent(in) :: batch
-      !> Analytic foot
-      real(wp), intent(in) :: foot(3)
+      !> Analytic point
+      real(wp), intent(in) :: point(3)
       !> Steps taken per stage and the cheap-step window
       integer, intent(in) :: n1, n2, n1_min, n1_max
       !> Message buffer
@@ -1495,7 +1488,7 @@ contains
       write (msg, "(a,a,i0,a,i0)") label, ": cheap steps ", n1, ", full steps ", n2
       call check(error, batch%status(1), point_converged, trim(msg)//": converged")
       if (allocated(error)) return
-      call check(error, norm2(batch%x(:, 1) - foot) < 1.0e-9_wp, trim(msg)//": analytic foot")
+      call check(error, norm2(batch%x(:, 1) - point) < 1.0e-9_wp, trim(msg)//": analytic point")
       if (allocated(error)) return
       call check(error, n1 >= n1_min .and. n1 <= n1_max, trim(msg)//": cheap steps in window")
       if (allocated(error)) return
@@ -1503,7 +1496,7 @@ contains
    end subroutine check_stage_run
 
    !> A Newton point stuck on the far pole (a constrained maximum) is escaped
-   !> and re-polished onto the near pole; the anchor's own foot is accepted as is
+   !> and re-polished onto the near pole; the anchor's own point is accepted as is
    !>
    !> @param[out] error Wrong classification or escape
    subroutine test_polish_far_pole(error)
@@ -1513,8 +1506,9 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points and solver state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: ncfg
-      type(polish_config_type) :: pcfg
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, near pole
@@ -1526,12 +1520,13 @@ contains
       if (allocated(error)) return
       anchor = [rs + 2.0_wp, 0.0_wp, 0.0_wp]
       pole = [rs, 0.0_wp, 0.0_wp]
+      call new_context(ctx, verbosity=0, nthreads=1)
 
       call batch%init(4, failed)
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
       call batch%append([-rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, scratch, failed)
+      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1541,22 +1536,22 @@ contains
       call check(error, norm2(batch%x(:, 2) + pole) < 1.0e-9_wp, "second start sits on the far pole")
       if (allocated(error)) return
 
-      call polish_batch(batch, lsf, pcfg, ncfg, scratch, failed)
+      call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "polish: "//failed%message)
          return
       end if
       call check(error, all(batch%status(1:2) == point_accepted), "both end as verified minima")
       if (allocated(error)) return
-      call check(error, norm2(batch%x(:, 1) - pole) < 1.0e-9_wp, "anchor foot untouched")
+      call check(error, norm2(batch%x(:, 1) - pole) < 1.0e-9_wp, "anchor point untouched")
       if (allocated(error)) return
       call check(error, norm2(batch%x(:, 2) - pole) < 1.0e-8_wp, "far pole escaped onto the near pole")
    end subroutine test_polish_far_pole
 
-   !> The seeded pass stops starts that head into the accepted local foot
+   !> The seeded pass stops starts that head into the accepted local point
    !>
    !> - one sphere at level 3: every octree start of the anchor ends on the
-   !>   local foot, so all of them are duplicates
+   !>   local point, so all of them are duplicates
    !> - the same worker with capture off is the reference: the same rows, more
    !>   level set evaluations, nothing captured
    !>
@@ -1570,13 +1565,15 @@ contains
       type(counting_svdw_type) :: lsf
       !> Worker under test
       type(projection_worker_type) :: worker
+      !> Run context
+      type(moist_context_type) :: ctx
       !> One-atom geometry
       type(structure_type) :: mol
       type(moist_error_type), allocatable :: failed
       !> Atom position, anchor
       real(wp) :: positions(3, 1), anchor(3)
       !> Rows with capture on (1) and off (2)
-      real(wp), allocatable :: feet_on(:, :), feet_off(:, :), w_on(:), w_off(:)
+      real(wp), allocatable :: points_on(:, :), points_off(:, :), w_on(:), w_off(:)
       !> Rows, captured starts and evaluated points per run
       integer :: n_on, n_off, captured(2), evaluated(2), k
 
@@ -1595,10 +1592,11 @@ contains
          call test_failed(error, "worker: "//failed%message)
          return
       end if
+      call new_context(ctx, verbosity=0, nthreads=1)
 
-      call project(.true., 1, n_on, feet_on, w_on)
+      call project(.true., 1, n_on, points_on, w_on)
       if (allocated(error)) return
-      call project(.false., 2, n_off, feet_off, w_off)
+      call project(.false., 2, n_off, points_off, w_off)
       if (allocated(error)) return
 
       call check(error, captured(1) > 0, "the seeded pass captures duplicate starts")
@@ -1610,7 +1608,7 @@ contains
       call check(error, n_on >= 1 .and. n_on == n_off, "the same number of rows")
       if (allocated(error)) return
       do k = 1, n_on
-         call check(error, same_value(feet_on(:, k), feet_off(:, k), 1.0e-9_wp), "the same feet")
+         call check(error, same_value(points_on(:, k), points_off(:, k), 1.0e-9_wp), "the same points")
          if (allocated(error)) return
          call check(error, same_value([w_on(k)], [w_off(k)], 1.0e-9_wp), "the same branch weights")
          if (allocated(error)) return
@@ -1623,20 +1621,20 @@ contains
       !> @param[in]  capture Capture duplicates in the seeded pass
       !> @param[in]  run     Slot of the counts
       !> @param[out] n       Rows
-      !> @param[out] feet    Feet (3, n)
+      !> @param[out] points    Points (3, n)
       !> @param[out] w       Branch weights
-      subroutine project(capture, run, n, feet, w)
+      subroutine project(capture, run, n, points, w)
          logical, intent(in) :: capture
          integer, intent(in) :: run
          integer, intent(out) :: n
-         real(wp), allocatable, intent(out) :: feet(:, :)
+         real(wp), allocatable, intent(out) :: points(:, :)
          real(wp), allocatable, intent(out) :: w(:)
          integer :: n0
 
-         worker%ncfg_seeded%capture_duplicates = capture
+         worker%solve_seeded%capture_duplicates = capture
          n0 = worker%n_captured
          call reset_count(worker%lsf)
-         call worker%project_anchor(anchor, 1, n, failed, feet=feet, weights=w)
+         call worker%project_anchor(ctx, anchor, 1, n, failed, points=points, weights=w)
          if (allocated(failed)) then
             call test_failed(error, "projection: "//failed%message)
             return
@@ -1652,50 +1650,52 @@ contains
 
    end subroutine test_capture_stops_duplicates
 
-   !> Close twin feet both survive capture
+   !> Close twin points both survive capture
    !>
    !> - two overlapping carbons; the anchor on their mirror plane lies just
-   !>   beyond the focal point of the neck, so its two mirror feet are close
-   !> - a run as the seeded pass builds it: the accepted foot on one side
+   !>   beyond the focal point of the neck, so its two mirror points are close
+   !> - a run as the seeded pass builds it: the accepted point on one side
    !>   first, then starts across the whole neck, the middle one on the saddle
-   !> - with capture on, the run keeps both feet, a start of each side is
-   !>   captured, and the feet are those of the run with capture off
+   !> - with capture on, the run keeps both points, a start of each side is
+   !>   captured, and the points are those of the run with capture off
    !>
-   !> @param[out] error A twin lost or a foot moved
-   subroutine test_capture_keeps_twin_feet(error)
+   !> @param[out] error A twin lost or a point moved
+   subroutine test_capture_keeps_twin_points(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Two-atom level set
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      !> Run of the accepted foot, run under test
+      !> Run of the accepted point, run under test
       type(projection_batch_type) :: local, batch
-      type(newton_config_type) :: ncfg
-      type(polish_config_type) :: pcfg
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       type(structure_type) :: mol
-      !> Anchor, distinct feet with capture on (1) and off (2)
-      real(wp) :: anchor(3), feet(3, 32, 2), mirror(3)
-      !> Distinct feet and captured starts per run, column, start, match
-      integer :: nfeet(2), captured(2), icol, k, run, i, m
+      !> Anchor, distinct points with capture on (1) and off (2)
+      real(wp) :: anchor(3), points(3, 32, 2), mirror(3)
+      !> Distinct points and captured starts per run, column, start, match
+      integer :: npoint(2), captured(2), icol, k, run, i, m
 
       call new(mol, [6, 6], reshape([-2.0_wp, 0.0_wp, 0.0_wp, 2.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
       call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=2.5_wp, blend_3b=1.0_wp))
       lsf%screening_threshold = 1.0e-11_wp
       call lsf%update(mol, [3.0_wp, 3.0_wp])
       anchor = [0.0_wp, 3.67_wp, 0.0_wp]
+      call new_context(ctx, verbosity=0, nthreads=1)
 
-      ! Accepted foot on the +x side
+      ! Accepted point on the +x side
       call local%init(4, failed)
       call local%begin_run(1, anchor, 1)
       call local%append([0.6_wp, 2.6_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(local, lsf, ncfg, scratch, failed)
-      if (.not. allocated(failed)) call polish_batch(local, lsf, pcfg, ncfg, scratch, failed)
+      call newton_solve_batch(local, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      if (.not. allocated(failed)) call polish_batch(ctx, local, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
-         call test_failed(error, "local foot: "//failed%message)
+         call test_failed(error, "local point: "//failed%message)
          return
       end if
-      call check(error, local%status(1), point_accepted, "local foot verified")
+      call check(error, local%status(1), point_accepted, "local point verified")
       if (allocated(error)) return
 
       call batch%init(32, failed)
@@ -1707,50 +1707,50 @@ contains
             call batch%append([0.1_wp*k, 2.6_wp, 0.0_wp], 0.0_wp, icol)
          end do
          ncfg%capture_duplicates = run == 1
-         call newton_solve_batch(batch, lsf, ncfg, scratch, failed)
-         if (.not. allocated(failed)) call polish_batch(batch, lsf, pcfg, ncfg, scratch, failed)
+         call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+         if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
          if (allocated(failed)) then
             call test_failed(error, "seeded run: "//failed%message)
             return
          end if
          captured(run) = count(batch%status(1:batch%n) == point_captured)
-         call distinct_feet(batch, feet(:, :, run), nfeet(run))
+         call distinct_points(batch, points(:, :, run), npoint(run))
       end do
 
       call check(error, captured(1) > 0, "the run captures duplicate starts")
       if (allocated(error)) return
-      call check(error, nfeet(1), 2, "both twin feet kept")
+      call check(error, npoint(1), 2, "both twin points kept")
       if (allocated(error)) return
-      mirror = [-feet(1, 2, 1), feet(2, 2, 1), feet(3, 2, 1)]
-      call check(error, same_value(feet(:, 1, 1), mirror, 1.0e-7_wp), "the two feet are mirror images")
+      mirror = [-points(1, 2, 1), points(2, 2, 1), points(3, 2, 1)]
+      call check(error, same_value(points(:, 1, 1), mirror, 1.0e-7_wp), "the two points are mirror images")
       if (allocated(error)) return
-      call check(error, norm2(feet(:, 1, 1) - feet(:, 2, 1)) < 0.1_wp, "the fixture's twins are close")
+      call check(error, norm2(points(:, 1, 1) - points(:, 2, 1)) < 0.1_wp, "the fixture's twins are close")
       if (allocated(error)) return
-      do i = 1, nfeet(1)
+      do i = 1, npoint(1)
          m = 0
-         do k = 1, nfeet(2)
-            if (same_value(feet(:, i, 1), feet(:, k, 2), 1.0e-7_wp)) m = k
+         do k = 1, npoint(2)
+            if (same_value(points(:, i, 1), points(:, k, 2), 1.0e-7_wp)) m = k
          end do
-         call check(error, m > 0, "every foot is a foot of the run with capture off")
+         call check(error, m > 0, "every point is a point of the run with capture off")
          if (allocated(error)) return
       end do
-      do k = 1, nfeet(2)
+      do k = 1, npoint(2)
          m = 0
-         do i = 1, nfeet(1)
-            if (same_value(feet(:, i, 1), feet(:, k, 2), 1.0e-7_wp)) m = i
+         do i = 1, npoint(1)
+            if (same_value(points(:, i, 1), points(:, k, 2), 1.0e-7_wp)) m = i
          end do
-         call check(error, m > 0, "no foot of the run with capture off is lost")
+         call check(error, m > 0, "no point of the run with capture off is lost")
          if (allocated(error)) return
       end do
 
    contains
 
-      !> Accepted feet of the run, deduplicated as the finalize does
+      !> Accepted points of the run, deduplicated as the finalize does
       !>
       !> @param[in]  b     Solved and polished run
-      !> @param[out] pts   Distinct feet (3, :)
-      !> @param[out] n     Distinct feet found
-      subroutine distinct_feet(b, pts, n)
+      !> @param[out] pts   Distinct points (3, :)
+      !> @param[out] n     Distinct points found
+      subroutine distinct_points(b, pts, n)
          type(projection_batch_type), intent(in) :: b
          real(wp), intent(out) :: pts(:, :)
          integer, intent(out) :: n
@@ -1773,9 +1773,9 @@ contains
             n = n + 1
             pts(:, n) = acc(:, j)
          end do
-      end subroutine distinct_feet
+      end subroutine distinct_points
 
-   end subroutine test_capture_keeps_twin_feet
+   end subroutine test_capture_keeps_twin_points
 
    !> Whether two vectors agree within `tol`, or `10 tol` relative to the reference
    !>
@@ -1848,7 +1848,7 @@ contains
    subroutine test_finalize_canonical_order(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      !> Feet and order
+      !> Points and order
       real(wp) :: pts(3, 3)
       integer :: order(3)
 
@@ -1860,7 +1860,82 @@ contains
       call check(error, all(order == [3, 2, 1]), "lexicographic order with tie tolerance")
    end subroutine test_finalize_canonical_order
 
-   !> Finalize on a sphere: duplicate feet merge into one row whose CP Jacobian is
+   !> The canonical order of a chain of near-ties does not depend on the input order
+   !>
+   !> - `a`, `b`, `c` step by 0.6e-8 in x, below the tie tolerance 1e-8, while
+   !>   `a` and `c` are 1.2e-8 apart: a pairwise tie test orders `c < b < a < c`,
+   !>   a cycle, and its sort result depends on the input order
+   !> - the chain is one tie cluster, so y decides inside it; `d` lies far off in x
+   !>   and sorts by x, whatever its y
+   !> - every permutation of the input gives the same sorted points: c, b, a, d
+   !>
+   !> @param[out] error Order depends on the input order
+   subroutine test_finalize_canonical_order_chain(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Tie tolerance of the canonical order (Bohr)
+      real(wp), parameter :: tie = 1.0e-8_wp
+      !> Fixture: a, b, c chained in x with y falling, d far off in x
+      real(wp), parameter :: base(3, 4) = reshape([ &
+         1.0_wp, 2.0_wp, 0.0_wp, &
+         1.0_wp + 0.6e-8_wp, 1.0_wp, 0.0_wp, &
+         1.0_wp + 1.2e-8_wp, 0.0_wp, 0.0_wp, &
+         2.0_wp, -5.0_wp, 0.0_wp], [3, 4])
+      !> Expected sorted fixture columns
+      integer, parameter :: expected(4) = [3, 2, 1, 4]
+      real(wp) :: pts(3, 4)
+      integer :: perm(4), order(4), i1, i2, i3, i4, nperm, k
+
+      ! Non-vacuity: the fixture is a chain on which the pairwise tie is not transitive
+      call check(error, abs(base(1, 2) - base(1, 1)) <= tie .and. abs(base(1, 3) - base(1, 2)) <= tie &
+                 .and. abs(base(1, 3) - base(1, 1)) > tie, "fixture is no chain of near-ties in x")
+      if (allocated(error)) return
+
+      nperm = 0
+      do i1 = 1, 4
+         do i2 = 1, 4
+            do i3 = 1, 4
+               do i4 = 1, 4
+                  perm = [i1, i2, i3, i4]
+                  if (any(perm(2:) == i1) .or. any(perm(3:) == i2) .or. i3 == i4) cycle
+                  nperm = nperm + 1
+                  pts = base(:, perm)
+                  call canonical_branch_order(pts, order)
+                  do k = 1, 4
+                     if (perm(order(k)) /= expected(k)) then
+                        call test_failed(error, "input "//format_ints(perm)//" sorts to "// &
+                                         format_ints(perm(order))//", expected "//format_ints(expected)// &
+                                         " for every input order")
+                        return
+                     end if
+                  end do
+               end do
+            end do
+         end do
+      end do
+      call check(error, nperm == 24, "not every permutation of the fixture was sorted")
+
+   contains
+
+      !> Integers as a bracketed list
+      pure function format_ints(v) result(s)
+         integer, intent(in) :: v(:)
+         character(len=:), allocatable :: s
+         character(len=12) :: buf
+         integer :: i
+
+         s = "["
+         do i = 1, size(v)
+            write (buf, "(i0)") v(i)
+            s = s//trim(buf)
+            if (i < size(v)) s = s//", "
+         end do
+         s = s//"]"
+      end function format_ints
+
+   end subroutine test_finalize_canonical_order_chain
+
+   !> Finalize on a sphere: duplicate points merge into one row whose CP Jacobian is
    !> the radial area ratio `(rs / R)^2` of the concentric anchor sphere
    !>
    !> @param[out] error Wrong row
@@ -1871,18 +1946,21 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points, solver and finalize state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: ncfg
-      type(polish_config_type) :: pcfg
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
       type(newton_scratch_type) :: scratch
-      type(finalize_config_type) :: fcfg
+      type(drop_finalize_parameters_type) :: fcfg
       type(finalize_anchor_type) :: anchor
       type(finalize_scratch_type) :: fsc
       type(projection_rows_type) :: rows
-      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_wleb
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
       type(branch_weight_type) :: branch_weight
+      !> Reach gate open far beyond every point
+      type(moist_math_smoothstep_sigmoid_type) :: open_reach
       type(moist_error_type), allocatable :: failed
-      !> Sphere radius, anchor sphere radius, foot
-      real(wp) :: rs, foot(3)
+      !> Sphere radius, anchor sphere radius, point
+      real(wp) :: rs, point(3)
       real(wp), parameter :: r_anchor = 3.0_wp
       !> Columns and counts
       integer :: icol, nbranch, nrows
@@ -1894,16 +1972,17 @@ contains
       anchor%owner_center = 0.0_wp
       anchor%wleb = 0.01_wp
       anchor%f = 1.0_wp
-      foot = rs*unit_vector(anchor%xyz)
+      point = rs*unit_vector(anchor%xyz)
+      call new_context(ctx, verbosity=0, nthreads=1)
 
-      ! The anchor and two nearby starts all reach the same foot
+      ! The anchor and two nearby starts all reach the same point
       call batch%init(4, failed)
       call batch%begin_run(anchor%index, anchor%xyz, 1)
       call batch%append(anchor%xyz, 0.0_wp, icol)
       call batch%append(anchor%xyz + [1.0e-3_wp, 0.0_wp, 0.0_wp], 0.0_wp, icol)
-      call batch%append(foot, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, scratch, failed)
-      if (.not. allocated(failed)) call polish_batch(batch, lsf, pcfg, ncfg, scratch, failed)
+      call batch%append(point, 0.0_wp, icol)
+      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "Newton/polish: "//failed%message)
          return
@@ -1912,12 +1991,13 @@ contains
       if (allocated(error)) return
 
       call new_smoothstep_sigmoid(f_crit, 0.25_wp, 0.6_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
-      call new_smoothstep_sigmoid(f_foc, 0.1_wp, 0.3_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
+      call new_smoothstep_sigmoid(f_foc, 0.2_wp, 0.6_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
       call new_smoothstep_sigmoid(f_wleb, 1.0e-12_wp, 1.0e-10_wp)
-      call branch_weight%init(0.0025_wp)
-      fcfg%rho2_slack = 0.26_wp
-      call finalize_anchor(fcfg, batch, 1, 3, anchor, f_crit, f_foc, f_wleb, branch_weight, &
-                           rows, nbranch, nrows, fsc, failed)
+      call new_smoothstep_sigmoid(f_hor, -2.0_wp, -1.0_wp)
+      call new_smoothstep_sigmoid(open_reach, 2.0e2_wp, 1.0e2_wp)
+      call branch_weight%init(0.2_wp, default_phi_alpha())
+      call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 3, anchor, f_crit, f_foc, f_hor, &
+                           f_wleb, open_reach, branch_weight, rows, nbranch, nrows, fsc, failed)
       if (allocated(failed)) then
          call test_failed(error, "finalize: "//failed%message)
          return
@@ -1927,22 +2007,23 @@ contains
       call check(error, rows%anchor(1) == 5 .and. rows%branch(1) == 1, &
                  "row indexing")
       if (allocated(error)) return
-      call check(error, norm2(rows%xyz(:, 1) - foot) < 1.0e-9_wp, "row foot")
+      call check(error, norm2(rows%xyz(:, 1) - point) < 1.0e-9_wp, "row point")
       if (allocated(error)) return
       call check(error, abs(rows%cpjac(1) - (rs/r_anchor)**2) < 1.0e-8_wp, "radial area ratio")
       if (allocated(error)) return
-      call check(error, rows%w_f(1) > 0.0_wp .and. rows%w_f(1) <= 1.0_wp .and. rows%wbranch(1) == 1.0_wp, &
-                 "switching and branch weight")
+      call check(error, rows%w_f(1) > 0.0_wp .and. rows%w_f(1) <= 1.0_wp &
+                 .and. abs(rows%wbranch(1) - rows%w_f(1)) < 1.0e-14_wp, &
+                 "gate, and a single branch has it as branch weight")
       if (allocated(error)) return
 
       ! An anchor below the switching cutoff appends nothing
       anchor%f = 0.0_wp
-      call finalize_anchor(fcfg, batch, 1, 3, anchor, f_crit, f_foc, f_wleb, branch_weight, &
-                           rows, nbranch, nrows, fsc, failed)
+      call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 3, anchor, f_crit, f_foc, f_hor, &
+                           f_wleb, open_reach, branch_weight, rows, nbranch, nrows, fsc, failed)
       call check(error, nbranch == 1 .and. nrows == 0 .and. rows%n == 1, "rows below the cut are never appended")
    end subroutine test_finalize_sphere_anchor
 
-   !> Finalize with two mirror branches folds each branch weight into the row
+   !> Finalize with two mirror branches stores each branch weight next to the row weight
    !> weight: every row is its single-branch weight times its branch weight,
    !> and the rows of the anchor sum to the single-branch weight
    !>
@@ -1950,6 +2031,8 @@ contains
    !>   column alone, where the branch weight is one
    !> - negative control: both branch weights are below one, so a lost fold
    !>   fails the per-row check
+   !> - closed sibling: with the horizon switch on, the mirror point on the other
+   !>   atom has a closed gate; it is no row and has no influence on the other
    !>
    !> @param[out] error Wrong row weight
    subroutine test_finalize_branch_fold(error)
@@ -1959,15 +2042,18 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Points, solver and finalize state
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: ncfg
-      type(polish_config_type) :: pcfg
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
       type(newton_scratch_type) :: scratch
-      type(finalize_config_type) :: fcfg
+      type(drop_finalize_parameters_type) :: fcfg
       type(finalize_anchor_type) :: anchor
       type(finalize_scratch_type) :: fsc
-      type(projection_rows_type) :: rows, single
-      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_wleb
+      type(projection_rows_type) :: rows, single, closed
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
       type(branch_weight_type) :: branch_weight
+      !> Reach gate open far beyond every point
+      type(moist_math_smoothstep_sigmoid_type) :: open_reach
       type(moist_error_type), allocatable :: failed
       type(structure_type) :: mol
       !> Single-atom radius, atom offset, reference weight
@@ -1988,36 +2074,38 @@ contains
       anchor%owner_center = [-h, 0.0_wp, 0.0_wp]
       anchor%wleb = 0.01_wp
       anchor%f = 1.0_wp
+      call new_context(ctx, verbosity=0, nthreads=1)
 
       ! One start near each atom's near pole
       call batch%init(4, failed)
       call batch%begin_run(anchor%index, anchor%xyz, 1)
       call batch%append([-(h - rs), 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call batch%append([h - rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, scratch, failed)
-      if (.not. allocated(failed)) call polish_batch(batch, lsf, pcfg, ncfg, scratch, failed)
+      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "Newton/polish: "//failed%message)
          return
       end if
-      call check(error, all(batch%status(1:2) == point_accepted), "both mirror feet verified")
+      call check(error, all(batch%status(1:2) == point_accepted), "both mirror points verified")
       if (allocated(error)) return
 
       call new_smoothstep_sigmoid(f_crit, 0.25_wp, 0.6_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
-      call new_smoothstep_sigmoid(f_foc, 0.1_wp, 0.3_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
+      call new_smoothstep_sigmoid(f_foc, 0.2_wp, 0.6_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
       call new_smoothstep_sigmoid(f_wleb, 1.0e-12_wp, 1.0e-10_wp)
-      call branch_weight%init(0.0025_wp)
-      fcfg%rho2_slack = 0.26_wp
+      call new_smoothstep_sigmoid(f_hor, -2.0_wp, -1.0_wp)
+      call new_smoothstep_sigmoid(open_reach, 2.0e2_wp, 1.0e2_wp)
+      call branch_weight%init(0.2_wp, default_phi_alpha())
 
-      call finalize_anchor(fcfg, batch, 1, 2, anchor, f_crit, f_foc, f_wleb, branch_weight, &
-                           rows, nbranch, nrows, fsc, failed)
+      call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 2, anchor, f_crit, f_foc, f_hor, &
+                           f_wleb, open_reach, branch_weight, rows, nbranch, nrows, fsc, failed)
       if (.not. allocated(failed)) then
-         call finalize_anchor(fcfg, batch, 1, 1, anchor, f_crit, f_foc, f_wleb, branch_weight, &
-                              single, nbranch, nrows, fsc, failed)
+         call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 1, anchor, f_crit, f_foc, f_hor, &
+                              f_wleb, open_reach, branch_weight, single, nbranch, nrows, fsc, failed)
       end if
       if (.not. allocated(failed)) then
-         call finalize_anchor(fcfg, batch, 2, 2, anchor, f_crit, f_foc, f_wleb, branch_weight, &
-                              single, nbranch, nrows, fsc, failed)
+         call finalize_anchor(fcfg, default_phi_alpha(), batch, 2, 2, anchor, f_crit, f_foc, f_hor, &
+                              f_wleb, open_reach, branch_weight, single, nbranch, nrows, fsc, failed)
       end if
       if (allocated(failed)) then
          call test_failed(error, "finalize: "//failed%message)
@@ -2025,7 +2113,10 @@ contains
       end if
       call check(error, rows%n == 2 .and. single%n == 2, "two kept rows, one per single-branch run")
       if (allocated(error)) return
-      call check(error, all(single%wbranch(1:2) == 1.0_wp), "a single branch has branch weight one")
+      call check(error, all(abs(single%wbranch(1:2) - single%w_f(1:2)) < 1.0e-14_wp), &
+                 "a single branch has its gate as branch weight")
+      if (allocated(error)) return
+      call check(error, all(single%w_f(1:2) == 1.0_wp), "the mirror points are fully open")
       if (allocated(error)) return
       call check(error, all(rows%wbranch(1:2) < 1.0_wp) .and. abs(sum(rows%wbranch(1:2)) - 1.0_wp) < 1.0e-12_wp, &
                  "the kept branch weights share the anchor")
@@ -2038,13 +2129,40 @@ contains
          end do
          call check(error, match > 0, "every kept row has its single-branch reference")
          if (allocated(error)) return
-         w_ref = single%wleb(match)*rows%wbranch(r)
+         w_ref = single%wleb(match)
          call check(error, abs(rows%wleb(r) - w_ref) < max(1.0e-15_wp, 1.0e-12_wp*abs(w_ref)), &
-                    "row weight is the single-branch weight times the branch weight")
+                    "row weight is the single-branch weight, without the branch weight")
          if (allocated(error)) return
       end do
-      call check(error, abs(sum(rows%wleb(1:2)) - single%wleb(1)) < 1.0e-12_wp*single%wleb(1), &
-                 "the kept rows sum to the anchor's single-branch weight")
+      call check(error, abs(sum(rows%wleb(1:2)*rows%wbranch(1:2)) - single%wleb(1)) &
+                 < 1.0e-12_wp*single%wleb(1), &
+                 "the branch-weighted rows sum to the anchor's single-branch weight")
+
+      ! Closed sibling: under the horizon switch the mirror point on the other
+      ! atom faces away from the anchor sphere; it is no row and the row left is
+      ! the one of the open point finalized alone, bit for bit
+      call new_smoothstep_sigmoid(f_hor, 0.0_wp, 0.15_wp, p_hi=0.8_wp, a_hi=1.6_wp, p_lo=0.8_wp, a_lo=1.6_wp)
+      call closed%clear()
+      call single%clear()
+      call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 2, anchor, f_crit, f_foc, f_hor, &
+                           f_wleb, open_reach, branch_weight, closed, nbranch, nrows, fsc, failed)
+      if (.not. allocated(failed)) then
+         call check(error, nbranch == 2 .and. nrows == 1 .and. closed%n == 1, &
+                    "a closed sibling is a row or takes the open one out")
+         if (allocated(error)) return
+         call finalize_anchor(fcfg, default_phi_alpha(), batch, 1, 1, anchor, f_crit, f_foc, f_hor, &
+                              f_wleb, open_reach, branch_weight, single, nbranch, nrows, fsc, failed)
+      end if
+      if (allocated(failed)) then
+         call test_failed(error, "finalize: "//failed%message)
+         return
+      end if
+      call check(error, single%n == 1 .and. all(closed%xyz(:, 1) == single%xyz(:, 1)) &
+                 .and. closed%wbranch(1) == single%wbranch(1) .and. closed%wleb(1) == single%wleb(1) &
+                 .and. closed%w_f(1) == single%w_f(1) .and. closed%branch(1) == 1, &
+                 "the closed sibling changes the row of the open point")
+      if (allocated(error)) return
+      call check(error, closed%wbranch(1) == 1.0_wp, "the open point does not keep its whole weight")
    end subroutine test_finalize_branch_fold
 
    !> Single carbon at the origin and the radius of its zero level set
@@ -2111,6 +2229,16 @@ contains
 
       u = v/norm2(v)
    end function unit_vector
+
+   !> Objective weight of the compiled DROP defaults
+   function default_phi_alpha() result(alpha)
+      !> Objective weight
+      real(wp) :: alpha
+      !> Compiled defaults
+      type(moist_cavity_drop_parameters_type) :: defaults
+
+      alpha = defaults%phi_alpha
+   end function default_phi_alpha
 
    !* ================================================================================= *!
    !*                  Octree surface coverage on an analytic level set                 *!
@@ -2207,7 +2335,7 @@ contains
       integer :: i, n_left, n_right
 
       ! Spheres of radius 1 centered at x = -2 and x = +2. The anchor sits at
-      ! the origin, equidistant from both surfaces at rho = 1
+      ! the origin, equidistant from both surfaces at pdist = 1
       ctx%nsphere = 2
       ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
       ctx%center(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
@@ -2222,8 +2350,8 @@ contains
 
       call sphere_union_probe(anchor, lsf0, radius, ctx)
 
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
-                      rho2_slack=0.5_wp, probe=sphere_union_probe_batch, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, &
+                      pdist2_slack=0.5_wp, probe=sphere_union_probe_batch, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, "octree run: "//solver_error%message)
@@ -2272,9 +2400,9 @@ contains
       call sphere_union_probe(anchor, lsf0, radius, ctx)
 
       ! Start from a ball far wider than needed: the anchor is 1 Bohr inside a
-      ! sphere of radius 2, so the only branch sits at rho = 1
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
-                      rho2_slack=0.25_wp, probe=sphere_union_probe_batch, &
+      ! sphere of radius 2, so the only branch sits at pdist = 1
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=5.0_wp, &
+                      pdist2_slack=0.25_wp, probe=sphere_union_probe_batch, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, "octree run: "//solver_error%message)
@@ -2284,9 +2412,9 @@ contains
       call check(error, octree%n_points > 0, message="surface coverage produced no seeds")
       if (allocated(error)) return
 
-      ! rho_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
+      ! pdist_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
       ! the run started from: the sign-change bound did the tightening
-      call check(error, octree%rho_max_final < 1.2_wp, &
+      call check(error, octree%pdist_max_final < 1.2_wp, &
                  message="search failed to tighten its own admissible radius")
    end subroutine test_octree_single_sphere
 
@@ -2298,7 +2426,7 @@ contains
       type(octree_seeder_type) :: octree
       type(sphere_union_context) :: ctx
       type(moist_error_type), allocatable :: solver_error
-      real(wp) :: anchor(3), lsf0, radius, rho_true
+      real(wp) :: anchor(3), lsf0, radius, pdist_true
 
       !> Squared-distance slack defining the admissible set
       real(wp), parameter :: slack = 0.25_wp
@@ -2316,12 +2444,12 @@ contains
 
       call sphere_union_probe(anchor, lsf0, radius, ctx)
 
-      ! The anchor sits 2 Bohr outside the sphere, so rho_min is exactly 2 and
+      ! The anchor sits 2 Bohr outside the sphere, so pdist_min is exactly 2 and
       ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
       ! that bounds the crossing by the probed center alone, without taking off
       ! that center's surface-free radius, stops around 2.1035 instead
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
-                      rho2_slack=slack, probe=sphere_union_probe_batch, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=5.0_wp, &
+                      pdist2_slack=slack, probe=sphere_union_probe_batch, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, "octree run: "//solver_error%message)
@@ -2331,15 +2459,15 @@ contains
       call check(error, octree%n_points > 0, message="surface coverage produced no seeds")
       if (allocated(error)) return
 
-      rho_true = sqrt(4.0_wp + slack)
+      pdist_true = sqrt(4.0_wp + slack)
 
       ! The epsilon absorbs a last-bit difference in how the bound is summed,
       ! not a real shortfall: the margin a working run keeps here is ~2e-3
-      call check(error, octree%rho_max_final >= rho_true - 1.0e-10_wp, &
+      call check(error, octree%pdist_max_final >= pdist_true - 1.0e-10_wp, &
                  message="certified radius fell below the true admissible one")
       if (allocated(error)) return
 
-      call check(error, octree%rho_max_final <= 1.01_wp*rho_true, &
+      call check(error, octree%pdist_max_final <= 1.01_wp*pdist_true, &
                  message="sign-change bound is not being refined by the "// &
                  "exclusion radius")
    end subroutine test_octree_sign_change_bound
@@ -2369,8 +2497,8 @@ contains
 
       ! The surface is 10 Bohr away; a ball of radius 1 around the anchor holds
       ! none of it, and the root box alone proves that
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=1.0_wp, &
-                      rho2_slack=0.25_wp, probe=sphere_union_probe_batch, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, &
+                      pdist2_slack=0.25_wp, probe=sphere_union_probe_batch, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, "octree run: "//solver_error%message)
@@ -2411,15 +2539,15 @@ contains
          call test_failed(error, solver_error%message)
          return
       end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
-                      rho2_slack=0.5_wp, probe=sphere_union_probe_batch, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, &
+                      pdist2_slack=0.5_wp, probe=sphere_union_probe_batch, &
                       context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, solver_error%message)
          return
       end if
 
-      ! rho^2 = 5 - 4*cos(theta); the admissible cap has cos(theta) >= 7/8
+      ! pdist^2 = 5 - 4*cos(theta); the admissible cap has cos(theta) >= 7/8
       do itheta = 0, 8
          theta = acos(0.875_wp)*real(itheta, wp)/8.0_wp
          do iphi = 0, 23
@@ -2523,7 +2651,7 @@ contains
       call lsf%evaluate_batch(p, 0, v, error=failed)
       request%anchor = p(:, 1)
       request%lsf0_anchor = v(1)
-      request%rho2_slack = 0.25_wp
+      request%pdist2_slack = 0.25_wp
       if (.not. allocated(failed)) call octree%seed(lsf, request, failed)
       if (allocated(failed)) then
          call test_failed(error, "octree seed: "//failed%message)
@@ -2542,8 +2670,8 @@ contains
       if (allocated(error)) return
       request%anchor = p(:, 1)
       request%lsf0_anchor = v(1)
-      request%rho2_slack = 0.0_wp
-      request%rho_start = -1.0_wp
+      request%pdist2_slack = 0.0_wp
+      request%pdist_start = -1.0_wp
       call octree%seed(lsf, request, failed)
       if (allocated(failed)) then
          call test_failed(error, "octree seed: "//failed%message)
@@ -2553,19 +2681,19 @@ contains
       if (allocated(error)) return
       call check(error, all(octree%points(:, 1) == request%anchor), "the seed is the anchor")
       if (allocated(error)) return
-      call check(error, octree%n_boxes_visited == 0 .and. octree%rho_max_final == 0.0_wp, &
+      call check(error, octree%n_boxes_visited == 0 .and. octree%pdist_max_final == 0.0_wp, &
                  "the tallies of the previous search are cleared")
    end subroutine test_octree_trace_on_surface
 
-   !> A verified foot beyond the fallback search radius bounds the search as it is
+   !> A verified point beyond the fallback search radius bounds the search as it is
    !>
    !> @param[out] error Missing or misplaced seeds
-   subroutine test_octree_far_foot_radius(error)
+   subroutine test_octree_far_point_radius(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      call check_octree_far_surface(error, from_foot=.true.)
-   end subroutine test_octree_far_foot_radius
+      call check_octree_far_surface(error, from_point=.true.)
+   end subroutine test_octree_far_point_radius
 
    !> A surface beyond the fallback search radius, reached by the trace, bounds the
    !> search as it is
@@ -2575,39 +2703,39 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      call check_octree_far_surface(error, from_foot=.false.)
+      call check_octree_far_surface(error, from_point=.false.)
    end subroutine test_octree_far_traced_radius
 
    !> Seeds at a single sphere whose only surface lies beyond the fallback radius
    !>
    !> - the anchor sits `distance` outside the sphere on the x axis, so the
-   !>   analytic foot is the radial one and the whole window lies beyond the
-   !>   request's `rho_fallback`
-   !> - the request carries the radius of that foot, `sqrt(distance^2 + slack)`,
+   !>   analytic point is the radial one and the whole window lies beyond the
+   !>   request's `pdist_fallback`
+   !> - the request carries the radius of that point, `sqrt(distance^2 + slack)`,
    !>   or no radius, so the seeder traces the surface itself
-   !> - every seed lies near the foot and at least one exists
+   !> - every seed lies near the point and at least one exists
    !>
    !> @param[out] error     Missing or misplaced seeds
-   !> @param[in]  from_foot Whether the request carries the radius of the foot
-   subroutine check_octree_far_surface(error, from_foot)
+   !> @param[in]  from_point Whether the request carries the radius of the point
+   subroutine check_octree_far_surface(error, from_point)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      !> Whether the request carries the radius of the foot
-      logical, intent(in) :: from_foot
+      !> Whether the request carries the radius of the point
+      logical, intent(in) :: from_point
       !> Single-atom level set
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(octree_seeder_type) :: octree
       type(seed_request_type) :: request
       type(moist_error_type), allocatable :: failed
-      !> Surface radius, anchor and its value, analytic foot
-      real(wp) :: rs, p(3, 1), v(1), foot(3)
+      !> Surface radius, anchor and its value, analytic point
+      real(wp) :: rs, p(3, 1), v(1), point(3)
       !> Seed index
       integer :: i
       !> Anchor distance from the surface (Bohr)
       real(wp), parameter :: distance = 18.0_wp
       !> Squared-distance window (Bohr^2)
       real(wp), parameter :: slack = 0.25_wp
-      !> Largest seed distance from the foot (Bohr), far below `distance`
+      !> Largest seed distance from the point (Bohr), far below `distance`
       real(wp), parameter :: near = 1.0_wp
 
       call sphere_lsf(lsf, rs, error)
@@ -2619,7 +2747,7 @@ contains
       end if
 
       p(:, 1) = [rs + distance, 0.0_wp, 0.0_wp]
-      foot = [rs, 0.0_wp, 0.0_wp]
+      point = [rs, 0.0_wp, 0.0_wp]
       call lsf%evaluate_batch(p, 0, v, error=failed)
       if (allocated(failed)) then
          call test_failed(error, "anchor value: "//failed%message)
@@ -2630,10 +2758,10 @@ contains
 
       request%anchor = p(:, 1)
       request%lsf0_anchor = v(1)
-      request%rho2_slack = slack
-      request%rho_start = -1.0_wp
-      if (from_foot) request%rho_start = sqrt(distance**2 + slack)
-      call check(error, distance > request%rho_fallback, "fixture surface lies beyond the fallback radius")
+      request%pdist2_slack = slack
+      request%pdist_start = -1.0_wp
+      if (from_point) request%pdist_start = sqrt(distance**2 + slack)
+      call check(error, distance > request%pdist_fallback, "fixture surface lies beyond the fallback radius")
       if (allocated(error)) return
 
       call octree%seed(lsf, request, failed)
@@ -2644,7 +2772,7 @@ contains
       call check(error, octree%n_points > 0, "the far surface produced no seeds")
       if (allocated(error)) return
       do i = 1, octree%n_points
-         call check(error, norm2(octree%points(:, i) - foot) <= near, "a seed lies far from the foot")
+         call check(error, norm2(octree%points(:, i) - point) <= near, "a seed lies far from the point")
          if (allocated(error)) return
       end do
    end subroutine check_octree_far_surface
@@ -2681,7 +2809,7 @@ contains
          call test_failed(error, solver_error%message)
          return
       end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, rho2_slack=0.5_wp, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, pdist2_slack=0.5_wp, &
                       probe=sphere_union_probe_batch, context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, solver_error%message)
@@ -2736,7 +2864,7 @@ contains
          call test_failed(error, solver_error%message)
          return
       end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=1.0_wp, rho2_slack=0.25_wp, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, pdist2_slack=0.25_wp, &
                       probe=sphere_union_probe_blind, context=ctx, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, solver_error%message)
@@ -2784,7 +2912,7 @@ contains
             call test_failed(error, solver_error%message)
             return
          end if
-         call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=1.0_wp, rho2_slack=0.25_wp, &
+         call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, pdist2_slack=0.25_wp, &
                          probe=sphere_union_probe_batch, context=ctx, error=solver_error)
          if (allocated(solver_error)) then
             call test_failed(error, solver_error%message)
@@ -2852,15 +2980,15 @@ contains
 
    !> Run the octree on a 2 Bohr sphere from an anchor 1 Bohr off its center
    !>
-   !> @param[inout] octree    Initialized seeder
-   !> @param[in]    rho_max   Starting radius
-   !> @param[in]    rho2_slack Squared-distance window
-   !> @param[out]   failed    Native refusal
-   subroutine run_sphere_octree(octree, rho_max, rho2_slack, failed)
+   !> @param[inout] octree       Initialized seeder
+   !> @param[in]    pdist_max    Starting radius
+   !> @param[in]    pdist2_slack Squared-distance window
+   !> @param[out]   failed       Native refusal
+   subroutine run_sphere_octree(octree, pdist_max, pdist2_slack, failed)
       !> Initialized seeder
       type(octree_seeder_type), intent(inout) :: octree
       !> Starting radius and window
-      real(wp), intent(in) :: rho_max, rho2_slack
+      real(wp), intent(in) :: pdist_max, pdist2_slack
       !> Native refusal
       type(moist_error_type), allocatable, intent(out) :: failed
       type(sphere_union_context) :: ctx
@@ -2871,7 +2999,7 @@ contains
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
       call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=rho_max, rho2_slack=rho2_slack, &
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=pdist_max, pdist2_slack=pdist2_slack, &
                       probe=sphere_union_probe_batch, context=ctx, error=failed)
    end subroutine run_sphere_octree
 
@@ -2906,7 +3034,7 @@ contains
    end subroutine test_bad_octree_max_depth
 
    !> A nonpositive starting radius is refused
-   subroutine test_bad_octree_rho_max(error)
+   subroutine test_bad_octree_pdist_max(error)
       type(error_type), allocatable, intent(out) :: error
       type(octree_seeder_type) :: octree
       type(moist_error_type), allocatable :: failed
@@ -2914,8 +3042,8 @@ contains
       call octree%init(failed, seed_size=0.1_wp)
       if (allocated(failed)) return
       call run_sphere_octree(octree, 0.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: rho_max must be positive")
-   end subroutine test_bad_octree_rho_max
+      call expect_error(error, failed, "Octree branch search: pdist_max must be positive")
+   end subroutine test_bad_octree_pdist_max
 
    !> A negative squared-distance slack would poison the radius cap with a NaN,
    !> after which every comparison against it is false and nothing is bounded
@@ -2927,7 +3055,7 @@ contains
       call octree%init(failed, seed_size=0.1_wp)
       if (allocated(failed)) return
       call run_sphere_octree(octree, 5.0_wp, -0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: rho2_slack must not be negative")
+      call expect_error(error, failed, "Octree branch search: pdist2_slack must not be negative")
    end subroutine test_bad_octree_negative_slack
 
    !> A depth cap that stops short of the requested seed size must be reported
@@ -3241,7 +3369,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(projection_batch_type) :: batch
-      type(newton_config_type) :: cfg
+      type(drop_solve_parameters_type) :: cfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       real(wp) :: rs, anchor(3)
@@ -3253,7 +3381,7 @@ contains
       call batch%init(8, failed)
       call batch%begin_run(7, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
       call expect_error(error, failed, &
                         "Projection Newton: anchor 7 lies beyond the level set reach, no atom screens it")
    end subroutine test_bad_newton_unreached_anchor

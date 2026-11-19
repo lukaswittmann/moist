@@ -17,14 +17,25 @@
 !>
 !> - The owner atom is excluded, its anchor term is not part of the level-set
 !>   adjoint
-!> - `w_f` is excluded, switching is anchor-only
-!> - The forward area derivative carries a switching part, `a = R^2 f wleb`
-!>   with `f` moving with every neighbor of the anchor; that part belongs to
-!>   `w_f`, so the reference removes `R^2 wleb f1_rA`
+!> - The switching value is `f = F w` with the anchor-only `F` and the gated
+!>   branch weight `w`; only `w` moves with the level set, so `w_f` and the
+!>   area channel, `a = R^2 f wleb`, reach it through `F dw` alone
+!> - The reference removes `R^2 wleb f1_rA` from the forward area derivative
+!>   and adds `F dw` back; on an unbranched point `dw` is the gate derivative
+!>   `w_f1_rA`, and points of a branched anchor are skipped
 !> - The two sides are separate passes, the forward sensitivity pass against
 !>   the level set's own nuclear jet, but both go through `drop_kkt_solve`, the
 !>   packed contraction and the objective jet, so a defect shared by those
 !>   (e.g. a swapped packed Hessian unpack) cancels here
+!>
+!> The value weights are pinned end to end against rebuilt cavities
+!>
+!> - At fixed `scale` an isovalue shift is the constant level-set field
+!>   `dS = scale drho_iso`, so `scale sum_i w_lsf0(i)` is the isovalue
+!>   derivative of the observable in the adjoint; area and volume are compared
+!>   with differences of cavities rebuilt at shifted `rho_iso`
+!> - This covers what the identity skips: the density dependence of `w`
+!>   through the gates and the distance shares of branched anchors
 !>
 !> Error paths: the per-point failures of the tiled reverse loops, shared by
 !> the response and the nuclear-gradient path, are checked on both; a host
@@ -49,10 +60,11 @@ module test_cavity_drop_potential
       & moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_isodensity_param, only: &
       & moist_cavity_drop_lsf_isodensity_param_type
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_branch_parameters_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_seed_result_type, build_seed_state, apply_seed, seed_state_ok
    use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
+   use moist_cavity_drop_projection_finalize, only: cp_jacobian_weight
    use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
       & nuclear_charge_request_type
@@ -61,7 +73,8 @@ module test_cavity_drop_potential
    use moist_context, only: moist_context_type, new_context
    use moist_math_packed, only: packed_index
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
-   use test_helpers, only: fill_legacy_radii
+   use test_helpers, only: fill_legacy_radii, get_test_sibling_gate, fd_probe_type, &
+      & fd_derivative, fd_compare
    implicit none(type, external)
    private
 
@@ -75,8 +88,6 @@ module test_cavity_drop_potential
    integer, parameter :: NUM_LEB = 302
    !> Projection tolerance
    real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
-   !> Projection iteration cap
-   integer, parameter :: PROJ_MAXITER = 1000
    !> Projection level
    integer, parameter :: PROJ_LEVEL = 1
 
@@ -117,6 +128,21 @@ module test_cavity_drop_potential
    !> - Measured worst deviation 1.7e-16 against responses up to ~0.5
    !> - Control gap between the single-entry seeds measured 0.089 to 0.24
    real(wp), parameter :: SEED_LIN_TOL = 1.0E-13_wp
+
+   !> Projection level of the branched isodensity fixture, every anchor searched
+   integer, parameter :: ISO_PROJ_LEVEL = 3
+   !> Cavity radius of every atom of the branched isodensity fixture (Bohr)
+   real(wp), parameter :: ISO_RADIUS = 3.0_wp
+   !> s-shell exponent of each atom of the branched isodensity fixture (Bohr^-2)
+   real(wp), parameter :: ISO_EXPS(5) = [0.309_wp, 0.318_wp, 0.327_wp, 0.336_wp, 0.345_wp]
+   !> Isovalue of the branched isodensity fixture (Bohr^-3), also fixing its scale
+   real(wp), parameter :: ISO_RHO = 1.0E-3_wp
+   !> Isovalue step of the 4-point difference (Bohr^-3)
+   real(wp), parameter :: ISO_STEP = 2.0E-6_wp
+   !> Bound on the isovalue derivatives against the differences (Bohr^5, Bohr^6)
+   real(wp), parameter :: ISO_FD_ABS = 1.0E-4_wp
+   !> Relative fallback of [[ISO_FD_ABS]]
+   real(wp), parameter :: ISO_FD_REL = 1.0E-9_wp
 
    !> Grid point the failure tests break: column 6 of the second surface tile
    integer, parameter :: BAD_POINT = 70
@@ -176,6 +202,17 @@ module test_cavity_drop_potential
       real(wp) :: max_viol = 0.0_wp
    end type compare_stats_type
 
+   !> Total area and volume of the branched isodensity fixture at a shifted isovalue
+   type, extends(fd_probe_type) :: isovalue_probe_type
+      !> Rows of each rebuilt cavity, in sampling order
+      integer :: nrows(4) = 0
+      !> Cavities rebuilt so far
+      integer :: nbuilt = 0
+   contains
+      !> Total area and volume at the isovalue `ISO_RHO + t`
+      procedure :: sample => isovalue_probe_sample
+   end type isovalue_probe_type
+
 contains
 
    !> Register the electronic reverse-path tests
@@ -192,12 +229,15 @@ contains
                   new_unittest("lsf_weights_offdiagonal_control", &
                                test_lsf_weights_offdiagonal_control), &
                   new_unittest("symmetric_hessian_seed", test_symmetric_hessian_seed), &
+                  new_unittest("gate_seed_vs_projection", test_gate_seed_vs_projection), &
+                  new_unittest("focal_seed_vs_projection", test_focal_seed_vs_projection), &
                   new_unittest("lsf_weights_ignore_switching", &
                                test_lsf_weights_ignore_switching), &
                   new_unittest("density_response_svdw_untouched", &
                                test_density_response_svdw_untouched), &
                   new_unittest("density_response_isodensity", &
                                test_density_response_isodensity), &
+                  new_unittest("isovalue_derivative_fd", test_isovalue_derivative_fd), &
                   new_unittest("bad_accumulator_uninitialized", &
                                test_bad_accumulator_uninitialized, should_fail=.true.), &
                   new_unittest("bad_accumulator_size", test_bad_accumulator_size, &
@@ -221,7 +261,8 @@ contains
                   new_unittest("bad_response_degenerate_point", test_bad_response_degenerate, &
                                should_fail=.true.), &
                   new_unittest("bad_gradient_degenerate_point", test_bad_gradient_degenerate, &
-                               should_fail=.true.) &
+                               should_fail=.true.), &
+                  new_unittest("lsf_weights_sibling_rows", test_lsf_weights_sibling_rows) &
                   ]
 
    end subroutine collect_cavity_drop_potential
@@ -354,7 +395,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(drop_seed_state_type) :: state
-      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_wleb
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
       type(drop_seed_result_type) :: r_ab, r_ba, r_sym
       integer, parameter :: pairs(2, 3) = reshape([1, 2, 1, 3, 2, 3], [2, 3])
       real(wp) :: dlsf1_r(3), dlsf2_rr(3, 3), dr(3)
@@ -369,16 +410,15 @@ contains
       state%owner_xyz = [0.0_wp, 0.0_wp, 0.0_wp]
       state%anchor_wleb0 = 0.05_wp
       state%cpjac_scal0 = 1.3_wp
-      state%w_f0 = 0.8_wp
-      state%wbranch = 1.0_wp
       state%wleb = 0.04_wp
       state%xi0 = 2.0_wp
       state%want_curvature = .true.
       call new_smoothstep_sigmoid(f_crit, 0.5_wp, 1.5_wp)
       call new_smoothstep_sigmoid(f_foc, 0.0_wp, 2.0_wp)
       call new_smoothstep_sigmoid(f_wleb, 0.0_wp, 1.0_wp)
+      call new_smoothstep_sigmoid(f_hor, -2.0_wp, -1.0_wp)
 
-      call build_seed_state(state, f_crit, f_foc, f_wleb, .false., status)
+      call build_seed_state(state, f_crit, f_foc, f_hor, f_wleb, .false., status)
       if (status /= seed_state_ok) then
          call test_failed(error, "seed state is degenerate, status "//to_string(status))
          return
@@ -424,9 +464,220 @@ contains
 
    end subroutine test_symmetric_hessian_seed
 
-   !> The switching channel never reaches the level set
+   !> Seed response of the gate against differences of the projection gate
    !>
-   !> - Switching is anchor-only, so adding `w_f` changes nothing beyond round-off
+   !> - The projection evaluates the gate in `cp_jacobian_weight`, the seed
+   !>   kernel differentiates it in `apply_seed`; a gradient seed at a fixed
+   !>   point must reproduce central differences of the former
+   !> - Critical, focal and horizon factor are all partly switched
+   !> - Negative control: with the horizon factor off the response differs far
+   !>   beyond the tolerance, so its term is live
+   !>
+   !> @param[out] error  test failure
+   subroutine test_gate_seed_vs_projection(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: STEP = 1.0E-5_wp, GATE_FD_TOL = 1.0E-8_wp
+      type(drop_seed_state_type) :: state, state_off
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_off, f_wleb
+      type(drop_seed_result_type) :: res, res_off
+      type(mctc_error), allocatable :: failed
+      real(wp) :: dlsf1_r(3), dlsf2_rr(3, 3), dr(3), g(3), jac, gate, gate_p, gate_m
+      real(wp) :: fd(3), ana(3), ana_off(3)
+      integer :: status, k
+
+      state%lsf1_r = [0.3_wp, -0.5_wp, 0.8_wp]
+      state%lsf2_rr = [0.7_wp, 0.2_wp, -0.4_wp, 0.15_wp, 0.35_wp, 0.5_wp]
+      state%lambda_val = 0.6_wp
+      state%alpha_coeff = 1.0_wp
+      state%anchor = [0.4_wp, 0.1_wp, 1.2_wp]
+      state%owner_xyz = [0.0_wp, 0.0_wp, 0.0_wp]
+      state%anchor_wleb0 = 0.05_wp
+      state%cpjac_scal0 = 1.3_wp
+      state%wleb = 0.04_wp
+      state%xi0 = 2.0_wp
+      state_off = state
+      call new_smoothstep_sigmoid(f_crit, 0.5_wp, 1.5_wp)
+      call new_smoothstep_sigmoid(f_foc, 0.0_wp, 1.0_wp)
+      call new_smoothstep_sigmoid(f_hor, 0.5_wp, 1.0_wp)
+      call new_smoothstep_sigmoid(f_off, -2.0_wp, -1.0_wp)
+      call new_smoothstep_sigmoid(f_wleb, 0.0_wp, 1.0_wp)
+
+      call build_seed_state(state, f_crit, f_foc, f_hor, f_wleb, .false., status)
+      if (status == seed_state_ok) call build_seed_state(state_off, f_crit, f_foc, f_off, f_wleb, .false., status)
+      if (status /= seed_state_ok) then
+         call test_failed(error, "seed state is degenerate, status "//to_string(status))
+         return
+      end if
+
+      call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, state%lsf2_rr, state%lambda_val, &
+                              state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, gate, failed)
+      if (allocated(failed)) then
+         call test_failed(error, failed%message)
+         return
+      end if
+      if (.not. (gate > 0.01_wp .and. gate < 0.99_wp)) then
+         call test_failed(error, "fixture gate is saturated: "//to_string(gate))
+         return
+      end if
+
+      dlsf2_rr = 0.0_wp
+      dr = 0.0_wp
+      do k = 1, 3
+         dlsf1_r = 0.0_wp
+         dlsf1_r(k) = 1.0_wp
+         call apply_seed(state, dlsf1_r, dlsf2_rr, dr, 0.0_wp, res)
+         call apply_seed(state_off, dlsf1_r, dlsf2_rr, dr, 0.0_wp, res_off)
+         ana(k) = res%dw_f
+         ana_off(k) = res_off%dw_f
+
+         g = state%lsf1_r + STEP*dlsf1_r
+         call cp_jacobian_weight(state%alpha_coeff, g, state%lsf2_rr, state%lambda_val, &
+                                 state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, gate_p, failed)
+         g = state%lsf1_r - STEP*dlsf1_r
+         if (.not. allocated(failed)) then
+            call cp_jacobian_weight(state%alpha_coeff, g, state%lsf2_rr, state%lambda_val, &
+                                    state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, gate_m, failed)
+         end if
+         if (allocated(failed)) then
+            call test_failed(error, failed%message)
+            return
+         end if
+         fd(k) = (gate_p - gate_m)/(2.0_wp*STEP)
+      end do
+
+      if (.not. (maxval(abs(ana - fd)) <= GATE_FD_TOL*maxval(abs(fd)))) then
+         call test_failed(error, "gate seed response differs from the projection gate: deviation "// &
+                          to_string(maxval(abs(ana - fd)))//", scale "//to_string(maxval(abs(fd))))
+         return
+      end if
+      if (.not. (maxval(abs(ana_off - fd)) > CONTROL_MARGIN*GATE_FD_TOL*maxval(abs(fd)))) then
+         call test_failed(error, "control: horizon factor does not move the gate response, gap "// &
+                          to_string(maxval(abs(ana_off - fd))))
+      end if
+
+   end subroutine test_gate_seed_vs_projection
+
+   !> Seed response of the focal factor of the gate against differences of the projection
+   !>
+   !> - with the other switches open `cp_jacobian_weight` returns the gate
+   !>   `f_foc(beta_min)` of a point, `apply_seed` its response; gradient,
+   !>   Hessian and multiplier seeds at a fixed point must reproduce central
+   !>   differences of the former
+   !> - the focal switch is inside its band
+   !>
+   !> @param[out] error  test failure
+   subroutine test_focal_seed_vs_projection(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: STEP = 1.0E-5_wp, FOCAL_FD_TOL = 1.0E-8_wp
+      type(drop_seed_state_type) :: state
+      type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
+      type(drop_seed_result_type) :: res
+      type(mctc_error), allocatable :: failed
+      real(wp) :: dlsf1_r(3), dlsf2_rr(3, 3), dr(3), g(3), h(6), jac, gate, s_p, s_m
+      real(wp) :: fd(10), ana(10)
+      integer :: status, k, ip, i, j
+
+      state%lsf1_r = [0.3_wp, -0.5_wp, 0.8_wp]
+      state%lsf2_rr = [0.7_wp, 0.2_wp, -0.4_wp, 0.15_wp, 0.35_wp, 0.5_wp]
+      state%lambda_val = 0.6_wp
+      state%alpha_coeff = 1.0_wp
+      state%anchor = [0.4_wp, 0.1_wp, 1.2_wp]
+      state%owner_xyz = [0.0_wp, 0.0_wp, 0.0_wp]
+      state%anchor_wleb0 = 0.05_wp
+      state%cpjac_scal0 = 1.3_wp
+      state%wleb = 0.04_wp
+      state%xi0 = 2.0_wp
+      call new_smoothstep_sigmoid(f_crit, 0.1_wp, 0.2_wp)
+      call new_smoothstep_sigmoid(f_foc, 0.0_wp, 1.0_wp)
+      call new_smoothstep_sigmoid(f_hor, -2.0_wp, -1.0_wp)
+      call new_smoothstep_sigmoid(f_wleb, 0.0_wp, 1.0_wp)
+
+      call build_seed_state(state, f_crit, f_foc, f_hor, f_wleb, .false., status)
+      if (status /= seed_state_ok) then
+         call test_failed(error, "focal seed state is degenerate, status "//to_string(status))
+         return
+      end if
+      call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, state%lsf2_rr, state%lambda_val, &
+                              state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, gate, failed)
+      if (allocated(failed)) then
+         call test_failed(error, failed%message)
+         return
+      end if
+      if (.not. (gate > 0.01_wp .and. gate < 0.99_wp)) then
+         call test_failed(error, "fixture gate saturated: "//to_string(gate))
+         return
+      end if
+
+      dr = 0.0_wp
+      ! Gradient seeds
+      do k = 1, 3
+         dlsf1_r = 0.0_wp
+         dlsf1_r(k) = 1.0_wp
+         dlsf2_rr = 0.0_wp
+         call apply_seed(state, dlsf1_r, dlsf2_rr, dr, 0.0_wp, res)
+         ana(k) = res%dw_f
+         g = state%lsf1_r + STEP*dlsf1_r
+         call cp_jacobian_weight(state%alpha_coeff, g, state%lsf2_rr, state%lambda_val, &
+                                 state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_p, failed)
+         g = state%lsf1_r - STEP*dlsf1_r
+         call cp_jacobian_weight(state%alpha_coeff, g, state%lsf2_rr, state%lambda_val, &
+                                 state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_m, failed)
+         fd(k) = (s_p - s_m)/(2.0_wp*STEP)
+      end do
+      ! Packed Hessian seeds, both off-diagonal entries moved together
+      do ip = 1, 6
+         dlsf1_r = 0.0_wp
+         dlsf2_rr = 0.0_wp
+         do j = 1, 3
+            do i = 1, 3
+               if (packed_index(i, j) == ip) dlsf2_rr(i, j) = 1.0_wp
+            end do
+         end do
+         call apply_seed(state, dlsf1_r, dlsf2_rr, dr, 0.0_wp, res)
+         ana(3 + ip) = res%dw_f
+         h = state%lsf2_rr
+         h(ip) = h(ip) + STEP
+         call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, h, state%lambda_val, &
+                                 state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_p, failed)
+         h(ip) = h(ip) - 2.0_wp*STEP
+         call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, h, state%lambda_val, &
+                                 state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_m, failed)
+         fd(3 + ip) = (s_p - s_m)/(2.0_wp*STEP)
+      end do
+      ! Multiplier seed
+      dlsf1_r = 0.0_wp
+      dlsf2_rr = 0.0_wp
+      call apply_seed(state, dlsf1_r, dlsf2_rr, dr, 1.0_wp, res)
+      ana(10) = res%dw_f
+      call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, state%lsf2_rr, state%lambda_val + STEP, &
+                              state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_p, failed)
+      call cp_jacobian_weight(state%alpha_coeff, state%lsf1_r, state%lsf2_rr, state%lambda_val - STEP, &
+                              state%anchor, state%owner_xyz, f_crit, f_foc, f_hor, jac, s_m, failed)
+      fd(10) = (s_p - s_m)/(2.0_wp*STEP)
+      if (allocated(failed)) then
+         call test_failed(error, failed%message)
+         return
+      end if
+
+      if (.not. (maxval(abs(fd)) > 1.0e-2_wp)) then
+         call test_failed(error, "focal factor does not respond to the seeds")
+         return
+      end if
+      if (.not. (maxval(abs(ana - fd)) <= FOCAL_FD_TOL*maxval(abs(fd)))) then
+         call test_failed(error, "focal seed response differs from the projection gate: deviation "// &
+                          to_string(maxval(abs(ana - fd)))//", scale "//to_string(maxval(abs(fd))))
+      end if
+
+   end subroutine test_focal_seed_vs_projection
+
+   !> The switching channel reaches the level set through the gate only
+   !>
+   !> - On points with a saturated gate adding `w_f` changes nothing beyond
+   !>   round-off; the contraction identity with `w_f` covers the others
    !> - Negative control: perturbing the width channel does change the result
    !>
    !> @param[out] error  test failure
@@ -440,10 +691,20 @@ contains
       real(wp), allocatable :: a0(:), a1(:, :), a2(:, :, :)
       real(wp), allocatable :: b0(:), b1(:, :), b2(:, :, :)
       integer, parameter :: base(3) = [CH_XYZ, CH_XI, CH_N]
+      integer :: i
       real(wp) :: dev_f, dev_xi
+      logical, allocatable :: flat(:)
 
-      call build_svdw_cavity(cavity, ctx, .false., error)
+      call build_svdw_cavity(cavity, ctx, .true., error)
       if (allocated(error)) return
+      call run_identity(cavity, [base, CH_F], "w_f through the gate", error)
+      if (allocated(error)) return
+      ! Points whose gate does not move with any atom
+      flat = [(all(cavity%w_f1_rA(:, :, i) == 0.0_wp), i=1, cavity%ngrid)]
+      if (count(flat) < MIN_LIVE) then
+         call test_failed(error, "too few points with a saturated gate")
+         return
+      end if
 
       call fill_channels(acc, cavity%ngrid, base)
       call lsf_weights(cavity, acc, a0, a1, a2, error)
@@ -456,7 +717,9 @@ contains
       end if
       call lsf_weights(cavity, acc, b0, b1, b2, error)
       if (allocated(error)) return
-      dev_f = max(maxval(abs(a0 - b0)), maxval(abs(a1 - b1)), maxval(abs(a2 - b2)))
+      dev_f = max(maxval(abs(a0 - b0), mask=flat), &
+                  maxval(abs(a1 - b1), mask=spread(flat, 1, 3)), &
+                  maxval(abs(a2 - b2), mask=spread(spread(flat, 1, 3), 1, 3)))
 
       call fill_channels(acc, cavity%ngrid, base)
       acc%w_xi = 1.01_wp*acc%w_xi
@@ -571,8 +834,8 @@ contains
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
       type(mctc_error), allocatable :: lsf_err
       real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :)
-      real(wp) :: rev, fwd, diff, viol
-      integer :: igrid, iatom, iaxis, islot, a, b, nsph
+      real(wp) :: rev, fwd, diff, viol, f_gate
+      integer :: igrid, iatom, iaxis, islot, a, b, nsph, ianchor
 
       nsph = cavity%nsph
       allocate (lsf, source=cavity%lsf_model)
@@ -581,6 +844,9 @@ contains
       allocate (lsf1_rA(3, nsph), lsf2_r_rA(3, 3, nsph), lsf3_rr_rA(6, 3, nsph))
 
       do igrid = 1, cavity%ngrid
+         ! Siblings couple through the branch weight, no per-point identity
+         ianchor = cavity%anchor_of_row(igrid)
+         if (cavity%offset(ianchor + 1) - cavity%offset(ianchor) > 1) cycle
          if (skip_umbilic) then
             if (abs(cavity%k1(igrid) - cavity%k2(igrid)) < CURV_GAP_THR) cycle
          end if
@@ -608,11 +874,14 @@ contains
                   end do
                end do
 
+               ! Level-set part of the switching value, `F dw`
+               f_gate = cavity%anchor%f0(ianchor)*cavity%w_f1_rA(iaxis, iatom, igrid)
                fwd = acc%w_xi(igrid)*cavity%xi1_rA(iaxis, iatom, igrid) &
                      + acc%w_a(igrid)*(cavity%a_i1_rA(iaxis, iatom, igrid) &
                                        - cavity%radii(cavity%owner(igrid))**2 &
                                        *cavity%wleb(igrid) &
-                                       *cavity%f1_rA(iaxis, iatom, igrid)) &
+                                       *(cavity%f1_rA(iaxis, iatom, igrid) - f_gate)) &
+                     + acc%w_f(igrid)*f_gate &
                      + acc%w_w(igrid)*cavity%wleb1_rA(iaxis, iatom, igrid) &
                      + acc%w_k1(igrid)*cavity%k1_rA(iaxis, iatom, igrid) &
                      + acc%w_k2(igrid)*cavity%k2_rA(iaxis, iatom, igrid) &
@@ -947,6 +1216,116 @@ contains
 
    end subroutine count_items
 
+   !> Isovalue derivative of area and volume against cavities rebuilt at shifted isovalues
+   !>
+   !> - `S = scale (rho_iso - rho)`, so at fixed `scale` the isovalue enters as
+   !>   the constant field `dS = scale drho_iso`, without gradient or Hessian;
+   !>   the derivative of an observable is `scale sum_i w_lsf0(i)` of its adjoint
+   !> - reference: 4-point differences of `sum(a)` and `sum(v)`; with the core
+   !>   fill off the build reads `rho_iso` elsewhere only in the exclusion radii
+   !>   of the octree seeder, which place seeds, not rows
+   !> - volume adjoint of `v_i = a_i (r_i - c) . n_i / 3`, the origin `c` being
+   !>   nuclear
+   !> - branched anchors with rows inside the branch window and partly open
+   !>   gates carrying area are asserted, so the switching value moves with the
+   !>   density through its gates and its distance shares
+   !> - negative controls, by hand: without the gate term of the jet seeds the
+   !>   area misses by 660, without the distance-share term by 0.26 and the
+   !>   volume by 0.17
+   !>
+   !> @param[out] error  test failure
+   subroutine test_isovalue_derivative_fd(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_adjoint_type) :: acc
+      type(isovalue_probe_type) :: probe
+      type(mctc_error), allocatable :: err
+      real(wp), allocatable :: w0(:), w1(:, :), w2(:, :, :), w_a(:), w_xyz(:, :), w_n(:, :)
+      real(wp) :: scale, origin(3), pdist_i, pdist_j, analytic(2), numeric(2)
+      logical :: valid(2), shares
+      character(len=:), allocatable :: rows
+      integer :: ngrid, ia, r0, n, i, j, nshare, npartial
+
+      call build_branched_iso_cavity(cavity, ctx, ISO_RHO, error)
+      if (allocated(error)) return
+      ngrid = cavity%ngrid
+      select type (model => cavity%lsf_model)
+      type is (moist_cavity_drop_lsf_isodensity_internal_type)
+         scale = model%param%scale
+      class default
+         call test_failed(error, "fixture level set is not the internal isodensity one")
+         return
+      end select
+
+      ! Anchors with two rows carrying area inside the branch window of each other
+      nshare = 0
+      do ia = 1, cavity%anchor%ngrid
+         r0 = cavity%offset(ia)
+         n = cavity%offset(ia + 1) - r0
+         shares = .false.
+         do i = r0 + 1, r0 + n
+            pdist_i = norm2(cavity%xyz(:, i) - cavity%anchor%xyz(:, ia))
+            do j = i + 1, r0 + n
+               pdist_j = norm2(cavity%xyz(:, j) - cavity%anchor%xyz(:, ia))
+               if (cavity%a(i) > VACUITY_THR .and. cavity%a(j) > VACUITY_THR .and. &
+                   abs(pdist_i - pdist_j) < cavity%param%branch%dpdist_max) shares = .true.
+            end do
+         end do
+         if (shares) nshare = nshare + 1
+      end do
+      npartial = count(cavity%w_f0(1:ngrid) > 0.0_wp .and. cavity%w_f0(1:ngrid) < 1.0_wp &
+                       .and. cavity%a(1:ngrid) > VACUITY_THR)
+      call check(error, nshare > 0, "fixture has no branched anchor whose rows share by distance")
+      if (allocated(error)) return
+      call check(error, npartial > 0, "fixture has no partly open row carrying area")
+      if (allocated(error)) return
+
+      allocate (w0(ngrid), w1(3, ngrid), w2(3, 3, ngrid))
+      allocate (w_a(ngrid), source=1.0_wp)
+      call acc%init(ngrid)
+      call acc%add_surface_weights(err, w_a=w_a)
+      if (.not. allocated(err)) call cavity%contract_surface_lsf_weights(acc, w0, w1, w2, err)
+      if (allocated(err)) then
+         call test_failed(error, "contracting the area adjoint failed: "//err%message)
+         return
+      end if
+      analytic(1) = scale*sum(w0)
+
+      origin = cavity%get_volume_origin()
+      allocate (w_xyz(3, ngrid), w_n(3, ngrid))
+      do i = 1, ngrid
+         w_a(i) = dot_product(cavity%xyz(:, i) - origin, cavity%normal0(:, i))/3.0_wp
+         w_xyz(:, i) = cavity%a(i)/3.0_wp*cavity%normal0(:, i)
+         w_n(:, i) = cavity%a(i)/3.0_wp*(cavity%xyz(:, i) - origin)
+      end do
+      call acc%init(ngrid)
+      call acc%add_surface_weights(err, w_a=w_a, w_xyz=w_xyz, w_n=w_n)
+      if (.not. allocated(err)) call cavity%contract_surface_lsf_weights(acc, w0, w1, w2, err)
+      if (allocated(err)) then
+         call test_failed(error, "contracting the volume adjoint failed: "//err%message)
+         return
+      end if
+      analytic(2) = scale*sum(w0)
+
+      call fd_derivative(probe, ISO_STEP, 4, numeric, valid, error)
+      if (allocated(error)) return
+      call fd_compare(error, analytic, numeric, valid, ISO_FD_ABS, ISO_FD_REL, &
+                      "isovalue derivative of the area (1) and the volume (2)", "observable")
+      if (allocated(error)) then
+         ! A branch the seeder finds on one side of the stencil only shows as a row count change
+         rows = ""
+         do i = 1, min(probe%nbuilt, size(probe%nrows))
+            rows = rows//" "//to_string(probe%nrows(i))
+         end do
+         error%message = error%message//new_line("a")//"  rows of the base cavity "// &
+                         to_string(ngrid)//", of the rebuilt ones"//rows
+      end if
+
+   end subroutine test_isovalue_derivative_fd
+
    !* ============================================================================== *!
    !*                                    Refusals                                     *!
    !* ============================================================================== *!
@@ -971,6 +1350,80 @@ contains
       if (index(err%message, expected) > 0) call test_failed(error, err%message)
 
    end subroutine expect_error
+
+   !> The switching adjoint of one row reaches the level-set weights of its siblings
+   !>
+   !> - a row's branch weight depends on the gate and the objective of the
+   !>   closer rows of its anchor, so an adjoint on the other rows of a branched
+   !>   anchor leaves a level-set weight on a partly open row in front of them,
+   !>   and on no row of another anchor
+   !> - the numbers are those of the nuclear path, compared against the
+   !>   forward derivatives in `cavity_drop_nuclear_adjoint`
+   !>
+   !> @param[out] error  test failure
+   subroutine test_lsf_weights_sibling_rows(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_adjoint_type) :: acc
+      type(mctc_error), allocatable :: err
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(moist_cavity_drop_parameters_type) :: param
+      real(wp), allocatable :: w0(:), w1(:, :), w2(:, :, :), w_f(:)
+      integer :: ia, r0, n, q, nanchor
+      real(wp) :: live
+
+      ! Five atoms whose anchors hold a partly open point next to a forward-facing row
+      call get_test_sibling_gate(mol)
+      call new_context(ctx, nthreads=0, verbosity=0)
+      param = moist_cavity_drop_parameters_type(num_leb=302, tolerance=1.0e-14_wp, proj_level=3, &
+                                                branch=drop_branch_parameters_type(dpdist_max=0.2_wp))
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.5_wp, blend_3b=3.0_wp))
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=err, param=param, ctx=ctx)
+      if (.not. allocated(err)) call cavity%update(mol, error=err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      allocate (w_f(cavity%ngrid), w0(cavity%ngrid), w1(3, cavity%ngrid), w2(3, 3, cavity%ngrid))
+      ! Adjoint on the siblings of each row in turn, over the branched anchors with a
+      ! partly open row; which row answers depends on the distances and on the
+      ! factor that is partly open (a gate set by the anchor alone has no response)
+      live = 0.0_wp
+      nanchor = 0
+      do ia = 1, cavity%anchor%ngrid
+         r0 = cavity%offset(ia)
+         n = cavity%offset(ia + 1) - r0
+         if (n < 2) cycle
+         if (.not. any(cavity%w_f0(r0 + 1:r0 + n) > 0.0_wp .and. cavity%w_f0(r0 + 1:r0 + n) < 1.0_wp)) cycle
+         nanchor = nanchor + 1
+         do q = r0 + 1, r0 + n
+            w_f = 0.0_wp
+            w_f(r0 + 1:r0 + n) = 1.0_wp
+            w_f(q) = 0.0_wp
+            call acc%init(cavity%ngrid)
+            call acc%add_surface_weights(err, w_f=w_f)
+            if (.not. allocated(err)) call cavity%contract_surface_lsf_weights(acc, w0, w1, w2, err)
+            if (allocated(err)) then
+               call test_failed(error, err%message)
+               return
+            end if
+            live = max(live, abs(w0(q)))
+            w0(r0 + 1:r0 + n) = 0.0_wp
+            call check(error, all(w0 == 0.0_wp), "a row of another anchor carries a level-set weight")
+            if (allocated(error)) return
+         end do
+      end do
+      call check(error, nanchor > 0, "fixture has no branched anchor with a partly open row")
+      if (allocated(error)) return
+      call check(error, live > 1.0e-6_wp, "no row carries a level-set weight from its siblings")
+
+   end subroutine test_lsf_weights_sibling_rows
 
    !> An accumulator that was never initialized is refused
    !>
@@ -1302,7 +1755,7 @@ contains
       call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type( &
                              blend_k=BLEND_K, blend_3b=BLEND_3B))
       param = moist_cavity_drop_parameters_type( &
-              num_leb=NUM_LEB, tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
+              num_leb=NUM_LEB, tolerance=PROJ_TOL, &
               proj_level=PROJ_LEVEL, wleb_prune_level=4, do_normal=.true., &
               do_curvature=.true., do_fine=forward)
       call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), &
@@ -1438,6 +1891,113 @@ contains
       if (cavity%ngrid == 0) call test_failed(error, "empty isodensity grid")
 
    end subroutine build_iso_cavity
+
+   !> Build a DROP cavity on s-type Gaussian densities at the sibling-gate atoms
+   !>
+   !> One unit s shell per atom with the exponents [[ISO_EXPS]], so
+   !> `rho = sum_A exp(-2 a_A |r - R_A|^2)`; at [[ISO_RHO]] the isosurface lies
+   !> near the 3 Bohr spheres and joins the five atoms into one cavity, whose
+   !> crevices branch anchors and partly close gates; `|grad S|` stays above 1.3
+   !> on the surface, clear of every critical point of the density
+   !>
+   !> @param[out]   cavity   Built cavity
+   !> @param[in,out] ctx      Run context borrowed by the cavity
+   !> @param[in]    rho_iso  Isovalue (Bohr^-3); the scale stays `1/ISO_RHO`
+   !> @param[out]   error    Test failure
+   subroutine build_branched_iso_cavity(cavity, ctx, rho_iso, error)
+      !> Built cavity
+      type(cavity_type_drop), allocatable, intent(out) :: cavity
+      !> Run context borrowed by the cavity
+      type(moist_context_type), target, intent(inout) :: ctx
+      !> Isovalue
+      real(wp), intent(in) :: rho_iso
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_parameters_type) :: drop_param
+      type(structure_type) :: mol
+      class(radius_type), allocatable :: radii
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: err
+      real(wp) :: dcart(size(ISO_EXPS), size(ISO_EXPS))
+      integer :: i
+
+      call get_test_sibling_gate(mol)
+      call lsf%new(sh_atom=[(i, i=1, mol%nat)], sh_l=[(0, i=1, mol%nat)], &
+                   sh_nprim=[(1, i=1, mol%nat)], exps=ISO_EXPS, coeffs=[(1.0_wp, i=1, mol%nat)], &
+                   error=err, param=moist_cavity_drop_lsf_isodensity_param_type( &
+                   rho_iso=rho_iso, scale=1.0_wp/ISO_RHO, core_fill=.false.))
+      dcart = 0.0_wp
+      do i = 1, size(ISO_EXPS)
+         dcart(i, i) = 1.0_wp
+      end do
+      if (.not. allocated(err)) call new_radii_custom_atoms([(ISO_RADIUS, i=1, mol%nat)], radii, err)
+      allocate (cavity)
+      call new_context(ctx, nthreads=0, verbosity=0)
+      if (.not. allocated(err)) then
+         drop_param = moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+                                                        proj_level=ISO_PROJ_LEVEL, do_normal=.true.)
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=err, &
+                              param=drop_param, ctx=ctx)
+      end if
+      if (.not. allocated(err)) call cavity%update(mol, err)
+      if (.not. allocated(err)) call cavity%prepare_build(coupling, err)
+      if (.not. allocated(err)) then
+         ! The core fill is off, so the build phase needs the density alone
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (density_matrix_request_type)
+               call coupling%answer("dcart", dcart, err)
+            end select
+            if (allocated(err)) exit
+         end do
+      end if
+      if (.not. allocated(err)) call cavity%build(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "failed to build branched isodensity cavity at rho_iso "// &
+                          to_string(rho_iso)//": "//err%message)
+         return
+      end if
+      if (cavity%ngrid == 0) call test_failed(error, "empty branched isodensity grid")
+
+   end subroutine build_branched_iso_cavity
+
+   !> Total area and volume of the branched isodensity fixture at the isovalue `ISO_RHO + t`
+   !>
+   !> @param[in,out] self   Probe, counting the rebuilt cavities and their rows
+   !> @param[in]     t      Isovalue shift (Bohr^-3)
+   !> @param[out]    vals   Total area and volume
+   !> @param[out]    valid  Both present on every rebuilt cavity
+   !> @param[out]    error  Test failure of the rebuild
+   subroutine isovalue_probe_sample(self, t, vals, valid, error)
+      !> Probe
+      class(isovalue_probe_type), intent(inout) :: self
+      !> Isovalue shift
+      real(wp), intent(in) :: t
+      !> Total area and volume
+      real(wp), intent(out) :: vals(:)
+      !> Validity mask
+      logical, intent(out) :: valid(:)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+
+      vals = 0.0_wp
+      valid = .false.
+      call build_branched_iso_cavity(cavity, ctx, ISO_RHO + t, error)
+      if (allocated(error)) return
+      vals(1) = sum(cavity%a(1:cavity%ngrid))
+      vals(2) = sum(cavity%v(1:cavity%ngrid))
+      valid = .true.
+      self%nbuilt = self%nbuilt + 1
+      if (self%nbuilt <= size(self%nrows)) self%nrows(self%nbuilt) = cavity%ngrid
+      ! The cavity borrows the context, so it goes first
+      deallocate (cavity)
+
+   end subroutine isovalue_probe_sample
 
    !> Build a DROP cavity on a host callback density of two Gaussian centers
    !>

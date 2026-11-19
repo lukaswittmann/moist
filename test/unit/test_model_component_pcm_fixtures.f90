@@ -18,7 +18,8 @@ module test_model_component_pcm_fixtures
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
       & moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
+                                           drop_branch_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_radii, only: default_cpcm_radii
@@ -559,8 +560,8 @@ contains
       call svdw%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.5_wp, blend_3b=3.0_wp))
       call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=svdw, error=err, &
          & param=moist_cavity_drop_parameters_type(num_leb=302, tolerance=1.0e-14_wp, &
-         & solve=drop_solve_parameters_type(max_iter=1000), proj_level=3, branch_dpdist_max=0.2_wp, &
-         & do_fine=.true.), ctx=ctx)
+         & solve=drop_solve_parameters_type(max_iter=1000), proj_level=3, &
+         & branch=drop_branch_parameters_type(dpdist_max=0.2_wp), do_fine=.true.), ctx=ctx)
       call check_moist_error(error, err, "DROP setup")
       if (allocated(error)) return
       call move_alloc(drop, cavity)

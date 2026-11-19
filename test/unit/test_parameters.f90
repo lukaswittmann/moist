@@ -13,7 +13,7 @@ module test_parameters
    use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_branching, only: branch_weight_type
-   use moist_cavity_drop_parameters, only: drop_seed_parameters_type
+   use moist_cavity_drop_parameters, only: drop_seed_parameters_type, drop_branch_parameters_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_mt, only: cavity_type_mt, new_cavity_mt
@@ -569,9 +569,9 @@ contains
             .and. loaded%wleb_prune_level == reference%wleb_prune_level)
          if (allocated(error)) return
          call check(error, maxval(abs([loaded%tolerance, loaded%solve%tol, loaded%iswig_xi_born, &
-            loaded%finalize%wleb_prune_off, loaded%finalize%wleb_prune_on, loaded%finalize%wleb_cut, loaded%branch_dpdist_max] - &
+            loaded%finalize%wleb_prune_off, loaded%finalize%wleb_prune_on, loaded%finalize%wleb_cut, loaded%branch%dpdist_max] - &
             [reference%tolerance, reference%solve%tol, reference%iswig_xi_born, reference%finalize%wleb_prune_off, &
-            reference%finalize%wleb_prune_on, reference%finalize%wleb_cut, reference%branch_dpdist_max])), 0.0_wp, thr=1.0e-14_wp)
+            reference%finalize%wleb_prune_on, reference%finalize%wleb_cut, reference%branch%dpdist_max])), 0.0_wp, thr=1.0e-14_wp)
       end subroutine same_settings
 
    end subroutine test_drop_load_file
@@ -974,8 +974,8 @@ contains
       type(moist_cavity_drop_parameters_type) :: param
 
       call param%init_defaults()
-      param%branch_reach_on = 3.0_wp
-      param%branch_reach_off = 2.5_wp
+      param%branch%reach_on = 3.0_wp
+      param%branch%reach_off = 2.5_wp
       call param%compute_derived(err)
       call expect_error(error, err, "Reach bounds must satisfy 0 < on < off")
    end subroutine test_bad_drop_reach_bounds
@@ -990,8 +990,8 @@ contains
       type(moist_cavity_drop_parameters_type) :: param
 
       call param%init_defaults()
-      param%branch_reach_on = 2.5_wp
-      param%branch_reach_off = 2.5_wp
+      param%branch%reach_on = 2.5_wp
+      param%branch%reach_off = 2.5_wp
       call param%compute_derived(err)
       call expect_error(error, err, "Reach bounds must satisfy 0 < on < off")
    end subroutine test_bad_drop_reach_zero_width
@@ -1010,24 +1010,24 @@ contains
 
       call param%init_defaults()
       call param%compute_derived(err)
-      call check(error, .not. allocated(err) .and. param%branch_reach_on > 0.0_wp &
-                 .and. param%branch_reach_on < param%branch_reach_off, "the default reach is no band")
+      call check(error, .not. allocated(err) .and. param%branch%reach_on > 0.0_wp &
+                 .and. param%branch%reach_on < param%branch%reach_off, "the default reach is no band")
       if (allocated(error)) return
-      reach_on = param%branch_reach_on
-      reach_off = param%branch_reach_off
-      param%branch_reach_on = 1.5_wp
-      param%branch_reach_off = 2.5_wp
+      reach_on = param%branch%reach_on
+      reach_off = param%branch%reach_off
+      param%branch%reach_on = 1.5_wp
+      param%branch%reach_off = 2.5_wp
       call param%compute_derived(err)
-      call check(error, .not. allocated(err) .and. param%branch_reach_on == 1.5_wp &
-                 .and. param%branch_reach_off == 2.5_wp, "an explicit reach is not kept")
+      call check(error, .not. allocated(err) .and. param%branch%reach_on == 1.5_wp &
+                 .and. param%branch%reach_off == 2.5_wp, "an explicit reach is not kept")
       if (allocated(error)) return
-      call check(error, .not. param%search_full_reach, "full-reach search is on by default")
+      call check(error, .not. param%branch%full_reach, "full-reach search is on by default")
       if (allocated(error)) return
-      param%search_full_reach = .true.
+      param%branch%full_reach = .true.
       call param%init_defaults()
-      call check(error, .not. param%search_full_reach, "defaults leave the full-reach search on")
+      call check(error, .not. param%branch%full_reach, "defaults leave the full-reach search on")
       if (allocated(error)) return
-      call check(error, param%branch_reach_on == reach_on .and. param%branch_reach_off == reach_off, &
+      call check(error, param%branch%reach_on == reach_on .and. param%branch%reach_off == reach_off, &
                  "defaults do not restore the reach band")
    end subroutine test_drop_reach_defaults
 
@@ -1240,21 +1240,6 @@ contains
       call expect_error(error, err, "Newton merit margin must be positive")
    end subroutine test_bad_drop_newton_merit_margin
 
-   !> A negative branch search window (other than the -1 sentinel) is refused
-   subroutine test_bad_drop_negative_search_slack(error)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error
-      type(moist_error), allocatable :: err
-      !> Settings under test
-      type(moist_cavity_drop_parameters_type) :: param
-
-      call param%init_defaults()
-      param%branch_search_pdist2_slack = -0.5_wp
-      call param%compute_derived(err)
-      call expect_error(error, err, "Branch search squared-distance slack must be -1 or nonnegative")
-   end subroutine test_bad_drop_negative_search_slack
-
    !> A NaN tolerance is refused; a `<= 0` test let it through
    subroutine test_bad_drop_tolerance_nan(error)
       !> Test failure, set only on the expected error
@@ -1409,7 +1394,6 @@ contains
          new_unittest("bad_cfc_fade_a2", test_bad_cfc_fade_a2, should_fail=.true.), &
          new_unittest("bad_drop_newton_max_step", test_bad_drop_newton_max_step, should_fail=.true.), &
          new_unittest("bad_drop_newton_merit_margin", test_bad_drop_newton_merit_margin, should_fail=.true.), &
-         new_unittest("bad_drop_negative_search_slack", test_bad_drop_negative_search_slack, should_fail=.true.), &
          new_unittest("bad_drop_tolerance_nan", test_bad_drop_tolerance_nan, should_fail=.true.), &
          new_unittest("bad_drop_tolerance_inf", test_bad_drop_tolerance_inf, should_fail=.true.), &
          new_unittest("bad_drop_rho_grid_h_nan", test_bad_drop_rho_grid_h_nan, should_fail=.true.), &
@@ -1537,7 +1521,7 @@ contains
 
       drop%tolerance = 1.0e-8_wp
       drop%do_fine = .true.
-      drop%branch_search_pdist2_slack = 3.2_wp
+      drop%branch%dpdist_max = 0.3_wp
       do format_index = 1, 2
          call roundtrip(drop, stem, error, format_index)
          if (allocated(error)) return
@@ -1545,7 +1529,7 @@ contains
          if (allocated(error)) return
          call check(error, drop%do_fine)
          if (allocated(error)) return
-         call check(error, drop%branch_pdist2_slack(), 3.2_wp)
+         call check(error, drop%branch%dpdist_max, 0.3_wp)
          if (allocated(error)) return
       end do
       iswig%cut_f = 0.02_wp
@@ -1809,7 +1793,7 @@ contains
       real(wp) :: lower
 
       call param%new(nleb=110, tolerance=2.0e-7_wp, proj_maxiter=81, proj_level=4, &
-                     branch_dpdist_max=0.03_wp, rho_grid_h=0.75_wp, wleb_prune_level=0, error=err)
+                     branch=drop_branch_parameters_type(dpdist_max=0.03_wp), rho_grid_h=0.75_wp, wleb_prune_level=0, error=err)
       call check(error,.not. allocated(err))
       if (allocated(error)) return
       call check(error, param%num_leb == 110 .and. param%solve%max_iter == 81 .and. param%proj_level == 4)
@@ -1820,7 +1804,7 @@ contains
       if (allocated(error)) return
       call check(error, param%solve%tol, 2.0e-7_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
-      call check(error, param%finalize%branch_sep_cut, 2.0e-6_wp, thr=1.0e-15_wp)
+      call check(error, param%branch%sep_cut, 2.0e-6_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
       ! Adjacency cutoff is four kernel lengths; the soft density screens with
       ! cutoff*rho_grid_h as 4 h^2
@@ -1829,7 +1813,7 @@ contains
       call check(error, param%iswig_xi_born > 4.8_wp .and. param%iswig_xi_born < 5.0_wp)
       if (allocated(error)) return
       ! The branch window is an input and survives the derivation untouched
-      call check(error, param%branch_dpdist_max, 0.03_wp, thr=0.0_wp)
+      call check(error, param%branch%dpdist_max, 0.03_wp, thr=0.0_wp)
       if (allocated(error)) return
       param%phi_alpha = 3.0_wp
       call param%compute_derived(err)
@@ -1840,8 +1824,8 @@ contains
          type(branch_weight_type) :: bw
          real(wp) :: pdist_max, w(2)
 
-         pdist_max = param%pdist_max_from(2.0_wp)
-         call bw%init(param%branch_dpdist_max, param%phi_alpha)
+         call bw%init(param%branch%dpdist_max, param%phi_alpha)
+         pdist_max = bw%pdist_max(2.0_wp)
          call bw%weights(0.5_wp*param%phi_alpha*[2.0_wp, pdist_max*(1.0_wp + 1.0e-12_wp)]**2, &
                          [1.0_wp, 1.0_wp], w)
          call check(error, w(2) == 0.0_wp, "a branch at the admissible radius has no weight")
@@ -1850,7 +1834,7 @@ contains
                          [1.0_wp, 1.0_wp], w)
          call check(error, w(2) > 0.0_wp, "a branch inside the admissible radius has weight")
          if (allocated(error)) return
-         call check(error, pdist_max - 2.0_wp, param%branch_dpdist_max, thr=1.0e-2_wp*param%branch_dpdist_max)
+         call check(error, pdist_max - 2.0_wp, param%branch%dpdist_max, thr=1.0e-2_wp*param%branch%dpdist_max)
          if (allocated(error)) return
       end block
       do level = 0, 6
@@ -1887,11 +1871,11 @@ contains
          case (6)
             param%proj_level = 2
          case (7)
-            param%branch_dpdist_max = ieee_value(1.0_wp, ieee_quiet_nan)
+            param%branch%dpdist_max = ieee_value(1.0_wp, ieee_quiet_nan)
          case (8)
             param%phi_alpha = 0.0_wp
          case (9)
-            param%branch_dpdist_max = -0.1_wp
+            param%branch%dpdist_max = -0.1_wp
          case (10)
             param%wleb_prune_level = 7
          case (11)
@@ -1921,7 +1905,7 @@ contains
       type(moist_pcm_parameters_type) :: pcm
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
-                      '"projection":{"maxiter":72,"level":4,"branch_search_pdist2_slack":1.5,"batch_size":64,'// &
+                      '"projection":{"maxiter":72,"level":4,"batch_size":64,'// &
                       '"newton":{"switch_fnorm":1e-2,"max_cheap_steps":2,'// &
                       '"max_step":0.6,"merit_margin":2.5},'// &
                       '"octree":{"max_boxes":123,"max_survivors":43,'// &
@@ -1948,12 +1932,11 @@ contains
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%w_0ls_off, &
                                     drop%w_0ls_on, drop%w_0ls_p, drop%w_0ls_a, &
                                     drop%w_0tra_off, drop%w_0tra_on, drop%w_0hor_off, drop%w_0hor_on, &
-                                    drop%rho_grid_h, drop%branch_dpdist_max, &
-                                    drop%branch_search_pdist2_slack, drop%branch_reach_on, &
-                                    drop%branch_reach_off] - &
+                                    drop%rho_grid_h, drop%branch%dpdist_max, &
+                                    drop%branch%reach_on, drop%branch%reach_off] - &
                                    [2.0e-7_wp, 2.0_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, &
                                     0.15_wp, 0.4_wp, 0.02_wp, 0.3_wp, &
-                                    0.8_wp, 0.04_wp, 1.5_wp, 1.5_wp, 2.25_wp])), 0.0_wp, thr=1.0e-14_wp)
+                                    0.8_wp, 0.04_wp, 1.5_wp, 2.25_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
                  drop%do_atomarea, &

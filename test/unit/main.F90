@@ -58,7 +58,6 @@ program tester
    use test_cavity_drop_branching, only: collect_cavity_drop_branching
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
    use test_cavity_drop_potential, only: collect_cavity_drop_potential
-   use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
    use test_cavity_numsa, only: collect_cavity_numsa
    use test_cavity_adjoint, only: collect_cavity_adjoint
    use test_cavity_mc, only: collect_cavity_mc
@@ -155,7 +154,6 @@ program tester
       & new_testsuite("cavity_drop_anchor", collect_cavity_drop_anchor), &
       & new_testsuite("cavity_drop_projector", collect_cavity_drop_projector), &
       & new_testsuite("cavity_drop_projection", collect_cavity_drop_projection), &
-      & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
