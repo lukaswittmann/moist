@@ -1,15 +1,15 @@
-!> DROP branching tests; contains tests for the branch weights individually,
-!> and full DROP nuclear gradients
+!> DROP branching tests: the branch weights of one anchor group, and cavities
+!> whose anchors branch
 !>
-!> - branch weights are the pure kernel of the branch weight model, one
-!>   anchor group at a time, no cavity
-!> - [[test_cross_branching]] runs the per-point derivative check of the
-!>   gradient suite on the five-carbon cross, whose anchors branch, so the
-!>   branch post-pass is exercised
-!> - [[test_tetra_branching]] runs the same check on a carbon tetrahedron
-!>   whose branches the default gates keep
-!> - [[test_branching_xyz_totals]] checks the total area and volume gradients
-!>   of the same cross against finite differences
+!> - branch weights: the pure kernel [[moist_cavity_drop_branching]], one group
+!>   at a time, no cavity
+!> - partly open siblings and switch bands: total gradients against finite
+!>   differences, the adaptive search radius, area scans across row births
+!>   and gate openings, the row cut
+!> - other level sets (CFC, SSES) and forward-facing pairs: total gradients
+!>   and shares under the default switches
+!> - branching gradients: per-row derivative checks and total gradients on
+!>   fixtures that branch
 module test_cavity_drop_branching
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use mctc_env_accuracy, only: wp
@@ -41,9 +41,9 @@ module test_cavity_drop_branching
    !>
    !> Measured on the steepest gate row of [[test_cross_branching]]
    !> (`d xi = -1744`, `d w_f = 21`): the O(h^6) truncation of the stencil is
-   !> 1.6e-4 (9e-8 relative) at 2.5e-4 and drops below 3e-9 at 1.25e-4, the
-   !> factor 64 of h^6; round-off grows as 1/h instead and is covered per point
-   !> by the driver's stencil noise floor
+   !> 1.6e-4 (9e-8 relative) at 2.5e-4 and 64 times less at 1.25e-4, 2.5e-6
+   !> (1.4e-9 relative), the factor of h^6; round-off grows as 1/h instead and
+   !> is covered per point by the driver's stencil noise floor
    real(wp), parameter :: STEP_SIZE = 1.25E-4_wp
 
    real(wp), parameter :: PROJ_TOL = 1E-14_wp
@@ -68,6 +68,8 @@ module test_cavity_drop_branching
    real(wp), parameter :: FORWARD_DZ = 0.06_wp
    !> FD step of the forward-pair totals (bohr)
    real(wp), parameter :: FORWARD_STEP = 2.5e-4_wp
+   !> Nodes of a refined area scan, two coarse steps at a quarter of the step
+   integer, parameter :: NFINE = 9
    !> FD step of the horizon totals on the switching anchors (bohr)
    !>
    !> - their volume gradient is small, so the relative threshold is tight; at
@@ -216,8 +218,9 @@ contains
    end subroutine test_branch_ties
 
    !> A sibling at or beyond the window of a fully open one has weight zero with
-   !> zero derivative, and the other siblings do not see it at all; only the
-   !> gate of the open one in front of it could uncover it
+   !> zero derivative; the weights of the others and their objective Jacobians
+   !> are those without it, and only the derivative in the gate of the open one
+   !> in front, which could uncover it, sees it
    subroutine test_branch_window(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -260,6 +263,11 @@ contains
       call bw%init(0.0_wp, ALPHA)
       call bw%weights([1.0_wp, 1.0_wp + 1.0e-9_wp], open4(1:2), w(1:2))
       call check(error, w(1) == 1.0_wp .and. w(2) == 0.0_wp, "zero window is closest-branch only")
+      if (allocated(error)) return
+
+      !> An exact tie at a zero window shares
+      call bw%weights([1.0_wp, 1.0_wp], open4(1:2), w(1:2))
+      call check(error, w(1) == 0.5_wp .and. w(2) == 0.5_wp, "an exact tie at a zero window does not share equally")
 
    end subroutine test_branch_window
 
@@ -309,7 +317,8 @@ contains
       end do
       call check(error, minval(w_half) > 0.1_wp, "a branch half a window behind shares")
       if (allocated(error)) return
-      call check(error, maxval(w_half) - minval(w_half) <= 1.0e-2_wp, &
+      ! Spread from the softening alone, about 5e-4
+      call check(error, maxval(w_half) - minval(w_half) <= 2.0e-3_wp, &
                  "the share at half a window does not depend on the distance")
       if (allocated(error)) return
 
@@ -442,8 +451,7 @@ contains
       w_last = g_far
       do i = 1, 9
          call bw%weights(phi, [0.1_wp*real(i, wp), g_far], w)
-         call check(error, w(2) < w_last .and. w(2) > 0.0_wp .and. w(1) > 0.0_wp &
-                    .and. w(1) <= 0.1_wp*real(i, wp), &
+         call check(error, w(2) < w_last .and. w(2) > 0.0_wp .and. w(1) > 0.0_wp, &
                     "the far weight does not fall as the gate in front opens, step "//to_string(i))
          if (allocated(error)) return
          call check(error, abs(w(1) - 0.1_wp*real(i, wp)) <= WEIGHT_THR &
@@ -455,9 +463,10 @@ contains
 
    end subroutine test_branch_gate_strength
 
-   !> The weights never exceed the gates and sum to at most one; they sum to
-   !> one when the closest branch is fully open, and nearly closed branches act
-   !> alone
+   !> The weights never exceed the gates and sum to at most one,
+   !> `1 - prod(1 - g)/Z`: to one when any branch is fully open, the closest
+   !> or one behind it, and to less with only partly open ones; nearly closed
+   !> branches act alone
    subroutine test_branch_gate_sum(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -474,8 +483,13 @@ contains
       call check(error, sum(w), 1.0_wp, thr_abs=WEIGHT_THR, thr_rel=WEIGHT_THR)
       if (allocated(error)) return
 
+      !> A partly open closest branch with a fully open one behind it
+      call bw%weights(phi, [0.2_wp, 1.0_wp, 0.6_wp], w)
+      call check(error, sum(w), 1.0_wp, thr_abs=WEIGHT_THR, thr_rel=WEIGHT_THR)
+      if (allocated(error)) return
+
       call bw%weights(phi, [0.2_wp, 0.5_wp, 0.6_wp], w)
-      call check(error, sum(w) < 1.0_wp .and. all(w > 0.0_wp), "a partly open closest branch leaves a deficit")
+      call check(error, sum(w) < 1.0_wp .and. all(w > 0.0_wp), "partly open branches alone leave no deficit")
       if (allocated(error)) return
 
       !> All nearly closed: each weight is its own gate to first order
@@ -575,19 +589,40 @@ contains
    !>
    !> - a point with a closed gate is no row: every row has an area and a
    !>   weight of its own, and the gradients need no row of the closed points
+   !> - the same build with a negative row cut keeps every point as a row and
+   !>   shows the closed ones: zero gate, next to an open row of the same anchor
    !> - gradients on the switching anchors
    subroutine test_closed_sibling_totals(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(cavity_type_drop), allocatable :: cavity
-      type(moist_context_type), target :: ctx
+      type(cavity_type_drop), allocatable :: cavity, every
+      type(moist_context_type), target :: ctx, ctx_every
+      type(mctc_error), allocatable :: cavity_error
+      integer :: ia, r0, r1, nclosed
 
       call get_test_cube(3.2731016603_wp, mol)
-      call build_switch_cavity(cavity, ctx, mol, 4.0_wp, 1.0_wp, 0.0_wp, 0.15_wp, error)
+      call build_switch_cavity(every, ctx_every, mol, 4.0_wp, 1.0_wp, 0.0_wp, 0.15_wp, error)
       if (allocated(error)) return
-      call check(error, cavity%n_extended > 0, "no anchor of the fixture is searched beyond its local point")
+      every%param%finalize%wleb_cut = -1.0_wp
+      call every%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      nclosed = 0
+      do ia = 1, every%anchor%ngrid
+         r0 = every%offset(ia) + 1
+         r1 = every%offset(ia + 1)
+         if (.not. (every%anchor%f0(ia) > 0.0_wp .and. any(every%w_f0(r0:r1) > 0.0_wp))) cycle
+         nclosed = nclosed + count(every%w_f0(r0:r1) == 0.0_wp)
+      end do
+      call check(error, nclosed > 0, "no anchor of the fixture finds a closed point next to an open one")
+      if (allocated(error)) return
+      deallocate (every)
+
+      call build_switch_cavity(cavity, ctx, mol, 4.0_wp, 1.0_wp, 0.0_wp, 0.15_wp, error)
       if (allocated(error)) return
       call check(error, all(cavity%a(1:cavity%ngrid) > 0.0_wp) .and. all(cavity%wbranch(1:cavity%ngrid) > 0.0_wp) &
                  .and. all(cavity%w_f0(1:cavity%ngrid) > 0.0_wp), "a row without area, weight or gate")
@@ -612,7 +647,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity, far
       type(moist_context_type), target :: ctx, ctx_far
-      real(wp) :: area_band, area_far
+      real(wp) :: area_band, area_far, area_band_far
       integer :: i
 
       call get_test_sibling_gate(mol)
@@ -622,6 +657,7 @@ contains
       area_far = sum(far%a(1:far%ngrid), mask=far%pdist(1:far%ngrid) >= R_OFF)
       call check(error, area_far > LIVE_AREA, "the long-reach build has no area beyond the closed edge")
       if (allocated(error)) return
+      area_band_far = sum(far%a(1:far%ngrid), mask=far%pdist(1:far%ngrid) > R_ON .and. far%pdist(1:far%ngrid) < R_OFF)
 
       call build_switch_cavity(cavity, ctx, mol, 1.5_wp, 0.2_wp, 0.0_wp, 0.15_wp, error, &
                                reach_on=R_ON, reach_off=R_OFF)
@@ -636,8 +672,14 @@ contains
       end do
       call check(error, area_band > LIVE_AREA, "fixture has no area inside the reach band")
       if (allocated(error)) return
+      ! Beyond the closed edge the area goes, and is not handed to closer rows;
+      ! the tolerance covers the change of the normalization
       call check(error, sum(cavity%a(1:cavity%ngrid)) < sum(far%a(1:far%ngrid)) - area_far + LIVE_AREA, &
-                 "the reach gate takes no area off")
+                 "the reach gate keeps area beyond its closed edge")
+      if (allocated(error)) return
+      call check(error, area_band < area_band_far - LIVE_AREA, &
+                 "the reach gate takes no area off its band: "//to_string(area_band)//" against "// &
+                 to_string(area_band_far)//" bohr^2 with the long reach")
       if (allocated(error)) return
       call check_drop_totals_gradient(cavity, mol, error, step=FORWARD_STEP)
 
@@ -731,14 +773,13 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: NCOARSE = 11, NFINE = 9
-      real(wp), parameter :: HALF0 = 2.8_wp, H_COARSE = 0.04_wp, H_FINE = 0.01_wp
+      integer, parameter :: NCOARSE = 11
+      real(wp), parameter :: HALF0 = 2.8_wp, H_COARSE = 0.04_wp
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(mctc_error), allocatable :: cavity_error
-      real(wp) :: coarse(NCOARSE), fine(NFINE), d2_coarse, d2_fine, d2
-      integer :: nbranched(NCOARSE), i, iworst
+      real(wp) :: coarse(NCOARSE), fine(NFINE), d2_coarse, d2_fine, half_fine
+      integer :: nbranched(NCOARSE), i
       logical :: behind
 
       call argon_tetrahedron(HALF0, mol)
@@ -747,13 +788,8 @@ contains
       if (allocated(error)) return
       behind = .false.
       do i = 1, NCOARSE
-         call argon_tetrahedron(HALF0 + real(i - 1, wp)*H_COARSE, mol)
-         call cavity%update(mol, error=cavity_error)
-         if (allocated(cavity_error)) then
-            call test_failed(error, cavity_error%message)
-            return
-         end if
-         coarse(i) = sum(cavity%a(1:cavity%ngrid))
+         call tetrahedron_area(cavity, HALF0 + real(i - 1, wp)*H_COARSE, coarse(i), error)
+         if (allocated(error)) return
          nbranched(i) = count(cavity%offset(2:cavity%anchor%ngrid + 1) - cavity%offset(1:cavity%anchor%ngrid) > 1)
          behind = behind .or. weighted_behind_partial(cavity)
       end do
@@ -762,32 +798,13 @@ contains
                  to_string(minval(nbranched))//" to "//to_string(maxval(nbranched))//")")
       if (allocated(error)) return
 
-      d2_coarse = 0.0_wp
-      iworst = 2
-      do i = 2, NCOARSE - 1
-         d2 = abs(coarse(i + 1) - 2.0_wp*coarse(i) + coarse(i - 1))
-         if (d2 > d2_coarse) then
-            d2_coarse = d2
-            iworst = i
-         end if
-      end do
+      d2_coarse = max_second_difference(coarse)
       call check(error, d2_coarse > 1.0e-2_wp, "the area does not bend along the scan: "//to_string(d2_coarse))
       if (allocated(error)) return
 
-      ! One coarse interval to either side of the worst node, at the fine step
-      do i = 1, NFINE
-         call argon_tetrahedron(HALF0 + real(iworst - 2, wp)*H_COARSE + real(i - 1, wp)*H_FINE, mol)
-         call cavity%update(mol, error=cavity_error)
-         if (allocated(cavity_error)) then
-            call test_failed(error, cavity_error%message)
-            return
-         end if
-         fine(i) = sum(cavity%a(1:cavity%ngrid))
-      end do
-      d2_fine = 0.0_wp
-      do i = 2, NFINE - 1
-         d2_fine = max(d2_fine, abs(fine(i + 1) - 2.0_wp*fine(i) + fine(i - 1)))
-      end do
+      call refine_scan(cavity, HALF0, H_COARSE, coarse, half_fine, fine, error)
+      if (allocated(error)) return
+      d2_fine = max_second_difference(fine)
       call check(error, d2_fine <= 0.25_wp*d2_coarse, &
                  "second differences of the area "//to_string(d2_coarse)//" (step 0.04) and "//to_string(d2_fine)// &
                  " (step 0.01) do not fall as those of a continuous curve")
@@ -807,16 +824,15 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      integer, parameter :: NCOARSE = 11, NFINE = 9
-      real(wp), parameter :: HALF0 = 3.06_wp, H_COARSE = 0.016_wp, H_FINE = 0.004_wp
+      integer, parameter :: NCOARSE = 11
+      real(wp), parameter :: HALF0 = 3.06_wp, H_COARSE = 0.016_wp
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(mctc_error), allocatable :: cavity_error
       type(moist_cavity_drop_parameters_type) :: defaults
-      real(wp) :: coarse(NCOARSE), fine(NFINE), d2_coarse, d2_fine, d2
+      real(wp) :: coarse(NCOARSE), fine(NFINE), d2_coarse, d2_fine, half_fine
       real(wp), allocatable :: gmin(:), gmax(:)
-      integer :: i, iworst
+      integer :: i
 
       call argon_tetrahedron(HALF0, mol)
       call build_switch_cavity(cavity, ctx, mol, 3.0_wp, defaults%branch%dpdist_max, defaults%w_0hor_off, &
@@ -825,49 +841,102 @@ contains
       allocate (gmin(mol%nat*SWITCH_NUM_LEB), source=1.0_wp)
       allocate (gmax(mol%nat*SWITCH_NUM_LEB), source=0.0_wp)
       do i = 1, NCOARSE
-         call argon_tetrahedron(HALF0 + real(i - 1, wp)*H_COARSE, mol)
-         call cavity%update(mol, error=cavity_error)
-         if (allocated(cavity_error)) then
-            call test_failed(error, cavity_error%message)
-            return
-         end if
-         coarse(i) = sum(cavity%a(1:cavity%ngrid))
+         call tetrahedron_area(cavity, HALF0 + real(i - 1, wp)*H_COARSE, coarse(i), error)
+         if (allocated(error)) return
          call track_front_gates(cavity, gmin, gmax)
       end do
       call check(error, maxval(gmax - gmin) > 0.5_wp, &
                  "no front row opens by more than half in front of a weighted one: "//to_string(maxval(gmax - gmin)))
       if (allocated(error)) return
 
-      d2_coarse = 0.0_wp
-      iworst = 2
-      do i = 2, NCOARSE - 1
-         d2 = abs(coarse(i + 1) - 2.0_wp*coarse(i) + coarse(i - 1))
-         if (d2 > d2_coarse) then
-            d2_coarse = d2
-            iworst = i
-         end if
-      end do
+      d2_coarse = max_second_difference(coarse)
       call check(error, d2_coarse > 1.0e-1_wp, "the area does not bend along the scan: "//to_string(d2_coarse))
       if (allocated(error)) return
 
-      ! One coarse interval to either side of the worst node, at the fine step
-      do i = 1, NFINE
-         call argon_tetrahedron(HALF0 + real(iworst - 2, wp)*H_COARSE + real(i - 1, wp)*H_FINE, mol)
-         call cavity%update(mol, error=cavity_error)
-         if (allocated(cavity_error)) then
-            call test_failed(error, cavity_error%message)
-            return
-         end if
-         fine(i) = sum(cavity%a(1:cavity%ngrid))
-      end do
-      d2_fine = 0.0_wp
-      do i = 2, NFINE - 1
-         d2_fine = max(d2_fine, abs(fine(i + 1) - 2.0_wp*fine(i) + fine(i - 1)))
-      end do
+      call refine_scan(cavity, HALF0, H_COARSE, coarse, half_fine, fine, error)
+      if (allocated(error)) return
+      d2_fine = max_second_difference(fine)
       call check(error, d2_fine <= 0.25_wp*d2_coarse, &
                  "second differences of the area "//to_string(d2_coarse)//" (step 0.016) and "//to_string(d2_fine)// &
                  " (step 0.004) do not fall as those of a continuous curve")
    end subroutine test_front_gate_scan
+
+   !> Total area of the argon tetrahedron at one half edge
+   !>
+   !> @param[in,out] cavity Cavity of the scan, updated to the geometry
+   !> @param[in]     half   Half edge of the cube (bohr)
+   !> @param[out]    area   Total area (bohr^2)
+   !> @param[out]    error  Error handle
+   subroutine tetrahedron_area(cavity, half, area, error)
+      type(cavity_type_drop), intent(inout) :: cavity
+      real(wp), intent(in) :: half
+      real(wp), intent(out) :: area
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: cavity_error
+
+      call argon_tetrahedron(half, mol)
+      call cavity%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      area = sum(cavity%a(1:cavity%ngrid))
+   end subroutine tetrahedron_area
+
+   !> Largest absolute second difference of a scan
+   !>
+   !> @param[in] area Areas at equal steps
+   !> @return    d2   `max |area(i+1) - 2 area(i) + area(i-1)|`
+   pure function max_second_difference(area) result(d2)
+      real(wp), intent(in) :: area(:)
+      real(wp) :: d2
+
+      integer :: i
+
+      d2 = 0.0_wp
+      do i = 2, size(area) - 1
+         d2 = max(d2, abs(area(i + 1) - 2.0_wp*area(i) + area(i - 1)))
+      end do
+   end function max_second_difference
+
+   !> Area scan of the argon tetrahedron at a four times finer step, one step
+   !> of the coarse scan to either side of its largest second difference
+   !>
+   !> @param[in,out] cavity     Cavity of the scan
+   !> @param[in]     half0      First half edge of the coarse scan (bohr)
+   !> @param[in]     step       Step of the coarse scan (bohr)
+   !> @param[in]     coarse     Areas of the coarse scan
+   !> @param[out]    half0_fine First half edge of the fine scan (bohr)
+   !> @param[out]    fine       Areas of the fine scan, `NFINE` nodes
+   !> @param[out]    error      Error handle
+   subroutine refine_scan(cavity, half0, step, coarse, half0_fine, fine, error)
+      type(cavity_type_drop), intent(inout) :: cavity
+      real(wp), intent(in) :: half0, step
+      real(wp), intent(in) :: coarse(:)
+      real(wp), intent(out) :: half0_fine
+      real(wp), intent(out) :: fine(NFINE)
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: d2, d2_max
+      integer :: i, iworst
+
+      d2_max = -1.0_wp
+      iworst = 2
+      do i = 2, size(coarse) - 1
+         d2 = abs(coarse(i + 1) - 2.0_wp*coarse(i) + coarse(i - 1))
+         if (d2 > d2_max) then
+            d2_max = d2
+            iworst = i
+         end if
+      end do
+      half0_fine = half0 + real(iworst - 2, wp)*step
+      do i = 1, NFINE
+         call tetrahedron_area(cavity, half0_fine + real(i - 1, wp)*0.25_wp*step, fine(i), error)
+         if (allocated(error)) return
+      end do
+   end subroutine refine_scan
 
    !> Range of the gates of partly open nearest rows with a weighted row behind
    !>
@@ -923,9 +992,8 @@ contains
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(mctc_error), allocatable :: cavity_error
       type(moist_cavity_drop_parameters_type) :: defaults
-      real(wp) :: area_ref(NSCAN), shift(size(CUTS))
+      real(wp) :: area_ref(NSCAN), shift(size(CUTS)), area
       integer, allocatable :: rows_ref(:, :), rows_cut(:)
       integer :: i, ic, nkept
 
@@ -939,17 +1007,13 @@ contains
          if (allocated(error)) return
          if (ic > 0) cavity%param%finalize%wleb_cut = CUTS(ic)
          do i = 1, NSCAN
-            call argon_tetrahedron(HALF0 + real(i - 1, wp)*H_STEP, mol)
-            call cavity%update(mol, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
+            call tetrahedron_area(cavity, HALF0 + real(i - 1, wp)*H_STEP, area, error)
+            if (allocated(error)) return
             if (ic == 0) then
-               area_ref(i) = sum(cavity%a(1:cavity%ngrid))
+               area_ref(i) = area
                call rows_per_anchor(cavity, rows_ref(:, i))
             else
-               shift(ic) = max(shift(ic), abs(sum(cavity%a(1:cavity%ngrid)) - area_ref(i)))
+               shift(ic) = max(shift(ic), abs(area - area_ref(i)))
                if (ic == 1) then
                   call rows_per_anchor(cavity, rows_cut)
                   nkept = nkept + count(rows_cut >= 1 .and. rows_cut < rows_ref(:, i))
@@ -1180,6 +1244,8 @@ contains
       real(wp), parameter :: DT = 5.0e-3_wp, T0 = -2.0e-2_wp
       !> Fall of the residual per halving at least, cubic: 8, linear: 2
       real(wp), parameter :: MIN_FALL = 4.0_wp
+      !> Atom the out-of-plane shift of the fixture moves, and its z component
+      integer, parameter :: IAT_SHIFT = 3, IZ = 3
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -1202,7 +1268,7 @@ contains
             return
          end if
          area(i) = sum(cavity%a(1:cavity%ngrid))
-         slope(i) = cavity%A_tot1_rA(3, 3)
+         slope(i) = cavity%A_tot1_rA(IZ, IAT_SHIFT)
          if (i == 1 .or. i == NSAMPLE) then
             call forward_branch(cavity, mol, w, found)
             call check(error, found, "fixture lost its forward branches")
@@ -1247,7 +1313,7 @@ contains
                  "fixture has no partly open row that moves a sibling weight ("//to_string(live)//")")
       if (allocated(error)) return
       call check(error, weighted_behind_partial(cavity), &
-                 "no anchor with a partly open closest row and a row with area more than a window behind it")
+                 "no anchor with a partly open closest row and a row with area more than 1.5 windows behind it")
       if (allocated(error)) return
       call check_drop_totals_gradient(cavity, mol, error, step=FORWARD_STEP, subset=.true.)
 
@@ -1336,7 +1402,7 @@ contains
    end subroutine test_focal_margin_alpha_invariance
 
    !> Whether an anchor has a partly open closest row and a row with area more
-   !> than the branch window behind it
+   !> than 1.5 branch windows behind it
    !>
    !> @param[in] cavity Built cavity
    !> @return    found  Such an anchor exists
@@ -1549,7 +1615,7 @@ contains
    !>
    !> - the siblings are backward projections (`c < 0`), which the signed
    !>   horizon switch closes; it is switched off
-   !> - a branch window far wider than the production one, inside which no
+   !> - a branch window far wider than the production one, beyond which no
    !>   second point of this fixture falls
    !>
    !> Exercises the branch post-pass, which adds the branch-weight response to
@@ -1624,14 +1690,6 @@ contains
             branch=drop_branch_parameters_type(dpdist_max=TOTALS_BRANCH_DPDIST)), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
-      if (allocated(error)) return
-
-      !> The cavity must *borrow* the caller-owned run context, not copy it
-      call check(error, associated(cavity%ctx, ctx), &
-                 "DROP cavity does not borrow the caller-owned run context")
-      if (allocated(error)) return
-      call check(error, cavity%ctx%verbosity() == 0, &
-                 "DROP cavity does not observe the context verbosity")
       if (allocated(error)) return
 
       call cavity%update(mol, error=cavity_error)

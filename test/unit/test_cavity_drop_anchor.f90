@@ -4,6 +4,7 @@
 !> - `compute_switching`: iSwiG limits of isolated and buried anchors
 !> - `filter`: the pre-filter compacts every anchor array with one permutation
 !> - Lebedev rule: a cavity refuses a rule with negative weights for its anchors
+!> - run context: a cavity borrows the caller's context
 module test_cavity_drop_anchor
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -59,7 +60,8 @@ contains
                   new_unittest("filter_keeps_none", test_filter_keeps_none), &
                   new_unittest("filter_skips_unallocated", test_filter_skips_unallocated), &
                   new_unittest("filter_reports_removed_count", test_filter_removed_count), &
-                  new_unittest("negative_weight_lebedev_rejected", test_negative_weight_lebedev) &
+                  new_unittest("negative_weight_lebedev_rejected", test_negative_weight_lebedev), &
+                  new_unittest("borrows_context", test_borrows_context) &
                   ]
 
    end subroutine collect_cavity_drop_anchor
@@ -529,6 +531,39 @@ contains
                  "unexpected error message: "//cavity_error%message)
 
    end subroutine test_negative_weight_lebedev
+
+   !* ================================================================================= *!
+   !*                                    Run context                                    *!
+   !* ================================================================================= *!
+
+   !> A constructed cavity borrows the caller's run context instead of copying
+   !> it, and observes its verbosity
+   subroutine test_borrows_context(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(moist_error_type), allocatable :: cavity_error
+      !> Run context borrowed by the cavity
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, nthreads=0, verbosity=0)
+      call svdw_template%new()
+      allocate (cavity)
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                           error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NLEB), ctx=ctx)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, associated(cavity%ctx, ctx), "DROP cavity does not borrow the caller-owned run context")
+      if (allocated(error)) return
+      call check(error, cavity%ctx%verbosity() == 0, "DROP cavity does not observe the context verbosity")
+      if (allocated(error)) return
+      deallocate (cavity)
+
+   end subroutine test_borrows_context
 
    !* ================================================================================= *!
    !*                                      Fixture                                      *!
