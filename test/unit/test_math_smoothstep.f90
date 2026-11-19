@@ -53,8 +53,8 @@ module test_math_smoothstep
    real(wp), parameter :: sym_thr = 1.0e-14_wp
    !> Derivative symmetry tolerance in t-units, 10x relative fallback; measured abs 9e-13, rel 7e-15
    real(wp), parameter :: dsym_thr = 5.0e-12_wp
-   !> Pinned erf/sigmoid values, relative tolerance
-   real(wp), parameter :: pin_thr = 1.0e-12_wp
+   !> Pinned erf/sigmoid values, relative tolerance; MinGW erfc off by 1.1e-12
+   real(wp), parameter :: pin_thr = 5.0e-12_wp
    !> Central first-derivative weights, offsets 1..4, O(h^8)
    real(wp), parameter :: w8(4) = [4.0_wp/5.0_wp, -1.0_wp/5.0_wp, 4.0_wp/105.0_wp, -1.0_wp/280.0_wp]
    !> Centre count of the synthetic chain-rule argument

@@ -365,7 +365,46 @@ if(MOIST_TESTS)
     single_atom asymmetric_trimer partition_integrals multicenter_integrals
     rotational_convergence integrate_constant_is_box_volume gaussian_width_law)
   set(moist_test_selected_math_grid_3d_invariance single_atom asymmetric_trimer)
-  # Split: the octree_cluster_* tests dominate the suite
+  set(moist_test_selected_model_component_pcm_derivatives
+    cpcm_surface_gradient cpcm_iterative_surface_gradient cpcm_tangent
+    cpcm_mf_tangent cpcm_nuclear_gradient cpcm_parameter_derivatives_gaussian
+    cpcm_parameter_derivatives_point cpcm_mf_parameter_derivatives_gaussian
+    cpcm_mf_parameter_derivatives_point cosmo_surface_gradient cosmo_tangent
+    cosmo_mf_tangent cosmo_nuclear_gradient cosmo_parameter_derivatives_gaussian
+    cosmo_parameter_derivatives_point cosmo_mf_parameter_derivatives_gaussian
+    cosmo_mf_parameter_derivatives_point iefpcm_surface_gradient iefpcm_tangent
+    iefpcm_mf_tangent iefpcm_nuclear_gradient iefpcm_parameter_derivatives_gaussian
+    iefpcm_parameter_derivatives_point iefpcm_mf_parameter_derivatives_gaussian
+    iefpcm_mf_parameter_derivatives_point ssvpe_surface_gradient ssvpe_tangent
+    ssvpe_mf_tangent ssvpe_nuclear_gradient ssvpe_parameter_derivatives_gaussian
+    ssvpe_parameter_derivatives_point ssvpe_mf_parameter_derivatives_gaussian
+    ssvpe_mf_parameter_derivatives_point dpcm_surface_gradient dpcm_tangent
+    dpcm_mf_tangent dpcm_nuclear_gradient dpcm_parameter_derivatives_gaussian
+    dpcm_parameter_derivatives_point dpcm_mf_parameter_derivatives_gaussian
+    dpcm_mf_parameter_derivatives_point dpcm_original_surface_gradient
+    dpcm_original_tangent dpcm_original_mf_tangent dpcm_original_nuclear_gradient
+    dpcm_original_parameter_derivatives_gaussian
+    dpcm_original_parameter_derivatives_point
+    dpcm_original_mf_parameter_derivatives_gaussian
+    dpcm_original_mf_parameter_derivatives_point lpb_surface_gradient lpb_tangent
+    lpb_mf_tangent lpb_nuclear_gradient lpb_parameter_derivatives_gaussian
+    lpb_parameter_derivatives_point lpb_mf_parameter_derivatives_gaussian
+    lpb_mf_parameter_derivatives_point slic_surface_gradient slic_tangent
+    slic_mf_tangent slic_nuclear_gradient slic_parameter_derivatives_gaussian
+    slic_parameter_derivatives_point slic_mf_parameter_derivatives_gaussian
+    slic_mf_parameter_derivatives_point
+    slic_default_mu_parameter_derivatives_gaussian
+    slic_default_mu_parameter_derivatives_point
+    slic_default_mu_mf_parameter_derivatives_gaussian
+    slic_default_mu_mf_parameter_derivatives_point nonlocal_surface_gradient
+    nonlocal_tangent nonlocal_mf_tangent nonlocal_nuclear_gradient
+    nonlocal_parameter_derivatives_gaussian nonlocal_parameter_derivatives_point
+    nonlocal_mf_parameter_derivatives_gaussian
+    nonlocal_mf_parameter_derivatives_point component_paths_gaussian
+    component_paths_point point_potential_surface_gradient
+    point_potential_nuclear_gradient point_potential_component_paths
+    cpcm_surface_weights cpcm_nuclear_gradient_ecp cpcm_external_nuclear_gradient
+    cpcm_sibling_gate iefpcm_sibling_gate)
   set(moist_test_selected_cavity_drop_projection
     octree_connected_minima octree_shallow_minimum octree_search_window
     octree_rigid_motion octree_zero_window_on_surface octree_cluster_dimer
