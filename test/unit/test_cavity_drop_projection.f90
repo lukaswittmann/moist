@@ -3259,9 +3259,9 @@ contains
 
    !> The worker refines evidence-free leaves in the fine octree only
    !>
-   !> - the octree each level's worker builds (searching only failed local
-   !>   solves at level 1, every anchor at levels 3, 4) runs a blind search of a
-   !>   sign-free ball, so every surviving leaf lacks evidence
+   !> - the octree each level's worker builds (the fallback at level 1, the
+   !>   seeder at levels 3, 4) runs a blind search of a sign-free ball, so every
+   !>   surviving leaf lacks evidence
    !> - the coarse octree of levels 1, 3 keeps such leaves but probes no child;
    !>   the fine octree of level 4 probes their children
    !>
@@ -3310,9 +3310,15 @@ contains
             call test_failed(error, trim(label)//": "//native_error%message)
             return
          end if
-         call check(error, allocated(worker%seeder), message=trim(label)//": no seeder")
-         if (allocated(error)) return
-         call run_blind(worker%seeder)
+         if (level == 1) then
+            call check(error, allocated(worker%fallback), message=trim(label)//": no fallback octree")
+            if (allocated(error)) return
+            call run_blind(worker%fallback)
+         else
+            call check(error, allocated(worker%seeder), message=trim(label)//": no seeder")
+            if (allocated(error)) return
+            call run_blind(worker%seeder)
+         end if
          if (allocated(error)) return
       end do
 
