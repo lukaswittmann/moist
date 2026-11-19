@@ -52,8 +52,6 @@ module moist_cavity_drop_lsf_screening
    !>   where FMA contraction may round differently by an ulp or two
    !> - widening keeps the list a strict superset of any such exact test
    real(wp), parameter :: hit_slack = 16.0_wp*epsilon(1.0_wp)
-   !> Most cell runs a query merges; more fall back to a general sort
-   integer, parameter :: max_runs = 64
 
    !> Binned cell list in CSR layout, slots stored in cell order
    type :: cell_list_type
@@ -339,6 +337,9 @@ contains
    !>
    !> - box mode: closest-point distance to `[blo, bhi]`
    !> - sphere mode: center distance against `r + reach_i`
+   !> - hits of one cell are ascending; hits of several cells are sorted with
+   !>   [[ord_sort]], `n/2` ids of the unused tail of `out` as scratch, else
+   !>   [[sort]] in place
    !>
    !> @param[in]  self    cell list
    !> @param[in]  blo     lower box corner
@@ -367,9 +368,7 @@ contains
       integer, intent(out) :: nout
 
       real(wp) :: tlo(3), thi(3), elo(3), ehi(3), upper(3), margin(3)
-      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, j, k, first
-      !> First entry of each run of hits, one run per cell; `nrun` may exceed `max_runs`
-      integer :: run_start(max_runs + 1), nrun
+      integer :: ilo(3), ihi(3), ix, iy, iz, ic, s, j, k, first, ncell_hit
 
       nout = 0
       if (self%natoms <= 0) return
@@ -418,7 +417,7 @@ contains
       ihi(2) = int(min(real(self%ny - 1, wp), thi(2)))
       ihi(3) = int(min(real(self%nz - 1, wp), thi(3)))
 
-      nrun = 0
+      ncell_hit = 0
       do iz = ilo(3), ihi(3)
          do iy = ilo(2), ihi(2)
             do ix = ilo(1), ihi(1)
@@ -430,93 +429,20 @@ contains
                      out(nout) = self%slot_atom(s)
                   end if
                end do
-               if (nout >= first) then
-                  nrun = nrun + 1
-                  if (nrun <= max_runs) run_start(nrun) = first
-               end if
+               if (nout >= first) ncell_hit = ncell_hit + 1
             end do
          end do
       end do
 
-      ! Each cell's run is ascending; several are merged for a box-independent order
-      if (nrun > 1) call merge_runs(out, nout, run_start, nrun)
-   end subroutine collect
-
-   !> Sort the ascending runs of a query result into one ascending list
-   !>
-   !> - bottom-up pairwise merge of the known cell runs, `O(n log nrun)`, in the
-   !>   unused tail of `out`
-   !> - when the tail is shorter than the result or the runs are more than
-   !>   `max_runs`: [[ord_sort]] with `n/2` ids of the tail as scratch, else
-   !>   [[sort]] in place
-   !> - kept over a plain [[ord_sort]], which finds the runs again and
-   !>   insertion-sorts lists below 64 ids
-   !>
-   !> @param[in,out] out       ids, runs in `out(1:n)`, ascending on return
-   !> @param[in]     n         number of ids
-   !> @param[in,out] run_start first entry of each run (`max_runs + 1`)
-   !> @param[in]     nrun      number of runs, more than one
-   pure subroutine merge_runs(out, n, run_start, nrun)
-      !> Atom ids
-      integer, intent(inout) :: out(:)
-      !> Number of ids
-      integer, intent(in) :: n
-      !> Run starts, overwritten
-      integer, intent(inout) :: run_start(:)
-      !> Number of runs
-      integer, intent(in) :: nrun
-
-      integer :: src, dst, m, i, j1, j2, e1, e2, k, runs
-
-      if (nrun > max_runs .or. size(out) < 2*n) then
-         if (size(out) - n >= n/2) then
-            call ord_sort(out(1:n), work=out(n + 1:n + n/2))
+      ! Hits of several cells are sorted for a box-independent order
+      if (ncell_hit > 1) then
+         if (size(out) - nout >= nout/2) then
+            call ord_sort(out(1:nout), work=out(nout + 1:nout + nout/2))
          else
-            call sort(out(1:n))
+            call sort(out(1:nout))
          end if
-         return
       end if
-      ! Runs live at the same positions in both halves, offset by `src` or `dst`
-      src = 0
-      dst = n
-      runs = nrun
-      run_start(runs + 1) = n + 1
-      do while (runs > 1)
-         m = 0
-         do i = 1, runs, 2
-            m = m + 1
-            if (i == runs) then
-               out(dst + run_start(i):dst + n) = out(src + run_start(i):src + n)
-               run_start(m) = run_start(i)
-               exit
-            end if
-            j1 = run_start(i)
-            e1 = run_start(i + 1) - 1
-            j2 = run_start(i + 1)
-            e2 = run_start(i + 2) - 1
-            k = j1
-            do while (j1 <= e1 .and. j2 <= e2)
-               if (out(src + j2) < out(src + j1)) then
-                  out(dst + k) = out(src + j2)
-                  j2 = j2 + 1
-               else
-                  out(dst + k) = out(src + j1)
-                  j1 = j1 + 1
-               end if
-               k = k + 1
-            end do
-            if (j1 <= e1) out(dst + k:dst + e2) = out(src + j1:src + e1)
-            if (j2 <= e2) out(dst + k:dst + e2) = out(src + j2:src + e2)
-            run_start(m) = run_start(i)
-         end do
-         runs = m
-         run_start(runs + 1) = n + 1
-         k = src
-         src = dst
-         dst = k
-      end do
-      if (src /= 0) out(1:n) = out(src + 1:src + n)
-   end subroutine merge_runs
+   end subroutine collect
 
    !> Whether the atom in slot `s` meets the query region
    !>
