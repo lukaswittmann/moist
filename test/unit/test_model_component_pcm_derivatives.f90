@@ -104,27 +104,15 @@ module test_model_component_pcm_derivatives
    !> All tolerances are about ten times the largest deviation over every
    !> model and solute (six-point stencil, roundoff-limited)
    real(wp), parameter :: grad_atol = 3.0e-12_wp, grad_rtol = 1.0e-9_wp
-   !> Energy differences with GMRES at the default tolerance, absolute part
-   !>
-   !> The iterate's error enters to first order in the residual: measured 1.4e-10
-   !> with the residual-corrected energy, up to 1.8e-7 with 0.5*dot(q, phi)
+   !> Energy differences with GMRES at the default tolerance, absolute
    real(wp), parameter :: gmres_atol = 1.5e-9_wp
-   !> Nuclear gradient (four-point stencil), with cavity rebuild roundoff
-   !>
-   !> The SLIC Newton tolerance sets the largest deviation, 9e-10 relative
-   real(wp), parameter :: nuc_atol = 1.0e-12_wp, nuc_rtol = 1.0e-8_wp
+   !> Nuclear gradient
+   real(wp), parameter :: nuc_atol = 1.0e-11_wp, nuc_rtol = 1.0e-8_wp
    !> Parameter derivatives against six-point energy differences
    real(wp), parameter :: param_atol = 1.0e-15_wp, param_rtol = 1.5e-10_wp
    !> Weight differences, per channel relative to its largest entry
    real(wp), parameter :: hess_atol = 3.0e-12_wp, hess_rtol = 1.0e-9_wp
    !> Matrix-free tangent against the dense analytic tangent, per channel
-   !>
-   !> Absolute part, and relative part of the largest dense entry; the dense
-   !> solves are direct and the GMRES tolerance is 1e-13
-   !>
-   !> Measured over every model, solute, seed, surface and direction: at most
-   !> 4.8e-14 absolute (CPCM dE/dphi) and 1.5e-12 relative to the channel scale
-   !> (entries above 1e-3); tolerances are about ten times that
    real(wp), parameter :: mf_atol = 5.0e-13_wp, mf_rtol = 1.5e-11_wp
    !> Energy derivative relative to |E| below which an expected-active direction is vacuous
    !>

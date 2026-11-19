@@ -368,10 +368,27 @@ if(MOIST_TESTS)
   # Split: the octree_cluster_* tests dominate the suite
   set(moist_test_selected_cavity_drop_projection
     octree_connected_minima octree_shallow_minimum octree_search_window
-    octree_rigid_motion octree_zero_window_on_surface search_window_validation
-    octree_cluster_dimer octree_cluster_cross octree_cluster_octahedron
-    octree_cluster_cube octree_cluster_pentagon octree_cluster_tetrahedron
-    brute_force_broad_window stationary_box_bounds)
+    octree_rigid_motion octree_zero_window_on_surface octree_cluster_dimer
+    octree_cluster_cross octree_cluster_octahedron octree_cluster_cube
+    octree_cluster_pentagon octree_cluster_tetrahedron brute_force_broad_window
+    stationary_box_bounds batch_flush_accumulator newton_sphere_point
+    newton_stage_switch newton_far_seed_unreached newton_far_point
+    polish_escapes_far_pole multistart_capture_stops_duplicates
+    multistart_capture_keeps_twin_points finalize_canonical_order
+    finalize_canonical_order_chain finalize_sphere_anchor
+    finalize_branch_weight_fold octree_two_sphere_branches
+    octree_single_sphere_one_branch octree_sign_change_bound_is_tight
+    octree_certifies_empty_ball octree_surface_patch_coverage
+    octree_optional_region_certificate octree_seed_anchor_within_trace_tolerance
+    octree_far_verified_point_radius octree_far_traced_radius
+    octree_seeds_on_sign_change_segments octree_sign_free_region_no_seeds
+    octree_refinement_thin_feature bad_octree_seed_size bad_octree_budgets
+    bad_octree_max_depth bad_octree_pdist_max bad_octree_negative_slack
+    bad_octree_depth_cap bad_octree_survivors bad_octree_box_budget
+    bad_octree_seed_before_init bad_octree_run_before_init
+    bad_octree_refine_levels octree_neighbours_outside_box_budget
+    octree_refinement_outside_box_budget worker_octree_refinement_by_level
+    bad_batch_target_size bad_newton_unreached_anchor)
 
   # Start priority (ctest COST, higher first), ranked by CI runtime
   set(moist_test_cost_cavity_drop_projection 9)
@@ -381,7 +398,6 @@ if(MOIST_TESTS)
   set(moist_test_cost_cavity_drop_gradient 5)
   set(moist_test_cost_cavity_drop_lsf 4)
   set(moist_test_cost_cavity_drop_isodensity 3)
-  set(moist_test_cost_cavity_drop_cpcm 2)
   set(moist_test_cost_model_component_pcm_references 1)
   set(moist_test_selected_math_grid_3d_threaded
     batched_ifft_uses_threaded_backend

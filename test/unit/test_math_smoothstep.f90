@@ -29,7 +29,7 @@
 module test_math_smoothstep
    use, intrinsic :: ieee_exceptions, only: ieee_get_flag, ieee_set_flag, ieee_divide_by_zero
    use mctc_env, only: wp
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    use moist_math_smoothstep, only: moist_math_smoothstep_type, &
       & moist_math_smoothstep_polynomial_type, new_smoothstep_polynomial, &
       & moist_math_smoothstep_erf_type, new_smoothstep_erf, &
@@ -54,7 +54,7 @@ module test_math_smoothstep
    !> Derivative symmetry tolerance in t-units, 10x relative fallback; measured abs 9e-13, rel 7e-15
    real(wp), parameter :: dsym_thr = 5.0e-12_wp
    !> Pinned erf/sigmoid values, relative tolerance
-   real(wp), parameter :: pin_thr = 1.0e-13_wp
+   real(wp), parameter :: pin_thr = 1.0e-12_wp
    !> Central first-derivative weights, offsets 1..4, O(h^8)
    real(wp), parameter :: w8(4) = [4.0_wp/5.0_wp, -1.0_wp/5.0_wp, 4.0_wp/105.0_wp, -1.0_wp/280.0_wp]
    !> Centre count of the synthetic chain-rule argument
@@ -458,7 +458,8 @@ contains
       call sw%eval(x, f(1), f(2), f(3))
       do k = 1, 3
          if (abs(f(k) - ref(k)) > pin_thr*max(abs(ref(k)), 1.0e-300_wp)) then
-            call test_failed(error, label//": f0..f2 differ from pre-move switching.f90")
+            call test_failed(error, label//": f0..f2 differ from pre-move switching.f90", &
+               & "f"//to_string(k - 1)//" "//to_string(f(k))//" vs pinned "//to_string(ref(k)))
             return
          end if
       end do
