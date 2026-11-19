@@ -26,6 +26,12 @@
 !>     - `f_i` belongs to the anchor, so the rows of one anchor share one sparse
 !>       evaluation over the owner's neighbours
 !>
+!>  4. Reach gate: a function of the projection distance, so it depends on the
+!>     anchor (owner) directly, on top of the projected point
+!>
+!> The gate and the objective of a row enter the branch weights of every row of
+!> its anchor; the branch adjoints carry that coupling
+!>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
    !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
@@ -98,6 +104,8 @@ contains
       integer :: igrid, p, k, iatom, ia, jrow
       !> Tile index, tile count, tile width, first grid point and size
       integer :: itile, ntile, tile, igrid0, np
+      !> Reach-gate partial of a row in the anchor, and its adjoint weight
+      real(wp) :: reach_da(3), reach_coef
       !> Shared candidate list of the tile
       integer, allocatable :: cand(:)
       integer :: nc
@@ -169,7 +177,7 @@ contains
       !$omp& tile_w0, tile_w1, tile_w2, tile_res_buf, tile_res, &
       !$omp& phi1_r, kkt_rhs, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, ia, jrow, w_switch, have_switch, &
-      !$omp& iswig_work, tile_grad, row_atoms, nrow, in_row)
+      !$omp& iswig_work, tile_grad, row_atoms, nrow, in_row, reach_da, reach_coef)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
 
@@ -210,7 +218,7 @@ contains
             igrid = igrid0 + p - 1
             anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
             owner_idx = self%owner(igrid)
-            call fill_seed_state(self, igrid, eff%have_wk, state)
+            call fill_seed_state(self, igrid, eff%have_wk, state, reach_da)
 
             !* ------------------ Field seeds -> level-set adjoints ------------------- *!
             ! Columns 5-7 of the bordered KKT system are the anchor seeds:
@@ -222,7 +230,7 @@ contains
             kkt_rhs(3, 7) = self%param%phi_alpha
             call seed_point_jet(slots%phi(thread_slot), tile_xyz(:, p), owner_idx, tile_lsf1(:, p), &
                                 tile_lsf2(:, p), tile_lsf3(:, p), self%lambda0(igrid), self%f_crit, &
-                                self%f_foc, self%f_wleb, self%param%wleb_prune_level > 0, eff, &
+                                self%f_foc, self%f_hor, self%f_wleb, self%param%finalize%wleb_prune, eff, &
                                 igrid, state, kkt_rhs, phi1_r, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
                                 w_xyz_local, status)
             if (status /= seed_state_ok) then
@@ -240,11 +248,20 @@ contains
             call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
                              tile_grad(:, owner_idx))
 
+            !* ------------------------ Reach channel (owner) ------------------------- *!
+            ! The reach gate moves with the anchor at a fixed projected point
+            if (abs(eff%branch_gate_adj(igrid)) > seed_weight_tol) then
+               reach_coef = eff%branch_gate_adj(igrid)*state%wleb_prune_f0*state%f_crit0*state%f_foc_f0 &
+                            *state%f_hor_f0
+               tile_grad(:, owner_idx) = tile_grad(:, owner_idx) + reach_coef*reach_da
+            end if
+
             !* ----------------------- iSwig switching channel ------------------------ *!
-            ! f_i depends on the nuclear geometry alone and is the same for every
-            ! row of an anchor, whose rows are contiguous:
-            ! the first row carries the summed weight of the run, evaluated once at fixed width
-            ! (anchor%xi0 has no nuclear dependence)
+            ! f_i = f_anchor*p_i; f_anchor depends on the nuclear geometry alone and
+            ! is shared by the rows of an anchor, which are contiguous:
+            ! the first row carries the summed, branch-weighted weight of the run,
+            ! evaluated once at fixed width (anchor%xi0 has no nuclear dependence)
+            ! The branch weight's own response enters through the branch adjoints
             ia = self%anchor_of_row(igrid)
             if (igrid > 1) then
                if (self%anchor_of_row(igrid - 1) == ia) cycle
@@ -254,7 +271,7 @@ contains
             do jrow = igrid, self%ngrid
                if (self%anchor_of_row(jrow) /= ia) exit
                if (abs(eff%w_f(jrow)) > seed_weight_tol) then
-                  w_switch = w_switch + eff%w_f(jrow)
+                  w_switch = w_switch + eff%w_f(jrow)*self%wbranch(jrow)
                   have_switch = .true.
                end if
             end do

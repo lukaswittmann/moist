@@ -12,7 +12,7 @@ static moist_context fixture_context = NULL;
 
 /* Fixture builders for numerical tests; public API exercised in test_v1_contract
  * below. Each copies and releases its LSF configuration */
-static moist_cavity fixture_drop(moist_error error, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
+static moist_cavity fixture_drop(moist_error error, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_dpdist_max, const double *rho_grid_h, const int *wleb_prune_level)
 {
     moist_drop_options options;
     moist_svdw_options surface;
@@ -25,7 +25,7 @@ static moist_cavity fixture_drop(moist_error error, const int *nleb, const doubl
     if (tolerance) options.tolerance = *tolerance;
     if (proj_maxiter) options.proj_maxiter = *proj_maxiter;
     if (proj_level) options.proj_level = *proj_level;
-    if (branch_weight_s) options.branch_weight_s = *branch_weight_s;
+    if (branch_dpdist_max) options.branch_dpdist_max = *branch_dpdist_max;
     if (rho_grid_h) options.rho_grid_h = *rho_grid_h;
     if (wleb_prune_level) options.wleb_prune_level = *wleb_prune_level;
     if (blendk) surface.blend_k = *blendk;
@@ -39,7 +39,7 @@ static moist_cavity fixture_drop(moist_error error, const int *nleb, const doubl
     return cavity;
 }
 
-static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
+static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_dpdist_max, const double *rho_grid_h, const int *wleb_prune_level)
 {
     moist_drop_options options;
     moist_svdw_options surface;
@@ -52,7 +52,7 @@ static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii
     if (tolerance) options.tolerance = *tolerance;
     if (proj_maxiter) options.proj_maxiter = *proj_maxiter;
     if (proj_level) options.proj_level = *proj_level;
-    if (branch_weight_s) options.branch_weight_s = *branch_weight_s;
+    if (branch_dpdist_max) options.branch_dpdist_max = *branch_dpdist_max;
     if (rho_grid_h) options.rho_grid_h = *rho_grid_h;
     if (wleb_prune_level) options.wleb_prune_level = *wleb_prune_level;
     if (blendk) surface.blend_k = *blendk;
@@ -184,14 +184,13 @@ static int read_field_int(moist_error error, moist_cavity cav, const char* name,
 /* DROP fields most callers want, read in one go by name */
 static int read_drop_fields(moist_error error, moist_cavity cav,
                             int* nmax, double* normal, double* wleb,
-                            double* r_iI0, double* f, double* rho)
+                            double* f, double* pdist)
 {
     return read_field_int(error, cav, "nmax", nmax)
         || read_field_real(error, cav, "normal0", normal)
         || read_field_real(error, cav, "wleb", wleb)
-        || read_field_real(error, cav, "r_iI0", r_iI0)
         || read_field_real(error, cav, "f", f)
-        || read_field_real(error, cav, "rho", rho);
+        || read_field_real(error, cav, "pdist", pdist);
 }
 
 /* Allowances for summation, backend, and translation identities */
@@ -343,10 +342,9 @@ int test_drop_cavity(void)
     double* asph = NULL;
     double* normal = NULL;
     double* wleb = NULL;
-    double* r_iI0 = NULL;
     double* xi = NULL;
     double* f = NULL;
-    double* rho = NULL;
+    double* pdist = NULL;
 
     const int natoms = 1;
     int numbers[1] = {1};
@@ -402,13 +400,12 @@ int test_drop_cavity(void)
     // DROP-specific arrays
     normal = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     wleb = (double*)malloc((size_t)ngrid * sizeof(double));
-    r_iI0 = (double*)malloc((size_t)ngrid * sizeof(double));
     xi = (double*)malloc((size_t)ngrid * sizeof(double));
     f = (double*)malloc((size_t)ngrid * sizeof(double));
-    rho = (double*)malloc((size_t)ngrid * sizeof(double));
+    pdist = (double*)malloc((size_t)ngrid * sizeof(double));
 
     if (!xyz || !a || !owner || !vradii || !asph || !normal ||
-        !wleb || !r_iI0 || !xi || !f || !rho) {
+        !wleb || !xi || !f || !pdist) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
     }
@@ -423,7 +420,7 @@ int test_drop_cavity(void)
     }
 
     // Get DROP results by name
-    if (read_drop_fields(error, cav, &nmax, normal, wleb, r_iI0, f, rho)) {
+    if (read_drop_fields(error, cav, &nmax, normal, wleb, f, pdist)) {
         goto cleanup;
     }
 
@@ -437,8 +434,8 @@ int test_drop_cavity(void)
     // Validate results
     result = area > 0.0 && ngrid > 0 &&
              nmax >= ngrid && wleb[0] > 0.0 && a[0] > 0.0 &&
-             r_iI0[0] > 0.0 && xi[0] > 0.0 &&
-             f[0] > 0.0 && rho[0] >= 0.0 &&
+             xi[0] > 0.0 &&
+             f[0] > 0.0 && pdist[0] >= 0.0 &&
              asph[0] > 0.0 &&
              vradii[0] > 0.0
          ? 0
@@ -446,7 +443,7 @@ int test_drop_cavity(void)
 
 cleanup:
     free(xyz); free(a); free(owner); free(vradii); free(asph);
-    free(normal); free(wleb); free(r_iI0); free(xi); free(f); free(rho);
+    free(normal); free(wleb); free(xi); free(f); free(pdist);
 
     // Free handles and verify they reset to NULL (generic delete)
     moist_delete_cavity(&cav);
@@ -647,11 +644,10 @@ int test_h2o_cavity(void)
     double* asph = NULL;
     double* normal = NULL;
     double* wleb = NULL;
-    double* r_iI0 = NULL;
     double* f = NULL;
     double* gaussian_xi = NULL;
     double* gaussian_f = NULL;
-    double* rho = NULL;
+    double* pdist = NULL;
 
     mol = make_h2o(error);
     if (moist_check_error(error)) {
@@ -694,14 +690,13 @@ int test_h2o_cavity(void)
     asph = (double*)malloc((size_t)nsph * sizeof(double));
     normal = (double*)malloc((size_t)3 * ngrid * sizeof(double));
     wleb = (double*)malloc((size_t)ngrid * sizeof(double));
-    r_iI0 = (double*)malloc((size_t)ngrid * sizeof(double));
     f = (double*)malloc((size_t)ngrid * sizeof(double));
     gaussian_xi = (double*)malloc((size_t)ngrid * sizeof(double));
     gaussian_f = (double*)malloc((size_t)ngrid * sizeof(double));
-    rho = (double*)malloc((size_t)ngrid * sizeof(double));
+    pdist = (double*)malloc((size_t)ngrid * sizeof(double));
 
     if (!xyz || !a || !owner || !vradii || !asph || !normal ||
-        !wleb || !r_iI0 || !f || !gaussian_xi || !gaussian_f || !rho) {
+        !wleb || !f || !gaussian_xi || !gaussian_f || !pdist) {
         printf("Error: Memory allocation failed\n");
         goto cleanup;
     }
@@ -718,7 +713,7 @@ int test_h2o_cavity(void)
     printf("  Cavity surface area: %.4f Bohr^2\n", area);
     printf("  Cavity volume: %.4f Bohr^3\n", volume);
 
-    if (read_drop_fields(error, cav, &nmax, normal, wleb, r_iI0, f, rho)) {
+    if (read_drop_fields(error, cav, &nmax, normal, wleb, f, pdist)) {
         goto cleanup;
     }
 
@@ -744,8 +739,8 @@ int test_h2o_cavity(void)
 
 cleanup:
     free(xyz); free(a); free(owner); free(vradii); free(asph);
-    free(normal); free(wleb); free(r_iI0); free(f);
-    free(gaussian_xi); free(gaussian_f); free(rho);
+    free(normal); free(wleb); free(f);
+    free(gaussian_xi); free(gaussian_f); free(pdist);
 
     moist_delete_cavity(&cav);
     moist_delete_structure(&mol);
@@ -780,8 +775,6 @@ int test_cavity_gradient(void)
     double* asph1_rA = NULL;         // (3, nsph, nsph)
     double* vsph1_rA = NULL;         // (3, nsph, nsph)
     double* xyz1_rA = NULL;          // (3, 3, nsph, ngrid)
-    double* r_iI1_rA = NULL;         // (3, nsph, ngrid)
-    double* rho1_rA = NULL;          // (3, nsph, ngrid)
     double* surface_q = NULL;        // (ngrid)
     double* surface_q_scaled = NULL; // (ngrid)
     double* qefield = NULL;          // (3, ngrid)
@@ -844,34 +837,23 @@ int test_cavity_gradient(void)
     asph1_rA = (double*)malloc(3 * nsph * nsph * sizeof(double));
     vsph1_rA = (double*)malloc(3 * nsph * nsph * sizeof(double));
     xyz1_rA = (double*)malloc(3 * 3 * nsph * ngrid * sizeof(double));
-    r_iI1_rA = (double*)malloc(3 * nsph * ngrid * sizeof(double));
-    rho1_rA = (double*)malloc(3 * nsph * ngrid * sizeof(double));
 
-    if (!A_tot1_rA || !V_tot1_rA || !asph1_rA || !vsph1_rA ||
-        !xyz1_rA || !r_iI1_rA || !rho1_rA) {
+    if (!A_tot1_rA || !V_tot1_rA || !asph1_rA || !vsph1_rA || !xyz1_rA) {
         printf("Error: Memory allocation failed for gradient arrays\n");
         goto cleanup;
     }
 
-    /* Get cavity gradient arrays; r_iI1_rA and rho1_rA exist only with
-     * do_fine, so this cavity hands out the required ones */
+    /* Get cavity gradient arrays */
     moist_get_cavity_gradient(error, cav, nsph, ngrid,
                               A_tot1_rA, V_tot1_rA,
                               asph1_rA, vsph1_rA,
-                              xyz1_rA, NULL, NULL);
+                              xyz1_rA);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
     }
-    moist_get_cavity_gradient(error, cav, nsph, ngrid,
-                              A_tot1_rA, V_tot1_rA,
-                              asph1_rA, vsph1_rA,
-                              xyz1_rA, r_iI1_rA, NULL);
-    if (expect_failure(&error, "r_iI1_rA was not computed", "uncomputed r_iI1_rA")) {
-        goto cleanup;
-    }
 
-    /* With do_fine both optional outputs are computed and handed out */
+    /* A do_fine cavity hands out the same arrays; a rebuild drops them */
     {
         const bool do_fine = true;
         fine = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, &do_fine,
@@ -882,15 +864,15 @@ int test_cavity_gradient(void)
             moist_get_cavity_gradient(error, fine, nsph, ngrid,
                                       A_tot1_rA, V_tot1_rA,
                                       asph1_rA, vsph1_rA,
-                                      xyz1_rA, r_iI1_rA, rho1_rA);
+                                      xyz1_rA);
         }
         if (moist_check_error(error)) {
             show_error(error);
             goto cleanup;
         }
-        for (size_t i = 0; i < (size_t)3 * nsph * ngrid; i++) {
-            if (!isfinite(r_iI1_rA[i]) || !isfinite(rho1_rA[i])) {
-                printf("  Error: do_fine r_iI1_rA/rho1_rA are not finite\n");
+        for (size_t i = 0; i < (size_t)9 * nsph * ngrid; i++) {
+            if (!isfinite(xyz1_rA[i])) {
+                printf("  Error: do_fine xyz1_rA is not finite\n");
                 goto cleanup;
             }
         }
@@ -904,7 +886,7 @@ int test_cavity_gradient(void)
         moist_get_cavity_gradient(error, fine, nsph, ngrid,
                                   A_tot1_rA, V_tot1_rA,
                                   asph1_rA, vsph1_rA,
-                                  xyz1_rA, r_iI1_rA, rho1_rA);
+                                  xyz1_rA);
         if (expect_failure(&error, "Gradient not computed - call compute_cavity_gradient first",
                            "gradient of a rebuilt cavity")) {
             goto cleanup;
@@ -913,7 +895,7 @@ int test_cavity_gradient(void)
     moist_get_cavity_gradient(error, cav, nsph, ngrid,
                               A_tot1_rA, V_tot1_rA,
                               asph1_rA, vsph1_rA,
-                              xyz1_rA, NULL, NULL);
+                              xyz1_rA);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1121,7 +1103,7 @@ int test_cavity_gradient(void)
 
 cleanup:
     free(A_tot1_rA); free(V_tot1_rA); free(asph1_rA); free(vsph1_rA);
-    free(xyz1_rA); free(r_iI1_rA); free(rho1_rA);
+    free(xyz1_rA);
     free(surface_q); free(surface_q_scaled); free(qefield); free(qefield_scaled);
     free(za); free(grad_ne_zero); free(grad_ne); free(grad_ne_scaled);
     free(w_lsf0); free(w_lsf1); free(w_lsf2);
@@ -2432,9 +2414,8 @@ int test_capacity_validation(void)
     double* vradii = NULL;
     double* asph = NULL;
     double* wleb = NULL;
-    double* r_iI0 = NULL;
     double* f = NULL;
-    double* rho = NULL;
+    double* pdist = NULL;
     int* numbering = NULL;
     double* xi = NULL;
     double* gaussian_f = NULL;
@@ -2473,15 +2454,14 @@ int test_capacity_validation(void)
     vradii = (double*)malloc(n_sph);
     asph = (double*)malloc(n_sph);
     wleb = (double*)malloc(n_a);
-    r_iI0 = (double*)malloc(n_a);
     f = (double*)malloc(n_a);
-    rho = (double*)malloc(n_a);
+    pdist = (double*)malloc(n_a);
     numbering = (int*)malloc(n_owner);
     xi = (double*)malloc(n_a);
     gaussian_f = (double*)malloc(n_a);
 
     if (!xyz || !a || !owner || !flags || !vradii || !asph || !wleb ||
-        !r_iI0 || !f || !rho || !numbering || !xi ||
+        !f || !pdist || !numbering || !xi ||
         !gaussian_f) {
         printf("  Error: memory allocation failed\n");
         goto cleanup;
@@ -2637,7 +2617,7 @@ int test_capacity_validation(void)
 
 cleanup:
     free(xyz); free(a); free(owner); free(flags); free(vradii); free(asph);
-    free(wleb); free(r_iI0); free(f); free(rho); free(numbering);
+    free(wleb); free(f); free(pdist); free(numbering);
     free(xi); free(gaussian_f);
     free(big_xyz); free(big_a); free(big_owner);
     free(big_radii); free(big_asph);
@@ -4351,7 +4331,7 @@ cleanup:
     return failed;
 }
 
-/* Historical 1.0 wire layout. Never append fields to this fixture */
+/* Copy of the 1.0 layout as it stands; the 1.0 API still changes in place */
 struct drop_options_1_0 {
     size_t struct_size;
     int nleb;
@@ -4359,9 +4339,11 @@ struct drop_options_1_0 {
     double tolerance;
     int proj_maxiter;
     int proj_level;
-    double branch_weight_s;
+    double branch_dpdist_max;
     double rho_grid_h;
     int wleb_prune_level;
+    double branch_reach_on, branch_reach_off;
+    double w_0hor_off, w_0hor_on;
 };
 
 struct cfc_options_1_0 {
@@ -4439,9 +4421,13 @@ int test_options_padding(void)
         MARK_FIELD(drop, tolerance);
         MARK_FIELD(drop, proj_maxiter);
         MARK_FIELD(drop, proj_level);
-        MARK_FIELD(drop, branch_weight_s);
+        MARK_FIELD(drop, branch_dpdist_max);
         MARK_FIELD(drop, rho_grid_h);
         MARK_FIELD(drop, wleb_prune_level);
+        MARK_FIELD(drop, branch_reach_on);
+        MARK_FIELD(drop, branch_reach_off);
+        MARK_FIELD(drop, w_0hor_off);
+        MARK_FIELD(drop, w_0hor_on);
         for (int pass = 0; pass < 2; ++pass) {
             memset(&value, pass ? 0x5a : 0xa5, sizeof value);
             moist_init_drop_options(error, &value, sizeof value);

@@ -73,7 +73,7 @@ module moist_cavity_drop_projection_batch
       !> Anchor objective `phi_alpha/2 ||x - anchor||^2`
       real(wp), allocatable :: phi(:)
       !> Anchor distance
-      real(wp), allocatable :: rho(:)
+      real(wp), allocatable :: pdist(:)
       !> Unit surface normal (3, capacity)
       real(wp), allocatable :: normal(:, :)
       !> Column status, one of the `point_*` codes
@@ -114,6 +114,8 @@ module moist_cavity_drop_projection_batch
       procedure :: append => batch_append
       !> Append a copy of another batch's solved column to the open run
       procedure :: append_copy => batch_append_copy
+      !> Append a copy of a solved column of this batch to the open run
+      procedure :: append_own => batch_append_own
       !> Record the level set jet at a run's anchor
       procedure :: set_anchor_jet => batch_set_anchor_jet
       !> Level set jet at a run's anchor; aborts when never recorded
@@ -145,7 +147,7 @@ contains
       case (point_accepted)
          label = "accepted"
       case (point_captured)
-         label = "duplicate of an accepted foot"
+         label = "duplicate of an accepted point"
       case (point_failed_iterations)
          label = "Newton iteration budget exhausted"
       case (point_failed_singular)
@@ -230,7 +232,7 @@ contains
       if (allocated(self%gradS)) deallocate (self%gradS)
       if (allocated(self%hessS)) deallocate (self%hessS)
       if (allocated(self%phi)) deallocate (self%phi)
-      if (allocated(self%rho)) deallocate (self%rho)
+      if (allocated(self%pdist)) deallocate (self%pdist)
       if (allocated(self%normal)) deallocate (self%normal)
       if (allocated(self%status)) deallocate (self%status)
       if (allocated(self%run_of)) deallocate (self%run_of)
@@ -303,7 +305,7 @@ contains
       self%gradS(:, icol) = nan
       self%hessS(:, icol) = nan
       self%phi(icol) = nan
-      self%rho(icol) = nan
+      self%pdist(icol) = nan
       self%normal(:, icol) = nan
       self%status(icol) = point_pending
       self%run_of(icol) = self%nrun
@@ -313,7 +315,7 @@ contains
    !> Append a copy of a solved column of `src` to the open run
    !>
    !> - iterate, multiplier, jet, objective, normal and status are copied, so
-   !>   an accepted foot is not solved again
+   !>   an accepted point is not solved again
    !>
    !> @param[inout] self Batch with an open run
    !> @param[in]    src  Source batch
@@ -325,15 +327,45 @@ contains
       integer, intent(in) :: j
       integer, intent(out) :: icol
 
+      ! TODO: column field list duplicated in batch_append_own; share one column value type or copy helper
       call self%append(src%x(:, j), src%lambda(j), icol)
       self%S(icol) = src%S(j)
       self%gradS(:, icol) = src%gradS(:, j)
       self%hessS(:, icol) = src%hessS(:, j)
       self%phi(icol) = src%phi(j)
-      self%rho(icol) = src%rho(j)
+      self%pdist(icol) = src%pdist(j)
       self%normal(:, icol) = src%normal(:, j)
       self%status(icol) = src%status(j)
    end subroutine batch_append_copy
+
+   !> Append a copy of a solved column of this batch to the open run
+   !>
+   !> - as [[batch_append_copy]] with the batch as its own source
+   !>
+   !> @param[inout] self Batch with an open run
+   !> @param[in]    j    Source column
+   !> @param[out]   icol Column index of the copy
+   subroutine batch_append_own(self, j, icol)
+      class(projection_batch_type), intent(inout) :: self
+      integer, intent(in) :: j
+      integer, intent(out) :: icol
+
+      real(wp) :: x(3), lambda
+
+      ! TODO: column field list duplicated in batch_append_copy; share one column value type or copy helper
+      ! TODO: name says nothing about what is appended; rename (e.g. append_column, append_column_from)
+      ! By value: the append may reallocate the columns
+      x = self%x(:, j)
+      lambda = self%lambda(j)
+      call self%append(x, lambda, icol)
+      self%S(icol) = self%S(j)
+      self%gradS(:, icol) = self%gradS(:, j)
+      self%hessS(:, icol) = self%hessS(:, j)
+      self%phi(icol) = self%phi(j)
+      self%pdist(icol) = self%pdist(j)
+      self%normal(:, icol) = self%normal(:, j)
+      self%status(icol) = self%status(j)
+   end subroutine batch_append_own
 
    !> Record the level set jet at a run's anchor
    !>
@@ -407,7 +439,7 @@ contains
       call grow_real_2d(self%gradS, 3, cap, self%n)
       call grow_real_2d(self%hessS, 6, cap, self%n)
       call grow_real_1d(self%phi, cap, self%n)
-      call grow_real_1d(self%rho, cap, self%n)
+      call grow_real_1d(self%pdist, cap, self%n)
       call grow_real_2d(self%normal, 3, cap, self%n)
       call grow_int_1d(self%status, cap, self%n)
       call grow_int_1d(self%run_of, cap, self%n)

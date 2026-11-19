@@ -9,6 +9,10 @@
 !>   distance, switching, area, volume and the branch-weight post-pass
 !> - `3 * n_active` seeds per grid point and `O(N_sph * N_grid)` memory; kept as
 !>   reference for the reverse paths, which contract the same kernel
+!> - atoms of a point: the LSF-active ones and the owner carry seeds (the anchor
+!>   moves with its owner whether or not the level set reaches it); the
+!>   switching neighbours of the anchor carry no seed and enter the
+!>   switching, area and volume gradients alone
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
@@ -54,9 +58,11 @@ contains
       !> Error type
       type(error_type), allocatable, intent(out) :: error
 
-      !> Restrict each grid point's active atom to its owner (anchor motion only)
+      !> Frozen field: the level set's nuclear partials are dropped, each grid
+      !> point moves with its owner's anchor only
       !>
-      !> For callback/isodensity LSFs the field nuclear derivatives are zero
+      !> Equal to the full gradient for callback LSFs, whose field has no
+      !> nuclear partials
       logical, intent(in), optional :: anchor_only
 
       !> Local copy of the anchor-only flag
@@ -68,6 +74,9 @@ contains
       !> Loop indices
       integer :: igrid, iatom, iaxis, jaxis, kaxis, i, n_active
       integer, allocatable :: active_idx(:)
+      !> Entries of `active_idx` with the switching neighbours appended, and its membership mask
+      integer :: n_row
+      logical, allocatable :: in_row(:)
 
       !> OpenMP thread management
       integer :: thread_slot
@@ -86,10 +95,10 @@ contains
       type(error_type), allocatable :: lsf_error
 
       !> Pre-resolved timer handles for the per-grid point hot loop
-      integer :: h_grad, h_prim, h_pos, h_disp, h_dist, h_seed, h_sw, h_area, h_vol, h_bw
+      integer :: h_grad, h_prim, h_pos, h_seed, h_sw, h_area, h_vol, h_bw
 
       !> Grid point data
-      real(wp) :: point(3), anchor(3), rho_vec(3), rho_norm
+      real(wp) :: point(3), anchor(3)
       integer :: owner_idx
 
       !> Level-set value; the spatial jet is written straight into the seed state
@@ -114,12 +123,6 @@ contains
       !> Whether the principal-curvature gradients are filled
       logical :: want_curvature
 
-      !> swi: Rho derivatives
-      real(wp) :: rho_unit(3), delta_matrix(3, 3)
-
-      !> Point derivatives
-      real(wp) :: r_iI_vec(3), r_iI_norm
-
       !> Volume derivatives
       real(wp) :: r_hat_dot_r, grad_r_hat_dot_r(3)
       !> Volume origin moving with the molecule
@@ -136,15 +139,17 @@ contains
       real(wp) :: dlsf2_rr(3, 3)
 
       ! Branch-weight post-pass state (serial, after main loop)
-      ! Softmax weights_grad takes dphi in (nparam, nbranch) layout with
+      ! weights_grad takes dphi in (nparam, nbranch) layout with
       ! nparam = 3 * nsph, flattening (iatom, iaxis) -> (iatom - 1) * 3 + iaxis
       integer :: igroup_start, igroup_end, group_size, m_branch, im_grid, ia_group, max_group
-      integer :: owner_m, k_param
-      real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
-      real(wp) :: area_fac_m, rn_m, dwleb_branch, da_branch, dv_branch
-      real(wp) :: xi_fac_m
-      real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
+      integer :: owner_m, k_param, nbr
+      real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m
+      real(wp) :: area_fac_m, rn_m, df_branch, da_branch, dv_branch
+      real(wp), allocatable :: branch_phi(:), branch_gate(:)
+      real(wp), allocatable :: branch_dphi(:, :), branch_dgate(:, :)
       real(wp), allocatable :: branch_weights(:), branch_dweights(:, :)
+      !> Reach-gate partial of a row in the anchor, and the rest of its gate
+      real(wp) :: reach_da(3), gate_rest
 
       ! Thread-local switching-gradient scratch
       type(iswig_workspace_type) :: iswig_work
@@ -176,14 +181,6 @@ contains
       allocate (self%lambda1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
 
       ! Optional derivative arrays (gated by the property flags)
-      if (self%param%do_rho) then
-         if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
-         allocate (self%rho1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
-      end if
-      if (self%param%do_r_iI) then
-         if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
-         allocate (self%r_iI1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
-      end if
       if (self%param%do_normal) then
          if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
          allocate (self%normal1_rA(3, self%nsph, 3, self%ngrid), source=0.0_wp)
@@ -242,8 +239,6 @@ contains
       if (h_grad == 0) h_grad = self%ctx%timer%resolve("Gradients", 0, cat_gradient)
       h_prim = self%ctx%timer%resolve("Primitives", h_grad)
       h_pos = self%ctx%timer%resolve("Positions", h_grad)
-      h_disp = self%ctx%timer%resolve("Displacement", h_grad)
-      h_dist = self%ctx%timer%resolve("Distances", h_grad)
       h_seed = self%ctx%timer%resolve("Seed responses", h_grad)
       h_sw = self%ctx%timer%resolve("Switching func.", h_grad)
       h_area = self%ctx%timer%resolve("Area", h_grad)
@@ -252,13 +247,14 @@ contains
 
       ! Loop over all grid points (parallelized)
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& iatom, iaxis, jaxis, kaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, &
+      !$omp& iatom, iaxis, jaxis, kaxis, point, anchor, owner_idx, lsf0, &
       !$omp& lsf1_rA, lsf2_r_rA, lsf3_rr_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
       !$omp& H_lagrangian, kkt_info, kkt_rhs_batch, state, status, res, dlsf2_rr, &
-      !$omp& rho_unit, delta_matrix, r_iI_vec, r_iI_norm, r_hat_dot_r, grad_r_hat_dot_r, &
-      !$omp& i, n_active, active_idx, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
+      !$omp& r_hat_dot_r, grad_r_hat_dot_r, &
+      !$omp& i, n_active, active_idx, n_row, in_row, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
       !$omp& dn_dR_buf, iswig_work, ai_val, vi_val, &
-      !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, lsf_error, do_timing)
+      !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, lsf_error, do_timing, &
+      !$omp& reach_da, gate_rest)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
@@ -267,6 +263,7 @@ contains
       ! are sized to the atom count, which bounds `active_count()` from above
       allocate (lsf3_rr_rA(6, 3, self%nsph))
       allocate (active_idx(self%nsph))
+      allocate (in_row(self%nsph), source=.false.)
       allocate (lsf_slot(self%nsph))
       allocate (dn_dR_buf(3, self%nsph, 3))
       allocate (lsf1_rA(3, self%nsph))
@@ -282,7 +279,6 @@ contains
       do igrid = 1, self%ngrid
          !$omp cancellation point do
          if (abort%requested) cycle
-
          !* -------------------------- Primitive derivatives -------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_prim)
 
@@ -305,15 +301,15 @@ contains
             cycle
          end if
 
-         ! Get nuclear and mixed derivatives
-         call slots%lsf(thread_slot)%lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         ! Get nuclear and mixed derivatives; a frozen field has none
+         if (.not. anchor_only_loc) call slots%lsf(thread_slot)%lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
          call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, state%lsf1_r, state%lsf2_rr, state%lsf3_rrr)
 
          ! Per-point kernel state; a degenerate point is latched
-         call fill_seed_state(self, igrid, want_curvature, state)
+         call fill_seed_state(self, igrid, want_curvature, state, reach_da)
          state%lambda_val = lambda_val
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
+         call build_seed_state(state, self%f_crit, self%f_foc, self%f_hor, self%f_wleb, &
+                               self%param%finalize%wleb_prune, status)
          if (status /= seed_state_ok) then
             call abort%latch_status(status, igrid)
             !$omp cancel do
@@ -333,24 +329,27 @@ contains
 
          ! Solve for each active atom and axis
          ! Screening: only active nodes have nonzero lsf1_rA / lsf2_r_rA;
-         ! phi2_r_rA is nonzero only at owner_idx (which is always active)
+         ! phi2_r_rA is nonzero only at owner_idx, which is seeded whether or
+         ! not the level set reaches it
          if (anchor_only_loc) then
-            ! Walk every atom, not just the LSF-active ones; an atom screening
-            ! dropped simply carries no LSF partials, which `lsf_slot` records
-            n_active = self%nsph
-            lsf_slot(1:n_active) = 0
-            do i = 1, slots%lsf(thread_slot)%lsf%active_count()
-               lsf_slot(slots%lsf(thread_slot)%lsf%active_atom(i)) = i
-            end do
-            do i = 1, n_active
-               active_idx(i) = i
-            end do
+            ! Frozen field: only the owner moves the point, and it carries no
+            ! field seed; the switching neighbours are appended below
+            n_active = 1
+            active_idx(1) = owner_idx
+            lsf_slot(1) = 0
          else
             n_active = slots%lsf(thread_slot)%lsf%active_count()
             do i = 1, n_active
                active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
                lsf_slot(i) = i
             end do
+            ! An owner outside the level set's reach, or a level set without
+            ! active atoms, still moves the anchor
+            if (.not. any(active_idx(1:n_active) == owner_idx)) then
+               n_active = n_active + 1
+               active_idx(n_active) = owner_idx
+               lsf_slot(n_active) = 0
+            end if
          end if
 
          ! Pack all RHS into batch array
@@ -384,72 +383,6 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_pos)
 
-         !* ---------------------- rho_i derivative (optional) ---------------------- *!
-         if (allocated(self%rho1_rA)) then
-            if (do_timing) call self%ctx%timer%start(h_disp)
-            rho_vec = point - anchor
-            rho_norm = sqrt(dot_product(rho_vec, rho_vec))
-
-            if (rho_norm <= 1.0e-16_wp) then
-               rho_unit = 0.0_wp
-            else
-               rho_unit = rho_vec/rho_norm
-            end if
-
-            ! Screening: xyz1_rA is zero for inactive atoms; delta_matrix only for owner (always active)
-            do i = 1, n_active
-               iatom = active_idx(i)
-
-               ! Compute delta matrix (identity if iatom == owner_idx, zero otherwise)
-               delta_matrix = 0.0_wp
-               if (iatom == owner_idx) then
-                  do iaxis = 1, 3
-                     delta_matrix(iaxis, iaxis) = 1.0_wp
-                  end do ! iaxis
-               end if
-
-               ! Compute rho derivative:rho_unit cdot ( dr/ dr_A - delta _A)
-               do iaxis = 1, 3
-                  self%rho1_rA(iaxis, iatom, igrid) = &
-                     dot_product(rho_unit, self%xyz1_rA(:, iaxis, iatom, igrid) - delta_matrix(:, iaxis))
-               end do ! iaxis
-            end do ! i (active atoms)
-
-            if (do_timing) call self%ctx%timer%stop(h_disp)
-         end if
-
-         !* -------------------- r_iI derivative (optional) -------------------- *!
-         if (allocated(self%r_iI1_rA)) then
-            if (do_timing) call self%ctx%timer%start(h_dist)
-            ! r_iI1_rA \equiv R_i when i \in I
-            ! \frac{\mathbf r_{Ii}}{r_{iI}}^\top\cdot\left(\nabla_A \mathbf r_I
-            ! - \nabla_A \mathbf r_i\right)
-
-            ! r_iI1_rA \equiv \hat{r}_{Ii}^\top (\nabla_A r_I - \nabla_A r_i)
-            r_iI_vec = self%mol%xyz(:, owner_idx) - point
-            r_iI_norm = sqrt(dot_product(r_iI_vec, r_iI_vec))
-            r_iI_vec = r_iI_vec/r_iI_norm
-
-            ! Screening: xyz1_rA is zero for inactive; delta_matrix only for owner (always active)
-            do i = 1, n_active
-               iatom = active_idx(i)
-               ! Reuse delta_matrix: identity for owner atom, zero otherwise
-               delta_matrix = 0.0_wp
-               if (iatom == owner_idx) then
-                  do iaxis = 1, 3
-                     delta_matrix(iaxis, iaxis) = 1.0_wp
-                  end do ! iaxis
-               end if
-
-               do iaxis = 1, 3
-                  self%r_iI1_rA(iaxis, iatom, igrid) = &
-                     dot_product(r_iI_vec, delta_matrix(:, iaxis) - self%xyz1_rA(:, iaxis, iatom, igrid))
-               end do ! iaxis
-            end do ! i (active atoms)
-
-            if (do_timing) call self%ctx%timer%stop(h_dist)
-         end if
-
          !* ------------------------------ Seed responses ----------------------------- *!
          ! One kernel seed per (atom, axis): the field moves by the LSF nuclear
          ! partials at fixed r, the point and its multiplier by the KKT solution
@@ -482,7 +415,6 @@ contains
 
                self%cpjac_scal1_rA(iaxis, iatom, igrid) = res%dJ
                self%w_f1_rA(iaxis, iatom, igrid) = res%dw_f
-               ! Without the branch-weight response, added by the post-pass
                self%wleb1_rA(iaxis, iatom, igrid) = res%dwleb
                self%xi1_rA(iaxis, iatom, igrid) = res%dxi
 
@@ -496,6 +428,11 @@ contains
             end do ! iaxis
          end do ! i (active atoms)
 
+         ! The reach gate moves with the anchor at a fixed projected point; the
+         ! owner need not be LSF-active
+         gate_rest = state%wleb_prune_f0*state%f_crit0*state%f_foc_f0*state%f_hor_f0
+         self%w_f1_rA(:, owner_idx, igrid) = self%w_f1_rA(:, owner_idx, igrid) + gate_rest*reach_da
+
          if (do_timing) call self%ctx%timer%stop(h_seed)
 
          !* ---------------------- f_i derivative ---------------------- *!
@@ -503,16 +440,32 @@ contains
 
          !> iswig switching derivatives: evaluated at anchor position, at the
          !> anchor width, which has no nuclear dependence
+         !> `f = f_anchor * wbranch`; the response of the branch weight, the gate
+         !> included, is added by the post-pass
          self%f1_rA(:, :, igrid) = 0.0_wp
          call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor%xi0(self%anchor_of_row(igrid)), &
-                                   1.0_wp, iswig_work, self%f1_rA(:, :, igrid))
+                                   self%wbranch(igrid), iswig_work, self%f1_rA(:, :, igrid))
+
+         ! The switching neighbours of the anchor need not be LSF-active at the
+         ! projected point: append them, seedless, for the area and volume
+         n_row = n_active
+         in_row(active_idx(1:n_active)) = .true.
+         do i = 1, iswig_work%n
+            iatom = iswig_work%k(i)
+            if (in_row(iatom)) cycle
+            in_row(iatom) = .true.
+            n_row = n_row + 1
+            active_idx(n_row) = iatom
+         end do
+         in_row(active_idx(1:n_row)) = .false.
 
          if (do_timing) call self%ctx%timer%stop(h_sw)
 
          !* ---------------------- a_i derivative ---------------------- *!
          if (do_timing) call self%ctx%timer%start(h_area)
-         ! Screening: f1_rA and wleb1_rA are zero for inactive atoms
-         do i = 1, n_active
+         ! Screening: f1_rA is zero off the seeded atoms and the switching
+         ! neighbours, wleb1_rA off the seeded atoms
+         do i = 1, n_row
             iatom = active_idx(i)
 
             self%a_i1_rA(:, iatom, igrid) = self%radii(owner_idx)**2 &
@@ -529,9 +482,10 @@ contains
          ! New volume formula: v_i = (1/3) * a_i * ((r_i - c) . n_i)
          ! where n_i = dS / | dS| is the surface normal and c the volume origin
 
-         ! Screening: a_i1_rA, dn_dR_buf, xyz1_rA all zero for inactive atoms;
+         ! Screening: dn_dR_buf and xyz1_rA are zero off the seeded atoms, a_i1_rA
+         ! off them and the switching neighbours;
          ! the origin's own motion reaches every atom and is added below
-         do i = 1, n_active
+         do i = 1, n_row
             iatom = active_idx(i)
             do iaxis = 1, 3
                ! Derivative of (r_i - c) . n_i at fixed c:
@@ -552,7 +506,7 @@ contains
          if (do_timing) call self%ctx%timer%stop(h_vol)
 
          !* -------- Per-atom accumulation -------- *!
-         do i = 1, n_active
+         do i = 1, n_row
             iatom = active_idx(i)
             do iaxis = 1, 3
                ai_val = self%a_i1_rA(iaxis, iatom, igrid)
@@ -582,7 +536,7 @@ contains
       dv_dc_sph = dv_dc_sph + dv_dc_sph_local
       !$omp end critical (gradient_reduction)
 
-      deallocate (lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
+      deallocate (lsf3_rr_rA, active_idx, in_row, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
       !$omp end parallel
@@ -606,14 +560,18 @@ contains
       !* ========================= Branch-weight post-pass ========================= *!
       call self%ctx%timer%start(h_bw)
 
-      ! TODO: this will change with the branch weight refactor
+      ! The branch weight of a row depends on the objectives and gates of
+      ! every row of its anchor; a single row has `wbranch = w_f`
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
       max_group = 0
-      if (self%ngrid > 0) max_group = maxval(self%offset(2:self%anchor%ngrid + 1) - self%offset(1:self%anchor%ngrid))
-      if (max_group > 1) then
-         allocate (branch_phi(max_group), source=0.0_wp)
+      if (self%ngrid > 0) then
+         max_group = maxval(self%offset(2:self%anchor%ngrid + 1) - self%offset(1:self%anchor%ngrid))
+      end if
+      if (max_group > 0) then
+         allocate (branch_phi(max_group), branch_gate(max_group), source=0.0_wp)
          allocate (branch_dphi(3*self%nsph, max_group), source=0.0_wp)
+         allocate (branch_dgate(3*self%nsph, max_group), source=0.0_wp)
          allocate (branch_weights(max_group), source=0.0_wp)
          allocate (branch_dweights(3*self%nsph, max_group), source=0.0_wp)
 
@@ -622,13 +580,14 @@ contains
             igroup_start = self%offset(ia_group) + 1
             igroup_end = self%offset(ia_group + 1)
             group_size = igroup_end - igroup_start + 1
-            if (group_size <= 1) cycle
+            if (group_size <= 0) cycle
+            nbr = group_size
 
-            ! Gather phi and dphi for every branch
+            ! Gather phi, gate and their derivatives for every row
             do m_branch = 1, group_size
                im_grid = igroup_start + m_branch - 1
                branch_phi(m_branch) = self%phi0(im_grid)
-
+               branch_gate(m_branch) = self%w_f0(im_grid)
                owner_m = self%owner(im_grid)
                pt_m = self%xyz(:, im_grid)
                anch_m = self%anchor%xyz(:, ia_group)
@@ -647,45 +606,33 @@ contains
                      end if
                      k_param = (iatom - 1)*3 + iaxis
                      branch_dphi(k_param, m_branch) = dphi_m
+                     branch_dgate(k_param, m_branch) = self%w_f1_rA(iaxis, iatom, im_grid)
                   end do
                end do
             end do
-
-            ! Softmax weights and their derivatives over the full branch set
+            ! Branch weights and their derivatives over the anchor's group
             call self%branch_weight%weights_grad( &
-               branch_phi(1:group_size), branch_dphi(:, 1:group_size), &
-               weights=branch_weights(1:group_size), &
-               dweights=branch_dweights(:, 1:group_size))
+               branch_phi(1:nbr), branch_gate(1:nbr), &
+               branch_dphi(:, 1:nbr), branch_dgate(:, 1:nbr), &
+               weights=branch_weights(1:nbr), &
+               dweights=branch_dweights(:, 1:nbr))
 
-            ! Distribute d(wbranch)/dr_A back into each branch's wleb1_rA and
-            ! propagate the branch-weight correction into the area and volume
-            ! gradients (accumulated earlier)
+            ! f = f_anchor * wbranch: add f_anchor * d(wbranch)/dr_A to the row's
+            ! switching gradient and carry it into the area and volume gradients
             do m_branch = 1, group_size
                im_grid = igroup_start + m_branch - 1
-               if (self%wbranch(im_grid) <= tiny(1.0_wp)) cycle
                owner_m = self%owner(im_grid)
-               factor_m = self%wleb(im_grid)/self%wbranch(im_grid)
-               area_fac_m = self%radii(owner_m)**2*self%f(im_grid)
+               area_fac_m = self%radii(owner_m)**2*self%wleb(im_grid)
                rn_m = dot_product(self%xyz(:, im_grid) - origin, self%normal0(:, im_grid))
-               ! xi = swx/(R*sqrt(wleb)) -> branch weight of dxi/dwleb = -xi/(2*wleb)
-               if (self%wleb(im_grid) > tiny(1.0_wp)) then
-                  xi_fac_m = -0.5_wp*self%xi0(im_grid)/self%wleb(im_grid)
-               else
-                  xi_fac_m = 0.0_wp
-               end if
                do iatom = 1, self%nsph
                   do iaxis = 1, 3
                      k_param = (iatom - 1)*3 + iaxis
-                     dwleb_branch = factor_m*branch_dweights(k_param, m_branch)
-                     self%wleb1_rA(iaxis, iatom, im_grid) = &
-                        self%wleb1_rA(iaxis, iatom, im_grid) + dwleb_branch
+                     df_branch = self%anchor%f0(ia_group)*branch_dweights(k_param, m_branch)
+                     if (df_branch == 0.0_wp) cycle
+                     self%f1_rA(iaxis, iatom, im_grid) = &
+                        self%f1_rA(iaxis, iatom, im_grid) + df_branch
 
-                     if (allocated(self%xi1_rA)) then
-                        self%xi1_rA(iaxis, iatom, im_grid) = &
-                           self%xi1_rA(iaxis, iatom, im_grid) + xi_fac_m*dwleb_branch
-                     end if
-
-                     da_branch = area_fac_m*dwleb_branch
+                     da_branch = area_fac_m*df_branch
                      dv_branch = (1.0_wp/3.0_wp)*da_branch*rn_m
 
                      self%a_i1_rA(iaxis, iatom, im_grid) = &
@@ -707,7 +654,8 @@ contains
             end do
          end do
 
-         deallocate (branch_phi, branch_dphi, branch_weights, branch_dweights)
+         deallocate (branch_phi, branch_gate, branch_dphi, branch_dgate, &
+                     branch_weights, branch_dweights)
       end if
 
       call self%ctx%timer%stop(h_bw)
@@ -716,9 +664,9 @@ contains
 
    !> Compute anchor-only nuclear derivatives for the DROP cavity
    !>
-   !> For a isodensity LSF the level set field has zero nuclear derivatives
-   !> (in first order), so only the reference system motion derivatives
-   !> are needed
+   !> - frozen field: the level set's nuclear partials are dropped, each grid
+   !>   point moves with its owner's anchor, the switching with its neighbours
+   !> - equal to the full gradient for callback LSFs
    !>
    !> @param[inout] self   DROP cavity instance (must hold a projected grid)
    !> @param[out]   error  Error object, allocated on failure

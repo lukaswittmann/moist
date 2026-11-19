@@ -7,11 +7,11 @@
 !>   against nuclear partial derivatives
 !>
 !> They share: validation of the accumulator, folding of the derived weight
-!> channels, running the branch-softmax reverse pass, and copying the cavity's
+!> channels, running the branch-weight reverse pass, and copying the cavity's
 !> grid-level scalars into the kernel's seed state
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_weights
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
-      & drop_seed_state_type, compute_branch_phi_adj, seed_weight_tol
+      & drop_seed_state_type, compute_branch_adj, seed_weight_tol
    implicit none(type, external)
 
 contains
@@ -96,8 +96,8 @@ contains
 
       !> Grid index
       integer :: igrid
-      !> Softmax temperature of the branch weights
-      real(wp) :: sigma_phi
+      !> Adjoint of the switching value with the area channel folded in
+      real(wp), allocatable :: w_f_area(:)
 
       allocate (eff%w_xi, source=acc%w_xi)
       allocate (eff%w_f, source=acc%w_f)
@@ -132,17 +132,25 @@ contains
       eff%have_wk = any(abs(eff%w_k1) > seed_weight_tol) &
                     .or. any(abs(eff%w_k2) > seed_weight_tol)
 
-      ! Reverse pass for the branch-weight post-pass: converts the width-induced
-      ! adjoint dL/dp_m into dL/dPhi_m, which the seed loop couples to dr/dp
-      ! Runs after the folds, since it reads the folded width channel
+      ! Reverse pass for the branch-weight post-pass: f = f_anchor*p, so the
+      ! adjoint of f gives dL/dp_m and from it dL/dPhi_l and dL/dg_l of every
+      ! row of the anchor, which the seed loops couple to the point motion and
+      ! the gate response
+      ! The area channel always reaches p through a = c*f*wleb, also when the
+      ! anchor-only part of the switching is held fixed (`fold_switching` off)
       allocate (eff%branch_phi_adj(self%ngrid), source=0.0_wp)
+      allocate (eff%branch_gate_adj(self%ngrid), source=0.0_wp)
       if (self%ngrid > 0 .and. allocated(self%offset)) then
-         sigma_phi = self%branch_weight%s
-         call compute_branch_phi_adj(self%offset, &
-                                     self%wbranch(1:self%ngrid), &
-                                     self%wleb(1:self%ngrid), &
-                                     self%xi0(1:self%ngrid), &
-                                     sigma_phi, eff%w_xi, eff%branch_phi_adj)
+         allocate (w_f_area, source=acc%w_f)
+         do igrid = 1, self%ngrid
+            if (abs(acc%w_a(igrid)) > seed_weight_tol) then
+               w_f_area(igrid) = w_f_area(igrid) &
+                                 + acc%w_a(igrid)*self%radii(self%owner(igrid))**2*self%wleb(igrid)
+            end if
+         end do
+         call compute_branch_adj(self%offset, self%phi0(1:self%ngrid), self%w_f0(1:self%ngrid), &
+                                 self%anchor%f0, self%branch_weight, w_f_area(1:self%ngrid), &
+                                 eff%branch_phi_adj, eff%branch_gate_adj)
       end if
    end subroutine prepare_surface_weights
 
@@ -152,12 +160,16 @@ contains
    !>
    !> - the level-set jet (`lsf1_r`, `lsf2_rr`, `lsf3_rrr`) and the multiplier
    !>   come from the caller's own LSF evaluation and are set by the caller
+   !> - the reach gate and its partial in the projected point go into the state;
+   !>   its partial in the anchor, which moves with the owner alone, is returned
+   !>   when asked for
    !>
    !> @param[in]    self           DROP cavity instance
    !> @param[in]    igrid          Grid point to describe
    !> @param[in]    want_curvature Whether the curvature invariants are needed
    !> @param[inout] state          Seed state; its cavity-owned inputs are set
-   module subroutine fill_seed_state(self, igrid, want_curvature, state)
+   !> @param[out]   reach_da       Reach-gate partial in the anchor
+   module subroutine fill_seed_state(self, igrid, want_curvature, state, reach_da)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Grid point
@@ -166,17 +178,32 @@ contains
       logical, intent(in) :: want_curvature
       !> Seed state
       type(drop_seed_state_type), intent(inout) :: state
+      !> Reach-gate partial in the anchor
+      real(wp), intent(out), optional :: reach_da(3)
+
+      !> Path from the anchor to the point, its length, the gate's slope in it
+      real(wp) :: v(3), pdist, fp
 
       state%alpha_coeff = self%param%phi_alpha
       state%anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
       state%owner_xyz = self%mol%xyz(:, self%owner(igrid))
       state%anchor_wleb0 = self%anchor%wleb0(self%anchor_of_row(igrid))
       state%cpjac_scal0 = self%cpjac_scal0(igrid)
-      state%w_f0 = self%w_f0(igrid)
-      state%wbranch = self%wbranch(igrid)
       state%wleb = self%wleb(igrid)
       state%xi0 = self%xi0(igrid)
       state%want_curvature = want_curvature
+
+      ! A closed gate stays closed to first order, every factor at zero being flat;
+      ! the reach gate is flat wherever the path length has its cusp
+      state%f_reach_f0 = 0.0_wp
+      state%f_reach_dy = 0.0_wp
+      if (self%w_f0(igrid) > 0.0_wp) then
+         v = self%xyz(:, igrid) - state%anchor
+         pdist = sqrt(dot_product(v, v))
+         call self%f_reach%eval(pdist, state%f_reach_f0, fp)
+         if (fp /= 0.0_wp) state%f_reach_dy = fp*v/pdist
+      end if
+      if (present(reach_da)) reach_da = -state%f_reach_dy
    end subroutine fill_seed_state
 
 end submodule moist_cavity_drop_derivatives_weights

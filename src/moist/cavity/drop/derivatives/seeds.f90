@@ -67,6 +67,7 @@ contains
    !> @param[in]    lambda_val     Lagrange multiplier of the projection
    !> @param[in]    f_crit         Critical-gradient switching function
    !> @param[in]    f_foc          Focusing switching function
+   !> @param[in]    f_hor          Horizon switching function
    !> @param[in]    f_wleb         Lebedev-weight pruning switching function
    !> @param[in]    use_wleb_prune Whether Lebedev-weight pruning is active
    !> @param[in]    eff            Folded surface adjoints
@@ -80,7 +81,7 @@ contains
    !> @param[out]   w_xyz_pt       Effective position adjoint for every seed
    !> @param[out]   status         `seed_state_ok` or the failure code
    subroutine seed_point_jet(phi, point, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, lambda_val, &
-                             f_crit, f_foc, f_wleb, use_wleb_prune, eff, igrid, state, kkt, &
+                             f_crit, f_foc, f_hor, f_wleb, use_wleb_prune, eff, igrid, state, kkt, &
                              phi1_r, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_pt, status)
       !> Projection objective of this thread
       type(moist_cavity_drop_phi_type), intent(inout) :: phi
@@ -97,7 +98,7 @@ contains
       !> Lagrange multiplier
       real(wp), intent(in) :: lambda_val
       !> Switching functions owned by the cavity
-      class(moist_math_smoothstep_type), intent(in) :: f_crit, f_foc, f_wleb
+      class(moist_math_smoothstep_type), intent(in) :: f_crit, f_foc, f_hor, f_wleb
       !> Whether Lebedev-weight pruning is active
       logical, intent(in) :: use_wleb_prune
       !> Folded surface adjoints
@@ -137,7 +138,7 @@ contains
       state%lsf2_rr = lsf2_rr
       state%lsf3_rrr = lsf3_rrr
       state%lambda_val = lambda_val
-      call build_seed_state(state, f_crit, f_foc, f_wleb, use_wleb_prune, status)
+      call build_seed_state(state, f_crit, f_foc, f_hor, f_wleb, use_wleb_prune, status)
       if (status /= seed_state_ok) return
 
       ! Outward-normal channel:
@@ -343,10 +344,11 @@ contains
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, dr_dp, dlambda_dp, res)
 
-         ! TODO: This will change with the planned branching change
-         ! No w_f term: the switching factor is an anchor-only iSwig overlap,
-         ! so a level-set perturbation at fixed nuclei leaves it alone
-         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi
+         ! No w_f term: the anchor part of the switching value is an iSwig overlap,
+         ! which a level-set perturbation at fixed nuclei leaves alone; its
+         ! branch-weight part responds through the gate and objective adjoints
+         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi &
+                        + eff%branch_gate_adj(igrid)*res%dw_f
          if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
             contribution = contribution + eff%branch_phi_adj(igrid)*dot_product(phi1_r, dr_dp)
          end if
@@ -415,10 +417,9 @@ contains
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, dr_dp, dlambda_dp, res)
 
-         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi
+         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi &
+                        + eff%branch_gate_adj(igrid)*res%dw_f
          if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
-            ! phi = 0.5*alpha*|r - anchor|^2, so at fixed r the owner's rigid
-            ! motion contributes -phi1_r on top of the point-motion term
             contribution = contribution + eff%branch_phi_adj(igrid) &
                            *(dot_product(phi1_r, dr_dp) - phi1_r(iaxis))
          end if

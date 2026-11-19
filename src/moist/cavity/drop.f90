@@ -64,6 +64,14 @@ module moist_cavity_drop
 
       !> Unprojected anchor points, indexed by anchor (`anchor%ngrid`)
       type(drop_anchor_type) :: anchor
+      !> Anchor ids to project; every anchor when not allocated
+      !> TODO: this is not simple/clean enough yet
+      !>
+      !> - for tests and diagnostics: the rows of the listed anchors only, a
+      !>   partial surface no model component may use
+      !> - each anchor projects on its own, so its rows, weights and
+      !>   derivatives are those of the full build
+      integer, allocatable :: anchor_subset(:)
 
       !> Rows of anchor `i` are `offset(i)+1 : offset(i+1)` (anchor%ngrid + 1)
       !>
@@ -856,6 +864,12 @@ contains
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%kv("Prefilter removed", nremoved, "points")
+      end if
+
+      ! TODO: this is not simple/clean enough yet
+      if (allocated(self%anchor_subset)) then
+         call self%anchor%restrict(self%anchor_subset, nremoved)
+         if (self%ctx%verbosity(4)) call pp%kv("Outside the anchor subset", nremoved, "points")
       end if
       call self%ctx%timer%stop("Pre-filter")
 

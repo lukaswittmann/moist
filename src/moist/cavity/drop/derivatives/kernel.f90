@@ -21,14 +21,15 @@
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
-   use moist_math_packed, only: packed_idx33, packed_idx333, packed_contract2
+   use moist_math_packed, only: packed_idx33, packed_contract2, packed_contract3
    use moist_math_smoothstep, only: moist_math_smoothstep_type
+   use moist_cavity_drop_branching, only: branch_weight_type
 
    implicit none(type, external)
    private
 
    public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type
-   public :: build_seed_state, apply_seed, compute_branch_phi_adj
+   public :: build_seed_state, apply_seed, compute_branch_adj
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
    public :: seed_state_singular_bmat, seed_state_singular_jacobian, seed_state_singular_kkt
@@ -79,8 +80,11 @@ module moist_cavity_drop_derivatives_kernel
       !> Anchor position and its owner sphere center
       real(wp) :: anchor(3) = 0.0_wp, owner_xyz(3) = 0.0_wp
       !> Grid-level weights entering the `wleb` / `xi` chain
-      real(wp) :: anchor_wleb0 = 0.0_wp, cpjac_scal0 = 0.0_wp, w_f0 = 0.0_wp
-      real(wp) :: wbranch = 0.0_wp, wleb = 0.0_wp, xi0 = 0.0_wp
+      real(wp) :: anchor_wleb0 = 0.0_wp, cpjac_scal0 = 0.0_wp
+      real(wp) :: wleb = 0.0_wp, xi0 = 0.0_wp
+      !> Reach gate of the projected point and its partial in that point; its
+      !> partial in the anchor is the caller's
+      real(wp) :: f_reach_f0 = 1.0_wp, f_reach_dy(3) = 0.0_wp
       !> Whether the caller needs the principal-curvature response
       logical :: want_curvature = .false.
 
@@ -114,8 +118,12 @@ module moist_cavity_drop_derivatives_kernel
       !> Switching-function values and slopes
       real(wp) :: f_crit0 = 0.0_wp, f_crit_dS = 0.0_wp
       real(wp) :: f_foc_f0 = 0.0_wp, f_foc_dS = 0.0_wp
-      !> Lebedev-weight pruning chain factor
-      real(wp) :: wleb_prune_factor = 1.0_wp
+      !> Horizon switch of the signed `n_surf . n_sph`, its value and its slope
+      !> along `d n_surf`
+      real(wp) :: f_hor_f0 = 1.0_wp, f_hor_dn(3) = 0.0_wp
+      !> Prune switch of the geometric weight `anchor_wleb0*cpjac`, its value and
+      !> its slope in the signed weight
+      real(wp) :: wleb_prune_f0 = 1.0_wp, wleb_prune_dS = 0.0_wp
       !> `H q_a`, shape operator `S_ab = q_a^T H q_b/|g|` and its half gap
       !> `disc = hypot((S11-S22)/2, S12)` (only when `want_curvature`)
       real(wp) :: Hq1(3) = 0.0_wp, Hq2(3) = 0.0_wp
@@ -130,7 +138,9 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: dg(3) = 0.0_wp, dH(3, 3) = 0.0_wp
       !> Sensitivity of the outward normal and of `|grad S|`
       real(wp) :: dn_surf(3) = 0.0_wp, d_gnorm = 0.0_wp
-      !> Sensitivity of the closest-point Jacobian and the focusing switch
+      !> Sensitivity of the closest-point Jacobian and of the gate
+      !> `f_crit * f_foc * f_hor * f_reach` (times the prune switch); the
+      !> reach gate through the projected point only
       real(wp) :: dJ = 0.0_wp, dw_f = 0.0_wp
       !> Sensitivity of the Lebedev weight and the Gaussian width
       real(wp) :: dwleb = 0.0_wp, dxi = 0.0_wp
@@ -161,8 +171,9 @@ module moist_cavity_drop_derivatives_kernel
       real(wp), allocatable :: w_n(:, :)
       !> Principal-curvature adjoints
       real(wp), allocatable :: w_k1(:), w_k2(:)
-      !> Branch-objective adjoint from the softmax reverse pass
-      real(wp), allocatable :: branch_phi_adj(:)
+      !> Branch-objective and gate adjoints of the rows from the branch-weight
+      !> reverse pass
+      real(wp), allocatable :: branch_phi_adj(:), branch_gate_adj(:)
       !> Whether the normal channel carries anything
       logical :: have_wn = .false.
       !> Whether either curvature channel carries anything
@@ -181,14 +192,15 @@ contains
    !> @param[inout] state             Seed state; inputs read, derived fields written
    !> @param[in]    f_crit            Critical-gradient switching function
    !> @param[in]    f_foc             Focusing switching function
+   !> @param[in]    f_hor             Horizon switching function
    !> @param[in]    f_wleb            Lebedev-weight pruning switching function
    !> @param[in]    use_wleb_prune    Whether Lebedev-weight pruning is active
    !> @param[out]   status            One of the `seed_state_*` codes
-   subroutine build_seed_state(state, f_crit, f_foc, f_wleb, use_wleb_prune, status)
+   subroutine build_seed_state(state, f_crit, f_foc, f_hor, f_wleb, use_wleb_prune, status)
       !> Seed state
       type(drop_seed_state_type), intent(inout) :: state
       !> Switching functions owned by the cavity
-      class(moist_math_smoothstep_type), intent(in) :: f_crit, f_foc, f_wleb
+      class(moist_math_smoothstep_type), intent(in) :: f_crit, f_foc, f_hor, f_wleb
       !> Whether Lebedev-weight pruning is active
       logical, intent(in) :: use_wleb_prune
       !> Degeneracy status
@@ -199,6 +211,8 @@ contains
       real(wp) :: vmin_B(2), vmax_B(2)
       !> Lebedev pruning scratch
       real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds
+      !> Horizon scratch
+      real(wp) :: n_sph(3), cos_hor, f_hor_ds
       !> Cartesian indices
       integer :: iaxis, jaxis
 
@@ -231,19 +245,35 @@ contains
       state%B12 = dot_product(state%q1, state%Aq2)
       state%B22 = dot_product(state%q2, state%Aq2)
       state%det_B = state%B11*state%B22 - state%B12*state%B12
-      if (abs(state%det_B) <= seed_det_b_guard) then
-         status = seed_state_singular_bmat
-         return
-      end if
+
+      ! Gram-Schmidt data of the frame derivative
+      state%min_axis = minloc(abs(state%n_surf), dim=1)
+      state%n_dot_q1 = state%n_surf(state%min_axis)
+      state%proj_surf = 1.0_wp - state%n_dot_q1**2
+      state%v_norm_surf = sqrt(max(state%proj_surf, 1.0e-30_wp))
+
       call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
       state%v_switch = vmin_B
       state%degenerate_switch = beta_max - lambda_switch <= seed_switch_gap_guard
-      call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS)
+      ! Focal margin `beta_min/alpha`; the slope is kept in `beta_min`
+      call f_foc%eval(lambda_switch/state%alpha_coeff, state%f_foc_f0, state%f_foc_dS)
+      state%f_foc_dS = state%f_foc_dS/state%alpha_coeff
 
+      if (abs(state%det_B) <= seed_det_b_guard) then
+         status = seed_state_singular_bmat
+         return
+      end if
       state%Binv11 = state%B22/state%det_B
       state%Binv12 = -state%B12/state%det_B
       state%Binv22 = state%B11/state%det_B
+
+      ! The sphere normal is rigid under every seed, so the cosine moves with n_surf alone
+      n_sph = state%anchor - state%owner_xyz
+      n_sph = n_sph/norm2(n_sph)
+      cos_hor = dot_product(state%n_surf, n_sph)
+      call f_hor%eval(cos_hor, state%f_hor_f0, f_hor_ds)
+      state%f_hor_dn = f_hor_ds*n_sph
 
       call setup_tangent_frame(state%anchor - state%owner_xyz, state%t1_vec, state%t2_vec)
       state%tau1(1) = dot_product(state%q1, state%t1_vec)
@@ -270,31 +300,35 @@ contains
          state%inv_J = 1.0_wp/J_val
       end block
 
-      state%min_axis = minloc(abs(state%n_surf), dim=1)
-      state%n_dot_q1 = state%n_surf(state%min_axis)
-      state%proj_surf = 1.0_wp - state%n_dot_q1**2
-      state%v_norm_surf = sqrt(max(state%proj_surf, 1.0e-30_wp))
-
-      ! d(w_pre * S)/dp = (S + |w_pre|*S') * d(w_pre)/dp
+      ! The prune switch acts on |w_pre| and is a factor of the gate
       if (use_wleb_prune) then
-         w_pre_i = state%anchor_wleb0*state%cpjac_scal0*state%w_f0
+         w_pre_i = state%anchor_wleb0*state%cpjac_scal0
          call f_wleb%eval(abs(w_pre_i), f_wleb_s, f_wleb_ds)
-         state%wleb_prune_factor = f_wleb_s + abs(w_pre_i)*f_wleb_ds
+         state%wleb_prune_f0 = f_wleb_s
+         state%wleb_prune_dS = sign(f_wleb_ds, w_pre_i)
       else
-         state%wleb_prune_factor = 1.0_wp
+         state%wleb_prune_f0 = 1.0_wp
+         state%wleb_prune_dS = 0.0_wp
       end if
 
-      ! Shape operator in the surface frame [q1, q2]; KM and the gap are
-      ! rotation invariants, the gap a sum of squares (accurate near umbilics)
-      if (state%want_curvature) then
-         call packed_contract2(state%lsf2_rr, state%q1, state%Hq1, 3)
-         call packed_contract2(state%lsf2_rr, state%q2, state%Hq2, 3)
-         state%S11_curv = dot_product(state%q1, state%Hq1)/state%g_norm
-         state%S12_curv = dot_product(state%q1, state%Hq2)/state%g_norm
-         state%S22_curv = dot_product(state%q2, state%Hq2)/state%g_norm
-         state%half_diff_curv = 0.5_wp*(state%S11_curv - state%S22_curv)
-         state%disc_curv = hypot(state%half_diff_curv, state%S12_curv)
-      end if
+      call curvature_state(state)
+
+   contains
+
+      !> Shape operator in the surface frame [q1, q2]; KM and the gap are
+      !> rotation invariants, the gap a sum of squares (accurate near umbilics)
+      subroutine curvature_state(st)
+         type(drop_seed_state_type), intent(inout) :: st
+
+         if (.not. st%want_curvature) return
+         call packed_contract2(st%lsf2_rr, st%q1, st%Hq1, 3)
+         call packed_contract2(st%lsf2_rr, st%q2, st%Hq2, 3)
+         st%S11_curv = dot_product(st%q1, st%Hq1)/st%g_norm
+         st%S12_curv = dot_product(st%q1, st%Hq2)/st%g_norm
+         st%S22_curv = dot_product(st%q2, st%Hq2)/st%g_norm
+         st%half_diff_curv = 0.5_wp*(st%S11_curv - st%S22_curv)
+         st%disc_curv = hypot(st%half_diff_curv, st%S12_curv)
+      end subroutine curvature_state
 
    end subroutine build_seed_state
 
@@ -332,7 +366,7 @@ contains
       real(wp) :: dAq1(3), dAq2(3), dB11, dB12, dB22, ddet_B
       real(wp) :: dBinv11, dBinv12, dBinv22
       !> Switched eigenvalue response and the symmetric part of `q1^T dA q2`
-      real(wp) :: dlambda_switch, dB12_sym
+      real(wp) :: dlambda_switch, dB12_sym, dfoc
       !> Lifted tangent-vector sensitivities
       real(wp) :: dtau1(2), dtau2(2), dw1(2), dw2(2)
       real(wp) :: dy1(3), dy2(3), dcross(3)
@@ -340,21 +374,19 @@ contains
       real(wp) :: dw_pre
       !> Shape-operator, mean-curvature and half-gap sensitivities
       real(wp) :: dS11, dS12, dS22, dKM, d_disc
-      !> `H dr`
-      real(wp) :: Hdr(3)
+      !> `H dr` and `T dr`, packed (6)
+      real(wp) :: Hdr(3), Tdr(6)
       !> Cartesian indices
-      integer :: iaxis, jaxis, kaxis
+      integer :: iaxis, jaxis
 
       call packed_contract2(state%lsf2_rr, dr, Hdr, 3)
       res%dg = dlsf1_r + Hdr
       res%dH = dlsf2_rr
       if (any(dr /= 0.0_wp)) then
-         do kaxis = 1, 3
-            do jaxis = 1, 3
-               do iaxis = 1, 3
-                  res%dH(iaxis, jaxis) = res%dH(iaxis, jaxis) &
-                                         + state%lsf3_rrr(packed_idx333(iaxis, jaxis, kaxis))*dr(kaxis)
-               end do
+         call packed_contract3(state%lsf3_rrr, dr, Tdr, 3)
+         do jaxis = 1, 3
+            do iaxis = 1, 3
+               res%dH(iaxis, jaxis) = res%dH(iaxis, jaxis) + Tdr(packed_idx33(iaxis, jaxis))
             end do
          end do
       end if
@@ -438,13 +470,17 @@ contains
       res%dJ = dot_product(state%cross_vec, dcross)*state%inv_J
 
       res%d_gnorm = dot_product(state%n_surf, res%dg)
-      res%dw_f = state%f_foc_f0*state%f_crit_dS*res%d_gnorm &
-                 + state%f_crit0*state%f_foc_dS*dlambda_switch
-
-      dw_pre = state%anchor_wleb0*state%w_f0*res%dJ &
-               + state%anchor_wleb0*state%cpjac_scal0*res%dw_f
-      res%dwleb = state%wbranch*state%wleb_prune_factor*dw_pre
-
+      ! wleb = anchor wleb * J; the gate, its prune factor included, acts on
+      ! the switching value instead
+      dw_pre = state%anchor_wleb0*res%dJ
+      res%dwleb = dw_pre
+      dfoc = state%f_foc_dS*dlambda_switch
+      res%dw_f = state%f_reach_f0*(state%wleb_prune_f0*(state%f_hor_f0*(state%f_foc_f0*state%f_crit_dS*res%d_gnorm &
+                                                                        + state%f_crit0*dfoc) &
+                                                        + state%f_crit0*state%f_foc_f0 &
+                                                        *dot_product(state%f_hor_dn, res%dn_surf)) &
+                                   + state%f_crit0*state%f_foc_f0*state%f_hor_f0*state%wleb_prune_dS*dw_pre) &
+                 + state%wleb_prune_f0*state%f_crit0*state%f_foc_f0*state%f_hor_f0*dot_product(state%f_reach_dy, dr)
       if (state%wleb > seed_weight_tol) then
          res%dxi = -0.5_wp*state%xi0*res%dwleb/state%wleb
       else
@@ -477,77 +513,84 @@ contains
 
    end subroutine apply_seed
 
-   !> Reverse pass over the branch-weight softmax
+   !> Reverse pass over the branch weights
    !>
-   !> Within an anchor group the Lebedev weight carries a softmax factor,
-   !> `wleb_m = base_m * p_m`
+   !> Within an anchor group the switching value carries the branch weight,
+   !> `f_m = f_anchor * p_m`, a function of the objectives and gates of every
+   !> row of the anchor
    !>
-   !> - the per-point seed loop handles `d(base_m)`
-   !> - the pass converts the remaining width-induced adjoint `dL/dp_m` into
-   !>   `dL/dPhi_m`, which the seed loop then couples to the point motion
+   !> - the switching channel handles `d(f_anchor)`
+   !> - the pass converts the adjoint of `p_m` into the adjoints of the
+   !>   objectives and gates through the transposed weight Jacobians; the seed
+   !>   loops then couple them to the point motion and the gate response of
+   !>   every row
    !>
-   !> Groups are the CSR rows of one anchor; an anchor with a single row
-   !> carries no softmax factor and stays at zero
+   !> Groups are the CSR rows of one anchor, the set its weights were formed
+   !> over; a single row has `p = g`
    !>
    !> @param[in]  offset          Row offsets per anchor (nmax + 1)
-   !> @param[in]  wbranch         Softmax branch weight per grid point (ngrid)
-   !> @param[in]  wleb            Lebedev weight per grid point (ngrid)
-   !> @param[in]  xi0             Gaussian width per grid point (ngrid)
-   !> @param[in]  sigma_phi       Softmax temperature
-   !> @param[in]  w_xi            Effective Gaussian-width adjoint (ngrid)
+   !> @param[in]  phi0            Branch objective per grid point (ngrid)
+   !> @param[in]  gate0           Gate per grid point (ngrid)
+   !> @param[in]  f_anchor        Switching value per anchor (nmax)
+   !> @param[in]  branch_weight   Branch weight model
+   !> @param[in]  w_f             Adjoint of the switching value per grid point (ngrid)
    !> @param[out] branch_phi_adj  Adjoint of the branch objective Phi (ngrid)
+   !> @param[out] branch_gate_adj Adjoint of the gate (ngrid)
    ! TODO: This is serial; it sh/could be parallelized
-   pure subroutine compute_branch_phi_adj(offset, wbranch, wleb, xi0, &
-                                          sigma_phi, w_xi, branch_phi_adj)
+   pure subroutine compute_branch_adj(offset, phi0, gate0, f_anchor, branch_weight, w_f, &
+                                      branch_phi_adj, branch_gate_adj)
       !> Row offsets per anchor
       integer, intent(in) :: offset(:)
-      !> Branch weight, Lebedev weight and Gaussian width per grid point
-      real(wp), intent(in) :: wbranch(:), wleb(:), xi0(:)
-      !> Softmax temperature
-      real(wp), intent(in) :: sigma_phi
-      !> Effective Gaussian-width adjoint
-      real(wp), intent(in) :: w_xi(:)
-      !> Adjoint of the branch objective
-      real(wp), intent(out) :: branch_phi_adj(:)
+      !> Branch objective per grid point
+      real(wp), intent(in) :: phi0(:)
+      !> Gate per grid point
+      real(wp), intent(in) :: gate0(:)
+      !> Switching value per anchor
+      real(wp), intent(in) :: f_anchor(:)
+      !> Branch weight model
+      type(branch_weight_type), intent(in) :: branch_weight
+      !> Adjoint of the switching value
+      real(wp), intent(in) :: w_f(:)
+      !> Adjoints of the rows
+      real(wp), intent(out) :: branch_phi_adj(:), branch_gate_adj(:)
 
       !> Anchor and group bookkeeping
-      integer :: ia, igroup_start, igroup_end, group_size, m_branch, im_grid
-      !> Weight-adjoint scratch
-      real(wp) :: adj_branch, mean_adj_branch
+      integer :: ia, r0, n, m, l, max_group
+      !> Weights and their Jacobians of one group
+      real(wp), allocatable :: weights(:), jac_phi(:, :), jac_gate(:, :)
+      !> Adjoint of one branch weight
+      real(wp) :: adj_p
 
       branch_phi_adj = 0.0_wp
+      branch_gate_adj = 0.0_wp
       if (size(branch_phi_adj) <= 0) return
-      if (sigma_phi <= seed_weight_tol) return
+
+      max_group = maxval(offset(2:) - offset(:size(offset) - 1))
+      allocate (weights(max_group))
+      allocate (jac_phi(max_group, max_group), jac_gate(max_group, max_group))
 
       do ia = 1, size(offset) - 1
-         igroup_start = offset(ia) + 1
-         igroup_end = offset(ia + 1)
-         group_size = igroup_end - igroup_start + 1
-         if (group_size <= 1) cycle
+         r0 = offset(ia)
+         n = offset(ia + 1) - r0
+         if (n <= 0) cycle
+         if (n == 1) then
+            branch_gate_adj(r0 + 1) = f_anchor(ia)*w_f(r0 + 1)
+            cycle
+         end if
+         if (all(abs(w_f(r0 + 1:r0 + n)) <= seed_weight_tol)) cycle
 
-         mean_adj_branch = 0.0_wp
-         do m_branch = 1, group_size
-            im_grid = igroup_start + m_branch - 1
-            ! dxi/dp_m = -xi/(2 wleb) * wleb/p_m; the Lebedev weight cancels, but
-            ! a pruned point (wleb = 0) has no finite width and stays at zero (guard)
-            adj_branch = 0.0_wp
-            if (abs(w_xi(im_grid)) > seed_weight_tol &
-                .and. wleb(im_grid) > tiny(1.0_wp) &
-                .and. wbranch(im_grid) > tiny(1.0_wp)) then
-               adj_branch = -0.5_wp*w_xi(im_grid)*xi0(im_grid)/wbranch(im_grid)
-            end if
-            mean_adj_branch = mean_adj_branch + wbranch(im_grid)*adj_branch
-            branch_phi_adj(im_grid) = adj_branch
-         end do
-
-         do m_branch = 1, group_size
-            im_grid = igroup_start + m_branch - 1
-            branch_phi_adj(im_grid) = -wbranch(im_grid) &
-                                      *(branch_phi_adj(im_grid) - mean_adj_branch)/sigma_phi
+         call branch_weight%weights_jac(phi0(r0 + 1:r0 + n), gate0(r0 + 1:r0 + n), &
+                                        weights(1:n), jac_phi(1:n, 1:n), jac_gate(1:n, 1:n))
+         do m = 1, n
+            adj_p = f_anchor(ia)*w_f(r0 + m)
+            do l = 1, n
+               branch_phi_adj(r0 + l) = branch_phi_adj(r0 + l) + jac_phi(m, l)*adj_p
+               branch_gate_adj(r0 + l) = branch_gate_adj(r0 + l) + jac_gate(m, l)*adj_p
+            end do
          end do
       end do
 
-   end subroutine compute_branch_phi_adj
+   end subroutine compute_branch_adj
 
    !> Render a degeneracy status as a diagnostic message
    !>

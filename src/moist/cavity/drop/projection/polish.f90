@@ -10,62 +10,38 @@
 !> the jet Newton left there, and re-polishes escaped saddles with one more
 !> batched Newton pass
 !>
+!> Run context read only, shared by the worker threads: traces gated by
+!> verbosity 5 or `debug`, written straight to `ctx%unit` inside the
+!> context's own `moist_context_io` critical; no timers, warnings or debug
+!> messages
+!>
 !> Every level set evaluation goes through the LSF's `evaluate_batch`, the third
 !> derivative of the degenerate test included; a point beyond the level set
 !> reach is a recoverable failure of the routine that met it, never build-fatal
 module moist_cavity_drop_projection_polish
-   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
+   use moist_context, only: moist_context_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
-   use moist_math_packed, only: packed_contract2, unpack_sym_tensor3
+   use moist_math_packed, only: packed_contract2, packed_full_contract3
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, &
                                                 point_failed_not_kkt, point_failed_saddle
-   use moist_cavity_drop_projection_newton, only: newton_config_type, newton_scratch_type, &
-                                                 newton_solve_batch
+   use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch
+   use moist_cavity_drop_projection_parameters, only: drop_solve_parameters_type, drop_polish_parameters_type
    implicit none(type, external)
    private
 
-   public :: polish_config_type, polish_batch
+   public :: polish_batch
    public :: check_constrained_optimality, riemannian_newton_escape, retract_to_surface
 
    !> Diagonal and off-diagonal slots of a packed 3x3 Hessian
    integer, parameter :: diag_slots(3) = [1, 3, 6], offdiag_slots(3) = [2, 4, 5]
-
-   ! TODO: we should also think about making this a general solver or at least some type of Riemannian Newton module
-
-   !> Polish settings
-   ! TODO: good idea to introduce a new type here with drop parameters again?
-   type :: polish_config_type
-      !> Anchor objective weight
-      real(wp) :: phi_alpha = 0.5_wp
-      !> Riemannian iterations
-      integer :: riemann_max_iter = 150
-      !> Line-search trials per Riemannian iteration
-      integer :: riemann_max_ls_iter = 20
-      !> Initial line-search step of a non-saddle Riemannian update
-      real(wp) :: riemann_alpha_init = 2.0_wp
-      !> Reduction of a rejected line-search step
-      real(wp) :: riemann_alpha_reduce = 0.75_wp
-      !> Armijo coefficient of the Riemannian line search
-      real(wp) :: riemann_armijo_c = 1.0e-4_wp
-      !> Fixed step along negative curvature when leaving a saddle
-      real(wp) :: riemann_escape_step = 0.5_wp
-      !> Reduced-Hessian eigenvalue below which a point counts as a saddle
-      real(wp) :: riemann_saddle_eig_tol = 1.0e-8_wp
-      !> Retraction iterations
-      integer :: retract_max_iter = 50
-      !> Report a saddle as an error when the caller does not ask for `is_saddle`
-      logical :: strict_minimum_required = .true.
-      !> Stability tables and Riemannian traces
-      logical :: debug = .false.
-      !> Run-context verbosity; per-point traces print at 5
-      integer :: verbosity = 1
-      !> Output unit of traces
-      integer :: unit = output_unit
-   end type polish_config_type
+   !> Floor of the reduced-Hessian eigenvalue threshold
+   real(wp), parameter :: tol_eig_base = 1.0e-10_wp
+   !> Third directional derivative of the Lagrangian above which a flat point is an inflection
+   real(wp), parameter :: tol_D3 = 1.0e-8_wp
 
 contains
 
@@ -81,19 +57,23 @@ contains
    !> - a classification the third-order test cannot settle keeps the point,
    !>   as the single-anchor projector did
    !>
+   !> @param[in]    ctx       Run context, read only; traces at verbosity 5
    !> @param[inout] batch     Points with Newton's final jets
    !> @param[inout] lsf       Thread-local level set
    !> @param[in]    cfg       Polish settings
    !> @param[in]    ncfg      Newton settings for the re-polish
+   !> @param[in]    phi_alpha Anchor objective weight
    !> @param[inout] nscratch  Newton scratch
    !> @param[out]   error     LSF evaluation failure (build-fatal)
    !> @param[in]    first     First column (default 1)
    !> @param[in]    last      Last column (default `batch%n`)
-   subroutine polish_batch(batch, lsf, cfg, ncfg, nscratch, error, first, last)
+   subroutine polish_batch(ctx, batch, lsf, cfg, ncfg, phi_alpha, nscratch, error, first, last)
+      type(moist_context_type), intent(in) :: ctx
       type(projection_batch_type), intent(inout) :: batch
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
-      type(polish_config_type), intent(in) :: cfg
-      type(newton_config_type), intent(in) :: ncfg
+      type(drop_polish_parameters_type), intent(in) :: cfg
+      type(drop_solve_parameters_type), intent(in) :: ncfg
+      real(wp), intent(in) :: phi_alpha
       type(newton_scratch_type), intent(inout) :: nscratch
       type(error_type), allocatable, intent(out) :: error
       integer, intent(in), optional :: first
@@ -122,14 +102,17 @@ contains
          if (batch%status(j) /= point_converged) cycle
          a = batch%run_xyz(:, batch%run_of(j))
          index = batch%run_anchor(batch%run_of(j))
-         call check_constrained_optimality(cfg, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
+         call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
                                            is_saddle=saddle, is_kkt=kkt, index=index, &
                                            jet_S=batch%S(j), jet_grad=batch%gradS(:, j), &
                                            jet_hess=batch%hessS(:, j), lsf_error=error)
          if (allocated(error)) return
          if (allocated(class_error)) then
-            if (cfg%verbosity >= 5) write (cfg%unit, "(1x,i12,1x,a,a)") index, "[optimality] ", &
-               trim(class_error%message)
+            if (ctx%verbosity(5)) then
+               !$omp critical (moist_context_io)
+               write (ctx%unit, "(1x,i12,1x,a,a)") index, "[optimality] ", trim(class_error%message)
+               !$omp end critical (moist_context_io)
+            end if
             deallocate (class_error)
          end if
          if (.not. kkt) then
@@ -141,10 +124,13 @@ contains
             cycle
          end if
 
-         if (cfg%verbosity >= 5) write (cfg%unit, "(1x,i12,1x,a)") index, &
-            "[optimality] Saddle point detected, attempting escape ..."
-         call riemannian_newton_escape(cfg, lsf, batch%x(:, j), a, batch%lambda(j), r_out, lambda_out, &
-                                       escape_error, lsf_error=error)
+         if (ctx%verbosity(5)) then
+            !$omp critical (moist_context_io)
+            write (ctx%unit, "(1x,i12,1x,a)") index, "[optimality] Saddle point detected, attempting escape ..."
+            !$omp end critical (moist_context_io)
+         end if
+         call riemannian_newton_escape(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), r_out, &
+                                       lambda_out, escape_error, lsf_error=error)
          if (allocated(error)) return
          ! A walk that ran out of iterations still hands back its best point;
          ! Newton and the re-check below decide whether it is usable
@@ -157,7 +143,7 @@ contains
       end do
       if (n_escaped == 0) return
 
-      call newton_solve_batch(batch, lsf, ncfg, nscratch, error, first=j0, last=j1)
+      call newton_solve_batch(batch, lsf, ncfg, phi_alpha, nscratch, error, first=j0, last=j1)
       if (allocated(error)) return
 
       do j = j0, j1
@@ -165,7 +151,7 @@ contains
          if (batch%status(j) /= point_converged) cycle
          a = batch%run_xyz(:, batch%run_of(j))
          index = batch%run_anchor(batch%run_of(j))
-         call check_constrained_optimality(cfg, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
+         call check_constrained_optimality(ctx, cfg, phi_alpha, lsf, batch%x(:, j), a, batch%lambda(j), class_error, &
                                            is_saddle=saddle, is_kkt=kkt, index=index, &
                                            jet_S=batch%S(j), jet_grad=batch%gradS(:, j), &
                                            jet_hess=batch%hessS(:, j), lsf_error=error)
@@ -174,8 +160,11 @@ contains
          if (.not. kkt) then
             batch%status(j) = point_failed_not_kkt
          else if (saddle) then
-            if (cfg%verbosity >= 5) write (cfg%unit, "(1x,i12,1x,a)") index, &
-               "[optimality] Failed to escape saddle point!"
+            if (ctx%verbosity(5)) then
+               !$omp critical (moist_context_io)
+               write (ctx%unit, "(1x,i12,1x,a)") index, "[optimality] Failed to escape saddle point!"
+               !$omp end critical (moist_context_io)
+            end if
             batch%status(j) = point_failed_saddle
          else
             batch%status(j) = point_accepted
@@ -196,7 +185,9 @@ contains
    !> - flat to third order raises `error`, classification unreliable
    !> - `r_star` beyond the level set reach: `is_kkt = .false.` and `error`
    !>
+   !> @param[in]    ctx          Run context, read only
    !> @param[in]    cfg          Polish settings
+   !> @param[in]    phi_alpha    Anchor objective weight
    !> @param[inout] lsf          Thread-local level set
    !> @param[in]    r_star       Candidate point
    !> @param[in]    anchor       Anchor
@@ -210,10 +201,12 @@ contains
    !> @param[in]    jet_grad     Level set gradient at `r_star`
    !> @param[in]    jet_hess     Level set Hessian at `r_star`, packed (6)
    !> @param[out]   lsf_error    LSF evaluation failure; folded into `error` when absent
-   subroutine check_constrained_optimality(cfg, lsf, r_star, anchor, lambda, error, &
+   subroutine check_constrained_optimality(ctx, cfg, phi_alpha, lsf, r_star, anchor, lambda, error, &
                                            is_saddle, is_kkt, is_converged, index, &
                                            jet_S, jet_grad, jet_hess, lsf_error)
-      type(polish_config_type), intent(in) :: cfg
+      type(moist_context_type), intent(in) :: ctx
+      type(drop_polish_parameters_type), intent(in) :: cfg
+      real(wp), intent(in) :: phi_alpha
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       real(wp), intent(in) :: r_star(3)
       real(wp), intent(in) :: anchor(3)
@@ -228,19 +221,17 @@ contains
       real(wp), intent(in), optional :: jet_hess(:)
       type(error_type), allocatable, intent(out), optional :: lsf_error
 
-      real(wp), parameter :: tol_D3 = 1.0e-8_wp
       real(wp), parameter :: tol_feas = 1.0e-6_wp
       real(wp), parameter :: tol_stat = 1.0e-6_wp
       real(wp), parameter :: tol_grad = 1.0e-10_wp
-      real(wp), parameter :: tol_eig_base = 1.0e-10_wp
 
       type(error_type), allocatable :: eval_error
       real(wp) :: S_val, grad_S(3), hess_S(6), grad_phi(3)
       real(wp) :: normal_vec(3), norm_grad_S, res_feas, res_stat, grad_L(3)
       real(wp) :: H_lagrangian(6), R_reduced(2, 2), T_mat(3, 2), t1(3), t2(3), Ht1(3), Ht2(3)
-      real(wp) :: mu_min, mu_max, v_min(2), v_max(2), eig_tol, HL_norm
-      real(wp) :: lsf3_S(3, 3, 3), d_degen(3), D3_ddd, S3, grad3(3), hess3(6)
-      integer :: i, j, k, id
+      real(wp) :: mu_min, mu_max, v_min(2), v_max(2), eig_tol
+      real(wp) :: d_degen(3), D3_ddd
+      integer :: id
       logical :: unreached
 
       if (present(is_saddle)) is_saddle = .false.
@@ -270,31 +261,38 @@ contains
       res_feas = abs(S_val)
       norm_grad_S = norm2(grad_S)
       if (norm_grad_S < tol_grad) then
-         if (cfg%verbosity >= 5) then
-            write (cfg%unit, "(1x,i12,1x,a,es12.4)") id, &
+         if (ctx%verbosity(5)) then
+            !$omp critical (moist_context_io)
+            write (ctx%unit, "(1x,i12,1x,a,es12.4)") id, &
                "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
+            !$omp end critical (moist_context_io)
          end if
          ! Cannot classify, but an infeasible point is no KKT point
          if (present(is_kkt)) is_kkt = res_feas <= tol_feas
          return
       end if
 
-      grad_phi = cfg%phi_alpha*(r_star - anchor)
+      grad_phi = phi_alpha*(r_star - anchor)
       grad_L = grad_phi - lambda*grad_S
       res_stat = norm2(grad_L)
 
-      if (cfg%debug) then
-         write (cfg%unit, "(1x,a)") "KKT verification:"
-         write (cfg%unit, "(3x,a,es12.4,a,es12.4,a)") &
+      if (ctx%debug) then
+         ! One block, so no other thread's line lands inside it
+         !$omp critical (moist_context_io)
+         write (ctx%unit, "(1x,a)") "KKT verification:"
+         write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
             "Feasibility   |S(r*)| = ", res_feas, "  (tol: ", tol_feas, ")"
-         write (cfg%unit, "(3x,a,es12.4,a,es12.4,a)") &
+         write (ctx%unit, "(3x,a,es12.4,a,es12.4,a)") &
             "Stationarity  ||dL||  = ", res_stat, "  (tol: ", tol_stat, ")"
+         !$omp end critical (moist_context_io)
       end if
 
       if (res_feas > tol_feas .or. res_stat > tol_stat) then
-         if (cfg%verbosity >= 5 .or. cfg%debug) then
-            write (cfg%unit, "(1x,i12,1x,a,es12.4,a,es12.4)") id, &
+         if (ctx%verbosity(5) .or. ctx%debug) then
+            !$omp critical (moist_context_io)
+            write (ctx%unit, "(1x,i12,1x,a,es12.4,a,es12.4)") id, &
                "[KKT check] Not at KKT point: |S| = ", res_feas, ", ||dL|| = ", res_stat
+            !$omp end critical (moist_context_io)
          end if
          if (present(is_kkt)) is_kkt = .false.
          return
@@ -307,7 +305,7 @@ contains
       T_mat(:, 1) = t1
       T_mat(:, 2) = t2
       H_lagrangian = -lambda*hess_S
-      H_lagrangian(diag_slots) = cfg%phi_alpha - lambda*hess_S(diag_slots)
+      H_lagrangian(diag_slots) = phi_alpha - lambda*hess_S(diag_slots)
       call packed_contract2(H_lagrangian, t1, Ht1, 3)
       call packed_contract2(H_lagrangian, t2, Ht2, 3)
       R_reduced(1, 1) = dot_product(t1, Ht1)
@@ -317,12 +315,12 @@ contains
       call eig_2x2_symmetric(R_reduced(1, 1), R_reduced(1, 2), R_reduced(2, 2), &
                              mu_min, mu_max, v_min, v_max)
 
-      ! Frobenius norm, off-diagonal slots twice
-      HL_norm = sqrt(sum(H_lagrangian(diag_slots)**2) + 2.0_wp*sum(H_lagrangian(offdiag_slots)**2))
-      eig_tol = max(tol_eig_base, 1.0e-8_wp*HL_norm)
+      eig_tol = saddle_eig_threshold(cfg%saddle_eig_tol, H_lagrangian)
 
-      if (cfg%debug) then
-         write (cfg%unit, "(3x,a,3es14.6)") "Reduced Hessian eigenvalues: ", mu_min, mu_max
+      if (ctx%debug) then
+         !$omp critical (moist_context_io)
+         write (ctx%unit, "(3x,a,3es14.6)") "Reduced Hessian eigenvalues: ", mu_min, mu_max
+         !$omp end critical (moist_context_io)
       end if
 
       if (mu_min < -eig_tol) then
@@ -340,7 +338,7 @@ contains
 
       !> Flat second order: D^3 L[d,d,d] = -lambda S_ijk d_i d_j d_k along d = T v_min
       d_degen = matmul(T_mat, v_min)
-      call point_jet(lsf, r_star, 3, S3, unreached, eval_error, grad3, hess3, lsf3_S)
+      call lagrangian_third_derivative(lsf, r_star, lambda, d_degen, D3_ddd, unreached, eval_error)
       if (allocated(eval_error)) then
          call hand_over(eval_error, error, lsf_error)
          if (present(is_kkt)) is_kkt = .false.
@@ -351,19 +349,12 @@ contains
          if (present(is_kkt)) is_kkt = .false.
          return
       end if
-      D3_ddd = 0.0_wp
-      do k = 1, 3
-         do j = 1, 3
-            do i = 1, 3
-               D3_ddd = D3_ddd + lsf3_S(i, j, k)*d_degen(i)*d_degen(j)*d_degen(k)
-            end do
-         end do
-      end do
-      D3_ddd = -lambda*D3_ddd
 
-      if (cfg%debug) then
-         write (cfg%unit, "(3x,a,2es16.8,a,es16.8)") "Reduced eigs = ", mu_min, mu_max, &
+      if (ctx%debug) then
+         !$omp critical (moist_context_io)
+         write (ctx%unit, "(3x,a,2es16.8,a,es16.8)") "Reduced eigs = ", mu_min, mu_max, &
             ", D3 L[d,d,d] = ", D3_ddd
+         !$omp end critical (moist_context_io)
       end if
 
       if (abs(D3_ddd) > tol_D3) then
@@ -382,14 +373,24 @@ contains
 
    !> Walk off a saddle along the surface, then descend to a minimum
    !>
-   !> - at a saddle: fixed step along the negative-curvature tangent direction,
-   !>   signed to decrease `phi`
+   !> - at a saddle, or at a flat point whose third derivative makes it an inflection
+   !>   (the classification of [[check_constrained_optimality]]): fixed step along
+   !>   the negative-curvature or flat tangent direction; the first-order change
+   !>   there is roundoff at a KKT point, so both signs are tried and the lower
+   !>   objective kept
+   !> - a flat point with zero third derivative ends the walk, as the check keeps it
    !> - elsewhere: Riemannian Newton (or steepest descent when nearly singular)
-   !> - every trial is retracted onto `S = 0` before the acceptance test
+   !> - stops in the basin of a minimum, at a tangential gradient of `1e-6`;
+   !>   [[polish_batch]] converges the point with the batched Newton like any other
+   !>   column
+   !> - every trial is retracted onto `S = 0` before the acceptance test; an escape
+   !>   step must lower `phi`, a Newton or descent step must pass the Armijo test
    !> - `r_out`/`lambda_out` always hold the last accepted point, also on error
    !> - an iterate beyond the level set reach ends the walk with `error`
    !>
+   !> @param[in]    ctx         Run context, read only
    !> @param[in]    cfg         Polish settings
+   !> @param[in]    phi_alpha   Anchor objective weight
    !> @param[inout] lsf         Thread-local level set
    !> @param[in]    r_init      Start point
    !> @param[in]    anchor      Anchor
@@ -398,9 +399,11 @@ contains
    !> @param[out]   lambda_out  Multiplier at `r_out`
    !> @param[out]   error       Degenerate gradient, unreached iterate or iteration budget exhausted
    !> @param[out]   lsf_error   LSF evaluation failure; folded into `error` when absent
-   subroutine riemannian_newton_escape(cfg, lsf, r_init, anchor, lambda_init, r_out, lambda_out, &
+   subroutine riemannian_newton_escape(ctx, cfg, phi_alpha, lsf, r_init, anchor, lambda_init, r_out, lambda_out, &
                                        error, lsf_error)
-      type(polish_config_type), intent(in) :: cfg
+      type(moist_context_type), intent(in) :: ctx
+      type(drop_polish_parameters_type), intent(in) :: cfg
+      real(wp), intent(in) :: phi_alpha
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       real(wp), intent(in) :: r_init(3)
       real(wp), intent(in) :: anchor(3)
@@ -410,7 +413,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(error_type), allocatable, intent(out), optional :: lsf_error
 
-      real(wp), parameter :: tol_grad_tan = 1.0e-8_wp
+      !> Hand-over gradient: below about sqrt(eps) the objective-based line search
+      !> cannot resolve progress, and a point handed over below Newton's residual
+      !> tolerance would be kept unrefined, off by `||F|| / mu` on a soft point
+      real(wp), parameter :: tol_grad_tan = 1.0e-6_wp
 
       type(error_type), allocatable :: eval_error, retract_error
       real(wp) :: r_curr(3), r_trial(3), r_retracted(3), lambda_curr, lambda_trial
@@ -418,18 +424,19 @@ contains
       real(wp) :: phi_curr, phi_trial, normal_vec(3), norm_grad_S
       real(wp) :: T_mat(3, 2), t1(3), t2(3), g_tan(2), H_lagrangian(6), R_reduced(2, 2), Ht1(3), Ht2(3)
       real(wp) :: delta_r(3), alpha, directional_deriv, norm_g_tan
-      real(wp) :: mu_min, mu_max, v_min(2), v_max(2), s_tan(2)
-      integer :: iter, ls_iter
-      logical :: converged, ls_success, at_saddle, unreached
+      real(wp) :: mu_min, mu_max, v_min(2), v_max(2), s_tan(2), eig_tol, D3_ddd
+      real(wp) :: r_cand(3), lambda_cand, phi_cand
+      integer :: iter, ls_iter, isign, nsign
+      logical :: converged, ls_success, at_saddle, escaping, have_trial, unreached
 
       r_curr = r_init
       lambda_curr = lambda_init
       r_out = r_curr
       lambda_out = lambda_curr
       converged = .false.
-      phi_curr = 0.5_wp*cfg%phi_alpha*sum((r_curr - anchor)**2)
+      phi_curr = 0.5_wp*phi_alpha*sum((r_curr - anchor)**2)
 
-      do iter = 0, cfg%riemann_max_iter
+      do iter = 0, cfg%escape_max_iter
          call point_jet(lsf, r_curr, 2, S_val, unreached, eval_error, grad_S, hess_S)
          if (allocated(eval_error)) then
             call hand_over(eval_error, error, lsf_error)
@@ -439,7 +446,7 @@ contains
             call fatal_error(error, "Riemannian escape: iterate beyond the level set reach")
             return
          end if
-         grad_phi = cfg%phi_alpha*(r_curr - anchor)
+         grad_phi = phi_alpha*(r_curr - anchor)
 
          norm_grad_S = norm2(grad_S)
          if (norm_grad_S < 1.0e-10_wp) then
@@ -456,7 +463,7 @@ contains
          norm_g_tan = norm2(g_tan)
 
          H_lagrangian = -lambda_curr*hess_S
-         H_lagrangian(diag_slots) = cfg%phi_alpha - lambda_curr*hess_S(diag_slots)
+         H_lagrangian(diag_slots) = phi_alpha - lambda_curr*hess_S(diag_slots)
          call packed_contract2(H_lagrangian, t1, Ht1, 3)
          call packed_contract2(H_lagrangian, t2, Ht2, 3)
          R_reduced(1, 1) = dot_product(t1, Ht1)
@@ -465,25 +472,41 @@ contains
          R_reduced(2, 1) = R_reduced(1, 2)
          call eig_2x2_symmetric(R_reduced(1, 1), R_reduced(1, 2), R_reduced(2, 2), &
                                 mu_min, mu_max, v_min, v_max)
-         at_saddle = mu_min < -cfg%riemann_saddle_eig_tol
+         ! Same threshold as the optimality check, so both agree on what a saddle is
+         eig_tol = saddle_eig_threshold(cfg%saddle_eig_tol, H_lagrangian)
+         at_saddle = mu_min < -eig_tol
 
+         escaping = at_saddle
          if (norm_g_tan < tol_grad_tan .and. .not. at_saddle) then
-            converged = .true.
-            exit
+            if (mu_min > eig_tol) then
+               converged = .true.
+               exit
+            end if
+            ! Flat second order: the third order decides, as in the check
+            call lagrangian_third_derivative(lsf, r_curr, lambda_curr, matmul(T_mat, v_min), D3_ddd, &
+                                             unreached, eval_error)
+            if (allocated(eval_error)) then
+               call hand_over(eval_error, error, lsf_error)
+               return
+            end if
+            if (unreached) then
+               call fatal_error(error, "Riemannian escape: iterate beyond the level set reach")
+               return
+            end if
+            if (abs(D3_ddd) <= tol_D3) then
+               converged = .true.
+               exit
+            end if
+            escaping = .true.
          end if
 
-         if (at_saddle) then
-            s_tan = v_min
-            delta_r = T_mat(:, 1)*s_tan(1) + T_mat(:, 2)*s_tan(2)
-            directional_deriv = dot_product(grad_phi, delta_r)
-            if (directional_deriv > 0.0_wp) then
-               s_tan = -s_tan
-               delta_r = -delta_r
-               directional_deriv = -directional_deriv
-            end if
-            alpha = cfg%riemann_escape_step
+         if (escaping) then
+            ! Unsigned: `grad phi . delta_r` is roundoff at a KKT point
+            delta_r = T_mat(:, 1)*v_min(1) + T_mat(:, 2)*v_min(2)
+            directional_deriv = 0.0_wp
+            alpha = cfg%escape_step
          else
-            if (mu_min > cfg%riemann_saddle_eig_tol) then
+            if (mu_min > eig_tol) then
                ! s = -V diag(1/mu) V^T g
                s_tan(1) = -(v_min(1)*g_tan(1) + v_min(2)*g_tan(2))/mu_min*v_min(1) &
                           - (v_max(1)*g_tan(1) + v_max(2)*g_tan(2))/mu_max*v_max(1)
@@ -494,36 +517,50 @@ contains
             end if
             delta_r = T_mat(:, 1)*s_tan(1) + T_mat(:, 2)*s_tan(2)
             directional_deriv = dot_product(grad_phi, delta_r)
-            alpha = cfg%riemann_alpha_init
+            alpha = cfg%escape_alpha_init
          end if
 
+         ! An escape step tries both signs and keeps the lower retracted objective
+         nsign = 1
+         if (escaping) nsign = 2
          ls_success = .false.
-         do ls_iter = 1, cfg%riemann_max_ls_iter
-            r_trial = r_curr + alpha*delta_r
-            call retract_to_surface(cfg, lsf, r_trial, anchor, r_retracted, lambda_trial, retract_error, &
-                                    lsf_error=eval_error)
-            if (allocated(eval_error)) then
-               call hand_over(eval_error, error, lsf_error)
-               return
-            end if
-            if (allocated(retract_error)) then
-               deallocate (retract_error)
-               alpha = alpha*cfg%riemann_alpha_reduce
+         do ls_iter = 1, cfg%escape_max_ls_iter
+            have_trial = .false.
+            do isign = 1, nsign
+               r_trial = r_curr + merge(alpha, -alpha, isign == 1)*delta_r
+               call retract_to_surface(cfg, phi_alpha, lsf, r_trial, anchor, r_cand, lambda_cand, retract_error, &
+                                       lsf_error=eval_error)
+               if (allocated(eval_error)) then
+                  call hand_over(eval_error, error, lsf_error)
+                  return
+               end if
+               if (allocated(retract_error)) then
+                  deallocate (retract_error)
+                  cycle
+               end if
+               phi_cand = 0.5_wp*phi_alpha*sum((r_cand - anchor)**2)
+               if (have_trial) then
+                  if (phi_cand >= phi_trial) cycle
+               end if
+               r_retracted = r_cand
+               lambda_trial = lambda_cand
+               phi_trial = phi_cand
+               have_trial = .true.
+            end do
+            if (.not. have_trial) then
+               alpha = alpha*cfg%escape_alpha_reduce
                cycle
             end if
 
-            phi_trial = 0.5_wp*cfg%phi_alpha*sum((r_retracted - anchor)**2)
-            if (phi_trial < phi_curr - 1.0e-10_wp) then
-               ls_success = .true.
-               exit
+            if (escaping) then
+               ! No first-order decrease to demand off a stationary point: the objective must drop
+               ls_success = phi_trial < phi_curr - 1.0e-10_wp
+            else
+               ! Sufficient decrease; a bare decrease accepts the overshoot of a long Newton step
+               ls_success = phi_trial <= phi_curr + cfg%escape_armijo_c*alpha*directional_deriv
             end if
-            if (directional_deriv < 0.0_wp) then
-               if (phi_trial <= phi_curr + cfg%riemann_armijo_c*alpha*directional_deriv) then
-                  ls_success = .true.
-                  exit
-               end if
-            end if
-            alpha = alpha*cfg%riemann_alpha_reduce
+            if (ls_success) exit
+            alpha = alpha*cfg%escape_alpha_reduce
          end do
 
          if (.not. ls_success) exit
@@ -534,13 +571,15 @@ contains
          r_out = r_curr
          lambda_out = lambda_curr
 
-         if (cfg%debug) then
-            write (cfg%unit, "(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,l1)") &
-               iter, phi_curr, norm2(r_curr - anchor), norm_g_tan, alpha, mu_min, at_saddle
+         if (ctx%debug) then
+            !$omp critical (moist_context_io)
+            write (ctx%unit, "(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,l1)") &
+               iter, phi_curr, norm2(r_curr - anchor), norm_g_tan, alpha, mu_min, escaping
+            !$omp end critical (moist_context_io)
          end if
       end do
 
-      if (.not. converged .and. iter >= cfg%riemann_max_iter) then
+      if (.not. converged .and. iter >= cfg%escape_max_iter) then
          call fatal_error(error, "Riemannian Newton did not converge within max iterations")
       end if
    end subroutine riemannian_newton_escape
@@ -555,6 +594,7 @@ contains
    !>   `grad phi . grad S / ||grad S||^2` at the retracted point
    !>
    !> @param[in]    cfg        Polish settings
+   !> @param[in]    phi_alpha  Anchor objective weight
    !> @param[inout] lsf        Thread-local level set
    !> @param[in]    r_init     Start point
    !> @param[in]    anchor     Anchor
@@ -562,8 +602,9 @@ contains
    !> @param[out]   lambda_out Multiplier at `r_out`
    !> @param[out]   error      Degenerate gradient, unreached trial or iteration budget exhausted
    !> @param[out]   lsf_error  LSF evaluation failure; folded into `error` when absent
-   subroutine retract_to_surface(cfg, lsf, r_init, anchor, r_out, lambda_out, error, lsf_error)
-      type(polish_config_type), intent(in) :: cfg
+   subroutine retract_to_surface(cfg, phi_alpha, lsf, r_init, anchor, r_out, lambda_out, error, lsf_error)
+      type(drop_polish_parameters_type), intent(in) :: cfg
+      real(wp), intent(in) :: phi_alpha
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       real(wp), intent(in) :: r_init(3)
       real(wp), intent(in) :: anchor(3)
@@ -602,7 +643,7 @@ contains
                return
             end if
             r_out = r_curr
-            lambda_out = dot_product(cfg%phi_alpha*(r_curr - anchor), grad_S)/norm_grad_S2
+            lambda_out = dot_product(phi_alpha*(r_curr - anchor), grad_S)/norm_grad_S2
             return
          end if
 
@@ -615,6 +656,54 @@ contains
 
       call fatal_error(error, "Retraction to surface did not converge")
    end subroutine retract_to_surface
+
+   !> Third directional derivative of the Lagrangian, `D^3 L[d,d,d] = -lambda S_ijk d_i d_j d_k`
+   !>
+   !> - `Hess phi` is constant, so only the level set contributes
+   !>
+   !> @param[inout] lsf       Thread-local level set
+   !> @param[in]    r         Surface point
+   !> @param[in]    lambda    Multiplier at `r`
+   !> @param[in]    d         Tangent direction
+   !> @param[out]   D3        Third directional derivative
+   !> @param[out]   unreached Point beyond the level set reach; `D3` is then zero and meaningless
+   !> @param[out]   error     LSF evaluation failure
+   subroutine lagrangian_third_derivative(lsf, r, lambda, d, D3, unreached, error)
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      real(wp), intent(in) :: r(3)
+      real(wp), intent(in) :: lambda
+      real(wp), intent(in) :: d(3)
+      real(wp), intent(out) :: D3
+      logical, intent(out) :: unreached
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: S3, grad3(3), hess3(6), third3(10)
+
+      D3 = 0.0_wp
+      call point_jet(lsf, r, 3, S3, unreached, error, grad3, hess3, third3)
+      if (allocated(error) .or. unreached) return
+      D3 = -lambda*packed_full_contract3(third3, d, 3)
+   end subroutine lagrangian_third_derivative
+
+   !> Reduced-Hessian eigenvalue threshold of the saddle classification
+   !>
+   !>     max(tol_eig_base, rel_tol ||H_L||_F)
+   !>
+   !> - shared by [[check_constrained_optimality]] and [[riemannian_newton_escape]]
+   !> - Frobenius norm of the packed Hessian, off-diagonal slots twice
+   !>
+   !> @param[in] rel_tol      Threshold relative to `||H_L||_F`
+   !> @param[in] H_lagrangian Lagrangian Hessian, packed (6)
+   pure function saddle_eig_threshold(rel_tol, H_lagrangian) result(eig_tol)
+      real(wp), intent(in) :: rel_tol
+      real(wp), intent(in) :: H_lagrangian(6)
+      real(wp) :: eig_tol
+
+      real(wp) :: HL_norm
+
+      HL_norm = sqrt(sum(H_lagrangian(diag_slots)**2) + 2.0_wp*sum(H_lagrangian(offdiag_slots)**2))
+      eig_tol = max(tol_eig_base, rel_tol*HL_norm)
+   end function saddle_eig_threshold
 
    !* ================================================================================= *!
    !*                            Single-point level set jets                            *!
@@ -633,7 +722,7 @@ contains
    !> @param[out]   error     LSF evaluation failure
    !> @param[out]   grad      Gradient, required for order >= 1
    !> @param[out]   hess      Hessian, packed (6), required for order >= 2
-   !> @param[out]   third     Third derivative tensor, required for order 3
+   !> @param[out]   third     Third derivatives, packed (10), required for order 3
    subroutine point_jet(lsf, point, order, S, unreached, error, grad, hess, third)
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       real(wp), intent(in) :: point(3)
@@ -643,7 +732,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), intent(out), optional :: grad(3)
       real(wp), intent(out), optional :: hess(:)
-      real(wp), intent(out), optional :: third(3, 3, 3)
+      real(wp), intent(out), optional :: third(10)
 
       !> One-column batch; Hessian packed (6, 1), third derivatives packed (10, 1)
       real(wp) :: p(3, 1), v(1), g(3, 1), h(6, 1), t3(10, 1)
@@ -666,7 +755,7 @@ contains
       S = v(1)
       if (order >= 1 .and. present(grad)) grad = g(:, 1)
       if (order >= 2 .and. present(hess)) hess = h(:, 1)
-      if (order >= 3 .and. present(third)) call unpack_sym_tensor3(t3(:, 1), third, 3)
+      if (order >= 3 .and. present(third)) third = t3(:, 1)
    end subroutine point_jet
 
    !> Route an LSF failure to `lsf_error` when the caller asked for it

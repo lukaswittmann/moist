@@ -5,11 +5,12 @@
 !> call per box of a best-first search
 !>
 !> Certificate unchanged -- a box is discarded only when
-!>   - its distance lower bound exceeds the admissible cap `rho_cap`
+!>   - its distance lower bound exceeds the admissible cap `pdist_cap`
 !>   - the probe's surface-free ball around its center swallows it
 !>   - the optional region certificate excludes it
 !>
-!> Seeds come from sign changes, not from every surviving leaf:
+!> Seeds come from sign changes at leaf edges at most `min(seed_size, pdist_max)`
+!> (at least eight children), not from every surviving leaf:
 !>   - a surviving leaf has evidence when its center and a face neighbour's
 !>     center (one leaf edge away) lie on opposite sides of the surface;
 !>     neighbours not probed at the leaf depth are probed in one extra batch
@@ -24,11 +25,15 @@
 !>   - every seed lies within `reach` of the capped ball, so a later, tighter
 !>     ball around the same anchor can reuse the seeds instead of searching again
 !>
-!> `rho_cap` tightens once per depth from that depth's sign changes,
-!> `rho_min <= ||c - anchor|| - r` for a probed center `c` of opposite sign
+!> `pdist_cap` tightens once per depth from that depth's sign changes,
+!> `pdist_min <= ||c - anchor|| - r` for a probed center `c` of opposite sign
 !> and surface-free radius `r`; a best-first search tightens it after every
 !> box, so the level-synchronous search prunes slightly less and may probe
 !> more boxes
+!>
+!> With `tighten` off the cap stays at the starting radius: the projection
+!> asks for the whole ball, since a sign change says nothing about the gate of
+!> the point behind it and only a fully open point may end a search
 !>
 !> A center beyond the level set reach takes the anchor's value and the
 !> LSF's `far_exclusion_radius()`, so it never tightens the cap, and its
@@ -41,7 +46,9 @@ module moist_cavity_drop_projection_seed_octree
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_branching, only: branch_pdist2_max
    use moist_cavity_drop_projection_seed, only: projection_seeder_type, seed_request_type
+   use moist_math_sorter, only: sort_index
    implicit none(type, external)
    private
 
@@ -118,7 +125,7 @@ module moist_cavity_drop_projection_seed_octree
 
       !* ---------------------------- Search configuration ---------------------------- *!
 
-      !> Edge length of the leaves whose sign changes become seeds (Bohr)
+      !> Leaf edge cap (Bohr); leaf edges never exceed the search radius
       real(wp) :: seed_size = 0.2_wp
       !> Tree-descent boxes probed per anchor before the search gives up, counted at
       !> every depth; face-neighbour and refinement probes are not counted, the survivor
@@ -140,7 +147,7 @@ module moist_cavity_drop_projection_seed_octree
       !* ---------------------------------- Results ----------------------------------- *!
 
       !> Admissible radius after self-tightening
-      real(wp) :: rho_max_final = 0.0_wp
+      real(wp) :: pdist_max_final = 0.0_wp
       !> Tree-descent boxes probed by the last search, the count `max_boxes` bounds
       integer :: n_boxes_visited = 0
       !> Boxes discarded by the region certificate
@@ -196,7 +203,7 @@ module moist_cavity_drop_projection_seed_octree
       integer :: dbg_child_seeds = 0
       !> Leaf depth and starting radius of the last search
       integer :: dbg_leaf_depth = 0
-      real(wp) :: dbg_rho_start = 0.0_wp
+      real(wp) :: dbg_pdist_start = 0.0_wp
    contains
       !> Validate the configuration and size the scratch
       procedure :: init => octree_init
@@ -220,7 +227,7 @@ contains
    !>
    !> @param[inout] self          Seeder
    !> @param[out]   error         Invalid configuration
-   !> @param[in]    seed_size     Leaf edge length (Bohr)
+   !> @param[in]    seed_size     Leaf edge cap (Bohr)
    !> @param[in]    max_boxes     Tree-descent box budget per anchor
    !> @param[in]    max_survivors Survivor budget per anchor
    !> @param[in]    max_depth     Depth limit
@@ -299,11 +306,11 @@ contains
 
    !> Cover the admissible surface region of one anchor and emit crossing seeds
    !>
-   !> - the starting radius is the request's `rho_start` when a verified foot
-   !>   gave one, else `sqrt(rho^2 + slack)` for the distance `rho` of the
+   !> - the starting radius is the request's `pdist_start` when a verified point
+   !>   gave one, else the window bound over the distance `pdist` of the
    !>   surface point a sphere trace along the normal reaches, else the
-   !>   request's `rho_fallback`
-   !> - a radius from a foot or the trace bounds the whole window and is used
+   !>   request's `pdist_fallback`
+   !> - a radius from a point or the trace bounds the whole window and is used
    !>   as it is, however large
    !> - with no slack, an anchor on the surface (exactly, or within the trace
    !>   tolerance, so the starting radius is zero) is its own single seed
@@ -320,7 +327,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(octree_lsf_context_type) :: ctx
-      real(wp) :: rho_start, rho_traced
+      real(wp) :: pdist_start, pdist_traced
       logical :: traced
 
       self%n_points = 0
@@ -329,7 +336,8 @@ contains
          return
       end if
 
-      if (request%lsf0_anchor == 0.0_wp .and. request%rho2_slack == 0.0_wp) then
+      if (request%lsf0_anchor == 0.0_wp .and. request%pdist2_slack == 0.0_wp &
+          .and. request%pdist_slack == 0.0_wp .and. .not. request%fixed_radius) then
          call reset_tallies(self, 0.0_wp)
          call self%push(request%anchor)
          return
@@ -339,26 +347,29 @@ contains
       ctx%anchor = request%anchor
       ctx%lsf0_anchor = request%lsf0_anchor
 
-      if (request%rho_start > 0.0_wp) then
-         rho_start = request%rho_start
+      if (request%pdist_start > 0.0_wp) then
+         pdist_start = request%pdist_start
       else
-         call trace_rho_bound(ctx, request, rho_traced, traced, error)
+         call trace_pdist_bound(ctx, request, pdist_traced, traced, error)
          if (allocated(error)) return
          if (traced) then
-            rho_start = sqrt(rho_traced*rho_traced + request%rho2_slack)
+            pdist_start = sqrt(branch_pdist2_max(pdist_traced*pdist_traced, request%pdist2_slack, &
+                                                 request%pdist_slack, request%pdist_soft))
          else
-            rho_start = request%rho_fallback
+            pdist_start = request%pdist_fallback
          end if
       end if
-      if (rho_start <= 0.0_wp) then
+      if (pdist_start <= 0.0_wp) then
          call reset_tallies(self, 0.0_wp)
          call self%push(request%anchor)
          return
       end if
 
       self%point_id = request%index
-      call self%run(request%anchor, request%lsf0_anchor, rho_start, request%rho2_slack, &
-                    lsf_probe, ctx, error, exclude_region=lsf_exclude_region)
+      call self%run(request%anchor, request%lsf0_anchor, pdist_start, request%pdist2_slack, &
+                    lsf_probe, ctx, error, exclude_region=lsf_exclude_region, &
+                    pdist_slack=request%pdist_slack, pdist_soft=request%pdist_soft, &
+                    tighten=.not. request%fixed_radius)
       if (allocated(error)) return
       if (request%nearest_first) call sort_points_by_distance(self, request%anchor)
    end subroutine octree_seed
@@ -372,61 +383,22 @@ contains
       real(wp), intent(in) :: anchor(3)
 
       real(wp), allocatable :: dist(:), sorted(:, :)
-      integer, allocatable :: order(:), work(:)
+      integer, allocatable :: order(:)
       integer :: k, n
 
       n = self%n_points
       if (n < 2) return
-      allocate (dist(n), order(n), work(n), sorted(3, n))
+      allocate (dist(n), order(n), sorted(3, n))
       do k = 1, n
          dist(k) = norm2(self%points(:, k) - anchor)
-         order(k) = k
       end do
-      call merge_sort_by_key(dist, order, work, 1, n)
+      ! Stable, so equal distances keep the emission order
+      call sort_index(dist, order)
       do k = 1, n
          sorted(:, k) = self%points(:, order(k))
       end do
       self%points(:, 1:n) = sorted
    end subroutine sort_points_by_distance
-
-   !> Stable merge sort of an index list by a real key
-   !>
-   !> @param[in]    key   Sort keys, indexed by the list entries
-   !> @param[inout] order Index list, sorted on `lo:hi`
-   !> @param[inout] work  Scratch of the list's size
-   !> @param[in]    lo    First entry
-   !> @param[in]    hi    Last entry
-   recursive subroutine merge_sort_by_key(key, order, work, lo, hi)
-      real(wp), intent(in) :: key(:)
-      integer, intent(inout) :: order(:)
-      integer, intent(inout) :: work(:)
-      integer, intent(in) :: lo, hi
-
-      integer :: mid, i, j, k
-
-      if (hi <= lo) return
-      mid = (lo + hi)/2
-      call merge_sort_by_key(key, order, work, lo, mid)
-      call merge_sort_by_key(key, order, work, mid + 1, hi)
-      i = lo
-      j = mid + 1
-      do k = lo, hi
-         if (j > hi) then
-            work(k) = order(i)
-            i = i + 1
-         else if (i > mid) then
-            work(k) = order(j)
-            j = j + 1
-         else if (key(order(j)) < key(order(i))) then
-            work(k) = order(j)
-            j = j + 1
-         else
-            work(k) = order(i)
-            i = i + 1
-         end if
-      end do
-      order(lo:hi) = work(lo:hi)
-   end subroutine merge_sort_by_key
 
    !* ================================================================================= *!
    !*                              Level-synchronous search                             *!
@@ -434,65 +406,87 @@ contains
 
    !> Cover unresolved regions within the admissible radius of one anchor
    !>
+   !> - leaf edge at most `min(seed_size, pdist_max)`, splitting an unpruned root
+   !>   into at least eight children when `max_depth >= 1`
    !> - on return `points(:, 1:n_points)` holds the crossing seeds and
-   !>   `rho_max_final` the radius actually certified
+   !>   `pdist_max_final` the radius actually certified
    !>
    !> @param[inout] self           Seeder (initialized)
    !> @param[in]    anchor         Anchor
    !> @param[in]    lsf0_anchor    Level set value at the anchor, for the sign test
-   !> @param[in]    rho_max        Starting admissible radius (Bohr)
-   !> @param[in]    rho2_slack     Squared-distance window, `rho_max^2 = rho_min^2 + slack`
+   !> @param[in]    pdist_max      Starting admissible radius (Bohr)
+   !> @param[in]    pdist2_slack   Constant squared-distance part of the window,
+   !>                              `pdist_max^2 = pdist_min^2 + slack` without a distance part
    !> @param[in]    probe          Batched probe
    !> @param[inout] context        Probe context
    !> @param[out]   error          Exhausted budget, coarse depth limit, probe failure
    !> @param[in]    exclude_region Optional whole-box certificate
-   subroutine octree_run(self, anchor, lsf0_anchor, rho_max, rho2_slack, probe, context, error, &
-                         exclude_region)
+   !> @param[in]    pdist_slack    Optional distance part of the window (Bohr)
+   !> @param[in]    pdist_soft     Optional softening length of the distance part (Bohr)
+   !> @param[in]    tighten        Shrink the cap to the window over the closest sign
+   !>                              change (default on); off, the whole ball is searched
+   subroutine octree_run(self, anchor, lsf0_anchor, pdist_max, pdist2_slack, probe, context, error, &
+                         exclude_region, pdist_slack, pdist_soft, tighten)
       class(octree_seeder_type), intent(inout) :: self
       real(wp), intent(in) :: anchor(3)
       real(wp), intent(in) :: lsf0_anchor
-      real(wp), intent(in) :: rho_max
-      real(wp), intent(in) :: rho2_slack
+      real(wp), intent(in) :: pdist_max
+      real(wp), intent(in) :: pdist2_slack
       procedure(octree_probe_batch_interface) :: probe
       class(*), intent(inout) :: context
       type(error_type), allocatable, intent(out) :: error
       procedure(octree_exclude_region_interface), optional :: exclude_region
+      real(wp), intent(in), optional :: pdist_slack
+      real(wp), intent(in), optional :: pdist_soft
+      logical, intent(in), optional :: tighten
 
-      real(wp) :: rho_cap, rho_hit, half, child_key, rho_cross
+      real(wp) :: pdist_cap, pdist_hit, half, child_key, pdist_cross, dpdist, soft
+      logical :: do_tighten
       integer :: depth, leaf_depth, ncur, nnext, nleaves, k, ix, iy, iz, child_lat(3)
       character(len=256) :: buffer
 
-      call reset_tallies(self, rho_max)
+      call reset_tallies(self, pdist_max)
 
       if (.not. self%initialized) then
          call fatal_error(error, "Octree branch search: run before init")
          return
       end if
-      if (rho_max <= 0.0_wp) then
-         call fatal_error(error, "Octree branch search: rho_max must be positive")
+      if (pdist_max <= 0.0_wp) then
+         call fatal_error(error, "Octree branch search: pdist_max must be positive")
          return
       end if
       ! A negative slack puts a NaN into the cap, after which nothing is bounded
-      if (rho2_slack < 0.0_wp) then
-         call fatal_error(error, "Octree branch search: rho2_slack must not be negative")
+      if (pdist2_slack < 0.0_wp) then
+         call fatal_error(error, "Octree branch search: pdist2_slack must not be negative")
          return
       end if
 
-      self%root_half = rho_max
+      dpdist = 0.0_wp
+      soft = 0.0_wp
+      if (present(pdist_slack)) dpdist = pdist_slack
+      if (present(pdist_soft)) soft = pdist_soft
+      do_tighten = .true.
+      if (present(tighten)) do_tighten = tighten
+      if (dpdist < 0.0_wp) then
+         call fatal_error(error, "Octree branch search: pdist_slack must not be negative")
+         return
+      end if
 
-      ! Depth at which the edge first drops to the seed size; stopping short of
-      ! it would merge minima the configured resolution separates
-      leaf_depth = 0
+      self%root_half = pdist_max
+
+      ! Depth with leaf edge at most `min(seed_size, pdist_max)`, at least eight
+      ! children when `max_depth >= 1`; coarser leaves merge resolved minima
+      leaf_depth = min(1, max(0, self%max_depth))
       do while (2.0_wp*box_half(self, leaf_depth) > self%seed_size)
-         leaf_depth = leaf_depth + 1
          if (leaf_depth >= self%max_depth) exit
+         leaf_depth = leaf_depth + 1
       end do
       if (2.0_wp*box_half(self, leaf_depth) > self%seed_size) then
          write (buffer, "(a,i0,a,f0.4,a,f0.4,a,i0,a)") &
             "Octree branch search: max_depth (", self%max_depth, &
             ") bottoms out at a leaf edge of ", 2.0_wp*box_half(self, leaf_depth), &
             " Bohr, coarser than the requested seed_size of ", self%seed_size, &
-            " Bohr. Raise max_depth to at least ", required_depth(self, rho_max), &
+            " Bohr. Raise max_depth to at least ", required_depth(self, pdist_max), &
             " or loosen seed_size."
          call fatal_error(error, trim(buffer))
          return
@@ -502,12 +496,12 @@ contains
       ! center within a half-diagonal of the capped ball
       self%reach = (1.0_wp + 0.5_wp*sqrt(3.0_wp))*2.0_wp*box_half(self, leaf_depth)
 
-      rho_cap = rho_max
-      rho_hit = huge(1.0_wp)
+      pdist_cap = pdist_max
+      pdist_hit = huge(1.0_wp)
       ! An anchor on the surface is its own closest branch
-      if (lsf0_anchor == 0.0_wp) then
-         rho_hit = 0.0_wp
-         rho_cap = min(rho_cap, sqrt(rho2_slack))
+      if (lsf0_anchor == 0.0_wp .and. do_tighten) then
+         pdist_hit = 0.0_wp
+         pdist_cap = min(pdist_cap, sqrt(branch_pdist2_max(0.0_wp, pdist2_slack, dpdist, soft)))
       end if
 
       ncur = 1
@@ -534,21 +528,23 @@ contains
          if (allocated(error)) return
 
          ! Sign changes of this depth tighten the cap for all of its boxes
-         if (lsf0_anchor /= 0.0_wp) then
+         if (lsf0_anchor /= 0.0_wp .and. do_tighten) then
             do k = 1, ncur
                if (self%probe0(k)*lsf0_anchor > 0.0_wp) cycle
-               rho_cross = max(0.0_wp, norm2(self%centers(:, k) - anchor) - self%probe_r(k))
-               rho_hit = min(rho_hit, rho_cross)
+               pdist_cross = max(0.0_wp, norm2(self%centers(:, k) - anchor) - self%probe_r(k))
+               pdist_hit = min(pdist_hit, pdist_cross)
             end do
-            if (rho_hit < huge(1.0_wp)) rho_cap = min(rho_cap, sqrt(rho_hit*rho_hit + rho2_slack))
+            if (pdist_hit < huge(1.0_wp)) then
+               pdist_cap = min(pdist_cap, sqrt(branch_pdist2_max(pdist_hit*pdist_hit, pdist2_slack, dpdist, soft)))
+            end if
          end if
-         self%dbg_cap(depth) = rho_cap
+         self%dbg_cap(depth) = pdist_cap
 
          nnext = 0
          nleaves = 0
          do k = 1, ncur
             self%survivor(k) = .false.
-            if (self%cur_key(k) > rho_cap) cycle
+            if (self%cur_key(k) > pdist_cap) cycle
 
             ! The surface-free ball swallows the box
             if (self%probe_r(k) >= half*sqrt(3.0_wp)) then
@@ -583,8 +579,8 @@ contains
                do iy = 0, 1
                   do ix = 0, 1
                      child_lat = 2*self%cur_lat(:, k) + [ix, iy, iz]
-                     child_key = box_rho_lower(self, depth + 1, child_lat)
-                     if (child_key > rho_cap) cycle
+                     child_key = box_pdist_lower(self, depth + 1, child_lat)
+                     if (child_key > pdist_cap) cycle
                      if (self%n_boxes_visited + nnext + 1 > self%max_boxes) then
                         call budget_error(error)
                         return
@@ -612,12 +608,13 @@ contains
          ncur = nnext
       end do
 
-      self%rho_max_final = rho_cap
+      self%pdist_max_final = pdist_cap
 
       if (self%debug) then
-         !$omp critical (drop_octree_report)
+         ! Same lock as the context's messages on this unit
+         !$omp critical (moist_context_io)
          call self%report(anchor)
-         !$omp end critical (drop_octree_report)
+         !$omp end critical (moist_context_io)
       end if
    end subroutine octree_run
 
@@ -712,15 +709,15 @@ contains
 
    !> Clear the per-search results and tallies
    !>
-   !> @param[inout] self      Seeder
-   !> @param[in]    rho_start Starting radius of the search (Bohr)
-   subroutine reset_tallies(self, rho_start)
+   !> @param[inout] self        Seeder
+   !> @param[in]    pdist_start Starting radius of the search (Bohr)
+   subroutine reset_tallies(self, pdist_start)
       type(octree_seeder_type), intent(inout) :: self
-      real(wp), intent(in) :: rho_start
+      real(wp), intent(in) :: pdist_start
 
       self%n_points = 0
       self%reach = 0.0_wp
-      self%rho_max_final = 0.0_wp
+      self%pdist_max_final = 0.0_wp
       self%n_boxes_visited = 0
       self%n_regions_excluded = 0
       self%dbg_probed = 0
@@ -736,7 +733,7 @@ contains
       self%dbg_face_seeds = 0
       self%dbg_child_seeds = 0
       self%dbg_leaf_depth = 0
-      self%dbg_rho_start = rho_start
+      self%dbg_pdist_start = pdist_start
    end subroutine reset_tallies
 
    !* ================================================================================= *!
@@ -1136,19 +1133,19 @@ contains
       half = self%root_half/real(2**depth, wp)
    end function box_half
 
-   !> Depth at which a root of half-width `rho_max` reaches `seed_size`
+   !> Leaf depth at which a root of half-width `pdist_max` reaches `seed_size`
    !>
-   !> @param[in] self    Seeder
-   !> @param[in] rho_max Root half-width (Bohr)
-   pure function required_depth(self, rho_max) result(depth)
+   !> @param[in] self      Seeder
+   !> @param[in] pdist_max Root half-width (Bohr)
+   pure function required_depth(self, pdist_max) result(depth)
       type(octree_seeder_type), intent(in) :: self
-      real(wp), intent(in) :: rho_max
+      real(wp), intent(in) :: pdist_max
       integer :: depth
 
-      depth = 0
-      do while (2.0_wp*rho_max/real(2**depth, wp) > self%seed_size)
-         depth = depth + 1
+      depth = 1
+      do while (2.0_wp*pdist_max/real(2**depth, wp) > self%seed_size)
          if (depth >= max_addressable_depth) exit
+         depth = depth + 1
       end do
    end function required_depth
 
@@ -1171,14 +1168,14 @@ contains
    !> @param[in] self  Seeder
    !> @param[in] depth Octree depth
    !> @param[in] lat   Lattice position
-   pure function box_rho_lower(self, depth, lat) result(rho)
+   pure function box_pdist_lower(self, depth, lat) result(pdist)
       type(octree_seeder_type), intent(in) :: self
       integer, intent(in) :: depth
       integer, intent(in) :: lat(3)
-      real(wp) :: rho
+      real(wp) :: pdist
 
-      rho = norm2(max(abs(box_offset(self, depth, lat)) - box_half(self, depth), 0.0_wp))
-   end function box_rho_lower
+      pdist = norm2(max(abs(box_offset(self, depth, lat)) - box_half(self, depth), 0.0_wp))
+   end function box_pdist_lower
 
    !* ================================================================================= *!
    !*                                  Level set probe                                  *!
@@ -1255,26 +1252,26 @@ contains
    !>
    !> - marches along the normal by `|S| / ||grad S||`, at most
    !>   `trace_step_limit` per step; a sign flip or a point within
-   !>   `trace_feasible_tol` of the surface bounds `rho_min`
+   !>   `trace_feasible_tol` of the surface bounds `pdist_min`
    !> - a ray that runs out of steps, meets a vanishing gradient or leaves the
    !>   level set reach bounds nothing
    !>
-   !> @param[inout] ctx       Probe context
-   !> @param[in]    request   Anchor request
-   !> @param[out]   rho_bound Upper bound on `rho_min` when `found`
-   !> @param[out]   found     Whether the ray reached the surface
-   !> @param[out]   error     LSF failure
-   subroutine trace_rho_bound(ctx, request, rho_bound, found, error)
+   !> @param[inout] ctx         Probe context
+   !> @param[in]    request     Anchor request
+   !> @param[out]   pdist_bound Upper bound on `pdist_min` when `found`
+   !> @param[out]   found       Whether the ray reached the surface
+   !> @param[out]   error       LSF failure
+   subroutine trace_pdist_bound(ctx, request, pdist_bound, found, error)
       type(octree_lsf_context_type), intent(inout) :: ctx
       type(seed_request_type), intent(in) :: request
-      real(wp), intent(out) :: rho_bound
+      real(wp), intent(out) :: pdist_bound
       logical, intent(out) :: found
       type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: x(3, 1), val(1), grad(3, 1), gnorm, dir(3), step
       integer :: istep
 
-      rho_bound = 0.0_wp
+      pdist_bound = 0.0_wp
       found = .false.
       x(:, 1) = request%anchor
       call ctx%lsf%evaluate_batch(x, 1, val, lsf1_r=grad, error=error)
@@ -1283,7 +1280,7 @@ contains
 
       do istep = 1, trace_max_steps
          if (abs(val(1)) <= trace_feasible_tol) then
-            rho_bound = norm2(x(:, 1) - request%anchor)
+            pdist_bound = norm2(x(:, 1) - request%anchor)
             found = .true.
             return
          end if
@@ -1297,13 +1294,13 @@ contains
          if (allocated(error)) return
          if (ctx%lsf%unreached(1)) return
          if (val(1)*request%lsf0_anchor < 0.0_wp) then
-            rho_bound = norm2(x(:, 1) - request%anchor)
+            pdist_bound = norm2(x(:, 1) - request%anchor)
             found = .true.
             return
          end if
       end do
 
-   end subroutine trace_rho_bound
+   end subroutine trace_pdist_bound
 
    !* ================================================================================= *!
    !*                                    Debug report                                   *!
@@ -1323,8 +1320,8 @@ contains
 
       write (self%unit, "(a)") ""
       write (self%unit, "(2x,a,i0,a,3(1x,f10.5))") "== Octree seeds, point ", self%point_id, ", anchor", anchor
-      write (self%unit, "(4x,a,f13.5)") "rho_max (start)        ", self%dbg_rho_start
-      write (self%unit, "(4x,a,f13.5)") "rho_max (certified)    ", self%rho_max_final
+      write (self%unit, "(4x,a,f13.5)") "pdist_max (start)      ", self%dbg_pdist_start
+      write (self%unit, "(4x,a,f13.5)") "pdist_max (certified)  ", self%pdist_max_final
       write (self%unit, "(4x,a,i13)") "leaf depth             ", self%dbg_leaf_depth
       write (self%unit, "(4x,7a10)") "depth", "probed", "free", "excluded", "split", "leaves", "cap"
       do depth = 0, self%dbg_leaf_depth

@@ -4,7 +4,7 @@
 !> solve failed or whose level searches every anchor
 !>
 !> - input: the anchor, its owning atom, the level set jet at the anchor, the
-!>   admissible window, the radius from a verified local foot and the fallback
+!>   admissible window, the radius from a verified local point and the fallback
 !>   search radius ([[seed_request_type]])
 !> - output: `points(:, 1:n_points)`, which the caller appends to the open run
 !>   of its batch with zero multipliers
@@ -33,17 +33,24 @@ module moist_cavity_drop_projection_seed
       real(wp) :: lsf0_anchor = 0.0_wp
       !> Level set gradient at the anchor
       real(wp) :: grad_anchor(3) = 0.0_wp
-      !> Admissible radius from a verified local foot, `sqrt(rho_1^2 + slack)`;
-      !> non-positive when no such foot exists
-      real(wp) :: rho_start = -1.0_wp
-      !> Squared-distance window over the closest branch (Bohr^2)
-      real(wp) :: rho2_slack = 0.0_wp
-      !> Search radius around the anchor when neither `rho_start` nor a surface
+      !> Admissible radius from a verified local point, the window bound over
+      !> its distance; non-positive when no such point exists
+      real(wp) :: pdist_start = -1.0_wp
+      !> Constant squared-distance part of the window over the closest branch (Bohr^2)
+      real(wp) :: pdist2_slack = 0.0_wp
+      !> Distance part of the window (Bohr), see [[branch_pdist2_max]]
+      real(wp) :: pdist_slack = 0.0_wp
+      !> Softening length of the distance part (Bohr)
+      real(wp) :: pdist_soft = 0.0_wp
+      !> Search radius around the anchor when neither `pdist_start` nor a surface
       !> trace bounds the search (Bohr)
-      real(wp) :: rho_fallback = 15.0_wp
+      real(wp) :: pdist_fallback = 15.0_wp
       !> Seeds ordered by distance to the anchor, nearest first; seeders without an
       !> order of their own ignore it
       logical :: nearest_first = .false.
+      !> Search the whole ball of radius `pdist_start`: surface met on the way does
+      !> not shrink it, its gate being unknown before the point is solved
+      logical :: fixed_radius = .false.
    end type seed_request_type
 
    !> Abstract seeder

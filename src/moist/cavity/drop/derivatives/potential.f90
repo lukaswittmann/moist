@@ -66,6 +66,9 @@ contains
    !> Includes position, normal, and curvature channel; area and integration
    !> weights enter through the Gaussian width; anchor-only switching is fixed
    !>
+   !> - the gate and the objective of a row also reach the branch weights of
+   !>   the other rows of its anchor
+   !>
    !> @param[in]  self   Requires a projected grid
    !> @param[in]  acc    Surface weights on the current cavity grid
    !> @param[out] w_lsf0 Shape (ngrid)
@@ -181,12 +184,11 @@ contains
 
             igrid = igrid0 + p - 1
             owner_idx = self%owner(igrid)
-            call fill_seed_state(self, igrid, eff%have_wk, state)
-
             ! A degenerate point or a singular KKT system voids the result
+            call fill_seed_state(self, igrid, eff%have_wk, state)
             call seed_point_jet(slots%phi(thread_slot), tile_xyz(:, p), owner_idx, tile_lsf1(:, p), &
                                 tile_lsf2(:, p), tile_lsf3(:, p), self%lambda0(igrid), self%f_crit, &
-                                self%f_foc, self%f_wleb, self%param%wleb_prune_level > 0, eff, &
+                                self%f_foc, self%f_hor, self%f_wleb, self%param%finalize%wleb_prune, eff, &
                                 igrid, state, kkt_rhs, phi1_r, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
                                 w_xyz_local, status)
             if (status /= seed_state_ok) then

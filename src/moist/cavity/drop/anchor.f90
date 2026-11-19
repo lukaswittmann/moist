@@ -7,6 +7,7 @@
 !> - `fill` places the Lebedev points on every sphere
 !> - `compute_switching` evaluates the iSwiG widths and switching factors
 !> - `filter` drops anchors whose weight `wleb0*f0` is at or below the cutoff
+!> - `restrict` keeps only listed anchor ids
 module moist_cavity_drop_anchor
    use mctc_env_accuracy, only: wp
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig
@@ -39,6 +40,8 @@ module moist_cavity_drop_anchor
       procedure :: compute_switching => anchor_compute_switching
       !> Drop anchors at or below the weight cutoff (pre-filter)
       procedure :: filter => anchor_filter
+      !> Keep only the anchors with listed ids
+      procedure :: restrict => anchor_restrict
       !> Deallocate every array and reset the count
       procedure :: clear => anchor_clear
    end type drop_anchor_type
@@ -177,6 +180,52 @@ contains
       self%ngrid = nvalid
 
    end subroutine anchor_filter
+
+   !> Keep only the anchors whose id is listed (mainly for unittests)
+   !>
+   !> - ids not on the grid are ignored, so one list serves every geometry
+   !> - `xi0` and `f0` must be allocated; the other arrays as in `filter`
+   !>
+   !> @param[inout] self     anchor grid
+   !> @param[in]    ids      anchor ids to keep
+   !> @param[out]   nremoved number of anchors dropped
+   subroutine anchor_restrict(self, ids, nremoved)
+      !> Anchor grid
+      class(drop_anchor_type), intent(inout) :: self
+      !> Anchor ids to keep
+      integer, intent(in) :: ids(:)
+      !> Number of anchors dropped
+      integer, intent(out) :: nremoved
+
+      !> Anchor count before and after
+      integer :: nold, nvalid
+      !> Listed per id, and keep mask (nold)
+      logical, allocatable :: listed(:), keep(:)
+      integer :: i
+
+      nold = self%ngrid
+      ! maxval of no anchors is -huge
+      allocate (listed(max(0, maxval(self%id(1:nold)))), source=.false.)
+      do i = 1, size(ids)
+         if (ids(i) >= 1 .and. ids(i) <= size(listed)) listed(ids(i)) = .true.
+      end do
+      allocate (keep(nold))
+      do i = 1, nold
+         keep(i) = listed(self%id(i))
+      end do
+
+      nvalid = count(keep)
+      nremoved = nold - nvalid
+
+      call filter_array(self%xyz, nold, keep, nvalid)
+      call filter_array(self%wleb0, nold, keep, nvalid)
+      call filter_array(self%f0, nold, keep, nvalid)
+      call filter_array(self%xi0, nold, keep, nvalid)
+      call filter_array(self%owner, nold, keep, nvalid)
+      call filter_array(self%id, nold, keep, nvalid)
+      self%ngrid = nvalid
+
+   end subroutine anchor_restrict
 
    !> Deallocate every array and reset the count
    !>
