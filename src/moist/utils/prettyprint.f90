@@ -1,6 +1,7 @@
 module moist_utils_prettyprint
    use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
      & real32, real64
+   use moist_utils_format, only: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
    implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
@@ -471,9 +472,9 @@ contains
       type is (integer(int64))
          fmt = self%fmt_int
       type is (real(real32))
-         call default_real_fmt(self, real(val, kind=real64), fmt)
+         call magnitude_real_fmt(real(val, kind=real64), self%fmt_real, self%fmt_exp, fmt)
       type is (real(real64))
-         call default_real_fmt(self, val, fmt)
+         call magnitude_real_fmt(val, self%fmt_real, self%fmt_exp, fmt)
       type is (logical)
          fmt = self%fmt_logical
       type is (character(*))
@@ -482,111 +483,5 @@ contains
          fmt = "A"
       end select
    end subroutine default_fmt
-
-   subroutine value_to_string(val, fmt, s)
-      class(*), intent(in) :: val
-      character(*), intent(in) :: fmt
-      character(:), allocatable, intent(out) :: s
-      character(256) :: buf
-      character(:), allocatable :: f
-
-      f = "("//trim(fmt)//")"
-      buf = ""
-
-      select type (val)
-      type is (integer(int8))
-         write (buf, f) val
-      type is (integer(int16))
-         write (buf, f) val
-      type is (integer(int32))
-         write (buf, f) val
-      type is (integer(int64))
-         write (buf, f) val
-      type is (real(real32))
-         if (val == 0.0_real32) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, f) val
-      type is (real(real64))
-         if (val == 0.0_real64) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, f) val
-      type is (logical)
-         write (buf, f) val
-      type is (character(*))
-         buf = val
-      class default
-         buf = "<unsupported type>"
-      end select
-
-      s = trim(buf)
-   end subroutine value_to_string
-
-   subroutine zero_value_string(fmt, s)
-      character(*), intent(in) :: fmt
-      character(:), allocatable, intent(out) :: s
-      character(256) :: buf
-      character(:), allocatable :: f
-      integer :: idot, w
-
-      f = "("//trim(fmt)//")"
-      write (buf, f) 0.0_real64
-      idot = index(buf, ".")
-      w = len_trim(buf)
-
-      if (idot > 1 .and. w > 0) then
-         s = repeat(" ", idot - 2)//"0.0"//repeat(" ", max(0, w - (idot + 1)))
-      else
-         s = "0.0"
-      end if
-   end subroutine zero_value_string
-
-   subroutine fixed_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine fixed_fmt
-
-   subroutine exp_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine exp_fmt
-
-   subroutine int_fmt(width, fmt)
-      integer, intent(in) :: width
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf
-
-      write (wbuf, "(I0)") max(1, width - 7)
-      fmt = "I"//trim(wbuf)
-   end subroutine int_fmt
-
-   subroutine default_real_fmt(self, val, fmt)
-      class(prettyprinter), intent(in) :: self
-      real(real64), intent(in) :: val
-      character(:), allocatable, intent(out) :: fmt
-      real(real64) :: aval
-
-      aval = abs(val)
-      if (aval == 0.0_real64) then
-         fmt = self%fmt_real
-      else if (aval < 1.0e-6_real64 .or. aval >= 1.0e6_real64) then
-         fmt = self%fmt_exp
-      else
-         fmt = self%fmt_real
-      end if
-   end subroutine default_real_fmt
 
 end module moist_utils_prettyprint
