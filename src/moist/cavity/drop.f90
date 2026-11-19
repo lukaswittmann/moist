@@ -528,7 +528,7 @@ contains
       call new_smoothstep_sigmoid(self%f_hor, self%param%hor_off, self%param%hor_on, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
-      call new_smoothstep_sigmoid(self%f_reach, self%param%reach_off, self%param%reach_on, &
+      call new_smoothstep_sigmoid(self%f_reach, self%param%branch%reach_off, self%param%branch%reach_on, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
                                  a_lo=self%param%w_0ls_a)
 
@@ -542,7 +542,7 @@ contains
       call new_iswig(self%iswig, self%param%iswig_xi_born)
 
       !> Set up branch weight model
-      call self%branch_weight%init(self%param%branch_dpdist_max, self%param%phi_alpha)
+      call self%branch_weight%init(self%param%branch%dpdist_max, self%param%phi_alpha, self%param%branch%sep_cut)
 
       ! A constructed cavity has no structure, no surface and no coupling yet
       if (allocated(self%mol)) deallocate (self%mol)
