@@ -445,6 +445,7 @@ if(MOIST_TESTS)
     set_property(TARGET moist-api-cpp-tester PROPERTY CXX_STANDARD 11)
     target_link_libraries(moist-api-cpp-tester PRIVATE moist)
     add_test(NAME api-cpp COMMAND moist-api-cpp-tester)
+    set_tests_properties(api-c api-cpp PROPERTIES TIMEOUT 900)
   endif()
 
   foreach(suite IN LISTS moist_test_suites)
