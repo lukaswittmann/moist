@@ -28,6 +28,7 @@ See each directory's `PROVENANCE.md` for the exact file list, origin, pinned rev
 | FINUFFT (non-uniform FFT) | `src/moist/math/fft/finufft/` | flatironinstitute/finufft | commit `0e9c10409580c482656b3f840c9d875f98c3a066` (2.6.0-dev) | Apache-2.0 | `src/moist/math/fft/finufft/LICENSE`, `NOTICE` |
 | xsimd (SIMD wrappers, header-only) | `src/moist/math/fft/xsimd/` | xtensor-stack/xsimd | commit `6842624fc8adafd7168a999e7150b384411da448` | BSD-3-Clause | `src/moist/math/fft/xsimd/LICENSE` |
 | ducc0 FFT (16-file subset) | `src/moist/math/fft/ducc0/` | mreineck/ducc, tag `ducc0_0_39_1` (commit `0c0525521bc56d1b7bef8eb97a6debb6a3bfd33c`) | see tag | BSD-3-Clause (only dual-licensed files are vendored; moist takes the BSD-3-Clause option) | full text in the header of every file, also collected in `src/moist/math/fft/ducc0/LICENSE`; provenance and closure in `src/moist/math/fft/ducc0/PROVENANCE.md` |
+| libmsym (point-group detection) | `src/moist/math/symmetry/libmsym/` | mcodev31/libmsym | commit `85e47232376a8e735c2a7b5283f40b59b3953db1` (0.2.4) | MIT | `src/moist/math/symmetry/libmsym/LICENSE`; provenance and local additions in `src/moist/math/symmetry/libmsym/PROVENANCE.md` |
 
 ## Lennard-Jones parameters
 
