@@ -18,6 +18,7 @@ module test_model_component_pcm_references
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf, ieee_is_finite
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
    use mstore, only: get_structure
    use mctc_env_error, only: moist_error_type => error_type
@@ -1197,7 +1198,7 @@ contains
          do i = 1, cavity%ngrid
             r = norm2(cavity%xyz(:, i))
             phi(i) = charge*erf(beta(i)*r)/r
-            dphi(:, i) = (2.0_wp*charge*beta(i)/sqrt(acos(-1.0_wp))*exp(-(beta(i)*r)**2) &
+            dphi(:, i) = (2.0_wp*charge*beta(i)/sqrt(pi)*exp(-(beta(i)*r)**2) &
                & - phi(i))*cavity%xyz(:, i)/r**2
          end do
          call submit(coupling, "phi", phi)
@@ -2201,7 +2202,7 @@ contains
       real(wp), allocatable, intent(out) :: radii(:)
 
       !> TIP3P bond length (bohr) and half angle (rad)
-      real(wp), parameter :: r_oh = 0.9572_wp*aatoau, half_hoh = 0.5_wp*104.52_wp*acos(-1.0_wp)/180.0_wp
+      real(wp), parameter :: r_oh = 0.9572_wp*aatoau, half_hoh = 0.5_wp*104.52_wp*pi/180.0_wp
       !> Atomic numbers of the sphere centers
       integer, allocatable :: num(:)
       !> Sphere centers, bohr

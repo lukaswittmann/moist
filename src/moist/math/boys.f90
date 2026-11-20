@@ -13,7 +13,7 @@ module moist_math_boys
    !* -------------------------- Beylkin & Beylkin fast boys -------------------------- *!
 
    real(wp), parameter :: tol = 1.0E-03_wp
-   real(wp), parameter :: sqrtpio2 = 0.886226925452758014_wp
+   real(wp), parameter :: sqrtpio2 = 0.5_wp*sqrt(pi)
    real(wp), parameter :: t(0:11) = [ &
                           0.20000000000000000E+01_wp, &
                           0.66666666666666663E+00_wp, &
@@ -89,7 +89,6 @@ module moist_math_boys
                           1.458916900093370682E-06_wp, &
                           -1.450385222315046877E-07_wp, &
                           1.3122532963802805073E-08_wp]
-   real(wp), parameter :: sqpio2 = 0.886226925452758014_wp
    real(wp), parameter :: pp(1:22) = [ &
                           0.001477878263796956477_wp, &
                           0.013317276413725817441_wp, &
@@ -275,7 +274,7 @@ contains
             val = val*y + asymcoef(k)
          end do
 
-         val = ez*val*y + z1*sqpio2
+         val = ez*val*y + z1*sqrtpio2
 
          return
       end if
@@ -290,7 +289,7 @@ contains
       end if
 
       ! Intermediate |z| uses the Pade-quadrature rational approximation
-      val = sqpio2/sqrt(z) - 0.5_wp*ez*sum(ff(1:22)/(z + pp(1:22)))
+      val = sqrtpio2/sqrt(z) - 0.5_wp*ez*sum(ff(1:22)/(z + pp(1:22)))
 
       return
    end subroutine zboysfun00
@@ -334,9 +333,9 @@ contains
       else
          sqrtx = sqrt(x)
          if (x >= boys_x_far) then
-            f0 = 0.88622692545275801_wp/sqrtx
+            f0 = sqrtpio2/sqrtx
          else
-            f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+            f0 = sqrtpio2*erf(sqrtx)/sqrtx
          end if
       end if
 
@@ -398,13 +397,13 @@ contains
       else if (x >= boys_x_far) then
          ex = 0.0_wp
          sqrtx = sqrt(x)
-         f0 = 0.88622692545275801_wp/sqrtx
+         f0 = sqrtpio2/sqrtx
          f1 = 0.5_wp*f0/x
       else
          sqrtx = sqrt(x)
          ex = exp(-x)
          inv2x = 0.5_wp/x
-         f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+         f0 = sqrtpio2*erf(sqrtx)/sqrtx
          f1 = (f0 - ex)*inv2x
       end if
 
@@ -485,14 +484,14 @@ contains
          ex = 0.0_wp
          sqrtx = sqrt(x)
          inv2x = 0.5_wp/x
-         f0 = 0.88622692545275801_wp/sqrtx
+         f0 = sqrtpio2/sqrtx
          f1 = f0*inv2x
          f2 = 3.0_wp*f1*inv2x
       else
          sqrtx = sqrt(x)
          ex = exp(-x)
          inv2x = 0.5_wp/x
-         f0 = 0.88622692545275801_wp*erf(sqrtx)/sqrtx
+         f0 = sqrtpio2*erf(sqrtx)/sqrtx
          f1 = (f0 - ex)*inv2x
          f2 = (3.0_wp*f1 - ex)*inv2x
       end if

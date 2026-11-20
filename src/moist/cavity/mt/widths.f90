@@ -18,6 +18,7 @@
 module moist_cavity_mt_widths
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
+   use mctc_io_constants, only: pi
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type
    use moist_math_adjacency, only: adjacency_list_type
@@ -26,7 +27,7 @@ module moist_cavity_mt_widths
    public :: width_factors
 
    !> sqrt(pi/2), converting a self potential to a Gaussian width
-   real(wp), parameter :: width_per_self = 1.2533141373155003_wp
+   real(wp), parameter :: width_per_self = sqrt(0.5_wp*pi)
    !> Largest relative change of one width
    real(wp), parameter :: max_ratio = 1.25_wp
    !> Triangles farther than this many diameters use the centroid rule

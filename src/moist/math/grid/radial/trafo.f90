@@ -17,7 +17,6 @@
 !> - Forward: diag(2*pi*dr/k) . S . diag(r)
 !> - Backward: diag(dk/(4*pi^2)/r) . S . diag(k)
 !> - S: unnormalised DST-IV (RODFT11); k2r(r2k(f)) = f to roundoff
-!> - Uses pi from `mctc_io_constants`, matching `new_uniform_radial_pair` and exact dk check
 !>
 !> General quadrature on any radial pair: dense spherical Fourier kernel
 !> Stored dr/dk weights w_r and w_k:

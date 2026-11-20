@@ -8,6 +8,7 @@ module test_cavity_drop_projector
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
@@ -46,7 +47,6 @@ module test_cavity_drop_projector
    !> Smallest objective change a curvature probe must show, against roundoff and a
    !> first-order residual
    real(wp), parameter :: PROBE_RISE = 1.0e-5_wp
-   real(wp), parameter :: PI = 3.14159265358979323846_wp
 
    !> Bare level set fixture: one structure, its LSF and the projection settings
    type :: fixture_type
@@ -2365,7 +2365,7 @@ contains
 
       real(wp) :: half
 
-      half = 0.5_wp*angle*PI/180.0_wp
+      half = 0.5_wp*angle*pi/180.0_wp
       xyz(:, 1) = [-arm*sin(half), 0.0_wp, -arm*cos(half)]
       xyz(:, 2) = 0.0_wp
       xyz(:, 3) = [arm*sin(half), 0.0_wp, -arm*cos(half)]
@@ -2767,7 +2767,7 @@ contains
 
       call setup_tangent_frame(normal, t1, t2)
       do k = 0, 7
-         ang = 0.25_wp*PI*real(k, wp)
+         ang = 0.25_wp*pi*real(k, wp)
          d = cos(ang)*t1 + sin(ang)*t2
          call step_change(fx, anchor, r, d, PROBE_STEP, rise, error)
          if (allocated(error)) return

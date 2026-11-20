@@ -6,6 +6,7 @@ module test_cavity_drop_projection
    use mctc_env, only: wp, moist_error_type => error_type
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -2551,7 +2552,7 @@ contains
       do itheta = 0, 8
          theta = acos(0.875_wp)*real(itheta, wp)/8.0_wp
          do iphi = 0, 23
-            phi = 2.0_wp*acos(-1.0_wp)*real(iphi, wp)/24.0_wp
+            phi = 2.0_wp*pi*real(iphi, wp)/24.0_wp
             point = [cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi)]
             distance = huge(1.0_wp)
             do i = 1, octree%n_points
