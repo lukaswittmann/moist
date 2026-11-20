@@ -12,6 +12,7 @@
 !> surface
 module moist_model_continuum_component_pcm_elstat
    use mctc_env, only: wp, error_type, fatal_error
+   use mctc_io_constants, only: pi
    use moist_context, only: resolve_num_threads
    implicit none(type, external)
    private
@@ -19,6 +20,9 @@ module moist_model_continuum_component_pcm_elstat
    public :: pcm_elstat_nuclear_gradient
    public :: pcm_elstat_direct_gradient
    public :: pcm_elstat_normal_direct_gradient
+
+   !> Square root of pi
+   real(wp), parameter :: sqrt_pi = sqrt(pi)
 
 contains
 
@@ -35,7 +39,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       real(wp), intent(in), optional :: xi(:)
       integer :: i, katom, ngrid, nsph
-      real(wp) :: rvec(3), r2, r, x, aterm, c0, c1, projection, sqrt_pi
+      real(wp) :: rvec(3), r2, r, x, aterm, c0, c1, projection
 
       grad_rA = 0.0_wp
       ngrid = size(w_grad, 2)
@@ -53,7 +57,6 @@ contains
          end if
       end if
 
-      sqrt_pi = sqrt(acos(-1.0_wp))
       do i = 1, ngrid
          do katom = 1, nsph
             rvec = xyz(:, i) - sphxyz(:, katom)
@@ -153,10 +156,10 @@ contains
             if (present(xi)) then
                x = xi(i)*sqrt(r2)
                if (abs(x) < 1.0e-3_wp) then
-                  inv_r3 = 4.0_wp*xi(i)*xi(i)*xi(i)/(3.0_wp*sqrt(acos(-1.0_wp))) &
+                  inv_r3 = 4.0_wp*xi(i)*xi(i)*xi(i)/(3.0_wp*sqrt_pi) &
                           & *(1.0_wp - 0.6_wp*x*x + 3.0_wp*x*x*x*x/14.0_wp)
                else
-                  inv_r3 = inv_r3*(erf(x) - 2.0_wp*x*exp(-x*x)/sqrt(acos(-1.0_wp)))
+                  inv_r3 = inv_r3*(erf(x) - 2.0_wp*x*exp(-x*x)/sqrt_pi)
                end if
             end if
             grad_rA(:, katom) = grad_rA(:, katom) + qi*za(katom)*inv_r3*rvec

@@ -9,6 +9,7 @@ module moist_model_continuum_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_output_citations, only: citation
    use moist_context, only: moist_context_type
@@ -47,7 +48,7 @@ module moist_model_continuum_component_gostshyp
    end type moist_gostshyp_parameters_type
 
    !> Pi times ln 2, the numerator of the Gaussian width
-   real(wp), parameter :: pi_ln2 = acos(-1.0_wp)*log(2.0_wp)
+   real(wp), parameter :: pi_ln2 = pi*log(2.0_wp)
 
    !> Gaussian widths, bohr**-2, bracketing the C2 switch-off of narrow points
    !>

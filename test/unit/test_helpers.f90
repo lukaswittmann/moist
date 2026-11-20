@@ -78,6 +78,7 @@ module test_helpers
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
+   use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
    use mctc_env_error, only: moist_error_type => error_type, fatal_error
    use mstore, only: get_structure
@@ -647,7 +648,7 @@ contains
             r_dist = sqrt(sum(r_vec**2))
             if (gaussian) then
                if (r_dist < min_dist) then
-                  phi(i) = phi(i) + qat(j)*2.0_wp*xi0(i)/sqrt(acos(-1.0_wp))
+                  phi(i) = phi(i) + qat(j)*2.0_wp*xi0(i)/sqrt(pi)
                   cycle
                end if
                phi(i) = phi(i) + qat(j)*erf(xi0(i)*r_dist)/r_dist
@@ -772,10 +773,10 @@ contains
             if (r_dist < min_dist) then
                if (gaussian) then
                   width = xi0(i)
-                  w_xi(i) = w_xi(i) + 2.0_wp*qat(j)/sqrt(acos(-1.0_wp))
+                  w_xi(i) = w_xi(i) + 2.0_wp*qat(j)/sqrt(pi)
                   do axis = 1, 3
                      h_xyz(axis, axis, i) = h_xyz(axis, axis, i) &
-                                            - 4.0_wp*qat(j)*width**3/(3.0_wp*sqrt(acos(-1.0_wp)))
+                                            - 4.0_wp*qat(j)*width**3/(3.0_wp*sqrt(pi))
                   end do
                end if
                cycle
@@ -786,7 +787,7 @@ contains
             if (gaussian) then
                width = xi0(i)
                x = width*r_dist
-               decay = exp(-x*x)/sqrt(acos(-1.0_wp))
+               decay = exp(-x*x)/sqrt(pi)
                screening = erf(x) - 2.0_wp*x*decay
                w_xi(i) = w_xi(i) + qat(j)*2.0_wp*decay
                h_xi(:, i) = h_xi(:, i) - 4.0_wp*qat(j)*width**2*decay*r_vec

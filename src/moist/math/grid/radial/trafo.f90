@@ -17,7 +17,7 @@
 !> - Forward: diag(2*pi*dr/k) . S . diag(r)
 !> - Backward: diag(dk/(4*pi^2)/r) . S . diag(k)
 !> - S: unnormalised DST-IV (RODFT11); k2r(r2k(f)) = f to roundoff
-!> - pi = acos(-1), matching `new_uniform_radial_pair` and exact dk check
+!> - Uses pi from `mctc_io_constants`, matching `new_uniform_radial_pair` and exact dk check
 !>
 !> General quadrature on any radial pair: dense spherical Fourier kernel
 !> Stored dr/dk weights w_r and w_k:
@@ -129,8 +129,6 @@ module moist_math_grid_radial_trafo
       real(wp) :: dr = 0.0_wp
       !> k-space spacing (1/bohr), read-only for callers
       real(wp) :: dk = 0.0_wp
-      !> pi = acos(-1) for DST-IV prefactors
-      real(wp) :: pi = 0.0_wp
       !> r-space nodes (bohr), shape (npts)
       real(wp), allocatable :: r(:)
       !> k-space nodes (1/bohr), shape (npts)
@@ -387,7 +385,7 @@ contains
    !> Build a DST-IV transform from a uniform radial pair
    !>
    !> Require two transform_dst4 tags, equal npts, and exact
-   !> dk = acos(-1)/(npts*dr) from `new_uniform_radial_pair`
+   !> dk = pi/(npts*dr) from `new_uniform_radial_pair`
    !> Copy nodes; retain recorded spacings
    !>
    !> @param[out] self   new trafo
@@ -405,7 +403,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: i, npts, stat
-      real(wp) :: pi_dst
 
       if (rgrid%transform /= transform_dst4 .or. kgrid%transform /= transform_dst4) then
          call fatal_error(error, "DST-IV radial trafo: both grids must be tagged transform_dst4")
@@ -433,15 +430,13 @@ contains
          return
       end if
       ! Match pair constructor expression for exact equality
-      pi_dst = acos(-1.0_wp)
-      if (.not. kgrid%spacing == pi_dst/(real(npts, wp)*rgrid%spacing)) then
+      if (.not. kgrid%spacing == pi/(real(npts, wp)*rgrid%spacing)) then
          call fatal_error(error, "DST-IV radial trafo: k spacing does not match pi/(npts*dr)")
          return
       end if
 
       self%nr = npts
       self%nk = npts
-      self%pi = pi_dst
       self%dr = rgrid%spacing
       self%dk = kgrid%spacing
 
@@ -498,7 +493,7 @@ contains
 
       call check_trafo_sizes(size(f_in), size(f_out), self%nr, self%nk, "fbt_r2k", error)
       if (allocated(error)) return
-      prefac = 2.0_wp*self%pi*self%dr
+      prefac = 2.0_wp*pi*self%dr
       self%work = f_in*self%r
       call self%dst4%execute(self%dst4_work, self%work, self%tmp, error)
       if (allocated(error)) return
@@ -525,7 +520,7 @@ contains
 
       call check_trafo_sizes(size(f_in), size(f_out), self%nk, self%nr, "fbt_k2r", error)
       if (allocated(error)) return
-      prefac = self%dk/(4.0_wp*self%pi*self%pi)
+      prefac = self%dk/(4.0_wp*pi*pi)
       self%work = f_in*self%k
       call self%dst4%execute(self%dst4_work, self%work, self%tmp, error)
       if (allocated(error)) return
@@ -555,7 +550,7 @@ contains
 
       call check_trafo_sizes(size(f_in), size(f_out), self%nk, self%nr, "fbt_r2k_adj", error)
       if (allocated(error)) return
-      prefac = 2.0_wp*self%pi*self%dr
+      prefac = 2.0_wp*pi*self%dr
       self%work = prefac*f_in*self%inv_k
       call self%dst4%execute(self%dst4_work, self%work, self%tmp, error)
       if (allocated(error)) return
@@ -585,7 +580,7 @@ contains
 
       call check_trafo_sizes(size(f_in), size(f_out), self%nr, self%nk, "fbt_k2r_adj", error)
       if (allocated(error)) return
-      prefac = self%dk/(4.0_wp*self%pi*self%pi)
+      prefac = self%dk/(4.0_wp*pi*pi)
       self%work = prefac*f_in*self%inv_r
       call self%dst4%execute(self%dst4_work, self%work, self%tmp, error)
       if (allocated(error)) return
@@ -657,7 +652,7 @@ contains
       if (nb == 0) return
       call dst4_trafo_ensure_all(self, nb, error)
       if (allocated(error)) return
-      prefac = 2.0_wp*self%pi*self%dr
+      prefac = 2.0_wp*pi*self%dr
       do j = 1, nb
          self%work_all(:, j) = f_in(:, j)*self%r
       end do
@@ -693,7 +688,7 @@ contains
       if (nb == 0) return
       call dst4_trafo_ensure_all(self, nb, error)
       if (allocated(error)) return
-      prefac = self%dk/(4.0_wp*self%pi*self%pi)
+      prefac = self%dk/(4.0_wp*pi*pi)
       do j = 1, nb
          self%work_all(:, j) = f_in(:, j)*self%k
       end do
@@ -729,7 +724,7 @@ contains
       if (nb == 0) return
       call dst4_trafo_ensure_all(self, nb, error)
       if (allocated(error)) return
-      prefac = 2.0_wp*self%pi*self%dr
+      prefac = 2.0_wp*pi*self%dr
       do j = 1, nb
          self%work_all(:, j) = prefac*f_in(:, j)*self%inv_k
       end do
@@ -765,7 +760,7 @@ contains
       if (nb == 0) return
       call dst4_trafo_ensure_all(self, nb, error)
       if (allocated(error)) return
-      prefac = self%dk/(4.0_wp*self%pi*self%pi)
+      prefac = self%dk/(4.0_wp*pi*pi)
       do j = 1, nb
          self%work_all(:, j) = prefac*f_in(:, j)*self%inv_r
       end do

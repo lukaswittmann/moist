@@ -4,6 +4,7 @@ module moist_math_grid_3d_cartesian
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
                                       integrand_3d, check_trafo_blocks
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
@@ -520,7 +521,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: i, ix, iy, iz, stat
-      real(wp), parameter :: two_pi = 8.0_wp*atan(1.0_wp)
+      real(wp), parameter :: two_pi = 2.0_wp*pi
 
       grid%nx = nx
       grid%ny = ny

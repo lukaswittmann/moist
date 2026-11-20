@@ -12,6 +12,7 @@
 !> - Reference: K.-C. Ng, J. Chem. Phys. 61, 2680 (1974); doi:10.1063/1.1682399
 module moist_model_moz_potential_kernel_ng
    use mctc_env, only: wp, error_type, fatal_error
+   use mctc_io_constants, only: pi
    use moist_math_boys, only: boys01
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
@@ -20,9 +21,9 @@ module moist_model_moz_potential_kernel_ng
    public :: ng_real_tail, ng_fourier_envelope, require_split_alpha
 
    !> 2/sqrt(pi)
-   real(wp), parameter :: two_over_sqrt_pi = 2.0_wp/sqrt(acos(-1.0_wp))
+   real(wp), parameter :: two_over_sqrt_pi = 2.0_wp/sqrt(pi)
    !> 4 pi
-   real(wp), parameter :: four_pi = 4.0_wp*acos(-1.0_wp)
+   real(wp), parameter :: four_pi = 4.0_wp*pi
    !> Squared wavenumber treated as the k = 0 mode, 1/bohr^2
    real(wp), parameter :: ng_k2_zero = 1.0e-20_wp
 

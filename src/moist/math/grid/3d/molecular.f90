@@ -8,6 +8,7 @@ module moist_math_grid_3d_molecular
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use moist_data_atomicrad, only: max_elem
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
       & moist_math_grid_atomic_recipe_override_type, element_override_index, &
@@ -54,14 +55,14 @@ module moist_math_grid_3d_molecular
    real(wp), parameter :: default_dr = 0.5_wp
 
    !> Two pi, used for the reciprocal-grid spacing dk = 2*pi/(N*dr)
-   real(wp), parameter :: two_pi = 8.0_wp*atan(1.0_wp)
+   real(wp), parameter :: two_pi = 2.0_wp*pi
    !> (2*pi)^3, the inverse-Fourier-transform normalisation denominator
    real(wp), parameter :: two_pi_cubed = two_pi*two_pi*two_pi
    !> Largest magnitude of a scaled type-1/type-2 coordinate handed to FINUFFT
    !>
    !> Older FINUFFT releases require `[-3pi, 3pi]`
    !> Outside this window, use type 3 for portability
-   real(wp), parameter :: type12_coord_limit = 3.0_wp*(0.5_wp*two_pi)
+   real(wp), parameter :: type12_coord_limit = 3.0_wp*pi
    !> Default extra real-space margin, bohr, on each side of the point box
    !>
    !> Auto-sizing margin to avoid FINUFFT periodic wrap

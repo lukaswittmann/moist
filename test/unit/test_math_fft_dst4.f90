@@ -16,6 +16,7 @@ module test_math_fft_dst4
       & ieee_positive_inf
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
+   use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_fft_dst4, only: dst4_plan_type, dst4_work_type
    use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
@@ -91,10 +92,9 @@ contains
       real(wp), intent(out) :: y(:)
 
       integer :: n, j, k, m
-      real(wp) :: pi, acc
+      real(wp) :: acc
 
       n = size(x)
-      pi = acos(-1.0_wp)
       do k = 1, n
          acc = 0.0_wp
          do j = 1, n
@@ -624,7 +624,6 @@ contains
       real(wp), parameter :: expo(2) = [0.7_wp, 0.91_wp]
       !> Acceptance bound, relative to the reference maximum
       real(wp), parameter :: thr = 3.0e-15_wp
-      real(wp), parameter :: pi = acos(-1.0_wp)
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr

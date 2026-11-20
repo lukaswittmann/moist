@@ -7,6 +7,7 @@
 module test_math_fft_3d
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
+   use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_fft, only: moist_fft_c2c_3d, moist_fft_c2c_3d_pass, &
       & moist_fft_c2c_3d_pass_inplace, moist_fft_r2c_3d, moist_fft_c2r_3d, &
@@ -20,8 +21,6 @@ module test_math_fft_3d
    integer, parameter :: wp = c_double
    !> Complex kind of the C interface
    integer, parameter :: cwp = c_double_complex
-   !> Circle constant
-   real(wp), parameter :: pi = acos(-1.0_wp)
 
    !> Exponent of the analytic test Gaussian exp(-a |r - c|^2), 1/bohr^2
    real(wp), parameter :: gauss_a = 1.0_wp

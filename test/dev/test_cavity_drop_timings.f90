@@ -5,6 +5,7 @@ module test_cavity_drop_timings
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
+   use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use moist_data_radii_legacy, only: get_radius_func
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -1258,7 +1259,7 @@ contains
       integer :: npts, ipt, iat
 
       npts = size(points, 2)
-      golden = acos(-1.0_wp)*(3.0_wp - sqrt(5.0_wp))
+      golden = pi*(3.0_wp - sqrt(5.0_wp))
 
       do ipt = 1, npts
          iat = 1 + mod((ipt - 1)*stride, mol%nat)

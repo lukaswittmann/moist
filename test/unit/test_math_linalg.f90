@@ -1,6 +1,7 @@
 !> Test suite for linalg utilities in moist_math_linalg
 module test_math_linalg
    use mctc_env, only: wp
+   use mctc_io_constants, only: pi
    use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check, real_to_string => to_string
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
@@ -1374,7 +1375,7 @@ contains
 
          minmn = min(m, n)
          dampsq = damp**2
-         fourpi = 4.0_wp*3.141592_wp
+         fourpi = 4.0_wp*pi
          alfa = fourpi/m
          beta = fourpi/n
 

@@ -10,6 +10,7 @@
 !>  2. Constrained circle: Minimize distance with constraint (Lagrangian/penalty)
 module test_math_solvers
    use mctc_env, only: wp
+   use mctc_io_constants, only: pi
    use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_solver_type, only: solver_base_type
@@ -672,7 +673,6 @@ contains
    subroutine test_fmin_sin(error)
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp), parameter :: pi = acos(-1.0_wp)
       real(wp) :: xmin
 
       xmin = fmin(fmin_sin_func, -4.0_wp, 0.0_wp, fmin_tol)

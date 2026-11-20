@@ -363,7 +363,6 @@ contains
       real(wp), parameter :: spacings(2) = [0.05_wp, 0.03_wp]
       real(wp), parameter :: expo(2) = [0.7_wp, 0.91_wp]
       real(wp), parameter :: thr = 3.0e-15_wp
-      real(wp), parameter :: pi_dst = acos(-1.0_wp)
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
@@ -382,7 +381,7 @@ contains
          allocate (f(n, 2), fk(n, 2), got(n, 2))
          do ic = 1, 2
             f(:, ic) = exp(-expo(ic)*rgrid%r**2)
-            fk(:, ic) = (pi_dst/expo(ic))**1.5_wp*exp(-kgrid%r**2/(4.0_wp*expo(ic)))
+            fk(:, ic) = (pi/expo(ic))**1.5_wp*exp(-kgrid%r**2/(4.0_wp*expo(ic)))
          end do
 
          call trafo%fbt_r2k(f(:, 1), got(:, 1), merr)
