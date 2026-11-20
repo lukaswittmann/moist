@@ -54,7 +54,7 @@ from moist.interface import (
     SolvationModel,
 )
 from moist.pyscf import (
-    CFC, DROP, ISwiG, Isodensity, SvdW,
+    CFC, DROP, GPA_TO_AU, ISwiG, Isodensity, SvdW,
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
 from moist.parameters import DROPParameters, ISwiGParameters, PCMParameters
@@ -66,7 +66,7 @@ CONTEXT = Context()
 #: Dielectric constant of water
 EPSILON = 80.0
 #: 10 GPa (atomic units)
-PRESSURE = 1.0e10 / 2.9421015697e13
+PRESSURE = 10.0 * GPA_TO_AU
 #: Lebedev order
 NLEB = 50
 #: Cavity projection tolerance
