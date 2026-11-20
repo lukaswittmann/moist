@@ -3,7 +3,8 @@ module moist_model_continuum_component_type
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use mctc_io_codata2018, only: atomic_unit_of_mass, atomic_unit_of_time, Bohr_radius
+   use mctc_io_constants, only: codata
+   use mctc_io_codata2018, only: atomic_unit_of_time, Bohr_radius
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_adjoint, only: cavity_adjoint_type
@@ -22,7 +23,7 @@ module moist_model_continuum_component_type
    public :: autogpa
 
    !> Pressure Eh/bohr^3 -> GPa: the atomic unit of pressure m_e/(a_0 t_au^2) in Pa, times 1e-9
-   real(wp), parameter :: autogpa = atomic_unit_of_mass/(Bohr_radius*atomic_unit_of_time**2)*1.0e-9_wp
+   real(wp), parameter :: autogpa = codata%me/(Bohr_radius*atomic_unit_of_time**2)*1.0e-9_wp
 
    !> Abstract solvation model component
    type, abstract :: model_continuum_component_type
