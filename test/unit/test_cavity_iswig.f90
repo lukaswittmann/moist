@@ -12,7 +12,7 @@ module test_cavity_iswig
    use moist_cavity_type, only: write_cavity_csv_debug
    use test_pcm_conductor_probe, only: probe_conductor_matrix, &
       & probe_conductor_bilinear_weights, probe_conductor_nuclear_gradient
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: fd4_scalar
@@ -2091,7 +2091,7 @@ contains
       type(cavity_type_iswig), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       class(radius_type), allocatable :: radius_model
-      type(cavity_surface_adjoint_type) :: acc
+      type(cavity_adjoint_type) :: acc
       real(wp), allocatable :: radii(:)
       !> Adjoint weights, indexed by raw (pre-filter) grid point
       real(wp), allocatable :: rw_xi(:), rw_f(:), rw_a(:), rw_w(:)

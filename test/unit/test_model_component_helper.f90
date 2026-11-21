@@ -5,7 +5,7 @@ module test_model_component_helper
    use mctc_env, only: wp
    use test_helpers, only: fd4_scalar, fd4_offsets
    use testdrive, only: error_type, check, test_failed
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    implicit none(type, external)
    private
 
@@ -187,7 +187,7 @@ contains
       !> Reference surface fixture
       type(surface_fixture), intent(in) :: surface
       !> Analytic component surface weights
-      type(cavity_surface_adjoint_type), intent(in) :: weights
+      type(cavity_adjoint_type), intent(in) :: weights
       !> Independent component energy callback
       procedure(surface_energy_callback) :: evaluate
       !> Component label used in failure messages
@@ -363,7 +363,7 @@ contains
 
    !> Check that every DROP weight channel has the fixture shape
    pure logical function weights_are_valid(weights, ngrid) result(valid)
-      type(cavity_surface_adjoint_type), intent(in) :: weights
+      type(cavity_adjoint_type), intent(in) :: weights
       integer, intent(in) :: ngrid
 
       valid = allocated(weights%w_xi) .and. allocated(weights%w_f) &

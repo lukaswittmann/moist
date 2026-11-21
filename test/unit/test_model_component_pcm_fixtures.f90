@@ -18,7 +18,8 @@ module test_model_component_pcm_fixtures
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, &
       & moist_cavity_iswig_parameters_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
+                                           drop_branch_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_radii, only: default_cpcm_radii
@@ -48,7 +49,7 @@ module test_model_component_pcm_fixtures
    public :: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, pcm_dpcm, pcm_dpcm_original, pcm_lpb, &
       & pcm_slic, pcm_nonlocal, npcm
    public :: pcm_physics, new_pcm, make_component
-   public :: seed_iswig, seed_drop, seed_name, first_seed, new_seed_cavity
+   public :: seed_iswig, seed_drop, seed_name, first_seed, new_seed_cavity, new_sibling_cavity
    public :: fd_cavity, get_seed
    public :: nmol, mol_triatomic, mol_label, get_solute
    public :: thr_vacuous
@@ -523,7 +524,7 @@ contains
          call svdw%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.5_wp, blend_3b=1.0_wp))
          call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=svdw, error=err, &
             & param=moist_cavity_drop_parameters_type(num_leb=nleb, tolerance=1.0e-14_wp, &
-            & proj_maxiter=150, proj_level=2), ctx=ctx)
+            & solve=drop_solve_parameters_type(max_iter=150), proj_level=1), ctx=ctx)
          call check_moist_error(error, err, "DROP setup")
          if (allocated(error)) return
          call move_alloc(drop, cavity)
@@ -531,6 +532,40 @@ contains
          call test_failed(error, "unknown cavity seed")
       end select
    end subroutine new_seed_cavity
+
+   !> DROP cavity whose anchors on `get_test_sibling_gate` hold partly open sibling points
+   !>
+   !> - SvdW `blend_k = 1.5`, `blend_3b = 3`, a 0.2 bohr branch window and the
+   !>   default switches, 302 Lebedev points per atom
+   !>
+   !> @param[in]  ctx    Run context borrowed by the cavity
+   !> @param[out] cavity Cavity, not updated
+   !> @param[out] error  Test failure
+   subroutine new_sibling_cavity(ctx, cavity, error)
+      !> Run context borrowed by the cavity
+      type(moist_context_type), target, intent(in) :: ctx
+      !> Cavity
+      class(cavity_type), allocatable, intent(out) :: cavity
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Concrete cavity
+      type(cavity_type_drop), allocatable :: drop
+      !> Level set
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw
+
+      allocate (drop)
+      call svdw%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.5_wp, blend_3b=3.0_wp))
+      call new_cavity_drop(drop, radius_model=default_cpcm_radii(), lsf_model=svdw, error=err, &
+         & param=moist_cavity_drop_parameters_type(num_leb=302, tolerance=1.0e-14_wp, &
+         & solve=drop_solve_parameters_type(max_iter=1000), proj_level=3, &
+         & branch=drop_branch_parameters_type(dpdist_max=0.2_wp), do_fine=.true.), ctx=ctx)
+      call check_moist_error(error, err, "DROP setup")
+      if (allocated(error)) return
+      call move_alloc(drop, cavity)
+   end subroutine new_sibling_cavity
 
    !> Synthetic cavity seeded from the surface of the solute
    !>

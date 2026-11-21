@@ -6,7 +6,7 @@ module moist_model_continuum_component_type
    use mctc_io_codata2018, only: atomic_unit_of_mass, atomic_unit_of_time, Bohr_radius
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_channels_response, only: response_type
@@ -273,7 +273,7 @@ contains
       !> Cavity data
       class(cavity_type), intent(in) :: cavity
       !> Surface-adjoint accumulator (a surface accumulator on a cavity)
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -300,7 +300,7 @@ contains
       !> Wavefunction data
       class(coupling_view_type), intent(in) :: coupling
       !> Surface-adjoint accumulator (a surface accumulator on a cavity)
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Expected grid size of the component's cavity
       integer, intent(in) :: ngrid
       !> Error handling
@@ -328,7 +328,7 @@ contains
       !> Cavity data
       class(cavity_type), intent(in) :: cavity
       !> Surface-adjoint accumulator (a surface accumulator on a cavity)
-      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      class(cavity_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 

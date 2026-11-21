@@ -8,15 +8,15 @@
 module moist_utils_prettylistprint
    use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
      & real32, real64
+   use moist_utils_format, only: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
    implicit none(type, external)
    private
    public :: prettylistprinter, new_prettylistprinter
 
    !> Field width for re-rendering an overflowing numeric edit: room for the 309
-   !> integer digits of huge(1.0_real64) under an F edit, sign, point and decimals
+   !> integer digits of huge(1.0_real64) under an F edit, sign, point and decimals;
+   !> the buffer of [[value_to_string]] is longer, for literal text around the field
    integer, parameter :: wide_width = 400
-   !> Internal-write buffer, longer than `wide_width` for literal text around the field
-   integer, parameter :: buffer_len = 512
 
    type :: prettylistprinter
       integer :: unit = output_unit
@@ -374,7 +374,7 @@ contains
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         call default_real_fmt(self, real(val, kind=real64), eff_fmt)
+         call magnitude_real_fmt(real(val, kind=real64), self%fmt_real, self%fmt_exp, eff_fmt)
       end if
       call add_number(self, val, eff_fmt)
    end subroutine add_r32
@@ -396,7 +396,7 @@ contains
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         call default_real_fmt(self, val, eff_fmt)
+         call magnitude_real_fmt(val, self%fmt_real, self%fmt_exp, eff_fmt)
       end if
       call add_number(self, val, eff_fmt)
    end subroutine add_r64
@@ -523,143 +523,6 @@ contains
       text = trim(adjustl(s))
       out = repeat(" ", max(0, width - len(text)))//text
    end subroutine format_cell
-
-   !> Convert supported scalar values to string using supplied format
-   !>
-   !> @param[in] val Scalar value
-   !> @param[in] fmt Fortran format string without outer parentheses
-   !> @param[out] s Formatted scalar text
-   subroutine value_to_string(val, fmt, s)
-      class(*), intent(in) :: val
-      character(*), intent(in) :: fmt
-      !> Formatted scalar text
-      character(:), allocatable, intent(out) :: s
-      character(buffer_len) :: buf
-
-      buf = ""
-
-      select type (val)
-      type is (integer(int8))
-         write (buf, "("//trim(fmt)//")") val
-      type is (integer(int16))
-         write (buf, "("//trim(fmt)//")") val
-      type is (integer(int32))
-         write (buf, "("//trim(fmt)//")") val
-      type is (integer(int64))
-         write (buf, "("//trim(fmt)//")") val
-      type is (real(real32))
-         if (val == 0.0_real32) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, "("//trim(fmt)//")") val
-      type is (real(real64))
-         if (val == 0.0_real64) then
-            call zero_value_string(fmt, s)
-            return
-         end if
-         write (buf, "("//trim(fmt)//")") val
-      type is (logical)
-         write (buf, "("//trim(fmt)//")") val
-      type is (character(*))
-         buf = val
-      class default
-         ! TODO: add errorprop
-         error stop "prettylistprinter: unsupported value type"
-      end select
-
-      s = trim(buf)
-   end subroutine value_to_string
-
-   !> Return canonical zero representation based on supplied format width
-   !>
-   !> @param[in] fmt Fortran format string without outer parentheses
-   !> @param[out] s Formatted zero text
-   subroutine zero_value_string(fmt, s)
-      character(*), intent(in) :: fmt
-      !> Formatted zero text
-      character(:), allocatable, intent(out) :: s
-      character(buffer_len) :: buf
-      integer :: idot, w
-
-      write (buf, "("//trim(fmt)//")") 0.0_real64
-      idot = index(buf, ".")
-      w = len_trim(buf)
-
-      if (idot > 1 .and. w > 0) then
-         s = repeat(" ", idot - 2)//"0.0"//repeat(" ", max(0, w - (idot + 1)))
-      else
-         s = "0.0"
-      end if
-   end subroutine zero_value_string
-
-   !> Build fixed real format string
-   !>
-   !> @param[in] width    Total field width
-   !> @param[in] decimals Digits after decimal point
-   !> @param[out] fmt Fixed-point format
-   subroutine fixed_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      !> Fixed-point format
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine fixed_fmt
-
-   !> Build exponential real format string
-   !>
-   !> @param[in] width    Total field width
-   !> @param[in] decimals Digits after decimal point
-   !> @param[out] fmt Exponential format
-   subroutine exp_fmt(width, decimals, fmt)
-      integer, intent(in) :: width, decimals
-      !> Exponential format
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf, dbuf
-
-      write (wbuf, "(I0)") max(1, width)
-      write (dbuf, "(I0)") max(0, decimals)
-      fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end subroutine exp_fmt
-
-   !> Build integer format string
-   !>
-   !> @param[in] width Base width used to derive integer field width
-   !> @param[out] fmt Integer format
-   subroutine int_fmt(width, fmt)
-      integer, intent(in) :: width
-      !> Integer format
-      character(:), allocatable, intent(out) :: fmt
-      character(32) :: wbuf
-
-      write (wbuf, "(I0)") max(1, width - 7)
-      fmt = "I"//trim(wbuf)
-   end subroutine int_fmt
-
-   !> Select default real format from value magnitude
-   !>
-   !> @param[in] self Pretty list printer instance
-   !> @param[in] val  Real64 value
-   !> @param[out] fmt Selected real format
-   subroutine default_real_fmt(self, val, fmt)
-      class(prettylistprinter), intent(in) :: self
-      real(real64), intent(in) :: val
-      !> Selected real format
-      character(:), allocatable, intent(out) :: fmt
-      real(real64) :: aval
-
-      aval = abs(val)
-      if (aval == 0.0_real64) then
-         fmt = self%fmt_real
-      else if (aval < 1.0e-6_real64 .or. aval >= 1.0e6_real64) then
-         fmt = self%fmt_exp
-      else
-         fmt = self%fmt_real
-      end if
-   end subroutine default_real_fmt
 
    !> Raise the field width of the first numeric edit descriptor to `wide_width`
    !>

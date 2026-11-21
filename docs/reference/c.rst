@@ -248,7 +248,8 @@ so ``count`` sizes a buffer for any item. The items of the
 ``w_dphi_dr[ngrid][3]`` of ``potential_adjoint``; ``w_rho[ngrid]``, ``w_grad_rho[ngrid][3]`` and
 ``w_hess_rho[ngrid][3][3]`` of ``density``; ``w_overlap[ngrid]`` and
 ``w_normal_deriv[ngrid]`` of ``gaussian_amplitude``. ``w_hess_rho`` and request output ``d2phi_dr2`` use
-``[point][b][a]`` for native ``(a,b,point)`` and need not be symmetric;
+``[point][b][a]`` for native ``(a,b,point)``; ``w_hess_rho`` is symmetric with
+off-diagonals not doubled, ``d2phi_dr2`` need not be;
 ``_real`` writes exactly the ``count`` elements ``_info`` reports. No current
 item or request, a field it does not declare and a NULL buffer are errors
 reported by name.
@@ -376,9 +377,7 @@ earlier components' energies remain available.
 The full derivative tensors of ``moist_get_cavity_gradient`` are diagnostic facilities. Normal host integration
 uses model gradients and response weights, keeping cavity-motion contractions
 inside MOIST. Their dimensions reverse the native axes exactly; consult the
-header for each axis's meaning. The ``r_iI1_rA`` and ``rho1_rA`` outputs of
-``moist_get_cavity_gradient`` accept ``NULL`` and exist only for a cavity
-built with ``do_fine``; asking for one that was not computed is an error.
+header for each axis's meaning.
 
 .. _isodensity-build-c:
 

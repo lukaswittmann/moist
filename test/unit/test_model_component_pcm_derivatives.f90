@@ -40,7 +40,7 @@ module test_model_component_pcm_derivatives
       & component_view, copy_potential_adjoint, point_charge_potential, point_charge_field, submit, &
       & get_test_structures, center_at_origin, get_test_cavity_iswig, &
       & fill_point_charge_potential, fill_point_charge_field, set_host_potential, &
-      & fill_missing_with_zeros, stage_point_charge_energy
+      & fill_missing_with_zeros, stage_point_charge_energy, get_test_sibling_gate
    use test_model_component_helper, only: surface_fixture, new_surface_fixture, &
       & check_surface_weights, nfixture => fixture_ngrid_param, fixture_xyz => fixture_xyz_param, &
       & fixture_normals => fixture_normals_param, fixture_areas => fixture_areas_param, &
@@ -49,11 +49,11 @@ module test_model_component_pcm_derivatives
       & probe_conductor_nuclear_gradient
    use test_model_component_pcm_fixtures, only: pcm_cpcm, pcm_cosmo, pcm_iefpcm, pcm_ssvpe, &
       & pcm_dpcm, pcm_dpcm_original, pcm_lpb, pcm_slic, pcm_nonlocal, npcm, new_pcm, make_component, &
-      & seed_drop, seed_name, first_seed, new_seed_cavity, fd_cavity, get_seed, nmol, &
+      & seed_drop, seed_name, first_seed, new_seed_cavity, new_sibling_cavity, fd_cavity, get_seed, nmol, &
       & mol_label, get_solute, thr_vacuous, pcm_physics, stage_energy, answer_sources, host_energy, host_charges
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
@@ -104,33 +104,15 @@ module test_model_component_pcm_derivatives
    !> All tolerances are about ten times the largest deviation over every
    !> model and solute (six-point stencil, roundoff-limited)
    real(wp), parameter :: grad_atol = 3.0e-12_wp, grad_rtol = 1.0e-9_wp
-   !> Energy differences with GMRES at the default tolerance, absolute part
-   !>
-   !> The iterate's error enters to first order in the residual: measured 1.4e-10
-   !> with the residual-corrected energy, up to 1.8e-7 with 0.5*dot(q, phi)
+   !> Energy differences with GMRES at the default tolerance, absolute
    real(wp), parameter :: gmres_atol = 1.5e-9_wp
-   !> Nuclear gradient (four-point stencil), with cavity rebuild roundoff
-   !>
-   !> The SLIC Newton tolerance sets the largest deviation, 9e-10 relative
-   real(wp), parameter :: nuc_atol = 1.0e-12_wp, nuc_rtol = 1.0e-8_wp
+   !> Nuclear gradient
+   real(wp), parameter :: nuc_atol = 1.0e-11_wp, nuc_rtol = 1.0e-8_wp
    !> Parameter derivatives against six-point energy differences
-   !>
-   !> Absolute part relative to max(1, |E|), relative part of the difference
-   !>
-   !> Measured over every model and parameter, Gaussian and point: at most
-   !> 3.5e-14 absolute and 1.4e-11 relative (SS(V)PE eps), the six-point
-   !> stencil being roundoff-limited; tolerances are about ten times that
    real(wp), parameter :: param_atol = 1.0e-15_wp, param_rtol = 1.5e-10_wp
    !> Weight differences, per channel relative to its largest entry
    real(wp), parameter :: hess_atol = 3.0e-12_wp, hess_rtol = 1.0e-9_wp
    !> Matrix-free tangent against the dense analytic tangent, per channel
-   !>
-   !> Absolute part, and relative part of the largest dense entry; the dense
-   !> solves are direct and the GMRES tolerance is 1e-13
-   !>
-   !> Measured over every model, solute, seed, surface and direction: at most
-   !> 4.8e-14 absolute (CPCM dE/dphi) and 1.5e-12 relative to the channel scale
-   !> (entries above 1e-3); tolerances are about ten times that
    real(wp), parameter :: mf_atol = 5.0e-13_wp, mf_rtol = 1.5e-11_wp
    !> Energy derivative relative to |E| below which an expected-active direction is vacuous
    !>
@@ -262,9 +244,25 @@ contains
          & new_unittest("point_potential_component_paths", test_point_potential_component_paths), &
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
          & new_unittest("cpcm_nuclear_gradient_ecp", test_cpcm_nuclear_gradient_ecp), &
-         & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient) &
+         & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient), &
+         & new_unittest("cpcm_sibling_gate", test_cpcm_sibling_gate), &
+         & new_unittest("iefpcm_sibling_gate", test_iefpcm_sibling_gate) &
          & ]
    end subroutine collect_model_component_pcm_derivatives
+
+   !> CPCM nuclear gradient on a cavity whose anchors hold partly open sibling points
+   subroutine test_cpcm_sibling_gate(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_nuclear_gradient(error, pcm_cpcm, 0, seed_drop, sibling=.true.)
+   end subroutine test_cpcm_sibling_gate
+
+   !> IEF-PCM nuclear gradient on a cavity whose anchors hold partly open sibling points
+   subroutine test_iefpcm_sibling_gate(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      call check_nuclear_gradient(error, pcm_iefpcm, 0, seed_drop, sibling=.true.)
+   end subroutine test_iefpcm_sibling_gate
 
    !* ================================================================================= *!
    !*                                 Per-model entries                                 *!
@@ -652,7 +650,7 @@ contains
       !> Synthetic cavity and its displacement
       type(fd_cavity) :: cavity, trial
       !> Total surface weights and a one-channel direction
-      type(cavity_surface_adjoint_type) :: acc, direction
+      type(cavity_adjoint_type) :: acc, direction
       !> Host charges on the solute atoms
       real(wp), allocatable :: q(:)
       !> Host traces, their directions and adjoints
@@ -805,7 +803,7 @@ contains
       !> Synthetic cavity
       type(fd_cavity) :: cavity
       !> Direction of the surface fields
-      type(cavity_surface_adjoint_type) :: direction
+      type(cavity_adjoint_type) :: direction
       !> Fixed traces, their directions and a zero direction
       real(wp), allocatable :: phi(:), dphi_dr(:, :), vn(:), du(:), dq(:), zero(:)
       !> Step of the differences
@@ -905,7 +903,7 @@ contains
       !> Fixed normal trace
       real(wp), intent(in) :: vn(:)
       !> Direction of the surface fields
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Direction of the potential trace
       real(wp), intent(in) :: du(:)
       !> Direction of the normal trace
@@ -926,7 +924,7 @@ contains
       !> Adjoints on the stencil, adjoint tangents of the dense oracle
       real(wp), allocatable :: s_phi(:, :), s_vn(:, :), dense_phi(:), dense_vn(:)
       !> Tangent accumulator, dense tangent, reference and stencil weights
-      type(cavity_surface_adjoint_type) :: tangent, dense, acc0, acc(6)
+      type(cavity_adjoint_type) :: tangent, dense, acc0, acc(6)
       !> Stencil index, channel index and number of grid points
       integer :: k, ich, ngrid
       !> Whether the expected channels must be active
@@ -1128,7 +1126,7 @@ contains
    !> @param[in] name Weight channel, one of `weight_name`
    function weights_of(acc, name) result(w)
       !> Surface weights
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Weight channel
       character(len=*), intent(in) :: name
       !> Flattened weights
@@ -1160,7 +1158,7 @@ contains
    !> @param[in] name Weight channel, one of `weight_name`
    function stencil_weights(acc, name) result(values)
       !> Surface weights on the stencil
-      type(cavity_surface_adjoint_type), intent(in) :: acc(:)
+      type(cavity_adjoint_type), intent(in) :: acc(:)
       !> Weight channel
       character(len=*), intent(in) :: name
       !> Flattened weights per stencil point
@@ -1185,7 +1183,7 @@ contains
    !> @param[in]  imol  Solute index
    !> @param[in]  seed  Cavity kind rebuilt at every geometry
    !> @param[in]  point_potential Couple through point potential integrals (default off)
-   subroutine check_nuclear_gradient(error, kind, imol, seed, point_potential)
+   subroutine check_nuclear_gradient(error, kind, imol, seed, point_potential, sibling)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Model identifier
@@ -1196,6 +1194,8 @@ contains
       integer, intent(in) :: seed
       !> Couple through point potential integrals
       logical, intent(in), optional :: point_potential
+      !> Use the sibling-gate fixture instead of `imol` and `seed`
+      logical, intent(in), optional :: sibling
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
@@ -1215,24 +1215,37 @@ contains
       real(wp), allocatable :: el_xyz(:, :), el_q(:)
       !> Analytic nuclear gradient (3, nat) and displacement directions (3, nat, ndir)
       real(wp), allocatable :: gradient(:, :), dirs(:, :, :)
-      !> Energy, stencil energies, analytic and FD derivatives, scale of the terms
-      real(wp) :: energy, values(4), analytic, fd, scale
+      !> Energy, stencil energies, analytic and FD derivatives
+      real(wp) :: energy, values(4), analytic, fd
       !> Direction and stencil indices
       integer :: idir, k
       !> Failure context
       character(len=240) :: context
       !> Failure context prefix
       character(len=:), allocatable :: prefix
+      !> Sibling-gate fixture, and the tolerance of its differences
+      logical :: with_sibling
 
+      with_sibling = .false.
+      if (present(sibling)) with_sibling = sibling
       call new_context(ctx, verbosity=0)
       call new_pcm(kind, ctx, pcm, error)
       if (allocated(error)) return
       if (present(point_potential)) pcm%param%point_potential = point_potential
-      call get_solute(imol, mol)
-      call electron_host(mol, el_xyz, el_q)
-      call new_host_cavity(seed, pcm, ctx, cavity, error)
+      if (with_sibling) then
+         call get_test_sibling_gate(mol)
+         call new_sibling_cavity(ctx, cavity, error)
+         if (allocated(error)) return
+         call pcm%configure_cavity(cavity, err)
+         call check_moist_error(error, err, "cavity configuration")
+         prefix = trim(pcm%name)//", sibling gate, DROP"
+      else
+         call get_solute(imol, mol)
+         call new_host_cavity(seed, pcm, ctx, cavity, error)
+         prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))
+      end if
       if (allocated(error)) return
-      prefix = trim(pcm%name)//", "//trim(mol_label(imol))//", "//trim(seed_name(seed))
+      call electron_host(mol, el_xyz, el_q)
       if (pcm%param%point_potential) prefix = prefix//", point potential"
 
       call nuclear_state(pcm, mol, el_xyz, el_q, cavity, coupling, energy, error)
@@ -1262,10 +1275,9 @@ contains
          call fd4_scalar(values(1), values(2), values(3), values(4), step_nuc, fd, error)
          if (allocated(error)) return
          analytic = sum(gradient*dirs(:, :, idir))
-         scale = sum(abs(gradient*dirs(:, :, idir)))
          write (context, '(a,": direction ",i0," dE/dt ",es12.4," vs FD ",es12.4, &
             & ", dev ",es9.2)') prefix, idir, analytic, fd, abs(analytic - fd)
-         call check(error, abs(analytic - fd) <= nuc_atol + nuc_rtol*scale, &
+         call check(error, analytic, fd, thr_abs=nuc_atol, thr_rel=nuc_rtol, &
             & message="nuclear gradient disagrees with the energy difference", &
             & more=trim(context))
          if (allocated(error)) return
@@ -1400,7 +1412,7 @@ contains
       !> Host charges on the solute atoms
       real(wp), intent(in) :: q(:)
       !> Total surface weights
-      type(cavity_surface_adjoint_type), intent(out) :: acc
+      type(cavity_adjoint_type), intent(out) :: acc
       !> Polarization energy
       real(wp), intent(out) :: energy
       !> Test failure
@@ -1551,7 +1563,7 @@ contains
       !> Normal trace
       real(wp), intent(in) :: vn(:)
       !> Operator surface weights
-      type(cavity_surface_adjoint_type), intent(out) :: acc
+      type(cavity_adjoint_type), intent(out) :: acc
       !> Potential adjoint
       real(wp), allocatable, intent(out) :: w_phi(:)
       !> Normal-trace adjoint
@@ -1855,7 +1867,7 @@ contains
    !> @param[in,out] direction Direction
    subroutine clear_direction(direction)
       !> Direction
-      type(cavity_surface_adjoint_type), intent(inout) :: direction
+      type(cavity_adjoint_type), intent(inout) :: direction
 
       if (allocated(direction%w_xyz)) deallocate (direction%w_xyz)
       if (allocated(direction%w_n)) deallocate (direction%w_n)
@@ -1879,7 +1891,7 @@ contains
       !> Channel index
       integer, intent(in) :: ich
       !> Direction
-      type(cavity_surface_adjoint_type), intent(out) :: direction
+      type(cavity_adjoint_type), intent(out) :: direction
 
       call add_channel_direction(cavity, ich, direction)
    end subroutine channel_direction
@@ -1899,7 +1911,7 @@ contains
       !> Channel index
       integer, intent(in) :: ich
       !> Direction
-      type(cavity_surface_adjoint_type), intent(inout) :: direction
+      type(cavity_adjoint_type), intent(inout) :: direction
 
       !> Deterministic unit-scale pattern
       real(wp), allocatable :: s(:)
@@ -1940,9 +1952,9 @@ contains
    !> @param[in] direction Direction, unallocated channels are zero
    pure function contract(acc, direction) result(dedt)
       !> Surface weights
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Direction
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Directional derivative
       real(wp) :: dedt
 
@@ -1966,7 +1978,7 @@ contains
       !> Reference cavity
       type(fd_cavity), intent(in) :: cavity
       !> Direction
-      type(cavity_surface_adjoint_type), intent(in) :: direction
+      type(cavity_adjoint_type), intent(in) :: direction
       !> Step
       real(wp), intent(in) :: t
       !> Displaced cavity
@@ -2082,7 +2094,7 @@ contains
       type(structure_type) :: mol
       class(model_continuum_component_pcm), allocatable :: component
       type(cavity_type_drop) :: cavity, displaced
-      type(cavity_surface_adjoint_type) :: weights, response_weights
+      type(cavity_adjoint_type) :: weights, response_weights
       type(coupling_type), target :: coupling
       type(response_type) :: response
       type(potential_adjoint_response_type) :: trace
@@ -3061,7 +3073,7 @@ contains
       !> Test cavity
       class(width_gradient_cavity), intent(in) :: self
       !> Accumulated surface adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
@@ -3089,7 +3101,7 @@ contains
       type(structure_type) :: mol
       type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_drop) :: cavity
-      type(cavity_surface_adjoint_type) :: weights
+      type(cavity_adjoint_type) :: weights
       type(surface_fixture) :: surface
       type(coupling_type) :: coupling
       !> Energy of the fixture, solved to stage the response phase

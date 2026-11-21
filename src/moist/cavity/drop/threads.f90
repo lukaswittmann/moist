@@ -5,19 +5,31 @@
 !>
 !> 1. `drop_worker_slots_type`: per-thread evaluator (clone)
 !>    The LSF evaluator caches screened derivatives inside itself; each
-!>    thread gets its own `lsf_model` (with given highest needed derivative);
-!>    if projection objective is needed, they also get a per-thread `phi`
+!>    thread gets its own worker of `lsf_model` (with given highest needed
+!>    derivative); if projection objective is needed, they also get a
+!>    per-thread `phi`
+!>    - sized serially by `init`, filled and released by each thread for its
+!>      own slot inside the parallel region, so the clones are made in
+!>      parallel and their memory is first touched by the thread using it
+!>    - a worker may borrow read-only data of `lsf_model`
+!>      ([[moist_cavity_drop_lsf_type:clone_worker]]); the model must stay
+!>      allocated and unchanged until the slot is released
 !>
 !> 2. `drop_abort_latch_type`: a shared error abort mechanism
-!>    Failures insode `!$omp do` cannot be returned as easily directly;
+!>    Failures inside `!$omp do` cannot be returned as easily directly;
 !>    Save it inside the latch and drain the loop; after the loop the failure
 !>    at the lowest grid point is raised, so the report is schedule-independent
 !>
 !> Usage:
 !>   ```fortran
-!>   call slots%init(ctx, self%lsf_model, max_deriv)
+!>   call slots%init(ctx)
 !>   call latch%reset()
-!>   !$omp parallel num_threads(slots%nthreads) default(shared) ...
+!>   !$omp parallel num_threads(slots%nthreads) default(shared) private(islot, ...)
+!>   islot = omp_get_thread_num() + 1
+!>   call slots%fill(islot, self%lsf_model, max_deriv)
+!>   ...
+!>   call slots%release(islot)
+!>   !$omp end parallel
 !>   ```
 module moist_cavity_drop_threads
    use mctc_env, only: error_type, fatal_error
@@ -25,7 +37,7 @@ module moist_cavity_drop_threads
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
+   use moist_cavity_drop_phi, only: moist_cavity_drop_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
 
    implicit none(type, external)
@@ -43,12 +55,16 @@ module moist_cavity_drop_threads
       !> Per-thread LSF evaluators, one per slot
       type(lsf_thread_slot), allocatable :: lsf(:)
       !> Per-thread projection objectives; unallocated unless requested
-      type(moist_cavity_drop_objective_phi_type), allocatable :: phi(:)
+      type(moist_cavity_drop_phi_type), allocatable :: phi(:)
       !> Team size the slots were built for
       integer :: nthreads = 0
    contains
-      !> Clone the evaluators for a parallel region
+      !> Size the slots for a parallel region, before entering it
       procedure :: init => worker_slots_init
+      !> Clone the evaluators of one slot, from the thread owning it
+      procedure :: fill => worker_slots_fill
+      !> Free the evaluators of one slot, from the thread owning it
+      procedure :: release => worker_slots_release
    end type drop_worker_slots_type
 
    !> Lowest-grid-point-wins error latch for a parallel grid loop
@@ -81,26 +97,51 @@ contains
 !*                                   Worker slots                                    *!
 !* ================================================================================= *!
 
-   !> Build per-thread evaluator clones for a parallel grid loop
+   !> Size the per-thread slots of a parallel grid loop
    !>
-   !> `phi` is allocated only when `param`, `mol` and `radii` are all supplied;
-   !> the projection and curvature loops do not evaluate the objective and pass
-   !> none of them
+   !> - serial and cheap: no evaluator is cloned here, each thread fills its own
+   !>   slot inside the region ([[worker_slots_fill]])
    !>
    !> @param[out] self      Worker slots
    !> @param[in]  ctx       Shared context; sole source of the team size
-   !> @param[in]  lsf_model LSF template to clone
-   !> @param[in]  max_deriv Highest derivative order the clones must serve
-   !> @param[in]  param     DROP parameters, for the per-thread objectives
-   !> @param[in]  mol       Molecular structure, for the per-thread objectives
-   !> @param[in]  radii     Atomic radii, for the per-thread objectives
-   subroutine worker_slots_init(self, ctx, lsf_model, max_deriv, param, mol, radii)
+   !> @param[in]  objective Whether the slots carry per-thread objectives, default no
+   subroutine worker_slots_init(self, ctx, objective)
       !> Worker slots
       class(drop_worker_slots_type), intent(out) :: self
       !> Shared context
       type(moist_context_type), intent(in) :: ctx
+      !> Whether per-thread objectives are needed
+      logical, intent(in), optional :: objective
+
+      self%nthreads = ctx%get_num_threads()
+      allocate (self%lsf(self%nthreads))
+      if (present(objective)) then
+         if (objective) allocate (self%phi(self%nthreads))
+      end if
+   end subroutine worker_slots_init
+
+   !> Clone the evaluators of one slot
+   !>
+   !> - called by the thread owning `islot`, inside the parallel region; slots
+   !>   are disjoint, so the threads fill them concurrently
+   !> - `phi` is set only when the slots carry objectives and `param`, `mol`
+   !>   and `radii` are all supplied; slots made with `objective` must get all
+   !>   three, or `phi` stays default and unusable
+   !>
+   !> @param[inout] self      Worker slots, sized by [[worker_slots_init]]
+   !> @param[in]    islot     Slot of the calling thread, 1..nthreads
+   !> @param[in]    lsf_model LSF template; read-only data may be borrowed
+   !> @param[in]    max_deriv Highest derivative order the clone must serve
+   !> @param[in]    param     DROP parameters, for the per-thread objective
+   !> @param[in]    mol       Molecular structure, for the per-thread objective
+   !> @param[in]    radii     Atomic radii, for the per-thread objective
+   subroutine worker_slots_fill(self, islot, lsf_model, max_deriv, param, mol, radii)
+      !> Worker slots
+      class(drop_worker_slots_type), intent(inout) :: self
+      !> Slot of the calling thread
+      integer, intent(in) :: islot
       !> LSF template
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf_model
       !> Highest derivative order required
       integer, intent(in) :: max_deriv
       !> DROP parameters
@@ -110,28 +151,29 @@ contains
       !> Atomic radii
       real(wp), intent(in), optional :: radii(:)
 
-      !> Slot index
-      integer :: islot
-      !> Whether the per-thread objectives are requested
-      logical :: want_phi
+      call lsf_model%clone_worker(self%lsf(islot)%lsf)
+      call self%lsf(islot)%lsf%set_max_deriv(max_deriv)
+      if (allocated(self%phi) .and. present(param) .and. present(mol) .and. present(radii)) then
+         call self%phi(islot)%set_parameters(param)
+         call self%phi(islot)%set_input(mol, radii)
+      end if
+   end subroutine worker_slots_fill
 
-      want_phi = present(param) .and. present(mol) .and. present(radii)
+   !> Free the evaluators of one slot
+   !>
+   !> - called by the thread owning `islot` before leaving the region, so the
+   !>   clones are freed in parallel and not by the master after it
+   !>
+   !> @param[inout] self  Worker slots
+   !> @param[in]    islot Slot of the calling thread
+   subroutine worker_slots_release(self, islot)
+      !> Worker slots
+      class(drop_worker_slots_type), intent(inout) :: self
+      !> Slot of the calling thread
+      integer, intent(in) :: islot
 
-      self%nthreads = ctx%get_num_threads()
-      allocate (self%lsf(self%nthreads))
-      if (want_phi) allocate (self%phi(self%nthreads))
-
-      do islot = 1, self%nthreads
-         allocate (self%lsf(islot)%lsf, source=lsf_model)
-         ! The screened-derivative cache is sized here, before the first
-         ! %prepare call; a later upgrade would have to reallocate it
-         call self%lsf(islot)%lsf%set_max_deriv(max_deriv)
-         if (want_phi) then
-            call self%phi(islot)%set_parameters(param)
-            call self%phi(islot)%set_input(mol, radii)
-         end if
-      end do
-   end subroutine worker_slots_init
+      if (allocated(self%lsf(islot)%lsf)) deallocate (self%lsf(islot)%lsf)
+   end subroutine worker_slots_release
 
 !* ================================================================================= *!
 !*                                    Abort latch                                    *!

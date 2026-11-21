@@ -67,8 +67,6 @@ class CavitySnapshot(_ImmutableArrayValue):
         ``(ngrid,)`` grid-point areas.
     ``owner``
         ``(ngrid,)`` index of the sphere each grid point belongs to.
-    ``converged``
-        ``(ngrid,)`` per-point projection success flags.
     ``radii``, ``asph``
         ``(nsph,)`` sphere radii and per-sphere surface areas.
     ``xi0``
@@ -89,7 +87,6 @@ class CavitySnapshot(_ImmutableArrayValue):
     xyz: np.ndarray
     a: np.ndarray
     owner: np.ndarray
-    converged: np.ndarray
     radii: np.ndarray
     asph: np.ndarray
     xi0: np.ndarray
@@ -105,9 +102,7 @@ class CavitySnapshotDROP(CavitySnapshot):
         Grid points allocated per sphere before pruning.
     ``wleb``
         ``(ngrid,)`` Lebedev quadrature weights.
-    ``r_iI0``
-        ``(ngrid,)`` distance from each grid point to its owner sphere center.
-    ``rho``
+    ``pdist``
         ``(ngrid,)`` distance each point was projected from its anchor.
     ``numbering``
         ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
@@ -119,8 +114,18 @@ class CavitySnapshotDROP(CavitySnapshot):
         is one-based, and ``branch_count`` counts the *surviving* branches in
         the point's anchor group -- so ``branch_count > 1`` marks the branched
         points and a point whose siblings were filtered away reports one.
+        ``branch`` is the position of the point among the rows of its
+        anchor, without gaps, and ``branch_count`` is the row count
+        ``offset[i + 1] - offset[i]`` of the anchor. Every row has an area
+        of its own.
     ``wbranch``
-        ``(ngrid,)`` branch weights, one for an unbranched point.
+        ``(ngrid,)`` branch weights, the gate of the point included; the
+        gate alone for an unbranched point.
+    ``offset``, ``anchor_of_row``
+        DROP row layout, both zero-based: ``offset`` ``(nmax + 1,)`` holds the
+        first row of each anchor, so anchor ``i`` owns rows
+        ``offset[i]:offset[i + 1]``; ``anchor_of_row`` ``(ngrid,)`` is the
+        anchor of each row.
 
     Everything the cavity holds beyond these -- curvatures, grid densities,
     projection diagnostics -- is reachable by name through
@@ -129,13 +134,14 @@ class CavitySnapshotDROP(CavitySnapshot):
 
     nmax: int
     wleb: np.ndarray
-    r_iI0: np.ndarray
-    rho: np.ndarray
+    pdist: np.ndarray
     numbering: np.ndarray
     anchor_id: np.ndarray
     branch: np.ndarray
     branch_count: np.ndarray
     wbranch: np.ndarray
+    offset: np.ndarray
+    anchor_of_row: np.ndarray
 
     @property
     def branched(self) -> np.ndarray:
@@ -212,8 +218,9 @@ class DensityResponse(_ImmutableArrayValue):
     your own ``d rho/dP`` they complete the Fock matrix, against the
     basis-center ``d rho/dR`` the nuclear gradient.  Going straight to the
     gradient phase drops that term and nothing reports it.  Hessian weights
-    use ``[point,b,a]`` for native ``(a,b,point)``.  They need not be
-    symmetric; preserve both Cartesian axes in contractions.
+    use ``[point,b,a]`` for native ``(a,b,point)``.  They are symmetric with
+    off-diagonals not doubled; contract all nine entries against the
+    density Hessian.
     """
 
     #: Native item name
@@ -853,10 +860,6 @@ class Cavity(ABC):
         return self.snapshot().owner
 
     @property
-    def converged(self) -> np.ndarray:
-        return self.snapshot().converged
-
-    @property
     def radii(self) -> np.ndarray:
         return self.snapshot().radii
 
@@ -928,13 +931,14 @@ class CavityISwiG(_CavityGenericBase):
 _DROP_SNAPSHOT_FIELDS = _GRID_INPUT_FIELDS + (
     "nmax",
     "wleb",
-    "r_iI0",
-    "rho",
+    "pdist",
     "numbering",
     "anchor_id",
     "branch",
     "branch_count",
     "wbranch",
+    "offset",
+    "anchor_of_row",
 )
 
 
@@ -1013,12 +1017,8 @@ class _CavityDROPBase(Cavity):
         return self.snapshot().wleb
 
     @property
-    def r_iI0(self) -> np.ndarray:
-        return self.snapshot().r_iI0
-
-    @property
-    def rho(self) -> np.ndarray:
-        return self.snapshot().rho
+    def pdist(self) -> np.ndarray:
+        return self.snapshot().pdist
 
 
 class _CavityDROPBorrowed(_CavityDROPBase):

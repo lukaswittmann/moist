@@ -2,6 +2,8 @@
 !> pre-pcmgen implementation
 !>
 !> - Not a reference: re-pin when a deliberate numerical change moves them
+!> - DROP/CPCM and DROP/COSMO on But14diol re-pinned 2026-11-18 after the
+!>   DROP gate redesign
 !> - Fingerprints: sum, absolute sum, sin and cos projections of each array
 !> - Explicit dense solves preserve the direct-solver baseline
 module test_model_component_pcm_regression
@@ -14,7 +16,7 @@ module test_model_component_pcm_regression
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_type, only: cavity_type
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig, moist_cavity_iswig_parameters_type
@@ -30,50 +32,47 @@ module test_model_component_pcm_regression
    public :: collect_model_component_pcm_regression
 
    real(wp), parameter :: dielectric = 78.355_wp
-   !> Frozen from the native target CPCM/COSMO implementation with A-matrix assembly.
-   !> Rows: iSwiG/CPCM, iSwiG/COSMO, DROP/CPCM, DROP/COSMO.
-   !> Re-pinned 2026-10-15 for the shared full-precision Born zeta table (110
-   !> points: iSwiG 4.901, DROP 4.900490, now both 4.90101060987); energies
-   !> moved 4e-7 (iSwiG) and 1.8e-5 (DROP) relative, positions unchanged.
+   !> Frozen from the native target CPCM/COSMO implementation with A-matrix assembly;
+   !> Rows: iSwiG/CPCM, iSwiG/COSMO, DROP/CPCM, DROP/COSMO
    real(wp), parameter :: energy_ref(8) = [ &
                           -5.1479216499987563e-2_wp, -5.1152799554327810e-2_wp, &
-                          -3.3650283393618854e-2_wp, -3.3436915291446425e-2_wp, &
+                          -3.3650328153369893e-2_wp, -3.3436959767386948e-2_wp, &
                           -1.4341653734303421e-1_wp, -1.4250716864515180e-1_wp, &
-                          -1.1050896797640573e-1_wp, -1.0980825801523386e-1_wp]
+                          -1.1050910182684498e-1_wp, -1.0980839101696072e-1_wp]
    !> Sum, absolute sum, sin projection and cos projection of the surface charges.
    real(wp), parameter :: q_ref(4, 8) = reshape([ &
                                                 2.3321643339626883e-5_wp, 1.3277827942042677e+0_wp, &
                                                 1.1480374893988068e-2_wp, -2.6256526865012586e-2_wp, &
                                                 2.3173766583087403e-5_wp, 1.3193636527788433e+0_wp, &
                                                 1.1407580683766851e-2_wp, -2.6090040739433893e-2_wp, &
-                                                1.3377133170037581e-4_wp, 1.0834232266813133e+0_wp, &
-                                                1.5609160106153848e-2_wp, 9.4320963195475542e-3_wp, &
-                                                1.3292312085976330e-4_wp, 1.0765535086755971e+0_wp, &
-                                                1.5510186292786601e-2_wp, 9.3722897358207824e-3_wp, &
+                                                1.3409842932499990e-4_wp, 1.0834284873554736e+0_wp, &
+                                                7.4181380761828113e-3_wp, 3.1693787082843557e-3_wp, &
+                                                1.3324814443898387e-4_wp, 1.0765587359931268e+0_wp, &
+                                                7.3711015022421339e-3_wp, 3.1492824638592338e-3_wp, &
                                                 1.6550689601669459e-3_wp, 1.8783032443252865e+0_wp, &
                                                 -7.1917654405905500e-2_wp, -5.1809274083117209e-2_wp, &
                                                 1.6445745783256134e-3_wp, 1.8663933892474505e+0_wp, &
                                                 -7.1461642393947296e-2_wp, -5.1480764324172776e-2_wp, &
-                                                1.7989591517178052e-3_wp, 1.7146602107797559e+0_wp, &
-                                                -6.4603290326013587e-2_wp, -7.2450521074466394e-2_wp, &
-                                                1.7875523978540295e-3_wp, 1.7037879755963237e+0_wp, &
-                                                -6.4193656882820251e-2_wp, -7.1991130287106868e-2_wp], [4, 8])
+                                                1.7999092012059188e-3_wp, 1.7146549485427838e+0_wp, &
+                                                -6.4603682120346326e-2_wp, -7.2440478001184638e-2_wp, &
+                                                1.7884964233147466e-3_wp, 1.7037827467258870e+0_wp, &
+                                                -6.4194046192882354e-2_wp, -7.1981150894462262e-2_wp], [4, 8])
    !> Cavity fingerprints for the chloroglycine test, iSwiG then DROP.
    real(wp), parameter :: xyz_ref(4, 2) = reshape([ &
                                                   -2.3098537341174193e+1_wp, 5.2269582477566591e+3_wp, &
                                                   -4.6965463272005962e+1_wp, -3.3973194568477830e+1_wp, &
-                                                  -1.9060932221531669e+2_wp, 6.0469792014353961e+3_wp, &
-                                                  -6.7810904138394832e+1_wp, -4.6230162296330910e+1_wp], [4, 2])
+                                                  -1.9063466928929586e+2_wp, 6.0470213090309844e+3_wp, &
+                                                  -6.7800241003110457e+1_wp, -4.6218737884474670e+1_wp], [4, 2])
    real(wp), parameter :: area_ref(4, 2) = reshape([ &
                                                    4.3558592783437673e+2_wp, 4.3558592783437673e+2_wp, &
                                                    2.4177011102698205e+1_wp, 5.7976948118787712e+0_wp, &
-                                                   4.7726077146771750e+2_wp, 4.7726077146771750e+2_wp, &
-                                                   3.1073264444545163e+1_wp, 8.5213883359103360e+0_wp], [4, 2])
+                                                   4.7726097375274321e+2_wp, 4.7726097375274321e+2_wp, &
+                                                   3.1073164683002346e+1_wp, 8.5213476663465162e+0_wp], [4, 2])
    real(wp), parameter :: switch_ref(4, 2) = reshape([ &
                                                      3.7866513733389091e+2_wp, 3.7866513733389091e+2_wp, &
                                                      1.6819628403573632e+1_wp, 8.5408541941912635e+0_wp, &
-                                                     3.7866513733397711e+2_wp, 3.7866513733397711e+2_wp, &
-                                                     1.7397685745955502e+1_wp, 9.9670596543947578e+0_wp], [4, 2])
+                                                     3.7866513733397704e+2_wp, 3.7866513733397704e+2_wp, &
+                                                     1.7397685745955506e+1_wp, 9.9670596543947649e+0_wp], [4, 2])
 
 contains
 
@@ -185,7 +184,8 @@ contains
                        blend_k=2.5_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
          call new_cavity_drop(drop, ctx=ctx, radius_model=default_cpcm_radii(), &
                               lsf_model=svdw, error=err, param=moist_cavity_drop_parameters_type( &
-                              num_leb=110, tolerance=1.0e-10_wp, proj_maxiter=1000, proj_level=1))
+                              num_leb=110, tolerance=1.0e-10_wp, solve=drop_solve_parameters_type(max_iter=1000), &
+                              proj_level=1))
          if (allocated(err)) then
             call test_failed(error, err%message)
             return
@@ -262,7 +262,7 @@ contains
          end if
       end if
       ngrid_ref = 997
-      if (cavity_kind == "drop") ngrid_ref = 1001
+      if (cavity_kind == "drop") ngrid_ref = 999
       if (icase > 4) ngrid_ref = 669
       if (icase > 6) ngrid_ref = 670
       call check(error, cavity%ngrid, ngrid_ref, message="native golden cavity grid changed")

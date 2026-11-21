@@ -6,6 +6,10 @@ module moist_cavity_drop_parameters
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_bornzeta, only: get_born_zeta
+   use moist_cavity_drop_projection_batch, only: default_batch_size
+   use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type, drop_solve_parameters_type, &
+                                                     drop_polish_parameters_type, drop_finalize_parameters_type, &
+                                                     drop_branch_parameters_type
 
    implicit none(type, external)
 
@@ -13,6 +17,10 @@ module moist_cavity_drop_parameters
    integer, parameter :: maxAtomicNumbers = 118
 
    public :: moist_cavity_drop_parameters_type
+   public :: is_valid_proj_level
+   public :: drop_seed_parameters_type, drop_branch_parameters_type
+   public :: drop_solve_parameters_type, drop_polish_parameters_type, drop_finalize_parameters_type
+
    private
 
    !> Parameter container for DROP
@@ -25,39 +33,30 @@ module moist_cavity_drop_parameters
       !> Number of Lebedev quadrature points per atomic sphere
       integer :: num_leb = 194
 
-      !> Compute all optional cavity properties; sets every `do_*` flag below
-      logical :: do_fine = .false.
-
       !* ----------------------------- Optional properties ---------------------------- *!
+
+      !> Compute all optional cavity properties below
+      logical :: do_fine = .false.
 
       !> Compute the local grid point density
       logical :: do_grid_density = .false.
-
-      !> Compute principal (and with this mean and Gaussian) curvatures
+      !> Compute principal curvatures (and mean and Gaussian)
       logical :: do_curvature = .false.
-
       !> Store surface normal vectors at grid points
       logical :: do_normal = .false.
-
-      !> Store sphere-center to grid point distances
-      logical :: do_r_iI = .false.
-
-      !> Store anchor-to-projected-point displacement distances
-      logical :: do_rho = .false.
+      !> Atomic areas via spatial partition of atomic contributions of the LSF
+      logical :: do_atomarea = .false.
 
       !* ---------------------------------- Tolerance --------------------------------- *!
 
       !> Main tolerance controlling all numerical thresholds
       !>
       !> Derived tolerances (tightest to loosest):
-      !>  - wleb_cut            = tolerance * 0.05 (quadrature weight cutoff)
+      !>  - finalize%wleb_cut    = tolerance * 0.05 (quadrature weight cutoff)
       !>  - screening_threshold = tolerance * 0.1  (LSF screening; passed into lsf_model by DROP constructor)
-      !>  - proj_tol            = tolerance        (projection convergence)
-      !>  - branch_sep_cut      = tolerance * 10   (branch degeneracy)
+      !>  - solve%tol           = tolerance        (projection convergence)
+      !>  - branch%sep_cut      = tolerance * 10   (branch degeneracy)
       real(wp) :: tolerance = 1.0E-10_wp
-
-      !> Minimum weight cutoff (derived from tolerance)
-      real(wp) :: wleb_cut = 5.0E-12_wp
 
       !> LSF screening threshold, derived from `tolerance` in
       !> `compute_drop_derived`
@@ -74,51 +73,44 @@ module moist_cavity_drop_parameters
 
       !* --------------------------- Projection Optimization -------------------------- *!
 
-      !> Convergence tolerance for projection optimizer (derived from tolerance)
-      real(wp) :: proj_tol = 1.0E-10_wp
-      !> Maximum iterations for projection optimizer
-      integer :: proj_maxiter = 150
       !> Projection level:
-      !> 1 = SLSQP only (no Newton refinement)
-      !> 2 = SLSQP + Newton refinement
-      !> 3 = Conditional multi-tangent for degenerate points
-      !> 4 = Conditional SLSQP-deflation
-      !> 5 = SLSQP-deflation (unconditional)
-      !> 6 = Newton-deflation on 4D KKT system
-      !> 7 = Regular SLSQP multistart
-      !> 8 = Fine SLSQP multistart reference (very expensive)
-      !> 9 = Octree surface coverage followed by local refinement
+      !> 1 = local batched KKT Newton only
+      !> 3 = every anchor, coarse octree seeds (`seed%init_coarse`)
+      !> 4 = every anchor, fine octree seeds (`seed%init_fine`)
+      !> Any other value is refused
+      !> A failed local solve is retried from the level's octree, the coarse one at level 1
+      !> The coarse octree drops a leaf without sign change; the fine one probes its children once
       integer :: proj_level = 3
 
-      !* --------------------- Octree surface coverage (level 9) ---------------------- *!
+      !* ----------------------------- Batched projection ----------------------------- *!
 
-      !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr)
-      real(wp) :: octree_seed_size = 0.2_wp
-      !> Box budget per anchor
-      integer :: octree_max_boxes = 200000
-      !> Surviving-leaf budget per anchor
-      integer :: octree_max_survivors = 200000
-      !> Octree depth limit
-      integer :: octree_max_depth = 12
-      !> Explicit search window rho^2 - rho_min^2, in Bohr^2
-      !>
-      !> - -1: derive the window from the current softmax weight floor
-      !> - >= 0: use this window independently of branch weights
-      real(wp) :: branch_search_rho2_slack = -1.0_wp
+      !> Anchors per projection chunk and flush target of the seeded pass (points)
+      integer :: batch_size = default_batch_size
+
+      !* ------------------------------ Projection stages ----------------------------- *!
+
+      !> Seed step (octree surface coverage); leaf size and refinement derived from `proj_level`
+      type(drop_seed_parameters_type) :: seed
+      !> Solve step (batched KKT Newton); `tol` derived from `tolerance`
+      type(drop_solve_parameters_type) :: solve
+      !> Optimality polish
+      type(drop_polish_parameters_type) :: polish
+      !> Per-anchor finalize; `wleb_cut` derived from `tolerance`,
+      !> the prune switch from `wleb_prune_level`
+      type(drop_finalize_parameters_type) :: finalize
 
       !* ---------------------------------- Screening --------------------------------- *!
 
       !> Distance cutoff for grid point adj. list, derived as `4*rho_grid_h`
       real(wp) :: adj_list_grid_cutoff = 1.0_wp
-      !> Below this atom count, the cell grid collapses to a single full-scan cell
+      !> Below this atom count, the level set's candidate cell list collapses to a
+      !> single full-scan cell
       !>
       !> - for small systems the per-cell fan-out reduces to "every atom in every
       !>   cell" anyway, so the build work is skipped and every query returns the
       !>   full atom list directly
+      !> - handed to the level set through `set_full_scan_below`
       integer :: cell_grid_full_scan_below = 200
-      !> Cell fraction for molecular cell grid
-      !> (1.0 = no subdivision, 0.5 = halved cell,..)
-      real(wp) :: cell_grid_fraction = 0.25_wp
 
       !* ------------------------ Hard-sphere reference cavity ------------------------ *!
 
@@ -128,15 +120,30 @@ module moist_cavity_drop_parameters
 
       !* ----------------------------- Switching Functions ---------------------------- *!
 
-      !> Start of critical level set weight switching transition
-      real(wp) :: w_0ls_from = 0.25_wp
-      !> End of critical level set weight switching transition
-      real(wp) :: w_0ls_to = 0.6_wp
+      !> Off-edge of critical level set weight switching transition
+      real(wp) :: w_0ls_off = 0.1_wp
+      !> On-edge of critical level set weight switching transition
+      real(wp) :: w_0ls_on = 0.6_wp
 
-      !> Start of focal/branching weight switching transition
-      real(wp) :: w_0tra_from = 0.1_wp
-      !> End of focal/branching weight switching transition
-      real(wp) :: w_0tra_to = 0.3_wp
+      !> Off-edge of focal/branching weight switching transition, in the focal
+      !> margin `beta_min/phi_alpha` (one on a flat surface)
+      real(wp) :: w_0tra_off = 0.2_wp
+      !> On-edge of focal/branching weight switching transition
+      real(wp) :: w_0tra_on = 0.6_wp
+
+      !> Off-edge of horizon weight switching transition, in the signed `n_surf . n_sph`
+      !>
+      !> - zero: closed exactly where the area scaling, proportional to the
+      !>   cosine, vanishes
+      real(wp) :: w_0hor_off = 0.0_wp
+      !> On-edge of horizon weight switching transition
+      !>
+      !> - zero switches the horizon factor off
+      real(wp) :: w_0hor_on = 0.15_wp
+      !> Horizon band in use, derived: the explicit one, else a band below
+      !> every cosine when switched off
+      real(wp) :: hor_off = 0.0_wp
+      real(wp) :: hor_on = 0.15_wp
 
       !> Function parameters
       real(wp) :: w_0ls_p = 0.8_wp
@@ -149,30 +156,22 @@ module moist_cavity_drop_parameters
 
       !* ---------------------------------- Branching --------------------------------- *!
 
-      !> Softmax scale parameter for branch weight model (smoothness)
-      real(wp) :: branch_weight_s = 0.0025_wp
-      !> Branch weight below which a branch carries no quadrature contribution
-      real(wp) :: branch_weight_floor = 0.0_wp
-      !> Largest objective excess a branch may have over the closest one
-      real(wp) :: branch_dphi_max = 0.0_wp
-      !> Branch separation cutoff (derived from tolerance)
-      real(wp) :: branch_sep_cut = 1.0E-8_wp
+      !> Branch window and reach; the window also bounds the branch search
+      type(drop_branch_parameters_type) :: branch
 
       !* ------------------------------ Weight switching ------------------------------ *!
 
-      !> Smooth switching on final Lebedev weights to suppress near-zero contributions before the branch filter
-      !>  - Level 0: disabled (default)
-      !>  - Level 1: from 1E-12 to 1E-10
-      !>  - Level 2: from 1E-10 to 1E-8
-      !>  - Level 3: from 1E-8  to 1E-6
-      !>  - Level 4: from 1E-6  to 1E-4
-      !>  - Level 5: from 1E-4  to 1E-2
-      !>  - Level 6: from 1E-2  to 1E0
+      !> Smooth switching on final Lebedev weights before the branch filter; the
+      !> switch edges in `finalize` are derived from the level
+      !>
+      !> - Level 0: disabled (default)
+      !> - Level 1: off at 1E-12, on at 1E-10
+      !> - Level 2: off at 1E-10, on at 1E-8
+      !> - Level 3: off at 1E-8,  on at 1E-6
+      !> - Level 4: off at 1E-6,  on at 1E-4
+      !> - Level 5: off at 1E-4,  on at 1E-2
+      !> - Level 6: off at 1E-2,  on at 1E0
       integer :: wleb_prune_level = 0
-      !> Lower bound of the weight switching region (below: fully off, derived)
-      real(wp) :: wleb_prune_from = 0.0_wp
-      !> Upper bound of the weight switching region (above: fully on, derived)
-      real(wp) :: wleb_prune_to = 0.0_wp
 
    contains
       !> Initialize parameters to compiled defaults
@@ -193,11 +192,6 @@ module moist_cavity_drop_parameters
       procedure :: print => print_parameters
       !> Return a human-readable description for the current projection level
       procedure :: proj_level_label => get_proj_level_label
-      !> Squared-distance difference a branch may have over the closest one
-      procedure :: branch_rho2_slack => branch_rho2_slack_value
-      !> Largest projection distance a branch may have and still carry weight
-      procedure :: rho_max_from => rho_max_from_rho_min
-
    end type moist_cavity_drop_parameters_type
 
 contains
@@ -206,24 +200,29 @@ contains
    !>
    !> @param[inout] self Initialized parameter container
    !> @param[in]    nleb Number of Lebedev quadrature points
-   !> @param[in]    tolerance main tolerance (derives proj_tol, wleb_cut, branch_sep)
+   !> @param[in]    tolerance main tolerance (derives solve tol, wleb_cut, branch_sep)
    !> @param[in]    proj_maxiter Maximum projection iterations
    !> @param[in]    proj_level Projection refinement level
-   !> @param[in]    branch_weight_s Softmax scale for branch weights
+   !> @param[in]    branch Branch window and reach
    !> @param[in]    rho_grid_h Grid density kernel length
    !> @param[in]    wleb_prune_level Weight switching level (0=off, 1-6=increasing aggressiveness)
-   !> @param[out]   error Error if no fitted Born zeta exists for `nleb`
+   !> @param[in]    w_0hor_off Horizon switch off-edge
+   !> @param[in]    w_0hor_on Horizon switch on-edge; zero switches it off
+   !> @param[out]   error Invalid setting, or no fitted Born zeta for `nleb`
    subroutine new_moist_cavity_drop_parameters_type(self, &
                                                     nleb, tolerance, proj_maxiter, proj_level, &
-                                                    branch_weight_s, rho_grid_h, wleb_prune_level, error)
+                                                    branch, rho_grid_h, wleb_prune_level, &
+                                                    w_0hor_off, w_0hor_on, &
+                                                    error)
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       integer, intent(in), optional :: nleb
       real(wp), intent(in), optional :: tolerance
       integer, intent(in), optional :: proj_maxiter
       integer, intent(in), optional :: proj_level
-      real(wp), intent(in), optional :: branch_weight_s
+      type(drop_branch_parameters_type), intent(in), optional :: branch
       real(wp), intent(in), optional :: rho_grid_h
       integer, intent(in), optional :: wleb_prune_level
+      real(wp), intent(in), optional :: w_0hor_off, w_0hor_on
       type(error_type), allocatable, intent(out) :: error
 
       ! Phase 1: Reset all fields to compiled defaults
@@ -233,12 +232,14 @@ contains
       if (present(nleb)) self%num_leb = nleb
 
       if (present(tolerance)) self%tolerance = tolerance
-      if (present(proj_maxiter)) self%proj_maxiter = proj_maxiter
+      if (present(proj_maxiter)) self%solve%max_iter = proj_maxiter
       if (present(proj_level)) self%proj_level = proj_level
 
-      if (present(branch_weight_s)) self%branch_weight_s = branch_weight_s
+      if (present(branch)) self%branch = branch
       if (present(rho_grid_h)) self%rho_grid_h = rho_grid_h
       if (present(wleb_prune_level)) self%wleb_prune_level = wleb_prune_level
+      if (present(w_0hor_off)) self%w_0hor_off = w_0hor_off
+      if (present(w_0hor_on)) self%w_0hor_on = w_0hor_on
 
       ! Phase 3: Compute derived parameters from final field values
       call self%compute_derived(error)
@@ -261,50 +262,43 @@ contains
       self%do_grid_density = fresh%do_grid_density
       self%do_curvature = fresh%do_curvature
       self%do_normal = fresh%do_normal
-      self%do_r_iI = fresh%do_r_iI
-      self%do_rho = fresh%do_rho
-      ! Tolerance (master; proj_tol, wleb_cut, branch_sep_cut are derived
-      ! from this in compute_derived; LSF screening lives on the LSF concrete)
+      self%do_atomarea = fresh%do_atomarea
+      ! Tolerance (master; solve%tol, finalize%wleb_cut, branch%sep_cut
+      ! are derived from this in compute_derived; LSF screening lives on the LSF concrete)
       self%tolerance = fresh%tolerance
       ! Objective
       self%phi_alpha = fresh%phi_alpha
       ! Projection
-      self%proj_maxiter = fresh%proj_maxiter
       self%proj_level = fresh%proj_level
-      ! Octree surface coverage
-      self%octree_seed_size = fresh%octree_seed_size
-      self%octree_max_boxes = fresh%octree_max_boxes
-      self%octree_max_survivors = fresh%octree_max_survivors
-      self%octree_max_depth = fresh%octree_max_depth
-      self%branch_search_rho2_slack = fresh%branch_search_rho2_slack
+      ! Batched projection
+      self%batch_size = fresh%batch_size
+      ! Projection stages, derived tolerances included
+      self%seed = fresh%seed
+      self%solve = fresh%solve
+      self%polish = fresh%polish
+      self%finalize = fresh%finalize
       ! Screening
       self%cell_grid_full_scan_below = fresh%cell_grid_full_scan_below
-      self%cell_grid_fraction = fresh%cell_grid_fraction
       ! Switching
-      self%w_0ls_from = fresh%w_0ls_from
-      self%w_0ls_to = fresh%w_0ls_to
+      self%w_0ls_off = fresh%w_0ls_off
+      self%w_0ls_on = fresh%w_0ls_on
       self%w_0ls_p = fresh%w_0ls_p
       self%w_0ls_a = fresh%w_0ls_a
-      self%w_0tra_from = fresh%w_0tra_from
-      self%w_0tra_to = fresh%w_0tra_to
-      ! Weight switching (from/to are derived in compute_derived)
+      self%w_0tra_off = fresh%w_0tra_off
+      self%w_0tra_on = fresh%w_0tra_on
+      self%w_0hor_off = fresh%w_0hor_off
+      self%w_0hor_on = fresh%w_0hor_on
+      self%hor_off = fresh%hor_off
+      self%hor_on = fresh%hor_on
       self%wleb_prune_level = fresh%wleb_prune_level
       ! Density
       self%rho_grid_h = fresh%rho_grid_h
-      ! Branching (branch_dphi_max is derived; a zero floor means it follows
-      ! wleb_cut, see compute_derived)
-      self%branch_weight_s = fresh%branch_weight_s
-      self%branch_weight_floor = fresh%branch_weight_floor
+      ! Branching
+      self%branch = fresh%branch
       !> Reset derived values; construction and file input recompute them
-      self%wleb_cut = fresh%wleb_cut
       self%screening_threshold = fresh%screening_threshold
-      self%proj_tol = fresh%proj_tol
       self%adj_list_grid_cutoff = fresh%adj_list_grid_cutoff
       self%iswig_xi_born = fresh%iswig_xi_born
-      self%branch_dphi_max = fresh%branch_dphi_max
-      self%branch_sep_cut = fresh%branch_sep_cut
-      self%wleb_prune_from = fresh%wleb_prune_from
-      self%wleb_prune_to = fresh%wleb_prune_to
    end subroutine init_cavity_drop_defaults
 
    !> Compute all derived parameters from the current user-facing fields
@@ -318,58 +312,155 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      !> Effective branch weight floor for this parameter set
-      real(wp) :: weight_floor
 
-      if (self%tolerance <= 0.0_wp .or. self%rho_grid_h <= 0.0_wp .or. &
-          self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > 9) then
-         call fatal_error(error, "Invalid DROP numerical parameters")
+      ! Written as `.not. (x > 0)` with a finiteness test, so NaN and Inf are refused
+      if (.not. (ieee_is_finite(self%tolerance) .and. self%tolerance > 0.0_wp)) then
+         call fatal_error(error, "Invalid DROP numerical parameters: tolerance must be finite and positive")
          return
       end if
-
-      if (.not. ieee_is_finite(self%branch_search_rho2_slack)) then
-         call fatal_error(error, "Branch search squared-distance slack must be finite")
+      if (.not. (ieee_is_finite(self%rho_grid_h) .and. self%rho_grid_h > 0.0_wp)) then
+         call fatal_error(error, "Invalid DROP numerical parameters: rho_grid_h must be finite and positive")
          return
       end if
-      if (self%branch_search_rho2_slack < 0.0_wp .and. self%branch_search_rho2_slack /= -1.0_wp) then
-         call fatal_error(error, "Branch search squared-distance slack must be -1 or nonnegative")
+      if (self%solve%max_iter < 1) then
+         call fatal_error(error, "Invalid DROP numerical parameters: projection maxiter must be positive")
+         return
+      end if
+      if (.not. is_valid_proj_level(self%proj_level)) then
+         call fatal_error(error, "Invalid DROP numerical parameters: projection level must be 1, 3 or 4")
+         return
+      end if
+      !> Octree leaf size and refinement of the level; the coarse octree is also
+      !> the fallback of level 1
+      if (self%proj_level == 4) then
+         call self%seed%init_fine()
+      else
+         call self%seed%init_coarse()
+      end if
+
+      if (self%seed%max_boxes < 1) then
+         call fatal_error(error, "Octree box budget must be positive")
+         return
+      end if
+      if (self%seed%max_survivors < 1) then
+         call fatal_error(error, "Octree survivor budget must be positive")
+         return
+      end if
+      if (self%seed%max_depth < 1 .or. self%seed%max_depth > self%seed%max_addressable_depth) then
+         call fatal_error(error, "Octree depth limit must lie in 1..20")
+         return
+      end if
+      if (self%batch_size < 1) then
+         call fatal_error(error, "Projection batch size must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(self%solve%switch_fnorm) .or. self%solve%switch_fnorm < 0.0_wp) then
+         call fatal_error(error, "Newton stage-switch residual must be nonnegative")
+         return
+      end if
+      if (self%solve%max_cheap_steps < 0) then
+         call fatal_error(error, "Newton cheap-step budget must not be negative")
+         return
+      end if
+      if (.not. (ieee_is_finite(self%solve%max_step) .and. self%solve%max_step > 0.0_wp)) then
+         call fatal_error(error, "Newton step cap must be positive")
+         return
+      end if
+      if (.not. ieee_is_finite(self%solve%merit_margin) .or. self%solve%merit_margin <= 0.0_wp) then
+         call fatal_error(error, "Newton merit margin must be positive")
          return
       end if
 
       !> Derive tolerance hierarchy from master tolerance
-      !> (tightest to loosest: wleb_cut < screening < proj_tol < branch_sep)
-      self%wleb_cut = self%tolerance*0.05_wp
+      !> (tightest to loosest: wleb_cut < screening < solve tol < branch_sep)
+      self%finalize%wleb_cut = self%tolerance*0.05_wp
       self%screening_threshold = self%tolerance*0.1_wp
-      self%proj_tol = self%tolerance
-      self%branch_sep_cut = self%tolerance*10.0_wp
+      self%solve%tol = self%tolerance
+      ! Copies of an ill-conditioned projected point differ by ~1e-9 Bohr, distinct ones by far more
+      self%branch%sep_cut = max(self%tolerance*10.0_wp, self%branch%sep_floor)
 
-      !> Branch admissibility from the softmax weight floor
+      !> Derive weight switching bounds from level
+      select case (self%wleb_prune_level)
+      case (0)
+         self%finalize%wleb_prune_off = 0.0_wp
+         self%finalize%wleb_prune_on = 0.0_wp
+      case (1)
+         self%finalize%wleb_prune_off = 1.0E-12_wp
+         self%finalize%wleb_prune_on = 1.0E-10_wp
+      case (2)
+         self%finalize%wleb_prune_off = 1.0E-10_wp
+         self%finalize%wleb_prune_on = 1.0E-8_wp
+      case (3)
+         self%finalize%wleb_prune_off = 1.0E-8_wp
+         self%finalize%wleb_prune_on = 1.0E-6_wp
+      case (4)
+         self%finalize%wleb_prune_off = 1.0E-6_wp
+         self%finalize%wleb_prune_on = 1.0E-4_wp
+      case (5)
+         self%finalize%wleb_prune_off = 1.0E-4_wp
+         self%finalize%wleb_prune_on = 1.0E-2_wp
+      case (6)
+         self%finalize%wleb_prune_off = 1.0E-2_wp
+         self%finalize%wleb_prune_on = 1.0E0_wp
+      case default
+         call fatal_error(error, "Invalid wleb_prune_level (must be 0-6)")
+         return
+      end select
+      self%finalize%wleb_prune = self%wleb_prune_level > 0
+
+      ! The cut stays at the tolerance with pruning on: the prune switch is
+      ! exactly zero below its onset, and a raised cut would step
+
+      !> Branch window
       !>
-      !> - a branch is kept while its weight can still reach the floor, which
-      !>   tracks the quadrature cutoff unless the user pinned it explicitly
-      !> - the user field is left alone, so it keeps meaning "follow wleb_cut"
-      !>   across a later tolerance change
-      !>
-      !> The admissible radius is `sqrt(rho_min^2 + 2*branch_dphi_max/phi_alpha)`,
-      !> so a floor at or above one -- or a non-positive alpha -- makes every
-      !> consumer of that formula take the square root of a negative number
-      !> Rejecting both here covers `rho_max_from_rho_min`, `filter_candidates`
-      !> and the two deflation ball caps at once
-      weight_floor = self%branch_weight_floor
-      if (weight_floor <= 0.0_wp) weight_floor = self%wleb_cut
-      if (weight_floor >= 1.0_wp) then
-         call fatal_error(error, "Branch weight floor must be below one; a floor "// &
-                          "at or above unity admits no branch at all")
+      !> A negative window or a non-positive alpha makes the consumers of the
+      !> admissible radius take the square root of a negative number
+      if (.not. (ieee_is_finite(self%phi_alpha) .and. self%phi_alpha > 0.0_wp)) then
+         call fatal_error(error, "Objective alpha must be finite and positive")
          return
       end if
-      if (self%phi_alpha <= 0.0_wp) then
-         call fatal_error(error, "Objective alpha must be positive")
+      if (.not. ieee_is_finite(self%branch%dpdist_max) .or. self%branch%dpdist_max < 0.0_wp) then
+         call fatal_error(error, "Branch distance window must not be negative")
          return
       end if
-      self%branch_dphi_max = self%branch_weight_s*log(1.0_wp/weight_floor)
-      if (self%branch_dphi_max < 0.0_wp) then
-         call fatal_error(error, "Branch softmax scale must not be negative")
+      !> The closed edge bounds the search, so it has no off switch
+      if (.not. (ieee_is_finite(self%branch%reach_off) .and. self%branch%reach_on > 0.0_wp &
+                 .and. self%branch%reach_off > self%branch%reach_on)) then
+         call fatal_error(error, "Reach bounds must satisfy 0 < on < off")
          return
+      end if
+      !> Switch bands rise from off to on with nonzero width: reversed edges
+      !> invert a gate, equal ones make it a step
+      if (.not. (self%w_0ls_off >= 0.0_wp .and. self%w_0ls_on > self%w_0ls_off &
+                 .and. ieee_is_finite(self%w_0ls_on))) then
+         call fatal_error(error, "Critical-gradient switch bounds must satisfy 0 <= off < on")
+         return
+      end if
+      !> A negative off-edge would open the gate past the focal point, det B = 0
+      if (.not. (self%w_0tra_off >= 0.0_wp .and. self%w_0tra_on > self%w_0tra_off &
+                 .and. ieee_is_finite(self%w_0tra_on))) then
+         call fatal_error(error, "Focal switch bounds must satisfy 0 <= off < on")
+         return
+      end if
+      if (.not. (ieee_is_finite(self%w_0ls_p) .and. ieee_is_finite(self%w_0ls_a) &
+                 .and. self%w_0ls_p > 0.0_wp .and. self%w_0ls_a > 0.0_wp)) then
+         call fatal_error(error, "Switch shape parameters w_0ls_p and w_0ls_a must be positive")
+         return
+      end if
+      !> A zero on-edge switches the horizon factor off, whatever the off-edge
+      if (.not. (self%w_0hor_on == 0.0_wp .or. (self%w_0hor_off >= 0.0_wp &
+                                                .and. self%w_0hor_on > self%w_0hor_off &
+                                                .and. self%w_0hor_on <= 1.0_wp))) then
+         call fatal_error(error, "Horizon switch bounds must satisfy 0 <= off < on <= 1")
+         return
+      end if
+      if (self%w_0hor_on > 0.0_wp) then
+         self%hor_off = self%w_0hor_off
+         self%hor_on = self%w_0hor_on
+      else
+         ! Switched off: a band below every cosine in [-1, 1], factor one, slope zero
+         self%hor_off = -2.0_wp
+         self%hor_on = -1.0_wp
       end if
 
       !> Grid point adjacency list cutoff from density kernel length
@@ -380,41 +471,7 @@ contains
          self%do_grid_density = .true.
          self%do_curvature = .true.
          self%do_normal = .true.
-         self%do_r_iI = .true.
-         self%do_rho = .true.
-      end if
-
-      !> Derive weight switching bounds from level
-      select case (self%wleb_prune_level)
-      case (0)
-         self%wleb_prune_from = 0.0_wp
-         self%wleb_prune_to = 0.0_wp
-      case (1)
-         self%wleb_prune_from = 1.0E-12_wp
-         self%wleb_prune_to = 1.0E-10_wp
-      case (2)
-         self%wleb_prune_from = 1.0E-10_wp
-         self%wleb_prune_to = 1.0E-8_wp
-      case (3)
-         self%wleb_prune_from = 1.0E-8_wp
-         self%wleb_prune_to = 1.0E-6_wp
-      case (4)
-         self%wleb_prune_from = 1.0E-6_wp
-         self%wleb_prune_to = 1.0E-4_wp
-      case (5)
-         self%wleb_prune_from = 1.0E-4_wp
-         self%wleb_prune_to = 1.0E-2_wp
-      case (6)
-         self%wleb_prune_from = 1.0E-2_wp
-         self%wleb_prune_to = 1.0E0_wp
-      case default
-         call fatal_error(error, "Invalid wleb_prune_level (must be 0-6)")
-         return
-      end select
-
-      ! If prune level is on, adjust wleb_cut
-      if (self%wleb_prune_level > 0) then
-         self%wleb_cut = self%wleb_prune_from
+         self%do_atomarea = .true.
       end if
 
       !> Select fitted Born zeta for the active Lebedev grid size
@@ -437,43 +494,47 @@ contains
       call self%register_logical("do_grid_density", self%do_grid_density)
       call self%register_logical("do_curvature", self%do_curvature)
       call self%register_logical("do_normal", self%do_normal)
-      call self%register_logical("do_r_iI", self%do_r_iI)
-      call self%register_logical("do_rho", self%do_rho)
+      call self%register_logical("do_atomarea", self%do_atomarea)
       ! Grid
       call self%register_int_scalar("grid.num_leb", self%num_leb)
-      ! Tolerance (master; wleb_cut, proj_tol, branch_sep are derived;
+      ! Tolerance (master; wleb_cut, solve tol, branch_sep are derived;
       ! LSF screening lives on the LSF concrete and is not registered here)
       call self%register_real_scalar("tolerance", self%tolerance)
       ! Objective
       call self%register_real_scalar("objective.alpha", self%phi_alpha)
       ! Projection
-      call self%register_int_scalar("projection.maxiter", self%proj_maxiter)
+      call self%register_int_scalar("projection.maxiter", self%solve%max_iter)
       call self%register_int_scalar("projection.level", self%proj_level)
-      call self%register_real_scalar("projection.branch_search_rho2_slack", self%branch_search_rho2_slack)
-      ! Octree surface coverage (projection level 9)
-      call self%register_real_scalar("projection.octree.seed_size", self%octree_seed_size)
-      call self%register_int_scalar("projection.octree.max_boxes", self%octree_max_boxes)
-      call self%register_int_scalar("projection.octree.max_survivors", self%octree_max_survivors)
-      call self%register_int_scalar("projection.octree.max_depth", self%octree_max_depth)
+      ! Octree surface coverage (projection levels 3 and 4, fallback of 1)
+      call self%register_int_scalar("projection.octree.max_boxes", self%seed%max_boxes)
+      call self%register_int_scalar("projection.octree.max_survivors", self%seed%max_survivors)
+      call self%register_int_scalar("projection.octree.max_depth", self%seed%max_depth)
+      ! Batched projection
+      call self%register_int_scalar("projection.batch_size", self%batch_size)
+      call self%register_real_scalar("projection.newton.switch_fnorm", self%solve%switch_fnorm)
+      call self%register_int_scalar("projection.newton.max_cheap_steps", self%solve%max_cheap_steps)
+      call self%register_real_scalar("projection.newton.max_step", self%solve%max_step)
+      call self%register_real_scalar("projection.newton.merit_margin", self%solve%merit_margin)
       ! Screening
       call self%register_int_scalar("screening.cell_grid_full_scan_below", &
                                     self%cell_grid_full_scan_below)
-      call self%register_real_scalar("screening.cell_grid_fraction", &
-                                     self%cell_grid_fraction)
       ! Switching
-      call self%register_real_scalar("switching.w_0ls_from", self%w_0ls_from)
-      call self%register_real_scalar("switching.w_0ls_to", self%w_0ls_to)
+      call self%register_real_scalar("switching.w_0ls_off", self%w_0ls_off)
+      call self%register_real_scalar("switching.w_0ls_on", self%w_0ls_on)
       call self%register_real_scalar("switching.w_0ls_p", self%w_0ls_p)
       call self%register_real_scalar("switching.w_0ls_a", self%w_0ls_a)
-      call self%register_real_scalar("switching.w_0tra_from", self%w_0tra_from)
-      call self%register_real_scalar("switching.w_0tra_to", self%w_0tra_to)
-      ! Weight switching (from/to are derived)
+      call self%register_real_scalar("switching.w_0tra_off", self%w_0tra_off)
+      call self%register_real_scalar("switching.w_0tra_on", self%w_0tra_on)
+      call self%register_real_scalar("switching.w_0hor_off", self%w_0hor_off)
+      call self%register_real_scalar("switching.w_0hor_on", self%w_0hor_on)
+      ! Weight switching (off/on are derived)
       call self%register_int_scalar("switching.wleb_prune_level", self%wleb_prune_level)
       ! Density
       call self%register_real_scalar("density.rho_grid_h", self%rho_grid_h)
-      ! Branching (branch_dphi_max is derived from the two below)
-      call self%register_real_scalar("branching.softmax_scale", self%branch_weight_s)
-      call self%register_real_scalar("branching.weight_floor", self%branch_weight_floor)
+      ! Branching
+      call self%register_real_scalar("branching.dpdist_max", self%branch%dpdist_max)
+      call self%register_real_scalar("branching.reach_on", self%branch%reach_on)
+      call self%register_real_scalar("branching.reach_off", self%branch%reach_off)
 
    end subroutine register_cavity_drop_entries
 
@@ -507,6 +568,17 @@ contains
       if (.not. found) call fatal_error(error, "No fitted DROP Born zeta parameter for Lebedev grid")
    end subroutine select_born_zeta
 
+   !> Whether `level` is a supported projection level: 1, 3 or 4
+   !>
+   !> @param[in] level Projection level
+   !> @return    valid Supported level
+   pure function is_valid_proj_level(level) result(valid)
+      integer, intent(in) :: level
+      logical :: valid
+
+      valid = level == 1 .or. level == 3 .or. level == 4
+   end function is_valid_proj_level
+
    !> Return a human-readable label for the current projection level
    !>
    !> @param[in] self Parameter container
@@ -517,70 +589,15 @@ contains
 
       select case (self%proj_level)
       case (1)
-         label = "SLSQP"
-      case (2)
-         label = "SLSQP + Newton"
+         label = "Local Newton, octree retry"
       case (3)
-         label = "Conditional multi-tangent"
+         label = "Coarse octree seeds"
       case (4)
-         label = "Conditional SLSQP-deflation"
-      case (5)
-         label = "SLSQP-deflation"
-      case (6)
-         label = "Newton-deflation (4D KKT)"
-      case (7)
-         label = "Regular SLSQP multistart"
-      case (8)
-         label = "Fine SLSQP multistart reference"
-      case (9)
-         label = "Octree surface coverage + local refinement"
+         label = "Fine octree seeds"
       case default
          label = "unknown"
       end select
    end function get_proj_level_label
-
-   !> Largest projection distance admitted by the configured search window
-   !>
-   !> The default window follows the current softmax model. An explicit
-   !> `branch_search_rho2_slack` overrides it for other branch weight models.
-   !> A branch enters the quadrature with the softmax weight
-   !> `p_b = exp[-(Phi_b - Phi_min)/sigma] / Z`. Dropping the normalization
-   !> (`Z >= 1`, so the bound errs towards keeping branches) it clears the
-   !> weight floor only while `Phi_b - Phi_min <= branch_dphi_max`. With the
-   !> quadratic objective `Phi = (alpha/2) rho^2` that admissible set is a
-   !> difference of *squares*, not of radii:
-   !>
-   !>     rho_max = sqrt( rho_min^2 + 2*branch_dphi_max/phi_alpha )
-   !>
-   !> At the default parameters this is `sqrt(rho_min^2 + 0.260)`, i.e. a shell
-   !> only ~0.12 Bohr thick at `rho_min = 1` and thinner still further out --
-   !> which is what makes a certified search over that volume affordable
-   !>
-   !> @param[in] self    Parameter container
-   !> @param[in] rho_min Projection distance of the closest branch found so far
-   !> @return    rho_max Radius admitted by the branch search window
-   pure function rho_max_from_rho_min(self, rho_min) result(rho_max)
-      class(moist_cavity_drop_parameters_type), intent(in) :: self
-      real(wp), intent(in) :: rho_min
-      real(wp) :: rho_max
-
-      rho_max = sqrt(rho_min*rho_min + self%branch_rho2_slack())
-   end function rho_max_from_rho_min
-
-   !> Squared-distance difference a branch may have over the closest one
-   !>
-   !> @param[in] self  Parameter container
-   !> @return    slack `rho_max^2 - rho_min^2`, in Bohr^2
-   pure function branch_rho2_slack_value(self) result(slack)
-      class(moist_cavity_drop_parameters_type), intent(in) :: self
-      real(wp) :: slack
-
-      if (self%branch_search_rho2_slack >= 0.0_wp) then
-         slack = self%branch_search_rho2_slack
-      else
-         slack = 2.0_wp*self%branch_dphi_max/self%phi_alpha
-      end if
-   end function branch_rho2_slack_value
 
    !> Print current parameter values
    !>
@@ -600,8 +617,6 @@ contains
       integer :: iu
       !> Whether the detailed settings print
       logical :: detailed
-      !> Effective search window; a function result in class(*) prints as unsupported
-      real(wp) :: rho2_slack
 
       iu = output_unit
       if (present(unit)) iu = unit
@@ -619,23 +634,25 @@ contains
       call pp%push("Tolerance:")
       call pp%kv("Main tolerance", self%tolerance)
       if (detailed) then
-         call pp%kv("Projection tol.", self%proj_tol)
+         call pp%kv("Projection tol.", self%solve%tol)
          call pp%kv("Screening threshold", self%screening_threshold)
-         call pp%kv("Weight cutoff", self%wleb_cut)
-         call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
+         call pp%kv("Weight cutoff", self%finalize%wleb_cut)
+         call pp%kv("Branch sep. cutoff", self%branch%sep_cut)
       end if
       call pp%pop()
 
       if (detailed) then
          call pp%push("Switching:")
-         call pp%kv("f_crit start", self%w_0ls_from)
-         call pp%kv("f_crit end", self%w_0ls_to)
-         call pp%kv("f_foc start", self%w_0tra_from)
-         call pp%kv("f_foc end", self%w_0tra_to)
+         call pp%kv("f_crit off", self%w_0ls_off)
+         call pp%kv("f_crit on", self%w_0ls_on)
+         call pp%kv("f_foc off", self%w_0tra_off)
+         call pp%kv("f_foc on", self%w_0tra_on)
+         call pp%kv("f_hor off", self%w_0hor_off)
+         call pp%kv("f_hor on", self%w_0hor_on)
          call pp%kv("Wleb switch level", self%wleb_prune_level)
-         if (self%wleb_prune_level > 0) then
-            call pp%kv("Wleb switch from", self%wleb_prune_from)
-            call pp%kv("Wleb switch to", self%wleb_prune_to)
+         if (self%finalize%wleb_prune) then
+            call pp%kv("Wleb switch off", self%finalize%wleb_prune_off)
+            call pp%kv("Wleb switch on", self%finalize%wleb_prune_on)
          end if
          call pp%pop()
 
@@ -651,37 +668,33 @@ contains
       call pp%push("Projection settings:")
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
       if (detailed) then
-         call pp%kv("Maximum iterations", self%proj_maxiter)
-         rho2_slack = self%branch_rho2_slack()
-         call pp%kv("Branch search window", rho2_slack, "Bohr^2")
-         if (self%proj_level >= 9) then
-            call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
-            call pp%kv("Octree box budget", self%octree_max_boxes)
+         call pp%kv("Maximum iterations", self%solve%max_iter)
+         call pp%kv("Octree seed size", self%seed%seed_size, "Bohr")
+         if (self%proj_level >= 3) then
+            call pp%kv("Octree box budget", self%seed%max_boxes)
          end if
+         call pp%kv("Batch size", self%batch_size)
       end if
       call pp%pop()
 
       if (detailed) then
          call pp%push("Branching:")
-         call pp%kv("Softmax scale", self%branch_weight_s)
-         call pp%kv("Weight floor", self%branch_weight_floor)
-         call pp%kv("Max. objective excess", self%branch_dphi_max)
+         call pp%kv("Max. distance excess", self%branch%dpdist_max, "Bohr")
+         call pp%kv("Reach on", self%branch%reach_on, "Bohr")
+         call pp%kv("Reach off", self%branch%reach_off, "Bohr")
          call pp%pop()
 
          call pp%push("Screening:")
          call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
-         call pp%kv("Cell grid fraction", self%cell_grid_fraction)
          call pp%pop()
 
          call pp%push("Optional properties:")
          call pp%kv("Grid point density", self%do_grid_density)
          call pp%kv("Curvature", self%do_curvature)
          call pp%kv("Surface normals", self%do_normal)
-         call pp%kv("r_iI distances", self%do_r_iI)
-         call pp%kv("rho displacements", self%do_rho)
+         call pp%kv("Atom areas", self%do_atomarea)
          call pp%pop()
       end if
-      call pp%blank()
 
    end subroutine print_parameters
 

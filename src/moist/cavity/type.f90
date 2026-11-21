@@ -24,7 +24,7 @@ module moist_cavity_type
    use mctc_io, only: structure_type
    use moist_radius_type, only: radius_type
    use moist_context, only: moist_context_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
       & moist_phase_build, coupling_begin_registration, coupling_set_scope, coupling_snapshot, &
@@ -613,7 +613,7 @@ contains
       !> Cavity instance
       class(cavity_type), intent(inout) :: self
       !> Surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Response accumulator
       type(response_type), intent(inout) :: response
       !> Error handling
@@ -634,7 +634,7 @@ contains
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
@@ -662,7 +662,7 @@ contains
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
+      type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling

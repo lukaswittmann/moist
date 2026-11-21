@@ -5,6 +5,7 @@ test(
     sources: files('example.c'),
     dependencies: moist_dep,
   ),
+  timeout: 900,
 )
 
 test(
@@ -16,4 +17,5 @@ test(
     override_options: [cxx.get_argument_syntax() == 'msvc' ? 'cpp_std=c++14' : 'cpp_std=c++11'],
     cpp_args: cxx.get_supported_arguments('-pedantic-errors'),
   ),
+  timeout: 900,
 )

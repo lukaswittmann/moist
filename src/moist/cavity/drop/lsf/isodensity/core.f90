@@ -17,8 +17,8 @@
 !>   `1e-8 X` of it only the value is added
 !> - with every built-in radius model, `rho + g > rho_iso` throughout each ball
 !>   for def2, cc-pVnZ-PP and LANL2DZ ECPs (Na to Rn, cations included) at
-!>   `rho_iso <= 1e-3`, narrowest for LANL2DZ Na (1.2 `rho_iso`); at `1e-2` only
-!>   LANL2DZ Na and Mg trip the check; these data hold for `f = 1/2`
+!>   `rho_iso <= 1e-3` and `f = 1/2`; at `1e-2` the lightest LANL2DZ atoms can
+!>   trip the check
 !> - a smaller `f` admits a surface that comes closer to an ECP nucleus
 !> - the ball must stay inside the cavity, so the level set carries no explicit
 !>   nuclear derivative at any surface point: [[iso_core_fill_check_surface]]

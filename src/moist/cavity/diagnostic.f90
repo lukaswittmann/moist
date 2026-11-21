@@ -2,6 +2,7 @@
 module moist_cavity_diagnostic
    use mctc_env, only: wp, error_type, fatal_error
    use moist_cavity_type, only: cavity_type
+   use moist_math_sorter, only: sort
    implicit none(type, external)
    private
    public :: find_disconnected_cavities
@@ -94,7 +95,7 @@ contains
          end do
       end do
       sizes = sizes(:nislands)
-      call sort_descending(sizes)
+      call sort(sizes, reverse=.true.)
 
    contains
 
@@ -168,23 +169,6 @@ contains
             end do
          end do
       end subroutine visit_shell
-
-      !> Insertion sort, largest first
-      subroutine sort_descending(values)
-         !> Values to sort in place
-         integer, intent(inout) :: values(:)
-         integer :: a, b, key
-         do a = 2, size(values)
-            key = values(a)
-            b = a - 1
-            do while (b >= 1)
-               if (values(b) >= key) exit
-               values(b + 1) = values(b)
-               b = b - 1
-            end do
-            values(b + 1) = key
-         end do
-      end subroutine sort_descending
 
    end subroutine find_disconnected_cavities
 

@@ -1,18 +1,23 @@
 !> Kernel-level unit tests for the auto-generated CFC pseudo-density module
 module test_cavity_drop_cfc
    use mctc_env_accuracy, only: wp
+   use mctc_env_error, only: mctc_error => error_type
+   use moist_api, only: vp_error
    use moist_cavity_drop_lsf_cfc_kernel, only: cfc_atomic_term_eval, &
                                                cfc_pair_term_eval, cfc_spatial_eval, &
                                                cfc_nuclear_eval, cfc_hessian_eval, &
                                                cfc_tangent_eval, cfc_hvp_eval
-   use test_helpers, only: fd4_scalar
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use test_helpers, only: fd_probe_type, fd_derivative, fd_compare
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    implicit none(type, external)
    private
 
    public :: collect_cavity_drop_cfc
 
    integer, parameter :: ndim = 3
+
+   !> Fade band at infinity in sigma: every center on the unfaded kernel body
+   real(wp), parameter :: no_fade_start = huge(1.0_wp), no_fade_width = 1.0_wp
 
    !> Klamt-Diedenhofen 2018 reference parameter set
    real(wp), parameter :: a1_ref = -15.0_wp
@@ -60,6 +65,38 @@ module test_cavity_drop_cfc
    real(wp), parameter :: STEP_SIZE = 2.0e-4_wp
    real(wp), parameter :: ABS_THR = 5.0E-9_wp
    real(wp), parameter :: REL_THR = 5.0E-8_wp
+
+   !> Kernel term of an FD check
+   integer, parameter :: term_atom = 1, term_pair = 2, term_lift = 3
+
+   !> One kernel output with offset `d_a` or `d_b` displaced along one axis
+   type, extends(fd_probe_type) :: cfc_kernel_probe_type
+      !> Kernel term, `term_*`
+      integer :: term = term_atom
+      !> Sampled order, 0..2
+      integer :: order = 0
+      !> Pair: sample the tensor of center b (`pd1_b`, `pd2_bb`), else of center a
+      logical :: side_b = .false.
+      !> Pair: displace `d_b`, else `d_a`
+      logical :: move_b = .false.
+      !> Displaced axis
+      integer :: axis = 1
+      !> Offset to center a, or the lift point
+      real(wp) :: d_a(ndim) = 0.0_wp
+      !> Offset to center b
+      real(wp) :: d_b(ndim) = 0.0_wp
+      !> Radius of center a
+      real(wp) :: R_a = 1.0_wp
+      !> Radius of center b
+      real(wp) :: R_b = 1.0_wp
+      !> Exponent, `a1` (atom) or `a2` (pair)
+      real(wp) :: expo = 0.0_wp
+      !> Pair parameter `c`
+      real(wp) :: c_par = 0.0_wp
+   contains
+      !> Sampled output at one displacement
+      procedure :: sample => sample_cfc_kernel
+   end type cfc_kernel_probe_type
 
 contains
 
@@ -113,8 +150,8 @@ contains
       pd2_rr = 0.0_wp
       pd3_rrr = 0.0_wp
       pd4_rrrr = 0.0_wp
-      call cfc_atomic_term_eval(d_a, R_a, a1, max_deriv, pd0, pd1_r, pd2_rr, pd3_rrr, &
-                                pd4_rrrr)
+      call cfc_atomic_term_eval(d_a, R_a, a1, no_fade_start, no_fade_width, max_deriv, &
+                                pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr)
    end subroutine eval_atom
 
    !> Evaluate the pair-term kernel at one (d_a, d_b) configuration
@@ -141,8 +178,8 @@ contains
       pd3_abb = 0.0_wp; pd3_bbb = 0.0_wp
       pd4_aaaa = 0.0_wp; pd4_aaab = 0.0_wp; pd4_aabb = 0.0_wp
       pd4_abbb = 0.0_wp; pd4_bbbb = 0.0_wp
-      call cfc_pair_term_eval(d_a, d_b, R_a, R_b, a2, c_par, max_deriv, &
-                              pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
+      call cfc_pair_term_eval(d_a, d_b, R_a, R_b, a2, c_par, no_fade_start, no_fade_width, &
+                              max_deriv, pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
                               pd3_aaa, pd3_aab, pd3_abb, pd3_bbb, &
                               pd4_aaaa, pd4_aaab, pd4_aabb, pd4_abbb, pd4_bbbb)
    end subroutine eval_pair
@@ -179,134 +216,336 @@ contains
    end subroutine eval_log_lift
 
    !* ================================================================================= *!
+   !*                         Finite-difference probe and checks                        *!
+   !* ================================================================================= *!
+
+   !> Analytic order `order + 1` of one kernel output against the FD of order `order`
+   !>
+   !> - one [[fd_derivative]] per displaced axis, one [[fd_compare]] per axis
+   !>
+   !> @param[out]    error  test failure, first in axis order
+   !> @param[in,out] probe  kernel, term, sampled output and undisplaced arguments
+   !> @param[in]     label  checked derivative and case
+   subroutine check_kernel_fd(error, probe, label)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Probe
+      type(cfc_kernel_probe_type), intent(inout) :: probe
+      !> Checked derivative and case
+      character(len=*), intent(in) :: label
+
+      !> Analytic derivative [sampled size, axis]
+      real(wp) :: analytic(ndim**probe%order, ndim)
+      real(wp) :: numeric(ndim**probe%order)
+      logical :: valid(ndim**probe%order)
+      integer :: axis
+
+      call kernel_analytic(probe, analytic)
+      do axis = 1, ndim
+         probe%axis = axis
+         call fd_derivative(probe, STEP_SIZE, 4, numeric, valid, error)
+         if (allocated(error)) return
+         call fd_compare(error, analytic(:, axis), numeric, valid, ABS_THR, REL_THR, &
+                         label//" axis "//to_string(axis))
+         if (allocated(error)) return
+      end do
+   end subroutine check_kernel_fd
+
+   !> Atomic-term FD over the test triples and `a1_values`
+   !>
+   !> @param[out] error  test failure
+   !> @param[in]  name   checked derivative
+   !> @param[in]  order  sampled order, 0..2
+   subroutine run_atom_fd(error, name, order)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Checked derivative
+      character(len=*), intent(in) :: name
+      !> Sampled order
+      integer, intent(in) :: order
+
+      type(cfc_kernel_probe_type) :: probe
+      integer :: ipt, ia1
+
+      probe%term = term_atom
+      probe%order = order
+      do ipt = 1, n_atom_pts
+         probe%d_a = atom_pts(:, ipt)
+         probe%R_a = atom_radii(ipt)
+         do ia1 = 1, size(a1_values)
+            probe%expo = a1_values(ia1)
+            call check_kernel_fd(error, probe, name//" vs FD, point "//to_string(ipt)// &
+                                 " a1 "//to_string(ia1))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine run_atom_fd
+
+   !> Pair-term FD over the test quadruples, at the reference parameters or swept
+   !>
+   !> @param[out] error   test failure
+   !> @param[in]  name    checked derivative
+   !> @param[in]  order   sampled order, 0..2
+   !> @param[in]  side_b  sample the tensor of center b (`pd1_b`, `pd2_bb`)
+   !> @param[in]  move_b  displace `d_b`, else `d_a`
+   !> @param[in]  sweep   `a2_values` x `c_values`, else `a2_ref`, `c_ref`
+   subroutine run_pair_fd(error, name, order, side_b, move_b, sweep)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Checked derivative
+      character(len=*), intent(in) :: name
+      !> Sampled order
+      integer, intent(in) :: order
+      !> Tensor of center b
+      logical, intent(in) :: side_b
+      !> `d_b` displaced
+      logical, intent(in) :: move_b
+      !> Parameter sweep
+      logical, intent(in) :: sweep
+
+      type(cfc_kernel_probe_type) :: probe
+      character(len=:), allocatable :: label
+      integer :: ipt, ia2, ic
+
+      probe%term = term_pair
+      probe%order = order
+      probe%side_b = side_b
+      probe%move_b = move_b
+      probe%expo = a2_ref
+      probe%c_par = c_ref
+      do ipt = 1, n_pair_pts
+         probe%d_a = pair_d_a(:, ipt)
+         probe%d_b = pair_d_b(:, ipt)
+         probe%R_a = pair_R_a(ipt)
+         probe%R_b = pair_R_b(ipt)
+         label = name//" vs FD, point "//to_string(ipt)
+         if (.not. sweep) then
+            call check_kernel_fd(error, probe, label)
+            if (allocated(error)) return
+            cycle
+         end if
+         do ia2 = 1, size(a2_values)
+            do ic = 1, size(c_values)
+               probe%expo = a2_values(ia2)
+               probe%c_par = c_values(ic)
+               call check_kernel_fd(error, probe, label//" a2 "//to_string(ia2)//" c "//to_string(ic))
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+   end subroutine run_pair_fd
+
+   !> Log-lift FD of [[ref_pd]] over the atomic test points
+   !>
+   !> @param[out] error  test failure
+   !> @param[in]  name   checked derivative
+   !> @param[in]  order  sampled order, 0..2; order 0 samples `log PD` directly
+   subroutine run_lift_fd(error, name, order)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Checked derivative
+      character(len=*), intent(in) :: name
+      !> Sampled order
+      integer, intent(in) :: order
+
+      type(cfc_kernel_probe_type) :: probe
+      integer :: ipt
+
+      probe%term = term_lift
+      probe%order = order
+      do ipt = 1, n_atom_pts
+         probe%d_a = atom_pts(:, ipt)
+         call check_kernel_fd(error, probe, name//" vs FD, point "//to_string(ipt))
+         if (allocated(error)) return
+      end do
+   end subroutine run_lift_fd
+
+   !> Sampled kernel output with `d_a` or `d_b` displaced by `t` along the probe's axis
+   !>
+   !> @param[in,out] self   probe
+   !> @param[in]     t      displacement
+   !> @param[out]    vals   sampled tensor, column-major
+   !> @param[out]    valid  every value present
+   !> @param[out]    error  never set
+   subroutine sample_cfc_kernel(self, t, vals, valid, error)
+      !> Probe
+      class(cfc_kernel_probe_type), intent(inout) :: self
+      !> Displacement
+      real(wp), intent(in) :: t
+      !> Sampled values
+      real(wp), intent(out) :: vals(:)
+      !> Value present
+      logical, intent(out) :: valid(:)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: d_a(ndim), d_b(ndim), t0, t1a(ndim), t1b(ndim)
+      real(wp) :: t2aa(ndim, ndim), t2ab(ndim, ndim), t2bb(ndim, ndim)
+      real(wp) :: t3aaa(ndim, ndim, ndim), t3aab(ndim, ndim, ndim)
+      real(wp) :: t3abb(ndim, ndim, ndim), t3bbb(ndim, ndim, ndim)
+
+      d_a = self%d_a
+      d_b = self%d_b
+      if (self%move_b) then
+         d_b(self%axis) = self%d_b(self%axis) + t
+      else
+         d_a(self%axis) = self%d_a(self%axis) + t
+      end if
+      valid = .true.
+      if (self%term == term_lift .and. self%order == 0) then
+         call ref_log_pd_value(d_a, vals(1))
+         return
+      end if
+      call kernel_eval(self, d_a, d_b, self%order, t0, t1a, t1b, t2aa, t2ab, t2bb, &
+                       t3aaa, t3aab, t3abb, t3bbb)
+      select case (self%order)
+      case (0)
+         vals(1) = t0
+      case (1)
+         if (self%side_b) then
+            vals = t1b
+         else
+            vals = t1a
+         end if
+      case default
+         if (self%side_b) then
+            vals = reshape(t2bb, [ndim**2])
+         else
+            vals = reshape(t2aa, [ndim**2])
+         end if
+      end select
+   end subroutine sample_cfc_kernel
+
+   !> Analytic derivative of the probe's sampled output along each axis of the displaced offset
+   !>
+   !> @param[in]  probe     probe at its undisplaced arguments
+   !> @param[out] analytic  derivative [sampled size, axis]
+   subroutine kernel_analytic(probe, analytic)
+      !> Probe
+      type(cfc_kernel_probe_type), intent(in) :: probe
+      !> Derivative
+      real(wp), intent(out) :: analytic(:, :)
+
+      real(wp) :: t0, t1a(ndim), t1b(ndim), t2aa(ndim, ndim), t2ab(ndim, ndim), t2bb(ndim, ndim)
+      real(wp) :: t3aaa(ndim, ndim, ndim), t3aab(ndim, ndim, ndim)
+      real(wp) :: t3abb(ndim, ndim, ndim), t3bbb(ndim, ndim, ndim)
+      integer :: axis
+
+      call kernel_eval(probe, probe%d_a, probe%d_b, probe%order + 1, t0, t1a, t1b, t2aa, t2ab, &
+                       t2bb, t3aaa, t3aab, t3abb, t3bbb)
+      select case (probe%order)
+      case (0)
+         if (probe%move_b) then
+            analytic(1, :) = t1b
+         else
+            analytic(1, :) = t1a
+         end if
+      case (1)
+         if (probe%side_b) then
+            analytic = t2bb
+         else if (probe%move_b) then
+            analytic = t2ab
+         else
+            analytic = t2aa
+         end if
+      case default
+         if (probe%side_b .and. .not. probe%move_b) then
+            do axis = 1, ndim
+               analytic(:, axis) = reshape(t3abb(axis, :, :), [ndim**2])
+            end do
+         else if (probe%side_b) then
+            analytic = reshape(t3bbb, [ndim**2, ndim])
+         else if (probe%move_b) then
+            analytic = reshape(t3aab, [ndim**2, ndim])
+         else
+            analytic = reshape(t3aaa, [ndim**2, ndim])
+         end if
+      end select
+   end subroutine kernel_analytic
+
+   !> Kernel outputs of the probe's term up to `max_deriv`, pair layout
+   !>
+   !> - atom and lift fill the center-a tensors only, at offset or point `d_a`
+   !>
+   !> @param[in]  probe      kernel term and parameters
+   !> @param[in]  d_a        offset to center a, or the lift point
+   !> @param[in]  d_b        offset to center b (pair)
+   !> @param[in]  max_deriv  highest order
+   !> @param[out] t0         value
+   !> @param[out] t1a        gradient in `d_a`
+   !> @param[out] t1b        gradient in `d_b` (pair)
+   !> @param[out] t2aa       second derivative in `d_a`
+   !> @param[out] t2ab       mixed second derivative (pair)
+   !> @param[out] t2bb       second derivative in `d_b` (pair)
+   !> @param[out] t3aaa      third derivative in `d_a`
+   !> @param[out] t3aab      `aab` third derivative (pair)
+   !> @param[out] t3abb      `abb` third derivative (pair)
+   !> @param[out] t3bbb      third derivative in `d_b` (pair)
+   subroutine kernel_eval(probe, d_a, d_b, max_deriv, t0, t1a, t1b, t2aa, t2ab, t2bb, &
+                          t3aaa, t3aab, t3abb, t3bbb)
+      !> Kernel term and parameters
+      class(cfc_kernel_probe_type), intent(in) :: probe
+      !> Offset to center a, or the lift point
+      real(wp), intent(in) :: d_a(ndim)
+      !> Offset to center b
+      real(wp), intent(in) :: d_b(ndim)
+      !> Highest order
+      integer, intent(in) :: max_deriv
+      !> Value
+      real(wp), intent(out) :: t0
+      !> Gradient in `d_a`
+      real(wp), intent(out) :: t1a(ndim)
+      !> Gradient in `d_b`
+      real(wp), intent(out) :: t1b(ndim)
+      !> Second derivative in `d_a`
+      real(wp), intent(out) :: t2aa(ndim, ndim)
+      !> Mixed second derivative
+      real(wp), intent(out) :: t2ab(ndim, ndim)
+      !> Second derivative in `d_b`
+      real(wp), intent(out) :: t2bb(ndim, ndim)
+      !> Third derivative in `d_a`
+      real(wp), intent(out) :: t3aaa(ndim, ndim, ndim)
+      !> `aab` third derivative
+      real(wp), intent(out) :: t3aab(ndim, ndim, ndim)
+      !> `abb` third derivative
+      real(wp), intent(out) :: t3abb(ndim, ndim, ndim)
+      !> Third derivative in `d_b`
+      real(wp), intent(out) :: t3bbb(ndim, ndim, ndim)
+
+      real(wp) :: pd0, pd1(ndim), pd2(ndim, ndim), pd3(ndim, ndim, ndim)
+
+      select case (probe%term)
+      case (term_atom)
+         call eval_atom(d_a, probe%R_a, probe%expo, max_deriv, t0, t1a, t2aa, t3aaa)
+      case (term_pair)
+         call eval_pair(d_a, d_b, probe%R_a, probe%R_b, probe%expo, probe%c_par, max_deriv, &
+                        t0, t1a, t1b, t2aa, t2ab, t2bb, t3aaa, t3aab, t3abb, t3bbb)
+      case default
+         call ref_pd(d_a, pd0, pd1, pd2, pd3)
+         call eval_log_lift(pd0, pd1, pd2, pd3, max_deriv, t0, t1a, t2aa, t3aaa)
+      end select
+   end subroutine kernel_eval
+
+   !* ================================================================================= *!
    !*                              Atomic-term FD tests                                 *!
    !* ================================================================================= *!
 
    !> pd1_r[i] = d/d(d_a,i) pd0
    subroutine test_atom_pd1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, ia1, axis, i
-      real(wp) :: d_a(ndim), R_a, a1, h
-      real(wp) :: pd0_a, pd1_a(ndim), pd2_a(ndim, ndim), pd3_a(ndim, ndim, ndim)
-      real(wp) :: numeric(ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm, dummy1(ndim), dummy2(ndim, ndim), dummy3(ndim, ndim, ndim)
-      real(wp) :: shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         d_a = atom_pts(:, ipt)
-         R_a = atom_radii(ipt)
-         do ia1 = 1, size(a1_values)
-            a1 = a1_values(ia1)
-            call eval_atom(d_a, R_a, a1, 1, pd0_a, pd1_a, pd2_a, pd3_a)
-            do axis = 1, ndim
-               shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 0, f_pp, dummy1, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) + h
-               call eval_atom(shifted, R_a, a1, 0, f_p, dummy1, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - h
-               call eval_atom(shifted, R_a, a1, 0, f_m, dummy1, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 0, f_mm, dummy1, dummy2, dummy3)
-               call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis), error)
-               if (allocated(error)) return
-            end do
-            do i = 1, ndim
-               call check(error, pd1_a(i), numeric(i), thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-            end do
-         end do
-      end do
+      call run_atom_fd(error, "atom pd1_r", 0)
    end subroutine test_atom_pd1_r_fd
 
    !> pd2_rr[i,j] = d/d(d_a,j) pd1_r[i]
    subroutine test_atom_pd2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, ia1, axis, i, j
-      real(wp) :: d_a(ndim), R_a, a1, h
-      real(wp) :: pd0_a, pd1_a(ndim), pd2_a(ndim, ndim), pd3_a(ndim, ndim, ndim)
-      real(wp) :: numeric(ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: shifted(ndim)
-      real(wp) :: dummy0, dummy2(ndim, ndim), dummy3(ndim, ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         d_a = atom_pts(:, ipt)
-         R_a = atom_radii(ipt)
-         do ia1 = 1, size(a1_values)
-            a1 = a1_values(ia1)
-            call eval_atom(d_a, R_a, a1, 2, pd0_a, pd1_a, pd2_a, pd3_a)
-            do axis = 1, ndim
-               shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 1, dummy0, g_pp, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) + h
-               call eval_atom(shifted, R_a, a1, 1, dummy0, g_p, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - h
-               call eval_atom(shifted, R_a, a1, 1, dummy0, g_m, dummy2, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 1, dummy0, g_mm, dummy2, dummy3)
-               do i = 1, ndim
-                  call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, pd2_a(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_atom_fd(error, "atom pd2_rr", 1)
    end subroutine test_atom_pd2_rr_fd
 
    !> pd3_rrr[i,j,k] = d/d(d_a,k) pd2_rr[i,j]
    subroutine test_atom_pd3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, ia1, axis, i, j, k
-      real(wp) :: d_a(ndim), R_a, a1, h
-      real(wp) :: pd0_a, pd1_a(ndim), pd2_a(ndim, ndim), pd3_a(ndim, ndim, ndim)
-      real(wp) :: numeric(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: shifted(ndim)
-      real(wp) :: dummy0, dummy1(ndim), dummy3(ndim, ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         d_a = atom_pts(:, ipt)
-         R_a = atom_radii(ipt)
-         do ia1 = 1, size(a1_values)
-            a1 = a1_values(ia1)
-            call eval_atom(d_a, R_a, a1, 3, pd0_a, pd1_a, pd2_a, pd3_a)
-            do axis = 1, ndim
-               shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 2, dummy0, dummy1, h_pp, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) + h
-               call eval_atom(shifted, R_a, a1, 2, dummy0, dummy1, h_p, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - h
-               call eval_atom(shifted, R_a, a1, 2, dummy0, dummy1, h_m, dummy3)
-               shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-               call eval_atom(shifted, R_a, a1, 2, dummy0, dummy1, h_mm, dummy3)
-               do j = 1, ndim
-                  do i = 1, ndim
-                     call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
-                                     numeric(i, j, axis), error)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-            do k = 1, ndim
-               do j = 1, ndim
-                  do i = 1, ndim
-                     call check(error, pd3_a(i, j, k), numeric(i, j, k), &
-                                thr_abs=ABS_THR, thr_rel=REL_THR)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-      end do
+      call run_atom_fd(error, "atom pd3_rrr", 2)
    end subroutine test_atom_pd3_rrr_fd
 
    subroutine test_atom_pd2_symmetry(error)
@@ -367,476 +606,55 @@ contains
    !> pd1_a[i] = d/d(d_a,i) pd0 (with d_b fixed)
    subroutine test_pair_pd1_a_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, ia2, ic, axis, i
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, a2, c_par, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: numeric(ndim), shifted(ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim), t_pd2aa(ndim, ndim)
-      real(wp) :: t_pd2ab(ndim, ndim), t_pd2bb(ndim, ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         do ia2 = 1, size(a2_values)
-            do ic = 1, size(c_values)
-               a2 = a2_values(ia2); c_par = c_values(ic)
-               call eval_pair(d_a, d_b, R_a, R_b, a2, c_par, 1, pd0, pd1a, pd1b, &
-                              pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-               do axis = 1, ndim
-                  shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-                  call eval_pair(shifted, d_b, R_a, R_b, a2, c_par, 0, f_pp, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_a; shifted(axis) = d_a(axis) + h
-                  call eval_pair(shifted, d_b, R_a, R_b, a2, c_par, 0, f_p, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_a; shifted(axis) = d_a(axis) - h
-                  call eval_pair(shifted, d_b, R_a, R_b, a2, c_par, 0, f_m, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-                  call eval_pair(shifted, d_b, R_a, R_b, a2, c_par, 0, f_mm, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis), error)
-                  if (allocated(error)) return
-               end do
-               do i = 1, ndim
-                  call check(error, pd1a(i), numeric(i), thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd1_a", 0, side_b=.false., move_b=.false., sweep=.true.)
    end subroutine test_pair_pd1_a_fd
 
    !> pd1_b[i] = d/d(d_b,i) pd0 (with d_a fixed)
    subroutine test_pair_pd1_b_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, ia2, ic, axis, i
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, a2, c_par, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: numeric(ndim), shifted(ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim), t_pd2aa(ndim, ndim)
-      real(wp) :: t_pd2ab(ndim, ndim), t_pd2bb(ndim, ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         do ia2 = 1, size(a2_values)
-            do ic = 1, size(c_values)
-               a2 = a2_values(ia2); c_par = c_values(ic)
-               call eval_pair(d_a, d_b, R_a, R_b, a2, c_par, 1, pd0, pd1a, pd1b, &
-                              pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-               do axis = 1, ndim
-                  shifted = d_b; shifted(axis) = d_b(axis) + 2.0_wp*h
-                  call eval_pair(d_a, shifted, R_a, R_b, a2, c_par, 0, f_pp, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_b; shifted(axis) = d_b(axis) + h
-                  call eval_pair(d_a, shifted, R_a, R_b, a2, c_par, 0, f_p, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_b; shifted(axis) = d_b(axis) - h
-                  call eval_pair(d_a, shifted, R_a, R_b, a2, c_par, 0, f_m, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  shifted = d_b; shifted(axis) = d_b(axis) - 2.0_wp*h
-                  call eval_pair(d_a, shifted, R_a, R_b, a2, c_par, 0, f_mm, &
-                                 t_pd1a, t_pd1b, t_pd2aa, t_pd2ab, t_pd2bb, &
-                                 t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-                  call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis), error)
-                  if (allocated(error)) return
-               end do
-               do i = 1, ndim
-                  call check(error, pd1b(i), numeric(i), thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd1_b", 0, side_b=.false., move_b=.true., sweep=.true.)
    end subroutine test_pair_pd1_b_fd
 
    !> pd2_aa[i,j] = d/d(d_a,j) pd1_a[i]
    subroutine test_pair_pd2_aa_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: dummy_b(ndim)
-      real(wp) :: t_pd2aa(ndim, ndim), t_pd2ab(ndim, ndim), t_pd2bb(ndim, ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 2, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_pp, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) + h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_p, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_m, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_mm, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do i = 1, ndim
-               call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
-               if (allocated(error)) return
-            end do
-         end do
-         do j = 1, ndim
-            do i = 1, ndim
-               call check(error, pd2aa(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd2_aa", 1, side_b=.false., move_b=.false., sweep=.false.)
    end subroutine test_pair_pd2_aa_fd
 
    !> pd2_bb[i,j] = d/d(d_b,j) pd1_b[i]
    subroutine test_pair_pd2_bb_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: dummy_a(ndim)
-      real(wp) :: t_pd2aa(ndim, ndim), t_pd2ab(ndim, ndim), t_pd2bb(ndim, ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 2, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_b; shifted(axis) = d_b(axis) + 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, dummy_a, g_pp, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) + h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, dummy_a, g_p, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, dummy_a, g_m, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, dummy_a, g_mm, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do i = 1, ndim
-               call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
-               if (allocated(error)) return
-            end do
-         end do
-         do j = 1, ndim
-            do i = 1, ndim
-               call check(error, pd2bb(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd2_bb", 1, side_b=.true., move_b=.true., sweep=.false.)
    end subroutine test_pair_pd2_bb_fd
 
    !> pd2_ab[i,j] = d/d(d_b,j) pd1_a[i] (NOT symmetric in i,j)
    subroutine test_pair_pd2_ab_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: dummy_b(ndim)
-      real(wp) :: t_pd2aa(ndim, ndim), t_pd2ab(ndim, ndim), t_pd2bb(ndim, ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 2, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_b; shifted(axis) = d_b(axis) + 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_pp, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) + h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_p, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_m, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 1, dummy_pd0, g_mm, dummy_b, &
-                           t_pd2aa, t_pd2ab, t_pd2bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do i = 1, ndim
-               call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
-               if (allocated(error)) return
-            end do
-         end do
-         do j = 1, ndim
-            do i = 1, ndim
-               call check(error, pd2ab(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd2_ab", 1, side_b=.false., move_b=.true., sweep=.false.)
    end subroutine test_pair_pd2_ab_fd
 
    !> pd3_aaa[i,j,k] = d/d(d_a,k) pd2_aa[i,j]
    subroutine test_pair_pd3_aaa_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j, k
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: dummy_ab(ndim, ndim), dummy_bb(ndim, ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 3, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_pp, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) + h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_p, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_m, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_mm, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do j = 1, ndim
-               do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
-                                  numeric(i, j, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do k = 1, ndim
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, pd3aaa(i, j, k), numeric(i, j, k), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd3_aaa", 2, side_b=.false., move_b=.false., sweep=.false.)
    end subroutine test_pair_pd3_aaa_fd
 
    !> pd3_bbb[i,j,k] = d/d(d_b,k) pd2_bb[i,j]
    subroutine test_pair_pd3_bbb_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j, k
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: dummy_aa(ndim, ndim), dummy_ab(ndim, ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 3, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_b; shifted(axis) = d_b(axis) + 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_pp, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) + h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_p, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_m, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_mm, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do j = 1, ndim
-               do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
-                                  numeric(i, j, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do k = 1, ndim
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, pd3bbb(i, j, k), numeric(i, j, k), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd3_bbb", 2, side_b=.true., move_b=.true., sweep=.false.)
    end subroutine test_pair_pd3_bbb_fd
 
    !> pd3_aab[i,j,k] = d/d(d_b,k) pd2_aa[i,j] (a-symmetric in i,j)
    subroutine test_pair_pd3_aab_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j, k
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: dummy_ab(ndim, ndim), dummy_bb(ndim, ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 3, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_b; shifted(axis) = d_b(axis) + 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_pp, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) + h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_p, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_m, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_b; shifted(axis) = d_b(axis) - 2.0_wp*h
-            call eval_pair(d_a, shifted, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           h_mm, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do j = 1, ndim
-               do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
-                                  numeric(i, j, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do k = 1, ndim
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, pd3aab(i, j, k), numeric(i, j, k), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd3_aab", 2, side_b=.false., move_b=.true., sweep=.false.)
    end subroutine test_pair_pd3_aab_fd
 
    !> pd3_abb[i,j,k] = d/d(d_a,i) pd2_bb[j,k] (b-symmetric in j,k)
    subroutine test_pair_pd3_abb_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j, k
-      real(wp) :: d_a(ndim), d_b(ndim), R_a, R_b, h
-      real(wp) :: pd0, pd1a(ndim), pd1b(ndim)
-      real(wp) :: pd2aa(ndim, ndim), pd2ab(ndim, ndim), pd2bb(ndim, ndim)
-      real(wp) :: pd3aaa(ndim, ndim, ndim), pd3aab(ndim, ndim, ndim)
-      real(wp) :: pd3abb(ndim, ndim, ndim), pd3bbb(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: dummy_aa(ndim, ndim), dummy_ab(ndim, ndim)
-      real(wp) :: t_pd1a(ndim), t_pd1b(ndim)
-      real(wp) :: t_pd3aaa(ndim, ndim, ndim), t_pd3aab(ndim, ndim, ndim)
-      real(wp) :: t_pd3abb(ndim, ndim, ndim), t_pd3bbb(ndim, ndim, ndim)
-      real(wp) :: dummy_pd0, numeric(ndim, ndim, ndim), shifted(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_pair_pts
-         d_a = pair_d_a(:, ipt); d_b = pair_d_b(:, ipt)
-         R_a = pair_R_a(ipt); R_b = pair_R_b(ipt)
-         call eval_pair(d_a, d_b, R_a, R_b, a2_ref, c_ref, 3, pd0, pd1a, pd1b, &
-                        pd2aa, pd2ab, pd2bb, pd3aaa, pd3aab, pd3abb, pd3bbb)
-         do axis = 1, ndim
-            shifted = d_a; shifted(axis) = d_a(axis) + 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_pp, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) + h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_p, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_m, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            shifted = d_a; shifted(axis) = d_a(axis) - 2.0_wp*h
-            call eval_pair(shifted, d_b, R_a, R_b, a2_ref, c_ref, 2, dummy_pd0, t_pd1a, t_pd1b, &
-                           dummy_aa, dummy_ab, h_mm, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
-            do k = 1, ndim
-               do j = 1, ndim
-                  call fd4_scalar(h_pp(j, k), h_p(j, k), h_m(j, k), h_mm(j, k), h, &
-                                  numeric(axis, j, k), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do k = 1, ndim
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, pd3abb(i, j, k), numeric(i, j, k), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_pair_fd(error, "pair pd3_abb", 2, side_b=.true., move_b=.false., sweep=.false.)
    end subroutine test_pair_pd3_abb_fd
 
    !> Verify the index-permutation symmetries of pd2_aa/pd2_bb (symmetric)
@@ -1044,134 +862,22 @@ contains
       val = log(pd0)
    end subroutine ref_log_pd_value
 
+   !> log PD gradient of the lift vs FD of log PD
    subroutine test_log_lift_grad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i
-      real(wp) :: r(ndim), pd0, pd1(ndim), pd2(ndim, ndim), pd3(ndim, ndim, ndim)
-      real(wp) :: lpd0, lpd1(ndim), lpd2(ndim, ndim), lpd3(ndim, ndim, ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm, h
-      real(wp) :: shifted(ndim), numeric(ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         r = atom_pts(:, ipt)
-         call ref_pd(r, pd0, pd1, pd2, pd3)
-         call eval_log_lift(pd0, pd1, pd2, pd3, 1, lpd0, lpd1, lpd2, lpd3)
-         do axis = 1, ndim
-            shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
-            call ref_log_pd_value(shifted, f_pp)
-            shifted = r; shifted(axis) = r(axis) + h
-            call ref_log_pd_value(shifted, f_p)
-            shifted = r; shifted(axis) = r(axis) - h
-            call ref_log_pd_value(shifted, f_m)
-            shifted = r; shifted(axis) = r(axis) - 2.0_wp*h
-            call ref_log_pd_value(shifted, f_mm)
-            call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis), error)
-            if (allocated(error)) return
-         end do
-         do i = 1, ndim
-            call check(error, lpd1(i), numeric(i), thr_abs=ABS_THR, thr_rel=REL_THR)
-            if (allocated(error)) return
-         end do
-      end do
+      call run_lift_fd(error, "log lift grad", 0)
    end subroutine test_log_lift_grad_fd
 
+   !> log PD Hessian of the lift vs FD of its gradient
    subroutine test_log_lift_hess_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j
-      real(wp) :: r(ndim), pd0, pd1(ndim), pd2(ndim, ndim), pd3(ndim, ndim, ndim)
-      real(wp) :: lpd0, lpd1(ndim), lpd2(ndim, ndim), lpd3(ndim, ndim, ndim)
-      real(wp) :: pd0_s, pd1_s(ndim), pd2_s(ndim, ndim), pd3_s(ndim, ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: lpd1_s(ndim), lpd2_s(ndim, ndim), lpd3_s(ndim, ndim, ndim), lpd0_s
-      real(wp) :: h, shifted(ndim), numeric(ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         r = atom_pts(:, ipt)
-         call ref_pd(r, pd0, pd1, pd2, pd3)
-         call eval_log_lift(pd0, pd1, pd2, pd3, 2, lpd0, lpd1, lpd2, lpd3)
-         do axis = 1, ndim
-            shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            g_pp = lpd1_s
-            shifted = r; shifted(axis) = r(axis) + h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            g_p = lpd1_s
-            shifted = r; shifted(axis) = r(axis) - h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            g_m = lpd1_s
-            shifted = r; shifted(axis) = r(axis) - 2.0_wp*h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            g_mm = lpd1_s
-            do i = 1, ndim
-               call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
-               if (allocated(error)) return
-            end do
-         end do
-         do j = 1, ndim
-            do i = 1, ndim
-               call check(error, lpd2(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-            end do
-         end do
-      end do
+      call run_lift_fd(error, "log lift hess", 1)
    end subroutine test_log_lift_hess_fd
 
+   !> log PD third derivative of the lift vs FD of its Hessian
    subroutine test_log_lift_third_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      integer :: ipt, axis, i, j, k
-      real(wp) :: r(ndim), pd0, pd1(ndim), pd2(ndim, ndim), pd3(ndim, ndim, ndim)
-      real(wp) :: lpd0, lpd1(ndim), lpd2(ndim, ndim), lpd3(ndim, ndim, ndim)
-      real(wp) :: pd0_s, pd1_s(ndim), pd2_s(ndim, ndim), pd3_s(ndim, ndim, ndim)
-      real(wp) :: lpd0_s, lpd1_s(ndim), lpd2_s(ndim, ndim), lpd3_s(ndim, ndim, ndim)
-      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
-      real(wp) :: h, shifted(ndim), numeric(ndim, ndim, ndim)
-
-      h = STEP_SIZE
-      do ipt = 1, n_atom_pts
-         r = atom_pts(:, ipt)
-         call ref_pd(r, pd0, pd1, pd2, pd3)
-         call eval_log_lift(pd0, pd1, pd2, pd3, 3, lpd0, lpd1, lpd2, lpd3)
-         do axis = 1, ndim
-            shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            h_pp = lpd2_s
-            shifted = r; shifted(axis) = r(axis) + h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            h_p = lpd2_s
-            shifted = r; shifted(axis) = r(axis) - h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            h_m = lpd2_s
-            shifted = r; shifted(axis) = r(axis) - 2.0_wp*h
-            call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
-            h_mm = lpd2_s
-            do j = 1, ndim
-               do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
-                                  numeric(i, j, axis), error)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-         do k = 1, ndim
-            do j = 1, ndim
-               do i = 1, ndim
-                  call check(error, lpd3(i, j, k), numeric(i, j, k), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
+      call run_lift_fd(error, "log lift third", 2)
    end subroutine test_log_lift_third_fd
 
    !* ================================================================================= *!

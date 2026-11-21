@@ -29,13 +29,31 @@
 !>   * `stage_model_point_charge_energy(error, model, qat, mol, coupling)`
 !>                                       - the same for a continuum model
 !>   * `get_test_cross(mol)` - five-carbon cross with concave seams
+!>   * `get_test_tetrahedron(mol)` - four carbons around a hollow, branched at the default gates
+!>   * `get_test_cube(half, mol)` - argon cube, slightly displaced, as in the cage scans
+!>   * `get_test_forward_pair(dz, mol)` - carbon and two oxygens whose branched
+!>                                         anchor has two forward-facing points
+!>   * `get_test_sibling_gate(mol)` - five atoms with rows behind partly open
+!>                                       closer rows of the same anchor
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
+!>   * `fd2_scalar(fp, fm, h, df, error)` - 2-point central FD formula, fails on a
+!>                                         nonfinite derivative
+!>   * `fd2_offsets` - the matching stencil offsets, in units of h
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h, df, error)` - 4-point central FD formula,
 !>                                         fails on a nonfinite derivative
 !>   * `fd4_offsets` - the matching stencil offsets, in units of h
 !>   * `fd6_scalar(fppp, fpp, fp, fm, fmm, fmmm, h, df, error)` - 6-point central
 !>                                         FD formula, fails on a nonfinite derivative
 !>   * `fd6_offsets` - the matching stencil offsets, in units of h
+!>   * `fd_probe_type` - quantities at a displacement along one direction,
+!>                                         one flat vector with a validity mask
+!>   * `fd_derivative(probe, h, npoint, deriv, valid, error, samples)` - 2-, 4- or
+!>                                         6-point stencil of every probe component,
+!>                                         optionally the raw samples
+!>   * `fd_compare(error, analytic, numeric, valid, thr_abs, thr_rel, label, index_name)`
+!>                                       - masked analytic vs numeric check, first
+!>                                         failure in component order; `thr_abs`
+!>                                         scalar or one per component
 !>   * `rel_deviation(a, b)` - |a - b| / (1 + |b|)
 !>   * `fill_legacy_radii(mol, radii, error)` - legacy per-element radius table
 !>   * `build_numbering_map(numbering, map)` - persistent grid numbering ->
@@ -49,11 +67,13 @@
 !>                                         degree, positive-weight rules
 !>   * `read_printout(unit, lines, nline)` - lines written to a scratch unit
 !>   * `printed_entry(lines, key, value)` - whether a `key ... value` line was printed
+!>   * `det_rand(x, state, x_start, x_end)` - deterministic uniform numbers in
+!>                                            [x_start, x_end) (default [0, 1))
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
 module test_helpers
-   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
@@ -100,7 +120,7 @@ module test_helpers
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
       & moist_math_grid_atomic_shell_arc_type, new_arc_shell_policy, &
       & moist_math_grid_atomic_recipe_type, moist_math_grid_atomic_recipe_override_type
-   use testdrive, only: error_type, test_failed, to_string
+   use testdrive, only: error_type, check, test_failed, to_string
    implicit none(type, external)
    private
 
@@ -120,12 +140,17 @@ module test_helpers
    public :: fill_missing_with_zeros
    public :: stage_point_charge_energy
    public :: stage_model_point_charge_energy
-   public :: get_test_cross
+   public :: get_test_cross, get_test_tetrahedron, get_test_cube, nudge_structure, get_test_forward_pair, get_test_sibling_gate
    public :: read_printout, printed_entry
+   public :: fd2_scalar
+   public :: fd2_offsets
    public :: fd4_scalar
    public :: fd4_offsets
    public :: fd6_scalar
    public :: fd6_offsets
+   public :: fd_probe_type
+   public :: fd_derivative
+   public :: fd_compare
    public :: rel_deviation
    public :: check_moist_error
    public :: fill_legacy_radii
@@ -142,22 +167,67 @@ module test_helpers
    !> Default Lebedev order for get_test_cavity_iswig
    integer, parameter :: default_nleb = 26
 
+   !> Stencil offsets, in units of h, matching `fd2_scalar`'s argument order
+   real(wp), parameter :: fd2_offsets(2) = [1.0_wp, -1.0_wp]
    !> Stencil offsets, in units of h, matching `fd4_scalar`'s argument order
    real(wp), parameter :: fd4_offsets(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
    !> Stencil offsets, in units of h, matching `fd6_scalar`'s argument order
    real(wp), parameter :: fd6_offsets(6) = [3.0_wp, 2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp, -3.0_wp]
+
+   !> Quantities sampled at a displacement along one direction
+   type, abstract :: fd_probe_type
+   contains
+      !> Every quantity at one displacement
+      procedure(fd_sample), deferred :: sample
+   end type fd_probe_type
+
+   !> Sampling interface of [[fd_probe_type]]
+   abstract interface
+      !> Every quantity at displacement `t`
+      !>
+      !> @param[in,out] self   probe, moved to `t`
+      !> @param[in]     t      displacement along the probe's direction
+      !> @param[out]    vals   one value per component
+      !> @param[out]    valid  component present at `t`; others are never compared
+      !> @param[out]    error  test failure, set if the sample cannot be taken
+      subroutine fd_sample(self, t, vals, valid, error)
+         import :: fd_probe_type, wp, error_type
+         implicit none(type, external)
+         !> Probe
+         class(fd_probe_type), intent(inout) :: self
+         !> Displacement
+         real(wp), intent(in) :: t
+         !> Values
+         real(wp), intent(out) :: vals(:)
+         !> Validity mask
+         logical, intent(out) :: valid(:)
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine fd_sample
+   end interface
 
    !> The 5 mstore collections that get_test_structures samples from
    integer, parameter :: n_datasets = 5
    character(len=*), parameter :: datasets(n_datasets) = [character(len=10):: &
                                                           "MB16-43", "Heavy28", "Amino20x4", "But14diol", "UPU23"]
 
+   !> Masked analytic vs numeric check, absolute threshold scalar or per component
+   interface fd_compare
+      module procedure fd_compare_scalar, fd_compare_each
+   end interface fd_compare
+
    !> Answer one output of the current request, failing immediately on a native error
    interface submit
       module procedure submit_1, submit_2, submit_3
    end interface submit
 
+   !> Deterministic uniform pseudo-random numbers in [x_start, x_end) (default [0, 1))
+   interface det_rand
+      module procedure det_rand_0, det_rand_1, det_rand_2, det_rand_3, det_rand_4
+   end interface det_rand
+
    public :: get_cartesian_gaussian_grid
+   public :: det_rand
 
 contains
 
@@ -304,7 +374,7 @@ contains
 
       integer :: total
       integer(int64) :: rng
-      real(wp) :: box_min(3), box_max(3), span(3), cand(3)
+      real(wp) :: box_min(3), box_max(3), span(3), cand(3), u
       integer :: ax, attempt, accepted
 
       total = default_n_points
@@ -319,13 +389,13 @@ contains
       span = box_max - box_min
 
       allocate (points(3, total))
-      !* Seed mixes mol%nat with a fixed offset so different-sized
-      !* molecules get distinct draws while each size is reproducible
-      rng = int(mol%nat, int64)*97_int64 + 12345_int64
+      rng = int(mol%nat, int64)* 97_int64 + 12345_int64
       accepted = 0
       do attempt = 1, max_attempts
          do ax = 1, 3
-            cand(ax) = box_min(ax) + lcg_uniform(rng)*span(ax)
+            rng = rng*6364136223846793005_int64 + 1442695040888963407_int64
+            u = real(ishft(rng, -33), wp)/real(2_int64**31, wp)
+            cand(ax) = box_min(ax) + u*span(ax)
          end do
          if (.not. far_from_all_atoms(cand, mol%xyz, min_dist)) cycle
          accepted = accepted + 1
@@ -931,10 +1001,6 @@ contains
 
    !> Five-carbon cross, converted to bohr
    !>
-   !> Deliberately concave seams between the four outer atoms: at the
-   !> unconditional-multistart projection level this geometry produces branched
-   !> anchors, which is what the warm-start and gradient FD suites need
-   !>
    !> @param[out] mol  Five-carbon cross structure, coordinates in bohr
    subroutine get_test_cross(mol)
       !> Resulting structure; coordinates in bohr
@@ -949,14 +1015,117 @@ contains
                                              [3, 5])*aatoau)
    end subroutine get_test_cross
 
+   !> Four carbons on alternate corners of a cube, skewed off its symmetry
+   !>
+   !> - the spheres leave a hollow at the centre; anchors facing it keep a
+   !>   partly open closest point and an open one on the hollow's wall behind it
+   !> - same geometry as the Python `branching_tetrahedron` fixture
+   !>
+   !> @param[out] mol  Tetrahedron structure, coordinates in bohr
+   subroutine get_test_tetrahedron(mol)
+      !> Resulting structure; coordinates in bohr
+      type(structure_type), intent(out) :: mol
+
+      call new(mol, [6, 6, 6, 6], reshape([ &
+                                          2.60_wp, 2.63_wp, 2.58_wp, &
+                                          2.64_wp, -2.60_wp, -2.59_wp, &
+                                          -2.61_wp, 2.57_wp, -2.60_wp, &
+                                          -2.58_wp, -2.59_wp, 2.63_wp], [3, 4]))
+   end subroutine get_test_tetrahedron
+
+   !> Eight argon atoms on the corners of a cube, nudged off the cube symmetry
+   !>
+   !> @param[in]  half Half edge (bohr)
+   !> @param[out] mol  Cube structure, coordinates in bohr
+   subroutine get_test_cube(half, mol)
+      !> Half edge
+      real(wp), intent(in) :: half
+      !> Resulting structure
+      type(structure_type), intent(out) :: mol
+
+      real(wp) :: xyz(3, 8)
+      integer :: i, j, k, n
+
+      n = 0
+      do i = -1, 1, 2
+         do j = -1, 1, 2
+            do k = -1, 1, 2
+               n = n + 1
+               xyz(:, n) = half*real([i, j, k], wp)
+            end do
+         end do
+      end do
+      call new(mol, [(18, n=1, 8)], xyz)
+      call nudge_structure(mol, 1.0e-3_wp)
+   end subroutine get_test_cube
+
+   !> Carbon with two oxygens in front of it, mirror-symmetric in `z` for `dz = 0`
+   !>
+   !> - with SvdW `blend_k = 2`, `blend_3b = 3` and default switches the carbon
+   !>   anchor on the 2-fold axis has two points, mirror images in `z`, both
+   !>   facing forward (cosine about 0.55) and clear of the oxygen spheres
+   !> - `dz` lifts the second oxygen out of the plane and tilts the shares
+   !>
+   !> @param[in]  dz  Out-of-plane shift of the second oxygen (bohr)
+   !> @param[out] mol Structure, coordinates in bohr
+   subroutine get_test_forward_pair(dz, mol)
+      !> Out-of-plane shift
+      real(wp), intent(in) :: dz
+      !> Resulting structure
+      type(structure_type), intent(out) :: mol
+
+      call new(mol, [6, 8, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, -3.5_wp, 4.5_wp, 0.0_wp, &
+                                        3.5_wp, 4.5_wp, dz], [3, 3]))
+   end subroutine get_test_forward_pair
+
+   !> Four oxygens and a nitrogen whose anchors hold partly open rows with siblings
+   !>
+   !> - with SvdW `blend_k = 1.5`, `blend_3b = 3` and default switches, about ten
+   !>   anchors have two rows: a partly open closest one and a row with area
+   !>   more than the branch window behind it, whose weight responds to the gate
+   !>   of the closer one
+   !>
+   !> @param[out] mol Structure, coordinates in bohr
+   subroutine get_test_sibling_gate(mol)
+      !> Resulting structure
+      type(structure_type), intent(out) :: mol
+
+      call new(mol, [8, 8, 8, 7, 8], reshape([ &
+               1.7412775035540848_wp, 2.9031653886944033_wp, 0.24050362822069626_wp, &
+               -1.2052642623553842_wp, -2.1293266443728043_wp, 0.5597897146915152_wp, &
+               -0.24145342600591668_wp, 3.1833729082244826_wp, -2.9169639027702425_wp, &
+               -4.6709775641262805_wp, 4.5421738971104055_wp, -0.45088613415373446_wp, &
+               4.314802238229333_wp, -1.580862392592767_wp, 2.5843937755942976_wp], [3, 5]))
+   end subroutine get_test_sibling_gate
+
+   !> Displace every atom by a fixed pseudo-random direction of length `step`
+   !>
+   !> @param[inout] mol  Structure
+   !> @param[in]    step Displacement length (bohr)
+   subroutine nudge_structure(mol, step)
+      !> Structure
+      type(structure_type), intent(inout) :: mol
+      !> Displacement length
+      real(wp), intent(in) :: step
+
+      real(wp) :: dvec(3)
+      integer :: iat, iaxis
+
+      do iat = 1, mol%nat
+         do iaxis = 1, 3
+            dvec(iaxis) = sin(2.7_wp*real(iat, wp) + 1.1_wp*real(iaxis, wp))
+         end do
+         mol%xyz(:, iat) = mol%xyz(:, iat) + step*dvec/norm2(dvec)
+      end do
+   end subroutine nudge_structure
+
    !> Turn a moist error into a testdrive test failure
    !>
    !> Safe to call unconditionally: an unallocated `err` is a no-op, so the
    !> idiom at every call site collapses to
    !> `call check_moist_error(error, err); if (allocated(error)) return`
-   !> This is the one assertion in an otherwise fixture-only module; it lives
-   !> here because the alternative is the same four lines copied into every
-   !> suite that touches a moist routine
+   !> Shared here instead of the same four lines in every suite that touches a
+   !> moist routine
    !>
    !> @param[out] error    Test failure, allocated only when `err` was
    !> @param[in]  err      Moist error to translate
@@ -976,6 +1145,35 @@ contains
          call test_failed(error, trim(err%message))
       end if
    end subroutine check_moist_error
+
+   !> 2-point central finite-difference formula:
+   !>   f'(x) ~ (f(x+h) - f(x-h)) / (2 h)
+   !> Truncation O(h^2 f^(3)); a nonfinite derivative fails the test, so a broken
+   !> stencil never passes as a match; the message lists the two stencil values and h
+   !>
+   !> @param[in]  fp     Value at x + h
+   !> @param[in]  fm     Value at x - h
+   !> @param[in]  h      Step size
+   !> @param[out] df     Finite-difference derivative
+   !> @param[out] error  Test failure, set on a nonfinite derivative
+   subroutine fd2_scalar(fp, fm, h, df, error)
+      !> Value at x + h
+      real(wp), intent(in) :: fp
+      !> Value at x - h
+      real(wp), intent(in) :: fm
+      !> Step size h
+      real(wp), intent(in) :: h
+      !> Finite-difference derivative
+      real(wp), intent(out) :: df
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      df = (fp - fm)/(2.0_wp*h)
+      if (.not. ieee_is_finite(df)) then
+         call test_failed(error, "fd2_scalar: nonfinite derivative", &
+            & "f(x+h) = "//to_string(fp)//", f(x-h) = "//to_string(fm)//", h = "//to_string(h))
+      end if
+   end subroutine fd2_scalar
 
    !> 4-point central finite-difference formula:
    !>   f'(x) ~ (-f(x+2h) + 8 f(x+h) - 8 f(x-h) + f(x-2h)) / (12 h)
@@ -1074,6 +1272,233 @@ contains
       dev = abs(a - b)/(1.0_wp + abs(b))
    end function rel_deviation
 
+   !* ---------------------------- Finite-difference driver --------------------------- *!
+
+   !> Central-difference derivative of every component of a probe
+   !>
+   !> - samples in stencil order, `fd2_offsets`, `fd4_offsets` or `fd6_offsets` times `h`
+   !> - a component is valid only if present at every sample; invalid ones are NaN
+   !> - a nonfinite derivative is left for [[fd_compare]] to report
+   !>
+   !> @param[in,out] probe    quantities to differentiate
+   !> @param[in]     h        step
+   !> @param[in]     npoint   stencil points, 2, 4 or 6
+   !> @param[out]    deriv    derivative per component
+   !> @param[out]    valid    component present at every sample, size of `deriv`
+   !> @param[out]    error    test failure, from the probe or a bad stencil
+   !> @param[out]    samples  raw samples [size of `deriv`, npoint], stencil order,
+   !>                         as the probe returned them (optional)
+   subroutine fd_derivative(probe, h, npoint, deriv, valid, error, samples)
+      !> Probe
+      class(fd_probe_type), intent(inout) :: probe
+      !> Step
+      real(wp), intent(in) :: h
+      !> Stencil points
+      integer, intent(in) :: npoint
+      !> Derivative per component
+      real(wp), intent(out) :: deriv(:)
+      !> Validity mask
+      logical, intent(out) :: valid(:)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Raw samples per component and stencil point
+      real(wp), intent(out), optional :: samples(:, :)
+
+      !> Stencil offsets in units of `h`
+      real(wp), allocatable :: offsets(:)
+      !> Samples per component and stencil point
+      real(wp), allocatable :: f(:, :)
+      !> Presence per component and stencil point
+      logical, allocatable :: ok(:, :)
+      !> Discarded nonfinite-derivative failure of the scalar formula
+      type(error_type), allocatable :: nonfinite
+      integer :: i, istep
+
+      select case (npoint)
+      case (2)
+         offsets = fd2_offsets
+      case (4)
+         offsets = fd4_offsets
+      case (6)
+         offsets = fd6_offsets
+      case default
+         call test_failed(error, "fd_derivative: "//to_string(npoint)//"-point stencil, expected 2, 4 or 6")
+         return
+      end select
+      if (size(valid) /= size(deriv)) then
+         call test_failed(error, "fd_derivative: mask of size "//to_string(size(valid))// &
+                          " for "//to_string(size(deriv))//" components")
+         return
+      end if
+      if (present(samples)) then
+         if (size(samples, 1) /= size(deriv) .or. size(samples, 2) /= npoint) then
+            call test_failed(error, "fd_derivative: samples of shape "//to_string(size(samples, 1))// &
+                             " x "//to_string(size(samples, 2))//", expected "//to_string(size(deriv))// &
+                             " x "//to_string(npoint))
+            return
+         end if
+      end if
+
+      allocate (f(size(deriv), npoint), ok(size(deriv), npoint))
+      do istep = 1, npoint
+         call probe%sample(offsets(istep)*h, f(:, istep), ok(:, istep), error)
+         if (allocated(error)) return
+      end do
+      if (present(samples)) samples = f
+
+      valid = all(ok, dim=2)
+      deriv = ieee_value(0.0_wp, ieee_quiet_nan)
+      do i = 1, size(deriv)
+         if (.not. valid(i)) cycle
+         select case (npoint)
+         case (2)
+            call fd2_scalar(f(i, 1), f(i, 2), h, deriv(i), nonfinite)
+         case (4)
+            call fd4_scalar(f(i, 1), f(i, 2), f(i, 3), f(i, 4), h, deriv(i), nonfinite)
+         case default
+            call fd6_scalar(f(i, 1), f(i, 2), f(i, 3), f(i, 4), f(i, 5), f(i, 6), h, deriv(i), nonfinite)
+         end select
+         if (allocated(nonfinite)) then
+            nonfinite%stat = 0
+            deallocate (nonfinite)
+         end if
+      end do
+   end subroutine fd_derivative
+
+   !> Compare analytic against numeric derivatives, valid components only
+   !>
+   !> - thresholds passed to testdrive `check` unchanged
+   !> - a nonfinite numeric derivative fails before its comparison
+   !> - failure message: `label`, `index_name` and the component index
+   !>
+   !> @param[out] error       test failure, first in component order
+   !> @param[in]  analytic    analytic derivative per component
+   !> @param[in]  numeric     finite-difference derivative per component
+   !> @param[in]  valid       component compared
+   !> @param[in]  thr_abs     absolute threshold
+   !> @param[in]  thr_rel     relative threshold
+   !> @param[in]  label       what is compared, with the caller's indices
+   !> @param[in]  index_name  name of the component index, default "component"
+   subroutine fd_compare_scalar(error, analytic, numeric, valid, thr_abs, thr_rel, label, index_name)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Analytic derivatives
+      real(wp), intent(in) :: analytic(:)
+      !> Finite-difference derivatives
+      real(wp), intent(in) :: numeric(:)
+      !> Validity mask
+      logical, intent(in) :: valid(:)
+      !> Absolute threshold
+      real(wp), intent(in) :: thr_abs
+      !> Relative threshold
+      real(wp), intent(in) :: thr_rel
+      !> Comparison label
+      character(len=*), intent(in) :: label
+      !> Component index name
+      character(len=*), intent(in), optional :: index_name
+
+      call compare_masked(error, analytic, numeric, valid, [thr_abs], thr_rel, label, index_name)
+   end subroutine fd_compare_scalar
+
+   !> [[fd_compare_scalar]] with one absolute threshold per component
+   !>
+   !> @param[out] error       test failure, first in component order
+   !> @param[in]  analytic    analytic derivative per component
+   !> @param[in]  numeric     finite-difference derivative per component
+   !> @param[in]  valid       component compared
+   !> @param[in]  thr_abs     absolute threshold per component, size of `analytic`
+   !> @param[in]  thr_rel     relative threshold
+   !> @param[in]  label       what is compared, with the caller's indices
+   !> @param[in]  index_name  name of the component index, default "component"
+   subroutine fd_compare_each(error, analytic, numeric, valid, thr_abs, thr_rel, label, index_name)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Analytic derivatives
+      real(wp), intent(in) :: analytic(:)
+      !> Finite-difference derivatives
+      real(wp), intent(in) :: numeric(:)
+      !> Validity mask
+      logical, intent(in) :: valid(:)
+      !> Absolute threshold per component
+      real(wp), intent(in) :: thr_abs(:)
+      !> Relative threshold
+      real(wp), intent(in) :: thr_rel
+      !> Comparison label
+      character(len=*), intent(in) :: label
+      !> Component index name
+      character(len=*), intent(in), optional :: index_name
+
+      if (size(thr_abs) /= size(analytic)) then
+         call test_failed(error, "fd_compare: "//to_string(size(thr_abs))//" thresholds for "// &
+                          to_string(size(analytic))//" components", label)
+         return
+      end if
+      call compare_masked(error, analytic, numeric, valid, thr_abs, thr_rel, label, index_name)
+   end subroutine fd_compare_each
+
+   !> Shared loop of [[fd_compare_scalar]] and [[fd_compare_each]]
+   !>
+   !> @param[out] error       test failure, first in component order
+   !> @param[in]  analytic    analytic derivative per component
+   !> @param[in]  numeric     finite-difference derivative per component
+   !> @param[in]  valid       component compared
+   !> @param[in]  thr_abs     absolute threshold, one for all or one per component
+   !> @param[in]  thr_rel     relative threshold
+   !> @param[in]  label       what is compared, with the caller's indices
+   !> @param[in]  index_name  name of the component index, default "component"
+   subroutine compare_masked(error, analytic, numeric, valid, thr_abs, thr_rel, label, index_name)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Analytic derivatives
+      real(wp), intent(in) :: analytic(:)
+      !> Finite-difference derivatives
+      real(wp), intent(in) :: numeric(:)
+      !> Validity mask
+      logical, intent(in) :: valid(:)
+      !> Absolute threshold, size 1 or of `analytic`
+      real(wp), intent(in) :: thr_abs(:)
+      !> Relative threshold
+      real(wp), intent(in) :: thr_rel
+      !> Comparison label
+      character(len=*), intent(in) :: label
+      !> Component index name
+      character(len=*), intent(in), optional :: index_name
+
+      !> Label with the component index
+      character(len=:), allocatable :: location
+      !> Component index name in use
+      character(len=:), allocatable :: name
+      !> Absolute threshold of the component
+      real(wp) :: thr
+      integer :: i
+
+      if (size(numeric) /= size(analytic) .or. size(valid) /= size(analytic)) then
+         call test_failed(error, "fd_compare: "//to_string(size(analytic))//" analytic, "// &
+                          to_string(size(numeric))//" numeric, "//to_string(size(valid))// &
+                          " mask entries", label)
+         return
+      end if
+      name = "component"
+      if (present(index_name)) name = index_name
+
+      do i = 1, size(analytic)
+         if (.not. valid(i)) cycle
+         thr = thr_abs(min(i, size(thr_abs)))
+         ! The label is built only for a failing component; the checks are rerun with it
+         if (ieee_is_finite(numeric(i))) then
+            call check(error, analytic(i), numeric(i), thr_abs=thr, thr_rel=thr_rel)
+            if (.not. allocated(error)) cycle
+            error%stat = 0
+            deallocate (error)
+         end if
+         location = label//" "//name//" "//to_string(i)
+         call check(error, ieee_is_finite(numeric(i)), "Non-finite FD reference", location)
+         if (allocated(error)) return
+         call check(error, analytic(i), numeric(i), thr_abs=thr, thr_rel=thr_rel, more=location)
+         if (allocated(error)) return
+      end do
+   end subroutine compare_masked
+
    !* ------------------------- Dataset and sampling internals ------------------------ *!
 
    !> Dispatch to the per-dataset records getter. Caller frees `records`
@@ -1103,6 +1528,7 @@ contains
       integer, intent(in) :: n
       integer(int64), intent(inout) :: rng
       integer, allocatable, intent(out) :: order(:)
+      real(wp) :: u
       integer :: i, j, tmp
 
       allocate (order(n))
@@ -1110,9 +1536,12 @@ contains
          order(i) = i
       end do
       !* Standard Fisher-Yates: for i = n downto 2, swap order(i) with
-      !* order(j) where j uniform in [1, i]
+      !* order(j) where j uniform in [1, i]. Keep Knuth's 64-bit MMIX step
+      !* here so get_test_structures stays pinned to cavity_reference.txt
       do i = n, 2, -1
-         j = 1 + int(lcg_uniform(rng)*real(i, wp))
+         rng = rng*6364136223846793005_int64 + 1442695040888963407_int64
+         u = real(ishft(rng, -33), wp)/real(2_int64**31, wp)
+         j = 1 + int(u*real(i, wp))
          if (j > i) j = i   ! guard against rounding to exactly i
          tmp = order(i)
          order(i) = order(j)
@@ -1138,17 +1567,114 @@ contains
       end do
    end function far_from_all_atoms
 
-   !> 64-bit LCG (Knuth MMIX constants from TAOCP vol 2). Self-contained;
-   !> does not touch the global Fortran RNG state, so safe under parallel
-   !> test execution
+   !> Deterministic uniform sample in [x_start, x_end) (default [0, 1))
    !>
-   !> @param[inout] state  LCG state, advanced by one step
-   real(wp) function lcg_uniform(state) result(u)
-      integer(int64), intent(inout) :: state
-      state = state*6364136223846793005_int64 + 1442695040888963407_int64
-      !* Top 31 bits as a nonneg integer; divide by 2^31 to land in [0, 1)
-      u = real(ishft(state, -33), wp)/real(2_int64**31, wp)
-   end function lcg_uniform
+   !> Self-contained 31-bit Weyl step with a SplitMix64 output mixer (53-bit mantissa);
+   !> keeps caller-owned `state` in 0..2^31-1 so a plain default integer suffices, and
+   !> never touches the global Fortran RNG state
+   !>
+   !> @param[out]   x        Uniform value in [x_start, x_end)
+   !> @param[inout] state    Generator state, advanced by one step
+   !> @param[in]    x_start  Optional lower bound (default 0)
+   !> @param[in]    x_end    Optional upper bound (default 1)
+   pure subroutine det_rand_0(x, state, x_start, x_end)
+      !> Uniform value in [x_start, x_end)
+      real(wp), intent(out) :: x
+      !> Generator state, advanced by one step
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      real(wp) :: lo, hi, u
+      integer(int64) :: s, z
+
+      lo = 0.0_wp
+      if (present(x_start)) lo = x_start
+      hi = 1.0_wp
+      if (present(x_end)) hi = x_end
+
+      s = iand(int(state, int64) + 1640531527_int64, 2147483647_int64)
+      state = int(s)
+      z = ieor(s, shiftr(s, 30))*(-4658895280553007687_int64)
+      z = ieor(z, shiftr(z, 27))*(-7723592293110705685_int64)
+      z = ieor(z, shiftr(z, 31))
+      u = real(shiftr(z, 11), wp)*(1.0_wp/real(2_int64**53, wp))
+      x = lo + (hi - lo)*u
+   end subroutine det_rand_0
+
+   !> Fill a rank-1 array with deterministic uniform samples in [x_start, x_end)
+   pure subroutine det_rand_1(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: i
+
+      do i = 1, size(x)
+         call det_rand_0(x(i), state, x_start, x_end)
+      end do
+   end subroutine det_rand_1
+
+   !> Fill a rank-2 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_2(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: j
+
+      do j = 1, size(x, 2)
+         call det_rand_1(x(:, j), state, x_start, x_end)
+      end do
+   end subroutine det_rand_2
+
+   !> Fill a rank-3 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_3(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: k
+
+      do k = 1, size(x, 3)
+         call det_rand_2(x(:, :, k), state, x_start, x_end)
+      end do
+   end subroutine det_rand_3
+
+   !> Fill a rank-4 array in column-major order with uniform samples in [x_start, x_end)
+   pure subroutine det_rand_4(x, state, x_start, x_end)
+      !> Output values in [x_start, x_end)
+      real(wp), intent(out) :: x(:, :, :, :)
+      !> LCG state, advanced by `size(x)` steps
+      integer, intent(inout) :: state
+      !> Optional lower bound (default 0)
+      real(wp), intent(in), optional :: x_start
+      !> Optional upper bound (default 1)
+      real(wp), intent(in), optional :: x_end
+
+      integer :: l
+
+      do l = 1, size(x, 4)
+         call det_rand_3(x(:, :, :, l), state, x_start, x_end)
+      end do
+   end subroutine det_rand_4
 
    !* --------------------------- Legacy radii and numbering -------------------------- *!
 

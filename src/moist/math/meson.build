@@ -7,16 +7,16 @@ subdir('grid')
 subdir('fft')
 
 srcs += files(
-  'adjacency_list.f90',
-  'cell_grid.f90',
+  'adjacency.f90',
   'lapack.f90',
   'blas.f90',
   'linalg.f90',
   'boys.f90',
   'solver.f90',
   'sorter.f90',
-  'smoothing_kernels.f90',
-  'packed_sym.f90',
+  'smoothing.f90',
+  'smoothstep.f90',
+  'packed.f90',
   'trigonometry.f90',
   'grid.f90',
   'fft.f90',

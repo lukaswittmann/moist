@@ -60,6 +60,17 @@ module moist_cavity_mt_mesh
       type(pair_table_type) :: edges
    end type surface_buffer_type
 
+   !> Lattice value of a node beyond the LSF's reach (`unreached()` after `prepare`): exterior
+   !>
+   !> - the true value is exterior (SvdW `Z = 0`, `S = +inf`; CFC `PD`
+   !>   underflowed), and `triangulate_tetra` classes `f >= 0` as exterior; zero
+   !>   would be the surface, not a far point
+   !> - its magnitude never enters an edge interpolation: an unreached node lies
+   !>   past the SvdW fade band end or hundreds of e-folds of CFC `PD` below the
+   !>   isovalue, so its lattice neighbours one cell away are exterior too
+   !> - one bohr, the LSF's natural scale, finite unlike the true value
+   real(wp), parameter :: mesh_exterior_value = 1.0_wp
+
    !> Cube vertices and six tetrahedra around the common body diagonal 1-8
    integer, parameter :: corner(3, 8) = reshape([ &
                                                 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, &
@@ -166,8 +177,7 @@ contains
             call fatal_error(error, "MT mesh: could not clone LSF")
             return
          end if
-         ! Screened SvdW/CFC return zero for an empty active list, which is
-         ! an exterior sentinel rather than a zero-set crossing
+         ! Full scan; a node no atom reaches is `mesh_exterior_value`, never zero
          call slots(i)%lsf%set_screening_threshold(0.0_wp)
          call slots(i)%lsf%set_max_deriv(0)
       end do
@@ -251,8 +261,8 @@ contains
       top = 2
       call sample_plane(slots, nt, lower, nc, h, origin, 0, planes(:, :, bottom), error)
       if (allocated(error)) return
-      ! Underflowed production pseudo-densities may report exterior zero.
-      ! Genuine zero contacts remain valid only if final adjacency is closed.
+      ! Unreached nodes are `mesh_exterior_value`; genuine zero contacts remain
+      ! valid only if final adjacency is closed
       boundary_hit = any(planes(:, :, bottom) < 0.0_wp)
       if (boundary_hit) return
       do iz = 0, nc(3) - 1
@@ -324,6 +334,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(error_type), allocatable :: local_error
       real(wp) :: point(3), val
+      !> Lattice indices and thread slot
       integer :: ix, iy, slot
 
       !$omp parallel do collapse(2) schedule(static) num_threads(nt) default(shared) &
@@ -334,10 +345,12 @@ contains
 !$          slot = omp_get_thread_num() + 1
             point = origin + lower + h*real([ix, iy, iz], wp)
             call slots(slot)%lsf%prepare(point, local_error)
-            val = 0.0_wp
+            val = mesh_exterior_value
             if (.not. allocated(local_error)) then
-               call slots(slot)%lsf%f0(val)
-               if (.not. ieee_is_finite(val)) call fatal_error(local_error, "MT mesh: nonfinite LSF value")
+               if (.not. slots(slot)%lsf%unreached()) then
+                  call slots(slot)%lsf%f0(val)
+                  if (.not. ieee_is_finite(val)) call fatal_error(local_error, "MT mesh: nonfinite LSF value")
+               end if
             end if
             if (allocated(local_error)) then
                !$omp critical(mt_mesh_sample_error)
