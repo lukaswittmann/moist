@@ -186,10 +186,8 @@ test_srcs = files(
   'test_helpers.f90',
   'test_cavity_drop_fd.f90',
   'test_pcm_conductor_probe.f90',
-  'test_moz_fixtures.f90',
+  'test_fixtures.f90',
   'test_model_component_helper.f90',
-  'test_model_component_pcm_fixtures.f90',
-  'test_cavity_symmetry_fixtures.f90',
 )
 
 foreach t : tests
