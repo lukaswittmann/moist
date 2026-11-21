@@ -17,6 +17,17 @@
 !> - `updated` and `built` record the latest successful update and build;
 !>   a deferring cavity is not built from `prepare_build` until a `build`
 !>   succeeds, so a skipped or failed build leaves nothing readable
+!> - a Lebedev-based cavity (iSwiG, NumSA, DROP) takes an optional grid
+!>   model at construction (`set_grid_model`, [[moist_cavity_grid_model_type]]), e.g. the
+!>   symmetry model, and calls `update_grid_model` once its radii are set
+!>   (DROP updates the model inside its own "Setup" section instead)
+!> - `build_grid` then assembles the angular grid components of every sphere
+!>   (`grid`, [[moist_cavity_grid_type]]) the cavity loops over; without a model, or
+!>   with a plain one, every sphere keeps its plain grid (`plain_grid`)
+!> - gradients: `get_frame` gives the grid Jacobians that spread a cavity's
+!>   own per-point (or per-component) derivatives over every atom
+!>   ([[moist_cavity_grid_frame]], forward mode); `add_grid_gradient` maps the
+!>   torque and weight adjoint of every component to the atoms (reverse mode)
 module moist_cavity_type
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -25,6 +36,10 @@ module moist_cavity_type
    use moist_radius_type, only: radius_type
    use moist_context, only: moist_context_type
    use moist_cavity_adjoint, only: cavity_adjoint_type
+   use moist_cavity_grid_model_type, only: grid_model_type
+   use moist_cavity_grid_type, only: cavity_grid_type
+   use moist_cavity_grid_frame, only: grid_frame_type, new_grid_frame
+   use moist_utils_timer, only: cat_setup
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
       & moist_phase_build, coupling_begin_registration, coupling_set_scope, coupling_snapshot, &
@@ -108,6 +123,20 @@ module moist_cavity_type
       !> - include the motion of the volume origin, so every atom is reached
       real(wp), allocatable :: v1_rA(:, :, :)
 
+      !> Grid model deciding the angular grid components, copied at construction
+      !>
+      !> TODO: the current naming might be a bit confusing (grid_model and cavity_grid)
+      !>
+      !> - unallocated: every sphere keeps its plain grid
+      !> - updated per geometry by `update_grid_model`, which reuses a model
+      !>   that is already current (the host updated it for this structure)
+      class(grid_model_type), allocatable :: grid_model
+      !> Angular grid components of every sphere, assembled by `build_grid`
+      type(cavity_grid_type) :: grid
+      !> Grid component of each grid point (ngrid); set by the Lebedev-based
+      !> cavities
+      integer, allocatable :: comp(:)
+
       !> Molecular structure of the latest successful `update`
       type(structure_type), allocatable :: mol
       !> Whether the latest update completed successfully
@@ -126,6 +155,18 @@ module moist_cavity_type
       !> Take a new structure and do everything that needs no host state;
       !> calls `update_cavity_base` first
       procedure(update_cavity), deferred :: update
+      !> Keep a copy of a grid model, or none; called by constructors
+      procedure, non_overridable :: set_grid_model => cavity_set_grid_model
+      !> Update the grid model for the current structure, once its radii are set
+      procedure, non_overridable :: update_grid_model => cavity_update_grid_model
+      !> Whether every sphere keeps its plain grid
+      procedure, non_overridable :: plain_grid => cavity_plain_grid
+      !> Assemble the angular grid components of every sphere (`grid`)
+      procedure, non_overridable :: build_grid => cavity_build_grid
+      !> Grid Jacobians for the forward terms
+      procedure, non_overridable :: get_frame => cavity_get_frame
+      !> Map component torques and weight adjoints to the nuclear gradient
+      procedure, non_overridable :: add_grid_gradient => cavity_add_grid_gradient
       !> Whether the surface waits for build-phase answers after `update`
       procedure :: defers_build => cavity_defers_build_default
       !> Stage the build phase: clear and declare the coupling
@@ -191,6 +232,8 @@ module moist_cavity_type
       procedure :: print_parameters => print_cavity_parameters
       !> Print the radius model of the current structure
       procedure, non_overridable :: print_radii => print_cavity_radii
+      !> Print the grid model report of the current structure
+      procedure, non_overridable :: print_grid_model => print_cavity_grid_model
       !> Write grid to XYZ file for visualization
       procedure :: write_xyz_debug => write_cavity_xyz_debug
       !> Write grid to CSV file for visualization
@@ -274,8 +317,9 @@ contains
    !>
    !> - invalidates every coupling the cavity minted; neither updated nor
    !>   built until the caller's `update` succeeds
-   !> - drops the surface of the previous structure, so neither a deferred nor
-   !>   a failed update leaves it readable
+   !> - drops the surface of the previous structure, so neither a deferred
+   !>   nor a failed update leaves it readable; the grid model keeps its
+   !>   fingerprint for reuse, readable only once `updated`
    !> - copies `mol`, which may be `self%mol` itself
    !>
    !> @param[in,out] self  Cavity instance
@@ -299,6 +343,182 @@ contains
       self%mol = tmp
 
    end subroutine update_cavity_base
+
+   !> Keep a copy of a grid model, or none
+   !>
+   !> Called by the constructors of the Lebedev-based cavities; absent, every
+   !> sphere keeps its plain grid, bitwise as without any grid handling
+   !>
+   !> - construction only: the cavity needs a new `update` afterwards, and
+   !>   the cavities without a Lebedev grid never read the model
+   !>
+   !> @param[in,out] self       Cavity instance
+   !> @param[in]     grid_model Grid model to copy
+   subroutine cavity_set_grid_model(self, grid_model)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Grid model to copy
+      class(grid_model_type), intent(in), optional :: grid_model
+
+      if (allocated(self%grid_model)) deallocate (self%grid_model)
+      if (present(grid_model)) allocate (self%grid_model, source=grid_model)
+
+      ! Nothing derived from the previous model stays readable
+      call self%grid%clear()
+      self%updated = .false.
+      self%built = .false.
+
+   end subroutine cavity_set_grid_model
+
+   !> Update the grid model for the current structure
+   !>
+   !> - called by `update` right after the radii are set; nothing without a
+   !>   grid model
+   !> - a model already current for this structure and these radii (updated
+   !>   by the host) is reused; otherwise the work is timed under "Setup"
+   !>
+   !> @param[in,out] self  Cavity with the structure and radii of this update
+   !> @param[out]    error Invalid setting or failed model update
+   subroutine cavity_update_grid_model(self, error)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Timer stack depth at entry; error paths unwind back to it
+      integer :: d0
+
+      if (.not. allocated(self%grid_model)) return
+      if (.not. allocated(self%mol) .or. .not. allocated(self%radii)) then
+         call fatal_error(error, "Cavity grid model needs the structure and the radii")
+         return
+      end if
+      if (self%grid_model%is_current(self%mol, self%radii)) return
+      if (.not. associated(self%ctx)) then
+         call self%grid_model%update(self%mol, self%radii, error)
+         return
+      end if
+      if (self%grid_model%is_trivial()) then
+         call self%grid_model%update(self%mol, self%radii, error, self%ctx)
+         return
+      end if
+
+      d0 = self%ctx%timer%current_depth()
+      call self%ctx%timer%start("Setup", category=cat_setup)
+      call self%grid_model%update(self%mol, self%radii, error, self%ctx)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      call self%ctx%timer%stop("Setup")
+
+   end subroutine cavity_update_grid_model
+
+   !> Whether every sphere keeps its plain grid
+   !>
+   !> - no grid model, or a plain one (e.g. symmetry in the lab orientation)
+   !>
+   !> @param[in] self Cavity instance
+   pure function cavity_plain_grid(self) result(plain)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Whether no sphere grid is turned, split or reweighted
+      logical :: plain
+
+      plain = .true.
+      if (allocated(self%grid_model)) plain = self%grid_model%is_plain()
+
+   end function cavity_plain_grid
+
+   !> Assemble the angular grid components of every sphere
+   !>
+   !> Called once per update after the grid model and the unit grid are
+   !> current; see [[cavity_grid_type]]
+   !>
+   !> @param[in,out] self        Cavity with `nsph` and its grid model updated
+   !> @param[in]     unit_grid   Unit nodes of the cavity's Lebedev size (3, npt)
+   !> @param[in]     unit_weight Angular weights of the nodes (npt)
+   !> @param[in]     zeta        Width parameter of the cavity's Lebedev size
+   !> @param[out]    error       Inconsistent or unsupported components
+   !> @param[in]     heaviest    Keep the heaviest component of each sphere
+   !>                            only, with weight one (default all)
+   subroutine cavity_build_grid(self, unit_grid, unit_weight, zeta, error, heaviest)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Unit nodes
+      real(wp), intent(in) :: unit_grid(:, :)
+      !> Angular weights
+      real(wp), intent(in) :: unit_weight(:)
+      !> Width parameter
+      real(wp), intent(in) :: zeta
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Keep the heaviest component only
+      logical, intent(in), optional :: heaviest
+
+      ! TODO: take a node provider (size and family -> nodes, weights, zeta)
+      ! in place of the single Lebedev set, so a grid model can request other
+      ! sizes or grids of another symmetry per sphere
+      ! (see the TODO in symmetry_components of the symmetry model)
+      if (allocated(self%grid_model)) then
+         call self%grid%assemble(self%nsph, unit_grid, unit_weight, zeta, error, self%grid_model, heaviest)
+      else
+         call self%grid%assemble(self%nsph, unit_grid, unit_weight, zeta, error)
+      end if
+
+   end subroutine cavity_build_grid
+
+   !> Grid Jacobians of the current structure, for the forward terms
+   !>
+   !> @param[in]  self  Cavity after its update
+   !> @param[out] frame Grid Jacobians ([[grid_frame_type]])
+   subroutine cavity_get_frame(self, frame)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Grid Jacobians
+      type(grid_frame_type), intent(out) :: frame
+
+      if (allocated(self%grid_model)) then
+         call new_grid_frame(frame, self%grid, self%grid_model)
+      else
+         call new_grid_frame(frame, self%grid)
+      end if
+
+   end subroutine cavity_get_frame
+
+   !> Map component torques and weight adjoints to the nuclear gradient
+   !>
+   !> Reverse-mode counterpart of `get_frame`; nothing with a plain grid
+   !>
+   !> @param[in]     self     Cavity after its update
+   !> @param[in]     torque   Torque per component (3, ncomp): sum over its
+   !>                         points of (p - c_a) x dE/dp
+   !> @param[in]     wbar     Weight adjoint dE/dw per component (ncomp)
+   !> @param[in,out] gradient Nuclear gradient (3, nsph), accumulated
+   subroutine cavity_add_grid_gradient(self, torque, wbar, gradient)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Torque per component
+      real(wp), intent(in) :: torque(:, :)
+      !> Weight adjoint per component
+      real(wp), intent(in) :: wbar(:)
+      !> Nuclear gradient
+      real(wp), intent(inout) :: gradient(:, :)
+
+      !> Adjoints per component of the model, for a reduced grid
+      real(wp), allocatable :: torque_model(:, :), wbar_model(:)
+
+      if (self%plain_grid()) return
+      if (.not. self%grid%reduced) then
+         call self%grid_model%add_gradient(torque, wbar, gradient)
+         return
+      end if
+      ! Only the kept components carry points; their weight is the constant one
+      allocate (torque_model(3, self%grid%ncomp_model), wbar_model(self%grid%ncomp_model), source=0.0_wp)
+      torque_model(:, self%grid%comp_model) = torque
+      call self%grid_model%add_gradient(torque_model, wbar_model, gradient)
+
+   end subroutine cavity_add_grid_gradient
 
    !> Default: the surface needs no build-phase answer
    !>
@@ -395,6 +615,7 @@ contains
       self%ngrid = 0
       if (allocated(self%asph)) deallocate (self%asph)
       if (allocated(self%owner)) deallocate (self%owner)
+      if (allocated(self%comp)) deallocate (self%comp)
       if (allocated(self%xyz)) deallocate (self%xyz)
       if (allocated(self%a)) deallocate (self%a)
       if (allocated(self%f)) deallocate (self%f)
@@ -738,7 +959,8 @@ contains
 
    !> Declare the results every discretized cavity carries
    !>
-   !> Before the build only the spheres: `nsph`, `radii` and `sphxyz`
+   !> - before the build only the spheres: `nsph`, `radii` and `sphxyz`, and
+   !>   once updated the numeric `symmetry_*` results of a symmetry model
    !>
    !> @param[in]    self   Cavity instance
    !> @param[inout] query  Walker collecting or fetching the declarations
@@ -751,6 +973,7 @@ contains
       call query%add_int_value("nsph", "Number of atomic spheres", self%nsph)
       call query%add_real("radii", "Sphere radii, bohr (nsph)", self%radii)
       call query%add_real2("sphxyz", "Sphere center coordinates, bohr (3, nsph)", self%sphxyz)
+      if (self%updated .and. allocated(self%grid_model)) call self%grid_model%list_fields(query)
       if (.not. self%built) return
 
       call query%add_int_value("ngrid", "Number of surface grid points", self%ngrid)
@@ -772,8 +995,13 @@ contains
    end subroutine list_cavity_fields_base
 
    !> Print basic cavity information (grid points, total area, total volume)
+   !>
+   !> @param[in] self Cavity instance
+   !> @param[in] unit Output unit; defaults to the run context's unit
    subroutine print_cavity_info(self, unit)
+      !> Cavity instance
       class(cavity_type), intent(in) :: self
+      !> Output unit
       integer, intent(in), optional :: unit
       integer :: iunit
       type(prettyprinter) :: pp
@@ -860,9 +1088,12 @@ contains
 
    end subroutine print_cavity_parameters
 
-   !> Print the radius model of the current structure
+   !> Print the radius model of the current structure, then the grid model report
    !>
    !> No `update` prints it; the host calls it after one when it wants the table
+   !>
+   !> - the grid model report of a cavity with a grid model follows the radii
+   !>   directly, see `print_grid_model`
    !>
    !> @param[in] self Cavity instance
    !> @param[in] unit Output unit; defaults to the run context's unit
@@ -887,8 +1118,43 @@ contains
       if (present(level)) lvl = level
       if (lvl < 1) return
       call self%radius_model%print(unit=iu)
+      call self%print_grid_model(iu, lvl)
 
    end subroutine print_cavity_radii
+
+   !> Print the grid model report of the current structure
+   !>
+   !> - nothing without a grid model (MT, MC, or none passed) or before a
+   !>   successful update; no `update` prints it, `print_radii` does after the
+   !>   radii
+   !> - group off: orientation and "off"; otherwise groups, reason,
+   !>   deviation, frame, and from level 2 the table of equivalent atoms
+   !>
+   !> @param[in] self  Cavity instance
+   !> @param[in] unit  Output unit; defaults to the run context's unit
+   !> @param[in] level Verbosity level; nothing prints at 0 (default: the
+   !>                  context's verbosity, everything without a context)
+   subroutine print_cavity_grid_model(self, unit, level)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+      !> Verbosity level of the printout
+      integer, intent(in), optional :: level
+
+      !> Effective output unit and verbosity level
+      integer :: iu, lvl
+
+      if (.not. (self%updated .and. allocated(self%grid_model))) return
+      iu = cavity_unit(self)
+      if (present(unit)) iu = unit
+      lvl = huge(1)
+      if (associated(self%ctx)) lvl = self%ctx%verbosity()
+      if (present(level)) lvl = level
+      if (lvl < 1) return
+      call self%grid_model%print(iu, lvl)
+
+   end subroutine print_cavity_grid_model
 
    !> Write grid points to an XYZ file as helium atoms (debug visualization)
    subroutine write_cavity_xyz_debug(self, filename, error)
