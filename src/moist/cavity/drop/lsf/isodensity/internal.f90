@@ -55,7 +55,18 @@ module moist_cavity_drop_lsf_isodensity_internal
    !> Isodensity LSF backed by an internal cartesian-monomial GTO evaluator
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_internal_type
       !> Cartesian-monomial Gaussian basis and density matrix
+      !>
+      !> - empty in a worker, which reads the model's through `shared_gto`
       type(moist_iso_gto_type) :: gto
+      !> Basis and density of the model a worker was cloned from; unassociated in a model
+      !>
+      !> - set by [[lsf_clone_worker]]; the evaluation reads it in place of `gto`
+      !> - dropped by `new`, `set_density` and `update`; the base type's
+      !>   non-overridable setters keep it, so a worker moved by `set_centers`
+      !>   would screen at its new centers but evaluate at the model's
+      !> - intrinsic assignment or `allocate(source=)` of a worker copies the
+      !>   borrow; a new worker comes from `clone_worker`
+      type(moist_iso_gto_type), pointer :: shared_gto => null()
       !> Level set parameters (isovalue and constant multiplier)
       type(moist_cavity_drop_lsf_isodensity_param_type) :: param
       !> Cached evaluation point in Bohr
@@ -90,6 +101,7 @@ module moist_cavity_drop_lsf_isodensity_internal
       integer, allocatable :: bat_perm(:)
    contains
       procedure, public :: new => lsf_new
+      procedure, public :: clone_worker => lsf_clone_worker
       procedure, public :: set_density => lsf_set_density
       procedure, public :: set_nuclear_charges => lsf_set_nuclear_charges
       procedure, public :: declare_coupling => lsf_declare_coupling
@@ -140,6 +152,7 @@ contains
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_drop_lsf_isodensity_param_type), intent(in), optional :: param
 
+      nullify (self%shared_gto)
       !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
       self%name = "Isodensity"
@@ -157,6 +170,52 @@ contains
       self%tile = moist_iso_gto_tile_type()
    end subroutine lsf_new
 
+   !> Per-thread worker borrowing the basis and density of this model
+   !>
+   !> - copies the base state, the parameters and the core fill, O(natoms); the
+   !>   basis, the density or its factor and the screening cutoffs are read in
+   !>   place through `shared_gto`, so no O(nfun^2) copy is made per thread
+   !> - the worker's scratch starts empty and is sized by the thread using it;
+   !>   only the candidate buffer takes the model's size up front
+   !> - a worker of a worker borrows from the same model
+   !> - an extension of this type gets a deep copy, its own components unknown here
+   !> - the worker must not outlive `self` nor see it changed
+   !> - `update` on the worker drops the borrow; it then evaluates nothing and
+   !>   `prepare` and `evaluate_batch` fail
+   !> - Fortran keeps the borrow defined after the return only when the actual
+   !>   of `self` is a target or pointer; the DROP loops pass a component of
+   !>   their `target` dummy `self`, so the borrow holds until they return
+   !>
+   !> @param[in]  self   LSF model
+   !> @param[out] worker Worker evaluating the same level set
+   subroutine lsf_clone_worker(self, worker)
+      !> LSF model
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in), target :: self
+      !> Worker evaluating the same level set
+      class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: worker
+
+      !> Worker under construction
+      type(moist_cavity_drop_lsf_isodensity_internal_type), allocatable :: light
+
+      if (.not. same_type_as(self, light)) then
+         allocate (worker, source=self)
+         return
+      end if
+      allocate (light)
+      call self%copy_base_state(light)
+      light%param = self%param
+      light%zmax = self%zmax
+      light%core = self%core
+      if (allocated(self%z)) light%z = self%z
+      if (allocated(self%bat_cand)) allocate (light%bat_cand(size(self%bat_cand)))
+      if (associated(self%shared_gto)) then
+         light%shared_gto => self%shared_gto
+      else
+         light%shared_gto => self%gto
+      end if
+      call move_alloc(light, worker)
+   end subroutine lsf_clone_worker
+
    !> Install the cartesian-monomial density matrix for the current SCF step
    !>
    !> @param[inout] self  LSF instance
@@ -168,6 +227,7 @@ contains
       real(wp), intent(in) :: dcart(:, :)
       type(error_type), allocatable, intent(out) :: error
 
+      nullify (self%shared_gto)
       call self%gto%set_density(dcart, error)
    end subroutine lsf_set_density
 
@@ -260,10 +320,13 @@ contains
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
 
-      call lsf_base_update(self, mol, radii)
+      nullify (self%shared_gto)
       call self%gto%refresh_centers(mol)
-      !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
+      ! Size the per-shell radial screening cutoffs to the cavity's screening
+      ! threshold (inherited from the base) first: the base update reads the
+      ! reach once per atom, which the build caches
       call self%gto%build_screening(self%screening_threshold)
+      call lsf_base_update(self, mol, radii)
       self%zmax = isodensity_max_nuclear_charge(mol)
       call self%core%update(mol, radii, self%param, self%z)
       if (allocated(self%bat_cand)) then
@@ -308,19 +371,20 @@ contains
       integer :: nderiv, inside
 
       nderiv = min(max(self%max_deriv, 1), 4)
+      ! Without a density the evaluation would silently give rho = 0; a worker
+      ! whose borrow `update` dropped lands here too
+      if (.not. lsf_has_density(self)) then
+         call fatal_error(error, "prepare failed: no density matrix installed ("//self%name//")")
+         return
+      end if
 
-      select case (nderiv)
-      case (:1)
-         call self%gto%eval(point, self%work, rho, drho, cand_atoms=cand_atoms)
-      case (2)
-         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
-      case (3)
-         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
-                            cand_atoms=cand_atoms)
-      case default
-         call self%gto%eval(point, self%work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
-                            cand_atoms=cand_atoms, d4rho=d4rho)
-      end select
+      if (associated(self%shared_gto)) then
+         call eval_point(self%shared_gto, self%work, point, nderiv, rho, drho, d2rho, d3rho, &
+                         d4rho, cand_atoms)
+      else
+         call eval_point(self%gto, self%work, point, nderiv, rho, drho, d2rho, d3rho, d4rho, &
+                         cand_atoms)
+      end if
       ! Every candidate list holds the shells of a point's nearby nuclei, so the
       ! fill is added whatever the screening
       call self%core%add(point, nderiv, rho, drho, d2rho, d3rho, d4rho, inside)
@@ -343,6 +407,55 @@ contains
       end if
       if (nderiv >= 4) self%fourth = -self%param%scale*d4rho
    end subroutine lsf_prepare_impl
+
+   !> Density and its spatial derivatives through `nderiv` at one point
+   !>
+   !> - derivatives above `nderiv` are left as they were
+   !>
+   !> @param[in]    gto        Basis and density, the model's or a worker's borrowed one
+   !> @param[inout] work       Evaluation scratch of the calling LSF
+   !> @param[in]    point      Evaluation point in Bohr
+   !> @param[in]    nderiv     Highest derivative order, 1..4
+   !> @param[out]   rho        Density
+   !> @param[out]   drho       Density gradient
+   !> @param[inout] d2rho      Density Hessian
+   !> @param[inout] d3rho      Third density derivative
+   !> @param[inout] d4rho      Fourth density derivative
+   !> @param[in]    cand_atoms Candidate owner atoms, all when absent
+   subroutine eval_point(gto, work, point, nderiv, rho, drho, d2rho, d3rho, d4rho, cand_atoms)
+      !> Basis and density
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Evaluation scratch
+      type(moist_iso_gto_work_type), intent(inout) :: work
+      !> Evaluation point
+      real(wp), intent(in) :: point(ndim)
+      !> Highest derivative order
+      integer, intent(in) :: nderiv
+      !> Density
+      real(wp), intent(out) :: rho
+      !> Density gradient
+      real(wp), intent(out) :: drho(ndim)
+      !> Density Hessian
+      real(wp), intent(inout) :: d2rho(ndim, ndim)
+      !> Third density derivative
+      real(wp), intent(inout) :: d3rho(ndim, ndim, ndim)
+      !> Fourth density derivative
+      real(wp), intent(inout) :: d4rho(ndim, ndim, ndim, ndim)
+      !> Candidate owner atoms
+      integer, intent(in), optional :: cand_atoms(:)
+
+      select case (nderiv)
+      case (:1)
+         call gto%eval(point, work, rho, drho, cand_atoms=cand_atoms)
+      case (2)
+         call gto%eval(point, work, rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
+      case (3)
+         call gto%eval(point, work, rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms)
+      case default
+         call gto%eval(point, work, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                       cand_atoms=cand_atoms, d4rho=d4rho)
+      end select
+   end subroutine eval_point
 
    !> Evaluate and cache the level set over the shells of a candidate atom list
    !>
@@ -530,7 +643,7 @@ contains
       call self%begin_batch(n)
       if (n == 0) return
       self%prepared_deriv = -1
-      if (.not. self%gto%has_density()) then
+      if (.not. lsf_has_density(self)) then
          call fatal_error(error, "evaluate_batch failed at point 1: no density matrix installed ("// &
                           self%name//")")
          return
@@ -619,22 +732,14 @@ contains
          do p = 1, np
             tp(:, p) = points(:, self%bat_perm(s0 + p - 1))
          end do
-         select case (nderiv)
-         case (1)
-            call self%gto%eval_tile(tp(:, 1:np), self%tile, rho(1:np), drho(:, 1:np), &
-                                    cand_atoms=cand)
-         case (2)
-            call self%gto%eval_tile(tp(:, 1:np), self%tile, rho(1:np), drho(:, 1:np), &
-                                    d2rho=d2rho(:, :, 1:np), cand_atoms=cand)
-         case (3)
-            call self%gto%eval_tile(tp(:, 1:np), self%tile, rho(1:np), drho(:, 1:np), &
-                                    d2rho=d2rho(:, :, 1:np), d3rho=d3rho(:, :, :, 1:np), &
-                                    cand_atoms=cand)
-         case default
-            call self%gto%eval_tile(tp(:, 1:np), self%tile, rho(1:np), drho(:, 1:np), &
-                                    d2rho=d2rho(:, :, 1:np), d3rho=d3rho(:, :, :, 1:np), &
-                                    d4rho=d4rho(:, :, :, :, 1:np), cand_atoms=cand)
-         end select
+         if (associated(self%shared_gto)) then
+            call eval_tile(self%shared_gto, self%tile, tp(:, 1:np), nderiv, rho(1:np), &
+                           drho(:, 1:np), d2rho(:, :, 1:np), d3rho(:, :, :, 1:np), &
+                           d4rho(:, :, :, :, 1:np), cand)
+         else
+            call eval_tile(self%gto, self%tile, tp(:, 1:np), nderiv, rho(1:np), drho(:, 1:np), &
+                           d2rho(:, :, 1:np), d3rho(:, :, :, 1:np), d4rho(:, :, :, :, 1:np), cand)
+         end if
 
          do p = 1, np
             i = self%bat_perm(s0 + p - 1)
@@ -674,6 +779,55 @@ contains
          error%message = "evaluate_batch failed at point "//trim(col)//": "//error%message
       end if
    end subroutine batch_tiles
+
+   !> Density and its spatial derivatives through `nderiv` over one tile
+   !>
+   !> - derivatives above `nderiv` are left as they were
+   !>
+   !> @param[in]    gto   Basis and density, the model's or a worker's borrowed one
+   !> @param[inout] tile  Tile scratch of the calling LSF
+   !> @param[in]    tp    Tile points in Bohr (3, np)
+   !> @param[in]    nderiv Highest derivative order, 1..4
+   !> @param[out]   rho   Densities (np)
+   !> @param[out]   drho  Density gradients (3, np)
+   !> @param[inout] d2rho Density Hessians (3, 3, np)
+   !> @param[inout] d3rho Third density derivatives (3, 3, 3, np)
+   !> @param[inout] d4rho Fourth density derivatives (3, 3, 3, 3, np)
+   !> @param[in]    cand  Ascending shared atom list, all atoms when absent
+   subroutine eval_tile(gto, tile, tp, nderiv, rho, drho, d2rho, d3rho, d4rho, cand)
+      !> Basis and density
+      type(moist_iso_gto_type), intent(in) :: gto
+      !> Tile scratch
+      type(moist_iso_gto_tile_type), intent(inout) :: tile
+      !> Tile points
+      real(wp), intent(in) :: tp(:, :)
+      !> Highest derivative order
+      integer, intent(in) :: nderiv
+      !> Densities
+      real(wp), intent(out), contiguous :: rho(:)
+      !> Density gradients
+      real(wp), intent(out), contiguous :: drho(:, :)
+      !> Density Hessians
+      real(wp), intent(inout), contiguous :: d2rho(:, :, :)
+      !> Third density derivatives
+      real(wp), intent(inout), contiguous :: d3rho(:, :, :, :)
+      !> Fourth density derivatives
+      real(wp), intent(inout), contiguous :: d4rho(:, :, :, :, :)
+      !> Ascending shared atom list
+      integer, intent(in), optional :: cand(:)
+
+      select case (nderiv)
+      case (1)
+         call gto%eval_tile(tp, tile, rho, drho, cand_atoms=cand)
+      case (2)
+         call gto%eval_tile(tp, tile, rho, drho, d2rho=d2rho, cand_atoms=cand)
+      case (3)
+         call gto%eval_tile(tp, tile, rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand)
+      case default
+         call gto%eval_tile(tp, tile, rho, drho, d2rho=d2rho, d3rho=d3rho, d4rho=d4rho, &
+                            cand_atoms=cand)
+      end select
+   end subroutine eval_tile
 
    !> Batch columns in tile order: the caller's, or the Morton order of the
    !> cells of a 2^order_bits grid over the bounding box of the finite points
@@ -866,7 +1020,7 @@ contains
       end if
       call self%begin_batch(np)
       if (np == 0) return
-      if (.not. self%gto%has_density()) then
+      if (.not. lsf_has_density(self)) then
          call fatal_error(error, "vjp_f1_rA_batch failed at point 1: "// &
                           "no density matrix installed ("//self%name//")")
          return
@@ -874,6 +1028,22 @@ contains
 
       res(:, :, 1:np) = 0.0_wp
    end subroutine lsf_vjp_f1_rA_batch
+
+   !> Whether a density is installed, in the model or the one a worker borrows
+   !>
+   !> @param[in] self LSF instance
+   function lsf_has_density(self) result(available)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> Whether a density is installed
+      logical :: available
+
+      if (associated(self%shared_gto)) then
+         available = self%shared_gto%has_density()
+      else
+         available = self%gto%has_density()
+      end if
+   end function lsf_has_density
 
    !> Radial offset (from the atom surface) beyond which no shell of this atom
    !> still contributes at the current screening threshold
@@ -894,7 +1064,11 @@ contains
       !> Radial offset from the atom surface (Bohr)
       real(wp) :: d
 
-      d = max(0.0_wp, self%gto%reach(self%screening_threshold) - radius)
+      if (associated(self%shared_gto)) then
+         d = max(0.0_wp, self%shared_gto%reach(self%screening_threshold) - radius)
+      else
+         d = max(0.0_wp, self%gto%reach(self%screening_threshold) - radius)
+      end if
    end function lsf_screening_offset
 
    !> Radius of a ball around the evaluation point free of surface
@@ -964,7 +1138,11 @@ contains
       real(wp) :: rho, drho(ndim), rho_atom(self%ncenters)
 
       rho_atom = 0.0_wp
-      call self%gto%eval(self%point, self%work, rho, drho, rho_atom=rho_atom)
+      if (associated(self%shared_gto)) then
+         call self%shared_gto%eval(self%point, self%work, rho, drho, rho_atom=rho_atom)
+      else
+         call self%gto%eval(self%point, self%work, rho, drho, rho_atom=rho_atom)
+      end if
       rho = sum(rho_atom)
       if (rho <= 0.0_wp) return
       acc = acc + rho_atom*(scale/rho)

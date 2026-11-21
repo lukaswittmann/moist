@@ -302,7 +302,7 @@ contains
    !> @param[inout] self  Cavity instance after `compute_area_volume`
    !> @param[out]   error Error handling
    module subroutine compute_atom_area(self, error)
-      class(cavity_type_drop), intent(inout) :: self
+      class(cavity_type_drop), intent(inout), target :: self
       type(error_type), allocatable, intent(out) :: error
 
       !> Relative tolerance of the sum of the partitioned areas, above the
@@ -325,7 +325,7 @@ contains
       allocate (self%asph_partition(self%nsph), source=0.0_wp)
 
       ! Only the value-level state of the LSF is read
-      call slots%init(self%ctx, self%lsf_model, 0)
+      call slots%init(self%ctx)
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) &
@@ -333,6 +333,7 @@ contains
       allocate (asph_local(self%nsph), source=0.0_wp)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
+      call slots%fill(thread_slot, self%lsf_model, 0)
 
       !$omp do schedule(dynamic)
       do i = 1, self%ngrid
@@ -351,6 +352,7 @@ contains
       !$omp end critical (compute_atom_area_reduce)
 
       deallocate (asph_local)
+      call slots%release(thread_slot)
       !$omp end parallel
 
       if (abort%requested) then
@@ -396,7 +398,7 @@ contains
    !>
    !> @param[inout] self Cavity with projected grid points
    module subroutine compute_curvature(self, error)
-      class(cavity_type_drop), intent(inout) :: self
+      class(cavity_type_drop), intent(inout), target :: self
       type(error_type), allocatable, intent(out) :: error
       !> Gradient norm at and below which a point has no normal, as in the
       !> finalize's CP Jacobian; a batched jet leaves ~1e-17 at a symmetric zero
@@ -432,13 +434,13 @@ contains
       ! Set up thread-local LSF evaluators
       ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the cached
       ! callback LSF must be told to compute up to second order
-      call slots%init(self%ctx, self%lsf_model, 2)
+      call slots%init(self%ctx)
       tile = surface_tile_width
       ntile = (self%ngrid + tile - 1)/tile
 
       call abort%reset()
 
-      ! Tiles of `surface_tile_width` points: one batched order-2 jet per tile
+      ! Tiles of `tile` points: one batched order-2 jet per tile
       ! over one shared candidate list; num_threads pins the team to the size the
       ! slots were built for, a larger live team would index slots%lsf out of bounds
       !$omp parallel num_threads(slots%nthreads) default(shared) &
@@ -449,6 +451,7 @@ contains
       !$omp&   S11, S12, S22, half_trace, half_diff, disc)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
+      call slots%fill(thread_slot, self%lsf_model, 2)
 
       allocate (cand(max(1, slots%lsf(thread_slot)%lsf%ncenters)))
       allocate (tile_xyz(3, tile), tile_lsf0(tile), tile_lsf1(3, tile), tile_lsf2(6, tile))
@@ -543,6 +546,7 @@ contains
       !$omp end do
 
       deallocate (cand, tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2)
+      call slots%release(thread_slot)
       !$omp end parallel
 
       if (abort%requested) then

@@ -176,6 +176,9 @@ contains
 
    !> Configure the worker from the cavity parameters
    !>
+   !> - the LSF clone may borrow read-only data of `lsf_model`, which must outlive
+   !>   the worker unchanged
+   !>
    !> @param[inout] self      Worker
    !> @param[in]    param     DROP parameters (validated)
    !> @param[in]    lsf_model Level set, already updated for the geometry; cloned
@@ -186,7 +189,7 @@ contains
    subroutine worker_init(self, param, lsf_model, centers, error, debug, unit)
       class(projection_worker_type), intent(inout) :: self
       type(moist_cavity_drop_parameters_type), intent(in) :: param
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
+      class(moist_cavity_drop_lsf_type), intent(in), target :: lsf_model
       real(wp), intent(in) :: centers(:, :)
       type(error_type), allocatable, intent(out) :: error
       logical, intent(in), optional :: debug
@@ -199,7 +202,7 @@ contains
       self%level = param%proj_level
 
       if (allocated(self%lsf)) deallocate (self%lsf)
-      allocate (self%lsf, source=lsf_model)
+      call lsf_model%clone_worker(self%lsf)
       call self%lsf%set_max_deriv(2)
       self%centers = centers
       self%reach_off = param%branch%reach_off

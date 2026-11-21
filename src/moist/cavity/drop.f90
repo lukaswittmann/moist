@@ -277,7 +277,7 @@ module moist_cavity_drop
       !> [projection.f90] Project all current grid points onto the LSF surface
       module subroutine project_all_points(self, error)
          implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
+         class(cavity_type_drop), intent(inout), target :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine project_all_points
 
@@ -312,14 +312,14 @@ module moist_cavity_drop
       !> [properties.f90] Partition the surface area among the atoms by the level set
       module subroutine compute_atom_area(self, error)
          implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
+         class(cavity_type_drop), intent(inout), target :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_atom_area
 
       !> [properties.f90] Compute mean and Gaussian curvature on the surface grid
       module subroutine compute_curvature(self, error)
          implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
+         class(cavity_type_drop), intent(inout), target :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_curvature
 
@@ -333,7 +333,7 @@ module moist_cavity_drop
       !> [deriv/forward.f90] Compute first nuclear derivatives for DROP quantities
       module subroutine compute_gradient_drop(self, error, anchor_only)
          implicit none(type, external)
-         class(cavity_type_drop), intent(inout) :: self
+         class(cavity_type_drop), intent(inout), target :: self
          type(error_type), allocatable, intent(out) :: error
          !> Frozen field: drop the level set's nuclear partials, each grid point
          !> moves with its owner's anchor only; equal to the full gradient for
@@ -405,7 +405,7 @@ module moist_cavity_drop
       !> @param[out] error      Error object
       module subroutine contract_surface_lsf_weights(self, acc, w_lsf0, w_lsf1, w_lsf2, error)
          implicit none(type, external)
-         class(cavity_type_drop), intent(in) :: self
+         class(cavity_type_drop), intent(in), target :: self
          type(cavity_adjoint_type), intent(in) :: acc
          real(wp), intent(out) :: w_lsf0(:)
          real(wp), intent(out) :: w_lsf1(:, :)

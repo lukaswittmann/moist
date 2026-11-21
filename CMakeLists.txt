@@ -408,7 +408,7 @@ if(MOIST_TESTS)
     sibling_gate_channels forward_screened_neighbour forward_screened_owner
     forward_isodensity_owner forward_frozen_field
     model_forward_reverse cosmo_model_forward_reverse shape_guard
-    thread_count_invariance)
+    thread_count_invariance isodensity_thread_count_invariance)
 
   set(moist_test_srcs
     "${_unit}/main.F90"

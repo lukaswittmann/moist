@@ -241,6 +241,7 @@ contains
                   new_unittest("mc_follows_the_density", test_mc_follows_density), &
                   new_unittest("rebuild_drops_the_derivatives", test_rebuild_drops_derivatives), &
                  new_unittest("isodensity_batch_vs_accessors", test_batch_vs_accessors), &
+                 new_unittest("isodensity_worker_borrows_density", test_worker_borrows_density), &
                  new_unittest("isodensity_batch_candidate_list", test_batch_candidate_list), &
                  new_unittest("isodensity_batch_callback_loops", test_batch_callback_loops), &
                  new_unittest("isodensity_batch_callback_order", test_batch_callback_order), &
@@ -4141,10 +4142,19 @@ contains
             if (allocated(error)) return
          end do
 
-         ! The global reach is that of max_deriv, the largest cutoff in use
-         call check(error, abs(gto%max_rcut - gto%reach(threshold)) &
-                    <= 4.0_wp*epsilon(1.0_wp)*gto%reach(threshold), &
+         ! The global reach is that of max_deriv, the largest cutoff in use;
+         ! `reach` returns `max_rcut` for the order it was built for, so each is
+         ! compared with the reach a copy built for another order recomputes
+         call check(error, abs(gto%max_rcut - g4%reach(threshold)) &
+                    <= 4.0_wp*epsilon(1.0_wp)*gto%max_rcut, &
                     test_label(tests(itest))//": max_rcut is the reach")
+         if (allocated(error)) return
+         call check(error, abs(g4%max_rcut - gto%reach(threshold, max_deriv=4)) &
+                    <= 4.0_wp*epsilon(1.0_wp)*g4%max_rcut, &
+                    test_label(tests(itest))//": max_rcut is the reach at max_deriv=4")
+         if (allocated(error)) return
+         call check(error, gto%reach(threshold) == gto%max_rcut, &
+                    test_label(tests(itest))//": reach at the built order is max_rcut")
          if (allocated(error)) return
          call check(error, sqrt(maxval(gto%sh_rcut2(:, 4))) &
                     <= gto%max_rcut*(1.0_wp + 1.0e-14_wp), &
@@ -5680,6 +5690,132 @@ contains
          print "(a,5es10.2)", "isodensity batch vs accessors, max rel dev by order:", worst
       end if
    end subroutine test_batch_vs_accessors
+
+   !> A per-thread worker borrows the basis and density of its model and
+   !> evaluates the same bits
+   !>
+   !> - no density copy: neither the matrix nor its factor is allocated in the worker
+   !> - batch and point evaluation, orders 0..4, and the Mulliken partition equal the
+   !>   model's bit for bit, screened and unscreened, cartesian and spherical
+   !> - a worker of a worker borrows from the same model
+   !> - a worker given a new geometry drops the borrow and refuses to evaluate,
+   !>   batch and point, instead of reading a basis it no longer matches
+   subroutine test_worker_borrows_density(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: tests(2) = [3, test_reference_sph]
+      real(wp), parameter :: thresholds(2) = [0.0_wp, 1.0e-6_wp]
+      type(moist_cavity_drop_lsf_isodensity_internal_type), target :: lsf
+      class(moist_cavity_drop_lsf_type), allocatable :: worker, worker2
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+      real(wp), allocatable :: pts(:, :), radii(:), part_m(:), part_w(:)
+      real(wp) :: m0(nbatch_points), m1(ndim, nbatch_points), m2(6, nbatch_points)
+      real(wp) :: m3(10, nbatch_points), m4(15, nbatch_points)
+      real(wp) :: w0(nbatch_points), w1(ndim, nbatch_points), w2(6, nbatch_points)
+      real(wp) :: w3(10, nbatch_points), w4(15, nbatch_points)
+      real(wp) :: a0, a1(ndim), a2(6), a3(10), a4(15), c0, c1(ndim), c2(6), c3(10), c4(15)
+      integer :: it, ith, order, i
+      character(len=64) :: label
+
+      do it = 1, size(tests)
+         do ith = 1, size(thresholds)
+            call build_molecular_internal_lsf(lsf, tests(it), thresholds(ith), mol, error)
+            if (allocated(error)) return
+            write (label, "(a,' thr ',es7.0)") test_label(tests(it)), thresholds(ith)
+            call lsf%clone_worker(worker)
+            select type (worker)
+            type is (moist_cavity_drop_lsf_isodensity_internal_type)
+               call check(error, associated(worker%shared_gto, lsf%gto), &
+                          more=trim(label)//": the worker borrows the model's basis")
+               if (allocated(error)) return
+               call check(error, .not. (allocated(worker%gto%dens) .or. allocated(worker%gto%lt)), &
+                          more=trim(label)//": the worker holds no density copy")
+               if (allocated(error)) return
+            class default
+               call test_failed(error, trim(label)//": worker of another type")
+               return
+            end select
+
+            call batch_points(mol, .false., pts)
+            do order = 0, 4
+               call lsf%set_max_deriv(order)
+               call worker%set_max_deriv(order)
+               call lsf%evaluate_batch(pts, order, m0, m1, m2, m3, m4, error=lsf_err)
+               if (.not. allocated(lsf_err)) &
+                  call worker%evaluate_batch(pts, order, w0, w1, w2, w3, w4, error=lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, trim(label)//": "//lsf_err%message)
+                  return
+               end if
+               call check(error, all(w0 == m0), more=trim(label)//": batch value")
+               if (allocated(error)) return
+               ! check() resets `error`, so each one returns before the next
+               if (order >= 1) call check(error, all(w1 == m1), more=trim(label)//": batch gradient")
+               if (allocated(error)) return
+               if (order >= 2) call check(error, all(w2 == m2), more=trim(label)//": batch Hessian")
+               if (allocated(error)) return
+               if (order >= 3) call check(error, all(w3 == m3), more=trim(label)//": batch third")
+               if (allocated(error)) return
+               if (order >= 4) call check(error, all(w4 == m4), more=trim(label)//": batch fourth")
+               if (allocated(error)) return
+               do i = 1, size(pts, 2), 5
+                  call lsf%prepare(pts(:, i), lsf_err)
+                  if (.not. allocated(lsf_err)) call worker%prepare(pts(:, i), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, trim(label)//": "//lsf_err%message)
+                     return
+                  end if
+                  call accessor_jet(lsf, order, a0, a1, a2, a3, a4)
+                  call accessor_jet(worker, order, c0, c1, c2, c3, c4)
+                  call check(error, c0 == a0 .and. all(c1 == a1) .and. all(c2 == a2) &
+                             .and. (order < 3 .or. all(c3 == a3)) .and. (order < 4 .or. all(c4 == a4)), &
+                             more=trim(label)//": point jet")
+                  if (allocated(error)) return
+               end do
+            end do
+
+            allocate (part_m(mol%nat), part_w(mol%nat), source=0.0_wp)
+            do i = 1, size(pts, 2), 3
+               call lsf%prepare(pts(:, i), lsf_err)
+               if (.not. allocated(lsf_err)) call worker%prepare(pts(:, i), lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, trim(label)//": "//lsf_err%message)
+                  return
+               end if
+               call lsf%atom_partition(1.0_wp, part_m)
+               call worker%atom_partition(1.0_wp, part_w)
+            end do
+            call check(error, all(part_w == part_m) .and. sum(part_m) > 0.0_wp, &
+                       more=trim(label)//": Mulliken partition")
+            deallocate (part_m, part_w)
+            if (allocated(error)) return
+
+            call worker%clone_worker(worker2)
+            select type (worker2)
+            type is (moist_cavity_drop_lsf_isodensity_internal_type)
+               call check(error, associated(worker2%shared_gto, lsf%gto), &
+                          more=trim(label)//": a worker's worker borrows from the model")
+               if (allocated(error)) return
+            end select
+
+            ! A new geometry drops the borrow: the worker has no basis of its own
+            allocate (radii(mol%nat), source=2.0_wp)
+            call worker%update(mol, radii)
+            deallocate (radii)
+            call worker%evaluate_batch(pts, 0, w0, error=lsf_err)
+            call check(error, allocated(lsf_err), more=trim(label)//": an updated worker refuses")
+            if (allocated(error)) return
+            deallocate (lsf_err)
+            call worker%prepare(pts(:, 1), lsf_err)
+            call check(error, allocated(lsf_err), &
+                       more=trim(label)//": an updated worker refuses a point")
+            if (allocated(error)) return
+            deallocate (lsf_err, worker, worker2)
+         end do
+      end do
+   end subroutine test_worker_borrows_density
 
    !> The shared candidate list: sorted, reversed and absent give identical bits;
    !> a partial list follows `prepare_subset` with the same list

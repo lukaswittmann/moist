@@ -106,8 +106,12 @@
 !> Thread-local clones
 !> -------------------
 !>   - the cavity holds one `class(moist_cavity_drop_lsf_type), allocatable` model and clones
-!>     it per thread
+!>     it per thread through `clone_worker`
 !>   - one clone per [[lsf_thread_slot]], each allocated independently
+!>   - `clone_worker` deep-copies by default; an LSF with large read-only data overrides it so
+!>     the worker borrows that data from the model instead of copying it
+!>   - a worker is for evaluation only: it lives no longer than one parallel loop, during which
+!>     the model is neither changed nor deallocated
 module moist_cavity_drop_lsf_base
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf
@@ -167,6 +171,8 @@ module moist_cavity_drop_lsf_base
    integer, parameter :: lsf_cell_list_full_scan_below = 200
 
    !> Abstract LSF base
+   !>
+   !> - a component added here must also be handled by [[lsf_base_copy_base_state]]
    type, abstract :: moist_cavity_drop_lsf_type
       !> Short name of the level-set model, e.g. `SvdW`; set by the constructor
       character(len=:), allocatable :: name
@@ -321,6 +327,10 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
+      !> Per-thread evaluation worker of this model
+      procedure :: clone_worker => lsf_base_clone_worker
+      !> Copy the base state into a fresh worker, for `clone_worker` overrides
+      procedure, non_overridable :: copy_base_state => lsf_base_copy_base_state
       !> Configure the highest spatial derivative order required
       procedure :: set_max_deriv => lsf_base_set_max_deriv
       !> Abort when an accessor is asked for an order `prepare` did not compute
@@ -894,6 +904,61 @@ contains
       end do
       deallocate (buckets)
    end subroutine lsf_base_spatial_sort
+
+   !> Per-thread evaluation worker of this model: a deep copy
+   !>
+   !> - an override may let the worker borrow read-only data of `self` instead;
+   !>   such a worker must not outlive `self` nor see it changed
+   !>
+   !> @param[in]  self   LSF model
+   !> @param[out] worker Worker evaluating the same level set
+   subroutine lsf_base_clone_worker(self, worker)
+      !> LSF model
+      class(moist_cavity_drop_lsf_type), intent(in), target :: self
+      !> Worker evaluating the same level set
+      class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: worker
+
+      allocate (worker, source=self)
+   end subroutine lsf_base_clone_worker
+
+   !> Copy the base state into a freshly allocated worker
+   !>
+   !> - for `clone_worker` overrides that build their worker component by
+   !>   component instead of copying the whole model
+   !> - copies the geometry, screening and candidate-space state; the per-point
+   !>   and per-batch evaluation state of `worker` stays at its defaults
+   !> - every base component is listed here, so a new one must be added
+   !>
+   !> @param[in]    self   LSF model
+   !> @param[inout] worker Freshly allocated worker, default-initialized
+   subroutine lsf_base_copy_base_state(self, worker)
+      !> LSF model
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      !> Freshly allocated worker
+      class(moist_cavity_drop_lsf_type), intent(inout) :: worker
+
+      if (allocated(self%name)) worker%name = self%name
+      worker%ncenters = self%ncenters
+      worker%mol = self%mol
+      worker%center_lower = self%center_lower
+      worker%center_upper = self%center_upper
+      worker%center_bounds_valid = self%center_bounds_valid
+      if (allocated(self%radii)) worker%radii = self%radii
+      worker%screening_threshold = self%screening_threshold
+      worker%max_deriv = self%max_deriv
+      worker%candidate_space = self%candidate_space
+      worker%radius_dependent = self%radius_dependent
+      if (allocated(self%orig_to_sorted)) worker%orig_to_sorted = self%orig_to_sorted
+      if (allocated(self%sorted_to_orig)) worker%sorted_to_orig = self%sorted_to_orig
+      if (allocated(self%cand_screen)) worker%cand_screen = self%cand_screen
+      if (allocated(self%cand_radii)) worker%cand_radii = self%cand_radii
+      if (allocated(self%cand_to_user)) worker%cand_to_user = self%cand_to_user
+      if (allocated(self%full_scan_cand)) worker%full_scan_cand = self%full_scan_cand
+      worker%cand_cells = self%cand_cells
+      worker%cell_full_scan_below = self%cell_full_scan_below
+      ! Evaluation state: prepared_deriv, prepared_unreached, batch_unreached and
+      ! batch_width keep the defaults of the fresh worker
+   end subroutine lsf_base_copy_base_state
 
    !> Configure the highest spatial derivative order `prepare` provisions
    !>

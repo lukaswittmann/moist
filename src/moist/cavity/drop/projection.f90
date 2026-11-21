@@ -56,7 +56,7 @@ contains
    !> @param[inout] self  Cavity after the pre-filter (anchor phase)
    !> @param[out]   error Build-fatal projection failure
    module subroutine project_all_points(self, error)
-      class(cavity_type_drop), intent(inout) :: self
+      class(cavity_type_drop), intent(inout), target :: self
       type(error_type), allocatable, intent(out) :: error
 
       type(prettyprinter) :: pp
@@ -162,6 +162,7 @@ contains
          end if
       end do
       !$omp end do
+      if (allocated(workers(thread_slot)%lsf)) deallocate (workers(thread_slot)%lsf)
       !$omp end parallel
 
       wall_end = drop_wall_time()

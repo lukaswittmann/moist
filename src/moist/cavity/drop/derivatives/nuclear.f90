@@ -65,13 +65,36 @@ contains
    !> - the two agree to round-off, which `test_cavity_drop_nuclear_adjoint`
    !>   asserts
    !>
-   !> @param[in]    self     DROP cavity instance (must hold a projected grid)
-   !> @param[in]    acc      Accumulated surface-observable adjoints
-   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
-   !> @param[out]   error    Error object, allocated on failure
+   !> @param[in]     self     DROP cavity instance (must hold a projected grid)
+   !> @param[in]     acc      Accumulated surface-observable adjoints
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[out]    error    Error object, allocated on failure
    module subroutine get_surface_gradient_drop(self, acc, gradient, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
+      !> Accumulated surface-observable adjoints
+      type(cavity_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call surface_gradient_tiles(self, acc, gradient, error)
+   end subroutine get_surface_gradient_drop
+
+   !> Tile loop of [[get_surface_gradient_drop]]
+   !>
+   !> - a separate procedure only for the `target` on `self`: the thread
+   !>   workers borrow from `self%lsf_model` for its duration, which the
+   !>   binding's interface, shared with every cavity, cannot declare
+   !>
+   !> @param[in]     self     DROP cavity instance (must hold a projected grid)
+   !> @param[in]     acc      Accumulated surface-observable adjoints
+   !> @param[in,out] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[out]    error    Error object, allocated on failure
+   subroutine surface_gradient_tiles(self, acc, gradient, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in), target :: self
       !> Accumulated surface-observable adjoints
       type(cavity_adjoint_type), intent(in) :: acc
       !> Nuclear-gradient accumulator
@@ -162,7 +185,7 @@ contains
       call prepare_surface_weights(self, acc, .true., eff)
 
       !* -------------------------------- Thread setup -------------------------------- *!
-      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
+      call slots%init(self%ctx, objective=.true.)
       tile = surface_tile_width
       ntile = (self%ngrid + tile - 1)/tile
       allocate (tile_rows(ntile))
@@ -180,6 +203,7 @@ contains
       !$omp& iswig_work, tile_grad, row_atoms, nrow, in_row, reach_da, reach_coef)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
+      call slots%fill(thread_slot, self%lsf_model, 3, self%param, self%mol, self%radii)
 
       allocate (cand(max(1, slots%lsf(thread_slot)%lsf%ncenters)))
       allocate (tile_xyz(3, tile), tile_lsf0(tile), tile_lsf1(3, tile), tile_lsf2(6, tile))
@@ -319,6 +343,7 @@ contains
       deallocate (cand, tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2, tile_lsf3)
       deallocate (tile_w0, tile_w1, tile_w2, tile_res_buf)
       deallocate (tile_grad, row_atoms, in_row)
+      call slots%release(thread_slot)
       !$omp end parallel
 
       if (abort%requested) then
@@ -341,9 +366,17 @@ contains
       end do
       gradient = gradient + grad_sum
 
+      ! The threads allocated the tile rows; free them in parallel
+      !$omp parallel do num_threads(slots%nthreads) default(shared) private(itile) schedule(static)
+      do itile = 1, ntile
+         if (allocated(tile_rows(itile)%atoms)) deallocate (tile_rows(itile)%atoms)
+         if (allocated(tile_rows(itile)%rows)) deallocate (tile_rows(itile)%rows)
+      end do
+      !$omp end parallel do
+
       call self%ctx%timer%stop(h_sgrad)
 
-   end subroutine get_surface_gradient_drop
+   end subroutine surface_gradient_tiles
 
    !> Record that a tile wrote the gradient row of an atom
    !>

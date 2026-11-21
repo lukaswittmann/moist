@@ -53,7 +53,7 @@ contains
    module subroutine compute_gradient_drop(self, error, anchor_only)
 
       !> DROP cavity instance; supplies the projected grid and receives the first-derivative (`*_rA`) arrays
-      class(cavity_type_drop), intent(inout) :: self
+      class(cavity_type_drop), intent(inout), target :: self
 
       !> Error type
       type(error_type), allocatable, intent(out) :: error
@@ -172,7 +172,7 @@ contains
 
       ! Thread-local primitives; the gradient reads third spatial derivatives
       timer_ref_thread = 1
-      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
+      call slots%init(self%ctx, objective=.true.)
 
       ! Allocate gradient arrays
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
@@ -257,6 +257,7 @@ contains
       !$omp& reach_da, gate_rest)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
+      call slots%fill(thread_slot, self%lsf_model, 3, self%param, self%mol, self%radii)
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
       ! The LSF nuclear outputs are active-indexed and caller-owned; the buffers
@@ -539,6 +540,7 @@ contains
       deallocate (lsf3_rr_rA, active_idx, in_row, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
+      call slots%release(thread_slot)
       !$omp end parallel
 
       if (abort%requested) then

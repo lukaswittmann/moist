@@ -46,7 +46,7 @@ module moist_cavity_drop_projection_batch
    integer, parameter :: point_failed_unreached = -7
 
    !> Default flush target (columns per batch)
-   integer, parameter :: default_batch_size = 256
+   integer, parameter :: default_batch_size = 8
 
    !> Batch of projection points, structure of arrays
    !>

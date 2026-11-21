@@ -19,7 +19,7 @@
 !> `test_all_channels` drives every channel at once; `test_single_channels`
 !> drives them one at a time so a bug in one cannot hide behind another
 module test_cavity_drop_nuclear_adjoint
-!$ use omp_lib, only: omp_in_parallel
+!$ use omp_lib, only: omp_in_parallel, omp_get_num_threads
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_branch_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
@@ -27,7 +27,8 @@ module test_cavity_drop_nuclear_adjoint
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed, &
+      & skip_test
    use test_helpers, only: get_test_cross, fd6_offsets, get_test_cube, nudge_structure, get_test_forward_pair, &
                            get_test_sibling_gate
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -36,13 +37,15 @@ module test_cavity_drop_nuclear_adjoint
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
+   use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use, intrinsic :: iso_c_binding, only: c_ptr, c_double, c_int, c_funloc, c_null_ptr, c_associated, c_f_pointer
    use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
-   use moist_channels_coupling, only: coupling_type
+   use moist_channels_coupling, only: coupling_type, density_matrix_request_type, &
+      & nuclear_charge_request_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
    use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm, &
@@ -138,7 +141,9 @@ contains
                   new_unittest("model_forward_reverse", test_model_forward_reverse), &
                   new_unittest("cosmo_model_forward_reverse", test_cosmo_model_forward_reverse), &
                   new_unittest("shape_guard", test_shape_guard), &
-                  new_unittest("thread_count_invariance", test_thread_count_invariance) &
+                  new_unittest("thread_count_invariance", test_thread_count_invariance), &
+                  new_unittest("isodensity_thread_count_invariance", &
+                               test_isodensity_thread_count_invariance) &
                   ]
 
    end subroutine collect_cavity_drop_nuclear_adjoint
@@ -733,6 +738,210 @@ contains
       end if
 
    end subroutine test_thread_count_invariance
+
+   !> The internal isodensity cavity, its surface LSF weights and its reverse
+   !> gradient are bit-identical on one and on several threads, and on a repeated call
+   !>
+   !> - the per-thread workers borrow the model's basis and density, in the
+   !>   projection, both reverse loops, the forward Jacobian, the curvature and
+   !>   the atom areas
+   !> - the atom areas, a sum over the points in thread order, to round-off only
+   !> - must run as a selected test, see [[test_thread_count_invariance]]
+   subroutine test_isodensity_thread_count_invariance(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: TEAM = 4
+      type(cavity_type_drop), allocatable :: cav_serial, cav_team
+      type(moist_context_type), target :: ctx_serial, ctx_team
+      type(cavity_adjoint_type) :: acc
+      type(mctc_error), allocatable :: cav_error
+      real(wp), allocatable :: grad(:, :, :), w0(:, :), w1(:, :, :), w2(:, :, :, :)
+      integer :: ich, irun, nteam
+      logical :: in_parallel
+
+      in_parallel = .false.
+!$    in_parallel = omp_in_parallel()
+      call check(error, .not. in_parallel, &
+         & "thread-count check must run as a selected test, not inside the suite-level parallel run")
+      if (allocated(error)) return
+
+      ! Without a full team the comparison below would pass without testing anything
+      nteam = 1
+      !$omp parallel num_threads(TEAM) default(shared)
+      !$omp single
+!$    nteam = omp_get_num_threads()
+      !$omp end single
+      !$omp end parallel
+      if (nteam /= TEAM) then
+         call skip_test(error, "a team of "//to_string(TEAM)//" threads is not available, got "// &
+                        to_string(nteam))
+         return
+      end if
+
+      call new_context(ctx_serial, nthreads=1, verbosity=0)
+      call new_context(ctx_team, nthreads=TEAM, verbosity=0)
+      call build_internal_iso_cavity(cav_serial, ctx_serial, error)
+      if (allocated(error)) return
+      call build_internal_iso_cavity(cav_team, ctx_team, error)
+      if (allocated(error)) return
+      if (cav_serial%ngrid <= 2*TEAM*surface_tile_width) then
+         call test_failed(error, "fixture too small to spread over "//to_string(TEAM)// &
+                          " threads: "//to_string(cav_serial%ngrid)//" points")
+         return
+      end if
+      if (cav_team%ngrid /= cav_serial%ngrid) then
+         call test_failed(error, "the isodensity grid depends on the thread count")
+         return
+      end if
+      if (any(cav_team%xyz /= cav_serial%xyz) .or. any(cav_team%a /= cav_serial%a)) then
+         call test_failed(error, "the isodensity surface depends on the thread count")
+         return
+      end if
+
+      call acc%init(cav_serial%ngrid)
+      do ich = 1, NCHAN
+         call apply_channel(acc, ich, cav_serial, error)
+         if (allocated(error)) return
+      end do
+
+      ! Run 1 serial, runs 2 and 3 on the team: thread count and repeated call
+      allocate (grad(3, cav_serial%nsph, 3), source=0.0_wp)
+      allocate (w0(cav_serial%ngrid, 3), w1(3, cav_serial%ngrid, 3), w2(3, 3, cav_serial%ngrid, 3))
+      do irun = 1, 3
+         if (irun == 1) then
+            call cav_serial%contract_surface_lsf_weights(acc, w0(:, irun), w1(:, :, irun), &
+                                                         w2(:, :, :, irun), cav_error)
+            if (.not. allocated(cav_error)) &
+               call cav_serial%get_surface_gradient(acc, grad(:, :, irun), cav_error)
+         else
+            call cav_team%contract_surface_lsf_weights(acc, w0(:, irun), w1(:, :, irun), &
+                                                       w2(:, :, :, irun), cav_error)
+            if (.not. allocated(cav_error)) &
+               call cav_team%get_surface_gradient(acc, grad(:, :, irun), cav_error)
+         end if
+         if (allocated(cav_error)) then
+            call test_failed(error, "isodensity reverse pass failed: "//cav_error%message)
+            return
+         end if
+      end do
+
+      if (maxval(abs(grad(:, :, 1))) <= VACUITY_THR .or. maxval(abs(w0(:, 1))) <= VACUITY_THR) then
+         call test_failed(error, "isodensity reverse pass is vacuous")
+         return
+      end if
+      do irun = 2, 3
+         call check(error, all(w0(:, irun) == w0(:, 1)) .and. all(w1(:, :, irun) == w1(:, :, 1)) &
+                    .and. all(w2(:, :, :, irun) == w2(:, :, :, 1)), &
+                    "isodensity LSF weights depend on the thread count or the call, run "// &
+                    to_string(irun))
+         if (allocated(error)) return
+         call check(error, all(grad(:, :, irun) == grad(:, :, 1)), &
+                    "isodensity reverse gradient depends on the thread count or the call, run "// &
+                    to_string(irun))
+         if (allocated(error)) return
+      end do
+
+      ! The curvature and atom-area loops of the build have their own workers
+      if (.not. (allocated(cav_serial%KM) .and. allocated(cav_serial%KG) &
+                 .and. allocated(cav_serial%asph_partition))) then
+         call test_failed(error, "isodensity curvature or atom areas missing")
+         return
+      end if
+      if (maxval(abs(cav_serial%KM)) <= VACUITY_THR .or. &
+          maxval(abs(cav_serial%asph_partition)) <= VACUITY_THR) then
+         call test_failed(error, "isodensity curvature or atom areas are vacuous")
+         return
+      end if
+      call check(error, all(cav_team%KM == cav_serial%KM) .and. all(cav_team%KG == cav_serial%KG), &
+                 "isodensity curvature depends on the thread count")
+      if (allocated(error)) return
+      ! The per-atom sums are reduced in thread order, so they agree to round-off only
+      call check(error, maxval(abs(cav_team%asph_partition - cav_serial%asph_partition)) &
+                 <= 1.0e-12_wp*maxval(abs(cav_serial%asph_partition)), &
+                 "isodensity atom areas depend on the thread count")
+      if (allocated(error)) return
+
+      ! The forward Jacobian loop as well
+      call cav_serial%compute_gradient_drop(cav_error)
+      if (.not. allocated(cav_error)) call cav_team%compute_gradient_drop(cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "isodensity forward Jacobian failed: "//cav_error%message)
+         return
+      end if
+      if (maxval(abs(cav_serial%xyz1_rA)) <= VACUITY_THR) then
+         call test_failed(error, "isodensity forward Jacobian is vacuous")
+         return
+      end if
+      call check(error, all(cav_team%xyz1_rA == cav_serial%xyz1_rA) &
+                 .and. all(cav_team%a_i1_rA == cav_serial%a_i1_rA), &
+                 "isodensity forward Jacobian depends on the thread count")
+      if (allocated(error)) return
+
+   end subroutine test_isodensity_thread_count_invariance
+
+   !> Internal isodensity cavity on two d-shell atoms, built through the coupling
+   !>
+   !> - with the curvature and atom-area diagnostics
+   !>
+   !> @param[out]   cavity Built cavity
+   !> @param[inout] ctx    Run context borrowed by the cavity, team size set
+   !> @param[out]   error  Test failure
+   subroutine build_internal_iso_cavity(cavity, ctx, error)
+      !> Built cavity
+      type(cavity_type_drop), allocatable, intent(out) :: cavity
+      !> Run context borrowed by the cavity
+      type(moist_context_type), target, intent(inout) :: ctx
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_param_type) :: param
+      type(structure_type) :: mol
+      class(radius_type), allocatable :: radii
+      type(coupling_type), target :: coupling
+      type(mctc_error), allocatable :: err
+      real(wp) :: dcart(12, 12)
+      integer :: i
+
+      call new(mol, [54, 54], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.5_wp, 0.0_wp, 5.0_wp], [3, 2]))
+      param = moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.)
+      param%rho_iso = 0.4_wp
+      param%scale = 1.0_wp/param%rho_iso
+      dcart = 0.0_wp
+      do i = 1, 12
+         dcart(i, i) = 1.0_wp
+      end do
+      call lsf%new(sh_atom=[1, 2], sh_l=[2, 2], sh_nprim=[1, 1], exps=[0.5_wp, 0.4_wp], &
+                   coeffs=[1.0_wp, 1.0_wp], error=err, param=param)
+      if (.not. allocated(err)) call new_radii_custom_atoms([4.0_wp, 4.0_wp], radii, err)
+      if (.not. allocated(err)) then
+         allocate (cavity)
+         call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, error=err, &
+                              param=moist_cavity_drop_parameters_type(num_leb=302, do_curvature=.true., &
+                                                                      do_atomarea=.true.), ctx=ctx)
+      end if
+      if (.not. allocated(err)) call cavity%update(mol, err)
+      if (.not. allocated(err)) call cavity%prepare_build(coupling, err)
+      if (.not. allocated(err)) then
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (density_matrix_request_type)
+               call coupling%answer("dcart", dcart, err)
+            type is (nuclear_charge_request_type)
+               call coupling%answer("z", [54.0_wp, 54.0_wp], err)
+            end select
+            if (allocated(err)) exit
+         end do
+      end if
+      if (.not. allocated(err)) call cavity%build(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "failed to build isodensity cavity: "//err%message)
+         return
+      end if
+      if (cavity%ngrid == 0) call test_failed(error, "empty isodensity grid")
+
+   end subroutine build_internal_iso_cavity
 
    !> A mis-shaped gradient accumulator must be rejected, not silently ignored
    subroutine test_shape_guard(error)

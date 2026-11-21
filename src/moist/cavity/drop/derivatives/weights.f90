@@ -94,21 +94,45 @@ contains
       !> Folded weights
       type(drop_surface_weights_type), intent(out) :: eff
 
-      !> Grid index
-      integer :: igrid
+      !> Grid index and grid size
+      integer :: igrid, n
+      !> Team size, anchor count, anchor block, its first/last anchor and rows
+      integer :: nthreads, nanchor, nblock, iblock, ia0, ia1, r0, r1
+      !> Anchors per block and the number of blocks holding one more
+      integer :: nper, nextra
       !> Adjoint of the switching value with the area channel folded in
       real(wp), allocatable :: w_f_area(:)
+      !> Switching adjoint with the area fold of one point
+      real(wp) :: w_f_folded
+      !> Whether the branch reverse pass runs, and the channel flags
+      logical :: have_branch, have_wn, have_wk
 
-      allocate (eff%w_xi, source=acc%w_xi)
-      allocate (eff%w_f, source=acc%w_f)
-      allocate (eff%w_xyz, source=acc%w_xyz)
-      allocate (eff%w_n, source=acc%w_n)
-      allocate (eff%w_k1, source=acc%w_k1)
-      allocate (eff%w_k2, source=acc%w_k2)
+      ! One parallel pass over the grid, every array first touched by the thread
+      ! that fills it: the copies and folds are elementwise, so the result does
+      ! not depend on the team size
+      n = self%ngrid
+      nthreads = self%ctx%get_num_threads()
+      allocate (eff%w_xi(n), eff%w_f(n), eff%w_xyz(3, n), eff%w_n(3, n), eff%w_k1(n), eff%w_k2(n))
+      allocate (eff%branch_phi_adj(n), eff%branch_gate_adj(n))
+      have_branch = n > 0 .and. allocated(self%offset)
+      if (have_branch) allocate (w_f_area(n))
+      have_wn = .false.
+      have_wk = .false.
 
-      ! a_i = c*f_i/xi_i^2 and w_i = c/xi_i^2, so da/dxi = -2a/xi and
-      ! dw/dxi = -2w/xi; both land on the width channel
-      do igrid = 1, self%ngrid
+      !$omp parallel do num_threads(nthreads) default(shared) private(igrid, w_f_folded) &
+      !$omp& schedule(static) reduction(.or.:have_wn, have_wk)
+      do igrid = 1, n
+         eff%w_xyz(:, igrid) = acc%w_xyz(:, igrid)
+         eff%w_n(:, igrid) = acc%w_n(:, igrid)
+         eff%w_k1(igrid) = acc%w_k1(igrid)
+         eff%w_k2(igrid) = acc%w_k2(igrid)
+         have_wn = have_wn .or. any(abs(acc%w_n(:, igrid)) > seed_weight_tol)
+         have_wk = have_wk .or. abs(acc%w_k1(igrid)) > seed_weight_tol &
+                   .or. abs(acc%w_k2(igrid)) > seed_weight_tol
+
+         ! a_i = c*f_i/xi_i^2 and w_i = c/xi_i^2, so da/dxi = -2a/xi and
+         ! dw/dxi = -2w/xi; both land on the width channel
+         eff%w_xi(igrid) = acc%w_xi(igrid)
          if (abs(acc%w_a(igrid)) > seed_weight_tol) then
             eff%w_xi(igrid) = eff%w_xi(igrid) &
                               - 2.0_wp*self%a(igrid)*acc%w_a(igrid)/self%xi0(igrid)
@@ -117,41 +141,54 @@ contains
             eff%w_xi(igrid) = eff%w_xi(igrid) &
                               - 2.0_wp*self%wleb(igrid)*acc%w_w(igrid)/self%xi0(igrid)
          end if
+
+         ! The area channel always reaches the branch weights p through
+         ! a = c*f*wleb; it folds into `w_f` itself only with `fold_switching`
+         w_f_folded = acc%w_f(igrid)
+         if (abs(acc%w_a(igrid)) > seed_weight_tol) then
+            w_f_folded = w_f_folded + acc%w_a(igrid)*self%radii(self%owner(igrid))**2*self%wleb(igrid)
+         end if
+         if (fold_switching) then
+            eff%w_f(igrid) = w_f_folded
+         else
+            eff%w_f(igrid) = acc%w_f(igrid)
+         end if
+         if (have_branch) w_f_area(igrid) = w_f_folded
       end do
-
-      if (fold_switching) then
-         do igrid = 1, self%ngrid
-            if (abs(acc%w_a(igrid)) > seed_weight_tol) then
-               eff%w_f(igrid) = eff%w_f(igrid) &
-                                + acc%w_a(igrid)*self%radii(self%owner(igrid))**2*self%wleb(igrid)
-            end if
-         end do
-      end if
-
-      eff%have_wn = any(abs(eff%w_n) > seed_weight_tol)
-      eff%have_wk = any(abs(eff%w_k1) > seed_weight_tol) &
-                    .or. any(abs(eff%w_k2) > seed_weight_tol)
+      !$omp end parallel do
+      eff%have_wn = have_wn
+      eff%have_wk = have_wk
 
       ! Reverse pass for the branch-weight post-pass: f = f_anchor*p, so the
       ! adjoint of f gives dL/dp_m and from it dL/dPhi_l and dL/dg_l of every
       ! row of the anchor, which the seed loops couple to the point motion and
       ! the gate response
-      ! The area channel always reaches p through a = c*f*wleb, also when the
-      ! anchor-only part of the switching is held fixed (`fold_switching` off)
-      allocate (eff%branch_phi_adj(self%ngrid), source=0.0_wp)
-      allocate (eff%branch_gate_adj(self%ngrid), source=0.0_wp)
-      if (self%ngrid > 0 .and. allocated(self%offset)) then
-         allocate (w_f_area, source=acc%w_f)
-         do igrid = 1, self%ngrid
-            if (abs(acc%w_a(igrid)) > seed_weight_tol) then
-               w_f_area(igrid) = w_f_area(igrid) &
-                                 + acc%w_a(igrid)*self%radii(self%owner(igrid))**2*self%wleb(igrid)
-            end if
-         end do
-         call compute_branch_adj(self%offset, self%phi0(1:self%ngrid), self%w_f0(1:self%ngrid), &
-                                 self%anchor%f0, self%branch_weight, w_f_area(1:self%ngrid), &
-                                 eff%branch_phi_adj, eff%branch_gate_adj)
+      ! Anchors are independent: blocks of anchors run as rebased CSR slices,
+      ! each writing only its own rows
+      if (.not. have_branch) then
+         eff%branch_phi_adj = 0.0_wp
+         eff%branch_gate_adj = 0.0_wp
+         return
       end if
+      ! Several blocks per thread, handed out dynamically, as the rows per anchor vary;
+      ! the split by quotient and remainder cannot overflow
+      nanchor = size(self%offset) - 1
+      nblock = 1
+      if (nthreads > 1) nblock = max(1, min(nanchor, 4*nthreads))
+      nper = nanchor/nblock
+      nextra = mod(nanchor, nblock)
+      !$omp parallel do num_threads(nthreads) default(shared) private(iblock, ia0, ia1, r0, r1) &
+      !$omp& schedule(dynamic, 1)
+      do iblock = 1, nblock
+         ia0 = (iblock - 1)*nper + min(iblock - 1, nextra) + 1
+         ia1 = iblock*nper + min(iblock, nextra)
+         r0 = self%offset(ia0) + 1
+         r1 = self%offset(ia1 + 1)
+         call compute_branch_adj(self%offset(ia0:ia1 + 1) - self%offset(ia0), self%phi0(r0:r1), &
+                                 self%w_f0(r0:r1), self%anchor%f0(ia0:ia1), self%branch_weight, &
+                                 w_f_area(r0:r1), eff%branch_phi_adj(r0:r1), eff%branch_gate_adj(r0:r1))
+      end do
+      !$omp end parallel do
    end subroutine prepare_surface_weights
 
    !> Copy the cavity's grid-level scalars into a kernel seed state

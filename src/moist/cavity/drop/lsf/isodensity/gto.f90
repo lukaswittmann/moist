@@ -324,12 +324,17 @@ module moist_cavity_drop_lsf_isodensity_gto
       real(wp), allocatable :: sh_rcut2(:, :)
       !> Largest cutoff built by [[gto_build_screening]], the `max_deriv` column
       !>
-      !> - equals `reach(threshold, max_deriv)`, no production reader
-      !> - the candidate cell list uses `reach(threshold)` at depth 3 instead, equal
-      !>   to it for the production build in `lsf_update`
+      !> - equals `reach(threshold, max_deriv)`; [[gto_reach]] returns it for the
+      !>   threshold and order it was built for
+      !> - the candidate cell list uses `reach(threshold)` at depth 3, equal to it
+      !>   for the production build in `lsf_update`
       !> - a build at `max_deriv = 4` evaluated at order 4 can exceed that reach
       !>   (tests only)
       real(wp) :: max_rcut = 0.0_wp
+      !> Threshold `max_rcut` was built for
+      real(wp) :: max_rcut_deriv = 0.0_wp
+      !> Derivative order `max_rcut` was built for; negative before any build
+      integer :: max_rcut_deriv = -1
    contains
       !> Configure the basis from per-shell primitive data
       procedure :: init => gto_init
@@ -652,6 +657,7 @@ contains
       !> direct user (no cavity / zero threshold) evaluates every shell exactly
       allocate (self%sh_rcut2(self%nshell, 4), source=huge(1.0_wp))
       self%max_rcut = 0.0_wp
+      self%max_rcut_deriv = -1
 
    contains
 
@@ -1056,11 +1062,15 @@ contains
                                threshold, derivative_order)
          self%max_rcut = max(self%max_rcut, rcut)
       end do
+      self%max_rcut_threshold = threshold
+      self%max_rcut_deriv = derivative_order
    end subroutine gto_build_screening
 
    !> Conservative global shell reach (Bohr) for a screening threshold
    !>
-   !> Independent of prior [[gto_build_screening]] calls
+   !> - the same value with or without prior [[gto_build_screening]] calls
+   !> - O(1) for the threshold and order of the last build, which caches the same
+   !>   maximum as `max_rcut`; O(nshell) otherwise
    !>
    !> @param[in] self      Basis instance
    !> @param[in] threshold Amplitude screening threshold
@@ -1076,6 +1086,10 @@ contains
 
       derivative_order = 3
       if (present(max_deriv)) derivative_order = max_deriv
+      if (derivative_order == self%max_rcut_deriv .and. threshold == self%max_rcut_threshold) then
+         r = self%max_rcut
+         return
+      end if
       r = 0.0_wp
       do s = 1, self%nshell
          p0 = self%sh_poff(s)

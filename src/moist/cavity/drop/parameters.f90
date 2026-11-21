@@ -6,6 +6,7 @@ module moist_cavity_drop_parameters
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_bornzeta, only: get_born_zeta
+   use moist_cavity_drop_projection_batch, only: default_batch_size
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type, drop_solve_parameters_type, &
                                                      drop_polish_parameters_type, drop_finalize_parameters_type, &
                                                      drop_branch_parameters_type
@@ -83,8 +84,8 @@ module moist_cavity_drop_parameters
 
       !* ----------------------------- Batched projection ----------------------------- *!
 
-      !> Flush target of the projection batch (points per batch)
-      integer :: batch_size = 256
+      !> Anchors per projection chunk and flush target of the seeded pass (points)
+      integer :: batch_size = default_batch_size
 
       !* ------------------------------ Projection stages ----------------------------- *!
 

@@ -33,7 +33,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp), allocatable :: w0(:), w1(:, :), w2(:, :, :)
       !> Cavity density response
       type(density_response_type) :: item
       !> Density chain-rule factor dS/drho
@@ -47,16 +46,15 @@ contains
       end if
       if (.not. self%lsf_model%density_adjoint_factor(factor)) return
 
-      allocate (w0(self%ngrid), w1(3, self%ngrid), w2(3, 3, self%ngrid))
-      call self%contract_surface_lsf_weights(acc, w0, w1, w2, error)
+      ! Contracted straight into the item, then scaled in place: no staging
+      ! copies, and the contraction's threads first-touch the item arrays
+      allocate (item%w_rho(self%ngrid), item%w_grad_rho(3, self%ngrid), &
+                item%w_hess_rho(3, 3, self%ngrid))
+      call self%contract_surface_lsf_weights(acc, item%w_rho, item%w_grad_rho, item%w_hess_rho, error)
       if (allocated(error)) return
-
-      allocate (item%w_rho(self%ngrid), source=0.0_wp)
-      allocate (item%w_grad_rho(3, self%ngrid), source=0.0_wp)
-      allocate (item%w_hess_rho(3, 3, self%ngrid), source=0.0_wp)
-      item%w_rho = item%w_rho + factor*w0
-      item%w_grad_rho = item%w_grad_rho + factor*w1
-      item%w_hess_rho = item%w_hess_rho + factor*w2
+      item%w_rho = factor*item%w_rho
+      item%w_grad_rho = factor*item%w_grad_rho
+      item%w_hess_rho = factor*item%w_hess_rho
       call response_accumulate(response, item, error)
 
    end subroutine get_surface_response_drop
@@ -68,6 +66,7 @@ contains
    !>
    !> - the gate and the objective of a row also reach the branch weights of
    !>   the other rows of its anchor
+   !> - the weights are zero after a failure in the contraction loop
    !>
    !> @param[in]  self   Requires a projected grid
    !> @param[in]  acc    Surface weights on the current cavity grid
@@ -77,7 +76,7 @@ contains
    !> @param[out] error  Allocated on failure
    module subroutine contract_surface_lsf_weights(self, acc, w_lsf0, w_lsf1, w_lsf2, error)
       !> DROP cavity with a projected grid
-      class(cavity_type_drop), intent(in) :: self
+      class(cavity_type_drop), intent(in), target :: self
       !> Accumulated surface-observable adjoints
       type(cavity_adjoint_type), intent(in) :: acc
       !> LSF value adjoints (ngrid)
@@ -134,9 +133,8 @@ contains
          return
       end if
 
-      w_lsf0 = 0.0_wp
-      w_lsf1 = 0.0_wp
-      w_lsf2 = 0.0_wp
+      ! Every point of a successful contraction is written by the loop below;
+      ! only a failure zeroes the weights
       if (self%ngrid <= 0) return
 
       h_weights = self%ctx%timer%resolve("Surface LSF weights", self%ctx%timer%current(), &
@@ -146,7 +144,7 @@ contains
       ! Density variations leave anchor-only switching fixed
       call prepare_surface_weights(self, acc, .false., eff)
 
-      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
+      call slots%init(self%ctx, objective=.true.)
       tile = surface_tile_width
       ntile = (self%ngrid + tile - 1)/tile
 
@@ -161,6 +159,7 @@ contains
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
+      call slots%fill(thread_slot, self%lsf_model, 3, self%param, self%mol, self%radii)
 
       allocate (cand(max(1, slots%lsf(thread_slot)%lsf%ncenters)))
       allocate (tile_xyz(3, tile), tile_lsf0(tile), tile_lsf1(3, tile), tile_lsf2(6, tile))
@@ -204,11 +203,15 @@ contains
       !$omp end do
 
       deallocate (cand, tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2, tile_lsf3)
+      call slots%release(thread_slot)
       !$omp end parallel
 
       call self%ctx%timer%stop(h_weights)
 
       if (abort%requested) then
+         w_lsf0 = 0.0_wp
+         w_lsf1 = 0.0_wp
+         w_lsf2 = 0.0_wp
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else
