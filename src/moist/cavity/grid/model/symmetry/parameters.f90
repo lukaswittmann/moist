@@ -4,8 +4,8 @@
 !>
 !> | key                  | values                                   | default |
 !> |----------------------|------------------------------------------|---------|
-!> | `orientation`        | "lab", "molecular"                       | unset   |
-!> | `group`              | "off", "auto", a Schoenflies symbol       | "off"   |
+!> | `orientation`        | "auto", "lab", "molecular"               | "auto"  |
+!> | `group`              | "off", "auto", a Schoenflies symbol      | "off"   |
 !> | `tolerance`          | largest atom deviation under an op, bohr | 1e-8    |
 !> | `gap_threshold`      | gap of two eigenvalues of the frame      | 1e-4    |
 !> |                      | tensor over their sum                    |         |
@@ -15,8 +15,8 @@
 !>
 !> - thresholds: where the molecular frame switches between two choices
 !>   ([[moist_math_symmetry_frame]]); a measure near its threshold is flagged
-!> - unset orientation: "molecular" with a group (implied by it), otherwise
-!>   `default_orientation`; files and printouts show this effective value
+!> - "auto" orientation: "molecular" with a group (implied by it), otherwise
+!>   `default_orientation`
 !> - an explicit "lab" with any group but "off" is an error
 !> - group symbols are checked against the structure at update time
 module moist_cavity_grid_model_symmetry_parameters
@@ -31,15 +31,15 @@ module moist_cavity_grid_model_symmetry_parameters
 
    !> Length of the string settings
    integer, parameter :: setting_len = 16
-   !> Orientation without a group when none is set
+   !> Orientation without a group under "auto"
    character(len=*), parameter :: default_orientation = "lab"
 
    !> Settings of the symmetry model
    type, extends(moist_model_parameters_type) :: moist_cavity_grid_model_symmetry_parameters_type
-      !> Sphere orientation: "lab", "molecular", or blank for unset
+      !> Sphere orientation: "auto", "lab", or "molecular", case-insensitive
       !>
-      !> - unset resolves through `effective_orientation`
-      character(len=setting_len) :: orientation = ""
+      !> - "auto" resolves through `effective_orientation`
+      character(len=setting_len) :: orientation = "auto"
       !> Point group: "off", "auto" or a Schoenflies symbol, case-insensitive
       character(len=setting_len) :: group = "off"
       !> Largest atom deviation under a symmetry operation, bohr
@@ -59,7 +59,7 @@ module moist_cavity_grid_model_symmetry_parameters
       procedure :: validate => validate_symmetry_parameters
       !> Orientation the settings ask for, "lab" or "molecular"
       procedure :: effective_orientation => symmetry_effective_orientation
-      !> Whether the orientation is unset and implied by a group
+      !> Whether "auto" orientation is resolved to molecular by a group
       procedure :: orientation_implied => symmetry_orientation_implied
       !> Whether a group is requested, anything but "off"
       procedure :: has_group => symmetry_has_group
@@ -67,7 +67,7 @@ module moist_cavity_grid_model_symmetry_parameters
 
 contains
 
-   !> Restore compiled defaults: orientation unset, group off, 1e-8 bohr
+   !> Restore compiled defaults: orientation auto, group off, 1e-8 bohr
    !>
    !> @param[in,out] self Symmetry settings
    subroutine init_symmetry_defaults(self)
@@ -89,23 +89,13 @@ contains
    !>
    !> - `symmetry.orientation` and `symmetry.group` print at the normal level,
    !>   `symmetry.tolerance` and the thresholds at the detailed one
-   !> - an orientation absent from the input stays unset; output shows the
-   !>   effective orientation
    !>
    !> @param[in,out] self Symmetry settings
    subroutine register_symmetry_entries(self)
       !> Symmetry settings
       class(moist_cavity_grid_model_symmetry_parameters_type), intent(inout), target :: self
 
-      !> Effective orientation, the value written
-      character(len=setting_len) :: orientation
-
-      if (self%is_reading()) then
-         call self%register_string("symmetry.orientation", self%orientation, level=2)
-      else
-         orientation = self%effective_orientation()
-         call self%register_string("symmetry.orientation", orientation, level=2)
-      end if
+      call self%register_string("symmetry.orientation", self%orientation, level=2)
       call self%register_string("symmetry.group", self%group, level=2)
       call self%register_real_scalar("symmetry.tolerance", self%tolerance)
       call self%register_real_scalar("symmetry.gap_threshold", self%gap_threshold)
@@ -129,7 +119,7 @@ contains
    !> Refuse an unknown orientation, an empty group, a bad tolerance or threshold
    !>
    !> - an explicit "lab" with any group but "off" is refused: a group needs
-   !>   the molecular orientation, which an unset orientation implies
+   !>   the molecular orientation, which "auto" implies
    !> - group symbols are checked against the structure at update time
    !>
    !> @param[in]  param Symmetry settings
@@ -141,9 +131,9 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       select case (to_lower(trim(adjustl(param%orientation))))
-      case ("", "lab", "molecular")
+      case ("auto", "lab", "molecular")
       case default
-         call fatal_error(error, "Symmetry: orientation must be 'lab' or 'molecular', got '"// &
+         call fatal_error(error, "Symmetry: orientation must be 'auto', 'lab' or 'molecular', got '"// &
             & trim(param%orientation)//"'")
          return
       end select
@@ -173,18 +163,18 @@ contains
 
    !> Orientation the settings ask for
    !>
-   !> - the set one, else "molecular" with a group and `default_orientation`
-   !>   without
+   !> - "lab" or "molecular"; "auto" resolves to "molecular" with a group and
+   !>   `default_orientation` without
    !>
    !> @param[in] self Symmetry settings
    pure function symmetry_effective_orientation(self) result(orientation)
       !> Symmetry settings
       class(moist_cavity_grid_model_symmetry_parameters_type), intent(in) :: self
-      !> "lab" or "molecular", or the unchecked set value
+      !> "lab" or "molecular", or an unchecked value
       character(len=:), allocatable :: orientation
 
       orientation = to_lower(trim(adjustl(self%orientation)))
-      if (len(orientation) > 0) return
+      if (orientation /= "auto") return
       if (self%has_group()) then
          orientation = "molecular"
       else
@@ -192,7 +182,7 @@ contains
       end if
    end function symmetry_effective_orientation
 
-   !> Whether the orientation is unset and implied by a group
+   !> Whether "auto" orientation is resolved to molecular by a group
    !>
    !> @param[in] self Symmetry settings
    pure function symmetry_orientation_implied(self) result(implied)
@@ -201,7 +191,7 @@ contains
       !> Whether the group implies the molecular orientation
       logical :: implied
 
-      implied = len_trim(self%orientation) == 0 .and. self%has_group()
+      implied = to_lower(trim(adjustl(self%orientation))) == "auto" .and. self%has_group()
    end function symmetry_orientation_implied
 
    !> Whether a group is requested, anything but "off"

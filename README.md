@@ -156,7 +156,7 @@ moist cavity drop svdw coord.xyz
 
 Here `cavity` selects the cavity-only workflow, `drop` the [DROP](https://moist.readthedocs.io/en/latest/cavities/drop.html) cavity construction, and `svdw` the smooth van der Waals level set (the alternative level set is [`cfc`](https://moist.readthedocs.io/en/latest/cavities/cfc.html)). Common options for this command are `--radii {cpcm,smd,d3,cosmo,bondi}` to choose the atomic radii set, `--nleb <N>` to set the Lebedev points per atom. The other cavity constructors, [NumSA](https://moist.readthedocs.io/en/latest/cavities/numsa.html) and [iSwiG](https://moist.readthedocs.io/en/latest/cavities/iswig.html), are available as `moist cavity {numsa,iswig} <coord>`, and `moist cavity mc {svdw,cfc} <coord>` integrates the level-set isosurface with [marching cubes](https://moist.readthedocs.io/en/latest/cavities/mc.html).
 
-For the Lebedev-based cavities (DROP, iSwiG, NumSA), `--sym {off,auto,<Schoenflies>}` selects the point group the grids respect, `--orientation {lab,molecular}` their orientation (a group implies `molecular`) and `--sym-tolerance <bohr>` the largest atom deviation a symmetry operation may leave (default `1e-8`).
+For the Lebedev-based cavities (DROP, iSwiG, NumSA), `--sym {off,auto,<Schoenflies>}` selects the point group the grids respect, `--orientation {auto,lab,molecular}` their orientation (default `auto`: `molecular` with a group, `lab` without) and `--sym-tolerance <bohr>` the largest atom deviation a symmetry operation may leave (default `1e-8`).
 
 ### Other subcommands
 

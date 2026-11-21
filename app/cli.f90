@@ -747,7 +747,7 @@ contains
       !> Add the symmetry arguments of the Lebedev-based cavities (NumSA, iSwiG, DROP)
       !>
       !> - no defaults: an absent flag keeps the setting of the parameter type,
-      !>   so an absent --orientation stays unset and a group implies molecular
+      !>   so an absent --orientation stays "auto" and a group implies molecular
       !> - help defaults come from the library settings type
       !>
       !> @param[in,out] p Cavity type parser receiving the symmetry options
@@ -770,17 +770,17 @@ contains
                              "(default: "//trim(defaults%group)//")", &
                              group_idx=grp_symmetry)
 
-         ! Orientation an unset value resolves to without a group
+         ! Orientation "auto" resolves to without a group
          defaults%group = "off"
          if (defaults%effective_orientation() == "molecular") then
             orientation_default = "molecular"
          else
-            orientation_default = "molecular if --sym is set, else "//defaults%effective_orientation()
+            orientation_default = "auto (molecular if --sym is set, else "//defaults%effective_orientation()//")"
          end if
          call p%add_argument("--orientation", &
-                             choices=[character(len=9) :: "lab", "molecular"], &
+                             choices=[character(len=9) :: "auto", "lab", "molecular"], &
                              dest="symmetry_orientation", metavar="ORIENT", &
-                             help="Grid orientation: lab or molecular (default: "//orientation_default//")", &
+                             help="Grid orientation: auto, lab, or molecular (default: "//orientation_default//")", &
                              group_idx=grp_symmetry)
 
          write (tolerance_default, "(es9.2)") defaults%tolerance
@@ -1008,7 +1008,7 @@ contains
 
    !> Read the symmetry flags into the symmetry settings
    !>
-   !> - an absent flag keeps the setting; an absent --orientation stays unset
+   !> - an absent flag keeps the setting; an absent --orientation stays "auto"
    !> - --sym is case-insensitive, see [[normalize_group]]
    !> - an explicit --orientation lab with a group is refused with the flag names,
    !>   the remaining checks are the library's; group symbols are checked against
