@@ -332,7 +332,7 @@ module moist_cavity_drop_lsf_isodensity_gto
       !>   (tests only)
       real(wp) :: max_rcut = 0.0_wp
       !> Threshold `max_rcut` was built for
-      real(wp) :: max_rcut_deriv = 0.0_wp
+      real(wp) :: max_rcut_threshold = 0.0_wp
       !> Derivative order `max_rcut` was built for; negative before any build
       integer :: max_rcut_deriv = -1
    contains
@@ -657,6 +657,7 @@ contains
       !> direct user (no cavity / zero threshold) evaluates every shell exactly
       allocate (self%sh_rcut2(self%nshell, 4), source=huge(1.0_wp))
       self%max_rcut = 0.0_wp
+      self%max_rcut_threshold = 0.0_wp
       self%max_rcut_deriv = -1
 
    contains
