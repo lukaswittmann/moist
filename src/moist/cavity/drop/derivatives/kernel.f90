@@ -18,6 +18,10 @@
 !> Degeneracy is reported: [[build_seed_state]] returns a status code and
 !> leaves the fatal-versus-skip decision to the caller
 !>
+!> Every seed of [[apply_seed]] holds the anchor's sphere frame rigid (its
+!> normal `n_sph`); a rotation of that frame, the molecular-frame term of a
+!> rotated anchor, is [[apply_sphere_rotation]]
+!>
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
@@ -29,7 +33,7 @@ module moist_cavity_drop_derivatives_kernel
    private
 
    public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type
-   public :: build_seed_state, apply_seed, compute_branch_adj
+   public :: build_seed_state, apply_seed, apply_sphere_rotation, compute_branch_adj
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
    public :: seed_state_singular_bmat, seed_state_singular_jacobian, seed_state_singular_kkt
@@ -121,6 +125,12 @@ module moist_cavity_drop_derivatives_kernel
       !> Horizon switch of the signed `n_surf . n_sph`, its value and its slope
       !> along `d n_surf`
       real(wp) :: f_hor_f0 = 1.0_wp, f_hor_dn(3) = 0.0_wp
+      !> Unit sphere normal at the anchor
+      real(wp) :: n_sph(3) = 0.0_wp
+      !> Horizon cosine `n_surf . n_sph`
+      real(wp) :: cos_hor = 0.0_wp
+      !> Slope of the horizon switch in its cosine
+      real(wp) :: f_hor_ds = 0.0_wp
       !> Prune switch of the geometric weight `anchor_wleb0*cpjac`, its value and
       !> its slope in the signed weight
       real(wp) :: wleb_prune_f0 = 1.0_wp, wleb_prune_dS = 0.0_wp
@@ -274,6 +284,9 @@ contains
       cos_hor = dot_product(state%n_surf, n_sph)
       call f_hor%eval(cos_hor, state%f_hor_f0, f_hor_ds)
       state%f_hor_dn = f_hor_ds*n_sph
+      state%n_sph = n_sph
+      state%cos_hor = cos_hor
+      state%f_hor_ds = f_hor_ds
 
       call setup_tangent_frame(state%anchor - state%owner_xyz, state%t1_vec, state%t2_vec)
       state%tau1(1) = dot_product(state%q1, state%t1_vec)
@@ -512,6 +525,48 @@ contains
       end associate
 
    end subroutine apply_seed
+
+   !> Response of the per-point map to a rotation of the anchor's sphere frame
+   !>
+   !> The rotation `omega` turns the sphere normal by `omega x n_sph` at a
+   !> fixed projected point, multiplier and level set; the motion of the anchor
+   !> itself is an anchor seed of [[apply_seed]]
+   !>
+   !> - `n_sph` enters through `c = n_surf . n_sph` alone: the horizon switch,
+   !>   and `J = alpha**2 |c|/|det B|` (`y1 x y2 = alpha**2/det(B) c n_surf`
+   !>   for orthonormal right-handed frames), so `dJ = J dc/c`
+   !> - the Lebedev weight, the width and the prune switch follow `J`
+   !> - sets `dJ`, `dwleb`, `dxi` and `dw_f`; every other response is zero
+   !>
+   !> @param[in]  state Per-grid point forward state from [[build_seed_state]]
+   !> @param[in]  omega Rotation (angular displacement) of the sphere frame
+   !> @param[out] res   Linear response of the per-point map
+   pure subroutine apply_sphere_rotation(state, omega, res)
+      !> Per-grid point forward state
+      type(drop_seed_state_type), intent(in) :: state
+      !> Rotation of the sphere frame
+      real(wp), intent(in) :: omega(3)
+      !> Linear response
+      type(drop_seed_result_type), intent(out) :: res
+
+      !> Change of `n_surf . n_sph`, and of the geometric weight before the prune
+      real(wp) :: dcos, dw_pre
+
+      ! n_surf . (omega x n_sph) = omega . (n_sph x n_surf)
+      dcos = omega(1)*(state%n_sph(2)*state%n_surf(3) - state%n_sph(3)*state%n_surf(2)) &
+             + omega(2)*(state%n_sph(3)*state%n_surf(1) - state%n_sph(1)*state%n_surf(3)) &
+             + omega(3)*(state%n_sph(1)*state%n_surf(2) - state%n_sph(2)*state%n_surf(1))
+      if (abs(state%cos_hor) > seed_weight_tol .and. state%inv_J > 0.0_wp) then
+         res%dJ = dcos/(state%cos_hor*state%inv_J)
+      end if
+      dw_pre = state%anchor_wleb0*res%dJ
+      res%dwleb = dw_pre
+      res%dw_f = state%f_reach_f0*state%f_crit0*state%f_foc_f0 &
+                 *(state%wleb_prune_f0*state%f_hor_ds*dcos + state%f_hor_f0*state%wleb_prune_dS*dw_pre)
+      if (state%wleb > seed_weight_tol) then
+         res%dxi = -0.5_wp*state%xi0*res%dwleb/state%wleb
+      end if
+   end subroutine apply_sphere_rotation
 
    !> Reverse pass over the branch weights
    !>

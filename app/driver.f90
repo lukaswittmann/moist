@@ -20,6 +20,7 @@ module moist_driver
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    use moist_radii, only: radius_type, new_radii
+   use moist_cavity_grid, only: grid_model_type, new_grid_model
    use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
@@ -106,8 +107,8 @@ contains
          if (allocated(error)) return
          allocate (system)
          call new_solvent_system(system, solvent_id, &
-                                              temperature=config%temperature, pressure_si=config%pressure_si, &
-                                              error=error)
+                                 temperature=config%temperature, pressure_si=config%pressure_si, &
+                                 error=error)
          if (allocated(error)) return
          if (ctx%verbosity(1)) call system%print()
          return
@@ -162,20 +163,37 @@ contains
          block
             class(cavity_type), allocatable :: cavity
             class(radius_type), allocatable :: radius_model
+            !> Grid model of the Lebedev-based cavities (NumSA, iSwiG, DROP),
+            !> built from the symmetry settings
+            class(grid_model_type), allocatable :: grid_model
 
             ! Print header
             if (ctx%verbosity(1)) call cavity_header(output_unit, trim(config%mode))
 
+            ! Radii and symmetry; update here just for printout purposes
             call new_radii(config%radii, radius_model, error)
             if (allocated(error)) return
+            call radius_model%update(mol, error=error)
+            if (allocated(error)) return
+            if (ctx%verbosity(2)) call radius_model%print(ctx%unit)
 
-            ! Instantiate the appropriate cavity type
+            if (to_lower(config%mode) == "numsa" .or. &
+                to_lower(config%mode) == "drop" .or. &
+                to_lower(config%mode) == "iswig") then
+
+               call new_grid_model(grid_model, error, symmetry=config%symmetry)
+               if (allocated(error)) return
+               call grid_model%update(mol, radius_model%f0, error, ctx)
+               if (allocated(error)) return
+               if (ctx%verbosity(1)) call grid_model%print(ctx%unit, ctx%verbosity())
+            end if
+
             if (to_lower(config%mode) == "numsa") then
                block
                   type(cavity_type_numsa), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
                   call new_cavity_numsa(tmp_cavity, radii=radius_model, error=error, &
-                     param=config%numsa, ctx=ctx)
+                                        param=config%numsa, ctx=ctx, grid_model=grid_model)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -184,7 +202,7 @@ contains
                   type(cavity_type_iswig), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
                   call new_cavity_iswig(tmp_cavity, radius_model=radius_model, error=error, &
-                     param=config%iswig, ctx=ctx)
+                                        param=config%iswig, ctx=ctx, grid_model=grid_model)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -224,7 +242,8 @@ contains
                         type(cavity_type_drop), allocatable :: tmp_cavity
                         allocate (tmp_cavity)
                         call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
-                                             lsf_model=lsf_model, error=error, param=config%drop, ctx=ctx)
+                                             lsf_model=lsf_model, error=error, param=config%drop, ctx=ctx, &
+                                             grid_model=grid_model)
                         if (allocated(error)) return
                         call move_alloc(tmp_cavity, cavity)
                      end block
@@ -249,11 +268,6 @@ contains
                   end if
                end block
             end if
-
-            call radius_model%update(mol, error=error)
-            if (allocated(error)) return
-
-            if (ctx%verbosity(2)) call radius_model%print()
 
             ! Settings of the constructed cavity
             if (ctx%verbosity(1)) call cavity%print_parameters()

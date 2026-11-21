@@ -13,18 +13,36 @@
 !>   moves with its owner whether or not the level set reaches it); the
 !>   switching neighbours of the anchor carry no seed and enter the
 !>   switching, area and volume gradients alone
+!> - molecular orientation: the anchors rotate with its sphere, which follows every
+!>   atom; per point, the response to a unit rotation about each axis
+!>   (anchor motion `omega x (anchor - c)` through the KKT system, the reach gate,
+!>   the switching and the objective; the sphere normal through [[apply_sphere_rotation]])
+!>   is spread over every atom ([[grid_frame_type]]) inside the point loop, while the
+!>   point's arrays are in cache; the sphere and total area and volume take it once from
+!>   the per-sphere sums, before the branch-weight post-pass, which then sees every frame term
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_packed, only: packed_idx33
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_seed_result_type, build_seed_state, apply_seed, seed_state_ok, &
+      & drop_seed_result_type, build_seed_state, apply_seed, apply_sphere_rotation, seed_state_ok, &
       & seed_state_singular_kkt
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, degenerate_point_error
-   use moist_cavity_drop_gaussian, only: iswig_workspace_type
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type, iswig_pos_gradient
    use moist_cavity_type, only: add_volume_origin_gradient
+   use moist_cavity_grid_frame, only: grid_frame_type
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
+
+   !> Per-point responses to a unit frame rotation, rows of the basis array
+   !>
+   !> Position (3), multiplier, normal (3), CP Jacobian, gate, Lebedev weight,
+   !> width, principal curvatures (2), switching, area, volume, and the direct
+   !> (fixed-point) change of the branch objective
+   integer, parameter :: fb_xyz = 1, fb_lambda = 4, fb_normal = 5, fb_cpjac = 8, fb_w_f = 9, &
+      & fb_wleb = 10, fb_xi = 11, fb_k1 = 12, fb_k2 = 13, fb_f = 14, fb_a = 15, fb_v = 16, &
+      & fb_phi = 17, fb_n = 17
 
 contains
 
@@ -164,6 +182,27 @@ contains
       real(wp), allocatable :: dv_dc_sph(:, :), dv_dc_sph_local(:, :)
       integer :: isph
 
+      !> Whether the anchors turn with a molecular frame
+      logical :: frame
+      !> Responses of every point to a unit rotation about each axis (fb_n, 3, ngrid)
+      real(wp), allocatable :: frame_basis(:, :, :)
+      !> Orientation Jacobian
+      type(grid_frame_type) :: frame_jac
+      !> Frame term of a point's normal with the axis before the atom, per
+      !> thread (3, 3, nsph)
+      real(wp), allocatable :: normal_buf(:, :, :)
+      !> Area and volume responses per rotation summed per sphere (3, nsph)
+      real(wp), allocatable :: frame_sum_a(:, :), frame_sum_v(:, :)
+      !> KKT columns solved per point: the atom seeds, then the frame axes
+      integer :: ncol
+      !> Anchor offset from its center, anchor motion of one axis, switching
+      !> gradient in the anchor
+      real(wp) :: d_anchor(3), da_k(3), dpos(3)
+      !> Response of the sphere normal's rotation
+      type(drop_seed_result_type) :: res_rot
+      !> Unit rotation about one axis, and the rotation's index of a row
+      real(wp) :: omega(3)
+
       call self%require_context(error)
       if (allocated(error)) return
 
@@ -220,6 +259,12 @@ contains
 
       want_curvature = allocated(self%k1_rA) .and. allocated(self%k2_rA)
 
+      frame = .not. self%plain_grid()
+      if (frame) then
+         allocate (frame_basis(fb_n, 3, self%ngrid), source=0.0_wp)
+         call self%get_frame(frame_jac)
+      end if
+
       call abort%reset()
 
       origin = self%get_volume_origin()
@@ -254,7 +299,7 @@ contains
       !$omp& i, n_active, active_idx, n_row, in_row, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
       !$omp& dn_dR_buf, iswig_work, ai_val, vi_val, &
       !$omp& A_tot_local, V_tot_local, dv_dc, dv_dc_sph_local, lsf_error, do_timing, &
-      !$omp& reach_da, gate_rest)
+      !$omp& reach_da, gate_rest, ncol, d_anchor, da_k, dpos, res_rot, omega, normal_buf)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
       call slots%fill(thread_slot, self%lsf_model, 3, self%param, self%mol, self%radii)
@@ -271,10 +316,11 @@ contains
       allocate (lsf2_r_rA(3, 3, self%nsph))
       allocate (phi2_r_rA(3, 3, self%nsph))
       call self%iswig%new_workspace(iswig_work)
-      allocate (kkt_rhs_batch(4, 3*self%nsph))
+      allocate (kkt_rhs_batch(4, 3*self%nsph + 3))
       allocate (A_tot_local(3, self%nsph), source=0.0_wp)
       allocate (V_tot_local(3, self%nsph), source=0.0_wp)
       allocate (dv_dc_sph_local(3, self%nsph), source=0.0_wp)
+      if (frame .and. allocated(self%normal1_rA)) allocate (normal_buf(3, 3, self%nsph))
 
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
@@ -365,8 +411,22 @@ contains
             end do
          end do
 
+         ! Molecular frame: the anchor turns about each axis, d(anchor) =
+         ! e_k x (anchor - c) at a fixed field, the anchor seed's RHS alpha*d(anchor)
+         ncol = 3*n_active
+         if (frame) then
+            d_anchor = anchor - self%mol%xyz(:, owner_idx)
+            do kaxis = 1, 3
+               omega = 0.0_wp
+               omega(kaxis) = 1.0_wp
+               kkt_rhs_batch(1:3, ncol + kaxis) = self%param%phi_alpha*cross_product(omega, d_anchor)
+               kkt_rhs_batch(4, ncol + kaxis) = 0.0_wp
+            end do
+            ncol = ncol + 3
+         end if
+
          ! Single factorization + solve for all RHS
-         call drop_kkt_solve(H_lagrangian, state%lsf1_r, kkt_rhs_batch(:, 1:3*n_active), kkt_info)
+         call drop_kkt_solve(H_lagrangian, state%lsf1_r, kkt_rhs_batch(:, 1:ncol), kkt_info)
          if (kkt_info /= 0_lapack_ik) then
             call abort%latch_status(seed_state_singular_kkt, igrid)
             !$omp cancel do
@@ -446,6 +506,9 @@ contains
          self%f1_rA(:, :, igrid) = 0.0_wp
          call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor%xi0(self%anchor_of_row(igrid)), &
                                    self%wbranch(igrid), iswig_work, self%f1_rA(:, :, igrid))
+         ! The anchor also turns with its sphere: the switching gradient in it
+         if (frame) dpos = iswig_pos_gradient(iswig_work, self%anchor%xi0(self%anchor_of_row(igrid)), &
+                                              self%wbranch(igrid))
 
          ! The switching neighbours of the anchor need not be LSF-active at the
          ! projected point: append them, seedless, for the area and volume
@@ -528,6 +591,66 @@ contains
          call add_volume_origin_gradient(dv_dc, self%v1_rA(:, :, igrid))
          dv_dc_sph_local(:, owner_idx) = dv_dc_sph_local(:, owner_idx) + dv_dc
 
+         !* -------- Frame rotation, per axis -------- *!
+         ! The anchor moves by da = e_k x (anchor - c) (point motion from the KKT
+         ! columns after the atom seeds, reach gate, switching, objective) and the
+         ! sphere normal turns with it
+         if (frame) then
+            do kaxis = 1, 3
+               omega = 0.0_wp
+               omega(kaxis) = 1.0_wp
+               da_k = cross_product(omega, d_anchor)
+               dlsf2_rr = 0.0_wp
+               call apply_seed(state, [0.0_wp, 0.0_wp, 0.0_wp], dlsf2_rr, &
+                               kkt_rhs_batch(1:3, 3*n_active + kaxis), kkt_rhs_batch(4, 3*n_active + kaxis), res)
+               call apply_sphere_rotation(state, omega, res_rot)
+               associate (fb => frame_basis(:, kaxis, igrid))
+                  fb(fb_xyz:fb_xyz + 2) = kkt_rhs_batch(1:3, 3*n_active + kaxis)
+                  fb(fb_lambda) = kkt_rhs_batch(4, 3*n_active + kaxis)
+                  fb(fb_normal:fb_normal + 2) = res%dn_surf
+                  fb(fb_cpjac) = res%dJ + res_rot%dJ
+                  fb(fb_w_f) = res%dw_f + res_rot%dw_f + gate_rest*dot_product(reach_da, da_k)
+                  fb(fb_wleb) = res%dwleb + res_rot%dwleb
+                  fb(fb_xi) = res%dxi + res_rot%dxi
+                  fb(fb_k1) = res%dk1
+                  fb(fb_k2) = res%dk2
+                  fb(fb_f) = dot_product(dpos, da_k)
+                  fb(fb_a) = self%radii(owner_idx)**2*(fb(fb_f)*self%wleb(igrid) + self%f(igrid)*fb(fb_wleb))
+                  ! d((r_i - c) . n_i) at fixed c, as in the volume gradient above
+                  grad_r_hat_dot_r(kaxis) = dot_product(fb(fb_xyz:fb_xyz + 2), self%normal0(:, igrid)) &
+                                            + dot_product(point - origin, res%dn_surf)
+                  fb(fb_v) = (fb(fb_a)*r_hat_dot_r + self%a(igrid)*grad_r_hat_dot_r(kaxis))/3.0_wp
+                  fb(fb_phi) = -dot_product(phi1_r, da_k)
+               end associate
+            end do
+
+            ! Spread over every atom now, while the point's arrays are in cache
+            associate (fb => frame_basis(:, :, igrid))
+               call frame_jac%add_vector(self%comp(igrid), transpose(fb(fb_xyz:fb_xyz + 2, :)), &
+                  & self%xyz1_rA(:, :, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_lambda, :), self%lambda1_rA(:, :, igrid))
+               if (allocated(self%normal1_rA)) then
+                  normal_buf = 0.0_wp
+                  call frame_jac%add_vector(self%comp(igrid), transpose(fb(fb_normal:fb_normal + 2, :)), normal_buf)
+                  do iaxis = 1, 3
+                     self%normal1_rA(:, :, iaxis, igrid) = self%normal1_rA(:, :, iaxis, igrid) &
+                                                           + normal_buf(:, iaxis, :)
+                  end do
+               end if
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_cpjac, :), self%cpjac_scal1_rA(:, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_w_f, :), self%w_f1_rA(:, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_wleb, :), self%wleb1_rA(:, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_xi, :), self%xi1_rA(:, :, igrid))
+               if (want_curvature) then
+                  call frame_jac%add_scalar(self%comp(igrid), fb(fb_k1, :), self%k1_rA(:, :, igrid))
+                  call frame_jac%add_scalar(self%comp(igrid), fb(fb_k2, :), self%k2_rA(:, :, igrid))
+               end if
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_f, :), self%f1_rA(:, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_a, :), self%a_i1_rA(:, :, igrid))
+               call frame_jac%add_scalar(self%comp(igrid), fb(fb_v, :), self%v1_rA(:, :, igrid))
+            end associate
+         end if
+
       end do ! igrid
       !$omp end do
 
@@ -540,6 +663,7 @@ contains
       deallocate (lsf3_rr_rA, active_idx, in_row, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local, dv_dc_sph_local)
+      if (allocated(normal_buf)) deallocate (normal_buf)
       call slots%release(thread_slot)
       !$omp end parallel
 
@@ -558,6 +682,20 @@ contains
          call add_volume_origin_gradient(dv_dc_sph(:, isph), self%vsph1_rA(:, isph, :))
       end do
       call add_volume_origin_gradient(sum(dv_dc_sph, dim=2), self%V_tot1_rA)
+
+      ! Molecular frame: the sphere and total area and volume from the
+      ! per-sphere sums, before the post-pass reads them
+      if (frame) then
+         allocate (frame_sum_a(3, self%grid%ncomp), frame_sum_v(3, self%grid%ncomp), source=0.0_wp)
+         do igrid = 1, self%ngrid
+            frame_sum_a(:, self%comp(igrid)) = frame_sum_a(:, self%comp(igrid)) + frame_basis(fb_a, :, igrid)
+            frame_sum_v(:, self%comp(igrid)) = frame_sum_v(:, self%comp(igrid)) + frame_basis(fb_v, :, igrid)
+         end do
+         call frame_jac%add_spheres(frame_sum_a, self%asph1_rA)
+         call frame_jac%add_spheres(frame_sum_v, self%vsph1_rA)
+         call frame_jac%add_total(frame_sum_a, self%A_tot1_rA)
+         call frame_jac%add_total(frame_sum_v, self%V_tot1_rA)
+      end if
 
       !* ========================= Branch-weight post-pass ========================= *!
       call self%ctx%timer%start(h_bw)
@@ -607,6 +745,11 @@ contains
                         dphi_m = dphi_m - phi1_r_m(iaxis)
                      end if
                      k_param = (iatom - 1)*3 + iaxis
+                     ! and turns with the owner's frame
+                     if (frame) then
+                        dphi_m = dphi_m + dot_product(frame_jac%gk(:, k_param, frame_jac%rot(self%comp(im_grid))), &
+                                                      frame_basis(fb_phi, :, im_grid))
+                     end if
                      branch_dphi(k_param, m_branch) = dphi_m
                      branch_dgate(k_param, m_branch) = self%w_f1_rA(iaxis, iatom, im_grid)
                   end do

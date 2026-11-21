@@ -88,8 +88,7 @@ if(MOIST_OPENMP)
 endif()
 find_package(Threads REQUIRED)
 
-# C++ FFT backend (ducc0 subset + shim) and FINUFFT on top of it, as OBJECT
-# libraries so their objects land in libmoist itself (static and shared)
+# C++ FFT backend (ducc0 subset + wrapper) and FINUFFT on top of it (as OBJECT libraries)
 set(_fft_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/fft")
 set(_finufft_dir "${_fft_dir}/finufft")
 add_library(moist_fft OBJECT
@@ -134,6 +133,19 @@ foreach(tgt moist_fft finufft_common finufft_f32 finufft)
     target_link_libraries(${tgt} PUBLIC OpenMP::OpenMP_CXX)
   endif()
 endforeach()
+
+# C point-group backend (vendored libmsym + wrapper) (as OBJECT libraries)
+set(_sym_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/symmetry")
+file(GLOB _libmsym_srcs CONFIGURE_DEPENDS "${_sym_dir}/libmsym/*.c")
+add_library(moist_libmsym OBJECT ${_libmsym_srcs})
+add_library(moist_msym OBJECT "${_sym_dir}/msym_shim.c")
+foreach(tgt moist_libmsym moist_msym)
+  target_include_directories(${tgt} SYSTEM PRIVATE "${_sym_dir}/libmsym")
+  target_compile_definitions(${tgt} PRIVATE MSYM_EXPORTS_BUILT_AS_STATIC)
+  set_target_properties(${tgt} PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON
+    C_VISIBILITY_PRESET hidden)
+endforeach()
+target_compile_options(moist_libmsym PRIVATE $<IF:$<C_COMPILER_ID:MSVC>,/w,-w>)
 
 # Vendored Fortran subprojects, in dependency order; the `<name>::<name>` aliases
 # satisfy their own `if(NOT TARGET ...)` lookups, so nothing is fetched
@@ -251,6 +263,10 @@ target_link_libraries(moist PUBLIC
 )
 # PRIVATE keeps the C++ include directories off moist's consumers
 target_link_libraries(moist PRIVATE moist_fft finufft finufft_f32 finufft_common)
+target_link_libraries(moist PRIVATE moist_msym moist_libmsym)
+if(UNIX)
+  target_link_libraries(moist PRIVATE m)
+endif()
 if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()
@@ -293,6 +309,8 @@ foreach(vendor ducc0 finufft xsimd)
     DESTINATION "${_licenses}" RENAME "LICENSE-${vendor}")
 endforeach()
 install(FILES "${_finufft_dir}/NOTICE" DESTINATION "${_licenses}" RENAME NOTICE-finufft)
+install(FILES "${_sym_dir}/libmsym/LICENSE"
+  DESTINATION "${_licenses}" RENAME LICENSE-libmsym)
 
 # Unit tests: one tester binary, run once per suite (mirrors test/unit/meson.build)
 if(MOIST_TESTS)
@@ -315,7 +333,7 @@ if(MOIST_TESTS)
     api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
     math_linalg math_smoothing math_adjacency
-    math_solvers math_sorters math_trig math_packed math_smoothstep
+    math_solvers math_sorters math_trig math_packed math_smoothstep math_symmetry
     math_fft_dst4 math_fft_3d math_fft_threads finufft math_grid_3d_fft math_grid_3d_nufft
     math_grid_radial_rule math_grid_radial math_grid_radial_trafo
     math_grid_angular math_grid_atomic
@@ -331,7 +349,7 @@ if(MOIST_TESTS)
     cavity_drop_integration cavity_drop_anchor cavity_drop_projector
     cavity_drop_projection
     cavity_drop_properties
-    cavity_iswig cavity_numsa cavity_mc cavity_reference cavity_adjoint
+    cavity_iswig cavity_numsa cavity_symmetry cavity_grid cavity_mc cavity_reference cavity_adjoint
     cavity_mt_mesh cavity_mt_patches cavity_mt
     model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
@@ -418,6 +436,7 @@ if(MOIST_TESTS)
     "${_unit}/test_moz_fixtures.f90"
     "${_unit}/test_model_component_helper.f90"
     "${_unit}/test_model_component_pcm_fixtures.f90"
+    "${_unit}/test_cavity_symmetry_fixtures.f90"
   )
   foreach(suite IN LISTS moist_test_suites)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")

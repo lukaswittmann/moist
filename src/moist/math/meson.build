@@ -5,6 +5,7 @@ subdir('solver')
 subdir('sorter')
 subdir('grid')
 subdir('fft')
+subdir('symmetry')
 
 srcs += files(
   'adjacency.f90',

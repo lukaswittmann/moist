@@ -18,6 +18,9 @@ module moist
    use moist_version, only: get_moist_version
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_radii, only: radius_type, new_radii
+   use moist_cavity_grid_model_symmetry, only: grid_model_symmetry_type, new_grid_model_symmetry, &
+      & moist_cavity_grid_model_symmetry_parameters_type
+   use moist_cavity_grid, only: grid_model_type, new_grid_model
    use moist_solvent, only: solvent_descriptors_type, get_solvent_descriptors, &
       & get_solvent_descriptors_by_id
    use moist_build_info, only: git_commit, build_host
@@ -59,6 +62,8 @@ module moist
    public :: get_moist_version
    public :: cavity_type_drop, new_cavity_drop
    public :: radius_type, new_radii
+   public :: grid_model_symmetry_type, new_grid_model_symmetry, moist_cavity_grid_model_symmetry_parameters_type
+   public :: grid_model_type, new_grid_model
    public :: solvent_descriptors_type, get_solvent_descriptors, get_solvent_descriptors_by_id
    public :: git_commit, build_host
    public :: solvation_model_type, model_continuum_type, new_continuum_model, &

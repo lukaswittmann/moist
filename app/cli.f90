@@ -11,8 +11,12 @@ module moist_cli
    use moist_cavity_mc, only: moist_cavity_mc_parameters_type
    use moist_cavity_mt, only: moist_cavity_mt_parameters_type
    use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
+   use moist_cavity_grid_model_symmetry_parameters, only: moist_cavity_grid_model_symmetry_parameters_type, &
+      & check_symmetry_parameters
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: get_filetype
+   use mctc_io_codata2018, only: standard_atmosphere
+   use mctc_io_utils, only: to_lower
    use moist, only: get_moist_version
    use moist_output_ascii, only: moist_header, moist_build_header
    use moist_output_citations, only: print_citations
@@ -54,7 +58,7 @@ module moist_cli
       ! System info
       real(wp), allocatable :: charge
       real(wp) :: temperature = 298.15_wp
-      real(wp) :: pressure_si = 101325.0_wp
+      real(wp) :: pressure_si = standard_atmosphere
       character(64) :: solvent = ""
 
       logical :: json = .false.
@@ -73,6 +77,11 @@ module moist_cli
 
       !> Radii set selection (cpcm, smd, d3, cosmo, bondi)
       character(32) :: radii = "cpcm"
+
+      !> Point-group symmetry settings of the Lebedev-based cavities
+      !>
+      !> - NumSA, iSwiG and DROP; built into a symmetry model beside the radii
+      type(moist_cavity_grid_model_symmetry_parameters_type) :: symmetry
 
       !> Level set function of DROP, marching cubes and marching tetrahedra
       character(32) :: drop_variant = ""
@@ -275,6 +284,15 @@ contains
             end select
          end if
 
+         ! Symmetry of the Lebedev-based cavities
+         select case (trim(config%mode))
+         case ("numsa", "iswig", "drop")
+            call get_symmetry_arguments(args, config%symmetry, error)
+            if (allocated(error)) return
+         case default
+            ! mc and mt take no symmetry model
+         end select
+
          if (args%has_key("radii")) then
             call args%get("radii", config%radii)
          end if
@@ -472,7 +490,7 @@ contains
                              help="Temperature in Kelvin", &
                              group_idx=grp_system)
          call p%add_argument("--pressure", &
-                             default_val=101325.0_wp, &
+                             default_val=standard_atmosphere, &
                              action=not_less_than(0.0_wp), &
                              data_type="real", dest="pressure", &
                              metavar="REAL", &
@@ -541,6 +559,7 @@ contains
                else
                   call add_cavity_shared_arguments(subparsers(i), nleb=iswig_defaults%num_leb)
                end if
+               call add_cavity_symmetry_arguments(subparsers(i))
                if (associated(specs(i)%add_specific_args)) then
                   call specs(i)%add_specific_args(subparsers(i))
                end if
@@ -570,6 +589,7 @@ contains
                                               prog="moist cavity drop svdw", &
                                               description="Construct DROP/DROP cavities with the SvdW level set")
          call add_cavity_shared_arguments(subparsers(1), nleb=defaults%num_leb)
+         call add_cavity_symmetry_arguments(subparsers(1))
          call add_cavity_drop_arguments(subparsers(1))
          call add_cavity_drop_svdw_arguments(subparsers(1))
          call p%add_parser("svdw", subparsers(1), help_text="SvdW DROP cavity")
@@ -578,6 +598,7 @@ contains
                                               prog="moist cavity drop cfc", &
                                               description="Construct DROP/DROP cavities with the CFC level set")
          call add_cavity_shared_arguments(subparsers(2), nleb=defaults%num_leb)
+         call add_cavity_symmetry_arguments(subparsers(2))
          call add_cavity_drop_arguments(subparsers(2))
          call add_cavity_drop_cfc_arguments(subparsers(2))
          call p%add_parser("cfc", subparsers(2), help_text="CFC DROP cavity")
@@ -586,6 +607,7 @@ contains
                                               prog="moist cavity drop sses", &
                                               description="Construct DROP cavities with the smooth SES-like level set")
          call add_cavity_shared_arguments(subparsers(3), nleb=defaults%num_leb)
+         call add_cavity_symmetry_arguments(subparsers(3))
          call add_cavity_drop_arguments(subparsers(3), proj_level=1)
          call add_cavity_drop_sses_arguments(subparsers(3))
          call p%add_parser("sses", subparsers(3), help_text="Smooth SES-like DROP cavity")
@@ -721,6 +743,53 @@ contains
                              help="Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)", &
                              group_idx=grp_input)
       end subroutine add_cavity_shared_arguments
+
+      !> Add the symmetry arguments of the Lebedev-based cavities (NumSA, iSwiG, DROP)
+      !>
+      !> - no defaults: an absent flag keeps the setting of the parameter type,
+      !>   so an absent --orientation stays unset and a group implies molecular
+      !> - help defaults come from the library settings type
+      !>
+      !> @param[in,out] p Cavity type parser receiving the symmetry options
+      subroutine add_cavity_symmetry_arguments(p)
+         !> Cavity type parser receiving the symmetry options
+         type(ArgumentParser), intent(inout) :: p
+         !> Library defaults of the symmetry settings
+         type(moist_cavity_grid_model_symmetry_parameters_type) :: defaults
+         !> Help text of the orientation and tolerance defaults
+         character(len=:), allocatable :: orientation_default
+         character(len=16) :: tolerance_default
+         integer :: grp_symmetry
+
+         grp_symmetry = p%add_argument_group("Symmetry settings", &
+                                             "Sphere orientation and point-group symmetry")
+
+         call p%add_argument("--sym", &
+                             dest="symmetry_group", metavar="GROUP", &
+                             help="Point-group symmetry: off, auto, or a Schoenflies symbol such as C2v "// &
+                             "(default: "//trim(defaults%group)//")", &
+                             group_idx=grp_symmetry)
+
+         ! Orientation an unset value resolves to without a group
+         defaults%group = "off"
+         if (defaults%effective_orientation() == "molecular") then
+            orientation_default = "molecular"
+         else
+            orientation_default = "molecular if --sym is set, else "//defaults%effective_orientation()
+         end if
+         call p%add_argument("--orientation", &
+                             choices=[character(len=9) :: "lab", "molecular"], &
+                             dest="symmetry_orientation", metavar="ORIENT", &
+                             help="Grid orientation: lab or molecular (default: "//orientation_default//")", &
+                             group_idx=grp_symmetry)
+
+         write (tolerance_default, "(es9.2)") defaults%tolerance
+         call p%add_argument("--sym-tolerance", data_type="real", &
+                             dest="symmetry_tolerance", metavar="BOHR", &
+                             help="Largest atom deviation under a symmetry operation, bohr (default: "// &
+                             trim(adjustl(tolerance_default))//")", &
+                             group_idx=grp_symmetry)
+      end subroutine add_cavity_symmetry_arguments
 
       !> Add DROP/DROP arguments shared by all DROP variants
       !>
@@ -937,12 +1006,80 @@ contains
 
    end subroutine get_arguments
 
-!> Initialize one subsubparser specification entry
-!> @param[inout] self        Subsubparser metadata entry
-!> @param[in]    name        Subparser name
-!> @param[in]    help_text   Short help text for command listing
-!> @param[in]    prog        Full command name used in usage output
-!> @param[in]    description Description text for the subparser help page
+   !> Read the symmetry flags into the symmetry settings
+   !>
+   !> - an absent flag keeps the setting; an absent --orientation stays unset
+   !> - --sym is case-insensitive, see [[normalize_group]]
+   !> - an explicit --orientation lab with a group is refused with the flag names,
+   !>   the remaining checks are the library's; group symbols are checked against
+   !>   the structure at update time
+   !>
+   !> @param[in]     args     Parsed command line
+   !> @param[in,out] settings Symmetry settings
+   !> @param[out]    error    Invalid value or conflicting flags
+   subroutine get_symmetry_arguments(args, settings, error)
+      !> Parsed command line
+      type(Namespace), intent(in) :: args
+      !> Symmetry settings
+      type(moist_cavity_grid_model_symmetry_parameters_type), intent(inout) :: settings
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Raw flag value
+      character(len=256) :: value
+
+      if (args%has_key("symmetry_group")) then
+         call args%get("symmetry_group", value)
+         if (len_trim(adjustl(value)) > len(settings%group)) then
+            call fatal_error(error, "--sym: '"//trim(adjustl(value))// &
+                             "' is not off, auto or a Schoenflies symbol")
+            return
+         end if
+         settings%group = normalize_group(value)
+      end if
+      if (args%has_key("symmetry_orientation")) then
+         call args%get("symmetry_orientation", value)
+         settings%orientation = trim(adjustl(value))
+      end if
+      if (args%has_key("symmetry_tolerance")) then
+         call args%get("symmetry_tolerance", settings%tolerance)
+         if (.not. (ieee_is_finite(settings%tolerance) .and. settings%tolerance > 0.0_wp)) then
+            call fatal_error(error, "--sym-tolerance must be a finite positive length in bohr")
+            return
+         end if
+      end if
+
+      if (to_lower(trim(settings%orientation)) == "lab" .and. to_lower(trim(settings%group)) /= "off") then
+         call fatal_error(error, "--sym "//trim(settings%group)//" needs the molecular orientation; "// &
+                          "omit --orientation or pass --orientation molecular")
+         return
+      end if
+      call check_symmetry_parameters(settings, error)
+   end subroutine get_symmetry_arguments
+
+   !> Case-normalized point-group request
+   !>
+   !> - "off" and "auto" in lower case, a Schoenflies symbol with an upper-case
+   !>   first letter and the rest in lower case (c2v -> C2v)
+   !>
+   !> @param[in] value Raw --sym value
+   pure function normalize_group(value) result(group)
+      !> Raw --sym value
+      character(len=*), intent(in) :: value
+      !> Normalized group
+      character(len=:), allocatable :: group
+
+      group = to_lower(trim(adjustl(value)))
+      if (len(group) == 0 .or. group == "off" .or. group == "auto") return
+      if (lge(group(1:1), "a") .and. lle(group(1:1), "z")) group(1:1) = achar(iachar(group(1:1)) - 32)
+   end function normalize_group
+
+   !> Initialize one subsubparser specification entry
+   !> @param[inout] self        Subsubparser metadata entry
+   !> @param[in]    name        Subparser name
+   !> @param[in]    help_text   Short help text for command listing
+   !> @param[in]    prog        Full command name used in usage output
+   !> @param[in]    description Description text for the subparser help page
    subroutine subsubparser_spec_init(self, name, help_text, prog, description)
       class(subsubparser_spec), intent(inout) :: self
       character(len=*), intent(in) :: name, help_text, prog, description

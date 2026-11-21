@@ -14,7 +14,7 @@ module moist_cavity_drop_gaussian
    implicit none(type, external)
    private
 
-   public :: moist_cavity_drop_iswig, new_iswig, iswig_workspace_type
+   public :: moist_cavity_drop_iswig, new_iswig, iswig_workspace_type, iswig_pos_gradient
 
    !> Erf argument beyond which erf(x) = 1 in double precision (erf(6) = 1 - 2.2e-17)
    real(wp), parameter :: erf_cutoff = 6.0_wp
@@ -410,5 +410,43 @@ contains
       grad(:, owner) = grad(:, owner) + weight*g_owner
 
    end subroutine iswig_add_f1_rA
+
+   !> Weighted gradient of the switching function in the point position
+   !>
+   !> `weight * df/dpos` at fixed width, the owner row [[iswig_add_f1_rA]]
+   !> adds, rebuilt from the neighbours that call left in `work`; for a point
+   !> that also moves without its owner (an anchor turning with its sphere)
+   !>
+   !> @param[in] work   Workspace after [[iswig_add_f1_rA]] for this point
+   !> @param[in] xi     Gaussian width parameter of that call
+   !> @param[in] weight Adjoint weight of `f`
+   pure function iswig_pos_gradient(work, xi, weight) result(grad_pos)
+      !> Workspace of the point
+      type(iswig_workspace_type), intent(in) :: work
+      !> Gaussian width parameter
+      real(wp), intent(in) :: xi
+      !> Adjoint weight of `f`
+      real(wp), intent(in) :: weight
+      !> Weighted gradient in the point position (3)
+      real(wp) :: grad_pos(3)
+
+      real(wp) :: f_val, prefac, coeff
+      integer :: jj
+
+      f_val = 1.0_wp
+      do jj = 1, work%n
+         f_val = f_val*work%fij(jj)
+      end do
+      prefac = -f_val*xi/sqrt(pi)
+      grad_pos = 0.0_wp
+      do jj = 1, work%n
+         if (work%rij(jj) < 1.0e-30_wp) cycle
+         if (abs(work%fij(jj)) < 1.0e-30_wp) cycle
+         coeff = prefac/(work%fij(jj)*work%rij(jj)) &
+                 *(exp(-work%rplus(jj)*work%rplus(jj)) - exp(-work%rminus(jj)*work%rminus(jj)))
+         grad_pos = grad_pos + coeff*work%d(:, jj)
+      end do
+      grad_pos = weight*grad_pos
+   end function iswig_pos_gradient
 
 end module moist_cavity_drop_gaussian

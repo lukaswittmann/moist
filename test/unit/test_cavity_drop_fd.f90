@@ -29,6 +29,7 @@ module test_cavity_drop_fd
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use moist_cavity_grid_model_symmetry_type, only: grid_model_symmetry_type
    implicit none(type, external)
    private
 
@@ -192,7 +193,9 @@ contains
    !> @param[in]  step               FD step in bohr, default 2.5e-4
    !> @param[in]  noise_floor        absolute threshold of the scalar quantities raised per point
    !>                                to [[stencil_noise_floor]], default off
-   subroutine check_drop_row_gradient(error, mol, param, lsf, require_branching, step, noise_floor)
+   !> @param[in]  symmetry           symmetry model of the cavity, updated at every
+   !>                                stencil geometry; default none (lab frame)
+   subroutine check_drop_row_gradient(error, mol, param, lsf, require_branching, step, noise_floor, symmetry)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
@@ -207,6 +210,8 @@ contains
       real(wp), intent(in), optional :: step
       !> Per-point noise floor
       logical, intent(in), optional :: noise_floor
+      !> Symmetry model of the cavity
+      type(grid_model_symmetry_type), intent(in), optional :: symmetry
 
       !> Run context borrowed by the cavity
       type(moist_context_type), target :: ctx
@@ -247,10 +252,10 @@ contains
          end if
          if (present(lsf)) then
             call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf, &
-                                 error=cavity_error, param=drop_param, ctx=ctx)
+                                 error=cavity_error, param=drop_param, ctx=ctx, grid_model=symmetry)
          else
             call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=drop_fd_svdw(), &
-                                 error=cavity_error, param=drop_param, ctx=ctx)
+                                 error=cavity_error, param=drop_param, ctx=ctx, grid_model=symmetry)
          end if
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)

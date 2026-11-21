@@ -19,4 +19,5 @@ extend-exclude = ["config/version.f90"]
 "src/moist/math/lapack/**" = ["C071"]
 # C entry points receive raw buffers of caller-owned size
 "src/moist/api.f90" = ["C071", "C072"]
+"src/moist/math/symmetry/msym.f90" = ["C071", "C072"]
 "test/unit/test_api.f90" = ["C071", "C072"]

@@ -4,13 +4,18 @@
 !> the projection maps anchors to rows through the cavity's `offset` and
 !> `anchor_of_row`
 !>
-!> - `fill` places the Lebedev points on every sphere
-!> - `compute_switching` evaluates the iSwiG widths and switching factors
+!> - `fill` places the nodes of every sphere's grid components
+!>   ([[cavity_grid_type]]): the plain Lebedev points, or those of a grid
+!>   model (rotated per component)
+!> - `compute_switching` evaluates the iSwiG widths and switching factors,
+!>   scaled by the component weights
 !> - `filter` drops anchors whose weight `wleb0*f0` is at or below the cutoff
 !> - `restrict` keeps only listed anchor ids
 module moist_cavity_drop_anchor
    use mctc_env_accuracy, only: wp
+   use mctc_env, only: error_type
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig
+   use moist_cavity_grid_type, only: cavity_grid_type
    use moist_utils_mem, only: filter_array
    implicit none(type, external)
    private
@@ -25,6 +30,8 @@ module moist_cavity_drop_anchor
       integer, allocatable :: id(:)
       !> Owning atom of each anchor (ngrid)
       integer, allocatable :: owner(:)
+      !> Grid component of each anchor (ngrid)
+      integer, allocatable :: comp(:)
       !> Anchor (unprojected) positions (3, ngrid)
       real(wp), allocatable :: xyz(:, :)
       !> Anchor Lebedev quadrature weights (ngrid)
@@ -34,8 +41,10 @@ module moist_cavity_drop_anchor
       !> Anchor switching factor (ngrid)
       real(wp), allocatable :: f0(:)
    contains
-      !> Place the Lebedev points on every sphere
+      !> Place the plain Lebedev points on every sphere
       procedure :: fill => anchor_fill
+      !> Place the nodes of every sphere's grid components
+      procedure :: fill_grid => anchor_fill_grid
       !> Evaluate the iSwiG widths and switching factors
       procedure :: compute_switching => anchor_compute_switching
       !> Drop anchors at or below the weight cutoff (pre-filter)
@@ -48,10 +57,77 @@ module moist_cavity_drop_anchor
 
 contains
 
-   !> Place the Lebedev points on every sphere
+   !> Place the nodes of every sphere's grid components
    !>
-   !> - anchor `(i - 1)*num_leb + j` is point `j` on sphere `i`, and its id
+   !> - anchor `ii` is global node `ii` of the grid, and that is its id:
+   !>   node `j` of component `c` is anchor `comp_first(c) + j - 1`, at
+   !>   `c_i + r_i u_j` with `u_j` the node of the component's node set
+   !> - the plain grid gives anchor `(i - 1)*num_leb + j` for Lebedev point
+   !>   `j` on sphere `i`, bitwise at `c_i + r_i u_j`
    !> - widths and switching factors of a previous grid are dropped
+   !>
+   !> @param[inout] self    anchor grid
+   !> @param[in]    centers sphere centers, bohr (3, nsph)
+   !> @param[in]    radii   sphere radii, bohr (nsph)
+   !> @param[in]    grid    grid components of every sphere
+   subroutine anchor_fill_grid(self, centers, radii, grid)
+      !> Anchor grid
+      class(drop_anchor_type), intent(inout) :: self
+      !> Sphere centers, bohr (3, nsph)
+      real(wp), intent(in) :: centers(:, :)
+      !> Sphere radii, bohr (nsph)
+      real(wp), intent(in) :: radii(:)
+      !> Grid components of every sphere
+      type(cavity_grid_type), intent(in) :: grid
+
+      !> Sphere, component, node and anchor index, node offset
+      integer :: i, icomp, jj, ii, n0
+      !> Number of spheres
+      integer :: nsph
+
+      nsph = size(radii)
+      self%ngrid = grid%nnode
+
+      if (allocated(self%xyz)) deallocate (self%xyz)
+      allocate (self%xyz(3, self%ngrid), source=0.0_wp)
+      if (allocated(self%wleb0)) deallocate (self%wleb0)
+      allocate (self%wleb0(self%ngrid), source=0.0_wp)
+      if (allocated(self%owner)) deallocate (self%owner)
+      allocate (self%owner(self%ngrid), source=0)
+      if (allocated(self%comp)) deallocate (self%comp)
+      allocate (self%comp(self%ngrid), source=0)
+      if (allocated(self%id)) deallocate (self%id)
+      allocate (self%id(self%ngrid), source=0)
+      if (allocated(self%xi0)) deallocate (self%xi0)
+      if (allocated(self%f0)) deallocate (self%f0)
+
+      do i = 1, nsph
+         do icomp = grid%sph_first(i), grid%sph_first(i + 1) - 1
+            n0 = grid%set_first(grid%comp_set(icomp)) - grid%comp_first(icomp)
+            do ii = grid%comp_first(icomp), grid%comp_first(icomp + 1) - 1
+               jj = n0 + ii
+
+               ! Solid-angle Lebedev weight, the same for a rotated node
+               self%wleb0(ii) = grid%wang(jj)
+
+               ! Cartesian location of the node on sphere i
+               self%xyz(1, ii) = centers(1, i) + radii(i)*grid%node(1, jj)
+               self%xyz(2, ii) = centers(2, i) + radii(i)*grid%node(2, jj)
+               self%xyz(3, ii) = centers(3, i) + radii(i)*grid%node(3, jj)
+
+               self%owner(ii) = i
+               self%comp(ii) = icomp
+               self%id(ii) = ii
+            end do
+         end do
+      end do
+
+   end subroutine anchor_fill_grid
+
+   !> Place the plain Lebedev points on every sphere
+   !>
+   !> [[anchor_fill_grid]] for one unrotated component of weight one per
+   !> sphere: anchor `(i - 1)*num_leb + j` is point `j` on sphere `i`
    !>
    !> @param[inout] self       anchor grid
    !> @param[in]    centers    sphere centers, bohr (3, nsph)
@@ -70,58 +146,34 @@ contains
       !> Solid-angle Lebedev weights (num_leb)
       real(wp), intent(in) :: ang_weight(:)
 
-      !> Sphere, Lebedev point and anchor index
-      integer :: i, jj, ii
-      !> Number of spheres and Lebedev points per sphere
-      integer :: nsph, num_leb
+      !> Plain grid components
+      type(cavity_grid_type) :: grid
+      !> Never set: a plain grid cannot fail
+      type(error_type), allocatable :: error
 
-      nsph = size(radii)
-      num_leb = size(ang_weight)
-      self%ngrid = nsph*num_leb
-
-      if (allocated(self%xyz)) deallocate (self%xyz)
-      allocate (self%xyz(3, self%ngrid), source=0.0_wp)
-      if (allocated(self%wleb0)) deallocate (self%wleb0)
-      allocate (self%wleb0(self%ngrid), source=0.0_wp)
-      if (allocated(self%owner)) deallocate (self%owner)
-      allocate (self%owner(self%ngrid), source=0)
-      if (allocated(self%id)) deallocate (self%id)
-      allocate (self%id(self%ngrid), source=0)
-      if (allocated(self%xi0)) deallocate (self%xi0)
-      if (allocated(self%f0)) deallocate (self%f0)
-
-      ii = 0
-      do i = 1, nsph
-         do jj = 1, num_leb
-            ii = ii + 1
-
-            ! Solid-angle Lebedev weight
-            self%wleb0(ii) = ang_weight(jj)
-
-            ! Cartesian location of point on sphere i
-            self%xyz(1, ii) = centers(1, i) + radii(i)*ang_grid(1, jj)
-            self%xyz(2, ii) = centers(2, i) + radii(i)*ang_grid(2, jj)
-            self%xyz(3, ii) = centers(3, i) + radii(i)*ang_grid(3, jj)
-
-            self%owner(ii) = i
-            self%id(ii) = ii
-         end do
-      end do
+      call grid%assemble(size(radii), ang_grid, ang_weight, 0.0_wp, error)
+      call self%fill_grid(centers, radii, grid)
 
    end subroutine anchor_fill
 
    !> Evaluate the iSwiG width and switching factor of every anchor
    !>
-   !> @param[inout] self     anchor grid after `fill`
-   !> @param[in]    iswig    iSwiG updated for the current geometry
-   !> @param[in]    nthreads OpenMP team size
-   subroutine anchor_compute_switching(self, iswig, nthreads)
+   !> - with `comp_weight`, the switching factor of an anchor is scaled by
+   !>   the weight of its grid component
+   !>
+   !> @param[inout] self        anchor grid after `fill`
+   !> @param[in]    iswig       iSwiG updated for the current geometry
+   !> @param[in]    nthreads    OpenMP team size
+   !> @param[in]    comp_weight weight of every grid component (ncomp)
+   subroutine anchor_compute_switching(self, iswig, nthreads, comp_weight)
       !> Anchor grid
       class(drop_anchor_type), intent(inout) :: self
       !> iSwiG updated for the current geometry
       type(moist_cavity_drop_iswig), intent(in) :: iswig
       !> OpenMP team size
       integer, intent(in) :: nthreads
+      !> Weight of every grid component
+      real(wp), intent(in), optional :: comp_weight(:)
 
       !> Anchor index
       integer :: i
@@ -140,6 +192,12 @@ contains
       end do
       !$omp end do
       !$omp end parallel
+
+      if (present(comp_weight)) then
+         do i = 1, self%ngrid
+            self%f0(i) = self%f0(i)*comp_weight(self%comp(i))
+         end do
+      end if
 
    end subroutine anchor_compute_switching
 
@@ -176,6 +234,7 @@ contains
       call filter_array(self%f0, nold, keep, nvalid)
       call filter_array(self%xi0, nold, keep, nvalid)
       call filter_array(self%owner, nold, keep, nvalid)
+      call filter_array(self%comp, nold, keep, nvalid)
       call filter_array(self%id, nold, keep, nvalid)
       self%ngrid = nvalid
 
@@ -222,6 +281,7 @@ contains
       call filter_array(self%f0, nold, keep, nvalid)
       call filter_array(self%xi0, nold, keep, nvalid)
       call filter_array(self%owner, nold, keep, nvalid)
+      call filter_array(self%comp, nold, keep, nvalid)
       call filter_array(self%id, nold, keep, nvalid)
       self%ngrid = nvalid
 
@@ -237,6 +297,7 @@ contains
       self%ngrid = 0
       if (allocated(self%id)) deallocate (self%id)
       if (allocated(self%owner)) deallocate (self%owner)
+      if (allocated(self%comp)) deallocate (self%comp)
       if (allocated(self%xyz)) deallocate (self%xyz)
       if (allocated(self%wleb0)) deallocate (self%wleb0)
       if (allocated(self%xi0)) deallocate (self%xi0)

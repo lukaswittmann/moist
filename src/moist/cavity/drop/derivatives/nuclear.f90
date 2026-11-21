@@ -32,16 +32,26 @@
 !> The gate and the objective of a row enter the branch weights of every row of
 !> its anchor; the branch adjoints carry that coupling
 !>
+!> Molecular orientation: the anchors of sphere a turn with its rotation R_a,
+!> which follows every atom. Routes 2-4 give the anchor adjoint abar (at a rigid
+!> sphere frame), and the sphere normal n_sph enters the horizon switch and the
+!> CP Jacobian; the same sweep sums the torque
+!>   tau_a = sum (anchor - c_a) x abar + dE/d(omega)
+!> of the n_sph rotation ([[apply_sphere_rotation]]) over the rows of sphere a,
+!> which `add_grid_gradient` maps to the atoms once, after the tile reduction
+!>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
    !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_surface_weights_type, seed_state_ok, seed_weight_tol
+      & drop_surface_weights_type, drop_seed_result_type, apply_sphere_rotation, seed_state_ok, &
+      & seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: seed_point_jet, seed_anchor, &
       & degenerate_point_error
    use moist_cavity_drop_tile, only: surface_tile_width, surface_tile_candidates, &
       & surface_jet_tile, surface_vjp_tile
-   use moist_cavity_drop_gaussian, only: iswig_workspace_type
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type, iswig_pos_gradient
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
 
    !> Compact nuclear-gradient rows of one surface tile
@@ -50,6 +60,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
       integer, allocatable :: atoms(:)
       !> Their gradient rows (3, n)
       real(wp), allocatable :: rows(:, :)
+      !> Their frame torques (3, n), molecular orientation only
+      real(wp), allocatable :: torque(:, :)
    end type tile_rows_type
 
 contains
@@ -64,6 +76,8 @@ contains
    !>   contracting the resulting `*_rA` arrays
    !> - the two agree to round-off, which `test_cavity_drop_nuclear_adjoint`
    !>   asserts
+   !> - molecular orientation: the frame torque of every sphere, summed in the
+   !>   same tile order, through `add_grid_gradient` once
    !>
    !> @param[in]     self     DROP cavity instance (must hold a projected grid)
    !> @param[in]     acc      Accumulated surface-observable adjoints
@@ -113,6 +127,20 @@ contains
       logical, allocatable :: in_row(:)
       !> Tile-ordered sum of the tile rows
       real(wp), allocatable :: grad_sum(:, :)
+      !> Whether the anchors turn with a molecular frame
+      logical :: frame
+      !> Frame torque of the current tile (3, nsph) and its tile-ordered sum
+      real(wp), allocatable :: tile_torque(:, :), torque_sum(:, :)
+      !> Weight adjoint per grid component; zero, the weights are constant
+      real(wp), allocatable :: wbar(:)
+      !> Anchor adjoint at a rigid sphere frame, the anchor's offset from its
+      !> center, the switching gradient in the anchor
+      real(wp) :: abar(3), d_anchor(3), dpos(3)
+      !> Torque of the sphere-normal rotation, and the response to one axis
+      real(wp) :: torque_n(3)
+      type(drop_seed_result_type) :: res
+      !> Unit rotation about one axis
+      real(wp) :: omega(3)
       !> Thread bookkeeping
       integer :: thread_slot
       !> First failure seen anywhere in the parallel region
@@ -186,6 +214,7 @@ contains
 
       !* -------------------------------- Thread setup -------------------------------- *!
       call slots%init(self%ctx, objective=.true.)
+      frame = .not. self%plain_grid()
       tile = surface_tile_width
       ntile = (self%ngrid + tile - 1)/tile
       allocate (tile_rows(ntile))
@@ -200,7 +229,8 @@ contains
       !$omp& tile_w0, tile_w1, tile_w2, tile_res_buf, tile_res, &
       !$omp& phi1_r, kkt_rhs, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, ia, jrow, w_switch, have_switch, &
-      !$omp& iswig_work, tile_grad, row_atoms, nrow, in_row, reach_da, reach_coef)
+      !$omp& iswig_work, tile_grad, row_atoms, nrow, in_row, reach_da, reach_coef, &
+      !$omp& tile_torque, abar, d_anchor, dpos, torque_n, res, omega)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
       call slots%fill(thread_slot, self%lsf_model, 3, self%param, self%mol, self%radii)
@@ -212,6 +242,7 @@ contains
       allocate (tile_res_buf(3*size(cand)*tile))
       call self%iswig%new_workspace(iswig_work)
       allocate (tile_grad(3, self%nsph), source=0.0_wp)
+      if (frame) allocate (tile_torque(3, self%nsph), source=0.0_wp)
       allocate (row_atoms(self%nsph))
       allocate (in_row(self%nsph), source=.false.)
       nrow = 0
@@ -224,6 +255,7 @@ contains
          do k = 1, nrow
             in_row(row_atoms(k)) = .false.
             tile_grad(:, row_atoms(k)) = 0.0_wp
+            if (frame) tile_torque(:, row_atoms(k)) = 0.0_wp
          end do
          nrow = 0
          igrid0 = (itile - 1)*tile + 1
@@ -269,8 +301,15 @@ contains
 
             !* ------------------------ Anchor channel (owner) ------------------------ *!
             call touch_row(owner_idx, in_row, row_atoms, nrow)
-            call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
-                             tile_grad(:, owner_idx))
+            if (frame) then
+               ! The anchor adjoint itself, for the torque
+               abar = 0.0_wp
+               call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, abar)
+               tile_grad(:, owner_idx) = tile_grad(:, owner_idx) + abar
+            else
+               call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
+                                tile_grad(:, owner_idx))
+            end if
 
             !* ------------------------ Reach channel (owner) ------------------------- *!
             ! The reach gate moves with the anchor at a fixed projected point
@@ -278,6 +317,24 @@ contains
                reach_coef = eff%branch_gate_adj(igrid)*state%wleb_prune_f0*state%f_crit0*state%f_foc_f0 &
                             *state%f_hor_f0
                tile_grad(:, owner_idx) = tile_grad(:, owner_idx) + reach_coef*reach_da
+            end if
+
+            !* ------------------------- Frame torque (owner) ------------------------- *!
+            ! The anchor turns with its sphere, d(anchor) = omega x (anchor - c),
+            ! and so does the sphere normal, which the kernel's anchor seeds hold
+            if (frame) then
+               ! The reach channel's anchor adjoint, reach_da = -f_reach_dy
+               if (abs(eff%branch_gate_adj(igrid)) > seed_weight_tol) then
+                  abar = abar - reach_coef*state%f_reach_dy
+               end if
+               d_anchor = anchor - self%sphxyz(:, owner_idx)
+               do k = 1, 3
+                  omega = 0.0_wp
+                  omega(k) = 1.0_wp
+                  call apply_sphere_rotation(state, omega, res)
+                  torque_n(k) = eff%w_xi(igrid)*res%dxi + eff%branch_gate_adj(igrid)*res%dw_f
+               end do
+               tile_torque(:, owner_idx) = tile_torque(:, owner_idx) + cross_product(d_anchor, abar) + torque_n
             end if
 
             !* ----------------------- iSwig switching channel ------------------------ *!
@@ -302,6 +359,12 @@ contains
             if (have_switch) then
                call self%iswig%add_f1_rA(anchor, owner_idx, self%anchor%xi0(ia), w_switch, &
                                          iswig_work, tile_grad)
+               ! f_anchor turns with the anchor as well
+               if (frame) then
+                  dpos = iswig_pos_gradient(iswig_work, self%anchor%xi0(ia), w_switch)
+                  tile_torque(:, owner_idx) = tile_torque(:, owner_idx) &
+                                              + cross_product(anchor - self%sphxyz(:, owner_idx), dpos)
+               end if
                do k = 1, iswig_work%n
                   call touch_row(iswig_work%k(k), in_row, row_atoms, nrow)
                end do
@@ -337,12 +400,14 @@ contains
             tile_rows(itile)%atoms(k) = row_atoms(k)
             tile_rows(itile)%rows(:, k) = tile_grad(:, row_atoms(k))
          end do
+         if (frame) tile_rows(itile)%torque = tile_torque(:, row_atoms(1:nrow))
       end do
       !$omp end do
 
       deallocate (cand, tile_xyz, tile_lsf0, tile_lsf1, tile_lsf2, tile_lsf3)
       deallocate (tile_w0, tile_w1, tile_w2, tile_res_buf)
       deallocate (tile_grad, row_atoms, in_row)
+      if (frame) deallocate (tile_torque)
       call slots%release(thread_slot)
       !$omp end parallel
 
@@ -364,6 +429,18 @@ contains
             grad_sum(:, iatom) = grad_sum(:, iatom) + tile_rows(itile)%rows(:, k)
          end do
       end do
+      if (frame) then
+         allocate (torque_sum(3, self%nsph), source=0.0_wp)
+         do itile = 1, ntile
+            do k = 1, size(tile_rows(itile)%atoms)
+               iatom = tile_rows(itile)%atoms(k)
+               torque_sum(:, iatom) = torque_sum(:, iatom) + tile_rows(itile)%torque(:, k)
+            end do
+         end do
+         ! The sweep sums the torque per sphere, which is per component; every sphere has a single one
+         allocate (wbar(self%grid%ncomp), source=0.0_wp)
+         call self%add_grid_gradient(torque_sum, wbar, grad_sum)
+      end if
       gradient = gradient + grad_sum
 
       ! The threads allocated the tile rows; free them in parallel
@@ -371,6 +448,7 @@ contains
       do itile = 1, ntile
          if (allocated(tile_rows(itile)%atoms)) deallocate (tile_rows(itile)%atoms)
          if (allocated(tile_rows(itile)%rows)) deallocate (tile_rows(itile)%rows)
+         if (allocated(tile_rows(itile)%torque)) deallocate (tile_rows(itile)%torque)
       end do
       !$omp end parallel do
 

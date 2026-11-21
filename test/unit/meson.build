@@ -32,6 +32,7 @@ tests = [
   'math_trig',
   'math_packed',
   'math_smoothstep',
+  'math_symmetry',
   'math_grid_radial_rule',
   'math_grid_radial',
   'math_grid_radial_trafo',
@@ -74,6 +75,8 @@ tests = [
   'cavity_drop_properties',
   'cavity_iswig',
   'cavity_numsa',
+  'cavity_symmetry',
+  'cavity_grid',
   'cavity_mc',
   'cavity_mt_mesh',
   'cavity_mt_patches',
@@ -186,6 +189,7 @@ test_srcs = files(
   'test_moz_fixtures.f90',
   'test_model_component_helper.f90',
   'test_model_component_pcm_fixtures.f90',
+  'test_cavity_symmetry_fixtures.f90',
 )
 
 foreach t : tests

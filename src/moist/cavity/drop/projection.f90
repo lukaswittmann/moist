@@ -198,13 +198,13 @@ contains
       ! Row arrays of the previous surface were freed before the anchor setup
       allocate (self%xyz(3, nout), self%normal0(3, nout), self%wleb(nout), self%lambda0(nout), &
                 self%f(nout), self%pdist(nout), self%wbranch(nout), self%phi0(nout), &
-                self%owner(nout), self%branch(nout), self%anchor_of_row(nout), self%cpjac_scal0(nout), &
+                self%owner(nout), self%comp(nout), self%branch(nout), self%anchor_of_row(nout), self%cpjac_scal0(nout), &
                 self%w_f0(nout), self%numbering(nout))
       self%ngrid = nout
 
       !> Scatter each worker's rows to their anchor's CSR slots; rows of one
       !> anchor are contiguous in the buffer that produced them
-      number_base = max(1, self%nsph*self%param%num_leb)
+      number_base = max(1, self%grid%nnode)
       !$omp parallel do num_threads(nthreads) default(shared) private(ithread, irow, ia, k, dest) &
       !$omp& schedule(static)
       do ithread = 1, nthreads
@@ -230,6 +230,7 @@ contains
             self%w_f0(dest) = workers(ithread)%rows%w_f(irow)
             self%anchor_of_row(dest) = ia
             self%owner(dest) = self%anchor%owner(ia)
+            self%comp(dest) = self%anchor%comp(ia)
             ! The row's switching value carries its share of the anchor
             self%f(dest) = self%anchor%f0(ia)*workers(ithread)%rows%wbranch(irow)
             self%numbering(dest) = self%anchor%id(ia) + number_base*(workers(ithread)%rows%branch(irow) - 1)

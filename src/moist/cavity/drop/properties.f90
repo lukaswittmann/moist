@@ -70,12 +70,15 @@ contains
    !>
    !> The hard density is evaluated against the full (unfiltered) Lebedev grid of its owner sphere
    !>
+   !> - that grid is the point's grid component on the owner sphere, as its
+   !>   anchors are: the nodes of `grid`
+   !>
    !> @param[inout] self Cavity instance with grid points and grid_adj_list
    module subroutine compute_grid_point_density(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: igrid, jgrid, jj, isph
+      integer :: igrid, jgrid, jj, isph, icomp, n0
       real(wp) :: d, d2, h, mean_wleb, four_h2
       real(wp) :: xi, yi, zi, xj, yj, zj, dx, dy, dz
       real(wp) :: kval
@@ -148,22 +151,24 @@ contains
       ! Evaluate the anchor density at each active point against the complete
       ! (unfiltered) Lebedev grid of its owner sphere
       !$omp parallel do num_threads(nthreads) default(shared) &
-      !$omp& private(igrid, isph, jj, xi, yi, zi, xj, yj, zj, &
+      !$omp& private(igrid, isph, icomp, n0, jj, xi, yi, zi, xj, yj, zj, &
       !$omp&   dx, dy, dz, d2, d, kval) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
          isph = self%owner(igrid)
+         icomp = self%comp(igrid)
+         n0 = self%grid%set_first(self%grid%comp_set(icomp)) - 1
 
          ! Anchor coordinates of active point i
          xi = self%anchor%xyz(1, self%anchor_of_row(igrid))
          yi = self%anchor%xyz(2, self%anchor_of_row(igrid))
          zi = self%anchor%xyz(3, self%anchor_of_row(igrid))
 
-         do jj = 1, self%param%num_leb
-            ! Full-grid Lebedev point j on owner sphere
-            xj = self%mol%xyz(1, isph) + self%radii(isph)*self%ang_grid(1, jj)
-            yj = self%mol%xyz(2, isph) + self%radii(isph)*self%ang_grid(2, jj)
-            zj = self%mol%xyz(3, isph) + self%radii(isph)*self%ang_grid(3, jj)
+         do jj = 1, self%grid%comp_first(icomp + 1) - self%grid%comp_first(icomp)
+            ! Full-grid node j of the point's grid component on the owner sphere
+            xj = self%mol%xyz(1, isph) + self%radii(isph)*self%grid%node(1, n0 + jj)
+            yj = self%mol%xyz(2, isph) + self%radii(isph)*self%grid%node(2, n0 + jj)
+            zj = self%mol%xyz(3, isph) + self%radii(isph)*self%grid%node(3, n0 + jj)
 
             dx = xi - xj
             dy = yi - yj
@@ -174,7 +179,7 @@ contains
                d = sqrt(d2)
                kval = kernel%f0(d)
                self%rho_grid_anchor(igrid) = self%rho_grid_anchor(igrid) &
-                                             + kval*self%ang_weight(jj)
+                                             + kval*self%grid%wang(n0 + jj)
             end if
          end do
       end do

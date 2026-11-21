@@ -30,6 +30,7 @@ program tester
    use test_math_trig, only: collect_math_trig
    use test_math_packed, only: collect_math_packed
    use test_math_smoothstep, only: collect_math_smoothstep
+   use test_math_symmetry, only: collect_math_symmetry
    use test_math_grid_radial_rule, only: collect_math_grid_radial_rule
    use test_math_grid_radial, only: collect_math_grid_radial
    use test_math_grid_radial_trafo, only: collect_math_grid_radial_trafo
@@ -59,6 +60,8 @@ program tester
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
    use test_cavity_drop_potential, only: collect_cavity_drop_potential
    use test_cavity_numsa, only: collect_cavity_numsa
+   use test_cavity_symmetry, only: collect_cavity_symmetry
+   use test_cavity_grid, only: collect_cavity_grid
    use test_cavity_adjoint, only: collect_cavity_adjoint
    use test_cavity_mc, only: collect_cavity_mc
    use test_cavity_mt_mesh, only: collect_cavity_mt_mesh
@@ -115,6 +118,7 @@ program tester
       & new_testsuite("math_trig", collect_math_trig), &
       & new_testsuite("math_packed", collect_math_packed), &
       & new_testsuite("math_smoothstep", collect_math_smoothstep), &
+      & new_testsuite("math_symmetry", collect_math_symmetry), &
       & new_testsuite("math_grid_radial_rule", collect_math_grid_radial_rule), &
       & new_testsuite("math_grid_radial", collect_math_grid_radial), &
       & new_testsuite("math_grid_radial_trafo", collect_math_grid_radial_trafo), &
@@ -157,6 +161,8 @@ program tester
       & new_testsuite("cavity_drop_properties", collect_cavity_drop_properties), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
+      & new_testsuite("cavity_symmetry", collect_cavity_symmetry), &
+      & new_testsuite("cavity_grid", collect_cavity_grid), &
       & new_testsuite("cavity_mc", collect_cavity_mc), &
       & new_testsuite("cavity_mt_mesh", collect_cavity_mt_mesh), &
       & new_testsuite("cavity_mt_patches", collect_cavity_mt_patches), &

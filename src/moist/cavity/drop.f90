@@ -17,6 +17,7 @@ module moist_cavity_drop
    use moist_channels_fields, only: field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
+   use moist_cavity_grid_model_type, only: grid_model_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -480,13 +481,16 @@ contains
 
    !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self Object to initialize
+   !> @param[in,out] self Object to initialize
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[in] lsf_model Level set function to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
-   subroutine new_cavity_drop(self, radius_model, lsf_model, error, param, ctx)
+   !> @param[in] grid_model Grid model to copy, e.g. a symmetry model, updated per
+   !>                       geometry and reported; omitted, every sphere keeps
+   !>                       its plain grid
+   subroutine new_cavity_drop(self, radius_model, lsf_model, error, param, ctx, grid_model)
       !> Cavity to initialize
       type(cavity_type_drop), intent(inout) :: self
       !> Atomic radius model to copy
@@ -499,6 +503,8 @@ contains
       type(moist_cavity_drop_parameters_type), intent(in), optional :: param
       !> Borrowed run context; omitted, a model supplies its own
       type(moist_context_type), intent(in), target, optional :: ctx
+      !> Grid model to copy; omitted means the plain grid
+      class(grid_model_type), intent(in), optional :: grid_model
 
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
@@ -511,6 +517,7 @@ contains
       !> Radius model setup
       if (allocated(self%radius_model)) deallocate (self%radius_model)
       allocate (self%radius_model, source=radius_model)
+      call self%set_grid_model(grid_model)
 
       !> LSF model setup
       if (allocated(self%lsf_model)) deallocate (self%lsf_model)
@@ -676,12 +683,20 @@ contains
    !> Take a new geometry: radii and sphere centers, then the surface unless
    !> the level set waits for build-phase answers
    !>
-   !> @param[inout] self     Cavity instance
-   !> @param[in]    mol      Molecular structure
-   !> @param[out]   error    Error handling
+   !> - grid model (e.g. symmetry): updated inside the projection's
+   !>   "Setup" section, so a cavity computing its own model opens that node
+   !>   once per update; a deferred projection computes them here, under a
+   !>   "Setup" of the update, so `update` still reports them and their errors
+   !>
+   !> @param[in,out] self  Cavity instance
+   !> @param[in]     mol   Molecular structure
+   !> @param[out]    error Error handling
    subroutine update_cavity_drop(self, mol, error)
+      !> Cavity instance
       class(cavity_type_drop), intent(inout) :: self
+      !> Molecular structure
       type(structure_type), intent(in) :: mol
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       call update_cavity_base(self, mol, error)
@@ -709,7 +724,10 @@ contains
       allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
 
       !> The projection waits for the density matrix or the nuclear charges
-      if (.not. self%defers_build()) then
+      if (self%defers_build()) then
+         call self%update_grid_model(error)
+         if (allocated(error)) return
+      else
          call project_surface_drop(self, error)
          if (allocated(error)) return
       end if
@@ -769,8 +787,13 @@ contains
 
    !> Project the surface of the stored structure, radii and sphere centers
    !>
-   !> @param[inout] self  Cavity instance
-   !> @param[out]   error Error handling
+   !> - "Setup" first brings the sphere orientations up to date (nothing when
+   !>   the model is current, untimed when trivial), then places the anchors:
+   !>   sphere a carries the nodes R_a u, rotated once per distinct rotation;
+   !>   the lab orientation (R = I) places bitwise c + r u
+   !>
+   !> @param[in,out] self  Cavity instance
+   !> @param[out]    error Error handling
    subroutine project_surface_drop(self, error)
       !> Cavity instance
       class(cavity_type_drop), intent(inout) :: self
@@ -783,7 +806,6 @@ contains
       integer :: nremoved, n_iswig_removed
       !> Pre-filter report
       type(prettyprinter) :: pp
-
       ! The previous surface and its derivatives go before the projection
       ! re-allocates them: the getters test `A_tot1_rA` for availability
       call self%clear_surface()
@@ -822,6 +844,15 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Setup", category=cat_setup)
 
+      !> Grid model of this structure, unless already current
+      if (allocated(self%grid_model)) then
+         call self%grid_model%update(self%mol, self%radii, error, self%ctx)
+         if (allocated(error)) then
+            call self%ctx%timer%unwind(d0)
+            return
+         end if
+      end if
+
       !> Ensure Lebedev cache for current num_leb
       call self%ctx%timer%start("Lebedev cache")
       call self%ensure_lebedev_cache(error)
@@ -831,9 +862,20 @@ contains
       end if
       call self%ctx%timer%stop("Lebedev cache")
 
-      !> Anchor grid: the Lebedev points on every sphere
+      !> Anchor grid: the nodes of every sphere's grid components
       call self%ctx%timer%start("Array setup")
-      call self%anchor%fill(self%sphxyz, self%radii, self%ang_grid, self%ang_weight)
+      call self%build_grid(self%ang_grid, self%ang_weight, self%param%iswig_xi_born, error, &
+         & heaviest=.true.)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      if (self%grid%ncomp /= self%nsph) then
+         call fatal_error(error, "DROP supports a single grid component per sphere")
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      call self%anchor%fill_grid(self%sphxyz, self%radii, self%grid)
       call self%ctx%timer%stop("Array setup")
 
       !> iSwiG atom-atom neighbour list, sorted by distance for early exit
@@ -844,7 +886,12 @@ contains
 
       !> Compute switching function
       call self%ctx%timer%start("Switching func.")
-      call self%anchor%compute_switching(self%iswig, self%ctx%get_num_threads())
+      if (self%grid%plain) then
+         call self%anchor%compute_switching(self%iswig, self%ctx%get_num_threads())
+      else
+         call self%anchor%compute_switching(self%iswig, self%ctx%get_num_threads(), &
+            & comp_weight=self%grid%comp_weight)
+      end if
       if (self%ctx%verbosity(4)) then
          n_iswig_removed = count(self%anchor%f0 < self%param%finalize%wleb_cut)
          pp = new_prettyprinter(unit=self%ctx%unit)
@@ -1281,6 +1328,7 @@ contains
       if (allocated(self%oleb)) deallocate (self%oleb)
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
       if (allocated(self%ang_weight)) deallocate (self%ang_weight)
+      call self%grid%clear()
 
       ! Deallocate gradient arrays
       if (allocated(self%lambda0)) deallocate (self%lambda0)

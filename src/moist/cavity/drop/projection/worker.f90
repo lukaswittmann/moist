@@ -338,6 +338,10 @@ contains
                         self%nscratch, error)
       if (allocated(error)) return
 
+      ! TODO: respect the cavity symmetry model; the octree boxes and seeds
+      ! (seeder and level-1 fallback) follow the lab axes, so which branches
+      ! are found depends on the orientation of the molecule; build them in
+      ! the molecular frame and map them over the group used, like the anchors
       ! Seeding; only a fully open local point bounds the search by its window
       call self%pass2%clear()
       call self%passn%clear()
