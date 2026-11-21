@@ -39,7 +39,7 @@ jobs:
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: ifort21, compiler: intel-classic, version: '2021.12', mkl: '2024.1', cc: icx, cxx: icpx, lapack: mkl, timeout: 45}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines  -ffpe-trap=invalid,zero,overflow', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: macos-arm64, os: macos-15, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: accelerate, timeout: 45}
