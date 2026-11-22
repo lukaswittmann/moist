@@ -246,9 +246,89 @@ contains
          & new_unittest("cpcm_nuclear_gradient_ecp", test_cpcm_nuclear_gradient_ecp), &
          & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient), &
          & new_unittest("cpcm_sibling_gate", test_cpcm_sibling_gate), &
-         & new_unittest("iefpcm_sibling_gate", test_iefpcm_sibling_gate) &
+         & new_unittest("iefpcm_sibling_gate", test_iefpcm_sibling_gate), &
+         & new_unittest("cpcm_gradient_iswig_keep_all", test_cpcm_gradient_iswig_keep_all) &
          & ]
    end subroutine collect_model_component_pcm_derivatives
+
+   !> CPCM nuclear gradient of water on an iSwiG cavity with `cut_f = 0`
+   !>
+   !> Buried points of switching value below 7.5e-155 overflow `f**(-2)` in the
+   !> Gaussian kernels; the cavity drops them, so the gradients are finite and
+   !> those of `cut_f = 1e-100`, reverse and forward
+   subroutine test_cpcm_gradient_iswig_keep_all(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Run context borrowed by the component
+      type(moist_context_type), target :: ctx
+      !> Solute
+      type(structure_type) :: mol
+      !> Component under test
+      class(model_continuum_component_pcm), allocatable :: pcm
+      !> Host part of the gradient phase, unused here
+      type(response_type) :: response
+      !> Gradients (3, nat, reverse/forward, cutoff), host and nuclear charges
+      real(wp) :: gradient(3, 3, 2, 2)
+      real(wp), allocatable :: q(:), z(:)
+      !> Polarization energy
+      real(wp) :: energy
+      !> Cutoff and pass indices
+      integer :: icut, ipass
+
+      !> Switching cutoffs
+      real(wp), parameter :: cuts(2) = [0.0_wp, 1.0e-100_wp]
+      !> Water in bohr
+      real(wp), parameter :: xyz(3, 3) = reshape([0.0_wp, 0.0_wp, 0.2217_wp, 0.0_wp, 1.4309_wp, -0.8867_wp, &
+         & 0.0_wp, -1.4309_wp, -0.8867_wp], [3, 3])
+
+      call new_context(ctx, nthreads=0)
+      call new(mol, [8, 1, 1], xyz)
+      q = host_charges(mol)
+      z = real(mol%num(mol%id), wp)
+      gradient = 0.0_wp
+      do icut = 1, 2
+         do ipass = 1, 2
+            block
+               type(cavity_type_iswig) :: cavity
+               type(coupling_type), target :: coupling
+
+               call get_test_cavity_iswig(mol, cavity, err, nleb=110, cut_f=cuts(icut))
+               call check_moist_error(error, err, "cavity")
+               if (allocated(error)) return
+               call new_pcm(pcm_cpcm, ctx, pcm, error)
+               if (allocated(error)) return
+               call stage_energy(pcm, mol, cavity, coupling, error)
+               if (allocated(error)) return
+               call answer_sources(cavity, coupling, mol, q, z)
+               energy = 0.0_wp
+               call pcm%get_energy(component_view(coupling), cavity, energy, err)
+               call check_moist_error(error, err, "energy")
+               if (allocated(error)) return
+               call pcm%prepare_gradient(cavity, coupling, err)
+               call check_moist_error(error, err, "gradient staging")
+               if (allocated(error)) return
+               call answer_sources(cavity, coupling, mol, q, z)
+               if (ipass == 1) then
+                  call pcm%get_gradient(component_view(coupling), cavity, response, gradient(:, :, ipass, icut), err)
+               else
+                  call pcm%get_forward_gradient(component_view(coupling), cavity, response, &
+                     & gradient(:, :, ipass, icut), err)
+               end if
+               call check_moist_error(error, err, "gradient")
+               if (allocated(error)) return
+            end block
+         end do
+      end do
+      call check(error, all(ieee_is_finite(gradient)), more="CPCM gradient at cut_f = 0 is not finite")
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient(:, :, 1, 1))) > thr_vacuous, more="CPCM gradient is zero, the test is vacuous")
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient(:, :, :, 1) - gradient(:, :, :, 2))), 0.0_wp, thr=1.0e-14_wp, &
+         & more="CPCM gradient at cut_f = 0 differs from cut_f = 1e-100")
+   end subroutine test_cpcm_gradient_iswig_keep_all
 
    !> CPCM nuclear gradient on a cavity whose anchors hold partly open sibling points
    subroutine test_cpcm_sibling_gate(error)
