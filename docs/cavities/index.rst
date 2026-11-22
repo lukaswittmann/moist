@@ -160,6 +160,13 @@ The frame is built from the orientation (via the shape) of the molecule: the sec
 
 Where the symmetry leaves several equivalent choices (the three equivalent angles of ammonia), they give the same grid, or grids that a symmetry operation of the molecule maps onto each other, so the results are the same.
 
+.. figure:: /_static/figures/symmetry/uracil_rotation.svg
+   :name: fig-molecular-frame-rotation
+   :width: 100%
+
+   Surface area of uracil (:math:`n_\mathrm{Leb}=194`) under a rigid rotation about the lab :math:`z` axis, for :doc:`iSwiG <iswig>` (left) and :doc:`SvdW-DROP <svdw>` (right).
+   In the lab frame (dashed) the area oscillates by about 1.1 % (iSwiG) and 1.0 % (SvdW-DROP) with the grid orientation; in the molecular frame (solid) it is constant and thus rotationally invariant.
+
 .. warning::
 
    Each of these choices is switched at a threshold (see the settings).
