@@ -5,6 +5,7 @@
 module moist_math_solver_newton
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
+   use mctc_io_utils, only: to_string
    use moist_math_solver_type, only: solver_base_type
 
    use nlesolver_module, only: nlesolver_type, NLESOLVER_SPARSITY_DENSE, NLESOLVER_SPARSITY_LSQR, &
@@ -462,7 +463,7 @@ contains
             call fatal_error(error, decode_error_message(istat, message))
          else
             ! Unknown status
-            call fatal_error(error, "Newton solver [code "//trim(int_to_str(istat))//"]: Unknown status")
+            call fatal_error(error, "Newton solver [code "//to_string(istat)//"]: Unknown status")
          end if
       end select
 
@@ -675,20 +676,10 @@ contains
          code_desc = "Unknown error"
       end select
 
-      msg = "Newton solver [code "//trim(int_to_str(istat))//"]: "// &
+      msg = "Newton solver [code "//to_string(istat)//"]: "// &
             trim(code_desc) ! // " | Details: " // trim(message)
 
    end function decode_error_message
-
-   !> Convert integer to string (helper function)
-   !>
-   !> @param[in]  i  Integer to convert
-   !> @return     String representation
-   function int_to_str(i) result(s)
-      integer, intent(in) :: i
-      character(len=20) :: s
-      write (s, "(I0)") i
-   end function int_to_str
 
    !> Internal wrapper for user Jacobian callback (sparse)
    !>

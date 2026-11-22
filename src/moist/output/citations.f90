@@ -5,7 +5,7 @@
 !> the parts citing it, authors, title, journal line, and DOI. The
 !> registry can be printed in full or filtered by label
 module moist_output_citations
-   use moist_output_format, only: print_wrapped
+   use moist_utils_format, only: print_wrapped
    implicit none(type, external)
    private
 

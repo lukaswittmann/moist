@@ -22,6 +22,7 @@ module moist_cavity_mt_widths
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type
    use moist_math_adjacency, only: adjacency_list_type
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
    private
    public :: width_factors
@@ -210,7 +211,7 @@ contains
       !> Integral, bohr
       real(wp) :: potential
       real(wp) :: normal(3), centroid(3), ab(3), bc(3), ca(3), area, diameter, height
-      normal = cross(b - a, c - a)
+      normal = cross_product(b - a, c - a)
       area = 0.5_wp*norm2(normal)
       centroid = (a + b + c)/3.0_wp
       diameter = max(norm2(b - a), norm2(c - b), norm2(a - c))
@@ -264,21 +265,7 @@ contains
       ta = dot_product(a - x, tangent)
       d = norm2((a - x) - ta*tangent)
       if (d <= 1.0e-14_wp*length) return
-      value = sign(d*(asinh((ta + length)/d) - asinh(ta/d)), dot_product(cross(a - x, b - x), normal))
+      value = sign(d*(asinh((ta + length)/d) - asinh(ta/d)), dot_product(cross_product(a - x, b - x), normal))
    end function edge_fan
-
-   !> Cross product
-   !>
-   !> @param[in] u First vector
-   !> @param[in] v Second vector
-   pure function cross(u, v) result(w)
-      !> First vector
-      real(wp), intent(in) :: u(3)
-      !> Second vector
-      real(wp), intent(in) :: v(3)
-      !> Cross product
-      real(wp) :: w(3)
-      w = [u(2)*v(3) - u(3)*v(2), u(3)*v(1) - u(1)*v(3), u(1)*v(2) - u(2)*v(1)]
-   end function cross
 
 end module moist_cavity_mt_widths

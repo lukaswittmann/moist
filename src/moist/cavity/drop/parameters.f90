@@ -13,9 +13,6 @@ module moist_cavity_drop_parameters
 
    implicit none(type, external)
 
-   !> Maximum supported atomic number
-   integer, parameter :: maxAtomicNumbers = 118
-
    public :: moist_cavity_drop_parameters_type
    public :: is_valid_proj_level
    public :: drop_seed_parameters_type, drop_branch_parameters_type

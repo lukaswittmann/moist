@@ -87,7 +87,7 @@ module moist_cavity_drop_lsf_svdw
                                          lsf_sorted_candidates, lsf_screen_records, &
                                          lsf_vjp_batch_shape_message
    use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3, pack_sym_tensor4, &
-                                    unpack_sym_matrix
+                                unpack_sym_matrix, packed_idx33, packed_idx333
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_lsf_svdw_kernel, only: nkind, &
                                                 svdw_atom_eval, svdw_atom_tangent_eval, &
@@ -121,14 +121,6 @@ module moist_cavity_drop_lsf_svdw
    integer, parameter :: max_strip = maxval(svdw_strip_width)
    !> Strip width of the nuclear vjp pipeline, the order-2 width
    integer, parameter :: vjp_strip = svdw_strip_width(2)
-
-   !> Packed slot of a dense rank-2 index, the kernel's and `moist_math_packed`'s order
-   integer, parameter :: slot2(ndim, ndim) = reshape([1, 2, 4, 2, 3, 5, 4, 5, 6], [ndim, ndim])
-   !> Packed slot of a dense rank-3 index
-   integer, parameter :: slot3(ndim, ndim, ndim) = reshape([ &
-                         1, 2, 5, 2, 3, 6, 5, 6, 8, &
-                         2, 3, 6, 3, 4, 7, 6, 7, 9, &
-                         5, 6, 8, 6, 7, 9, 8, 9, 10], [ndim, ndim, ndim])
 
    !> Fade band at infinity: the untruncated model, every atom on the plain body
    !>
@@ -731,7 +723,7 @@ contains
          if (md >= 2) then
             do j = 1, ndim
                do i = 1, ndim
-                  self%ps2(i, j, k) = self%pk2(1, slot2(i, j), k)
+                  self%ps2(i, j, k) = self%pk2(1, packed_idx33(i, j), k)
                end do
             end do
          end if
@@ -739,7 +731,7 @@ contains
             do l = 1, ndim
                do j = 1, ndim
                   do i = 1, ndim
-                     self%ps3(i, j, l, k) = self%pk3(1, slot3(i, j, l), k)
+                     self%ps3(i, j, l, k) = self%pk3(1, packed_idx333(i, j, l), k)
                   end do
                end do
             end do

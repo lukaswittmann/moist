@@ -32,8 +32,10 @@ module moist_model_continuum_component_pcm_solvers
    use, intrinsic :: iso_fortran_env, only: int64, output_unit
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
+   use mctc_io_utils, only: to_string
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs, sytrf, sytrs
    use moist_math_blas, only: dot, gemv, nrm2
+   use moist_utils_format, only: format_string
    implicit none(type, external)
    private
 
@@ -719,7 +721,7 @@ contains
          if (steps >= solver%nonlinear_max_iter) then
             call newton_statistics(solver, steps, norm_f/scale)
             call fatal_error(error, here//" Newton did not converge: |F|/|F(0)| = " &
-               & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps")
+               & //format_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps")
             return
          end if
          call self%step(x, f, p, error)
@@ -737,8 +739,8 @@ contains
             if (t < newton_step_min) then
                call newton_statistics(solver, steps, norm_f/scale)
                call fatal_error(error, here//" Newton stalled at |F|/|F(0)| = " &
-                  & //real_str(norm_f/scale)//" after "//int_str(steps)//" steps: no step" &
-                  & //" length down to "//real_str(newton_step_min)//" decreases |F|; the" &
+                  & //format_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps: no step" &
+                  & //" length down to "//format_string(newton_step_min, "(es12.4)")//" decreases |F|; the" &
                   & //" Jacobian is near singular away from a root (fold of the solution branch)")
                return
             end if
@@ -1187,8 +1189,8 @@ contains
       integer :: stat
 
       if (size(x) /= size(rhs)) then
-         call fatal_error(error, here//" solution of length "//int_str(size(x)) &
-            & //" does not match right-hand side of length "//int_str(size(rhs)))
+         call fatal_error(error, here//" solution of length "//to_string(size(x)) &
+            & //" does not match right-hand side of length "//to_string(size(rhs)))
          return
       end if
       allocate (rhs_block(size(rhs), 1), stat=stat)
@@ -1253,8 +1255,8 @@ contains
       integer :: stat
 
       if (size(x) /= size(rhs)) then
-         call fatal_error(error, here//" solution of length "//int_str(size(x)) &
-            & //" does not match right-hand side of length "//int_str(size(rhs)))
+         call fatal_error(error, here//" solution of length "//to_string(size(x)) &
+            & //" does not match right-hand side of length "//to_string(size(rhs)))
          return
       end if
       allocate (rhs_block(size(rhs), 2), stat=stat)
@@ -1380,7 +1382,7 @@ contains
       if (stat == 0 .and. .not. op%positive_definite) allocate (ipiv(op%npt), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, here//" failed to allocate the matrix of operator " &
-            & //int_str(op%id))
+            & //to_string(op%id))
          return
       end if
       call op%assemble(a, error)
@@ -1390,9 +1392,9 @@ contains
          kind = pcm_factor_cholesky
          call potrf(a, info, uplo="l")
          if (info > 0) then
-            call fatal_error(error, here//" operator "//int_str(op%id) &
+            call fatal_error(error, here//" operator "//to_string(op%id) &
                & //" is declared positive definite but is not (potrf info = " &
-               & //int_str(info)//")")
+               & //to_string(info)//")")
             return
          end if
       else if (op%symmetric) then
@@ -1466,14 +1468,14 @@ contains
          case (pcm_factor_lu)
             call getrs(f%a, x, f%ipiv, info, trans=merge("t", "n", trans))
          case default
-            call fatal_error(error, here//" operator id "//int_str(op%id) &
+            call fatal_error(error, here//" operator id "//to_string(op%id) &
                & //" holds complex factors; set up the real operator first")
             return
          end select
          if (info /= 0) then
             call fatal_error(error, here//" "//factor_name(f%kind) &
-               & //" solve failed for operator "//int_str(op%id)//" (info = " &
-               & //int_str(info)//")")
+               & //" solve failed for operator "//to_string(op%id)//" (info = " &
+               & //to_string(info)//")")
             return
          end if
       end associate
@@ -1516,7 +1518,7 @@ contains
       if (stat == 0) allocate (ipiv(op%npt), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, here//" failed to allocate the matrix of operator " &
-            & //int_str(op%id))
+            & //to_string(op%id))
          return
       end if
       call op%assemble(a, error)
@@ -1573,9 +1575,9 @@ contains
       integer :: n_slots, info, stat
 
       if (size(rhs) /= op%npt .or. size(x) /= size(rhs)) then
-         call fatal_error(error, here//" right-hand side of length "//int_str(size(rhs)) &
-            & //" and solution of length "//int_str(size(x))//" do not match operator " &
-            & //int_str(op%id)//" of dimension "//int_str(op%npt))
+         call fatal_error(error, here//" right-hand side of length "//to_string(size(rhs)) &
+            & //" and solution of length "//to_string(size(x))//" do not match operator " &
+            & //to_string(op%id)//" of dimension "//to_string(op%npt))
          return
       end if
       n_slots = 0
@@ -1602,14 +1604,14 @@ contains
          case (pcm_factor_complex_lu)
             call getrs(f%z, x_block, f%ipiv, info, trans=merge("t", "n", trans))
          case default
-            call fatal_error(error, here//" operator id "//int_str(op%id) &
+            call fatal_error(error, here//" operator id "//to_string(op%id) &
                & //" holds real factors; set up the complex operator first")
             return
          end select
          if (info /= 0) then
             call fatal_error(error, here//" "//factor_name(f%kind) &
-               & //" solve failed for operator "//int_str(op%id)//" (info = " &
-               & //int_str(info)//")")
+               & //" solve failed for operator "//to_string(op%id)//" (info = " &
+               & //to_string(info)//")")
             return
          end if
       end associate
@@ -1704,8 +1706,8 @@ contains
             nb = size(b%unknowns)/m
             allocate (b%a(m*nb, m*nb), stat=stat)
             if (stat /= 0) then
-               call fatal_error(error, here//" failed to allocate block "//int_str(ib) &
-                  & //" of operator "//int_str(op%id))
+               call fatal_error(error, here//" failed to allocate block "//to_string(ib) &
+                  & //" of operator "//to_string(op%id))
                return
             end if
             call op%assemble_block(b%unknowns(1:nb), b%a, error)
@@ -1762,8 +1764,8 @@ contains
             nb = size(b%unknowns)/m
             allocate (b%z(m*nb, m*nb), stat=stat)
             if (stat /= 0) then
-               call fatal_error(error, here//" failed to allocate block "//int_str(ib) &
-                  & //" of operator "//int_str(op%id))
+               call fatal_error(error, here//" failed to allocate block "//to_string(ib) &
+                  & //" of operator "//to_string(op%id))
                return
             end if
             call op%assemble_block(b%unknowns(1:nb), b%z, error)
@@ -1825,8 +1827,8 @@ contains
                w(1:nu, 1) = x(b%unknowns)
                call getrs(b%a, w(1:nu, 1:1), b%ipiv, info, trans=merge("t", "n", trans))
                if (info /= 0) then
-                  call fatal_error(error, here//" getrs failed for block "//int_str(ib) &
-                     & //" of operator "//int_str(op%id)//" (info = "//int_str(info)//")")
+                  call fatal_error(error, here//" getrs failed for block "//to_string(ib) &
+                     & //" of operator "//to_string(op%id)//" (info = "//to_string(info)//")")
                   return
                end if
                y(b%unknowns) = w(1:nu, 1)
@@ -1879,8 +1881,8 @@ contains
                w(1:nu, 1) = x(b%unknowns)
                call getrs(b%z, w(1:nu, 1:1), b%ipiv, info, trans=merge("t", "n", trans))
                if (info /= 0) then
-                  call fatal_error(error, here//" zgetrs failed for block "//int_str(ib) &
-                     & //" of operator "//int_str(op%id)//" (info = "//int_str(info)//")")
+                  call fatal_error(error, here//" zgetrs failed for block "//to_string(ib) &
+                     & //" of operator "//to_string(op%id)//" (info = "//to_string(info)//")")
                   return
                end if
                y(b%unknowns) = w(1:nu, 1)
@@ -1943,14 +1945,14 @@ contains
       call check_operator(id, npt, n_slots, routine, error)
       if (allocated(error)) return
       if (self%slots(id)%kind /= kind .or. self%slots(id)%npt /= npt) then
-         call fatal_error(error, routine//" operator "//int_str(id) &
+         call fatal_error(error, routine//" operator "//to_string(id) &
             & //" is not set up for this preconditioner")
          return
       end if
       if (nx /= npt .or. ny /= npt) then
-         call fatal_error(error, routine//" vectors of length "//int_str(nx)//" and " &
-            & //int_str(ny)//" do not match operator "//int_str(id)//" of dimension " &
-            & //int_str(npt))
+         call fatal_error(error, routine//" vectors of length "//to_string(nx)//" and " &
+            & //to_string(ny)//" do not match operator "//to_string(id)//" of dimension " &
+            & //to_string(npt))
          return
       end if
    end subroutine check_jacobi_slot
@@ -1978,12 +1980,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (info > 0) then
-         call fatal_error(error, routine//" diagonal block "//int_str(ib)//" of operator " &
-            & //int_str(id)//" is singular ("//name//" info = "//int_str(info)//")")
+         call fatal_error(error, routine//" diagonal block "//to_string(ib)//" of operator " &
+            & //to_string(id)//" is singular ("//name//" info = "//to_string(info)//")")
          return
       else if (info < 0) then
-         call fatal_error(error, routine//" "//name//" rejected argument "//int_str(-info) &
-            & //" for block "//int_str(ib)//" of operator "//int_str(id))
+         call fatal_error(error, routine//" "//name//" rejected argument "//to_string(-info) &
+            & //" for block "//to_string(ib)//" of operator "//to_string(id))
          return
       end if
    end subroutine check_block_info
@@ -2031,22 +2033,22 @@ contains
       m = 1
       if (block_size < 1) then
          call fatal_error(error, routine//" block_size must be positive, got " &
-            & //int_str(block_size))
+            & //to_string(block_size))
          return
       end if
       np = npoint
       if (np == 0) np = npt
       if (npt > 0 .and. (np < 1 .or. mod(npt, max(np, 1)) /= 0)) then
-         call fatal_error(error, routine//" operator "//int_str(id)//" of dimension " &
-            & //int_str(npt)//" is not a multiple of its "//int_str(npoint)//" points")
+         call fatal_error(error, routine//" operator "//to_string(id)//" of dimension " &
+            & //to_string(npt)//" is not a multiple of its "//to_string(npoint)//" points")
          return
       end if
       if (npt > 0) m = npt/np
       if (associated(points)) then
          if (size(points, 1) /= 3 .or. size(points, 2) /= np) then
-            call fatal_error(error, routine//" points of operator "//int_str(id) &
-               & //" have shape ("//int_str(size(points, 1))//", " &
-               & //int_str(size(points, 2))//"), expected (3, "//int_str(np)//")")
+            call fatal_error(error, routine//" points of operator "//to_string(id) &
+               & //" have shape ("//to_string(size(points, 1))//", " &
+               & //to_string(size(points, 2))//"), expected (3, "//to_string(np)//")")
             return
          end if
       end if
@@ -2058,7 +2060,7 @@ contains
       if (stat == 0) allocate (blocks(n_clusters), stat=stat)
       if (stat /= 0) then
          call fatal_error(error, routine//" failed to allocate the clusters of operator " &
-            & //int_str(id))
+            & //to_string(id))
          return
       end if
       perm = [(ib, ib=1, size(perm))]
@@ -2080,7 +2082,7 @@ contains
          if (stat == 0) allocate (blocks(ib)%ipiv(m*nb), stat=stat)
          if (stat /= 0) then
             call fatal_error(error, routine//" failed to allocate the clusters of operator " &
-               & //int_str(id))
+               & //to_string(id))
             return
          end if
          associate (idx => perm(first(ib):first(ib + 1) - 1))
@@ -2285,7 +2287,7 @@ contains
       end if
       do k = 1, size(rhs, 2)
          call gmres_real(self, op, trans, rhs(:, k), x(:, k), &
-            & here//" operator "//int_str(op%id)//", right-hand side "//int_str(k)//":", error)
+            & here//" operator "//to_string(op%id)//", right-hand side "//to_string(k)//":", error)
          if (allocated(error)) return
       end do
    end subroutine pcm_gmres_solve_block
@@ -2318,9 +2320,9 @@ contains
       character(len=*), parameter :: here = "[pcm_gmres_solve_complex]"
 
       if (size(rhs) /= op%npt .or. size(x) /= size(rhs)) then
-         call fatal_error(error, here//" right-hand side of length "//int_str(size(rhs)) &
-            & //" and solution of length "//int_str(size(x))//" do not match operator " &
-            & //int_str(op%id)//" of dimension "//int_str(op%npt))
+         call fatal_error(error, here//" right-hand side of length "//to_string(size(rhs)) &
+            & //" and solution of length "//to_string(size(x))//" do not match operator " &
+            & //to_string(op%id)//" of dimension "//to_string(op%npt))
          return
       end if
       call gmres_prepare(self, op%id, op%npt, here, error)
@@ -2329,7 +2331,7 @@ contains
          call self%setup_complex(op, error)
          if (allocated(error)) return
       end if
-      call gmres_complex(self, op, trans, rhs, x, here//" operator "//int_str(op%id)//":", &
+      call gmres_complex(self, op, trans, rhs, x, here//" operator "//to_string(op%id)//":", &
          & error)
    end subroutine pcm_gmres_solve_complex_complex
 
@@ -2389,9 +2391,9 @@ contains
       integer :: n_slots
 
       if (.not. (self%tol > 0.0_wp) .or. self%restart < 1 .or. self%max_iter < 0) then
-         call fatal_error(error, routine//" invalid settings: tol = "//real_str(self%tol) &
-            & //", restart = "//int_str(self%restart)//", max_iter = " &
-            & //int_str(self%max_iter)//" (need tol > 0, restart >= 1, max_iter >= 0)")
+         call fatal_error(error, routine//" invalid settings: tol = "//format_string(self%tol, "(es12.4)") &
+            & //", restart = "//to_string(self%restart)//", max_iter = " &
+            & //to_string(self%max_iter)//" (need tol > 0, restart >= 1, max_iter >= 0)")
          return
       end if
       n_slots = 0
@@ -2478,9 +2480,9 @@ contains
          if (beta <= threshold) exit
          if (its >= self%max_iter .or. .not. ieee_is_finite(beta)) then
             call gmres_statistics(self, its, beta/b_norm)
-            call fatal_error(error, context//" GMRES did not converge in "//int_str(its) &
-               & //" iterations (relative residual "//real_str(beta/b_norm) &
-               & //", tolerance "//real_str(self%tol)//")")
+            call fatal_error(error, context//" GMRES did not converge in "//to_string(its) &
+               & //" iterations (relative residual "//format_string(beta/b_norm, "(es12.4)") &
+               & //", tolerance "//format_string(self%tol, "(es12.4)")//")")
             return
          end if
 
@@ -2517,7 +2519,7 @@ contains
          do i = k, 1, -1
             if (.not. (abs(h(i, i)) > 0.0_wp)) then
                call gmres_statistics(self, its, beta/b_norm)
-               call fatal_error(error, context//" GMRES breakdown after "//int_str(its) &
+               call fatal_error(error, context//" GMRES breakdown after "//to_string(its) &
                   & //" iterations; the preconditioned operator is singular")
                return
             end if
@@ -2612,9 +2614,9 @@ contains
          if (beta <= threshold) exit
          if (its >= self%max_iter .or. .not. ieee_is_finite(beta)) then
             call gmres_statistics(self, its, beta/b_norm)
-            call fatal_error(error, context//" GMRES did not converge in "//int_str(its) &
-               & //" iterations (relative residual "//real_str(beta/b_norm) &
-               & //", tolerance "//real_str(self%tol)//")")
+            call fatal_error(error, context//" GMRES did not converge in "//to_string(its) &
+               & //" iterations (relative residual "//format_string(beta/b_norm, "(es12.4)") &
+               & //", tolerance "//format_string(self%tol, "(es12.4)")//")")
             return
          end if
 
@@ -2652,7 +2654,7 @@ contains
          do i = k, 1, -1
             if (.not. (abs(h(i, i)) > 0.0_wp)) then
                call gmres_statistics(self, its, beta/b_norm)
-               call fatal_error(error, context//" GMRES breakdown after "//int_str(its) &
+               call fatal_error(error, context//" GMRES breakdown after "//to_string(its) &
                   & //" iterations; the preconditioned operator is singular")
                return
             end if
@@ -2790,13 +2792,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (id < 1 .or. id > n_slots) then
-         call fatal_error(error, routine//" operator id "//int_str(id) &
-            & //" is outside 1.."//int_str(n_slots)//"; reset the solver first")
+         call fatal_error(error, routine//" operator id "//to_string(id) &
+            & //" is outside 1.."//to_string(n_slots)//"; reset the solver first")
          return
       end if
       if (npt < 0) then
-         call fatal_error(error, routine//" operator "//int_str(id) &
-            & //" has negative dimension "//int_str(npt))
+         call fatal_error(error, routine//" operator "//to_string(id) &
+            & //" has negative dimension "//to_string(npt))
          return
       end if
    end subroutine check_operator
@@ -2821,12 +2823,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (info > 0) then
-         call fatal_error(error, routine//" operator "//int_str(id) &
-            & //" is singular ("//factor_name(kind)//" info = "//int_str(info)//")")
+         call fatal_error(error, routine//" operator "//to_string(id) &
+            & //" is singular ("//factor_name(kind)//" info = "//to_string(info)//")")
          return
       else if (info < 0) then
          call fatal_error(error, routine//" "//factor_name(kind) &
-            & //" rejected argument "//int_str(-info)//" for operator "//int_str(id))
+            & //" rejected argument "//to_string(-info)//" for operator "//to_string(id))
          return
       end if
    end subroutine check_factor_info
@@ -2851,10 +2853,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (size(rhs, 1) /= op%npt .or. any(shape(x) /= shape(rhs))) then
-         call fatal_error(error, routine//" right-hand sides ("//int_str(size(rhs, 1)) &
-            & //", "//int_str(size(rhs, 2))//") and solutions ("//int_str(size(x, 1)) &
-            & //", "//int_str(size(x, 2))//") do not match operator " &
-            & //int_str(op%id)//" of dimension "//int_str(op%npt))
+         call fatal_error(error, routine//" right-hand sides ("//to_string(size(rhs, 1)) &
+            & //", "//to_string(size(rhs, 2))//") and solutions ("//to_string(size(x, 1)) &
+            & //", "//to_string(size(x, 2))//") do not match operator " &
+            & //to_string(op%id)//" of dimension "//to_string(op%npt))
          return
       end if
    end subroutine check_block_shapes
@@ -2881,35 +2883,5 @@ contains
          name = "getrf"
       end select
    end function factor_name
-
-   !> Integer as text
-   !>
-   !> @param[in] i  value
-   pure function int_str(i) result(s)
-      !> Value
-      integer, intent(in) :: i
-      !> Decimal representation without blanks
-      character(len=:), allocatable :: s
-
-      character(len=24) :: buffer
-
-      write (buffer, "(i0)") i
-      s = trim(buffer)
-   end function int_str
-
-   !> Real as text in scientific notation
-   !>
-   !> @param[in] r  value
-   pure function real_str(r) result(s)
-      !> Value
-      real(wp), intent(in) :: r
-      !> Representation without leading blanks
-      character(len=:), allocatable :: s
-
-      character(len=32) :: buffer
-
-      write (buffer, "(es12.4)") r
-      s = trim(adjustl(buffer))
-   end function real_str
 
 end module moist_model_continuum_component_pcm_solvers

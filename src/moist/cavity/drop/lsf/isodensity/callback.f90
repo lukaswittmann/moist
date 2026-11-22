@@ -22,6 +22,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
+   use mctc_io_utils, only: to_string
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user, &
                                          lsf_sorted_candidates, lsf_vjp_batch_shape_message
@@ -32,7 +33,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
       & request_require, moist_phase_build, nuclear_charge_request_type
    use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3
-   use moist_output_format, only: format_string
+   use moist_utils_format, only: format_string
    implicit none(type, external)
    private
 
@@ -279,10 +280,10 @@ contains
          self%prepared_deriv = 3
 
          call fatal_error(error, "External LSF evaluation failed with status "// &
-                          format_string(int(host_status), "(i0)")//" at point ("// &
-                          trim(adjustl(format_string(point(1), "(es13.6)")))//" "// &
-                          trim(adjustl(format_string(point(2), "(es13.6)")))//" "// &
-                          trim(adjustl(format_string(point(3), "(es13.6)")))// &
+                          to_string(int(host_status))//" at point ("// &
+                          format_string(point(1), "(es13.6)")//" "// &
+                          format_string(point(2), "(es13.6)")//" "// &
+                          format_string(point(3), "(es13.6)")// &
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if

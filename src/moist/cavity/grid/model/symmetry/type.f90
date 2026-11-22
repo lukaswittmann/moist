@@ -31,7 +31,7 @@ module moist_cavity_grid_model_symmetry_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_symbols, only: to_symbol
-   use mctc_io_utils, only: to_lower
+   use mctc_io_utils, only: to_lower, to_string
    use moist_context, only: moist_context_type
    use moist_utils_timer, only: cat_setup
    use moist_cavity_grid_model_symmetry_parameters, only: moist_cavity_grid_model_symmetry_parameters_type, &
@@ -41,7 +41,7 @@ module moist_cavity_grid_model_symmetry_type
    use moist_math_symmetry_frame, only: sym_threshold_type, frame_level_name, frame_level_list
    use moist_channels_fields, only: field_query_type
    use moist_cavity_grid_model_type, only: grid_model_type, grid_components_type, grid_size_default
-   use moist_output_format, only: format_string
+   use moist_utils_format, only: format_string
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    implicit none(type, external)
@@ -196,8 +196,8 @@ contains
 
       if (present(ctx) .and. self%missed_tolerance()) then
          call ctx%warning("Symmetry: the geometry matches "//self%orient%group_detected// &
-            & " only to "//trim(adjustl(format_string(self%orient%deviation_detected, "(es9.2)")))// &
-            & " bohr, above the tolerance "//trim(adjustl(format_string(self%used%tolerance, "(es9.2)")))// &
+            & " only to "//format_string(self%orient%deviation_detected, "(es9.2)")// &
+            & " bohr, above the tolerance "//format_string(self%used%tolerance, "(es9.2)")// &
             & " bohr, so "//self%orient%group_used// &
             & " is used; symmetrize the input geometry or raise symmetry.tolerance")
       end if
@@ -497,11 +497,11 @@ contains
 
       text = ""
       if (orient%frame%near_gap) text = text//", nearly degenerate second-moment eigenvalues"// &
-         & " (relative gap "//trim(adjustl(format_string(orient%frame%near_gap_value, "(es9.2)")))//")"
+         & " (relative gap "//format_string(orient%frame%near_gap_value, "(es9.2)")//")"
       if (orient%frame%near_linear) text = text//", nearly linear molecule (mean square distance"// &
-         & " from the axis "//trim(adjustl(format_string(orient%frame%tau, "(es9.2)")))//" bohr^2)"
+         & " from the axis "//format_string(orient%frame%tau, "(es9.2)")//" bohr^2)"
       if (orient%frame%near_harmonic) text = text//", weak or nearly tied in-plane harmonic ("// &
-         & trim(adjustl(format_string(orient%frame%near_harmonic_value, "(es9.2)")))//")"
+         & format_string(orient%frame%near_harmonic_value, "(es9.2)")//")"
       text = text(3:)
    end function near_text
 
@@ -671,8 +671,8 @@ contains
       if (.not. self%computed) return
       associate (orient => self%orient)
          call query%add_int_value("symmetry_orientation", &
-            & "Sphere orientation used: "//format_string(orient_lab, "(i0)")//" lab frame, "// &
-            & format_string(orient_molecular, "(i0)")//" molecular frame", orient%orientation)
+            & "Sphere orientation used: "//to_string(orient_lab)//" lab frame, "// &
+            & to_string(orient_molecular)//" molecular frame", orient%orientation)
          call query%add_int_value("symmetry_order", "Order of the group used", size(orient%ops, 3))
          scalar = orient%deviation
          call query%add_real_scalar("symmetry_deviation", &
@@ -761,23 +761,23 @@ contains
          call pp%kv("Group requested", orient%group_requested)
          if (len(orient%group_detected) > 0) then
             call pp%kv("Group detected", orient%group_detected//" (deviation "// &
-               & trim(adjustl(format_string(orient%deviation_detected, "(es9.2)")))//" bohr)")
+               & format_string(orient%deviation_detected, "(es9.2)")//" bohr)")
          else
             call pp%kv("Group detected", "-")
          end if
          used = orient%group_used
-         if (order > 1) used = used//" (order "//format_string(order, "(i0)")//")"
+         if (order > 1) used = used//" (order "//to_string(order)//")"
          call pp%kv("Group used", used)
          if (len(orient%reason) > 0) call pp%kv("Reason", orient%reason)
          if (order > 1) then
-            call pp%kv("Max. deviation", trim(adjustl(format_string(orient%deviation, "(es9.2)")))// &
-               & " bohr (tolerance "//trim(adjustl(format_string(self%used%tolerance, "(es9.2)")))//" bohr)")
+            call pp%kv("Max. deviation", format_string(orient%deviation, "(es9.2)")// &
+               & " bohr (tolerance "//format_string(self%used%tolerance, "(es9.2)")//" bohr)")
          else
-            call pp%kv("Tolerance", trim(adjustl(format_string(self%used%tolerance, "(es9.2)")))//" bohr")
+            call pp%kv("Tolerance", format_string(self%used%tolerance, "(es9.2)")//" bohr")
          end if
          if (orient%orientation == orient_molecular) call print_frames(pp, orient)
-         call pp%kv("Orbits", format_string(orient%norbit, "(i0)"))
-         call pp%kv("Grid rotations", format_string(orient%nrot, "(i0)"))
+         call pp%kv("Orbits", to_string(orient%norbit))
+         call pp%kv("Grid rotations", to_string(orient%nrot))
          call pp%pop()
          call pp%blank()
          if (lvl >= 2 .and. order > 1) call print_orbit_table(orient, iu, self%num, self%radii)
@@ -798,7 +798,7 @@ contains
       type(sym_orient_type), intent(in) :: orient
 
       call pp%kv("Molecular frame", frame_level_name(orient%frame%level)//" (eigen-gap "// &
-         & trim(adjustl(format_string(orient%frame%gap, "(es9.2)")))//")")
+         & format_string(orient%frame%gap, "(es9.2)")//")")
       if (orient%frame%near_gap .or. orient%frame%near_linear .or. orient%frame%near_harmonic) then
          call pp%kv("Near a switch", near_text(orient))
       end if
@@ -927,10 +927,10 @@ contains
          end do
          ! Runs of three or more as a range, shorter ones listed
          if (j >= i + 2) then
-            item = format_string(ids(i), "(i0)")//"-"//format_string(ids(j), "(i0)")
+            item = to_string(ids(i))//"-"//to_string(ids(j))
          else
             j = i
-            item = format_string(ids(i), "(i0)")
+            item = to_string(ids(i))
          end if
          if (len(text) > 0) then
             if (len(text) + 1 + len(item) > max_len) then

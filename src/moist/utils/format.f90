@@ -1,19 +1,140 @@
-!> Scalar-to-text conversion shared by the pretty printers
+!> Scalar-to-text conversion and text-wrapping utilities
 !>
-!> - `value_to_string`: one scalar through a Fortran edit descriptor, zero as `0.0`
+!> - `format_string`: pure inline scalar rendering with a Fortran format, trimmed
+!> - `print_wrapped`: word-wrapped text output at a given column width
+!> - `value_to_string`: polymorphic scalar for pretty printers, zero as `0.0`
 !> - `fixed_fmt`, `exp_fmt`, `int_fmt`: default descriptors from a field width
 !> - `magnitude_real_fmt`: fixed or exponential descriptor by the size of a value
 module moist_utils_format
    use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
    implicit none(type, external)
    private
+   public :: format_string, print_wrapped
    public :: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
+
+   !> Format a scalar into a trimmed, left-adjusted string
+   interface format_string
+      module procedure :: format_string_int
+      module procedure :: format_string_real_dp
+   end interface format_string
 
    !> Internal-write buffer, room for a numeric edit re-rendered at a 400-character
    !> width and literal text around it
    integer, parameter :: buffer_len = 512
 
 contains
+
+   !> Render a double-precision real with a parenthesized Fortran format
+   !>
+   !> - leading and trailing blanks are stripped
+   !> - returns `"*"` if the internal write fails
+   !>
+   !> @param[in] val     value to render
+   !> @param[in] format  Fortran format with outer parentheses, e.g. `"(es9.2)"`
+   pure function format_string_real_dp(val, format) result(str)
+      !> Value to render
+      real(real64), intent(in) :: val
+      !> Fortran format with outer parentheses
+      character(len=*), intent(in) :: format
+      !> Trimmed, left-adjusted rendering
+      character(len=:), allocatable :: str
+
+      character(len=buffer_len) :: buffer
+      integer :: stat
+
+      write (buffer, format, iostat=stat) val
+      if (stat == 0) then
+         str = trim(adjustl(buffer))
+      else
+         str = "*"
+      end if
+   end function format_string_real_dp
+
+   !> Render an integer with a parenthesized Fortran format
+   !>
+   !> - leading and trailing blanks are stripped
+   !> - returns `"*"` if the internal write fails
+   !>
+   !> @param[in] val     value to render
+   !> @param[in] format  Fortran format with outer parentheses, e.g. `"(i0)"`
+   pure function format_string_int(val, format) result(str)
+      !> Value to render
+      integer, intent(in) :: val
+      !> Fortran format with outer parentheses
+      character(len=*), intent(in) :: format
+      !> Trimmed, left-adjusted rendering
+      character(len=:), allocatable :: str
+
+      character(len=buffer_len) :: buffer
+      integer :: stat
+
+      write (buffer, format, iostat=stat) val
+      if (stat == 0) then
+         str = trim(adjustl(buffer))
+      else
+         str = "*"
+      end if
+   end function format_string_int
+
+   !> Write text word-wrapped at spaces to a given width
+   !>
+   !> - words are never split; breaks occur at spaces only
+   !>
+   !> @param[in] unit    Fortran I/O unit
+   !> @param[in] text    text to write
+   !> @param[in] indent  prefix for every line, e.g. `"  "`
+   !> @param[in] width   maximum characters per line, excluding indent
+   subroutine print_wrapped(unit, text, indent, width)
+      !> Fortran I/O unit
+      integer, intent(in) :: unit
+      !> Text to write
+      character(len=*), intent(in) :: text
+      !> Prefix for every line
+      character(len=*), intent(in) :: indent
+      !> Maximum characters per line, excluding indent
+      integer, intent(in) :: width
+
+      integer :: pos, line_start, last_space, text_len
+
+      text_len = len_trim(text)
+      if (text_len == 0) then
+         write (unit, "(a)") indent
+         return
+      end if
+
+      line_start = 1
+      do while (line_start <= text_len)
+         ! Remainder fits on one line
+         if (line_start + width - 1 >= text_len) then
+            write (unit, "(a,a)") indent, text(line_start:text_len)
+            return
+         end if
+
+         ! Last space within the allowed width
+         last_space = 0
+         do pos = line_start, min(line_start + width - 1, text_len)
+            if (text(pos:pos) == " ") last_space = pos
+         end do
+
+         if (last_space > line_start) then
+            ! Break at the last space within width
+            write (unit, "(a,a)") indent, text(line_start:last_space - 1)
+            line_start = last_space + 1
+         else
+            ! No space within width: break at the next space beyond width
+            last_space = index(text(line_start:text_len), " ")
+            if (last_space > 0) then
+               last_space = line_start + last_space - 1
+               write (unit, "(a,a)") indent, text(line_start:last_space - 1)
+               line_start = last_space + 1
+            else
+               ! No remaining spaces: write the rest
+               write (unit, "(a,a)") indent, text(line_start:text_len)
+               return
+            end if
+         end if
+      end do
+   end subroutine print_wrapped
 
    !> Convert a scalar to text with an edit descriptor
    !>

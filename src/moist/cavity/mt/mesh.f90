@@ -5,6 +5,7 @@ module moist_cavity_mt_mesh
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   use moist_math_linalg, only: cross_product
 !$ use omp_lib, only: omp_get_thread_num, omp_get_max_threads
    implicit none(type, external)
    private
@@ -517,8 +518,8 @@ contains
       integer :: capacity, stat
       integer, allocatable :: grown(:, :)
       if (v(1) == v(2) .or. v(1) == v(3) .or. v(2) == v(3)) return
-      normal = cross(buffer%vertices(:, v(2)) - buffer%vertices(:, v(1)), &
-                     buffer%vertices(:, v(3)) - buffer%vertices(:, v(1)))
+      normal = cross_product(buffer%vertices(:, v(2)) - buffer%vertices(:, v(1)), &
+                             buffer%vertices(:, v(3)) - buffer%vertices(:, v(1)))
       if (norm2(normal) <= 0.0_wp) return
       capacity = size(buffer%triangles, 2)
       if (buffer%nt == capacity) then
@@ -589,12 +590,12 @@ contains
       do it = 1, buffer%nt
          v = mesh%triangles(:, it)
          p = buffer%vertices(:, v)
-         n = cross(p(:, 2) - p(:, 1), p(:, 3) - p(:, 1))
+         n = cross_product(p(:, 2) - p(:, 1), p(:, 3) - p(:, 1))
          length = norm2(n)
          mesh%area(it) = 0.5_wp*length
          mesh%normal(:, it) = n/length
          mesh%centroid(:, it) = origin + sum(p, dim=2)/3.0_wp
-         volume = dot_product(p(:, 1), cross(p(:, 2), p(:, 3)))/6.0_wp
+         volume = dot_product(p(:, 1), cross_product(p(:, 2), p(:, 3)))/6.0_wp
          y = volume - correction
          summed = mesh%total_volume + y
          correction = (summed - mesh%total_volume) - y
@@ -709,19 +710,5 @@ contains
       call move_alloc(grown%second, table%second)
       call move_alloc(grown%value, table%value)
    end subroutine resize_table
-
-   !> Three-dimensional vector product
-   !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> Vector product
-      real(wp) :: c(3)
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
 
 end module moist_cavity_mt_mesh

@@ -7,6 +7,7 @@ module moist_math_smoothing
 
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
+   use mctc_io_utils, only: to_string
 
    implicit none(type, external)
    private
@@ -356,7 +357,7 @@ contains
          end select
       case default
          call fatal_error(error, "wendland_init: unsupported order "// &
-                          trim(as_string(order))//" (must be 2, 4, or 6)")
+                          to_string(order)//" (must be 2, 4, or 6)")
          return
       end select
    end subroutine wendland_init
@@ -375,22 +376,9 @@ contains
       integer, intent(in) :: dimension
 
       call fatal_error(error, "wendland_init: unsupported dimension "// &
-                       trim(as_string(dimension))//" for "//kernel// &
+                       to_string(dimension)//" for "//kernel// &
                        " (must be 1, 2, or 3)")
    end subroutine unsupported_dimension
-
-   !> Render an integer for use in a diagnostic message
-   !>
-   !> @param[in] value Integer to render
-   !> @returns         Left-justified decimal representation
-   pure function as_string(value) result(text)
-      !> Integer to render
-      integer, intent(in) :: value
-      !> Left-justified decimal representation
-      character(len=16) :: text
-
-      write (text, "(i0)") value
-   end function as_string
 
    !> Evaluate Wendland kernel at distance r
    pure function wendland_f0(self, r) result(kernel_val)

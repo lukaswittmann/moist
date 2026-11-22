@@ -31,6 +31,7 @@
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
    use mctc_env, only: error_type, fatal_error
+   use mctc_io_resize, only: resize
    use moist_utils_timer, only: timer_type, timer_name_len => name_len, cat_host
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_output_citations, only: citation, print_citations
@@ -451,15 +452,9 @@ contains
       class(moist_context_type), intent(inout) :: self
       !> Node to push
       integer, intent(in) :: id
-      !> Grown stack
-      integer, allocatable :: frames(:)
 
       if (.not. allocated(self%host_frames)) allocate (self%host_frames(8))
-      if (self%nhost == size(self%host_frames)) then
-         allocate (frames(2*self%nhost))
-         frames(:self%nhost) = self%host_frames(:self%nhost)
-         call move_alloc(frames, self%host_frames)
-      end if
+      if (self%nhost == size(self%host_frames)) call resize(self%host_frames, 2*self%nhost)
       self%nhost = self%nhost + 1
       self%host_frames(self%nhost) = id
 

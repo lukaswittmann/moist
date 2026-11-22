@@ -12,6 +12,7 @@
 module moist_math_solver_lbfgsb
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
+   use mctc_io_utils, only: to_string
    use moist_math_solver_type, only: solver_base_type
    use lbfgsb_module, only: setulb, lbfgsp_wp
    use, intrinsic :: iso_fortran_env, only: output_unit
@@ -234,7 +235,7 @@ contains
       if (present(m)) m_use = m
       if (m_use < 3 .or. m_use > 20) then
          call fatal_error(error, "L-BFGS-B memory parameter m must be in range [3,20], got "// &
-                          int_to_str(m_use))
+                          to_string(m_use))
          return
       end if
       tmp%m = m_use
@@ -334,14 +335,14 @@ contains
       ! Validate bounds
       do i = 1, n
          if (tmp%nbd(i) < 0 .or. tmp%nbd(i) > 3) then
-            call fatal_error(error, "Invalid nbd("//int_to_str(i)//") = "// &
-                             int_to_str(tmp%nbd(i))//" (must be 0, 1, 2, or 3)")
+            call fatal_error(error, "Invalid nbd("//to_string(i)//") = "// &
+                             to_string(tmp%nbd(i))//" (must be 0, 1, 2, or 3)")
             return
          end if
          if (tmp%nbd(i) == 2) then
             if (tmp%l(i) > tmp%u(i)) then
                call fatal_error(error, &
-                                "Lower bound exceeds upper bound for variable "//int_to_str(i))
+                                "Lower bound exceeds upper bound for variable "//to_string(i))
                return
             end if
          end if
@@ -382,8 +383,8 @@ contains
 
       ! Validate input
       if (size(x) /= self%n) then
-         call fatal_error(error, "Input x size mismatch: expected "//int_to_str(self%n)// &
-                          ", got "//int_to_str(size(x)))
+         call fatal_error(error, "Input x size mismatch: expected "//to_string(self%n)// &
+                          ", got "//to_string(size(x)))
          return
       end if
 
@@ -417,7 +418,7 @@ contains
             ! Check iteration limit
             if (iter >= self%max_iter) then
                call fatal_error(error, "L-BFGS-B reached maximum iterations ("// &
-                                int_to_str(self%max_iter)//")")
+                                to_string(self%max_iter)//")")
                return
             end if
 
@@ -495,15 +496,5 @@ contains
       end if
 
    end subroutine compute_objective_and_gradient
-
-   !> Convert integer to string (helper function)
-   !>
-   !> @param[in]  i  Integer to convert
-   !> @return     String representation
-   function int_to_str(i) result(s)
-      integer, intent(in) :: i
-      character(len=20) :: s
-      write (s, "(I0)") i
-   end function int_to_str
 
 end module moist_math_solver_lbfgsb
