@@ -1,31 +1,29 @@
 /* C shim exposing the vendored libmsym point-group detection to Fortran
  *
- * libmsym hands out pointers into its own context (operations, subgroups),
- * enums and fixed-size name buffers; this file flattens that into plain arrays
- * so moist_math_symmetry_msym (msym.f90) binds these entry points and nothing else
+ * Flattens libmsym's context pointers, enums and fixed-size name buffers into
+ * plain arrays; moist_math_symmetry_msym (msym.f90) binds these entry points
+ * and nothing else
  *
- * - every element gets unit mass, the caller's species id as nuclear charge
- *   and a fixed name: libmsym calls two atoms equivalent when all three match,
- *   so the species id alone decides which atoms may be permuted, and the
- *   center libmsym works about is the plain centroid (no isotope dependence)
- * - operation matrices are written column-major (Fortran order), each acting
- *   on coordinates relative to `center`
- * - subgroup operations are returned as indices into the operation list,
- *   found by matrix comparison, not by pointer identity into libmsym's arrays
- * - detection runs at libmsym's default thresholds except `equivalence`,
- *   which the caller passes: the default merges unrelated orbits of a large
- *   molecule into one set, which libmsym then rejects or reads as a lower group
+ * Conventions
  * - every entry point returns 0 on success and a nonzero status otherwise;
  *   moist_msym_error_message() renders the status and libmsym's last details
+ * - operation matrices are column-major (Fortran order) and act on
+ *   coordinates relative to `center`
+ * - subgroup operations are indices into the operation list, found by
+ *   matrix comparison, not by pointer identity into libmsym's arrays
  *
- * - libmsym's floating-point exceptions stay inside: it divides zero by zero
- *   on purpose (vequal), which a caller trapping exceptions (gfortran
- *   -ffpe-trap) would die on; every entry point computing in libmsym holds
- *   the caller's environment, then drops the raised flags and restores it
- *
- * libmsym keeps its error details in a static buffer, so calls must not run
- * concurrently; moist calls this once per cavity update, outside parallel
- * regions
+ * Choices
+ * - atoms: unit mass, the caller's species id as nuclear charge, one fixed
+ *   name; libmsym calls two atoms equivalent when all three match, so the
+ *   species id alone decides, and `center` is the plain centroid
+ * - thresholds: libmsym's defaults unless the caller passes a positive
+ *   `equivalence` or `angle`; msym.f90 says when and why (find_point_group)
+ * - floating-point exceptions stay inside: libmsym divides zero by zero on
+ *   purpose (vequal), which a caller trapping exceptions (gfortran
+ *   -ffpe-trap) would die on; entry points computing in libmsym hold the
+ *   caller's environment, then drop the raised flags and restore it
+ * - not thread safe: libmsym keeps its error details in a static buffer;
+ *   msym.f90 calls from an OpenMP critical section
  */
 #include <fenv.h>
 #include <math.h>
@@ -89,13 +87,14 @@ void moist_msym_release(void *handle) {
 }
 
 static int find_symmetry(void *handle, int nat, const double *xyz,
-                         const int *species, double equivalence) {
+                         const int *species, double equivalence, double angle) {
   msym_context ctx = (msym_context)handle;
-  /* Default thresholds with the caller's equivalence test; not positive
-   * keeps libmsym's own */
-  if (equivalence > 0.0) {
+  /* Default thresholds with the caller's equivalence and angle tests; not
+   * positive keeps libmsym's own */
+  if (equivalence > 0.0 || angle > 0.0) {
     msym_thresholds_t thresholds = *msymGetDefaultThresholds();
-    thresholds.equivalence = equivalence;
+    if (equivalence > 0.0) thresholds.equivalence = equivalence;
+    if (angle > 0.0) thresholds.angle = angle;
     msym_error_t tret = msymSetThresholds(ctx, &thresholds);
     if (tret != MSYM_SUCCESS) return (int)tret;
   }
@@ -130,10 +129,10 @@ static int find_symmetry(void *handle, int nat, const double *xyz,
 }
 
 int moist_msym_find(void *handle, int nat, const double *xyz,
-                    const int *species, double equivalence) {
+                    const int *species, double equivalence, double angle) {
   fp_guard guard;
   fp_hold(&guard);
-  int status = find_symmetry(handle, nat, xyz, species, equivalence);
+  int status = find_symmetry(handle, nat, xyz, species, equivalence, angle);
   fp_restore(&guard);
   return status;
 }
