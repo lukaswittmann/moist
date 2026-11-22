@@ -86,15 +86,20 @@ contains
       !> Relative permittivity inside the cavity
       real(wp), intent(in), optional :: epsilon_solute
       type(moist_pcm_parameters_type) :: settings
+      !> Values under test are finite and within their bounds
+      logical :: valid
 
-      if (.not. ieee_is_finite(epsilon) .or. epsilon < 1.0_wp .or. &
-          & .not. ieee_is_finite(epsilon_inf) .or. epsilon_inf < 1.0_wp .or. &
-          & .not. ieee_is_finite(lambda) .or. lambda <= 0.0_wp) then
+      ! Finiteness test first: an ordered comparison on a NaN raises invalid
+      valid = ieee_is_finite(epsilon) .and. ieee_is_finite(epsilon_inf) .and. ieee_is_finite(lambda)
+      if (valid) valid = epsilon >= 1.0_wp .and. epsilon_inf >= 1.0_wp .and. lambda > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Nonlocal PCM requires permittivities >= 1 and positive lambda")
          return
       end if
       if (present(epsilon_solute)) then
-         if (.not. ieee_is_finite(epsilon_solute) .or. epsilon_solute < 1.0_wp) then
+         valid = ieee_is_finite(epsilon_solute)
+         if (valid) valid = epsilon_solute >= 1.0_wp
+         if (.not. valid) then
             call fatal_error(error, "Nonlocal PCM solute permittivity must be >= 1")
             return
          end if

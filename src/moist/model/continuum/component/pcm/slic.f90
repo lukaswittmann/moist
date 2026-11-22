@@ -103,8 +103,13 @@ contains
       !> Static potential offset
       real(wp), intent(in), optional :: phi_static
       type(moist_pcm_parameters_type) :: settings
+      !> Epsilon is a number and at least one
+      logical :: valid
 
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "SLIC epsilon must be >= 1")
          return
       end if

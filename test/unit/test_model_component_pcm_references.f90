@@ -1460,7 +1460,12 @@ contains
       associate (eps => physics%eps)
          select case (kind)
          case (pcm_cosmo)
-            feps = merge((eps - 1.0_wp)/(eps + 0.5_wp), 1.0_wp, ieee_is_finite(eps))
+            ! No merge: it evaluates both arms, and inf/inf raises invalid
+            if (ieee_is_finite(eps)) then
+               feps = (eps - 1.0_wp)/(eps + 0.5_wp)
+            else
+               feps = 1.0_wp
+            end if
          case (pcm_lpb)
             feps = 1.0_wp - 1.0_wp/(eps*(1.0_wp + physics%kappa*radius))
          case (pcm_slic)
@@ -1476,7 +1481,11 @@ contains
             feps = 1.0_wp/physics%eps_solute - 1.0_wp/eps &
                & - (1.0_wp/physics%eps_inf - 1.0_wp/eps)/(1.0_wp + nu)
          case default
-            feps = merge((eps - 1.0_wp)/eps, 1.0_wp, ieee_is_finite(eps))
+            if (ieee_is_finite(eps)) then
+               feps = (eps - 1.0_wp)/eps
+            else
+               feps = 1.0_wp
+            end if
          end select
       end associate
       energy = -0.5_wp*feps*charge**2/radius

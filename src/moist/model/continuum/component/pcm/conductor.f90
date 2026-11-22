@@ -105,9 +105,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Epsilon is a number and at least one
+      logical :: valid
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "[new_component_cpcm] Dielectric constant must be >= 1")
          return
       end if
@@ -144,9 +149,14 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Linear solver and operator-storage controls
       type(moist_pcm_parameters_type), intent(in), optional :: param
+      !> Epsilon is a number and at least one
+      logical :: valid
 
       if (present(ctx)) self%ctx => ctx
-      if (epsilon < 1.0_wp .or. ieee_is_nan(epsilon)) then
+      ! NaN test first: an ordered comparison on a NaN raises invalid
+      valid = .not. ieee_is_nan(epsilon)
+      if (valid) valid = epsilon >= 1.0_wp
+      if (.not. valid) then
          call fatal_error(error, "[new_component_cosmo] Dielectric constant must be >= 1")
          return
       end if

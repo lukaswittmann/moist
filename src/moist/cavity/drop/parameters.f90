@@ -309,13 +309,18 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
+      !> Value under test is finite and within its bound
+      logical :: valid
 
-      ! Written as `.not. (x > 0)` with a finiteness test, so NaN and Inf are refused
-      if (.not. (ieee_is_finite(self%tolerance) .and. self%tolerance > 0.0_wp)) then
+      valid = ieee_is_finite(self%tolerance)
+      if (valid) valid = self%tolerance > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Invalid DROP numerical parameters: tolerance must be finite and positive")
          return
       end if
-      if (.not. (ieee_is_finite(self%rho_grid_h) .and. self%rho_grid_h > 0.0_wp)) then
+      valid = ieee_is_finite(self%rho_grid_h)
+      if (valid) valid = self%rho_grid_h > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Invalid DROP numerical parameters: rho_grid_h must be finite and positive")
          return
       end if
@@ -351,7 +356,9 @@ contains
          call fatal_error(error, "Projection batch size must be positive")
          return
       end if
-      if (.not. ieee_is_finite(self%solve%switch_fnorm) .or. self%solve%switch_fnorm < 0.0_wp) then
+      valid = ieee_is_finite(self%solve%switch_fnorm)
+      if (valid) valid = self%solve%switch_fnorm >= 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Newton stage-switch residual must be nonnegative")
          return
       end if
@@ -359,11 +366,15 @@ contains
          call fatal_error(error, "Newton cheap-step budget must not be negative")
          return
       end if
-      if (.not. (ieee_is_finite(self%solve%max_step) .and. self%solve%max_step > 0.0_wp)) then
+      valid = ieee_is_finite(self%solve%max_step)
+      if (valid) valid = self%solve%max_step > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Newton step cap must be positive")
          return
       end if
-      if (.not. ieee_is_finite(self%solve%merit_margin) .or. self%solve%merit_margin <= 0.0_wp) then
+      valid = ieee_is_finite(self%solve%merit_margin)
+      if (valid) valid = self%solve%merit_margin > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Newton merit margin must be positive")
          return
       end if
@@ -412,11 +423,15 @@ contains
       !>
       !> A negative window or a non-positive alpha makes the consumers of the
       !> admissible radius take the square root of a negative number
-      if (.not. (ieee_is_finite(self%phi_alpha) .and. self%phi_alpha > 0.0_wp)) then
+      valid = ieee_is_finite(self%phi_alpha)
+      if (valid) valid = self%phi_alpha > 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Objective alpha must be finite and positive")
          return
       end if
-      if (.not. ieee_is_finite(self%branch%dpdist_max) .or. self%branch%dpdist_max < 0.0_wp) then
+      valid = ieee_is_finite(self%branch%dpdist_max)
+      if (valid) valid = self%branch%dpdist_max >= 0.0_wp
+      if (.not. valid) then
          call fatal_error(error, "Branch distance window must not be negative")
          return
       end if

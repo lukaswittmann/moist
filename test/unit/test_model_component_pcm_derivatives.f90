@@ -268,8 +268,6 @@ contains
       type(structure_type) :: mol
       !> Component under test
       class(model_continuum_component_pcm), allocatable :: pcm
-      !> Host part of the gradient phase, unused here
-      type(response_type) :: response
       !> Gradients (3, nat, reverse/forward, cutoff), host and nuclear charges
       real(wp) :: gradient(3, 3, 2, 2)
       real(wp), allocatable :: q(:), z(:)
@@ -294,6 +292,7 @@ contains
             block
                type(cavity_type_iswig) :: cavity
                type(coupling_type), target :: coupling
+               type(response_type) :: response
 
                call get_test_cavity_iswig(mol, cavity, err, nleb=110, cut_f=cuts(icut))
                call check_moist_error(error, err, "cavity")

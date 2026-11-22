@@ -360,11 +360,6 @@ Analytic nuclear derivatives include this orientation term.
 The reverse-mode gradient (``get_surface_gradient``) collects one torque per sphere in its existing sweep, at a few percent extra cost.
 The forward-mode arrays (``get_gradient``) become dense in the atoms, at a cost proportional to points times atoms.
 
-With a group of more than one operation, the orientation term is the derivative of the cavity whose group moves rigidly with the molecule.
-Along the totally symmetric part of a displacement the grids follow the molecular frame within what each site allows; of the rest, only the rigid rotation counts.
-The derivatives are therefore exact along rigid motions and along displacements that keep the group, for every quantity.
-Along a symmetry-breaking distortion the group itself is lost, and the derivative leaves out the orientation response to it.
-
 Limitations
 ~~~~~~~~~~~
 

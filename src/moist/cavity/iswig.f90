@@ -27,6 +27,9 @@ module moist_cavity_iswig
 
    public :: moist_cavity_iswig_parameters_type
 
+   !> Smallest switching value kept: f**(-2), f**(-3) of the PCM kernels overflow below
+   real(wp), parameter :: f_floor = 1.0e-100_wp
+
    !> iSwiG construction parameters
    type, extends(moist_model_parameters_type) :: moist_cavity_iswig_parameters_type
       !> Lebedev points per sphere
@@ -735,7 +738,7 @@ contains
    !> @param[in]  origin       Volume origin, bohr
    !> @param[in]  radii        Sphere radii (nsph), bohr
    !> @param[in]  cut_a        Area cutoff, used when positive
-   !> @param[in]  cut_f        Switching cutoff, used otherwise
+   !> @param[in]  cut_f        Switching cutoff, used otherwise; at least `f_floor`
    !> @param[in]  grid         Grid components of every sphere
    !> @param[out] ngrid        Number of surviving points
    !> @param[out] owner        Sphere of every point (ngrid)
@@ -809,7 +812,7 @@ contains
       real(wp), allocatable :: xyz_raw(:, :), area_raw(:)
       integer, allocatable  :: owner_raw(:), comp_raw(:)
       real(wp), allocatable :: zeta_raw(:), weight_raw(:), switch_raw(:)
-      real(wp) :: rx, ry, rz
+      real(wp) :: rx, ry, rz, f_min
 
       ! Allocate raw (pre-filter) arrays of total size
       nraw = grid%nnode
@@ -829,14 +832,16 @@ contains
       call compute_switching_function(nraw, nsph, owner_raw, xyz_raw, centers, &
                                       zeta_raw, radii, switch_raw)
 
-      ! Filter out points according to cut_a or cut_f
+      ! Filter out points according to cut_a or cut_f, never below f_floor
+      f_min = f_floor
+      if (cut_a <= 0.0_wp) f_min = max(cut_f, f_floor)
       ngrid = 0
       do iraw = 1, nraw
+         if (switch_raw(iraw) <= f_min) cycle
          if (cut_a > 0.0_wp) then
-            if (switch_raw(iraw)*area_raw(iraw) > cut_a) ngrid = ngrid + 1
-         else
-            if (switch_raw(iraw) > cut_f) ngrid = ngrid + 1
+            if (switch_raw(iraw)*area_raw(iraw) <= cut_a) cycle
          end if
+         ngrid = ngrid + 1
       end do
 
       allocate (grid_xyz(3, ngrid), source=0.0_wp)
@@ -861,10 +866,9 @@ contains
 
       ipt = 0
       do iraw = 1, nraw
+         if (switch_raw(iraw) <= f_min) cycle
          if (cut_a > 0.0_wp) then
             if ((switch_raw(iraw)*area_raw(iraw)) <= cut_a) cycle
-         else
-            if (switch_raw(iraw) <= cut_f) cycle
          end if
 
          ipt = ipt + 1
