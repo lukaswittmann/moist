@@ -73,3 +73,19 @@ iSwiG needs a :ref:`radius model <cavity-radii>` and builds the discretization d
          )
 
 A positive ``cut_a`` replaces ``cut_f``.
+
+Grid Orientation
+----------------
+
+A symmetry model (``grid_model=`` in Fortran, ``--sym`` and ``--orientation`` on the command line) orients the grids by the molecule or by its point group; see :ref:`cavity-symmetry`.
+
+In the molecular orientation, point :math:`i` of sphere :math:`a` sits at :math:`\mathbf p_i = \mathbf c_a + r_a \mathbf R_a \mathbf u_i`, with :math:`\mathbf u_i` a Lebedev node and :math:`\mathbf R_a` the rotation of the sphere.
+The points are rigid on their sphere: a rotation :math:`\delta\boldsymbol\omega_a` of the grid moves a point by :math:`\delta\boldsymbol\omega_a \times (\mathbf p_i - \mathbf c_a)` and turns its normal by :math:`\delta\boldsymbol\omega_a \times \mathbf n_i`, while widths and Lebedev weights stay unchanged.
+The reverse-mode gradient therefore collects one torque per sphere,
+
+.. math::
+
+   \boldsymbol\tau_a = \sum_{i \in a} \left[ (\mathbf p_i - \mathbf c_a) \times \bar{\mathbf p}_i + \mathbf n_i \times \bar{\mathbf n}_i \right],
+
+with :math:`\bar{\mathbf p}_i` the adjoint of the point position, including the switching functions of the neighbouring spheres, and :math:`\bar{\mathbf n}_i` that of the normal.
+The symmetry model maps the torques to the atoms through the molecular frame.

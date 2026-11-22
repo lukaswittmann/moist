@@ -163,6 +163,28 @@ Omitting the settings object (an absent ``param``, ``NULL`` options, or no
 LSF and the radius model. Call ``update`` after every geometry change, and for
 ρ-DROP after every density change as well.
 
+Grid Orientation
+----------------
+
+``new_cavity_drop`` takes an optional ``grid_model`` argument, and ``drop svdw``, ``drop cfc`` and ``drop sses`` take ``--sym``, ``--orientation`` and ``--sym-tolerance``; they orient the reference grids by the molecule or by its point group, see :ref:`cavity-symmetry`.
+
+The Lebedev nodes are the anchors of the projection: in the molecular orientation, anchor :math:`j` of sphere :math:`a` sits at
+
+.. math::
+   
+   \mathbf r^\circ_j = \mathbf c_a + r_a \mathbf R_a \mathbf u_j, 
+
+and the projected point follows it.
+A rotation :math:`\delta\boldsymbol\omega_a` of the grid moves the anchor by
+
+.. math::
+
+   \delta\boldsymbol\omega_a \times (\mathbf r^\circ_j - \mathbf c_a)
+
+and turns its sphere normal.
+The derivatives carry the anchor motion through the projection, the reach gate and the switching function of the anchor, the routes a moving atom also takes, and the normal through the horizon switch and the weight-mapping Jacobian.
+The reverse-mode gradient sums these into one torque per sphere, which the symmetry model maps to the atoms.
+
 Settings
 --------
 
