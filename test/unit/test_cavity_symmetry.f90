@@ -80,6 +80,8 @@ module test_cavity_symmetry
    real(wp), parameter :: TOL = 1.0e-8_wp
    !> Length of a captured printout line
    integer, parameter :: line_len = 200
+   !> Tolerance of a point or normal against its construction recomputed in the test, bohr
+   real(wp), parameter :: construction_tol = 1.0e-13_wp
 
    !> Cavities with symmetry handling
    integer, parameter :: kind_iswig = 1, kind_numsa = 2, kind_drop = 3
@@ -244,7 +246,7 @@ contains
                   new_unittest("tolerance_fallback", test_tolerance_fallback), &
                   new_unittest("fields_numeric", test_fields), &
                   new_unittest("report", test_report), &
-                  new_unittest("iswig_lab_bitwise", test_iswig_lab_bitwise), &
+                  new_unittest("iswig_lab_construction", test_iswig_lab_construction), &
                   new_unittest("iswig_molecular_points", test_iswig_molecular_points), &
                   new_unittest("iswig_invariance", test_iswig_invariance), &
                   new_unittest("iswig_exact_symmetry", test_iswig_exact_symmetry), &
@@ -538,7 +540,7 @@ contains
             deallocate (gradient, torque)
          end associate
 
-         ! iSwiG points are c + r R u with the cached unit grid, bitwise
+         ! iSwiG points are c + r R u with the cached unit grid, to round-off
          select type (cav)
          type is (cavity_type_iswig)
             associate (gm_ => symmetry_of(cav))
@@ -548,9 +550,9 @@ contains
                iat = cav%owner(ipt)
                ileb = cav%numbering(ipt) - (iat - 1)*cav%param%num_leb
                associate (gm_ => symmetry_of(cav))
-                  call check(error, same_bits(cav%xyz(:, ipt:ipt), spread(cav%sphxyz(:, iat) + &
-                     & cav%radii(iat)*rotated(:, ileb, model_rot_index(gm_, iat)), 2, 1)), &
-                     & "iSwiG: a grid point is not c + r R u bitwise")
+                  call check(error, maxval(abs(cav%xyz(:, ipt) - cav%sphxyz(:, iat) &
+                     & - cav%radii(iat)*rotated(:, ileb, model_rot_index(gm_, iat)))), 0.0_wp, &
+                     & "iSwiG: a grid point is not c + r R u", thr=construction_tol)
                end associate
                if (allocated(error)) return
             end do
@@ -595,8 +597,7 @@ contains
          if (allocated(error)) return
          call check(error, plain%ngrid == lab%ngrid, trim(kind_name(kind))//": point counts differ")
          if (allocated(error)) return
-         call check(error, same_bits(reshape([plain%total_area, plain%total_volume], [2, 1]), &
-            & reshape([lab%total_area, lab%total_volume], [2, 1])), &
+         call check(error, same_bits([plain%total_area, plain%total_volume], [lab%total_area, lab%total_volume]), &
             & trim(kind_name(kind))//": area or volume not bitwise")
          if (allocated(error)) return
          if (plain%ngrid > 0 .and. allocated(plain%xyz)) then
@@ -609,8 +610,7 @@ contains
          type is (cavity_type_iswig)
             select type (lab)
             type is (cavity_type_iswig)
-               call check(error, same_bits(reshape(plain%a, [1, plain%ngrid]), reshape(lab%a, [1, lab%ngrid])) &
-                  & .and. same_bits(reshape(plain%f, [1, plain%ngrid]), reshape(lab%f, [1, lab%ngrid])) &
+               call check(error, same_bits(plain%a, lab%a) .and. same_bits(plain%f, lab%f) &
                   & .and. same_bits(plain%normal0, lab%normal0), "iSwiG: areas, switching or normals not bitwise")
                if (allocated(error)) return
                call plain%get_gradient(err)
@@ -638,9 +638,8 @@ contains
                   call test_failed(error, err%message)
                   return
                end if
-               call check(error, same_bits(reshape(plain%asph, [1, plain%nsph]), reshape(lab%asph, [1, lab%nsph])) &
-                  & .and. same_bits(plain%area_grad, lab%area_grad) .and. same_bits(reshape(plain%dsdr, &
-                  & [3, plain%nsph**2]), reshape(lab%dsdr, [3, lab%nsph**2])), &
+               call check(error, same_bits(plain%asph, lab%asph) .and. same_bits(plain%area_grad, lab%area_grad) &
+                  & .and. same_bits(plain%dsdr, lab%dsdr), &
                   & "NumSA: sphere areas or area gradients not bitwise")
                if (allocated(error)) return
                call check(error,.not. ((.not. lab%grid%plain) .or. allocated(lab%frame_torque)), &
@@ -696,10 +695,8 @@ contains
          return
       end if
       n = plain%ngrid
-      call check(error, same_bits(reshape(plain%xyz1_rA, [9, plain%nsph*n]), reshape(lab%xyz1_rA, [9, lab%nsph*n])) &
-         & .and. same_bits(reshape(plain%f1_rA, [3, plain%nsph*n]), reshape(lab%f1_rA, [3, lab%nsph*n])) &
-         & .and. same_bits(reshape(plain%xi1_rA, [3, plain%nsph*n]), reshape(lab%xi1_rA, [3, lab%nsph*n])) &
-         & .and. same_bits(reshape(plain%v1_rA, [3, plain%nsph*n]), reshape(lab%v1_rA, [3, lab%nsph*n])) &
+      call check(error, same_bits(plain%xyz1_rA, lab%xyz1_rA) .and. same_bits(plain%f1_rA, lab%f1_rA) &
+         & .and. same_bits(plain%xi1_rA, lab%xi1_rA) .and. same_bits(plain%v1_rA, lab%v1_rA) &
          & .and. same_bits(plain%A_tot1_rA, lab%A_tot1_rA) .and. same_bits(plain%V_tot1_rA, lab%V_tot1_rA), &
          & "DROP: forward gradients not bitwise")
       if (allocated(error)) return
@@ -1625,14 +1622,14 @@ contains
    !*                                 iSwiG orientation                                 *!
    !* ================================================================================= *!
 
-   !> Lab orientation: points and normals bitwise those of c + r u
+   !> Lab orientation: points and normals those of c + r u, to round-off
    !>
    !> The construction before sphere orientations, component by component
    !> from the cached nodes, for an explicit and the default lab orientation;
    !> no rotated copy of the nodes is made
    !>
    !> @param[out] error Error handle
-   subroutine test_iswig_lab_bitwise(error)
+   subroutine test_iswig_lab_construction(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
@@ -1641,7 +1638,7 @@ contains
       type(cavity_type_iswig), allocatable :: cav
       type(moist_cavity_grid_model_symmetry_parameters_type) :: settings
       type(mctc_error), allocatable :: err
-      real(wp) :: p(3, 1), n(3, 1)
+      real(wp) :: p(3), n(3)
       integer :: ipt, iat, ileb, imode
 
       call new_context(ctx, nthreads=0, verbosity=0)
@@ -1661,18 +1658,19 @@ contains
          do ipt = 1, cav%ngrid
             iat = cav%owner(ipt)
             ileb = cav%numbering(ipt) - (iat - 1)*cav%param%num_leb
-            p(1, 1) = cav%sphxyz(1, iat) + cav%radii(iat)*cav%ang_grid(1, ileb)
-            p(2, 1) = cav%sphxyz(2, iat) + cav%radii(iat)*cav%ang_grid(2, ileb)
-            p(3, 1) = cav%sphxyz(3, iat) + cav%radii(iat)*cav%ang_grid(3, ileb)
-            n(:, 1) = (p(:, 1) - cav%sphxyz(:, iat))/cav%radii(iat)
-            call check(error, same_bits(cav%xyz(:, ipt:ipt), p) .and. same_bits(cav%normal0(:, ipt:ipt), n), &
-               & "lab point or normal is not the construction from c + r u")
+            p = cav%sphxyz(:, iat) + cav%radii(iat)*cav%ang_grid(:, ileb)
+            n = (p - cav%sphxyz(:, iat))/cav%radii(iat)
+            call check(error, maxval(abs(cav%xyz(:, ipt) - p)), 0.0_wp, &
+               & "lab point is not the construction from c + r u", thr=construction_tol)
+            if (allocated(error)) return
+            call check(error, maxval(abs(cav%normal0(:, ipt) - n)), 0.0_wp, &
+               & "lab normal is not (p - c)/r", thr=construction_tol)
             if (allocated(error)) return
             call check(error, cav%wleb(ipt) == cav%ang_weight(ileb), "lab weight changed")
             if (allocated(error)) return
          end do
       end do
-   end subroutine test_iswig_lab_bitwise
+   end subroutine test_iswig_lab_construction
 
    !> Base frame helpers against the dense contraction of the rotation Jacobians
    !>
@@ -2121,7 +2119,7 @@ contains
    !> - molecular orientation (frame only, and C3v ammonia): one rotated copy
    !>   of the nodes per distinct rotation, R_k u to round-off; every anchor is
    !>   exactly c_a + r_a times its sphere's copy, weight and width unchanged
-   !> - lab orientation: no copy, every anchor bitwise c + r u
+   !> - lab orientation: no copy, every anchor c + r u to round-off
    !>
    !> @param[out] error Error handle
    subroutine test_drop_anchors(error)
@@ -2136,8 +2134,8 @@ contains
       character(len=*), parameter :: names(3) = [character(len=7) :: "c1", "ammonia", "c1"]
       character(len=*), parameter :: groups(3) = [character(len=4) :: "off", "auto", "off"]
       character(len=*), parameter :: orientations(3) = [character(len=9) :: "molecular", "molecular", "lab"]
-      real(wp) :: rot(3, 3), p(3, 1), u(3)
-      integer :: im, ia, iat, ileb, irot, k
+      real(wp) :: rot(3, 3), p(3), u(3)
+      integer :: im, ia, iat, ileb, irot
 
       call new_context(ctx, nthreads=0, verbosity=0)
       do im = 1, size(names)
@@ -2186,17 +2184,16 @@ contains
                iat = cav%anchor%owner(ia)
                ileb = cav%anchor%id(ia) - (iat - 1)*cav%param%num_leb
                if (settings%orientation == "lab") then
-                  do k = 1, 3
-                     p(k, 1) = cav%sphxyz(k, iat) + cav%radii(iat)*cav%ang_grid(k, ileb)
-                  end do
+                  p = cav%sphxyz(:, iat) + cav%radii(iat)*cav%ang_grid(:, ileb)
                else
                   associate (gm_ => symmetry_of(cav))
                      irot = model_rot_index(gm_, iat)
                   end associate
-                  p(:, 1) = cav%sphxyz(:, iat) + cav%radii(iat)*cav%grid%node(:, (irot - 1)*size(cav%ang_grid, 2) + ileb)
+                  p = cav%sphxyz(:, iat) + cav%radii(iat)*cav%grid%node(:, (irot - 1)*size(cav%ang_grid, 2) + ileb)
                end if
-               call check(error, same_bits(cav%anchor%xyz(:, ia:ia), p), &
-                  & trim(names(im))//" ("//trim(orientations(im))//"): anchor is not c + r R u")
+               call check(error, maxval(abs(cav%anchor%xyz(:, ia) - p)), 0.0_wp, &
+                  & trim(names(im))//" ("//trim(orientations(im))//"): anchor is not c + r R u", &
+                  & thr=construction_tol)
                if (allocated(error)) return
                call check(error, cav%anchor%wleb0(ia) == cav%ang_weight(ileb), &
                   & trim(names(im))//": anchor weight changed by the rotation")

@@ -173,6 +173,11 @@ module test_cavity_symmetry_fixtures
    public :: surface_points_type, surface_points_of, match_surface_points, molecule_symmetry
    public :: same_bits, gradient_covariance_error, sphere_gradient_covariance_error
 
+   !> Whether two real arrays agree in shape and bit for bit
+   interface same_bits
+      module procedure same_bits_1, same_bits_2, same_bits_3, same_bits_4
+   end interface same_bits
+
    !> Number of scalar values compared per point: area, switching, width, volume
    integer, parameter :: nval = 4
    !> Their names in messages
@@ -1164,21 +1169,98 @@ contains
    !*                                   Small helpers                                   *!
    !* ================================================================================= *!
 
-   !> Whether two real matrices agree bit for bit
+   !> Rank-1 `same_bits`
    !>
-   !> @param[in] a First matrix
-   !> @param[in] b Second matrix
-   pure function same_bits(a, b) result(same)
-      !> First matrix
+   !> @param[in] a First array
+   !> @param[in] b Second array
+   pure function same_bits_1(a, b) result(same)
+      !> First array
+      real(wp), intent(in) :: a(:)
+      !> Second array
+      real(wp), intent(in) :: b(:)
+      !> Whether shapes and bit patterns agree
+      logical :: same
+
+      same = all(shape(a) == shape(b))
+      if (same) same = same_bits_flat(size(a), a, b)
+   end function same_bits_1
+
+   !> Rank-2 `same_bits`
+   !>
+   !> @param[in] a First array
+   !> @param[in] b Second array
+   pure function same_bits_2(a, b) result(same)
+      !> First array
       real(wp), intent(in) :: a(:, :)
-      !> Second matrix
+      !> Second array
       real(wp), intent(in) :: b(:, :)
       !> Whether shapes and bit patterns agree
       logical :: same
 
       same = all(shape(a) == shape(b))
-      if (same) same = all(transfer(a, [0_int64]) == transfer(b, [0_int64]))
-   end function same_bits
+      if (same) same = same_bits_flat(size(a), a, b)
+   end function same_bits_2
+
+   !> Rank-3 `same_bits`
+   !>
+   !> @param[in] a First array
+   !> @param[in] b Second array
+   pure function same_bits_3(a, b) result(same)
+      !> First array
+      real(wp), intent(in) :: a(:, :, :)
+      !> Second array
+      real(wp), intent(in) :: b(:, :, :)
+      !> Whether shapes and bit patterns agree
+      logical :: same
+
+      same = all(shape(a) == shape(b))
+      if (same) same = same_bits_flat(size(a), a, b)
+   end function same_bits_3
+
+   !> Rank-4 `same_bits`
+   !>
+   !> @param[in] a First array
+   !> @param[in] b Second array
+   pure function same_bits_4(a, b) result(same)
+      !> First array
+      real(wp), intent(in) :: a(:, :, :, :)
+      !> Second array
+      real(wp), intent(in) :: b(:, :, :, :)
+      !> Whether shapes and bit patterns agree
+      logical :: same
+
+      same = all(shape(a) == shape(b))
+      if (same) same = same_bits_flat(size(a), a, b)
+   end function same_bits_4
+
+   !> Whether two real sequences agree bit for bit
+   !>
+   !> - element by element: no array temporaries, which ifx would place on the
+   !>   stack and overflow it for whole-cavity Jacobians
+   !>
+   !> @param[in] n Number of elements
+   !> @param[in] a First sequence (n)
+   !> @param[in] b Second sequence (n)
+   pure function same_bits_flat(n, a, b) result(same)
+      !> Number of elements
+      integer, intent(in) :: n
+      !> First sequence
+      real(wp), intent(in) :: a(n)
+      !> Second sequence
+      real(wp), intent(in) :: b(n)
+      !> Whether every bit pattern agrees
+      logical :: same
+
+      integer :: i
+
+      same = .true.
+      do i = 1, n
+         if (transfer(a(i), 0_int64) /= transfer(b(i), 0_int64)) then
+            same = .false.
+            return
+         end if
+      end do
+   end function same_bits_flat
 
 end module test_cavity_symmetry_fixtures
 
