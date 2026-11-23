@@ -11,8 +11,6 @@ module test_utils_format
 contains
 
    !> Collect all scalar rendering tests
-   !>
-   !> @param[out] testsuite Collection of tests
    subroutine collect_utils_format(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -28,8 +26,6 @@ contains
    end subroutine collect_utils_format
 
    !> Default integers render as `(i0)` does, digit boundaries and extremes included
-   !>
-   !> @param[out] error Test failure
    subroutine test_int_as_i0(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -50,8 +46,6 @@ contains
    end subroutine test_int_as_i0
 
    !> 64-bit integers render as `(i0)` does, both extremes included
-   !>
-   !> @param[out] error Test failure
    subroutine test_int64_as_i0(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -71,8 +65,6 @@ contains
    end subroutine test_int64_as_i0
 
    !> Reals without a format render as `(g0)` does, blanks stripped
-   !>
-   !> @param[out] error Test failure
    subroutine test_real_as_g0(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -93,8 +85,6 @@ contains
    end subroutine test_real_as_g0
 
    !> Reals with a format: the edit as written, leading blanks stripped
-   !>
-   !> @param[out] error Test failure
    subroutine test_real_with_format(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -111,13 +101,11 @@ contains
    end subroutine test_real_with_format
 
    !> A failed internal write renders as `"*"`
-   !>
-   !> @param[out] error Test failure
    subroutine test_failed_write(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      call check(error, to_string(1.0_real64, "(i5)"), "*", "integer edit for a real")
+      call check(error, to_string(1.0_real64, "(q5)"), "*", "unknown edit descriptor")
       if (allocated(error)) return
       call check(error, to_string(1.0_real64, "(f6.2"), "*", "unbalanced parentheses")
    end subroutine test_failed_write

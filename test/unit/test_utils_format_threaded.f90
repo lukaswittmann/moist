@@ -28,7 +28,6 @@ contains
    !>   race hits only a fraction of calls, so a pass does not prove its absence
    !> - integers take the I/O-free path; reals go through serialized internal writes
    !>
-   !> @param[out] error Test failure
    subroutine test_concurrent_rendering(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
