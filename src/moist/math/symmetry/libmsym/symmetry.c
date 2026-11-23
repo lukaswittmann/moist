@@ -1156,7 +1156,7 @@ msym_error_t reduceSymmetry(int sopsl, msym_symmetry_operation_t sops[sopsl], ms
                 if(sops[i].order != 2){
                     add = vparallel(sops[i].v,v,thresholds->angle);
                 } else {
-                    add = vparallel(sops[i].v,v,thresholds->angle) || (vperpendicular(sops[i].v,cinf[0]->v,thresholds->angle) && inv[0]);
+                    add = vparallel(sops[i].v,v,thresholds->angle) || (vperpendicular(sops[i].v,v,thresholds->angle) && inv[0]);
                 }
             } else if(sops[i].type == REFLECTION){
                 add = vperpendicular(sops[i].v,v,thresholds->angle);

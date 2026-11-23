@@ -48,8 +48,8 @@ module moist_math_symmetry_orient
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io_constants, only: pi
    use mctc_io_math, only: matdet_3x3
+   use mctc_io_utils, only: to_lower
    use moist_utils_timer, only: timer_type
-   use moist_utils_format, only: format_string
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: lapack_syev
    use moist_math_linalg_geometry, only: cross_product
@@ -59,19 +59,24 @@ module moist_math_symmetry_orient
       & new_sym_frame
    use moist_math_symmetry_embed, only: site_candidates, smallest_forms, oh_closeness, is_oh_element, sort_keys, &
       & neighbour_form_type, new_neighbour_form, compare_forms, tie_tol
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
    public :: sym_orient_type, new_sym_orient, sym_orient_vjp, sym_orient_jacobian
-   public :: orient_lab, orient_molecular
+   public :: orient_lab, orient_molecular, orient_codes
 
    !> Spheres in the lab frame
    integer, parameter :: orient_lab = 0
    !> Spheres in the molecular frame
    integer, parameter :: orient_molecular = 1
+   !> Codes and names of the orientations, for descriptions of the orientation
+   character(len=*), parameter :: orient_codes = "0 lab frame, 1 molecular frame"
 
    !> Tolerance for matching orientations (modulo Oh) and their derivative maps
    real(wp), parameter :: dedupe_tol = 1.0e-12_wp
+   !> Length of a `subgroup_name` result
+   integer, parameter :: subgroup_name_len = 3
    !> Tolerance of the candidate group keys (integers and a sum of closenesses)
    real(wp), parameter :: key_tol = 1.0e-8_wp
    !> Smallest inertia eigenvalue with a rotation, relative to the largest
@@ -202,6 +207,8 @@ contains
       type(sym_threshold_type) :: thr
       integer :: nat
       logical :: off, auto
+      !> Requested group, lower case
+      character(len=:), allocatable :: req
 
       nat = size(xyz, 2)
       if (size(species) /= nat) then
@@ -209,9 +216,10 @@ contains
          return
       end if
       ! C1 has no operation to respect; libmsym may not list it as a subgroup
-      off = lower(group) == "off" .or. lower(group) == "c1"
-      auto = lower(group) == "auto"
-      self%group_requested = trim(group)
+      self%group_requested = trim(adjustl(group))
+      req = to_lower(self%group_requested)
+      off = req == "off" .or. req == "c1"
+      auto = req == "auto"
       self%group_detected = ""
       self%group_used = "C1"
       self%reason = ""
@@ -230,7 +238,7 @@ contains
       if (nat < 2) then
          ! One atom has every point group and no operation to respect
          if (.not. auto) then
-            if (.not. valid_symbol(lower(group))) then
+            if (.not. valid_symbol(req)) then
                call fatal_error(error, "Symmetry: unknown point group "//trim(group))
                return
             end if
@@ -392,7 +400,7 @@ contains
       integer, parameter :: no_key(1, 1) = 0
 
       nat = size(xyz, 2)
-      req = lower(self%group_requested)
+      req = to_lower(self%group_requested)
 
       call time_phase(timer, "Detection", .true.)
       call find_point_group(xyz, species, detected, detect_error, tolerance)
@@ -483,12 +491,12 @@ contains
          if (.not. any(in_pool)) then
             if (dev_req > tolerance) then
                call fatal_error(error, "Symmetry: geometry deviates from "//self%group_requested// &
-                  & " by "//format_string(dev_req, "(es9.2)")// &
-                  & " bohr, above the tolerance "//format_string(tolerance, "(es9.2)")//" bohr")
+                  & " by "//to_string(dev_req, "(es9.2)")// &
+                  & " bohr, above the tolerance "//to_string(tolerance, "(es9.2)")//" bohr")
             else
                ! Within the tolerance, but two atoms share an image
                call fatal_error(error, "Symmetry: the tolerance "// &
-                  & format_string(tolerance, "(es9.2)")// &
+                  & to_string(tolerance, "(es9.2)")// &
                   & " bohr is too loose for "//self%group_requested// &
                   & ", its operations do not map the atoms one to one")
             end if
@@ -532,12 +540,12 @@ contains
          call set_trivial(self, nat)
          if (.not. any(in_pool) .and. self%deviation_detected > tolerance) then
             self%reason = "geometry matches "//detected%name//" only to "// &
-               & format_string(self%deviation_detected, "(es9.2)")// &
-               & " bohr, above the tolerance "//format_string(tolerance, "(es9.2)")// &
+               & to_string(self%deviation_detected, "(es9.2)")// &
+               & " bohr, above the tolerance "//to_string(tolerance, "(es9.2)")// &
                & " bohr; no symmetry used"
          else if (.not. any(in_pool)) then
             ! Within the tolerance, but two atoms share an image
-            self%reason = "the tolerance "//format_string(tolerance, "(es9.2)")// &
+            self%reason = "the tolerance "//to_string(tolerance, "(es9.2)")// &
                & " bohr is too loose for "//detected%name// &
                & ", its operations do not map the atoms one to one; no symmetry used"
          else
@@ -551,7 +559,7 @@ contains
       self%deviation = maxval(dev_op(cands(best)%ops))
       if (auto .and. (best /= 1 .or. detected%linear)) then
          self%reason = "detected "//detected%name//", using "//cands(best)%name
-      else if (.not. auto .and. lower(cands(best)%name) /= req) then
+      else if (.not. auto .and. to_lower(cands(best)%name) /= req) then
          self%reason = "requested "//self%group_requested//", using "//cands(best)%name
       end if
       if (len(self%reason) > 0) then
@@ -559,10 +567,10 @@ contains
             self%reason = self%reason//" (finite subgroup of a linear group)"
          else if (auto .and. any(dev_op(cands(1)%ops) > tolerance)) then
             self%reason = self%reason//" ("//detected%name//" matches only to "// &
-               & format_string(self%deviation_detected, "(es9.2)")// &
-               & " bohr, above the tolerance "//format_string(tolerance, "(es9.2)")//" bohr)"
+               & to_string(self%deviation_detected, "(es9.2)")// &
+               & " bohr, above the tolerance "//to_string(tolerance, "(es9.2)")//" bohr)"
          else if (auto .and. any(.not. pass_op(cands(1)%ops))) then
-            self%reason = self%reason//" (the tolerance "//format_string(tolerance, "(es9.2)")// &
+            self%reason = self%reason//" (the tolerance "//to_string(tolerance, "(es9.2)")// &
                & " bohr is too loose for "//detected%name// &
                & ", its operations do not map the atoms one to one)"
          else
@@ -996,7 +1004,7 @@ contains
             if (count(groups(:, ig)) /= k) cycle
             l = l + 1
             cands(l)%ops = pack([(i, i=1, n)], groups(:, ig))
-            cands(l)%name = subgroup_name(ops(:, :, cands(l)%ops))
+            cands(l)%name = trim(subgroup_name(ops(:, :, cands(l)%ops)))
          end do
       end do
    end subroutine finite_subgroups
@@ -1007,8 +1015,8 @@ contains
    function subgroup_name(ops) result(name)
       !> Operations
       real(wp), intent(in) :: ops(:, :, :)
-      !> Symbol
-      character(len=:), allocatable :: name
+      !> Symbol, blank-padded
+      character(len=subgroup_name_len) :: name
 
       integer :: k, nproper
       logical :: inversion, c4, s4, square(size(ops, 3))
@@ -1846,7 +1854,7 @@ contains
       !> Whether they match
       logical :: same
 
-      same = lower(name) == req
+      same = to_lower(name) == req
       if (linear .and. .not. same) then
          select case (req)
          case ("dinfh", "dooh", "d*h", "d0h")
@@ -1952,24 +1960,6 @@ contains
          end if
       end do
    end function is_subset
-
-   !> Lower-case copy of a string
-   !>
-   !> @param[in] str String
-   pure function lower(str) result(low)
-      !> String
-      character(len=*), intent(in) :: str
-      !> Lower-case, trimmed copy
-      character(len=:), allocatable :: low
-
-      integer :: i, c
-
-      low = trim(adjustl(str))
-      do i = 1, len(low)
-         c = iachar(low(i:i))
-         if (c >= iachar("A") .and. c <= iachar("Z")) low(i:i) = achar(c + 32)
-      end do
-   end function lower
 
    !> Integer power of a 3x3 matrix, identity for k = 0
    !>

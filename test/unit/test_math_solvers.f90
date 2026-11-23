@@ -11,7 +11,6 @@
 module test_math_solvers
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
-   use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_solver_type, only: solver_base_type
 
@@ -27,6 +26,7 @@ module test_math_solvers
                                NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_finite
    use test_helpers, only: fd4_scalar, fd4_offsets
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

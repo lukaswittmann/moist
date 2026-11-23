@@ -14,7 +14,7 @@ module test_channels
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
       & coupling_make_view, coupling_close_view, moist_n_phases
-   use moist_channels_response, only: response_type, response_item_type, &
+   use moist_channels_response, only: response_type, response_item_type, response_name_len, &
       & potential_adjoint_response_type, density_response_type, &
       & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
@@ -1331,24 +1331,29 @@ contains
    !* ================================================================================= *!
 
    !> Names of the items one full pass of the response walk visits, comma separated
-   function walk_names(response) result(names)
+   !>
+   !> @param[in,out] response Response walked
+   !> @param[out]    names    Visited item names, each followed by a comma
+   subroutine walk_names(response, names)
+      !> Response walked
       type(response_type), intent(inout) :: response
-      character(len=:), allocatable :: names
+      !> Visited item names
+      character(len=:), allocatable, intent(out) :: names
       class(response_item_type), allocatable :: item
       names = ""
       do while (response%next())
          item = response%item()
          names = names//trim(item%name())//","
       end do
-   end function walk_names
+   end subroutine walk_names
 
    !> Name of what `item()` returns now, "no_current_item" outside a pass
    function item_name(response) result(name)
       type(response_type), intent(in) :: response
-      character(len=:), allocatable :: name
+      character(len=response_name_len) :: name
       class(response_item_type), allocatable :: item
       item = response%item()
-      name = trim(item%name())
+      name = item%name()
    end function item_name
 
    !> A potential adjoint accumulated before a density item
@@ -1393,19 +1398,23 @@ contains
       type(potential_adjoint_response_type) :: charge
       type(gaussian_amplitude_response_type) :: amplitude
       type(density_response_type) :: density
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
 
       allocate (charge%w_phi, source=[1.0_wp, 2.0_wp, 3.0_wp])
       call response_accumulate(response, charge, err)
       call check_moist_error(error, err, "first accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,")
       if (allocated(error)) return
 
       charge%w_phi = [1.0_wp, 1.0_wp, 1.0_wp]
       call response_accumulate(response, charge, err)
       call check_moist_error(error, err, "second accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,", more="summing added an item")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,", more="summing added an item")
       if (allocated(error)) return
 
       amplitude%w_overlap = [0.5_wp, 0.5_wp]
@@ -1420,7 +1429,8 @@ contains
       call response_accumulate(response, density, err)
       call check_moist_error(error, err, "density accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,gaussian_amplitude,density,")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,gaussian_amplitude,density,")
       if (allocated(error)) return
 
       ! One pass contracting each kind, as a host does
@@ -1451,21 +1461,27 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(response_type) :: response
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
       call two_items(response, err)
       call check_moist_error(error, err, "two items")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,density,")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,density,")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,density,", &
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,density,", &
          & more="the finished pass did not rewind")
       if (allocated(error)) return
       call check(error, response%next())
       if (allocated(error)) return
       call check(error, item_name(response), "potential_adjoint")
       if (allocated(error)) return
-      call check(error, walk_names(response), "density,", more="a pass left early did not resume")
+      call walk_names(response, walked)
+      call check(error, walked, "density,", more="a pass left early did not resume")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,density,")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,density,")
    end subroutine test_response_walk_passes
 
    !> `accumulate` and `clear` reset the cursor, so a model call always starts
@@ -1475,6 +1491,8 @@ contains
       type(moist_error_type), allocatable :: err
       type(response_type) :: response
       type(gaussian_amplitude_response_type) :: amplitude
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
       call two_items(response, err)
       call check_moist_error(error, err, "two items")
       if (allocated(error)) return
@@ -1487,7 +1505,8 @@ contains
       if (allocated(error)) return
       call check(error, item_name(response), "no_current_item", more="accumulate kept the current item")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,density,gaussian_amplitude,")
+      call walk_names(response, walked)
+      call check(error, walked, "potential_adjoint,density,gaussian_amplitude,")
       if (allocated(error)) return
       call check(error, response%next())
       if (allocated(error)) return
@@ -1584,6 +1603,8 @@ contains
       real(wp) :: hess(3, 3, 2)
       !> Element index
       integer :: i
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
 
       allocate (rho_only%w_rho, source=[1.0_wp, 2.0_wp])
       call response_accumulate(response, rho_only, err)
@@ -1618,7 +1639,8 @@ contains
          & "error names item and array")
       if (allocated(error)) return
 
-      call check(error, walk_names(response), "density,", more="density items were not merged")
+      call walk_names(response, walked)
+      call check(error, walked, "density,", more="density items were not merged")
       if (allocated(error)) return
       call check(error, response%next())
       if (allocated(error)) return
@@ -1731,6 +1753,8 @@ contains
       type(parameter_adjoint_response_type) :: screened, nonlocal, empty
       !> Field walker
       type(field_query_type) :: query
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
 
       screened%dg_deps = 1.0_wp
       screened%dg_dkappa = 2.0_wp
@@ -1743,7 +1767,8 @@ contains
       if (.not. allocated(err)) call response_accumulate(response, empty, err)
       call check_moist_error(error, err, "parameter accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "parameter_adjoint,", more="parameter items were not merged")
+      call walk_names(response, walked)
+      call check(error, walked, "parameter_adjoint,", more="parameter items were not merged")
       if (allocated(error)) return
 
       call check(error, response%next())
@@ -2495,6 +2520,8 @@ contains
       type(response_type) :: response
       type(atomic_multipole_adjoint_response_type) :: item
       type(potential_adjoint_response_type) :: charge
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
 
       item%dg_dq = [1.0_wp, 2.0_wp]
       call response_accumulate(response, item, err)
@@ -2508,7 +2535,8 @@ contains
       call response_accumulate(response, charge, err)
       call check_moist_error(error, err, "charge accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "atomic_multipole_adjoint,potential_adjoint,")
+      call walk_names(response, walked)
+      call check(error, walked, "atomic_multipole_adjoint,potential_adjoint,")
       if (allocated(error)) return
       do while (response%next())
          select type (current => response%item())
@@ -2796,6 +2824,8 @@ contains
       type(response_type) :: response
       type(atomic_charge_adjoint_response_type) :: item
       type(atomic_multipole_adjoint_response_type) :: multipoles
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
       item%dg_dq = [1.0_wp, 2.0_wp]
       call response_accumulate(response, item, err)
       if (.not. allocated(err)) call response_accumulate(response, item, err)
@@ -2805,7 +2835,8 @@ contains
       call response_accumulate(response, multipoles, err)
       call check_moist_error(error, err, "multipole accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "atomic_charge_adjoint,atomic_multipole_adjoint,")
+      call walk_names(response, walked)
+      call check(error, walked, "atomic_charge_adjoint,atomic_multipole_adjoint,")
       if (allocated(error)) return
       do while (response%next())
          select type (current => response%item())
@@ -2835,6 +2866,8 @@ contains
       type(radial_potential_adjoint_response_type) :: item
       type(potential_adjoint_response_type) :: charge
       integer :: i
+      !> Result of `walk_names`
+      character(len=:), allocatable :: walked
       item%dg_dphi = reshape([(real(i, wp), i=1, 6)], [3, 2])
       call response_accumulate(response, item, err)
       if (.not. allocated(err)) call response_accumulate(response, item, err)
@@ -2844,7 +2877,8 @@ contains
       call response_accumulate(response, charge, err)
       call check_moist_error(error, err, "charge accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "radial_potential_adjoint,potential_adjoint,")
+      call walk_names(response, walked)
+      call check(error, walked, "radial_potential_adjoint,potential_adjoint,")
       if (allocated(error)) return
       do while (response%next())
          select type (current => response%item())

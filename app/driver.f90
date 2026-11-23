@@ -382,7 +382,7 @@ contains
    function join(a1, a2) result(path)
       use mctc_env_system, only: is_windows
       character(len=*), intent(in) :: a1, a2
-      character(len=:), allocatable :: path
+      character(len=len(a1) + 1 + len(a2)) :: path
       character :: filesep
 
       if (is_windows()) then
@@ -404,10 +404,13 @@ contains
 !> Extract dirname from path
    function dirname(filename)
       character(len=*), intent(in) :: filename
-      character(len=:), allocatable :: dirname
+      character(len=max(1, scan(filename, "/\", back=.true.))) :: dirname
 
-      dirname = filename(1:scan(filename, "/\", back=.true.))
-      if (len_trim(dirname) == 0) dirname = "."
+      if (scan(filename, "/\", back=.true.) == 0) then
+         dirname = "."
+      else
+         dirname = filename(1:len(dirname))
+      end if
    end function dirname
 
 end module moist_driver

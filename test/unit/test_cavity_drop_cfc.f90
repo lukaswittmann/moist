@@ -8,7 +8,8 @@ module test_cavity_drop_cfc
                                                cfc_nuclear_eval, cfc_hessian_eval, &
                                                cfc_tangent_eval, cfc_hvp_eval
    use test_helpers, only: fd_probe_type, fd_derivative, fd_compare
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

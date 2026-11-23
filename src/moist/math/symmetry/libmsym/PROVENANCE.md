@@ -8,7 +8,9 @@ Every `.c` and `.h` file below is a byte-for-byte copy of `src/<file>` at that c
 
 - `msym_EXPORTS.h`: written for moist. Upstream generates it with CMake's `GenerateExportHeader`; here `MSYM_EXPORT` is empty, since libmsym is compiled into libmoist and only reached through moist's shim (`../msym_shim.c`), which exports nothing of libmsym.
 
-No upstream file is modified.
+## Local patches
+
+- `symmetry.c` (`reduceSymmetry`, `else if (cinf[0] != NULL)`): compare against the saved vector `v` instead of `cinf[0]->v`, since `realloc(rsops, ...)` in the loop body can move and free the array `cinf[0]` points into.
 
 ## License
 

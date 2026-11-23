@@ -69,6 +69,7 @@ module test_cavity_symmetry
       & rotation_matrix, new_tilted, &
       & surface_points_type, surface_points_of, match_surface_points, molecule_symmetry, same_bits, &
       & identity, cross, gradient_covariance_error, sphere_gradient_covariance_error
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -1304,7 +1305,7 @@ contains
          if (allocated(error)) return
          call check(error, model%missed_tolerance(), "noisy benzene: tolerance miss not flagged")
          if (allocated(error)) return
-         dev = sci(orient%deviation_detected)
+         dev = to_string(orient%deviation_detected, "(es9.2)")
       end associate
 
       open (newunit=unit, status="scratch", action="readwrite")
@@ -1352,7 +1353,7 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      dev = sci(model%orient%deviation_detected)
+      dev = to_string(model%orient%deviation_detected, "(es9.2)")
       call check(error, model%orient%group_used == "Cs" .and. index(model%orient%reason, &
          & "detected C2v, using Cs (C2v matches only to "//dev//" bohr, above the tolerance 1.00E-08 bohr)") > 0, &
          & "distorted water: reason '"//model%orient%reason//"'")
@@ -5822,21 +5823,6 @@ contains
          if (ctx%timer%node_name(id) == name) found = .true.
       end do
    end function timer_has
-
-   !> Scientific rendering of the report, e.g. "1.00E-08"
-   !>
-   !> @param[in] val Real
-   function sci(val) result(text)
-      !> Real
-      real(wp), intent(in) :: val
-      !> Rendering
-      character(len=:), allocatable :: text
-
-      character(len=16) :: buf
-
-      write (buf, "(es9.2)") val
-      text = trim(adjustl(buf))
-   end function sci
 
    !> Write a parameter file, read it and remove it again
    !>

@@ -508,7 +508,7 @@ contains
             call moist_msym_release(handle)
             return
          end if
-         group%name = from_c(cname)
+         call from_c(cname, group%name)
          group%kind = kind
          group%n = n
          group%linear = n == 0 .and. (kind == msym_type_cnv .or. kind == msym_type_dnh)
@@ -558,7 +558,7 @@ contains
                call moist_msym_release(handle)
                return
             end if
-            group%subgroups(isub)%name = from_c(cname)
+            call from_c(cname, group%subgroups(isub)%name)
             group%subgroups(isub)%ops = int(sub_ops(1:sub_order)) + 1
          end do
 
@@ -577,21 +577,25 @@ contains
 
          !> Rendered message
          character(kind=c_char) :: buf(msg_len)
+         !> Fortran copy of the message
+         character(len=:), allocatable :: msg
 
          call moist_msym_error_message(code, buf, int(msg_len, c_int))
-         call fatal_error(error, "libmsym failed "//what//": "//from_c(buf))
+         call from_c(buf, msg)
+         call fatal_error(error, "libmsym failed "//what//": "//msg)
       end subroutine fail
 
    end subroutine detect_point_group
 
    !> Fortran string from a NUL-terminated C character array
    !>
-   !> @param[in] buf C characters
-   function from_c(buf) result(str)
+   !> @param[in]  buf C characters
+   !> @param[out] str Trimmed string up to the first NUL
+   pure subroutine from_c(buf, str)
       !> C characters
       character(kind=c_char), intent(in) :: buf(:)
       !> Trimmed string up to the first NUL
-      character(len=:), allocatable :: str
+      character(len=:), allocatable, intent(out) :: str
 
       integer :: i, n
 
@@ -607,6 +611,6 @@ contains
          str(i:i) = buf(i)
       end do
       str = trim(str)
-   end function from_c
+   end subroutine from_c
 
 end module moist_math_symmetry_msym

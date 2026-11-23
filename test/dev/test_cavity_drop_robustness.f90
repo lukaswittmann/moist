@@ -418,7 +418,7 @@ contains
 
       ! Resolve directory for problematic-structure dumps
       ! (MOIST_DROP_ISSUES_DIR override, repo-relative default)
-      issues_dir = resolve_dir("MOIST_DROP_ISSUES_DIR", "test/outputs/drop_issues")
+      call resolve_dir("MOIST_DROP_ISSUES_DIR", "test/outputs/drop_issues", issues_dir)
       call ensure_dir(issues_dir)
 
       ! Main fuzz test loop

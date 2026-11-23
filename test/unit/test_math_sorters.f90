@@ -20,10 +20,10 @@
 module test_math_sorters
    use, intrinsic :: ieee_arithmetic, only: ieee_is_negative
    use mctc_env, only: wp
-   use mctc_io_utils, only: to_string
    use test_helpers, only: det_rand
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_sorter, only: ord_sort, sort, sort_index, sort_adjoint, counting_argsort
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -81,6 +81,8 @@ contains
 
       integer, allocatable :: a(:), orig(:)
       integer :: is, ip, n, nmerge
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       nmerge = 0
       do is = 1, size(sizes)
@@ -90,8 +92,9 @@ contains
             if (n >= 64 .and. .not. is_sorted_int(orig)) nmerge = nmerge + 1
             a = orig
             call ord_sort(a)
+            call label(n, ip, tag)
             call check(error, all(a == orig(stable_reference_int(orig, .false.))), &
-                       "ord_sort (integer) is not the ascending order"//label(n, ip))
+                       "ord_sort (integer) is not the ascending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -105,6 +108,8 @@ contains
 
       real(wp), allocatable :: a(:), orig(:)
       integer :: is, ip, n, nmerge
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       nmerge = 0
       do is = 1, size(sizes)
@@ -114,8 +119,9 @@ contains
             if (n >= 64 .and. .not. is_sorted_real(orig)) nmerge = nmerge + 1
             a = orig
             call ord_sort(a)
+            call label(n, ip, tag)
             call check(error, all(a == orig(stable_reference_real(orig, .false.))), &
-                       "ord_sort (real) is not the ascending order"//label(n, ip))
+                       "ord_sort (real) is not the ascending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -144,6 +150,8 @@ contains
       integer, allocatable :: ia(:), iorig(:)
       real(wp), allocatable :: ra(:), rorig(:)
       integer :: is, ip, n
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       do is = 1, size(sizes)
          n = sizes(is)
@@ -151,14 +159,15 @@ contains
             iorig = int_pattern(n, ip)
             ia = iorig
             call ord_sort(ia, reverse=.true.)
+            call label(n, ip, tag)
             call check(error, all(ia == iorig(stable_reference_int(iorig, .true.))), &
-                       "ord_sort (integer, reverse) is not the descending order"//label(n, ip))
+                       "ord_sort (integer, reverse) is not the descending order"//tag)
             if (allocated(error)) return
             rorig = real_pattern(n, ip)
             ra = rorig
             call ord_sort(ra, reverse=.true.)
             call check(error, all(ra == rorig(stable_reference_real(rorig, .true.))), &
-                       "ord_sort (real, reverse) is not the descending order"//label(n, ip))
+                       "ord_sort (real, reverse) is not the descending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -213,6 +222,8 @@ contains
 
       integer, allocatable :: a(:), orig(:)
       integer :: is, ip, n, ndeep
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       ndeep = 0
       do is = 1, size(sizes)
@@ -223,8 +234,9 @@ contains
             if (n >= 1000 .and. (ip == 4 .or. ip == 5)) ndeep = ndeep + 1
             a = orig
             call sort(a)
+            call label(n, ip, tag)
             call check(error, all(a == orig(stable_reference_int(orig, .false.))), &
-                       "sort (integer) is not the ascending order"//label(n, ip))
+                       "sort (integer) is not the ascending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -238,6 +250,8 @@ contains
 
       real(wp), allocatable :: a(:), orig(:)
       integer :: is, ip, n, npart
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       npart = 0
       do is = 1, size(sizes)
@@ -247,8 +261,9 @@ contains
             if (n > 16 .and. .not. is_sorted_real(orig)) npart = npart + 1
             a = orig
             call sort(a)
+            call label(n, ip, tag)
             call check(error, all(a == orig(stable_reference_real(orig, .false.))), &
-                       "sort (real) is not the ascending order"//label(n, ip))
+                       "sort (real) is not the ascending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -263,6 +278,8 @@ contains
       integer, allocatable :: ia(:), iorig(:)
       real(wp), allocatable :: ra(:), rorig(:)
       integer :: is, ip, n
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       do is = 1, size(sizes)
          n = sizes(is)
@@ -270,14 +287,15 @@ contains
             iorig = int_pattern(n, ip)
             ia = iorig
             call sort(ia, reverse=.true.)
+            call label(n, ip, tag)
             call check(error, all(ia == iorig(stable_reference_int(iorig, .true.))), &
-                       "sort (integer, reverse) is not the descending order"//label(n, ip))
+                       "sort (integer, reverse) is not the descending order"//tag)
             if (allocated(error)) return
             rorig = real_pattern(n, ip)
             ra = rorig
             call sort(ra, reverse=.true.)
             call check(error, all(ra == rorig(stable_reference_real(rorig, .true.))), &
-                       "sort (real, reverse) is not the descending order"//label(n, ip))
+                       "sort (real, reverse) is not the descending order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -295,6 +313,8 @@ contains
       real(wp), allocatable :: a(:), orig(:)
       integer, allocatable :: idx(:)
       integer :: is, ip, n, nties
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       nties = 0
       do is = 1, size(sizes)
@@ -305,13 +325,14 @@ contains
             a = orig
             allocate (idx(n), source=0)
             call sort_index(a, idx)
-            call check_permutation(error, idx, "sort_index (real)"//label(n, ip))
+            call label(n, ip, tag)
+            call check_permutation(error, idx, "sort_index (real)"//tag)
             if (allocated(error)) return
             call check(error, all(orig(idx) == a), "sort_index (real): index does not reproduce the keys" &
-                       //label(n, ip))
+                       //tag)
             if (allocated(error)) return
             call check(error, all(idx == stable_reference_real(orig, .false.)), &
-                       "sort_index (real) is not the stable ascending order"//label(n, ip))
+                       "sort_index (real) is not the stable ascending order"//tag)
             if (allocated(error)) return
             deallocate (idx)
          end do
@@ -326,6 +347,8 @@ contains
 
       integer, allocatable :: a(:), orig(:), idx(:)
       integer :: is, ip, n, nties
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       nties = 0
       do is = 1, size(sizes)
@@ -336,13 +359,14 @@ contains
             a = orig
             allocate (idx(n), source=0)
             call sort_index(a, idx)
-            call check_permutation(error, idx, "sort_index (integer)"//label(n, ip))
+            call label(n, ip, tag)
+            call check_permutation(error, idx, "sort_index (integer)"//tag)
             if (allocated(error)) return
             call check(error, all(orig(idx) == a), "sort_index (integer): index does not reproduce the keys" &
-                       //label(n, ip))
+                       //tag)
             if (allocated(error)) return
             call check(error, all(idx == stable_reference_int(orig, .false.)), &
-                       "sort_index (integer) is not the stable ascending order"//label(n, ip))
+                       "sort_index (integer) is not the stable ascending order"//tag)
             if (allocated(error)) return
             deallocate (idx)
          end do
@@ -358,6 +382,8 @@ contains
       real(wp), allocatable :: ra(:), rorig(:)
       integer, allocatable :: ia(:), iorig(:), idx(:)
       integer :: is, ip, n
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       do is = 1, size(sizes)
          n = sizes(is)
@@ -366,14 +392,15 @@ contains
             rorig = real_pattern(n, ip)
             ra = rorig
             call sort_index(ra, idx, reverse=.true.)
+            call label(n, ip, tag)
             call check(error, all(rorig(idx) == ra) .and. all(idx == stable_reference_real(rorig, .true.)), &
-                       "sort_index (real, reverse) is not the stable descending order"//label(n, ip))
+                       "sort_index (real, reverse) is not the stable descending order"//tag)
             if (allocated(error)) return
             iorig = int_pattern(n, ip)
             ia = iorig
             call sort_index(ia, idx, reverse=.true.)
             call check(error, all(iorig(idx) == ia) .and. all(idx == stable_reference_int(iorig, .true.)), &
-                       "sort_index (integer, reverse) is not the stable descending order"//label(n, ip))
+                       "sort_index (integer, reverse) is not the stable descending order"//tag)
             if (allocated(error)) return
             deallocate (idx)
          end do
@@ -437,6 +464,8 @@ contains
       real(wp), allocatable :: ra(:), rorig(:)
       integer, allocatable :: ia(:), iorig(:), lab(:), lab0(:)
       integer :: is, ip, n, i
+      !> Result of `label`
+      character(len=:), allocatable :: tag
 
       do is = 1, size(ns)
          n = ns(is)
@@ -446,9 +475,10 @@ contains
             ra = rorig
             lab = lab0
             call sort_adjoint(ra, lab)
+            call label(n, ip, tag)
             call check(error, all(lab == lab0(stable_reference_real(rorig, .false.))) .and. &
                        all(ra == rorig(stable_reference_real(rorig, .false.))), &
-                       "sort_adjoint (real) lost the companion order"//label(n, ip))
+                       "sort_adjoint (real) lost the companion order"//tag)
             if (allocated(error)) return
             iorig = int_pattern(n, ip)
             ia = iorig
@@ -456,7 +486,7 @@ contains
             call sort_adjoint(ia, lab)
             call check(error, all(lab == lab0(stable_reference_int(iorig, .false.))) .and. &
                        all(ia == iorig(stable_reference_int(iorig, .false.))), &
-                       "sort_adjoint (integer) lost the companion order"//label(n, ip))
+                       "sort_adjoint (integer) lost the companion order"//tag)
             if (allocated(error)) return
          end do
       end do
@@ -804,17 +834,18 @@ contains
 
    !> Failure label of a fixture
    !>
-   !> @param[in] n       Number of entries
-   !> @param[in] pattern Pattern id, 1..npattern
-   pure function label(n, pattern) result(text)
+   !> @param[in]  n       Number of entries
+   !> @param[in]  pattern Pattern id, 1..npattern
+   !> @param[out] text    Label
+   pure subroutine label(n, pattern, text)
       !> Number of entries
       integer, intent(in) :: n
       !> Pattern id
       integer, intent(in) :: pattern
       !> Label
-      character(len=:), allocatable :: text
+      character(len=:), allocatable, intent(out) :: text
 
       text = " (n = "//to_string(n)//", "//trim(pattern_name(pattern))//")"
-   end function label
+   end subroutine label
 
 end module test_math_sorters

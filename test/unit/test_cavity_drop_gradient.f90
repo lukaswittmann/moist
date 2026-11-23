@@ -5,7 +5,7 @@ module test_cavity_drop_gradient
    use mctc_io, only: structure_type, new
    use test_helpers, only: build_numbering_map
    use test_cavity_drop_fd, only: check_drop_row_gradient, drop_fd_param, drop_fd_svdw
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -16,6 +16,7 @@ module test_cavity_drop_gradient
    use mstore, only: get_structure
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

@@ -32,10 +32,9 @@ module moist_model_continuum_component_pcm_solvers
    use, intrinsic :: iso_fortran_env, only: int64, output_unit
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
-   use mctc_io_utils, only: to_string
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs, sytrf, sytrs
    use moist_math_blas, only: dot, gemv, nrm2
-   use moist_utils_format, only: format_string
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -67,6 +66,8 @@ module moist_model_continuum_component_pcm_solvers
    integer, parameter :: pcm_factor_complex_symmetric = 4
    !> Factorization of a complex general operator (zgetrf)
    integer, parameter :: pcm_factor_complex_lu = 5
+   !> Length of a `factor_name` result
+   integer, parameter :: factor_name_len = 6
 
    !> Operator storage of the generated kernels: dense matrices
    integer, parameter :: pcm_storage_dense = 1
@@ -721,7 +722,7 @@ contains
          if (steps >= solver%nonlinear_max_iter) then
             call newton_statistics(solver, steps, norm_f/scale)
             call fatal_error(error, here//" Newton did not converge: |F|/|F(0)| = " &
-               & //format_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps")
+               & //to_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps")
             return
          end if
          call self%step(x, f, p, error)
@@ -739,8 +740,8 @@ contains
             if (t < newton_step_min) then
                call newton_statistics(solver, steps, norm_f/scale)
                call fatal_error(error, here//" Newton stalled at |F|/|F(0)| = " &
-                  & //format_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps: no step" &
-                  & //" length down to "//format_string(newton_step_min, "(es12.4)")//" decreases |F|; the" &
+                  & //to_string(norm_f/scale, "(es12.4)")//" after "//to_string(steps)//" steps: no step" &
+                  & //" length down to "//to_string(newton_step_min, "(es12.4)")//" decreases |F|; the" &
                   & //" Jacobian is near singular away from a root (fold of the solution branch)")
                return
             end if
@@ -1473,7 +1474,7 @@ contains
             return
          end select
          if (info /= 0) then
-            call fatal_error(error, here//" "//factor_name(f%kind) &
+            call fatal_error(error, here//" "//trim(factor_name(f%kind)) &
                & //" solve failed for operator "//to_string(op%id)//" (info = " &
                & //to_string(info)//")")
             return
@@ -1609,7 +1610,7 @@ contains
             return
          end select
          if (info /= 0) then
-            call fatal_error(error, here//" "//factor_name(f%kind) &
+            call fatal_error(error, here//" "//trim(factor_name(f%kind)) &
                & //" solve failed for operator "//to_string(op%id)//" (info = " &
                & //to_string(info)//")")
             return
@@ -2391,7 +2392,7 @@ contains
       integer :: n_slots
 
       if (.not. (self%tol > 0.0_wp) .or. self%restart < 1 .or. self%max_iter < 0) then
-         call fatal_error(error, routine//" invalid settings: tol = "//format_string(self%tol, "(es12.4)") &
+         call fatal_error(error, routine//" invalid settings: tol = "//to_string(self%tol, "(es12.4)") &
             & //", restart = "//to_string(self%restart)//", max_iter = " &
             & //to_string(self%max_iter)//" (need tol > 0, restart >= 1, max_iter >= 0)")
          return
@@ -2481,8 +2482,8 @@ contains
          if (its >= self%max_iter .or. .not. ieee_is_finite(beta)) then
             call gmres_statistics(self, its, beta/b_norm)
             call fatal_error(error, context//" GMRES did not converge in "//to_string(its) &
-               & //" iterations (relative residual "//format_string(beta/b_norm, "(es12.4)") &
-               & //", tolerance "//format_string(self%tol, "(es12.4)")//")")
+               & //" iterations (relative residual "//to_string(beta/b_norm, "(es12.4)") &
+               & //", tolerance "//to_string(self%tol, "(es12.4)")//")")
             return
          end if
 
@@ -2615,8 +2616,8 @@ contains
          if (its >= self%max_iter .or. .not. ieee_is_finite(beta)) then
             call gmres_statistics(self, its, beta/b_norm)
             call fatal_error(error, context//" GMRES did not converge in "//to_string(its) &
-               & //" iterations (relative residual "//format_string(beta/b_norm, "(es12.4)") &
-               & //", tolerance "//format_string(self%tol, "(es12.4)")//")")
+               & //" iterations (relative residual "//to_string(beta/b_norm, "(es12.4)") &
+               & //", tolerance "//to_string(self%tol, "(es12.4)")//")")
             return
          end if
 
@@ -2824,10 +2825,10 @@ contains
 
       if (info > 0) then
          call fatal_error(error, routine//" operator "//to_string(id) &
-            & //" is singular ("//factor_name(kind)//" info = "//to_string(info)//")")
+            & //" is singular ("//trim(factor_name(kind))//" info = "//to_string(info)//")")
          return
       else if (info < 0) then
-         call fatal_error(error, routine//" "//factor_name(kind) &
+         call fatal_error(error, routine//" "//trim(factor_name(kind)) &
             & //" rejected argument "//to_string(-info)//" for operator "//to_string(id))
          return
       end if
@@ -2867,8 +2868,8 @@ contains
    pure function factor_name(kind) result(name)
       !> Factorization kind
       integer, intent(in) :: kind
-      !> Name of the factorization routine
-      character(len=:), allocatable :: name
+      !> Name of the factorization routine, blank-padded
+      character(len=factor_name_len) :: name
 
       select case (kind)
       case (pcm_factor_cholesky)

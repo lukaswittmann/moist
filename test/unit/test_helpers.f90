@@ -121,7 +121,8 @@ module test_helpers
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
       & moist_math_grid_atomic_shell_arc_type, new_arc_shell_policy, &
       & moist_math_grid_atomic_recipe_type, moist_math_grid_atomic_recipe_override_type
-   use testdrive, only: error_type, check, test_failed, to_string
+   use testdrive, only: error_type, check, test_failed
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

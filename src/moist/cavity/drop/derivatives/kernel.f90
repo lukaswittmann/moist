@@ -41,6 +41,8 @@ module moist_cavity_drop_derivatives_kernel
 
    !> Grid point is usable
    integer, parameter :: seed_state_ok = 0
+   !> Length of a `seed_status_message` result
+   integer, parameter :: seed_status_message_len = 64
    !> `|grad S|` vanished; the surface normal is undefined
    integer, parameter :: seed_state_singular_gradient = 1
    !> Tangent-restricted KKT matrix `B` is singular
@@ -656,8 +658,8 @@ contains
    pure function seed_status_message(status) result(msg)
       !> Degeneracy status
       integer, intent(in) :: status
-      !> Description
-      character(len=:), allocatable :: msg
+      !> Description, blank-padded
+      character(len=seed_status_message_len) :: msg
 
       select case (status)
       case (seed_state_singular_gradient)

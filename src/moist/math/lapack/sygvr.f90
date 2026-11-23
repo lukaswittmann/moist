@@ -1,10 +1,10 @@
 module moist_math_lapack_sygvr
    use mctc_env, only: sp, dp, error_type, fatal_error
-   use mctc_io_utils, only: to_string
    use moist_math_lapack_type, only: eigen_solver_type
    use moist_math_lapack_sygst, only: wrap_sygst
    use moist_math_lapack_potrf, only: wrap_potrf
    use moist_math_blas_level3, only: wrap_trsm
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

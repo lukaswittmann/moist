@@ -20,6 +20,9 @@ module moist_cavity_drop_parameters
 
    private
 
+   !> Length of a `proj_level_label` result
+   integer, parameter :: proj_level_label_len = 32
+
    !> Parameter container for DROP
    !> Extends the base parameter type with DROP-specific settings for
    !> grid generation, blending, barrier potentials, and optimization
@@ -594,10 +597,11 @@ contains
    !> Return a human-readable label for the current projection level
    !>
    !> @param[in] self Parameter container
-   !> @return    label Description of the active projection level
    pure function get_proj_level_label(self) result(label)
+      !> Parameter container
       class(moist_cavity_drop_parameters_type), intent(in) :: self
-      character(len=:), allocatable :: label
+      !> Description of the active projection level, blank-padded
+      character(len=proj_level_label_len) :: label
 
       select case (self%proj_level)
       case (1)

@@ -65,7 +65,8 @@ module test_cavity_drop_isodensity
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use moist_model_continuum_component_pcm_conductor, only: model_continuum_component_cpcm, new_component_cpcm
-   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type, to_string
+   use testdrive, only: new_unittest, unittest_type, check, test_failed, error_type
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -341,7 +342,10 @@ contains
    pure function test_label(test) result(label)
       !> test identifier
       integer, intent(in) :: test
-      character(len=:), allocatable :: label
+      !> "collection/record/basis"
+      character(len=len_trim(mol_collection(test_molecule_index(test))) &
+         & + len_trim(mol_record(test_molecule_index(test))) &
+         & + len_trim(basis_name(test_basis_index(test))) + 2) :: label
 
       label = trim(mol_collection(test_molecule_index(test)))//"/" &
               //trim(mol_record(test_molecule_index(test)))//"/" &
@@ -432,7 +436,7 @@ contains
       integer :: unit, stat, nat, ncart, nelectron, nshell, nprim
       integer :: i, j, iat, shell, offset, ientry
 
-      filename = test_filename(test)
+      call test_filename(test, filename)
       label = test_label(test)
       ! Claim and release the unit under a critical section
       !$omp critical(moist_test_scratch_unit)
@@ -529,24 +533,25 @@ contains
 
    !> Path of the reference file belonging to a test
    !>
-   !> @param[in] test test identifier
-   !> @returns           Path to the checked-in PySCF reference file
-   function test_filename(test) result(filename)
+   !> @param[in]  test     test identifier
+   !> @param[out] filename Path to the checked-in PySCF reference file
+   subroutine test_filename(test, filename)
       !> test identifier
       integer, intent(in) :: test
-      character(len=:), allocatable :: filename
+      !> Path to the reference file
+      character(len=:), allocatable, intent(out) :: filename
 
       character(len=:), allocatable :: source_root
 
       ! get_env always returns an allocated string, so an `allocated` guard would
       ! never fire; the default is what covers an unset variable. meson exports
       ! the source root, a tester started from the project root gets the default
-      source_root = get_env("MOIST_SOURCE_ROOT", default=".")
+      call get_env("MOIST_SOURCE_ROOT", source_root, default=".")
       filename = source_root//"/test/unit/data/" &
                  //trim(mol_tag(test_molecule_index(test)))//"_" &
                  //trim(basis_tag(test_basis_index(test))) &
                  //trim(merge("_sph", "    ", test_spherical(test)))//".density"
-   end function test_filename
+   end subroutine test_filename
 
    !> Evaluate the density and its spatial derivatives at a point
    !>
@@ -668,6 +673,8 @@ contains
       type(moist_iso_gto_type) :: gto
       type(mctc_error), allocatable :: merr
       real(wp) :: coeffs(size(exps))
+      !> Rendered actual and expected lists
+      character(len=:), allocatable :: got_text, want_text
 
       coeffs = 1.0_wp
       call gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, merr, basis=moist_iso_basis%cartesian)
@@ -677,20 +684,24 @@ contains
       end if
       call check(error, all(gto%atom_soff == [0, 4, 6]), "atom_soff is not the CSR of 4 and 2 shells")
       if (allocated(error)) return
+      call join_ints(gto%atom_shell, got_text)
+      call join_ints(expected_shell, want_text)
       call check(error, all(gto%atom_shell == expected_shell), "shell order "// &
-         join_ints(gto%atom_shell)//" instead of "//join_ints(expected_shell))
+         got_text//" instead of "//want_text)
       if (allocated(error)) return
+      call join_ints(gto%sh_foff, got_text)
+      call join_ints(expected_foff, want_text)
       call check(error, gto%nfun == 15 .and. all(gto%sh_foff == expected_foff), "function offsets "// &
-         join_ints(gto%sh_foff)//" instead of "//join_ints(expected_foff))
+         got_text//" instead of "//want_text)
 
    contains
 
       !> Comma-separated integers of a short list
-      function join_ints(vals) result(text)
+      subroutine join_ints(vals, text)
          !> Integers
          integer, intent(in) :: vals(:)
          !> Joined text
-         character(len=:), allocatable :: text
+         character(len=:), allocatable, intent(out) :: text
 
          integer :: k
 
@@ -698,7 +709,7 @@ contains
          do k = 2, size(vals)
             text = text//", "//to_string(vals(k))
          end do
-      end function join_ints
+      end subroutine join_ints
    end subroutine test_gto_shell_order
 
    !> Analytic density value matches the independent direct evaluation
@@ -4327,7 +4338,7 @@ contains
          shift = maxval(abs(vl - ve))
          nmoved = count(abs(vl - ve) > 100.0_wp*AGREE)
          nfar = count(sqrt(loose%gto%sh_rcut2(:, 1)) < sqrt(lsf%gto%sh_rcut2(:, 1)))
-         if (get_env("MOIST_TEST_VERBOSE", "") /= "") then
+         if (verbose_requested()) then
             print "(2a,i0,3(a,i0),2(a,es9.2))", trim(label), ": per-order gate, np ", &
                np, " order1~forced ", ndiff, " order1~order3 ", nbit, &
                " loose moved ", nmoved, &
@@ -5686,7 +5697,7 @@ contains
       call check(error, grad_max > 1.0e-3_wp .and. fourth_max > 1.0e-3_wp, &
                  more="the batch fixtures carry level-set gradients and fourth derivatives")
       if (allocated(error)) return
-      if (get_env("MOIST_TEST_VERBOSE", "") /= "") then
+      if (verbose_requested()) then
          print "(a,5es10.2)", "isodensity batch vs accessors, max rel dev by order:", worst
       end if
    end subroutine test_batch_vs_accessors
@@ -5934,6 +5945,8 @@ contains
       integer :: state
       real(wp) :: f_before, f_after
       integer :: np, ncand, k, l, i, nlist(3), half
+      !> Shape diagnostic of one call
+      character(len=:), allocatable :: msg
 
       call build_molecular_internal_lsf(lsf, test_reference, 1.0e-6_wp, mol, error)
       if (allocated(error)) return
@@ -6020,13 +6033,11 @@ contains
 
       ! Shape message: right ncand empty, wrong ncand non-empty
       allocate (res(ndim, lsf%ncenters, np), source=0.0_wp)
-      call check(error, len(lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, &
-                                                        lsf%ncenters)) == 0, &
-                 more="shape message empty for the right ncand")
+      call lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, lsf%ncenters, msg)
+      call check(error, len(msg) == 0, more="shape message empty for the right ncand")
       if (allocated(error)) return
-      call check(error, len(lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, &
-                                                        lsf%ncenters + 1)) > 0, &
-                 more="shape message non-empty for a wrong ncand")
+      call lsf_vjp_batch_shape_message(lsf%name, pts, w0, w1, w2, res, lsf%ncenters + 1, msg)
+      call check(error, len(msg) > 0, more="shape message non-empty for a wrong ncand")
       if (allocated(error)) return
 
       ! No density installed: refusal, no column written
@@ -6501,5 +6512,17 @@ contains
       call check(error, (pos_hi - 1)/width < (pos_lo - 1)/width, &
                  more="the Morton reorder must put column 40 in an earlier tile than column 1")
    end subroutine test_batch_core_fill
+
+   !> Whether `MOIST_TEST_VERBOSE` asks for diagnostic prints
+   function verbose_requested() result(verbose)
+      !> Whether the variable is set and nonempty
+      logical :: verbose
+
+      !> Variable value
+      character(len=:), allocatable :: flag
+
+      call get_env("MOIST_TEST_VERBOSE", flag)
+      verbose = len(flag) > 0
+   end function verbose_requested
 
 end module test_cavity_drop_isodensity

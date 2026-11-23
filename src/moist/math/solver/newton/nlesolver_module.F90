@@ -21,6 +21,10 @@
 !### License
 !  * BSD-3
 !
+!### moist changes
+!  * `int2str` / `real2str` replaced by `to_string` of `moist_utils_format`: their
+!    deferred-length results race under OpenMP on gfortran (GCC PR 113797)
+!
 !@todo add an `istat` output to func and grad, for user stopping
 !      or to take a smaller stop (if istat>0 take a smaller step, if istat<0 abort)
 !
@@ -48,6 +52,7 @@ module nlesolver_module
    use moist_math_linalg_lsmr, only: lsmr_ez
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_lapack_gels, only: dgels
+   use moist_utils_format, only: to_string
 
    implicit none
 
@@ -366,8 +371,8 @@ contains
       integer :: iostat !! write `iostat` code
 
       message = trim(string)
-      if (present(i)) message = message//" "//int2str(i)
-      if (present(r)) message = message//" "//real2str(r)
+      if (present(i)) message = message//" "//to_string(i)
+      if (present(r)) message = message//" "//to_string(r)
 
       if (me%verbose) write (me%iunit, "(A)", iostat=iostat) message
 
@@ -376,42 +381,6 @@ contains
       me%message = message
 
    end subroutine set_status
-!*****************************************************************************************
-
-!*****************************************************************************************
-!>
-!  Convert an integer to a string. Works for up to 256 digits.
-
-   function int2str(i) result(s)
-      integer, intent(in) :: i !! integer to convert
-      character(len=:), allocatable :: s !! string result
-      character(len=256) :: tmp !! temp string
-      integer :: iostat !! write `iostat` code
-      write (tmp, fmt=*, iostat=iostat) i
-      if (iostat /= 0) then
-         s = "****"
-      else
-         s = trim(adjustl(tmp))
-      end if
-   end function int2str
-!*****************************************************************************************
-
-!*****************************************************************************************
-!>
-!  Convert a real to a string. Works for up to 256 digits.
-
-   function real2str(r) result(s)
-      real(wp), intent(in) :: r !! real to convert
-      character(len=:), allocatable :: s !! string result
-      character(len=256) :: tmp !! temp string
-      integer :: iostat !! write `iostat` code
-      write (tmp, fmt=*, iostat=iostat) r
-      if (iostat /= 0) then
-         s = "****"
-      else
-         s = trim(adjustl(tmp))
-      end if
-   end function real2str
 !*****************************************************************************************
 
 !*****************************************************************************************
@@ -1130,10 +1099,10 @@ contains
          do i = 1, me%n
             if (x(i) < me%xlow(i)) then
                x(i) = me%xlow(i)
-               if (me%verbose) write (me%iunit, "(A)") "Initial x("//int2str(i)//") < xlow(i) : adjusting to lower bound"
+               if (me%verbose) write (me%iunit, "(A)") "Initial x("//to_string(i)//") < xlow(i) : adjusting to lower bound"
             else if (x(i) > me%xupp(i)) then
                x(i) = me%xupp(i)
-               if (me%verbose) write (me%iunit, "(A)") "Initial x("//int2str(i)//") > xupp(i) : adjusting to upper bound"
+               if (me%verbose) write (me%iunit, "(A)") "Initial x("//to_string(i)//") > xupp(i) : adjusting to upper bound"
             end if
          end do
       end if
@@ -1182,7 +1151,7 @@ contains
          if (xnew(i) < me%xlow(i)) then
             search_direction_modifed = .true.
             modified(i) = .true.
-            if (me%verbose) write (me%iunit, "(A)") "x("//int2str(i)//") < xlow(i) : adjusting to lower bound"
+            if (me%verbose) write (me%iunit, "(A)") "x("//to_string(i)//") < xlow(i) : adjusting to lower bound"
             select case (me%bounds_mode)
             case (NLESOLVER_SCALAR_BOUNDS, NLESOLVER_WALL_BOUNDS); xnew(i) = me%xlow(i)
             case (NLESOLVER_VECTOR_BOUNDS); t = min(t, (me%xlow(i) - x(i))/p(i))
@@ -1190,7 +1159,7 @@ contains
          else if (xnew(i) > me%xupp(i)) then
             search_direction_modifed = .true.
             modified(i) = .true.
-            if (me%verbose) write (me%iunit, "(A)") "x("//int2str(i)//") > xupp(i) : adjusting to upper bound"
+            if (me%verbose) write (me%iunit, "(A)") "x("//to_string(i)//") > xupp(i) : adjusting to upper bound"
             select case (me%bounds_mode)
             case (NLESOLVER_SCALAR_BOUNDS, NLESOLVER_WALL_BOUNDS); xnew(i) = me%xupp(i)
             case (NLESOLVER_VECTOR_BOUNDS); t = min(t, (me%xupp(i) - x(i))/p(i))

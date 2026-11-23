@@ -13,15 +13,15 @@ contains
    !> Read an environment variable into an allocatable string
    !>
    !> @param[in]  name     Environment variable name to query
+   !> @param[out] val      Trimmed value, `default`, or a zero-length string
    !> @param[in]  default  Optional: value used when the variable is unset or empty
-   !> @return              Trimmed value, `default`, or a zero-length string
-   function get_env(name, default) result(val)
+   subroutine get_env(name, val, default)
       !> Environment variable name to query
       character(len=*), intent(in) :: name
+      !> Resolved value; always allocated
+      character(len=:), allocatable, intent(out) :: val
       !> Value substituted when the variable is unset or empty
       character(len=*), intent(in), optional :: default
-      !> Resolved value; always allocated
-      character(len=:), allocatable :: val
       !> Length of the variable value as reported by the runtime
       integer :: length
       !> Query status (0 if the variable exists)
@@ -37,7 +37,7 @@ contains
 
       val = ""
       if (present(default)) val = default
-   end function get_env
+   end subroutine get_env
 
    !> Resolve a directory from an environment variable, falling back to a
    !> default
@@ -46,17 +46,17 @@ contains
    !>
    !> @param[in]  env_name  Environment variable consulted first
    !> @param[in]  fallback  Default used when the variable is unset or empty
-   !> @return               Resolved directory path (no trailing slash)
-   function resolve_dir(env_name, fallback) result(dir)
+   !> @param[out] dir       Resolved directory path (no trailing slash)
+   subroutine resolve_dir(env_name, fallback, dir)
       !> Environment variable consulted first
       character(len=*), intent(in) :: env_name
       !> Default used when the variable is unset or empty
       character(len=*), intent(in) :: fallback
       !> Resolved directory path
-      character(len=:), allocatable :: dir
+      character(len=:), allocatable, intent(out) :: dir
 
-      dir = get_env(env_name, default=fallback)
-   end function resolve_dir
+      call get_env(env_name, dir, default=fallback)
+   end subroutine resolve_dir
 
    !> Create a directory (and any missing parents) if it does not already exist
    !>

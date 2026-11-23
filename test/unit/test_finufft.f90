@@ -10,7 +10,8 @@ module test_finufft
    use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr, c_loc
    use finufft_mod, only: finufft_opts
    use moist_math_fft_finufft, only: finufft_default_opts, finufft_destroy
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

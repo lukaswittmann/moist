@@ -18,12 +18,13 @@ module test_cavity_drop_properties
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop
    use test_helpers, only: build_test_cavity_drop, read_printout
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: new_radii_custom_atoms, default_cpcm_radii, radius_type
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

@@ -270,7 +270,8 @@ module test_cavity_drop_lsf
    use moist_context, only: moist_context_type, new_context
    use moist_radii_custom, only: radius_type_custom, new_custom_radii_atoms
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -9274,6 +9275,8 @@ contains
       real(wp) :: p3(3, 4), p2(2, 4), w0(4), w0s(3), w1(3, 4), w1b(2, 4), w1s(3, 3)
       real(wp) :: w2(6, 4), w2b(5, 4), w2s(6, 3), r(3, 6, 4), rc(3, 5, 4), rn(3, 6, 3)
       real(wp) :: rd(2, 6, 4), ra(3, 6, 6)
+      !> Shape diagnostic of one call
+      character(len=:), allocatable :: msg
 
       p3 = 0.0_wp
       p2 = 0.0_wp
@@ -9291,40 +9294,38 @@ contains
       rd = 0.0_wp
       ra = 0.0_wp
 
-      call check(error, len(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, r, 6)), &
-                 0, more="a fitting call must give no message")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, r, 6, msg)
+      call check(error, len(msg), 0, more="a fitting call must give no message")
       if (allocated(error)) return
-      call check(error, len(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, ra, 6)), 0, &
-                 more="extra tile columns in res must fit")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, ra, 6, msg)
+      call check(error, len(msg), 0, more="extra tile columns in res must fit")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p2, w0, w1, w2, r, 6), &
-                              "points must be (3, np)") > 0, more="points leading extent")
+      call lsf_vjp_batch_shape_message("X", p2, w0, w1, w2, r, 6, msg)
+      call check(error, index(msg, "points must be (3, np)") > 0, more="points leading extent")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0s, w1, w2, r, 6), &
-                              "w0 holds fewer") > 0, more="w0 length")
+      call lsf_vjp_batch_shape_message("X", p3, w0s, w1, w2, r, 6, msg)
+      call check(error, index(msg, "w0 holds fewer") > 0, more="w0 length")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1b, w2, r, 6), &
-                              "w1 must be (3, >= np)") > 0, more="w1 leading extent")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1b, w2, r, 6, msg)
+      call check(error, index(msg, "w1 must be (3, >= np)") > 0, more="w1 leading extent")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1s, w2, r, 6), &
-                              "w1 must be (3, >= np)") > 0, more="w1 columns")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1s, w2, r, 6, msg)
+      call check(error, index(msg, "w1 must be (3, >= np)") > 0, more="w1 columns")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2b, r, 6), &
-                              "w2 must be packed (6, >= np)") > 0, &
-                 more="w2 packed length")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2b, r, 6, msg)
+      call check(error, index(msg, "w2 must be packed (6, >= np)") > 0, more="w2 packed length")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2s, r, 6), &
-                              "w2 must be packed (6, >= np)") > 0, more="w2 columns")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2s, r, 6, msg)
+      call check(error, index(msg, "w2 must be packed (6, >= np)") > 0, more="w2 columns")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rc, 6), &
-                              "res must be (3, ncand, >= np)") > 0, more="res candidates")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rc, 6, msg)
+      call check(error, index(msg, "res must be (3, ncand, >= np)") > 0, more="res candidates")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rn, 6), &
-                              "res must be (3, ncand, >= np)") > 0, more="res columns")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rn, 6, msg)
+      call check(error, index(msg, "res must be (3, ncand, >= np)") > 0, more="res columns")
       if (allocated(error)) return
-      call check(error, index(lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rd, 6), &
-                              "res must be (3, ncand, >= np)") > 0, &
-                 more="res leading extent")
+      call lsf_vjp_batch_shape_message("X", p3, w0, w1, w2, rd, 6, msg)
+      call check(error, index(msg, "res must be (3, ncand, >= np)") > 0, more="res leading extent")
    end subroutine test_vjp_batch_shape_messages
 
    !> Failed column raises `error` in `vjp_f1_rA_batch` (SvdW)

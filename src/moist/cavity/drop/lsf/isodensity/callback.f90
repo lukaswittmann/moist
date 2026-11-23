@@ -22,7 +22,6 @@ module moist_cavity_drop_lsf_isodensity_callback
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
-   use mctc_io_utils, only: to_string
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user, &
                                          lsf_sorted_candidates, lsf_vjp_batch_shape_message
@@ -33,7 +32,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_channels_coupling, only: coupling_type, coupling_view_type, coupling_register, &
       & request_require, moist_phase_build, nuclear_charge_request_type
    use moist_math_packed, only: pack_sym_matrix, pack_sym_tensor3
-   use moist_utils_format, only: format_string
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -281,9 +280,9 @@ contains
 
          call fatal_error(error, "External LSF evaluation failed with status "// &
                           to_string(int(host_status))//" at point ("// &
-                          format_string(point(1), "(es13.6)")//" "// &
-                          format_string(point(2), "(es13.6)")//" "// &
-                          format_string(point(3), "(es13.6)")// &
+                          to_string(point(1), "(es13.6)")//" "// &
+                          to_string(point(2), "(es13.6)")//" "// &
+                          to_string(point(3), "(es13.6)")// &
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if
@@ -479,7 +478,7 @@ contains
       np = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
+      call lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, msg)
       if (len(msg) > 0) error stop msg
       if (present(candidate_indices)) then
          allocate (sorted(ncand))

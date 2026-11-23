@@ -13,14 +13,14 @@ it below.
 | Component | Path in `moist` | Upstream repository | Original author(s) | License | License file |
 |---|---|---|---|---|---|
 | L-BFGS-B | `src/moist/math/solver/lbfgsb/` | jacobwilliams/lbfgsb | L-BFGS-B 3.0: J. Nocedal & J. L. Morales; modern Fortran by J. Williams | BSD-3-Clause ("New BSD") | `src/moist/math/solver/lbfgsb/LICENSE` |
-| nlesolver | `src/moist/math/solver/newton/` | jacobwilliams/nlesolver-fortran | J. Williams | BSD-3-Clause | `src/moist/math/solver/newton/LICENSE` |
+| nlesolver | `src/moist/math/solver/newton/` | jacobwilliams/nlesolver-fortran, adapted to moist's linear-algebra modules; see the file header | J. Williams | BSD-3-Clause | `src/moist/math/solver/newton/LICENSE` |
 | fmin | `src/moist/math/solver/fmin/` | jacobwilliams/fmin (tag 1.1.1) | J. Williams | BSD-3-Clause | `src/moist/math/solver/fmin/LICENSE` |
 | LSQR | `src/moist/math/linalg/lsqr/` | jacobwilliams/LSQR (tag 1.1.0) | M. Saunders (SOL, Stanford); modern Fortran by J. Williams | BSD-3-Clause (+ CPL-1.0 original, + LAPACK BSD) | `src/moist/math/linalg/lsqr/LICENSE` |
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
 | Fortran stdlib sorting (`ord_sort`, `sort`, `sort_index`, `sort_adjoint`) | `src/moist/math/sorter/merge.f90`, `introsort.f90`, `argsort.f90` | fortran-lang/stdlib (tag v0.8.1, `src/sorting/`), ported by hand to default integer and `real(wp)`, changes listed in each file header | stdlib contributors; `ord_sort`/`sort_index` translate the Rust `slice.rs` merge sort (The Rust Project Developers, Apache-2.0 OR MIT); `sort` is D. R. Musser's introsort (Softw. Pract. Exper. 27, 983 (1997)) | MIT | `src/moist/math/sorter/LICENSE` |
 
-They are unmodified except for two OpenMP fixes in FINUFFT's `spread.hpp` and `makeplan.hpp`.
+They are unmodified except for two OpenMP changes in FINUFFT's `spread.hpp` and `makeplan.hpp` and one change in libmsym's `symmetry.c`.
 See each directory's `PROVENANCE.md` for the exact file list, origin, pinned revision and local patches.
 
 | Component | Path in `moist` | Upstream repository | Pinned revision | License | License file |
@@ -28,7 +28,7 @@ See each directory's `PROVENANCE.md` for the exact file list, origin, pinned rev
 | FINUFFT (non-uniform FFT) | `src/moist/math/fft/finufft/` | flatironinstitute/finufft | commit `0e9c10409580c482656b3f840c9d875f98c3a066` (2.6.0-dev) | Apache-2.0 | `src/moist/math/fft/finufft/LICENSE`, `NOTICE` |
 | xsimd (SIMD wrappers, header-only) | `src/moist/math/fft/xsimd/` | xtensor-stack/xsimd | commit `6842624fc8adafd7168a999e7150b384411da448` | BSD-3-Clause | `src/moist/math/fft/xsimd/LICENSE` |
 | ducc0 FFT (16-file subset) | `src/moist/math/fft/ducc0/` | mreineck/ducc, tag `ducc0_0_39_1` (commit `0c0525521bc56d1b7bef8eb97a6debb6a3bfd33c`) | see tag | BSD-3-Clause (only dual-licensed files are vendored; moist takes the BSD-3-Clause option) | full text in the header of every file, also collected in `src/moist/math/fft/ducc0/LICENSE`; provenance and closure in `src/moist/math/fft/ducc0/PROVENANCE.md` |
-| libmsym (point-group detection) | `src/moist/math/symmetry/libmsym/` | mcodev31/libmsym | commit `85e47232376a8e735c2a7b5283f40b59b3953db1` (0.2.4) | MIT | `src/moist/math/symmetry/libmsym/LICENSE`; provenance and local additions in `src/moist/math/symmetry/libmsym/PROVENANCE.md` |
+| libmsym (point-group detection) | `src/moist/math/symmetry/libmsym/` | mcodev31/libmsym | commit `85e47232376a8e735c2a7b5283f40b59b3953db1` (0.2.4) | MIT | `src/moist/math/symmetry/libmsym/LICENSE`; provenance, local additions and patches in `src/moist/math/symmetry/libmsym/PROVENANCE.md` |
 
 ## Lennard-Jones parameters
 

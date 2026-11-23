@@ -31,19 +31,19 @@ module moist_cavity_grid_model_symmetry_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_symbols, only: to_symbol
-   use mctc_io_utils, only: to_lower, to_string
+   use mctc_io_utils, only: to_lower
    use moist_context, only: moist_context_type
    use moist_utils_timer, only: cat_setup
    use moist_cavity_grid_model_symmetry_parameters, only: moist_cavity_grid_model_symmetry_parameters_type, &
       & check_symmetry_parameters
    use moist_math_symmetry_orient, only: sym_orient_type, new_sym_orient, sym_orient_vjp, &
-      & sym_orient_jacobian, orient_lab, orient_molecular
-   use moist_math_symmetry_frame, only: sym_threshold_type, frame_level_name, frame_level_list
+      & sym_orient_jacobian, orient_lab, orient_molecular, orient_codes
+   use moist_math_symmetry_frame, only: sym_threshold_type, frame_level_name, frame_level_codes
    use moist_channels_fields, only: field_query_type
    use moist_cavity_grid_model_type, only: grid_model_type, grid_components_type, grid_size_default
-   use moist_utils_format, only: format_string
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -170,6 +170,8 @@ contains
 
       !> Timer stack depth at entry; error paths unwind back to it
       integer :: d0
+      !> Description of frame choices near a switch
+      character(len=:), allocatable :: switch_text
 
       if (self%is_current(mol, radii)) return
       call self%clear()
@@ -196,8 +198,8 @@ contains
 
       if (present(ctx) .and. self%missed_tolerance()) then
          call ctx%warning("Symmetry: the geometry matches "//self%orient%group_detected// &
-            & " only to "//format_string(self%orient%deviation_detected, "(es9.2)")// &
-            & " bohr, above the tolerance "//format_string(self%used%tolerance, "(es9.2)")// &
+            & " only to "//to_string(self%orient%deviation_detected, "(es9.2)")// &
+            & " bohr, above the tolerance "//to_string(self%used%tolerance, "(es9.2)")// &
             & " bohr, so "//self%orient%group_used// &
             & " is used; symmetrize the input geometry or raise symmetry.tolerance")
       end if
@@ -206,7 +208,8 @@ contains
             & " (symmetry.group) removes the choice only where the grid can carry it")
       end if
       if (present(ctx) .and. self%near_switch()) then
-         call ctx%warning("Symmetry: "//near_text(self%orient)//"; the molecular frame is close"// &
+         call near_text(self%orient, switch_text)
+         call ctx%warning("Symmetry: "//switch_text//"; the molecular frame is close"// &
             & " to a switch and the grid orientation can change abruptly under a small"// &
             & " displacement, which can cause problems in geometry optimizations and other"// &
             & " calculations; symmetrize the geometry and specify its point group"// &
@@ -488,22 +491,23 @@ contains
 
    !> Text naming the choices of the frame near their switch
    !>
-   !> @param[in] orient Orientations with a flagged frame
-   function near_text(orient) result(text)
+   !> @param[in]  orient Orientations with a flagged frame
+   !> @param[out] text   Description
+   pure subroutine near_text(orient, text)
       !> Orientations
       type(sym_orient_type), intent(in) :: orient
       !> Description
-      character(len=:), allocatable :: text
+      character(len=:), allocatable, intent(out) :: text
 
       text = ""
       if (orient%frame%near_gap) text = text//", nearly degenerate second-moment eigenvalues"// &
-         & " (relative gap "//format_string(orient%frame%near_gap_value, "(es9.2)")//")"
+         & " (relative gap "//to_string(orient%frame%near_gap_value, "(es9.2)")//")"
       if (orient%frame%near_linear) text = text//", nearly linear molecule (mean square distance"// &
-         & " from the axis "//format_string(orient%frame%tau, "(es9.2)")//" bohr^2)"
+         & " from the axis "//to_string(orient%frame%tau, "(es9.2)")//" bohr^2)"
       if (orient%frame%near_harmonic) text = text//", weak or nearly tied in-plane harmonic ("// &
-         & format_string(orient%frame%near_harmonic_value, "(es9.2)")//")"
+         & to_string(orient%frame%near_harmonic_value, "(es9.2)")//")"
       text = text(3:)
-   end function near_text
+   end subroutine near_text
 
    !> Forget the computation: every sphere back in the lab frame
    !>
@@ -671,14 +675,13 @@ contains
       if (.not. self%computed) return
       associate (orient => self%orient)
          call query%add_int_value("symmetry_orientation", &
-            & "Sphere orientation used: "//to_string(orient_lab)//" lab frame, "// &
-            & to_string(orient_molecular)//" molecular frame", orient%orientation)
+            & "Sphere orientation used: "//orient_codes, orient%orientation)
          call query%add_int_value("symmetry_order", "Order of the group used", size(orient%ops, 3))
          scalar = orient%deviation
          call query%add_real_scalar("symmetry_deviation", &
             & "Largest atom deviation under the operations used, bohr", scalar)
          call query%add_int_value("symmetry_frame_level", &
-            & "Molecular frame level: "//frame_level_list(), orient%frame%level)
+            & "Molecular frame level: "//frame_level_codes, orient%frame%level)
          scalar = orient%frame%gap
          call query%add_real_scalar("symmetry_frame_gap", &
             & "Smallest gap of two neighbouring eigenvalues of the frame tensor relative to their sum", scalar)
@@ -761,7 +764,7 @@ contains
          call pp%kv("Group requested", orient%group_requested)
          if (len(orient%group_detected) > 0) then
             call pp%kv("Group detected", orient%group_detected//" (deviation "// &
-               & format_string(orient%deviation_detected, "(es9.2)")//" bohr)")
+               & to_string(orient%deviation_detected, "(es9.2)")//" bohr)")
          else
             call pp%kv("Group detected", "-")
          end if
@@ -770,10 +773,10 @@ contains
          call pp%kv("Group used", used)
          if (len(orient%reason) > 0) call pp%kv("Reason", orient%reason)
          if (order > 1) then
-            call pp%kv("Max. deviation", format_string(orient%deviation, "(es9.2)")// &
-               & " bohr (tolerance "//format_string(self%used%tolerance, "(es9.2)")//" bohr)")
+            call pp%kv("Max. deviation", to_string(orient%deviation, "(es9.2)")// &
+               & " bohr (tolerance "//to_string(self%used%tolerance, "(es9.2)")//" bohr)")
          else
-            call pp%kv("Tolerance", format_string(self%used%tolerance, "(es9.2)")//" bohr")
+            call pp%kv("Tolerance", to_string(self%used%tolerance, "(es9.2)")//" bohr")
          end if
          if (orient%orientation == orient_molecular) call print_frames(pp, orient)
          call pp%kv("Orbits", to_string(orient%norbit))
@@ -797,10 +800,14 @@ contains
       !> Orientations
       type(sym_orient_type), intent(in) :: orient
 
-      call pp%kv("Molecular frame", frame_level_name(orient%frame%level)//" (eigen-gap "// &
-         & format_string(orient%frame%gap, "(es9.2)")//")")
+      !> Description of choices near a switch
+      character(len=:), allocatable :: switch_text
+
+      call pp%kv("Molecular frame", trim(frame_level_name(orient%frame%level))//" (eigen-gap "// &
+         & to_string(orient%frame%gap, "(es9.2)")//")")
       if (orient%frame%near_gap .or. orient%frame%near_linear .or. orient%frame%near_harmonic) then
-         call pp%kv("Near a switch", near_text(orient))
+         call near_text(orient, switch_text)
+         call pp%kv("Near a switch", switch_text)
       end if
       if (orient%ambiguous) call pp%kv("Tied frames", "the species tell them apart; orientation dependent")
    end subroutine print_frames
@@ -826,6 +833,8 @@ contains
       integer, allocatable :: members(:), start(:)
       !> Distinct rotations of one orbit
       integer, allocatable :: rots(:)
+      !> Formatted rotation and atom lists for one row
+      character(len=:), allocatable :: rot_text, atom_text
       integer :: nat, iorb, ia, irep, nmem, nrots, k
 
       nat = size(orient%orbit_of_atom)
@@ -867,8 +876,10 @@ contains
          call plp%add(radii(irep), fmt="f10.4")
          call plp%add(nmem)
          call plp%add(count(orient%perm(irep, :) == irep))
-         call plp%add(compact_ranges(rots(1:nrots), max_list_len))
-         call plp%add(compact_ranges(members(start(iorb):start(iorb + 1) - 1), max_list_len))
+         call compact_ranges(rots(1:nrots), max_list_len, rot_text)
+         call compact_ranges(members(start(iorb):start(iorb + 1) - 1), max_list_len, atom_text)
+         call plp%add(rot_text)
+         call plp%add(atom_text)
          call plp%end_row()
       end do
       call plp%blank()
@@ -904,15 +915,16 @@ contains
    !>
    !> Cut with ",..." once longer than `max_len`
    !>
-   !> @param[in] ids     Ascending distinct integers
-   !> @param[in] max_len Longest rendering before the cut
-   pure function compact_ranges(ids, max_len) result(text)
+   !> @param[in]  ids     Ascending distinct integers
+   !> @param[in]  max_len Longest rendering before the cut
+   !> @param[out] text    Rendering
+   pure subroutine compact_ranges(ids, max_len, text)
       !> Ascending distinct integers
       integer, intent(in) :: ids(:)
       !> Longest rendering before the cut
       integer, intent(in) :: max_len
       !> Rendering
-      character(len=:), allocatable :: text
+      character(len=:), allocatable, intent(out) :: text
 
       character(len=:), allocatable :: item
       integer :: i, j
@@ -942,7 +954,7 @@ contains
          text = text//item
          i = j + 1
       end do
-   end function compact_ranges
+   end subroutine compact_ranges
 
    !> Whether two real arrays agree bit for bit
    !>

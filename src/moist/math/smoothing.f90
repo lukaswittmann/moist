@@ -7,7 +7,7 @@ module moist_math_smoothing
 
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
-   use mctc_io_utils, only: to_string
+   use moist_utils_format, only: to_string
 
    implicit none(type, external)
    private

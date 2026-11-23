@@ -3,8 +3,8 @@
 !> Wrapper to symmetric divide-and-conquer solver for general eigenvalue problems
 module moist_math_lapack_sygvd
    use mctc_env, only: sp, dp, error_type, fatal_error
-   use mctc_io_utils, only: to_string
    use moist_math_lapack_type, only: eigen_solver_type, context_solver
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

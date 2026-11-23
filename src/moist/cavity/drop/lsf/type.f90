@@ -1876,7 +1876,7 @@ contains
       np = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
+      call lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, msg)
       if (len(msg) > 0) error stop msg
       call self%begin_batch(np)
 
@@ -1945,8 +1945,8 @@ contains
    !> @param[in] w2     Packed Hessian seeds (6, np); only the extents are read
    !> @param[in] res    Result (3, ncand, np); only the extents are read
    !> @param[in] ncand  Number of candidates, `size(candidate_indices)` or `ncenters`
-   !> @returns   msg   Diagnostic, empty when the shapes fit
-   pure function lsf_vjp_batch_shape_message(who, points, w0, w1, w2, res, ncand) result(msg)
+   !> @param[out] msg    Diagnostic, empty when the shapes fit
+   pure subroutine lsf_vjp_batch_shape_message(who, points, w0, w1, w2, res, ncand, msg)
       !> LSF name for the diagnostic
       character(len=*), intent(in) :: who
       !> Evaluation points; only the extents are read
@@ -1962,7 +1962,7 @@ contains
       !> Number of candidates
       integer, intent(in) :: ncand
       !> Diagnostic, empty when the shapes fit
-      character(len=:), allocatable :: msg
+      character(len=:), allocatable, intent(out) :: msg
 
       character(len=*), parameter :: pre = "moist DROP LSF vjp_f1_rA_batch: "
       integer :: np
@@ -1983,7 +1983,7 @@ contains
                .or. size(res, 3) < np) then
          msg = pre//"res must be (3, ncand, >= np) ("//who//")"
       end if
-   end function lsf_vjp_batch_shape_message
+   end subroutine lsf_vjp_batch_shape_message
 
    !* ================================================================================= *!
    !*                            Geometric bound queries                                *!

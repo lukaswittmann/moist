@@ -6,7 +6,7 @@ module moist_math_grid_3d_cartesian
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
-                                      integrand_3d, check_trafo_blocks
+                                      integrand_3d, check_trafo_blocks, grid_kind_name_len
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
@@ -479,8 +479,8 @@ contains
    function cartesian_kind_name(self) result(name)
       !> Domain instance
       class(moist_math_grid_3d_cartesian_type), intent(in) :: self
-      !> Diagnostic name
-      character(len=:), allocatable :: name
+      !> Diagnostic name, blank-padded
+      character(len=grid_kind_name_len) :: name
       name = "cartesian"
    end function cartesian_kind_name
 

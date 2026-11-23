@@ -12,10 +12,10 @@
 module moist_math_solver_lbfgsb
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use mctc_io_utils, only: to_string
    use moist_math_solver_type, only: solver_base_type
    use lbfgsb_module, only: setulb, lbfgsp_wp
    use, intrinsic :: iso_fortran_env, only: output_unit
+   use moist_utils_format, only: to_string
 
    implicit none(type, external)
    private

@@ -12,6 +12,10 @@ module moist_math_grid_3d_base
    public :: moist_math_grid_3d_trafo_type
    public :: integrand_3d
    public :: check_trafo_blocks
+   public :: grid_kind_name_len
+
+   !> Length of a `kind_name` result
+   integer, parameter :: grid_kind_name_len = 16
 
    !> Scalar-valued 3D integrand used by `integrate`
    abstract interface
@@ -415,7 +419,7 @@ contains
       !> Unsupported grid
       type(error_type), allocatable, intent(out) :: error
 
-      call fatal_error(error, self%kind_name()//": volume Hessian is not implemented")
+      call fatal_error(error, trim(self%kind_name())//": volume Hessian is not implemented")
    end subroutine get_grid_volume_hessian_vector_default
 
    !> Weighted volume integral sampled on the domain coordinates
@@ -494,11 +498,11 @@ contains
       call self%validate(error)
       if (allocated(error)) return
       if (mol%nat < 1) then
-         call fatal_error(error, self%kind_name()//" domain: at least one solute atom is required")
+         call fatal_error(error, trim(self%kind_name())//" domain: at least one solute atom is required")
          return
       end if
       if (.not. all(ieee_is_finite(mol%xyz))) then
-         call fatal_error(error, self%kind_name()//" domain: solute coordinates must be finite")
+         call fatal_error(error, trim(self%kind_name())//" domain: solute coordinates must be finite")
       end if
    end subroutine grid_check_update_input
 
@@ -630,7 +634,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call fatal_error(error, "The "//self%kind_name()// &
+      call fatal_error(error, "The "//trim(self%kind_name())// &
          & " domain does not provide a reverse-mode geometry gradient")
 
    end subroutine get_grid_volume_gradient_default
@@ -654,8 +658,8 @@ contains
    function grid_kind_name_default(self) result(name)
       !> Domain instance
       class(moist_math_grid_3d_type), intent(in) :: self
-      !> Kind name
-      character(len=:), allocatable :: name
+      !> Kind name, blank-padded
+      character(len=grid_kind_name_len) :: name
 
       name = "generic"
 

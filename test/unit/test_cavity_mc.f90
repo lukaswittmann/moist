@@ -1142,7 +1142,7 @@ contains
       type(integration_case_type), intent(in) :: c
 
       !> Printable case label without trailing blanks
-      character(len=:), allocatable :: str
+      character(len=len_trim(c%dataset) + len_trim(c%structure) + 22) :: str
 
       character(len=8) :: k_str, b_str, g_str
 

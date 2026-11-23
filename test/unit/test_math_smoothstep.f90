@@ -29,11 +29,12 @@
 module test_math_smoothstep
    use, intrinsic :: ieee_exceptions, only: ieee_get_flag, ieee_set_flag, ieee_divide_by_zero
    use mctc_env, only: wp
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_smoothstep, only: moist_math_smoothstep_type, &
       & moist_math_smoothstep_polynomial_type, new_smoothstep_polynomial, &
       & moist_math_smoothstep_erf_type, new_smoothstep_erf, &
       & moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

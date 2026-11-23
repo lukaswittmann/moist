@@ -13,8 +13,9 @@
 module test_cavity_adjoint
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_adjoint, only: cavity_adjoint_type
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

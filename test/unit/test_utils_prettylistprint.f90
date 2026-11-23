@@ -1,8 +1,9 @@
 !> Test suite for the tabular printer in moist_utils_prettylistprint
 module test_utils_prettylistprint
    use, intrinsic :: iso_fortran_env, only: real32, real64, int8, int16, int32, int64, iostat_eor, iostat_end
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

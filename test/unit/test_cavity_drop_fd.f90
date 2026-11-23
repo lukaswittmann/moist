@@ -20,7 +20,7 @@ module test_cavity_drop_fd
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-   use testdrive, only: error_type, check, test_failed, to_string
+   use testdrive, only: error_type, check, test_failed
    use test_helpers, only: build_numbering_map, fd_probe_type, fd_derivative, fd_compare
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -30,6 +30,7 @@ module test_cavity_drop_fd
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
    use moist_cavity_grid_model_symmetry_type, only: grid_model_symmetry_type
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

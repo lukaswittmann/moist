@@ -2,8 +2,7 @@
 module test_math_linalg
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
-   use mctc_io_utils, only: to_string
-   use testdrive, only: new_unittest, unittest_type, error_type, check, real_to_string => to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
                                 outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
                                 outer4, sym4_31, sym4_22, sym4_211
@@ -15,6 +14,7 @@ module test_math_linalg
    use moist_math_linalg_lusol_ez, only: solve
    use moist_math_linalg_lsmr, only: lsmr, lsmr_operator
    use moist_math_linalg_lsqr, only: lsqr_solver_ez
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -687,13 +687,13 @@ contains
             call eig_2x2_symmetric(R(1, 1), R(1, 2), R(2, 2), lambda_min, lambda_max, v_min, v_max)
             call dsyev("N", "U", int(2, lapack_ik), R, int(2, lapack_ik), evals, work, int(8, lapack_ik), info)
             if (info /= 0) then
-               call check(error, .false., "LAPACK dsyev failed for gap "//real_to_string(gaps(k)))
+               call check(error, .false., "LAPACK dsyev failed for gap "//to_string(gaps(k)))
                return
             end if
             call check(error, abs(lambda_min - evals(1)) <= thr*scale .and. abs(lambda_max - evals(2)) <= thr*scale, &
-                       "near-degenerate eigenvalues off LAPACK, gap "//real_to_string(gaps(k))//", rotation "// &
-                       to_string(i)//": "//real_to_string(lambda_min - evals(1))//", "// &
-                       real_to_string(lambda_max - evals(2)))
+                       "near-degenerate eigenvalues off LAPACK, gap "//to_string(gaps(k))//", rotation "// &
+                       to_string(i)//": "//to_string(lambda_min - evals(1))//", "// &
+                       to_string(lambda_max - evals(2)))
             if (allocated(error)) return
          end do
       end do

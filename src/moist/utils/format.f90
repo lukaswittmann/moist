@@ -1,22 +1,27 @@
 !> Scalar-to-text conversion and text-wrapping utilities
 !>
-!> - `format_string`: pure inline scalar rendering with a Fortran format, trimmed
+!> - `to_string`: inline scalar rendering, trimmed; `(i0)` and `(g0)` without a format
 !> - `print_wrapped`: word-wrapped text output at a given column width
 !> - `value_to_string`: polymorphic scalar for pretty printers, zero as `0.0`
 !> - `fixed_fmt`, `exp_fmt`, `int_fmt`: default descriptors from a field width
 !> - `magnitude_real_fmt`: fixed or exponential descriptor by the size of a value
+!>
+!> No deferred-length character results: gfortran keeps the hidden result
+!> length of such a call in static storage, even under `-fopenmp`, so threads
 module moist_utils_format
    use, intrinsic :: iso_fortran_env, only: int8, int16, int32, int64, real32, real64
    implicit none(type, external)
    private
-   public :: format_string, print_wrapped
+   public :: to_string, print_wrapped
    public :: value_to_string, fixed_fmt, exp_fmt, int_fmt, magnitude_real_fmt
 
    !> Format a scalar into a trimmed, left-adjusted string
-   interface format_string
-      module procedure :: format_string_int
-      module procedure :: format_string_real_dp
-   end interface format_string
+   interface to_string
+      module procedure :: to_string_int
+      module procedure :: to_string_int64
+      module procedure :: to_string_real_dp
+      module procedure :: to_string_real_dp_fmt
+   end interface to_string
 
    !> Internal-write buffer, room for a numeric edit re-rendered at a 400-character
    !> width and literal text around it
@@ -24,57 +29,135 @@ module moist_utils_format
 
 contains
 
+   !> Render an integer as `(i0)` does, without an internal write
+   !>
+   !> @param[in] val Value to render
+   pure function to_string_int(val) result(str)
+      !> Value to render
+      integer(int32), intent(in) :: val
+      !> Rendering
+      character(len=int_digits(int(val, int64))) :: str
+
+      str = to_string_int64(int(val, int64))
+   end function to_string_int
+
+   !> Render a 64-bit integer as `(i0)` does, without an internal write
+   !>
+   !> @param[in] val Value to render
+   pure function to_string_int64(val) result(str)
+      !> Value to render
+      integer(int64), intent(in) :: val
+      !> Rendering
+      character(len=int_digits(val)) :: str
+
+      integer(int64) :: rest
+      integer :: pos
+
+      ! Digits right to left; a negative value keeps its sign in `mod`
+      rest = val
+      do pos = len(str), 1, -1
+         str(pos:pos) = achar(iachar("0") + int(abs(mod(rest, 10_int64))))
+         rest = rest/10
+         if (rest == 0) exit
+      end do
+      if (val < 0) str(1:1) = "-"
+   end function to_string_int64
+
+   !> Render a double-precision real as `(g0)` does
+   !>
+   !> @param[in] val Value to render
+   pure function to_string_real_dp(val) result(str)
+      !> Value to render
+      real(real64), intent(in) :: val
+      !> Rendering
+      character(len=written_len_real_dp(val, "(g0)")) :: str
+
+      character(len=buffer_len) :: buffer
+
+      call write_real_dp(val, "(g0)", buffer)
+      str = buffer
+   end function to_string_real_dp
+
    !> Render a double-precision real with a parenthesized Fortran format
    !>
    !> - leading and trailing blanks are stripped
-   !> - returns `"*"` if the internal write fails
+   !> - `"*"` if the internal write fails
    !>
-   !> @param[in] val     value to render
-   !> @param[in] format  Fortran format with outer parentheses, e.g. `"(es9.2)"`
-   pure function format_string_real_dp(val, format) result(str)
+   !> @param[in] val    Value to render
+   !> @param[in] format Fortran format with outer parentheses, e.g. `"(es9.2)"`
+   pure function to_string_real_dp_fmt(val, format) result(str)
       !> Value to render
       real(real64), intent(in) :: val
       !> Fortran format with outer parentheses
       character(len=*), intent(in) :: format
-      !> Trimmed, left-adjusted rendering
-      character(len=:), allocatable :: str
+      !> Rendering
+      character(len=written_len_real_dp(val, format)) :: str
 
       character(len=buffer_len) :: buffer
-      integer :: stat
 
-      write (buffer, format, iostat=stat) val
-      if (stat == 0) then
-         str = trim(adjustl(buffer))
-      else
-         str = "*"
-      end if
-   end function format_string_real_dp
+      call write_real_dp(val, format, buffer)
+      str = buffer
+   end function to_string_real_dp_fmt
 
-   !> Render an integer with a parenthesized Fortran format
+   !> Characters of an integer under `(i0)`, sign included
    !>
-   !> - leading and trailing blanks are stripped
-   !> - returns `"*"` if the internal write fails
+   !> @param[in] val Value
+   pure function int_digits(val) result(n)
+      !> Value
+      integer(int64), intent(in) :: val
+      !> Number of characters
+      integer :: n
+
+      integer(int64) :: rest
+
+      n = merge(2, 1, val < 0)
+      rest = val/10
+      do while (rest /= 0)
+         n = n + 1
+         rest = rest/10
+      end do
+   end function int_digits
+
+   !> Length of a real rendering with a format, blanks stripped
    !>
-   !> @param[in] val     value to render
-   !> @param[in] format  Fortran format with outer parentheses, e.g. `"(i0)"`
-   pure function format_string_int(val, format) result(str)
-      !> Value to render
-      integer, intent(in) :: val
+   !> @param[in] val    Value
+   !> @param[in] format Fortran format with outer parentheses
+   pure function written_len_real_dp(val, format) result(n)
+      !> Value
+      real(real64), intent(in) :: val
       !> Fortran format with outer parentheses
       character(len=*), intent(in) :: format
-      !> Trimmed, left-adjusted rendering
-      character(len=:), allocatable :: str
+      !> Number of characters
+      integer :: n
 
       character(len=buffer_len) :: buffer
+
+      call write_real_dp(val, format, buffer)
+      n = len_trim(buffer)
+   end function written_len_real_dp
+
+   !> Left-adjusted internal write of a real, `"*"` on failure
+   !>
+   !> @param[in]  val    Value
+   !> @param[in]  format Fortran format with outer parentheses
+   !> @param[out] buffer Rendering
+   pure subroutine write_real_dp(val, format, buffer)
+      !> Value
+      real(real64), intent(in) :: val
+      !> Fortran format with outer parentheses
+      character(len=*), intent(in) :: format
+      !> Rendering
+      character(len=buffer_len), intent(out) :: buffer
+
       integer :: stat
 
       write (buffer, format, iostat=stat) val
       if (stat == 0) then
-         str = trim(adjustl(buffer))
+         buffer = adjustl(buffer)
       else
-         str = "*"
+         buffer = "*"
       end if
-   end function format_string_int
+   end subroutine write_real_dp
 
    !> Write text word-wrapped at spaces to a given width
    !>

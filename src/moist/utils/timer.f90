@@ -681,15 +681,27 @@ contains
       !> Node index
       integer, intent(in) :: id
       !> Node name
-      character(len=:), allocatable :: name
+      character(len=node_name_len(self, id)) :: name
 
-      if (id < 1 .or. id > self%n) then
-         name = ""
-      else
-         name = trim(self%names(id))
-      end if
+      if (len(name) > 0) name = self%names(id)
 
    end function node_name
+
+   !> Trimmed length of a node name, zero for an id out of range
+   !>
+   !> @param[in] self  Timer instance
+   !> @param[in] id    Node index
+   pure function node_name_len(self, id) result(n)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Node index
+      integer, intent(in) :: id
+      !> Number of characters
+      integer :: n
+
+      n = 0
+      if (id >= 1 .and. id <= self%n) n = len_trim(self%names(id))
+   end function node_name_len
 
    !> Nesting depth of a node (0 = top level), from its parent chain
    !>
@@ -1496,16 +1508,9 @@ contains
       !> Target width
       integer, intent(in) :: w
       !> Padded result
-      character(len=:), allocatable :: padded
+      character(len=len(s) + max(0, w - disp_len(s))) :: padded
 
-      integer :: dl
-
-      dl = disp_len(s)
-      if (dl < w) then
-         padded = s//repeat(" ", w - dl)
-      else
-         padded = s
-      end if
+      padded = s
 
    end function pad_disp
 
@@ -1513,7 +1518,7 @@ contains
    !> @return  Banner line
    pure function banner_line() result(s)
       !> Banner line
-      character(len=:), allocatable :: s
+      character(len=tbl_w) :: s
 
       character(len=*), parameter :: title = " MOIST Timings "
       integer :: left
@@ -1526,14 +1531,16 @@ contains
    !> The column-header row ("section  time [s]  %tot  calls"), aligned to the same
    !> fixed columns the data rows use
    !> @return  Header line
-   function header_line() result(s)
+   pure function header_line() result(s)
+      !> First column title
+      character(len=*), parameter :: section = "section"
       !> Header line
-      character(len=:), allocatable :: s
+      character(len=max(sect_w, len(section)) + 32) :: s
 
       character(len=32) :: tail
 
       write (tail, "(a13,a9,a10)") "time [s]", "%tot", "calls"
-      s = pad_disp("section", sect_w)//tail
+      s = pad_disp(section, sect_w)//tail
 
    end function header_line
 

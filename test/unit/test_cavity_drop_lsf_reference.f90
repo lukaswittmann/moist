@@ -23,6 +23,7 @@ module test_cavity_drop_lsf_reference
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_math_packed, only: packed_index, packed_index3, packed_index4, pack_sym_matrix
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -297,7 +298,8 @@ contains
                   nfail = nfail + 1
                   if (nfail == 1) then
                      write (values, "(a,es24.16,a,es24.16)") " reference ", r%val, " batch ", got
-                     first = record_label(r)//values
+                     call record_label(r, first)
+                     first = first//values
                   end if
                end associate
             end do
@@ -307,12 +309,12 @@ contains
       end do
 
       if (ncmp /= 2*n_cfc_cases*n_points*records_per_point) then
-         call test_failed(error, "CFC batch reference: compared "//itoa(ncmp)// &
-                          " records, expected "//itoa(2*n_cfc_cases*n_points*records_per_point))
+         call test_failed(error, "CFC batch reference: compared "//to_string(ncmp)// &
+                          " records, expected "//to_string(2*n_cfc_cases*n_points*records_per_point))
          return
       end if
       if (nfail == 0) return
-      call test_failed(error, itoa(nfail)//" CFC batch value(s) deviate from the per-point "// &
+      call test_failed(error, to_string(nfail)//" CFC batch value(s) deviate from the per-point "// &
                        "fixture; first: "//first)
    end subroutine test_cfc_batch_reference
 
@@ -778,7 +780,7 @@ contains
       call prepare_lsf(lsf_scr, prior, error)
       if (allocated(error)) return
       if (lsf_scr%active_count() == 0) then
-         call test_failed(error, trim(gcase%tag)//" point "//itoa(ip)// &
+         call test_failed(error, trim(gcase%tag)//" point "//to_string(ip)// &
                           ": prior point leaves no active atom to go stale")
          return
       end if
@@ -1444,9 +1446,9 @@ contains
       else if (extent == count(act > 0)) then
          nuc_slot = act(atom)
       else
-         call stream%flag_problem(label//": extent "//itoa(extent)// &
-                                  " is neither ncenters "//itoa(size(act))// &
-                                  " nor active_count "//itoa(count(act > 0))// &
+         call stream%flag_problem(label//": extent "//to_string(extent)// &
+                                  " is neither ncenters "//to_string(size(act))// &
+                                  " nor active_count "//to_string(count(act > 0))// &
                                   " - index space changed in src/")
          nuc_slot = 0
          return
@@ -1515,7 +1517,7 @@ contains
       do atom = 1, size(act)
          if (act(atom) > 0) cycle
          if (maxval(abs(t(:, atom))) == 0.0_wp) cycle
-         call stream%flag_problem(label//": atom "//itoa(atom)//" is screened away yet "// &
+         call stream%flag_problem(label//": atom "//to_string(atom)//" is screened away yet "// &
                                   "its user-space column is non-zero - the output is no "// &
                                   "longer user-indexed")
          return
@@ -1549,7 +1551,7 @@ contains
 
       if (nact == nat) return
       call test_failed(error, "threshold 0 no longer disables screening for "//trim(tag)// &
-                       " point "//itoa(ip)//": active "//itoa(nact)//" of "//itoa(nat))
+                       " point "//to_string(ip)//": active "//to_string(nact)//" of "//to_string(nat))
    end subroutine assert_unscreened
 
    !> Require the same active count for both flags (fade on)
@@ -1576,7 +1578,7 @@ contains
 
       if (nscr == nref) return
       call test_failed(error, "fade on: the screening threshold changes the active set for "// &
-                       trim(tag)//" point "//itoa(ip)//": "//itoa(nscr)//" vs "//itoa(nref))
+                       trim(tag)//" point "//to_string(ip)//": "//to_string(nscr)//" vs "//to_string(nref))
    end subroutine assert_same_reach
 
    !> Flag a problem unless the `S` and `U` blocks hold bit-identical values
@@ -1606,19 +1608,19 @@ contains
       m = n1 - n0
       if (stream%n /= n1 + m + 1) then
          call stream%flag_problem("S and U block lengths differ for "//trim(tag)// &
-                                  " point "//itoa(ip))
+                                  " point "//to_string(ip))
          return
       end if
       do i = 1, m
          if (stream%rec(n0 + i)%val == stream%rec(n1 + i)%val) cycle
          call stream%flag_problem("fade on: S and U records differ for "//trim(tag)// &
-                                  " point "//itoa(ip)//" ("// &
+                                  " point "//to_string(ip)//" ("// &
                                   trim(stream%rec(n0 + i)%quantity)//")")
          return
       end do
       if (stream%rec(stream%n)%val /= 0.0_wp) then
          call stream%flag_problem("fade on: f0_delta not exactly zero for "// &
-                                  trim(tag)//" point "//itoa(ip))
+                                  trim(tag)//" point "//to_string(ip))
       end if
    end subroutine check_flags_identical
 
@@ -1652,7 +1654,7 @@ contains
       do i = 1, nat
          if (act(i) == i) cycle
          call stream%flag_problem("fully active list is no longer ascending: atom "// &
-                                  itoa(i)//" sits at active slot "//itoa(act(i)))
+                                  to_string(i)//" sits at active slot "//to_string(act(i)))
          return
       end do
    end subroutine active_map
@@ -1720,7 +1722,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (stream%nproblem == 0) return
-      call test_failed(error, itoa(stream%nproblem)//" structural problem(s); first: "// &
+      call test_failed(error, to_string(stream%nproblem)//" structural problem(s); first: "// &
                        stream%problem)
    end subroutine check_problems
 
@@ -1745,11 +1747,13 @@ contains
 
       integer :: i, nfail
       character(len=:), allocatable :: first
+      !> Label of the fixture record
+      character(len=:), allocatable :: ref_text
       character(len=80) :: values
 
       if (got%n /= size(ref)) then
          call test_failed(error, "reference fixture length mismatch: evaluated "// &
-                          itoa(got%n)//" records, fixture has "//itoa(size(ref))//" - "// &
+                          to_string(got%n)//" records, fixture has "//to_string(size(ref))//" - "// &
                           path//" no longer describes this traversal")
          return
       end if
@@ -1759,9 +1763,12 @@ contains
       do i = 1, got%n
          if (.not. same_label(got%rec(i), ref(i))) then
             nfail = nfail + 1
-            if (nfail == 1) first = "record "//itoa(i)//" is labelled '"// &
-                                    record_label(ref(i))//"' in the fixture but '"// &
-                                    record_label(got%rec(i))//"' now"
+            if (nfail == 1) then
+               call record_label(ref(i), ref_text)
+               call record_label(got%rec(i), first)
+               first = "record "//to_string(i)//" is labelled '"//ref_text// &
+                       "' in the fixture but '"//first//"' now"
+            end if
             cycle
          end if
          if (rel_deviation(got%rec(i)%val, ref(i)%val) <= tol) cycle
@@ -1769,12 +1776,13 @@ contains
          if (nfail == 1) then
             write (values, "(a,es24.16,a,es24.16)") " reference ", ref(i)%val, " now ", &
                got%rec(i)%val
-            first = "record "//itoa(i)//" "//record_label(ref(i))//values
+            call record_label(ref(i), ref_text)
+            first = "record "//to_string(i)//" "//ref_text//values
          end if
       end do
 
       if (nfail == 0) return
-      call test_failed(error, itoa(nfail)//" record(s) deviate from the reference; first: "//first)
+      call test_failed(error, to_string(nfail)//" record(s) deviate from the reference; first: "//first)
    end subroutine compare_stream
 
    !> `.true.` when two records name the same number
@@ -1793,37 +1801,24 @@ contains
                    .and. a%quantity == b%quantity .and. all(a%idx == b%idx)
    end function same_label
 
-   !> Left-justified decimal form of `n`
-   !>
-   !> @param[in] n  Number to render
-   !> @returns      Decimal digits, no padding
-   function itoa(n) result(text)
-      !> Number to render
-      integer, intent(in) :: n
-      character(len=:), allocatable :: text
-      character(len=32) :: buf
-
-      write (buf, "(i0)") n
-      text = trim(buf)
-   end function itoa
-
    !> Record identity for failure messages
    !>
-   !> @param[in] rec  Record to describe
-   !> @returns        One-line description
-   function record_label(rec) result(text)
+   !> @param[in]  rec  Record to describe
+   !> @param[out] text One-line description
+   subroutine record_label(rec, text)
       !> Record to describe
       type(record_type), intent(in) :: rec
-      character(len=:), allocatable :: text
+      !> Description
+      character(len=:), allocatable, intent(out) :: text
       integer :: i
 
-      text = trim(rec%id%kind)//" "//trim(rec%id%case_tag)//" point "//itoa(rec%id%ip)// &
+      text = trim(rec%id%kind)//" "//trim(rec%id%case_tag)//" point "//to_string(rec%id%ip)// &
              " "//rec%id%flag//" "//trim(rec%quantity)//" ["
       do i = 1, size(rec%idx)
-         text = text//" "//itoa(rec%idx(i))
+         text = text//" "//to_string(rec%idx(i))
       end do
       text = text//" ]"
-   end function record_label
+   end subroutine record_label
 
    !> Parse fixture records, skipping blank and `#` lines
    !>
@@ -1868,7 +1863,7 @@ contains
             ref(n)%id%flag, ref(n)%quantity, ref(n)%idx, ref(n)%val
          if (stat /= 0) then
             close (unit)
-            call test_failed(error, "malformed record "//itoa(n)//" in "//path)
+            call test_failed(error, "malformed record "//to_string(n)//" in "//path)
             return
          end if
       end do
@@ -1936,7 +1931,7 @@ contains
 
       if (first%n /= second%n) then
          call test_failed(error, kind//" record count is not reproducible: "// &
-                          itoa(first%n)//" then "//itoa(second%n))
+                          to_string(first%n)//" then "//to_string(second%n))
          return
       end if
 
@@ -1945,7 +1940,7 @@ contains
          write (tail, "(a,es24.16,a,es24.16)") &
             " differs between two passes in one process: ", first%rec(i)%val, " then ", &
             second%rec(i)%val
-         call test_failed(error, kind//" record "//itoa(i)//trim(tail))
+         call test_failed(error, kind//" record "//to_string(i)//trim(tail))
          return
       end do
    end subroutine compare_two_passes

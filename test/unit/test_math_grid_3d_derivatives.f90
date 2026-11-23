@@ -1182,7 +1182,7 @@ contains
       integer :: i
 
       if (moved%ngrid /= grid%ngrid) then
-         call test_failed(error, grid%kind_name()//": finite-difference step changed point membership")
+         call test_failed(error, trim(grid%kind_name())//": finite-difference step changed point membership")
          return
       end if
       do i = 1, grid%ngrid
@@ -1196,7 +1196,7 @@ contains
          ! Per-element checks ~30x slower on millions of points
          ! `.not. all(... < thr)` also rejects NaN
          if (.not. all(abs(moved%xyz(:, i) - grid%xyz(:, i) - motion) < 1.0e-12_wp)) then
-            call test_failed(error, grid%kind_name()//": retained point identities must stay fixed")
+            call test_failed(error, trim(grid%kind_name())//": retained point identities must stay fixed")
             return
          end if
       end do

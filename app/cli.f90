@@ -775,7 +775,8 @@ contains
          if (defaults%effective_orientation() == "molecular") then
             orientation_default = "molecular"
          else
-            orientation_default = "auto (molecular if --sym is set, else "//defaults%effective_orientation()//")"
+            orientation_default = "auto (molecular if --sym is set, else "// &
+               & trim(defaults%effective_orientation())//")"
          end if
          call p%add_argument("--orientation", &
                              choices=[character(len=9) :: "auto", "lab", "molecular"], &
@@ -1067,9 +1068,9 @@ contains
       !> Raw --sym value
       character(len=*), intent(in) :: value
       !> Normalized group
-      character(len=:), allocatable :: group
+      character(len=len_trim(adjustl(value))) :: group
 
-      group = to_lower(trim(adjustl(value)))
+      group = to_lower(adjustl(value))
       if (len(group) == 0 .or. group == "off" .or. group == "auto") return
       if (lge(group(1:1), "a") .and. lle(group(1:1), "z")) group(1:1) = achar(iachar(group(1:1)) - 32)
    end function normalize_group

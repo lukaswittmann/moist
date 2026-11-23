@@ -44,6 +44,8 @@ module moist_cavity_drop_projection_batch
    integer, parameter :: point_failed_saddle = -6
    !> Iterate beyond the level set's screening reach
    integer, parameter :: point_failed_unreached = -7
+   !> Length of a `point_status_label` result
+   integer, parameter :: point_status_label_len = 40
 
    !> Default flush target (columns per batch)
    integer, parameter :: default_batch_size = 8
@@ -136,8 +138,8 @@ contains
    pure function point_status_label(status) result(label)
       !> Column status code
       integer, intent(in) :: status
-      !> Label
-      character(len=:), allocatable :: label
+      !> Label, blank-padded
+      character(len=point_status_label_len) :: label
 
       select case (status)
       case (point_pending)

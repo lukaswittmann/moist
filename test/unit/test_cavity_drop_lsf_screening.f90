@@ -2,8 +2,9 @@
 module test_cavity_drop_lsf_screening
    use mctc_env, only: wp
    use test_helpers, only: det_rand
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop_lsf_screening, only: cell_list_type
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

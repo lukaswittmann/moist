@@ -1411,8 +1411,8 @@ contains
       integer, intent(in) :: kind
       !> Gaussian surface
       logical, intent(in) :: smeared
-      !> Blank-separated channel names
-      character(len=:), allocatable :: channels
+      !> Blank-separated channel names, blank-padded
+      character(len=12) :: channels
 
       select case (kind)
       case (pcm_cpcm, pcm_cosmo)
@@ -1422,7 +1422,6 @@ contains
       case default
          channels = merge("r n k xi f a", "r n k a     ", smeared)
       end select
-      channels = trim(channels)
    end function active_channels
 
    !> Potential request the component stages for the energy phase

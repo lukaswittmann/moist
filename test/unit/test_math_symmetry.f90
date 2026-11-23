@@ -23,14 +23,15 @@ module test_math_symmetry
    use moist_math_symmetry_msym, only: msym_group_type, find_point_group
    use moist_math_symmetry_frame, only: sym_frame_type, sym_frame_vjp, &
       & frame_level_none, frame_level_eigen, frame_level_plane, frame_level_sphere, frame_level_axial, &
-      & frame_level_name, frame_level_list, sym_threshold_type, new_sym_frame
+      & frame_level_name, frame_level_codes, sym_threshold_type, new_sym_frame
    use moist_math_symmetry_embed, only: is_oh_element, site_candidates, neighbour_form_type, &
       & new_neighbour_form, compare_forms
    use moist_math_symmetry_orient, only: sym_orient_type, new_sym_orient, sym_orient_vjp, &
-      & sym_orient_jacobian, orient_lab, orient_molecular
+      & sym_orient_jacobian, orient_lab, orient_molecular, orient_codes
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type
    use test_cavity_symmetry_fixtures, only: structure_of, molecule_symmetry
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -508,6 +509,9 @@ contains
       type(sym_frame_type) :: frame
       real(wp), allocatable :: xyz(:, :)
       integer, allocatable :: z(:)
+      !> Listing rebuilt from the codes
+      character(len=:), allocatable :: expected
+      integer :: level
 
       call molecule("c1", xyz, z)
       call default_frame(frame, xyz)
@@ -533,8 +537,17 @@ contains
          & frame_level_name(frame_level_axial) == "axial" .and. &
          & frame_level_name(-1) == "unknown", "unexpected frame_level_name")
       if (allocated(error)) return
-      call check(error, frame_level_list() == "0 none, 1 eigen, 2 plane, 3 sphere, 4 axial", &
-         & "unexpected frame_level_list: "//frame_level_list())
+
+      ! The listings in the field descriptions follow the codes and names
+      expected = ""
+      do level = frame_level_none, frame_level_axial
+         if (level > frame_level_none) expected = expected//", "
+         expected = expected//to_string(level)//" "//trim(frame_level_name(level))
+      end do
+      call check(error, frame_level_codes, expected, "frame_level_codes out of step with the levels")
+      if (allocated(error)) return
+      call check(error, orient_codes, to_string(orient_lab)//" lab frame, "// &
+         & to_string(orient_molecular)//" molecular frame", "orient_codes out of step with the orientations")
    end subroutine test_frame_levels
 
    !> Linear molecules reach `axial` wherever they lie
@@ -2900,7 +2913,7 @@ contains
 
    !> @param[out] xyz  Coordinates (3, nat)
    !> @param[out] z    Atomic numbers
-   subroutine molecule(name, xyz, z)
+   recursive subroutine molecule(name, xyz, z)
       !> Molecule
       character(len=*), intent(in) :: name
       !> Coordinates

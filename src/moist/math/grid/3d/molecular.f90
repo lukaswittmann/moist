@@ -20,7 +20,7 @@ module moist_math_grid_3d_molecular
    use moist_math_grid_3d_kernel_pvoronoi, only: pvoronoi_partition_type, default_power_width
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
-                                      integrand_3d, check_trafo_blocks
+                                      integrand_3d, check_trafo_blocks, grid_kind_name_len
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
    use moist_math_fft_finufft, only: finufft_default_opts, finufft_makeplan, finufft_setpts, &
@@ -898,8 +898,8 @@ contains
    function molecular_kind_name(self) result(name)
       !> Domain instance
       class(moist_math_grid_3d_molecular_type), intent(in) :: self
-      !> Diagnostic name
-      character(len=:), allocatable :: name
+      !> Diagnostic name, blank-padded
+      character(len=grid_kind_name_len) :: name
       name = "molecular"
    end function molecular_kind_name
 

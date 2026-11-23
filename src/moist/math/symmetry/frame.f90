@@ -6,7 +6,7 @@
 !> - [[new_sym_frame]]: frame of a set of coordinates
 !> - [[sym_frame_vjp]]: reverse-mode derivative of the frame
 !> - [[sym_threshold_type]]: thresholds of the discrete choices
-!> - `frame_level_*` codes with [[frame_level_name]] and [[frame_level_list]]
+!> - `frame_level_*` codes with [[frame_level_name]] and their listing `frame_level_codes`
 !>
 !> Concepts
 !>
@@ -42,7 +42,6 @@
 module moist_math_symmetry_frame
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
-   use mctc_io_utils, only: to_string
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: lapack_syev
    use moist_math_linalg_geometry, only: cross_product, setup_tangent_frame
@@ -52,7 +51,7 @@ module moist_math_symmetry_frame
    public :: sym_frame_type, sym_frame_vjp
    public :: sym_threshold_type, new_sym_frame, near_below, near_above
    public :: frame_level_none, frame_level_eigen, frame_level_plane, frame_level_sphere, &
-      & frame_level_axial, frame_level_name, frame_level_list
+      & frame_level_axial, frame_level_name, frame_level_name_len, frame_level_codes
 
    !> Fewer than two distinct points: identity frame
    integer, parameter :: frame_level_none = 0
@@ -64,6 +63,10 @@ module moist_math_symmetry_frame
    integer, parameter :: frame_level_sphere = 3
    !> Atoms on a line, or one separated eigenvalue without a harmonic; in-plane angle from the lab frame
    integer, parameter :: frame_level_axial = 4
+   !> Codes and names of the frame levels, for descriptions of the level
+   character(len=*), parameter :: frame_level_codes = "0 none, 1 eigen, 2 plane, 3 sphere, 4 axial"
+   !> Length of a `frame_level_name` result
+   integer, parameter :: frame_level_name_len = 7
 
    !> Relative size above which a harmonic or higher moment is significant
    real(wp), parameter :: harm_tol = 1.0e-6_wp
@@ -1391,8 +1394,8 @@ contains
    pure function frame_level_name(level) result(name)
       !> Frame level
       integer, intent(in) :: level
-      !> Name
-      character(len=:), allocatable :: name
+      !> Name, blank-padded
+      character(len=frame_level_name_len) :: name
 
       select case (level)
       case (frame_level_none)
@@ -1409,21 +1412,5 @@ contains
          name = "unknown"
       end select
    end function frame_level_name
-
-   !> Codes and names of the molecular frame levels, "0 none, 1 eigen, ..."
-   pure function frame_level_list() result(text)
-      !> Rendering
-      character(len=:), allocatable :: text
-
-      integer, parameter :: levels(5) = [frame_level_none, frame_level_eigen, frame_level_plane, &
-         & frame_level_sphere, frame_level_axial]
-      integer :: k
-
-      text = ""
-      do k = 1, size(levels)
-         if (k > 1) text = text//", "
-         text = text//to_string(levels(k))//" "//frame_level_name(levels(k))
-      end do
-   end function frame_level_list
 
 end module moist_math_symmetry_frame

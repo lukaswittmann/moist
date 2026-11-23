@@ -2088,7 +2088,7 @@ contains
       n = size(points, 2)
       ncand = self%ncenters
       if (present(candidate_indices)) ncand = size(candidate_indices)
-      msg = lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand)
+      call lsf_vjp_batch_shape_message(self%name, points, w0, w1, w2, res, ncand, msg)
       if (len(msg) > 0) error stop msg
       if (n == 0) return
       if (.not. allocated(self%cand_screen)) then

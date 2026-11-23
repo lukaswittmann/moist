@@ -1824,6 +1824,8 @@ contains
       type(density_response_type) :: density
       !> Pass index
       integer :: pass
+      !> Result of `current_item_name`
+      character(len=:), allocatable :: current_name
 
       ! A missing response handle ends the loop with an error
       call check(error,.not. logical(next_response_item_api(c_loc(err), c_null_ptr)))
@@ -1835,7 +1837,8 @@ contains
       if (allocated(error)) return
       call check(error,.not. allocated(err%ptr))
       if (allocated(error)) return
-      call check(error, current_item_name(err, response), "")
+      call current_item_name(err, response, current_name)
+      call check(error, current_name, "")
       if (allocated(error)) return
       call check_api_error(error, err, &
          & "[moist_get_response_item_name] No current response item - call next() first")
@@ -1854,11 +1857,13 @@ contains
       do pass = 1, 2
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) return
-         call check(error, current_item_name(err, response), "potential_adjoint")
+         call current_item_name(err, response, current_name)
+         call check(error, current_name, "potential_adjoint")
          if (allocated(error)) return
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) return
-         call check(error, current_item_name(err, response), "density")
+         call current_item_name(err, response, current_name)
+         call check(error, current_name, "density")
          if (allocated(error)) return
          call check(error,.not. logical(next_response_item_api(c_loc(err), c_loc(response))), &
             & more="the pass did not end after the last item")
@@ -1875,13 +1880,17 @@ contains
    end subroutine test_response_walk
 
    !> Name of the current response item through the C entry point, empty on error
-   function current_item_name(err, response) result(name)
+   !>
+   !> @param[in,out] err      Error wrapper receiving a failure
+   !> @param[in,out] response Response wrapper under test
+   !> @param[out]    name     Decoded name
+   subroutine current_item_name(err, response, name)
       !> Error wrapper receiving a failure
       type(vp_error), target, intent(inout) :: err
       !> Response wrapper under test
       type(vp_response), target, intent(inout) :: response
       !> Decoded name
-      character(len=:), allocatable :: name
+      character(len=:), allocatable, intent(out) :: name
       !> MOIST_NAME_MAX + 1 fits every name
       character(kind=c_char) :: buffer(33)
       integer :: ichar
@@ -1892,7 +1901,7 @@ contains
       do ichar = 1, c_string_len(buffer)
          name = name//buffer(ichar)
       end do
-   end function current_item_name
+   end subroutine current_item_name
 
    !* ================================================================================= *!
    !*                        Validation branches of the C entry points                  *!
@@ -4066,9 +4075,8 @@ contains
       !> Buffer written by a C entry point
       character(kind=c_char), intent(in) :: buffer(:)
       !> Text before the terminator
-      character(len=:), allocatable :: text
+      character(len=c_string_len(buffer)) :: text
       integer :: ichar
-      allocate (character(len=c_string_len(buffer)) :: text)
       do ichar = 1, len(text)
          text(ichar:ichar) = buffer(ichar)
       end do

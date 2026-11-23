@@ -451,7 +451,7 @@ contains
       character(len=32) :: idx
 
       write (idx, "(i0)") igrid
-      call fatal_error(error, context//": "//seed_status_message(status)// &
+      call fatal_error(error, context//": "//trim(seed_status_message(status))// &
                        " at grid point "//trim(idx))
    end subroutine degenerate_point_error
 

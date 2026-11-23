@@ -208,7 +208,8 @@ contains
       !> Case index
       integer, intent(in) :: icase
       !> Test name
-      character(len=:), allocatable :: name
+      character(len=len_trim(reference_cases(icase)%kind) + 1 &
+         & + len_trim(structure_tags(reference_cases(icase)%istruct))) :: name
 
       name = trim(reference_cases(icase)%kind)//"_"// &
              trim(structure_tags(reference_cases(icase)%istruct))

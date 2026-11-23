@@ -16,13 +16,14 @@ module test_cavity_drop_integration
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -377,7 +378,10 @@ contains
       integer :: iatom
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
+      !> Case label for failure messages
+      character(len=:), allocatable :: label
 
+      call case_label(c, label)
       call new_context(ctx, nthreads=0, verbosity=0)
 
       call load_structure(c%dataset, c%structure, mol)
@@ -398,7 +402,7 @@ contains
             allocate (lsf_template, source=cfc_template)
          end block
       case default
-         call test_failed(error, "Unknown level-set kind for "//case_to_string(c))
+         call test_failed(error, "Unknown level-set kind for "//label)
          return
       end select
 
@@ -407,35 +411,35 @@ contains
          error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
          proj_level=PROJ_LEVEL), ctx=ctx)
       if (allocated(cavity_error)) then
-         call test_failed(error, "new_cavity_drop failed for "//case_to_string(c)// &
+         call test_failed(error, "new_cavity_drop failed for "//label// &
                           ": "//trim(cavity_error%message))
          return
       end if
 
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
-         call test_failed(error, "cavity%update failed for "//case_to_string(c)// &
+         call test_failed(error, "cavity%update failed for "//label// &
                           ": "//trim(cavity_error%message))
          return
       end if
 
       call check_sum_identity(error, cavity%total_area, sum(cavity%a), &
-                              "Total area sum mismatch for "//case_to_string(c))
+                              "Total area sum mismatch for "//label)
       if (allocated(error)) return
       call check_sum_identity(error, cavity%total_volume, sum(cavity%v), &
-                              "Total volume sum mismatch for "//case_to_string(c))
+                              "Total volume sum mismatch for "//label)
       if (allocated(error)) return
 
       do iatom = 1, mol%nat
          call check_sum_identity(error, cavity%asph(iatom), &
                                  sum(cavity%a, mask=cavity%owner == iatom), &
                                  "Atomic area sum mismatch for atom "//to_string(iatom)// &
-                                 " of "//case_to_string(c))
+                                 " of "//label)
          if (allocated(error)) return
          call check_sum_identity(error, cavity%vsph(iatom), &
                                  sum(cavity%v, mask=cavity%owner == iatom), &
                                  "Atomic volume sum mismatch for atom "//to_string(iatom)// &
-                                 " of "//case_to_string(c))
+                                 " of "//label)
          if (allocated(error)) return
       end do
 
@@ -443,11 +447,11 @@ contains
       volume_ratio = cavity%total_volume/c%mc_volume
 
       call check(error, area_ratio, 1.0_wp, thr=AREA_REL_THR, &
-                 message="Area ratio mismatch for "//case_to_string(c))
+                 message="Area ratio mismatch for "//label)
       if (allocated(error)) return
 
       call check(error, volume_ratio, 1.0_wp, thr=VOLUME_REL_THR, &
-                 message="Volume ratio mismatch for "//case_to_string(c))
+                 message="Volume ratio mismatch for "//label)
       if (allocated(error)) return
 
    end subroutine run_single_case
@@ -504,12 +508,13 @@ contains
 
    !> Unique compact label for an integration case
    !>
-   !> @param[in] c  Reference case entry
-   pure function case_to_string(c) result(str)
+   !> @param[in]  c   Reference case entry
+   !> @param[out] str Printable case label
+   pure subroutine case_label(c, str)
       !> Reference case entry
       type(integration_case_type), intent(in) :: c
       !> Printable case label: kind, dataset, structure, shape parameters
-      character(len=:), allocatable :: str
+      character(len=:), allocatable, intent(out) :: str
       !> Formatted first shape parameter (k or a1)
       character(len=8) :: p1_str
       !> Formatted second shape parameter (beta or a2)
@@ -533,6 +538,6 @@ contains
       case default
          str = trim(c%lsf_kind)//" "//trim(c%dataset)//" "//trim(c%structure)
       end select
-   end function case_to_string
+   end subroutine case_label
 
 end module test_cavity_drop_integration

@@ -170,8 +170,8 @@ contains
    pure function symmetry_effective_orientation(self) result(orientation)
       !> Symmetry settings
       class(moist_cavity_grid_model_symmetry_parameters_type), intent(in) :: self
-      !> "lab" or "molecular", or an unchecked value
-      character(len=:), allocatable :: orientation
+      !> "lab" or "molecular", or an unchecked value; blank-padded
+      character(len=setting_len) :: orientation
 
       orientation = to_lower(trim(adjustl(self%orientation)))
       if (orientation /= "auto") return

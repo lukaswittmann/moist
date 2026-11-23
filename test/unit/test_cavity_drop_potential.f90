@@ -48,8 +48,7 @@ module test_cavity_drop_potential
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, &
-      & test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -75,6 +74,7 @@ module test_cavity_drop_potential
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use test_helpers, only: fill_legacy_radii, get_test_sibling_gate, fd_probe_type, &
       & fd_derivative, fd_compare
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

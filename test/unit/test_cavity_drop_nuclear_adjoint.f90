@@ -27,8 +27,7 @@ module test_cavity_drop_nuclear_adjoint
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed, &
-      & skip_test
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, skip_test
    use test_helpers, only: get_test_cross, fd6_offsets, get_test_cube, nudge_structure, get_test_forward_pair, &
                            get_test_sibling_gate
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -56,6 +55,7 @@ module test_cavity_drop_nuclear_adjoint
       & fill_point_charge_field, &
       & fill_legacy_radii, copy_potential_adjoint
    use moist_cavity_type, only: cavity_type
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

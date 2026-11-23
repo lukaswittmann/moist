@@ -18,7 +18,7 @@ module test_cavity_drop_branching
    use test_helpers, only: get_test_cross, get_test_tetrahedron, get_test_cube, &
                            nudge_structure, get_test_forward_pair, get_test_sibling_gate
    use test_cavity_drop_fd, only: check_drop_row_gradient, check_drop_totals_gradient, drop_fd_param, drop_fd_svdw
-   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_branching, only: branch_weight_type, branch_soft_fraction
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -30,6 +30,7 @@ module test_cavity_drop_branching
                                            drop_branch_parameters_type
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 

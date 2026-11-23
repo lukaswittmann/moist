@@ -162,6 +162,7 @@ module test_cavity_symmetry_fixtures
    use moist_cavity_grid_model_symmetry_type, only: grid_model_symmetry_type
    use moist_cavity_grid_model_type, only: grid_components_type
    use moist_math_symmetry_msym, only: msym_group_type, find_point_group
+   use moist_utils_format, only: to_string
    implicit none(type, external)
    private
 
@@ -1046,7 +1047,7 @@ contains
       first_message = ""
       if (present(matched_op)) matched_op = 0
       if (ref%n /= moved%n) then
-         message = "point counts differ: "//itoa(ref%n)//" vs "//itoa(moved%n)
+         message = "point counts differ: "//to_string(ref%n)//" vs "//to_string(moved%n)
          return
       end if
 
@@ -1132,7 +1133,7 @@ contains
             end if
          end do
          if (jbest == 0) then
-            message = "no unmatched point of sphere "//itoa(pts%owner(ip))
+            message = "no unmatched point of sphere "//to_string(pts%owner(ip))
             return
          end if
          if (best > scale) then
@@ -1200,21 +1201,6 @@ contains
 
       c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
    end function cross
-
-   !> Decimal rendering of an integer
-   !>
-   !> @param[in] val Integer
-   pure function itoa(val) result(text)
-      !> Integer
-      integer, intent(in) :: val
-      !> Rendering
-      character(len=:), allocatable :: text
-
-      character(len=12) :: buf
-
-      write (buf, "(i0)") val
-      text = trim(buf)
-   end function itoa
 
 end module test_cavity_symmetry_fixtures
 

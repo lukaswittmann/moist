@@ -1886,6 +1886,8 @@ contains
       integer, parameter :: expected(4) = [3, 2, 1, 4]
       real(wp) :: pts(3, 4)
       integer :: perm(4), order(4), i1, i2, i3, i4, nperm, k
+      !> Rendered input, result and expected orders
+      character(len=:), allocatable :: in_text, got_text, want_text
 
       ! Non-vacuity: the fixture is a chain on which the pairwise tie is not transitive
       call check(error, abs(base(1, 2) - base(1, 1)) <= tie .and. abs(base(1, 3) - base(1, 2)) <= tie &
@@ -1904,9 +1906,11 @@ contains
                   call canonical_branch_order(pts, order)
                   do k = 1, 4
                      if (perm(order(k)) /= expected(k)) then
-                        call test_failed(error, "input "//format_ints(perm)//" sorts to "// &
-                                         format_ints(perm(order))//", expected "//format_ints(expected)// &
-                                         " for every input order")
+                        call format_ints(perm, in_text)
+                        call format_ints(perm(order), got_text)
+                        call format_ints(expected, want_text)
+                        call test_failed(error, "input "//in_text//" sorts to "//got_text// &
+                                         ", expected "//want_text//" for every input order")
                         return
                      end if
                   end do
@@ -1919,9 +1923,11 @@ contains
    contains
 
       !> Integers as a bracketed list
-      pure function format_ints(v) result(s)
+      pure subroutine format_ints(v, s)
+         !> Integers
          integer, intent(in) :: v(:)
-         character(len=:), allocatable :: s
+         !> Bracketed list
+         character(len=:), allocatable, intent(out) :: s
          character(len=12) :: buf
          integer :: i
 
@@ -1932,7 +1938,7 @@ contains
             if (i < size(v)) s = s//", "
          end do
          s = s//"]"
-      end function format_ints
+      end subroutine format_ints
 
    end subroutine test_finalize_canonical_order_chain
 
