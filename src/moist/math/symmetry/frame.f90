@@ -44,7 +44,7 @@ module moist_math_symmetry_frame
    use mctc_io_constants, only: pi
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: lapack_syev
-   use moist_math_linalg_geometry, only: cross_product, setup_tangent_frame
+   use moist_math_linalg_geometry, only: identity3, cross_product, setup_tangent_frame
    implicit none(type, external)
    private
 
@@ -182,8 +182,7 @@ module moist_math_symmetry_frame
    !> Frame axes with the data its reverse-mode derivative needs
    type :: sym_frame_type
       !> Axes as columns, a proper rotation (3, 3)
-      real(wp) :: axes(3, 3) = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
-         & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+      real(wp) :: axes(3, 3) = identity3
       !> Resolution level, one of the `frame_level_*` values
       integer :: level = frame_level_none
       !> Smallest relative gap of neighbouring frame-tensor eigenvalues

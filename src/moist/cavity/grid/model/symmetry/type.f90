@@ -44,6 +44,7 @@ module moist_cavity_grid_model_symmetry_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_format, only: to_string
+   use moist_math_linalg_geometry, only: identity3
    implicit none(type, external)
    private
 
@@ -578,8 +579,7 @@ contains
       else
          comps%rot = 1
          allocate (comps%rotation(3, 3, 1))
-         comps%rotation(:, :, 1) = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
-            & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+         comps%rotation(:, :, 1) = identity3
       end if
    end subroutine symmetry_components
 

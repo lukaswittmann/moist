@@ -1,6 +1,7 @@
 !> Test suite for trigonometric utilities in moist_math_trigonometry
 module test_math_trig
    use mctc_env, only: wp
+   use moist_math_linalg_geometry, only: identity3
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_trigonometry, only: rotation_z_to_n
    implicit none(type, external)
@@ -161,7 +162,7 @@ contains
    subroutine test_rot_unit_vector_properties(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: directions(3, 12), n(3), R(3, 3), RtR(3, 3), identity(3, 3)
+      real(wp) :: directions(3, 12), n(3), R(3, 3), RtR(3, 3)
       real(wp) :: det, mapping_tol
       integer :: k
 
@@ -177,8 +178,6 @@ contains
       directions(:, 10) = [-0.001_wp, 0.002_wp, -1.0_wp]
       directions(:, 11) = [1.0e-8_wp, -2.0e-8_wp, 1.0_wp]
       directions(:, 12) = [-1.0e-8_wp, 2.0e-8_wp, -1.0_wp]
-      identity = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, &
-                          0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
       do k = 1, size(directions, 2)
          n = directions(:, k)/norm2(directions(:, k))
          call rotation_z_to_n(n, R)
@@ -188,7 +187,7 @@ contains
          call check(error, maxval(abs(R(:, 3) - n)) < mapping_tol, "Rotation must map z to target")
          if (allocated(error)) return
          RtR = matmul(transpose(R), R)
-         call check(error, maxval(abs(RtR - identity)) < thr, "Rotation must preserve lengths and angles")
+         call check(error, maxval(abs(RtR - identity3)) < thr, "Rotation must preserve lengths and angles")
          if (allocated(error)) return
          det = R(1, 1)*(R(2, 2)*R(3, 3) - R(2, 3)*R(3, 2)) &
                - R(1, 2)*(R(2, 1)*R(3, 3) - R(2, 3)*R(3, 1)) &

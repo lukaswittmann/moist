@@ -8,6 +8,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_properties
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter, only: sort_adjoint
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
 
 contains
@@ -517,9 +518,7 @@ contains
             t1 = t1*(1.0_wp/sqrt(t1(1)*t1(1) + t1(2)*t1(2) + t1(3)*t1(3)))
 
             ! t2 = n x t1 (unit length by construction)
-            t2(1) = n_vec(2)*t1(3) - n_vec(3)*t1(2)
-            t2(2) = n_vec(3)*t1(1) - n_vec(1)*t1(3)
-            t2(3) = n_vec(1)*t1(2) - n_vec(2)*t1(1)
+            t2 = cross_product(n_vec, t1)
 
             ! Shape operator matrix elements: S_ab = (1/||g||) * t_a^T H t_b
             Ht1(1) = lsf2_rr_loc(1)*t1(1) + lsf2_rr_loc(2)*t1(2) + lsf2_rr_loc(4)*t1(3)

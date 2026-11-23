@@ -4,6 +4,7 @@ module test_cavity_mc
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_mc, only: moist_cavity_mc_parameters_type, integrate_surface_mc
    use mctc_env, only: wp
+   use moist_math_linalg_geometry, only: cross_product
    use mctc_env_error, only: mctc_error => error_type, fatal_error
    use mctc_io_constants, only: pi
    use mctc_io_convert, only: autoaa
@@ -664,7 +665,7 @@ contains
          case ("v ")
             nv = nv + 1
             read (line(2:), *) vertex(:, mod(nv - 1, 3) + 1)
-            if (mod(nv, 3) == 0) obj_area = obj_area + 0.5_wp*norm2(cross(vertex(:, 2) - vertex(:, 1), &
+            if (mod(nv, 3) == 0) obj_area = obj_area + 0.5_wp*norm2(cross_product(vertex(:, 2) - vertex(:, 1), &
                & vertex(:, 3) - vertex(:, 1)))
          case ("f ")
             nf = nf + 1
@@ -1065,21 +1066,6 @@ contains
          call self%moist_cavity_drop_lsf_svdw_type%f0(val)
       end if
    end subroutine reach_f0
-
-   !> Three-dimensional vector product
-   !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> Vector product
-      real(wp) :: c(3)
-
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
 
    !> Integrate one molecular case and compare against its fine-grid reference
    !>

@@ -2,6 +2,7 @@
 module test_cavity_mt_patches
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    use mctc_env, only: wp, mctc_error => error_type
+   use moist_math_linalg_geometry, only: cross_product
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type, build_mt_patches
@@ -655,7 +656,7 @@ contains
          ids = mesh%triangles(:, f)
          a = mesh%vertices(:, ids(2)) - mesh%vertices(:, ids(1))
          b = mesh%vertices(:, ids(3)) - mesh%vertices(:, ids(1))
-         normal = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+         normal = cross_product(a, b)
          mesh%area(f) = 0.5_wp*norm2(normal)
          mesh%normal(:, f) = normal/norm2(normal)
          mesh%centroid(:, f) = sum(mesh%vertices(:, ids), dim=2)/3.0_wp

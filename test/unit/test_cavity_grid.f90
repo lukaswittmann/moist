@@ -11,6 +11,7 @@
 !> of the model (central differences)
 module test_cavity_grid
    use mctc_env, only: wp
+   use moist_math_linalg_geometry, only: identity3
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type
@@ -287,8 +288,7 @@ contains
          comps%rot = [([1, 2], isph=1, nsph)]
       end if
       allocate (comps%rotation(3, 3, 2), source=0.0_wp)
-      comps%rotation(:, :, 1) = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
-         & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+      comps%rotation(:, :, 1) = identity3
       comps%rotation(:, :, 2) = reshape([cos(theta), sin(theta), 0.0_wp, -sin(theta), cos(theta), 0.0_wp, &
          & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
    end subroutine fade_components

@@ -29,7 +29,7 @@
 module moist_cavity_drop_projection_finalize
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_math_linalg, only: setup_tangent_frame
+   use moist_math_linalg, only: cross_product, setup_tangent_frame
    use moist_math_packed, only: packed_index
    use moist_math_smoothstep, only: moist_math_smoothstep_type
    use moist_cavity_drop_branching, only: branch_weight_type, branch_pdist2_max
@@ -626,9 +626,7 @@ contains
       w2 = [Binv11*tau2(1) + Binv12*tau2(2), Binv12*tau2(1) + Binv22*tau2(2)]
       y1 = w*(w1(1)*q1 + w1(2)*q2)
       y2 = w*(w2(1)*q1 + w2(2)*q2)
-      c(1) = y1(2)*y2(3) - y1(3)*y2(2)
-      c(2) = y1(3)*y2(1) - y1(1)*y2(3)
-      c(3) = y1(1)*y2(2) - y1(2)*y2(1)
+      c = cross_product(y1, y2)
       J = sqrt(c(1)**2 + c(2)**2 + c(3)**2)
    end subroutine cp_jacobian_weight
 

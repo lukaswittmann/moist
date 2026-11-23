@@ -52,7 +52,7 @@ module moist_math_symmetry_orient
    use moist_utils_timer, only: timer_type
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: lapack_syev
-   use moist_math_linalg_geometry, only: cross_product
+   use moist_math_linalg_geometry, only: identity3, cross_product
    use moist_math_symmetry_msym, only: msym_group_type, find_point_group, msym_op_proper, &
       & msym_type_dnh
    use moist_math_symmetry_frame, only: sym_frame_type, sym_frame_vjp, sym_threshold_type, &
@@ -329,12 +329,12 @@ contains
       allocate (self%rotation(3, 3, 1), self%dw(3, 3, 1))
       self%rotation(:, :, 1) = self%frame%axes
       self%dw(:, :, 1) = 0.0_wp
-      if (self%orientation == orient_molecular) self%dw(:, :, 1) = identity3()
+      if (self%orientation == orient_molecular) self%dw(:, :, 1) = identity3
       self%rot_of_atom = [(1, ia=1, nat)]
       self%norbit = nat
       self%orbit_of_atom = [(ia, ia=1, nat)]
       self%orbit_rep = [(ia, ia=1, nat)]
-      self%ops = reshape(identity3(), [3, 3, 1])
+      self%ops = reshape(identity3, [3, 3, 1])
       self%perm = reshape([(ia, ia=1, nat)], [nat, 1])
       self%deviation = 0.0_wp
    end subroutine set_trivial
@@ -896,7 +896,7 @@ contains
       x = self%frame%axes(:, 1) - axis*dot_product(axis, self%frame%axes(:, 1))
       if (norm2(x) < 1.0e-8_wp) x = self%frame%axes(:, 2) - axis*dot_product(axis, self%frame%axes(:, 2))
       x = x/norm2(x)
-      y = [axis(2)*x(3) - axis(3)*x(2), axis(3)*x(1) - axis(1)*x(3), axis(1)*x(2) - axis(2)*x(1)]
+      y = cross_product(axis, x)
       basis(:, 1) = x
       basis(:, 2) = y
       basis(:, 3) = axis
@@ -1025,8 +1025,8 @@ contains
       inversion = .false.
       do k = 1, size(ops, 3)
          if (matdet_3x3(ops(:, :, k)) > 0.0_wp) nproper = nproper + 1
-         if (all(abs(ops(:, :, k) + identity3()) < 1.0e-8_wp)) inversion = .true.
-         square(k) = all(abs(matmul(ops(:, :, k), ops(:, :, k)) - identity3()) < 1.0e-8_wp)
+         if (all(abs(ops(:, :, k) + identity3) < 1.0e-8_wp)) inversion = .true.
+         square(k) = all(abs(matmul(ops(:, :, k), ops(:, :, k)) - identity3) < 1.0e-8_wp)
       end do
       c4 = .false.
       s4 = .false.
@@ -1363,7 +1363,7 @@ contains
 
       real(wp) :: angle, k(3, 3)
 
-      q = identity3()
+      q = identity3
       angle = norm2(w)
       if (angle <= tiny(1.0_wp)) return
       k = skew(w/angle)
@@ -1975,19 +1975,11 @@ contains
 
       integer :: i
 
-      p = identity3()
+      p = identity3
       do i = 1, k
          p = matmul(p, m)
       end do
    end function matpow
-
-   !> 3x3 identity
-   pure function identity3() result(e)
-      !> Identity matrix
-      real(wp) :: e(3, 3)
-
-      e = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
-   end function identity3
 
    !> Trace of a 3x3 matrix
    !>

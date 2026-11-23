@@ -4,6 +4,7 @@ module moist_cavity_mt_patches
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use moist_cavity_mt_mesh, only: mt_mesh_type
+   use moist_math_linalg, only: cross_product
    implicit none(type, external)
    private
    public :: mt_patch_type, build_mt_patches
@@ -928,15 +929,15 @@ contains
       corners(:, 1) = -(a + b)/3.0_wp
       corners(:, 2) = corners(:, 1) + a
       corners(:, 3) = corners(:, 1) + b
-      normal = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
+      normal = cross_product(a, b)
       denominator = norm2(normal)
       if (denominator > 0.0_wp) then
          normal = normal/denominator
          plane = q - dot_product(q - corners(:, 1), normal)*normal
          r = plane - corners(:, 1)
-         cross = [r(2)*b(3) - r(3)*b(2), r(3)*b(1) - r(1)*b(3), r(1)*b(2) - r(2)*b(1)]
+         cross = cross_product(r, b)
          x = dot_product(cross, normal)/denominator
-         cross = [a(2)*r(3) - a(3)*r(2), a(3)*r(1) - a(1)*r(3), a(1)*r(2) - a(2)*r(1)]
+         cross = cross_product(a, r)
          y = dot_product(cross, normal)/denominator
          if (x >= 0.0_wp .and. y >= 0.0_wp .and. x + y <= 1.0_wp) then
             projected = scale*plane

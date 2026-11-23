@@ -68,7 +68,8 @@ module test_cavity_symmetry
       & symmetry_of, structure_of, test_rotation, test_permutation, rigid_motion, &
       & rotation_matrix, new_tilted, &
       & surface_points_type, surface_points_of, match_surface_points, molecule_symmetry, same_bits, &
-      & identity, cross, gradient_covariance_error, sphere_gradient_covariance_error
+      & gradient_covariance_error, sphere_gradient_covariance_error
+   use moist_math_linalg_geometry, only: identity3, cross_product
    use moist_utils_format, only: to_string
    implicit none(type, external)
    private
@@ -518,7 +519,7 @@ contains
             if (allocated(error)) return
             do isph = 1, mol%nat
                rot = model_rotation(sym, isph)
-               call check(error, same_bits(rot, identity()) .and. model_rot_index(sym, isph) == 1, &
+               call check(error, same_bits(rot, identity3) .and. model_rot_index(sym, isph) == 1, &
                   & trim(kind_name(kind))//": a sphere rotation is not the exact identity")
                if (allocated(error)) return
             end do
@@ -2011,7 +2012,7 @@ contains
       end if
       torque = 0.0_wp
       do iat = 1, fix%mol%nat
-         torque = torque + cross(fix%mol%xyz(:, iat), cav%area_grad(:, iat))
+         torque = torque + cross_product(fix%mol%xyz(:, iat), cav%area_grad(:, iat))
       end do
       call check(error, norm2(torque) > 1.0e-6_wp, "lab area has no torque, the rigid check is vacuous")
    end subroutine test_iswig_gradient_eigen
@@ -2769,7 +2770,7 @@ contains
             amp = 0.4_wp
          end select
          do iat = 1, nat
-            tangent(:, iat) = shift + cross(axis, fix%mol%xyz(:, iat) - center) + amp*keep(:, iat, 1)
+            tangent(:, iat) = shift + cross_product(axis, fix%mol%xyz(:, iat) - center) + amp*keep(:, iat, 1)
          end do
          do k = 1, 4
             theta = fd4_offsets(k)*fix%step
@@ -2834,7 +2835,7 @@ contains
       real(wp) :: k(3, 3)
 
       k = reshape([0.0_wp, axis(3), -axis(2), -axis(3), 0.0_wp, axis(1), axis(2), -axis(1), 0.0_wp], [3, 3])
-      q = identity() + sin(theta)*k + (1.0_wp - cos(theta))*matmul(k, k)
+      q = identity3 + sin(theta)*k + (1.0_wp - cos(theta))*matmul(k, k)
    end function axis_rotation
 
    !> NumSA area gradients of a fixture against central differences
@@ -4935,7 +4936,7 @@ contains
       force = sum(grad, dim=2)
       torque = 0.0_wp
       do iat = 1, fix%mol%nat
-         torque = torque + cross(fix%mol%xyz(:, iat), grad(:, iat))
+         torque = torque + cross_product(fix%mol%xyz(:, iat), grad(:, iat))
       end do
       scale = maxval(abs(grad))*max(1.0_wp, maxval(abs(fix%mol%xyz)))
       call check(error, norm2(force) <= 1.0e-11_wp*scale .and. norm2(torque) <= 1.0e-11_wp*scale, &
@@ -5316,7 +5317,7 @@ contains
 
          ! The gradient of the branch the copy took: that of g(original)
          if (iop == 0) then
-            g = identity()
+            g = identity3
             gperm = [(ia, ia=1, mol%nat)]
          else
             g = ops(:, :, iop)
@@ -5363,7 +5364,7 @@ contains
 
          carries = .true.
          if (.not. (allocated(ref%ops) .and. allocated(val%ops))) return
-         gg = identity()
+         gg = identity3
          if (jop > 0) gg = ops(:, :, jop)
          carries = size(ref%ops, 3) == size(val%ops, 3)
          if (.not. carries) return
@@ -5429,8 +5430,7 @@ contains
             case (1)
                moved = mol
             case (2)
-               call rigid_motion(mol, reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
-                  & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3]), [0.1_wp, 0.2_wp, -0.3_wp], [1, 2, 3], moved)
+               call rigid_motion(mol, identity3, [0.1_wp, 0.2_wp, -0.3_wp], [1, 2, 3], moved)
             case default
                call rigid_motion(mol, test_rotation(1), [0.4_wp, -1.1_wp, 0.7_wp], [1, 2, 3], moved)
             end select

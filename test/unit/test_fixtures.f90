@@ -153,6 +153,7 @@ module test_cavity_symmetry_fixtures
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
+   use moist_math_linalg_geometry, only: identity3
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
@@ -170,7 +171,7 @@ module test_cavity_symmetry_fixtures
    public :: model_add_torque, model_frame_jacobian
    public :: structure_of, new_tilted, rotation_matrix, test_rotation, test_permutation, rigid_motion
    public :: surface_points_type, surface_points_of, match_surface_points, molecule_symmetry
-   public :: same_bits, identity, cross, gradient_covariance_error, sphere_gradient_covariance_error
+   public :: same_bits, gradient_covariance_error, sphere_gradient_covariance_error
 
    !> Number of scalar values compared per point: area, switching, width, volume
    integer, parameter :: nval = 4
@@ -700,7 +701,7 @@ contains
       case (2)
          ! R = 2 u u^T - I, a rotation by pi about u
          u = [1.0_wp, 1.0_wp, 1.0_wp]/sqrt(3.0_wp)
-         q = 2.0_wp*spread(u, 2, 3)*spread(u, 1, 3) - identity()
+         q = 2.0_wp*spread(u, 2, 3)*spread(u, 1, 3) - identity3
       case (3)
          q = rotation_matrix(3.05_wp, 3.02_wp, -3.09_wp)
       case default
@@ -884,7 +885,7 @@ contains
       integer :: ig, ia, ib, iat
 
       center = sum(mol%xyz, dim=2)/real(mol%nat, wp)
-      ops = reshape(identity(), [3, 3, 1])
+      ops = reshape(identity3, [3, 3, 1])
       call find_point_group(mol%xyz, mol%num(mol%id), group, err)
       if (.not. allocated(err) .and. .not. group%linear) then
          if (allocated(group%ops)) then
@@ -1178,29 +1179,6 @@ contains
       same = all(shape(a) == shape(b))
       if (same) same = all(transfer(a, [0_int64]) == transfer(b, [0_int64]))
    end function same_bits
-
-   !> 3x3 identity
-   pure function identity() result(e)
-      !> Identity
-      real(wp) :: e(3, 3)
-
-      e = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
-   end function identity
-
-   !> Cross product
-   !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> a x b
-      real(wp) :: c(3)
-
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
 
 end module test_cavity_symmetry_fixtures
 

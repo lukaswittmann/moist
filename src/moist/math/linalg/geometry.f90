@@ -7,9 +7,14 @@ module moist_math_linalg_geometry
    implicit none(type, external)
    private
 
+   public :: identity3
    public :: cross_product
    public :: setup_tangent_frame
    public :: logaddexp
+
+   !> 3x3 identity matrix
+   real(wp), parameter :: identity3(3, 3) = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
 
 contains
 

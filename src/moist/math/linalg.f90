@@ -7,7 +7,7 @@ module moist_math_linalg
    use moist_math_linalg_decomp, only: mat3x3_inv, eig_2x2_symmetric
    use moist_math_linalg_outer, only: outer_matrix, outer3, outer3_linear, outer4
    use moist_math_linalg_symmetrize, only: sym3_21, sym4_31, sym4_22, sym4_211
-   use moist_math_linalg_geometry, only: cross_product, setup_tangent_frame, logaddexp
+   use moist_math_linalg_geometry, only: identity3, cross_product, setup_tangent_frame, logaddexp
    implicit none(type, external)
    public
 end module moist_math_linalg

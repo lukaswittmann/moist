@@ -31,6 +31,7 @@ module test_math_symmetry
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type
    use test_cavity_symmetry_fixtures, only: structure_of, molecule_symmetry
+   use moist_math_linalg_geometry, only: identity3, cross_product
    use moist_utils_format, only: to_string
    implicit none(type, external)
    private
@@ -481,7 +482,7 @@ contains
       call new_sym_orient(orient, xyz, z, orient_lab, "off", TOL, merr)
       call check(error, .not. allocated(merr), "lab mode failed")
       if (allocated(error)) return
-      call check(error, all(abs(orient%rotation(:, :, 1) - identity()) < 1.0e-14_wp), &
+      call check(error, all(abs(orient%rotation(:, :, 1) - identity3) < 1.0e-14_wp), &
          & "lab mode is not the identity")
       if (allocated(error)) return
       call check(error, all(orient%dw == 0.0_wp), "lab mode has a frame derivative")
@@ -576,10 +577,10 @@ contains
          do it = 1, 4
             select case (it)
             case (1)
-               q = identity()
+               q = identity3
                shift = 0.0_wp
             case (2)
-               q = identity()
+               q = identity3
                shift = [0.1_wp, 0.2_wp, -0.3_wp]
             case (3)
                q = rotation_matrix(0.3_wp, 1.1_wp, -0.7_wp)
@@ -679,7 +680,7 @@ contains
          do ia = 1, 3
             if (rotation) then
                omega = coef(:, imode)
-               mode(:, ia) = cross(omega, d(:, ia))
+               mode(:, ia) = cross_product(omega, d(:, ia))
             else
                mode(:, ia) = coef(ia, imode)*line
             end if
@@ -1050,7 +1051,7 @@ contains
          call check(error, orient%orientation == orient_lab .and. orient%nrot == 1, &
             & trim(names(k))//": explicit C1 changed the orientation")
          if (allocated(error)) return
-         call check(error, all(orient%rotation(:, :, 1) == identity()), &
+         call check(error, all(orient%rotation(:, :, 1) == identity3), &
             & trim(names(k))//": explicit C1 in lab mode is not the exact identity")
          if (allocated(error)) return
       end do
@@ -1511,7 +1512,7 @@ contains
             omega(k) = 1.0_wp
             rigid = 0.0_wp
             do ia = 1, nat
-               rigid = rigid + dot_product(grad(:, ia), cross(omega, xyz(:, ia) - center))
+               rigid = rigid + dot_product(grad(:, ia), cross_product(omega, xyz(:, ia) - center))
             end do
             ! About the axis of a line no sphere turns: the molecule stays put
             if (o1%group_detected == "D0h" .or. o1%group_detected == "C0v") then
@@ -2090,7 +2091,7 @@ contains
             omega(k) = 1.0_wp
             rigid = 0.0_wp
             do ia = 1, size(z)
-               rigid = rigid + dot_product(grad(:, ia), cross(omega, xyz(:, ia) - center))
+               rigid = rigid + dot_product(grad(:, ia), cross_product(omega, xyz(:, ia) - center))
             end do
             call check(error, abs(rigid - sum(torque(k, :))) <= 1.0e-10_wp, &
                & trim(names(im))//": a rigid rotation does not turn every sphere with the molecule")
@@ -2175,7 +2176,7 @@ contains
             do is = 1, 2
                theta = merge(STEP, -STEP, is == 1)
                do ia = 1, nat
-                  moved(:, ia) = center + cos(theta)*d(:, ia) + sin(theta)*cross(axis, d(:, ia)) &
+                  moved(:, ia) = center + cos(theta)*d(:, ia) + sin(theta)*cross_product(axis, d(:, ia)) &
                      & + (1.0_wp - cos(theta))*dot_product(axis, d(:, ia))*axis
                end do
                call new_sym_orient(shifted(is), moved, z, orient_molecular, trim(groups(im)), TOL, merr)
@@ -2190,7 +2191,7 @@ contains
                   & shifted(2)%rotation(:, :, shifted(2)%rot_of_atom(ia)))
                analytic = 0.0_wp
                do ib = 1, nat
-                  analytic = analytic + matmul(jac(:, :, ib, o0%rot_of_atom(ia)), cross(axis, d(:, ib)))
+                  analytic = analytic + matmul(jac(:, :, ib, o0%rot_of_atom(ia)), cross_product(axis, d(:, ib)))
                end do
                call check(error, maxval(abs(analytic - numeric)) <= 1.0e-7_wp, &
                   & trim(text)//": a sphere does not turn as its Jacobian along a rigid rotation")
@@ -2387,7 +2388,7 @@ contains
       do k = 1, 3
          wr = matmul(w, r(:, k))
          s = dot_product(r(:, k), wr)
-         tau = tau + 4.0_wp*s*cross(r(:, k), wr)
+         tau = tau + 4.0_wp*s*cross_product(r(:, k), wr)
       end do
    end function oh_torque
 
@@ -3148,7 +3149,7 @@ contains
       nat = size(xyz, 2)
       call find_point_group(xyz, z, group, merr)
       if (allocated(merr) .or. group%linear) then
-         ops = reshape(identity(), [3, 3, 1])
+         ops = reshape(identity3, [3, 3, 1])
       else
          ops = group%ops
       end if
@@ -3203,14 +3204,6 @@ contains
       q = matmul(ra, matmul(rb, rc))
    end function rotation_matrix
 
-   !> 3x3 identity
-   pure function identity() result(e)
-      !> Identity
-      real(wp) :: e(3, 3)
-
-      e = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
-   end function identity
-
    !> Determinant of a 3x3 matrix
    !>
    !> @param[in] m Matrix
@@ -3220,22 +3213,7 @@ contains
       !> Determinant
       real(wp) :: d
 
-      d = dot_product(m(:, 1), cross(m(:, 2), m(:, 3)))
+      d = dot_product(m(:, 1), cross_product(m(:, 2), m(:, 3)))
    end function det
-
-   !> Cross product
-   !>
-   !> @param[in] a First vector
-   !> @param[in] b Second vector
-   pure function cross(a, b) result(c)
-      !> First vector
-      real(wp), intent(in) :: a(3)
-      !> Second vector
-      real(wp), intent(in) :: b(3)
-      !> a x b
-      real(wp) :: c(3)
-
-      c = [a(2)*b(3) - a(3)*b(2), a(3)*b(1) - a(1)*b(3), a(1)*b(2) - a(2)*b(1)]
-   end function cross
 
 end module test_math_symmetry

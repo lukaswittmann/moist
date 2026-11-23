@@ -10,6 +10,7 @@
 module test_math_grid_3d_invariance
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
+   use moist_math_linalg_geometry, only: identity3
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
@@ -22,9 +23,6 @@ module test_math_grid_3d_invariance
 
    public :: collect_math_grid_3d_invariance
 
-   !> Identity rotation
-   real(wp), parameter :: identity(3, 3) = reshape([ &
-      & 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
    !> Rotation pivot distinct from the origin, nuclei and integrand centers (bohr)
    real(wp), parameter :: pivot(3) = [1.13_wp, -0.71_wp, 0.37_wp]
    !> Integrands checked under every motion: orientation, oscillation phase, narrow multicenter tails
@@ -102,12 +100,12 @@ contains
       first = axis_rotation([2.0_wp, -1.0_wp, 3.0_wp], 0.63_wp)
       second = axis_rotation([-1.0_wp, 4.0_wp, 2.0_wp], -0.91_wp)
       motions = [ &
-         & rigid_motion_type("fractional translation", identity, small_shift), &
-         & rigid_motion_type("large translation", identity, large_shift), &
+         & rigid_motion_type("fractional translation", identity3, small_shift), &
+         & rigid_motion_type("large translation", identity3, large_shift), &
          & rigid_motion_type("first oblique rotation", first, zero), &
          & rigid_motion_type("second oblique rotation", second, zero), &
          & rigid_motion_type("rotation and translation", matmul(second, first), large_shift, callback=.true.), &
-         & rigid_motion_type("restored geometry", identity, zero, all_cases=.true.) &
+         & rigid_motion_type("restored geometry", identity3, zero, all_cases=.true.) &
          & ]
    end subroutine make_motions
 
@@ -127,7 +125,7 @@ contains
 
       u = axis/sqrt(sum(axis**2))
       cross = reshape([0.0_wp, u(3), -u(2), -u(3), 0.0_wp, u(1), u(2), -u(1), 0.0_wp], [3, 3])
-      rotation = cos(angle)*identity + sin(angle)*cross
+      rotation = cos(angle)*identity3 + sin(angle)*cross
       do j = 1, 3
          rotation(:, j) = rotation(:, j) + (1.0_wp - cos(angle))*u*u(j)
       end do
@@ -160,7 +158,7 @@ contains
 
       call make_cases(cases)
       call make_motions(motions)
-      original = rigid_motion_type("original geometry", identity, [0.0_wp, 0.0_wp, 0.0_wp])
+      original = rigid_motion_type("original geometry", identity3, [0.0_wp, 0.0_wp, 0.0_wp])
       allocate (baseline(size(cases)), subset(size(cases)))
       do icase = 1, size(cases)
          subset(icase) = any(motion_cases == cases(icase)%name)
@@ -171,7 +169,7 @@ contains
          gram = matmul(transpose(motions(imotion)%rotation), motions(imotion)%rotation)
          do j = 1, 3
             do i = 1, 3
-               call check(error, gram(i, j), identity(i, j), thr=1.0e-14_wp, &
+               call check(error, gram(i, j), identity3(i, j), thr=1.0e-14_wp, &
                   & more=trim(motions(imotion)%name)//": rotation orthogonality")
                if (allocated(error)) return
             end do

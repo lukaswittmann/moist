@@ -28,7 +28,7 @@ module moist_math_symmetry_embed
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
    use mctc_io_math, only: matdet_3x3
-   use moist_math_linalg_geometry, only: cross_product
+   use moist_math_linalg_geometry, only: identity3, cross_product
    implicit none(type, external)
    private
 
@@ -155,7 +155,7 @@ contains
          found = .true.
          value = 3.0_wp
          rot = reshape(frame, [3, 3, 1])
-         dw = reshape([1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp], [3, 3, 1])
+         dw = reshape(identity3, [3, 3, 1])
       case (1)
          call family_candidates(site, frame, lines(:, 1), classes(1), found, value, rot, dw)
       case default
