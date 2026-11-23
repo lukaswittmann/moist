@@ -424,6 +424,8 @@ contains
    !> (a tie of the discrete choices gives the image under g)
    !>
    !> - the sharing only; [[test_symmetric_covariant]] checks the orientations
+   !> - a failure lists the entries and orbits of both copies, the second
+   !>   through the operation with the fewest differing pairs
    !>
    !> @param[out] error Error handle
    subroutine test_rotations_modulo_oh_covariant(error)
@@ -435,8 +437,9 @@ contains
       real(wp), allocatable :: xyz(:, :), moved(:, :), ops(:, :, :)
       integer, allocatable :: z(:), perm(:, :)
       real(wp) :: q(3, 3)
-      integer :: nat, ig, ia, ib, ga, gb
-      logical :: follows, same
+      integer :: nat, ig, ia, ib, ga, gb, nbad, best, best_bad
+      !> Diagnostic on failure
+      character(len=:), allocatable :: more
 
       q = rotation_matrix(0.7_wp, -1.3_wp, 0.25_wp)
       call orient_of(error, "oh48", "auto", xyz, z, o1)
@@ -451,21 +454,41 @@ contains
          & "oh48: group or number of entries changed")
       if (allocated(error)) return
 
-      follows = .false.
+      ! Operation with the fewest atom pairs whose sharing differs
+      best = 0
+      best_bad = huge(best_bad)
       do ig = 1, size(ops, 3)
-         same = .true.
+         nbad = 0
          do ia = 1, nat
             ga = nat + 1 - perm(ia, ig)
             do ib = ia + 1, nat
                gb = nat + 1 - perm(ib, ig)
-               same = same .and. ((o1%rot_of_atom(ia) == o1%rot_of_atom(ib)) .eqv. &
-                  & (o2%rot_of_atom(ga) == o2%rot_of_atom(gb)))
+               if ((o1%rot_of_atom(ia) == o1%rot_of_atom(ib)) .neqv. &
+                  & (o2%rot_of_atom(ga) == o2%rot_of_atom(gb))) nbad = nbad + 1
             end do
-            if (.not. same) exit
          end do
-         follows = follows .or. same
+         if (nbad < best_bad) then
+            best = ig
+            best_bad = nbad
+         end if
       end do
-      call check(error, follows, "oh48: shared entries do not follow the atoms")
+      if (best_bad == 0) return
+
+      ! Entries of both copies, the second through the closest operation
+      more = "closest operation "//to_string(best)//" of "//to_string(size(ops, 3))//": " &
+         & //to_string(best_bad)//" atom pairs differ"//new_line("a")//"entry (o1|o2 g):"
+      do ia = 1, nat
+         more = more//" "//to_string(o1%rot_of_atom(ia))//"|"//to_string(o2%rot_of_atom(nat + 1 - perm(ia, best)))
+      end do
+      more = more//new_line("a")//"orbit (o1|o2 g):"
+      do ia = 1, nat
+         more = more//" "//to_string(o1%orbit_of_atom(ia))//"|"//to_string(o2%orbit_of_atom(nat + 1 - perm(ia, best)))
+      end do
+      more = more//new_line("a")//"frame level "//to_string(o1%frame%level)//"|"//to_string(o2%frame%level) &
+         & //", gap "//to_string(o1%frame%gap, "(es10.3)")//"|"//to_string(o2%frame%gap, "(es10.3)") &
+         & //", ambiguous "//merge("T", "F", o1%ambiguous)//"|"//merge("T", "F", o2%ambiguous) &
+         & //", deviation "//to_string(o1%deviation, "(es10.3)")//"|"//to_string(o2%deviation, "(es10.3)")
+      call test_failed(error, "oh48: shared entries do not follow the atoms", more)
    end subroutine test_rotations_modulo_oh_covariant
 
    !> Lab mode keeps the identity, molecular mode the frame, both one rotation
