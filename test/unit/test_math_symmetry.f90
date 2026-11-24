@@ -424,10 +424,11 @@ contains
    !> (a tie of the discrete choices gives the image under g)
    !>
    !> - the sharing only; [[test_symmetric_covariant]] checks the orientations
+   !> - the operations must permute the atoms; a failure prints the operation
+   !>   and its images
    !> - a failure lists the entries and orbits of both copies, the second
    !>   through the operation with the fewest differing pairs
    !>
-   !> @param[out] error Error handle
    subroutine test_rotations_modulo_oh_covariant(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -446,6 +447,29 @@ contains
       if (allocated(error)) return
       call symmetry_of(xyz, z, ops, perm)
       nat = size(xyz, 2)
+
+      ! Every operation maps the atoms one to one onto atoms of the same species
+      do ig = 1, size(ops, 3)
+         nbad = 0
+         do ia = 1, nat
+            if (count(perm(:, ig) == ia) /= 1 .or. z(perm(ia, ig)) /= z(ia)) nbad = nbad + 1
+         end do
+         if (nbad > 0) then
+            more = "operation (rows):"
+            do ia = 1, 3
+               more = more//" "//to_string(ops(ia, 1, ig), "(f8.4)")//" "//to_string(ops(ia, 2, ig), "(f8.4)") &
+                  & //" "//to_string(ops(ia, 3, ig), "(f8.4)")//" /"
+            end do
+            more = more//new_line("a")//"images:"
+            do ia = 1, nat
+               more = more//" "//to_string(perm(ia, ig))
+            end do
+            call test_failed(error, "oh48: operation "//to_string(ig)//" of "//to_string(size(ops, 3)) &
+               & //" does not permute the atoms ("//to_string(nbad)//" atoms)", more)
+            return
+         end if
+      end do
+
       moved = transformed(xyz, q, [0.9_wp, -1.4_wp, 0.3_wp])
       call new_sym_orient(o2, moved(:, nat:1:-1), z(nat:1:-1), orient_molecular, "auto", TOL, merr)
       call check(error, .not. allocated(merr), "oh48: rotated copy failed")
@@ -3150,6 +3174,9 @@ contains
    !>
    !> The identity alone when libmsym finds nothing
    !>
+   !> - the image of an atom is the atom nearest to its transformed position,
+   !>   the first one on a tie
+   !>
    !> @param[in]  xyz  Coordinates
    !> @param[in]  z    Species
    !> @param[out] ops  Operations (3, 3, order), about the centroid
@@ -3166,8 +3193,8 @@ contains
 
       type(msym_group_type) :: group
       type(moist_error_type), allocatable :: merr
-      real(wp) :: center(3), target(3)
-      integer :: ig, ia, nat
+      real(wp) :: center(3), target(3), d2, nearest
+      integer :: ig, ia, ja, nat
 
       nat = size(xyz, 2)
       call find_point_group(xyz, z, group, merr)
@@ -3181,7 +3208,15 @@ contains
       do ig = 1, size(ops, 3)
          do ia = 1, nat
             target = center + matmul(ops(:, :, ig), xyz(:, ia) - center)
-            perm(ia, ig) = minloc(norm2(xyz - spread(target, 2, nat), dim=1), dim=1)
+            perm(ia, ig) = 1
+            nearest = huge(nearest)
+            do ja = 1, nat
+               d2 = (xyz(1, ja) - target(1))**2 + (xyz(2, ja) - target(2))**2 + (xyz(3, ja) - target(3))**2
+               if (d2 < nearest) then
+                  nearest = d2
+                  perm(ia, ig) = ja
+               end if
+            end do
          end do
       end do
    end subroutine symmetry_of
