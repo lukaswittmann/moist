@@ -13,6 +13,10 @@
 #                      `!$omp parallel do`; see CONTRIBUTING.md:47); also splits a
 #                      long suite into separately scheduled tests. Every test of the
 #                      suite must be listed, an omitted one is not run
+#   test_chunks       suite id -> n, for a long suite run as `tester <suite> k/n`
+#                      (every n-th test from the k-th, still in test-drive's
+#                      OpenMP team); coverage runs single-threaded and needs the
+#                      chunks to spread such a suite over the runner's cores
 tests = [
   'api',
   'parameters',
@@ -116,6 +120,11 @@ test_priority = {
   'model_component_pcm_references': 1,
 }
 
+test_chunks = {
+  'cavity_drop_branching': 4,
+  'model_component_pcm_derivatives': 4,
+}
+
 # threaded tests (single testdrive thread)
 test_selected = {
   'math_grid_3d_integration': [
@@ -207,7 +216,12 @@ tester = executable(
 
 foreach t : tests
   runs = {t: [t]}
-  if test_selected.has_key(t)
+  if test_chunks.has_key(t)
+    runs = {}
+    foreach k : range(1, test_chunks[t] + 1)
+      runs += {'@0@_@1@of@2@'.format(t, k, test_chunks[t]): [t, '@0@/@1@'.format(k, test_chunks[t])]}
+    endforeach
+  elif test_selected.has_key(t)
     runs = {}
     foreach sel : test_selected[t]
       runs += {t + '_' + sel: [t, sel]}

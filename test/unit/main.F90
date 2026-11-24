@@ -3,7 +3,7 @@
 program tester
    use, intrinsic :: iso_fortran_env, only: error_unit
    use moist_math_fft, only: moist_fft_release_threads
-   use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
+   use testdrive, only: run_testsuite, new_testsuite, testsuite_type, unittest_type, &
       & select_suite, run_selected, get_argument
    use test_parameters, only: collect_parameters
    use test_api, only: collect_api
@@ -95,6 +95,8 @@ program tester
    implicit none(type, external)
 
    integer :: stat, is
+   !> Chunk k/n of a suite: every n-th test from the k-th
+   integer :: chunk, nchunk, slash, iostat
    character(len=:), allocatable :: suite_name, test_name
    type(testsuite_type), allocatable :: testsuites(:)
    character(len=*), parameter :: fmt = '("#", *(1x, a))'
@@ -198,7 +200,20 @@ program tester
    if (allocated(suite_name)) then
       is = select_suite(testsuites, suite_name)
       if (is > 0 .and. is <= size(testsuites)) then
-         if (allocated(test_name)) then
+         slash = 0
+         if (allocated(test_name)) slash = index(test_name, "/")
+         if (slash > 0) then
+            ! A long suite in chunks, each still in test-drive's OpenMP team
+            read (test_name(:slash - 1), *, iostat=iostat) chunk
+            if (iostat == 0) read (test_name(slash + 1:), *, iostat=iostat) nchunk
+            if (iostat /= 0) chunk = 0
+            if (chunk < 1 .or. chunk > nchunk) then
+               write (error_unit, fmt) "Invalid chunk:", test_name
+               error stop 1
+            end if
+            write (error_unit, fmt) "Testing:", trim(testsuites(is)%name), test_name
+            call run_testsuite(collect_chunk, error_unit, stat)
+         else if (allocated(test_name)) then
             write (error_unit, fmt) "Suite:", trim(testsuites(is)%name)
             call run_selected(testsuites(is)%collect, test_name, error_unit, stat)
             if (stat < 0) then
@@ -232,5 +247,18 @@ program tester
       write (error_unit, "(i0, 1x, a)") stat, "test(s) failed!"
       error stop 1
    end if
+
+contains
+
+   !> Chunk `chunk` of `nchunk` of the selected suite
+   subroutine collect_chunk(testsuite)
+      !> Collection of tests
+      type(unittest_type), allocatable, intent(out) :: testsuite(:)
+
+      type(unittest_type), allocatable :: full(:)
+
+      call testsuites(is)%collect(full)
+      testsuite = full(chunk::nchunk)
+   end subroutine collect_chunk
 
 end program tester

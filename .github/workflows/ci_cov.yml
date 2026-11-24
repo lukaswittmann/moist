@@ -95,7 +95,7 @@ jobs:
 
       - name: Run tests
         env:
-          OMP_NUM_THREADS: 4
+          OMP_NUM_THREADS: 1
           COVERAGE_PROCESS_START: ${{ matrix.leg.name == 'coupling' && format('{0}/coveragerc', runner.temp) || '' }}
         run: |
           meson test -C build ${{ matrix.leg.tests }} \
