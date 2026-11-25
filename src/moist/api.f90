@@ -120,7 +120,7 @@ module moist_api
       !> Maximum projection iterations
       integer(c_int) :: proj_maxiter = 50_c_int
       !> Projection refinement level: 1, 2, 3 or 4
-      integer(c_int) :: proj_level = 3_c_int
+      integer(c_int) :: proj_level = 2_c_int
       !> Projection-distance excess at which a branch loses all weight (Bohr)
       real(c_double) :: branch_dpdist_max = 0.2_c_double
       !> Grid density kernel length in Bohr

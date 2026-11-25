@@ -686,7 +686,7 @@ contains
       !>
       !> @param[in]  k1           Anchor index within the chunk
       !> @param[in]  radius       Search radius (Bohr), positive
-      !> @param[in]  has_accepted Whether the anchor already has an accepted local foot
+      !> @param[in]  has_accepted Whether the anchor already has an accepted local point
       !> @param[out] request      Request
       subroutine anchor_request(k1, radius, has_accepted, request)
          integer, intent(in) :: k1

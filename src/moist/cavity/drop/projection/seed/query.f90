@@ -243,13 +243,13 @@ contains
    !>   - `filter_grazing`: `r > h` and `|d . n| / r < 0.20`, a patch seen edge-on
    !>   - `filter_cone` (an anchor with an accepted local point):
    !>     `||g|| > cone_scale h (1 + r k_max)`, `g` the tangential part of `d`;
-   !>     at a foot `g = 0`, and it grows by at most `1 + r k_max` per distance
-   !>     along the surface, so a sample outside the cone is no foot's nearest one
+   !>     at a point `g = 0`, and it grows by at most `1 + r k_max` per distance
+   !>     along the surface, so a sample outside the cone is no point's nearest one
    !>   - `filter_focal`: `I - sigma II` is negative definite, the sample lies
-   !>     beyond both focal centers; a foot there is a maximum of the distance,
+   !>     beyond both focal centers; a point there is a maximum of the distance,
    !>     which the focal switch closes. Beyond one center only the sample is
-   !>     kept: Newton leaves it along the crease for an open foot
-   !> - a kept sample with `I - sigma II` positive definite steps towards the foot
+   !>     kept: Newton leaves it along the crease for an open point
+   !> - a kept sample with `I - sigma II` positive definite steps towards the point
    !>   on its osculating quadric, the tangent step `t` solving `(I - sigma II) t = -g`,
    !>   capped at `h`, and the normal offset `z = -t^T II t / 2`; `t` and `z` are then
    !>   scaled together (`z` with the square) so the move `|t|^2 + z^2` stays within
