@@ -102,6 +102,8 @@ module moist_context
       procedure :: debug_message => context_debug_message
       !> Write a warning to the output unit, optionally copied to stderr
       procedure :: warning => context_warning
+      !> Pretty printer routed to the context unit and gated by verbosity
+      procedure :: printer => context_printer
       !> OpenMP thread count fixed at construction
       procedure :: get_num_threads => context_get_num_threads
       !> Render the run settings via the pretty printer
@@ -560,6 +562,28 @@ contains
       !$omp end critical(moist_context_io)
 
    end subroutine context_warning
+
+   !> Pretty printer routed to the context unit and gated by verbosity
+   !>
+   !> - silent (no-op on every write) when run verbosity is below `level`
+   !>
+   !> @param[in] self   context instance
+   !> @param[in] level  verbosity level required to emit output (default 1)
+   function context_printer(self, level) result(pp)
+      !> Context instance
+      class(moist_context_type), intent(in) :: self
+      !> Verbosity level required to emit output
+      integer, intent(in), optional :: level
+      !> Configured pretty printer
+      type(prettyprinter) :: pp
+      !> Effective verbosity threshold
+      integer :: lvl
+
+      lvl = 1
+      if (present(level)) lvl = level
+      pp = new_prettyprinter(unit=self%unit, active=self%verbosity(lvl))
+
+   end function context_printer
 
    !> OpenMP thread count for the run
    !>

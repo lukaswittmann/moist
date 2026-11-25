@@ -9,7 +9,9 @@ module moist_cavity_drop_parameters
    use moist_cavity_drop_projection_batch, only: default_batch_size
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type, drop_solve_parameters_type, &
                                                      drop_polish_parameters_type, drop_finalize_parameters_type, &
-                                                     drop_branch_parameters_type
+                                                     drop_branch_parameters_type, is_valid_seed_method, &
+                                                     max_lattice_depth, seed_method_octree, seed_method_global, &
+                                                     seed_method_sphere
 
    implicit none(type, external)
 
@@ -75,12 +77,13 @@ module moist_cavity_drop_parameters
 
       !> Projection level:
       !> 1 = local batched KKT Newton only
-      !> 3 = every anchor, coarse octree seeds (`seed%init_coarse`)
-      !> 4 = every anchor, fine octree seeds (`seed%init_fine`)
+      !> 2 = selected anchors, filtered coarse mesh seeds
+      !> 3 = every anchor, filtered mesh seeds
+      !> 4 = every anchor, fine mesh seeds
       !> Any other value is refused
-      !> A failed local solve is retried from the level's octree, the coarse one at level 1
-      !> The coarse octree drops a leaf without sign change; the fine one probes its children once
-      integer :: proj_level = 3
+      !> A failed local solve is retried from the level's seeder, a coarse octree at level 1
+      !> Seeder, spacing and refinement of each level: `seed%init_level`
+      integer :: proj_level = 2
 
       !* ----------------------------- Batched projection ----------------------------- *!
 
@@ -89,7 +92,7 @@ module moist_cavity_drop_parameters
 
       !* ------------------------------ Projection stages ----------------------------- *!
 
-      !> Seed step (octree surface coverage); leaf size and refinement derived from `proj_level`
+      !> Seed step; seeder, spacing and refinement derived from `proj_level`
       type(drop_seed_parameters_type) :: seed
       !> Solve step (batched KKT Newton); `tol` derived from `tolerance`
       type(drop_solve_parameters_type) :: solve
@@ -314,6 +317,7 @@ contains
 
       !> Value under test is finite and within its bound
       logical :: valid
+      character(len=64) :: message
 
       valid = ieee_is_finite(self%tolerance)
       if (valid) valid = self%tolerance > 0.0_wp
@@ -332,17 +336,16 @@ contains
          return
       end if
       if (.not. is_valid_proj_level(self%proj_level)) then
-         call fatal_error(error, "Invalid DROP numerical parameters: projection level must be 1, 3 or 4")
+         call fatal_error(error, "Invalid DROP numerical parameters: projection level must be 1, 2, 3 or 4")
          return
       end if
-      !> Octree leaf size and refinement of the level; the coarse octree is also
-      !> the fallback of level 1
-      if (self%proj_level == 4) then
-         call self%seed%init_fine()
-      else
-         call self%seed%init_coarse()
-      end if
+      !> Seeder, spacing and refinement of the level
+      call self%seed%init_level(self%proj_level)
 
+      if (.not. is_valid_seed_method(self%seed%method_used)) then
+         call fatal_error(error, "Invalid DROP numerical parameters: unknown projection seeder")
+         return
+      end if
       if (self%seed%max_boxes < 1) then
          call fatal_error(error, "Octree box budget must be positive")
          return
@@ -351,22 +354,13 @@ contains
          call fatal_error(error, "Octree survivor budget must be positive")
          return
       end if
-      if (self%seed%max_depth < 1 .or. self%seed%max_depth > self%seed%max_addressable_depth) then
-         call fatal_error(error, "Octree depth limit must lie in 1..20")
+      if (self%seed%max_depth < 1 .or. self%seed%max_depth > max_lattice_depth) then
+         write (message, "(a,i0)") "Octree depth limit must lie in 1..", max_lattice_depth
+         call fatal_error(error, trim(message))
          return
       end if
       if (self%batch_size < 1) then
          call fatal_error(error, "Projection batch size must be positive")
-         return
-      end if
-      valid = ieee_is_finite(self%solve%switch_fnorm)
-      if (valid) valid = self%solve%switch_fnorm >= 0.0_wp
-      if (.not. valid) then
-         call fatal_error(error, "Newton stage-switch residual must be nonnegative")
-         return
-      end if
-      if (self%solve%max_cheap_steps < 0) then
-         call fatal_error(error, "Newton cheap-step budget must not be negative")
          return
       end if
       valid = ieee_is_finite(self%solve%max_step)
@@ -477,6 +471,10 @@ contains
          self%hor_off = -2.0_wp
          self%hor_on = -1.0_wp
       end if
+      ! Seed filters of the level or the listed ones; the back-facing one only
+      ! where the horizon switch closes such points
+      call self%seed%init_filters(self%proj_level, self%hor_off >= 0.0_wp, error)
+      if (allocated(error)) return
 
       !> Grid point adjacency list cutoff from density kernel length
       self%adj_list_grid_cutoff = 4.0_wp*self%rho_grid_h
@@ -520,14 +518,14 @@ contains
       ! Projection
       call self%register_int_scalar("projection.maxiter", self%solve%max_iter)
       call self%register_int_scalar("projection.level", self%proj_level)
-      ! Octree surface coverage (projection levels 3 and 4, fallback of 1)
+      call self%register_string("projection.seeder", self%seed%method)
+      call self%register_string("projection.seed_filters", self%seed%filters)
+      ! Per-anchor octree budgets: the octree seeder and the requests global and sphere hand to it
       call self%register_int_scalar("projection.octree.max_boxes", self%seed%max_boxes)
       call self%register_int_scalar("projection.octree.max_survivors", self%seed%max_survivors)
       call self%register_int_scalar("projection.octree.max_depth", self%seed%max_depth)
       ! Batched projection
       call self%register_int_scalar("projection.batch_size", self%batch_size)
-      call self%register_real_scalar("projection.newton.switch_fnorm", self%solve%switch_fnorm)
-      call self%register_int_scalar("projection.newton.max_cheap_steps", self%solve%max_cheap_steps)
       call self%register_real_scalar("projection.newton.max_step", self%solve%max_step)
       call self%register_real_scalar("projection.newton.merit_margin", self%solve%merit_margin)
       ! Screening
@@ -583,7 +581,7 @@ contains
       if (.not. found) call fatal_error(error, "No fitted DROP Born zeta parameter for Lebedev grid")
    end subroutine select_born_zeta
 
-   !> Whether `level` is a supported projection level: 1, 3 or 4
+   !> Whether `level` is a supported projection level: 1, 2, 3 or 4
    !>
    !> @param[in] level Projection level
    !> @return    valid Supported level
@@ -591,7 +589,7 @@ contains
       integer, intent(in) :: level
       logical :: valid
 
-      valid = level == 1 .or. level == 3 .or. level == 4
+      valid = level >= 1 .and. level <= 4
    end function is_valid_proj_level
 
    !> Return a human-readable label for the current projection level
@@ -606,10 +604,12 @@ contains
       select case (self%proj_level)
       case (1)
          label = "Local Newton, octree retry"
+      case (2)
+         label = "Selective coarse mesh seeds"
       case (3)
-         label = "Coarse octree seeds"
+         label = "Coarse mesh seeds"
       case (4)
-         label = "Fine octree seeds"
+         label = "Fine mesh seeds"
       case default
          label = "unknown"
       end select
@@ -685,10 +685,15 @@ contains
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
       if (detailed) then
          call pp%kv("Maximum iterations", self%solve%max_iter)
-         call pp%kv("Octree seed size", self%seed%seed_size, "Bohr")
-         if (self%proj_level >= 3) then
+         call pp%kv("Seeder", trim(self%seed%method_used))
+         call pp%kv("Seed spacing", self%seed%seed_size, "Bohr")
+         select case (self%seed%method_used)
+         case (seed_method_octree, seed_method_global, seed_method_sphere)
             call pp%kv("Octree box budget", self%seed%max_boxes)
-         end if
+         case default
+            ! The surface mesh runs no per-anchor octree: no budget to print
+            call pp%kv("Seed filters", self%seed%filters_label())
+         end select
          call pp%kv("Batch size", self%batch_size)
       end if
       call pp%pop()

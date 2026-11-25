@@ -145,6 +145,10 @@ module moist_utils_timer
       integer(int64), private :: t_root0 = 0
       !> Clock ticks per second
       integer(int64), private :: rate = 1
+      !> Elapsed ticks of the most recently stopped timer
+      integer(int64), private :: t_last = 0
+      !> Whether the most recently stopped timer was poisoned
+      logical, private :: last_poisoned = .false.
       !> CPU time at root start
       real(wp), private :: cpu_root0 = 0.0_wp
 
@@ -166,6 +170,8 @@ module moist_utils_timer
       procedure, private :: get_total
       procedure, private :: get_name
       generic :: get => get_total, get_name
+      !> Wall time in seconds of the most recently stopped timer
+      procedure :: last => last_elapsed
       procedure :: write => write_report
       !> Write the simple wall-time report (seconds per step, depth <= 2)
       procedure :: write_simple => write_simple_report
@@ -234,6 +240,8 @@ contains
 
       self%n = 0
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
       self%active = .true.
 
       call system_clock(self%t_root0, self%rate)
@@ -251,6 +259,8 @@ contains
       self%n = 0
       self%cap = 0
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
       self%active = .false.
       self%verbose = .false.
       self%unit = output_unit
@@ -289,6 +299,8 @@ contains
          self%poisoned(1:self%n) = .false.
       end if
       self%sp = 0
+      self%t_last = 0_int64
+      self%last_poisoned = .false.
 
       call system_clock(self%t_root0)
       call cpu_time(self%cpu_root0)
@@ -532,16 +544,21 @@ contains
       !> Node handle
       integer, intent(in) :: id
 
-      integer(int64) :: c
+      integer(int64) :: c, dt
 
       if (.not. self%active .or. id < 1 .or. id > self%n) return
 
       call system_clock(c)
       if (self%running(id)) then
-         self%t_acc(id) = self%t_acc(id) + (c - self%t0(id))
+         dt = c - self%t0(id)
+         self%t_acc(id) = self%t_acc(id) + dt
+         self%t_last = dt
+         self%last_poisoned = self%poisoned(id)
          self%running(id) = .false.
       else
          self%poisoned(id) = .true.
+         self%t_last = 0_int64
+         self%last_poisoned = .true.
       end if
 
    end subroutine stop_id
@@ -594,6 +611,30 @@ contains
       end if
 
    end function get_name
+
+   !> Wall time of the most recently stopped timer in seconds
+   !>
+   !> - single span of the last `stop`, not the cumulative node total
+   !> - 0 before any stop, after `reset`, or when inactive; NaN if that stop was poisoned
+   !>
+   !> @param[in] self  Timer instance
+   pure function last_elapsed(self) result(sec)
+      !> Timer instance
+      class(timer_type), intent(in) :: self
+      !> Elapsed seconds
+      real(wp) :: sec
+
+      if (.not. self%active) then
+         sec = 0.0_wp
+      else if (self%last_poisoned) then
+         sec = ieee_value(1.0_wp, ieee_quiet_nan)
+      else if (self%rate > 0_int64) then
+         sec = real(self%t_last, wp)/real(self%rate, wp)
+      else
+         sec = 0.0_wp
+      end if
+
+   end function last_elapsed
 
    !> Number of registered timer nodes
    !>

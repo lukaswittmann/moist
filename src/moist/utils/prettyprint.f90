@@ -8,6 +8,8 @@ module moist_utils_prettyprint
 
    type :: prettyprinter
       integer :: iu = output_unit
+      !> Whether output methods emit lines (false turns every write into a no-op)
+      logical :: active = .true.
       integer :: indent = 0
       integer :: indent_step = 2
       integer :: col_value = 32  ! 1-based column where the value starts
@@ -37,6 +39,8 @@ module moist_utils_prettyprint
       procedure :: kv2
       !> Print three values on the same line with optional units and formatting
       procedure :: kvvv
+      !> Print a finished work step with its wall time
+      procedure :: step
    end type prettyprinter
 
 contains
@@ -115,18 +119,23 @@ contains
    !> @param[in] fmt_real    Optional fixed real format override
    !> @param[in] fmt_exp     Optional exponential real format override
    !> @param[in] fmt_logical Optional logical format override
+   !> @param[in] active      Optional output gate (default `.true.`; `.false.` silences all writes)
    function new_prettyprinter(unit, col_value, col_value2, indent_step, dot_gap, dot_right, &
-      & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical) result(pp)
+      & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical, active) result(pp)
       !> Optional output unit
       integer, intent(in), optional :: unit
       !> Optional layout scalars
       integer, intent(in), optional :: col_value, col_value2, indent_step, dot_gap, dot_right, dot_total, fmt_len
       !> Optional explicit format strings
       character(*), intent(in), optional :: fmt_int, fmt_real, fmt_exp, fmt_logical
+      !> Optional output gate
+      logical, intent(in), optional :: active
       !> Constructed pretty printer
       type(prettyprinter) :: pp
 
       if (present(unit)) pp%iu = unit
+      if (present(active)) pp%active = active
+      if (.not. pp%active) return
 
       call pp%set_layout(col_value=col_value, col_value2=col_value2, indent_step=indent_step, &
          & dot_gap=dot_gap, dot_right=dot_right, dot_total=dot_total, fmt_len=fmt_len, &
@@ -139,6 +148,7 @@ contains
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
+      if (.not. self%active) return
       write (self%iu, "(A)") ""
       flush (self%iu)
    end subroutine blank
@@ -152,6 +162,7 @@ contains
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
+      if (.not. self%active) return
       write (self%iu, "(A)") repeat(" ", self%indent)//trim(title)
    end subroutine section
 
@@ -164,6 +175,7 @@ contains
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
+      if (.not. self%active) return
       call self%section(title)
       self%indent = self%indent + self%indent_step
    end subroutine push
@@ -174,6 +186,7 @@ contains
    subroutine pop(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
+      if (.not. self%active) return
       self%indent = max(0, self%indent - self%indent_step)
    end subroutine pop
 
@@ -202,6 +215,7 @@ contains
       character(:), allocatable :: prefix, left, leader, vstr, line, eff_fmt
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       prefix = repeat(" ", self%indent)
@@ -283,6 +297,7 @@ contains
       character(:), allocatable :: u1, u2
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       if (present(fmt1)) then
@@ -387,6 +402,7 @@ contains
       integer, parameter :: value_gap = 2
       integer :: ndots, nlead, nspaces
 
+      if (.not. self%active) return
       call self%set_layout()  ! ensure defaults are allocated
 
       if (present(fmt1)) then
@@ -456,6 +472,23 @@ contains
 
       write (self%iu, "(A)") line
    end subroutine kvvv
+
+   !> Print a finished work step with its wall time: `label ...  done     12.34 s`
+   !>
+   !> @param[inout] self    Pretty printer instance
+   !> @param[in]    desc    Step name
+   !> @param[in]    seconds Wall time spent in the step (s)
+   subroutine step(self, desc, seconds)
+      class(prettyprinter), intent(inout) :: self
+      character(*), intent(in) :: desc
+      real(real64), intent(in) :: seconds
+
+      character(len=32) :: state
+
+      if (.not. self%active) return
+      write (state, "(' done',f12.2,' s')") seconds
+      call self%kv(desc, trim(state))
+   end subroutine step
 
    subroutine default_fmt(self, val, fmt)
       class(prettyprinter), intent(in) :: self

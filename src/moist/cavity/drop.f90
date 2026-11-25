@@ -1055,6 +1055,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
+      type(prettyprinter) :: pp
 
       call self%require_context(error)
       if (allocated(error)) return
@@ -1064,7 +1065,6 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)
 
-      if (self%ctx%verbosity(3)) write (self%ctx%unit, "(a)") "[Info] Computing gradients ..."
       call self%compute_gradient_drop(error)
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
@@ -1072,6 +1072,10 @@ contains
       end if
 
       call self%ctx%timer%stop("Gradients")
+
+      pp = self%ctx%printer(level=4)
+      call pp%blank()
+      call pp%step("Cavity gradient", self%ctx%timer%last())
 
    end subroutine get_gradient_drop
 

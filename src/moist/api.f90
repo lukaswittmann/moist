@@ -119,7 +119,7 @@ module moist_api
       real(c_double) :: tolerance = 1.0e-10_c_double
       !> Maximum projection iterations
       integer(c_int) :: proj_maxiter = 50_c_int
-      !> Projection refinement level: 1, 3 or 4
+      !> Projection refinement level: 1, 2, 3 or 4
       integer(c_int) :: proj_level = 3_c_int
       !> Projection-distance excess at which a branch loses all weight (Bohr)
       real(c_double) :: branch_dpdist_max = 0.2_c_double
@@ -1794,7 +1794,7 @@ contains
       end if
       if (.not. is_valid_proj_level(int(o%proj_level))) then
          call api_error(error%ptr, "new_drop_cavity", &
-                        "Invalid DROP options: projection level must be 1, 3 or 4")
+                        "Invalid DROP options: projection level must be 1, 2, 3 or 4")
          return
       end if
       call read_api_radii(vradii, radii, error%ptr)

@@ -1,5 +1,6 @@
 !> Memory utilities for array reallocation
 module moist_utils_mem
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, error_type, fatal_error
    implicit none(type, external)
    private
@@ -12,6 +13,8 @@ module moist_utils_mem
       module procedure :: grow_array_real_1d
       module procedure :: grow_array_real_2d
       module procedure :: grow_array_int_1d
+      module procedure :: grow_array_int64_1d
+      module procedure :: grow_array_int_2d
       module procedure :: grow_array_logical_1d
    end interface grow_array
 
@@ -30,7 +33,7 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   !> @param[out]   error      Refused resize, left unallocated on success
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
    subroutine grow_array_real_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:)
@@ -38,8 +41,8 @@ contains
       integer, intent(in) :: new_size
       !> Fill value for new elements
       real(wp), intent(in), optional :: fill_value
-      !> Refused resize, left unallocated on success
-      type(error_type), allocatable, intent(out) :: error
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
 
       real(wp) :: fill
       real(wp), allocatable :: tmp(:)
@@ -53,7 +56,7 @@ contains
 
       !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         call fatal_error(error, "grow_array_real_1d: Cannot shrink array")
+         call refuse("grow_array_real_1d: Cannot shrink array", error)
          return
       end if
 
@@ -72,7 +75,7 @@ contains
    !> @param[in]    dim1       First dimension size (must match existing if allocated)
    !> @param[in]    dim2       Second dimension size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   !> @param[out]   error      Refused resize, left unallocated on success
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
    subroutine grow_array_real_2d(array, dim1, dim2, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:, :)
@@ -82,8 +85,8 @@ contains
       integer, intent(in) :: dim2
       !> Fill value for new elements
       real(wp), intent(in), optional :: fill_value
-      !> Refused resize, left unallocated on success
-      type(error_type), allocatable, intent(out) :: error
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
 
       real(wp) :: fill
       real(wp), allocatable :: tmp(:, :)
@@ -100,7 +103,7 @@ contains
 
       !> Enforce that first dimension remains constant
       if (old_dim1 > 0 .and. old_dim1 /= dim1) then
-         call fatal_error(error, "grow_array_real_2d: Cannot change first dimension")
+         call refuse("grow_array_real_2d: Cannot change first dimension", error)
          return
       end if
 
@@ -109,7 +112,7 @@ contains
 
       !> Refuse to shrink; the array keeps its current contents and shape
       if (old_dim2 > dim2) then
-         call fatal_error(error, "grow_array_real_2d: Cannot shrink array")
+         call refuse("grow_array_real_2d: Cannot shrink array", error)
          return
       end if
 
@@ -127,7 +130,7 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0)
-   !> @param[out]   error      Refused resize, left unallocated on success
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
    subroutine grow_array_int_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       integer, allocatable, intent(inout) :: array(:)
@@ -135,8 +138,8 @@ contains
       integer, intent(in) :: new_size
       !> Fill value for new elements
       integer, intent(in), optional :: fill_value
-      !> Refused resize, left unallocated on success
-      type(error_type), allocatable, intent(out) :: error
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
 
       integer :: fill
       integer, allocatable :: tmp(:)
@@ -150,7 +153,7 @@ contains
 
       !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         call fatal_error(error, "grow_array_int_1d: Cannot shrink array")
+         call refuse("grow_array_int_1d: Cannot shrink array", error)
          return
       end if
 
@@ -163,12 +166,109 @@ contains
       call move_alloc(tmp, array)
    end subroutine grow_array_int_1d
 
+   !> Reallocate 1D 64-bit integer array to new capacity, preserving existing data
+   !>
+   !> @param[inout] array      Array to reallocate
+   !> @param[in]    new_size   New array size (must be >= current size)
+   !> @param[in]    fill_value Value for new elements (default 0)
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
+   subroutine grow_array_int64_1d(array, new_size, fill_value, error)
+      !> Array to reallocate
+      integer(int64), allocatable, intent(inout) :: array(:)
+      !> New array size
+      integer, intent(in) :: new_size
+      !> Fill value for new elements
+      integer(int64), intent(in), optional :: fill_value
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
+
+      integer(int64) :: fill
+      integer(int64), allocatable :: tmp(:)
+      integer :: old_size
+
+      old_size = 0
+      if (allocated(array)) old_size = size(array)
+
+      !> Early return if array already has the requested size
+      if (old_size == new_size) return
+
+      !> Refuse to shrink; the array keeps its current contents and size
+      if (old_size > new_size) then
+         call refuse("grow_array_int64_1d: Cannot shrink array", error)
+         return
+      end if
+
+      fill = 0_int64
+      if (present(fill_value)) fill = fill_value
+
+      allocate (tmp(new_size))
+      if (old_size > 0) tmp(1:old_size) = array(1:old_size)
+      tmp(old_size + 1:new_size) = fill
+      call move_alloc(tmp, array)
+   end subroutine grow_array_int64_1d
+
+   !> Reallocate 2D integer array to new capacity, preserving existing data
+   !>
+   !> @param[inout] array      Array to reallocate
+   !> @param[in]    dim1       First dimension size (must match existing if allocated)
+   !> @param[in]    dim2       Second dimension size (must be >= current size)
+   !> @param[in]    fill_value Value for new elements (default 0)
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
+   subroutine grow_array_int_2d(array, dim1, dim2, fill_value, error)
+      !> Array to reallocate
+      integer, allocatable, intent(inout) :: array(:, :)
+      !> First dimension size
+      integer, intent(in) :: dim1
+      !> Second dimension size
+      integer, intent(in) :: dim2
+      !> Fill value for new elements
+      integer, intent(in), optional :: fill_value
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
+
+      integer :: fill
+      integer, allocatable :: tmp(:, :)
+      integer :: old_dim1, old_dim2
+
+      old_dim1 = 0
+      old_dim2 = 0
+      if (allocated(array)) then
+         old_dim1 = size(array, dim=1)
+         old_dim2 = size(array, dim=2)
+      else
+         old_dim1 = dim1
+      end if
+
+      !> Enforce that first dimension remains constant
+      if (old_dim1 > 0 .and. old_dim1 /= dim1) then
+         call refuse("grow_array_int_2d: Cannot change first dimension", error)
+         return
+      end if
+
+      !> Early return if array already has the requested size
+      if (old_dim2 == dim2) return
+
+      !> Refuse to shrink; the array keeps its current contents and shape
+      if (old_dim2 > dim2) then
+         call refuse("grow_array_int_2d: Cannot shrink array", error)
+         return
+      end if
+
+      fill = 0
+      if (present(fill_value)) fill = fill_value
+
+      allocate (tmp(dim1, dim2))
+      if (old_dim2 > 0) tmp(:, 1:old_dim2) = array(:, 1:old_dim2)
+      tmp(:, old_dim2 + 1:dim2) = fill
+      call move_alloc(tmp, array)
+   end subroutine grow_array_int_2d
+
    !> Reallocate 1D logical array to new capacity, preserving existing data
    !>
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default .false.)
-   !> @param[out]   error      Refused resize, left unallocated on success
+   !> @param[out]   error      Refused resize; absent, a refusal stops the run
    subroutine grow_array_logical_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       logical, allocatable, intent(inout) :: array(:)
@@ -176,8 +276,8 @@ contains
       integer, intent(in) :: new_size
       !> Fill value for new elements
       logical, intent(in), optional :: fill_value
-      !> Refused resize, left unallocated on success
-      type(error_type), allocatable, intent(out) :: error
+      !> Refused resize
+      type(error_type), allocatable, intent(out), optional :: error
 
       logical :: fill
       logical, allocatable :: tmp(:)
@@ -191,7 +291,7 @@ contains
 
       !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         call fatal_error(error, "grow_array_logical_1d: Cannot shrink array")
+         call refuse("grow_array_logical_1d: Cannot shrink array", error)
          return
       end if
 
@@ -203,6 +303,23 @@ contains
       tmp(old_size + 1:new_size) = fill
       call move_alloc(tmp, array)
    end subroutine grow_array_logical_1d
+
+   !> Report a refused resize, or stop the run when the caller passed no error
+   !>
+   !> - a caller without an error handle grows by construction, so a refusal is
+   !>   a programming error there
+   !>
+   !> @param[in]  message Refused resize
+   !> @param[out] error   Error handle; absent stops the run
+   subroutine refuse(message, error)
+      !> Refused resize
+      character(len=*), intent(in) :: message
+      !> Error handle
+      type(error_type), allocatable, intent(out), optional :: error
+
+      if (.not. present(error)) error stop message
+      call fatal_error(error, message)
+   end subroutine refuse
 
    !> Filter allocated 1D real array in-place
    !>
