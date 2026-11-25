@@ -75,9 +75,9 @@ module moist_cavity_drop_parameters
 
       !> Projection level:
       !> 1 = local batched KKT Newton only
-      !> 2 = selected anchors, filtered coarse mesh seeds
-      !> 3 = every anchor, filtered mesh seeds
-      !> 4 = every anchor, fine mesh seeds
+      !> 2 = selected anchors, filtered coarse lattice seeds
+      !> 3 = every anchor, filtered lattice seeds
+      !> 4 = every anchor, fine lattice seeds
       !> Any other value is refused
       !> A failed local solve is retried from the level's seeder, a coarse surface mesh at level 1
       !> Seeder, spacing and refinement of each level: `seed%init_level`
@@ -573,13 +573,13 @@ contains
 
       select case (self%proj_level)
       case (1)
-         label = "Local Newton, coarse mesh retry"
+         label = "Local Newton, coarse lattice retry"
       case (2)
-         label = "Selective coarse mesh seeds"
+         label = "Selective coarse lattice seeds"
       case (3)
-         label = "Coarse mesh seeds"
+         label = "Coarse lattice seeds"
       case (4)
-         label = "Fine mesh seeds"
+         label = "Fine lattice seeds"
       case default
          label = "unknown"
       end select

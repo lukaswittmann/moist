@@ -11,7 +11,7 @@ The individual steps are illustrated in :ref:`the DROP scheme below <fig-drop-sc
 It starts from a reference system (van der Waals type cavity) which is subsequently discretized using Lebedev quadrature grids (a).
 The reference cavity is then projected onto the defined zero level set given by the level set function (LSF) (b).
 After projection, the quadrature weights have to be mapped in order to obtain correct surface integration weights (c).
-The resulting surface grid inherits the smoothness of the underlying LSF and the projection/mapping scheme and thus  is provides consistent analytical derivatives.
+The resulting surface grid inherits the smoothness of the underlying LSF and the projection/mapping scheme and thus provides consistent analytical derivatives.
 
 DROP is independent of the particular surface definition; the two main level sets are:
  - :doc:`Electron-isodensity surface (ρ-DROP) <isodensity>`, a fully self-consistent and differentiable cavity based on the electron density and a chosen isodensity value.
@@ -38,7 +38,7 @@ DROP is independent of the particular surface definition; the two main level set
    surface, :math:`S=0`, and the dots are the atom centers.
 
 For completeness, two further level sets are available: the :doc:`COSMO Fine Cavity (CFC-DROP) <cfc>`, and the :doc:`smooth SES-like surface (SSES-DROP) <sses>`, an experimental optimized power-distance moment surface with a solvent probe radius and smoothing length.
-In all cases, the :doc:`SvdW <svdw>` should be preferred over both due to its supiriour computational cost, smoother PES, and bester testing.
+In all cases, :doc:`SvdW <svdw>` should be preferred over both for its lower computational cost, smoother PES, and better testing.
 
 .. dropdown:: Further level sets: CFC and SSES
 
@@ -188,11 +188,12 @@ The reverse-mode gradient sums these into one torque per sphere, which the symme
 Settings
 --------
 
-Settings can be supplied two ways:
+Settings can be supplied in two ways:
 
-- **Parameter file**: parameters  in a JSON or TOML file, read via ``load_file`` (e.g. ``grid.num_leb``, ``projection.level``). The full key set is registered in ``register_cavity_drop_entries``.
-- **Settings object**: When constructing the ``moist_cavity_drop_parameters_type``, via the constructor ``param%new``, allows setting all parameters (``nleb``, ``tolerance``, ``proj_maxiter``, ``proj_level``, ``branch_weight_s``, ``rho_grid_h``, ``wleb_prune_level``). The C and Python options expose those seven plus ``do_fine`` (logical, default false; computes all available surface properties); verbosity and debug come from the run context.
-- **Optional properties**: ``do_grid_density``, ``do_curvature``, ``do_normal``, ``do_r_iI`` and ``do_rho`` switch single surface properties on (default false). ``do_fine`` switches all five on.
+- **Parameter file**: parameters in a JSON or TOML file, read via ``load_file`` (e.g. ``grid.num_leb``, ``projection.level``). The full key set is registered in ``register_cavity_drop_entries``; an unknown key is an error.
+- **Settings object**: the constructor ``param%new`` of ``moist_cavity_drop_parameters_type`` sets ``nleb``, ``tolerance``, ``proj_maxiter``, ``proj_level``, ``rho_grid_h``, ``wleb_prune_level``, the horizon band ``w_0hor_off`` / ``w_0hor_on`` and ``branch``, a ``drop_branch_parameters_type`` with the fields ``dpdist_max``, ``reach_on`` and ``reach_off``. The C and Python options expose the same eleven settings as flat fields (``branch_dpdist_max``, ``branch_reach_on``, ``branch_reach_off``) plus ``do_fine`` (logical, default false; computes all available surface properties); verbosity and debug come from the run context.
+
+**Optional properties**: ``do_grid_density``, ``do_curvature``, ``do_normal`` and ``do_atomarea`` switch single surface properties on (default false). ``do_fine`` switches all four on. The projection distance ``pdist`` of every point is always stored.
 
 
 Level Set Functions (LSF)
@@ -231,12 +232,12 @@ Numerical Tolerance
    - quadrature weight cutoff ``wleb_cut``, :math:`0.05\,\varepsilon`
    - LSF screening threshold, :math:`0.1\,\varepsilon` (handed to the LSF by the constructor); read by the isodensity LSFs and by SvdW and CFC with their fade off. With the fade on (the SvdW and CFC default) the atom reach is the end of the fade switching region and the threshold is not used, see :doc:`svdw` and :doc:`cfc`
    - projection convergence ``proj_tol``, :math:`\varepsilon`
-   - branch-degeneracy separation, :math:`10\,\varepsilon`
+   - branch-degeneracy separation, :math:`10\,\varepsilon`, at least ``1e-6`` Bohr
 
-   A nonzero ``switching.wleb_prune_level`` overrides ``wleb_cut`` with the lower bound of its switching region.
+   ``wleb_cut`` does not depend on ``switching.wleb_prune_level``: the prune switch is exactly zero below its switching region, so the points it removes fall under the cut on their own.
    See :cite:t:`wittmann2026drop`, Supporting Information Sec. C.2.c for the convergence behavior with respect to these thresholds.
 
-   A value of ``1.0e-10`` is generally recommended; combined with extremely tight SCF (and/or optimization) settings, values of ``1.0e-12`` is recommended.
+   A value of ``1.0e-10`` is generally recommended; combined with extremely tight SCF (and/or optimization) settings, a value of ``1.0e-12`` is recommended.
    This setting has little effect on the computational cost of constructing the DROP cavity.
    Values of approximately ``1.0e-14`` or smaller may, however, cause convergence problems in the projection because of finite precision of floating-point arithmetic.
 
@@ -244,50 +245,76 @@ Numerical Tolerance
 Surface Projection
 ------------------
 
+``projection.level`` (integer, default ``2``)
+   Projection strategy for the projection of the reference points.
+   Every level first runs a local projection from their anchor; the levels differ in which anchors are then searched for further branches and how densely that search is done.
+   Valid levels are 1 to 4 and are outlined in the table below.
 
-``projection.maxiter`` (integer, default ``150``)
-  Maximum iterations for the projection optimizer.
+   .. list-table::
+      :header-rows: 1
+      :widths: 10 50 40
+
+      * - Level
+        - Strategy
+        - Recommendation
+      * - 1
+        - local projection only; an anchor whose local solve fails is searched from a coarse seed lattice (1.0 Bohr spacing)
+        - Fastest; single-point energies and very large systems
+      * - 2
+        - searches anchors whose local point is not fully open or lies more than 0.5 Bohr away; seed lattice with 0.5 Bohr spacing, all seed filters
+        - Default; sufficient for most calculations, including MD and geometry optimizations
+      * - 3
+        - searches every anchor; seed lattice with 0.3 Bohr spacing, tangent-cone filter only
+        - Smoother PES; for MD, geometry optimizations, or tight tolerances and convergence criteria where level 2 is not enough
+      * - 4
+        - searches every anchor; seed lattice with 0.2 Bohr spacing and one refinement, no seed filters
+        - Reference calculations; most expensive
+
+   Higher levels find more branches in concave regions at a higher cost; seeder spacing, refinement and seed filters follow from the level.
+   A search never goes beyond ``branching.reach_off`` and ends at the branch window behind the nearest fully open point (see `Branching`_).
+   The seed lattice only supplies starting points for the Newton solves: every point is an exact projection onto :math:`S=0`, and the level only decides which branches are found.
+
+   .. dropdown:: How the branch search works
+
+      .. figure:: /_static/figures/drop/rmesh.svg
+         :name: fig-drop-rmesh
+         :alt: Seed lattice on a smooth model cavity with concave regions: anchors on the reference spheres, adaptive lattice cells, surface samples, and the seeds of one anchor with two points
+         :width: 100%
+
+         Seed lattice on a smooth two-dimensional model cavity (interior blue, surface black).
+         Anchors (circles) lie on the reference spheres (dotted); only the searched anchors (yellow), here those in the concave regions, span a search ball (dashed).
+         **(a)** Lattice cells are split only inside the search balls and only where the surface may pass; every sign-change edge of an unsplit cell gives one sample (blue) on :math:`S=0`.
+         **(b)** Zoom into a concave notch (box in a): each sample kept by the seed filters is moved by the osculating pre-step (green, at most one spacing), and Newton converges from these seeds to both projected points (stars), one on each wall.
+
+      - **Seed lattice**: built once per geometry over the search balls of the anchors to be searched. Lattice cells are split while they hold a sign change or are not certified surface-free; every sign-change edge gives one sample, retracted onto the surface. SSES provides no surface-free bound, so its lattice is refined everywhere and costs more.
+      - **Seed filters** drop samples that cannot lead to a point with weight:
+        
+        - ``cone`` (the anchor lies outside the sample's tangent cone),
+        - ``grazing`` (the anchor sees the patch edge-on), 
+        - ``back_facing`` (the normal points into the anchor's sphere, only with the horizon switch on), and 
+        - ``focal`` (beyond both focal centers of the patch).
+        
+        Level 2 uses all four, level 3 ``cone`` alone. The filters are first order in the lattice spacing and can drop the only seed of a point, so level 4 uses none.
+      - **Search**: with a fully open local point, the seeds within its branch window are solved. Otherwise seeds are solved nearest first in rounds of growing size, and the ball grows towards ``branching.reach_off`` until a fully open point bounds it. An anchor whose local solve fails is searched the same way.
+      - **Duplicates**: a seed stops once its Newton prediction lands within ``1e-4`` Bohr of a point already accepted for its anchor, and a saddle met again is escaped only once.
+
+      The search counters are printed at verbosity 4.
+
+``projection.batch_size`` (integer, default ``256``)
+   Anchors per work chunk; each chunk is projected by one thread in batched Newton calls.
+
+``projection.newton.max_step`` (real, default ``1.0``)
+   Longest Newton step in Bohr; longer steps are scaled down before the line search.
+
+``projection.newton.merit_margin`` (real, default ``1.0``)
+   Margin of the penalty in the line-search merit function, :math:`\mu \ge |\lambda| +` ``merit_margin``.
+
+``projection.maxiter`` (integer, default ``50``)
+   Maximum iterations of a local projection; a solve that needs more is retried from the level's seeder.
 
 ``objective.alpha`` (real, default ``0.5``)
-  Weight :math:`w_a` of the anchor term :math:`\tfrac{1}{2} w_a \|\mathbf r - \mathbf r^\circ\|^2` in the projection objective.
-  It does not move a point that has a single projection, but branch weights and the admissible branch radius depend on it through :math:`\Phi`, so it does not cancel in concave regions.
-  This should not be changed.
-
-``projection.branch_search_rho2_slack`` (real, default ``-1``)
-  Search window :math:`\Delta\rho^2` in :math:`\mathrm{bohr}^2`: a projection :math:`b` of an anchor is kept only if :math:`\rho_b^2 \le \rho_\mathrm{min}^2 + \Delta\rho^2`, where :math:`\rho_\mathrm{min}` is the closest projection found for that anchor.
-  The window applies to every projection level, both to the branch search and to the candidate filter.
-
-  - ``-1``: derived from the branch weights, :math:`\Delta\rho^2 = 2\,\Delta\Phi_\mathrm{max}/w_a`, with the admissible objective excess :math:`\Delta\Phi_\mathrm{max}` from `Branching`_. With the defaults this is about :math:`0.26\,\mathrm{bohr}^2`. Every branch outside it has a softmax weight below the floor.
-  - :math:`\ge 0`: explicit window, independent of the branch weights.
-
-Switching Functions
--------------------
-
-Smooth step functions that fade surface contributions in and out so the cavity stays differentiable also in rare edge cases.
-Two independent switches act on the integration weights, each keyed on a different geometric quantity (see the note below for the underlying rationale):
-
-**Critical level set weight switch** (``f_crit``), a function of the level set gradient norm :math:`\|\nabla S\|`:
-
-``switching.w_0ls_from`` / ``switching.w_0ls_to`` (real, defaults ``0.25`` / ``0.6``)
-   Transition bounds of the critical level set weight switch (start, end).
-   Contributions are fully suppressed below ``w_0ls_from`` and fully restored above ``w_0ls_to``.
-
-**Focal/branching weight switch** (``f_foc``), a function of the smallest eigenvalue of the Lagrangian Hessian restricted to the tangent space (TRLH):
-
-``switching.w_0tra_from`` / ``switching.w_0tra_to`` (real, defaults ``0.1`` / ``0.3``)
-   Transition bounds of the focal/branching weight switch (start, end).
-   A point's contribution is damped as its tangential curvature drops from ``w_0tra_to`` toward ``w_0tra_from``.
-
-.. note::
-
-  Although the level set function itself is differentiable away from nuclei, the resulting zero level set can become singular where :math:`S=0` and :math:`\nabla S=0`.
-  To avoid ill-conditioned or non-unique projections in such critical regions, a critical-point switching function :math:`f_\mathrm{crit}(\|\nabla S\|)` smoothly attenuates contributions from the zero level set, which amounts to scaling the surface measure and the discretized integration weights.
-  It is inactive in regular surface regions and suppresses a contribution entirely below ``switching.w_0ls_from``.
-
-  A second switch handles focal events, where the closest-point map loses regularity in a tangential direction. In practice this is detected from the smallest eigenvalue of the Lagrangian Hessian restricted to the tangent
-  space.
-  When that tangential curvature becomes too small, the focal switch ``f_foc`` smoothly damps the contribution of the affected point so the discretized surface remains stable.
-
+   Weight :math:`w_a` of the anchor term :math:`\tfrac{1}{2} w_a \|\mathbf r - \mathbf r^\circ\|^2` in the projection objective.
+   This should not be changed.
 
 Weight Pruning
 --------------
@@ -296,7 +323,9 @@ If desired, near-zero weights can be smoothly attenuated to speed up the computa
 Additionally, it can be used in cases where small weights could cause numerical issues.
 
 ``switching.wleb_prune_level`` (integer, default ``0``)
-   Smoothly suppresses near-zero Lebedev weights before the branch filter. The
+   Smoothly switches off points whose Lebedev weight after the closest-point
+   scaling is near zero. The switch is a factor of the gate of the point, next
+   to the switches above, so it acts on the switching value :math:`f`. The
    switch region is derived from the level:
 
    .. list-table::
@@ -324,13 +353,7 @@ Additionally, it can be used in cases where small weights could cause numerical 
 Branching
 ---------
 
-``branching.softmax_scale`` (:math:`\tau_\Phi`, real, default ``0.0025``)
-  Softmax scale of the branch-weight model in concave regions; smaller values make the branch-weight distribution sharper.
-  Branch fractions are a softmax of :math:`-\Phi/\tau_\Phi` over the objective values :math:`\Phi` of all competing projections (i.e. the projected distance), so equal objective values receive equal weights and a lower objective value smoothly dominates.
-  Each branch fraction multiplies the integration weight of its projected point.
-  The admissible objective excess of a branch is :math:`\Delta\Phi_\mathrm{max} = \tau_\Phi\ln(1/w_\mathrm{floor})`, where the floor :math:`w_\mathrm{floor}` is ``branching.weight_floor`` (default ``0.0``) or, when that is not positive, the derived quadrature weight cutoff.
-  It sets the default search window ``projection.branch_search_rho2_slack``.
-
+.. TODO: add docs once paper with figures is done
 
 Spatial Screening
 -----------------
@@ -340,5 +363,3 @@ Acceleration settings that do not change results, only cost.
 ``screening.cell_grid_full_scan_below`` (integer, default ``200``)
    Below this atom count the level set's candidate cell list collapses to a single full-scan cell.
    The cell list returns, for each batch of points, the atoms whose screening reach meets the batch; both modes return the same atoms, so this has no influence on the results, only on the cost of the LSF evaluations.
-
-The former ``screening.cell_grid_fraction`` is retired and no longer read; the cell list sizes its cells from the atom reach.

@@ -103,11 +103,11 @@ contains
             has_seeded = size(geometry%radius_max) > 0
             if (has_seeded) then
                call search_order(local, chunk_order)
-               call self%ctx%timer%start("Seed mesh")
+               call self%ctx%timer%start("Seed lattice")
                call seeder%build(self%lsf_model, geometry, error)
-               call self%ctx%timer%stop("Seed mesh")
+               call self%ctx%timer%stop("Seed lattice")
                if (allocated(error)) return
-               call pp%step("Seed mesh", self%ctx%timer%last())
+               call pp%step("Seed lattice", self%ctx%timer%last())
             end if
          end if
 
