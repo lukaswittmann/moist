@@ -6,8 +6,9 @@
 !> - [[counting_argsort]]: stable argsort of small integer keys, caller's counters
 !>
 !> The first three are ports of Fortran stdlib v0.8.1 for default-integer and
-!> `real(wp)` keys, in `sorter/{merge,introsort,argsort}.f90` (MIT, see
-!> `sorter/LICENSE`); `sorter/counting.f90` is moist's own
+!> `real(wp)` keys, `sort` also for 64-bit integers, in
+!> `sorter/{merge,introsort,argsort}.f90` (MIT, see `sorter/LICENSE`);
+!> `sorter/counting.f90` is moist's own
 module moist_math_sorter
    use moist_math_sorter_merge, only: ord_sort
    use moist_math_sorter_introsort, only: sort
