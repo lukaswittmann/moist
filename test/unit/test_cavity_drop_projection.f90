@@ -3,8 +3,9 @@
 !> surface-leaf reference, and the batch, Newton, polish, seeder and finalize
 !> building blocks
 module test_cavity_drop_projection
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp, moist_error_type => error_type
-   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
+   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_positive_inf, ieee_is_nan
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mctc_io_convert, only: aatoau
@@ -14,24 +15,27 @@ module test_cavity_drop_projection
    use moist_math_linalg, only: setup_tangent_frame
    use moist_math_packed, only: unpack_sym_matrix
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
+   use test_helpers, only: expect_error
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type, drop_solve_parameters_type, &
                                            drop_polish_parameters_type, drop_finalize_parameters_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_lsf_sses, only: moist_cavity_drop_lsf_sses_type
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
                                                 point_pending, point_converged, point_accepted, &
-                                                point_captured, point_failed_unreached
+                                                point_captured, point_failed
    use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch
-   use moist_cavity_drop_projection_polish, only: polish_batch
+   use moist_cavity_drop_projection_polish, only: polish_batch, retract_to_surface
    use moist_cavity_drop_projection_finalize, only: dedupe_candidates, canonical_branch_order, &
                                                    finalize_anchor_type, &
                                                    finalize_scratch_type, projection_rows_type, &
                                                    finalize_anchor
    use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_cavity_drop_branching, only: branch_weight_type
-   use moist_cavity_drop_projection_seed, only: projection_seeder_type, seed_request_type
-   use moist_cavity_drop_projection_seed_octree, only: octree_seeder_type
+   use moist_cavity_drop_projection_seed, only: projection_seeder_type, seeder_scratch_type, seed_request_type, &
+                                                seed_build_type
+   use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type
    use moist_cavity_drop_projection_worker, only: projection_worker_type
    implicit none(type, external)
    private
@@ -39,33 +43,28 @@ module test_cavity_drop_projection
    public :: collect_cavity_drop_projection
 
    !> Level set evaluator for the unpruned surface-coverage reference
-   type :: brute_force_context_type
-      !> Geometry evaluator, separate from the finder under test
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-   end type brute_force_context_type
-
-   !> Context for the analytic probe: a union of spheres, as a signed distance
-   !>
-   !> `S(x) = min_i (||x - c_i|| - R_i)` is exactly 1-Lipschitz, so `|S(x)|` is
-   !> a valid surface-free radius -- the same certificate the SvdW level set
-   !> supplies, without pulling the whole cavity machinery into a solver test
-   type :: sphere_union_context
-      !> Sphere centers (3, nsphere)
-      real(wp) :: center(3, 2) = 0.0_wp
-      !> Sphere radii
-      real(wp) :: radius(2) = 1.0_wp
-      !> Number of spheres actually used
-      integer :: nsphere = 1
-   end type sphere_union_context
-
    !> SvdW level set that counts the points it evaluates
    type, extends(moist_cavity_drop_lsf_svdw_type) :: counting_svdw_type
       !> Points evaluated, every order
       integer :: n_points = 0
+      !> Point whose evaluations with a Hessian are counted
+      real(wp) :: probe(3) = huge(1.0_wp)
+      !> Evaluations of `probe` at order 2 or higher
+      integer :: n_probe_hess = 0
    contains
       !> Count, then evaluate as the SvdW level set
       procedure :: evaluate_batch => counting_evaluate_batch
    end type counting_svdw_type
+
+   !> SvdW level set whose value at one point is NaN, gradient and reach kept:
+   !> a host density that is not finite
+   type, extends(moist_cavity_drop_lsf_svdw_type) :: nan_value_svdw_type
+      !> Point whose value is replaced by NaN; non-finite points are answered alike
+      real(wp) :: poisoned(3) = huge(1.0_wp)
+   contains
+      !> Evaluate as the SvdW level set, then replace the value at `poisoned`
+      procedure :: evaluate_batch => nan_value_evaluate_batch
+   end type nan_value_svdw_type
 
 contains
 
@@ -76,59 +75,58 @@ contains
       !> Registered tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("octree_connected_minima", test_connected_minima), &
-         & new_unittest("octree_shallow_minimum", test_shallow_minimum), &
-         & new_unittest("octree_search_window", test_search_window), &
-         & new_unittest("octree_rigid_motion", test_rigid_motion), &
-         & new_unittest("octree_zero_window_on_surface", test_zero_window), &
-         & new_unittest("octree_cluster_dimer", test_dimer_branching), &
-         & new_unittest("octree_cluster_cross", test_branching_xyz_cross), &
-         & new_unittest("octree_cluster_octahedron", test_octahedral), &
-         & new_unittest("octree_cluster_cube", test_cube), &
-         & new_unittest("octree_cluster_pentagon", test_pentagonal), &
-         & new_unittest("octree_cluster_tetrahedron", test_tetrahedral), &
+         & new_unittest("h2_connected_minima", test_connected_minima), &
+         & new_unittest("h2_shallow_minimum", test_shallow_minimum), &
+         & new_unittest("h2_search_window", test_search_window), &
+         & new_unittest("h2_rigid_motion", test_rigid_motion), &
+         & new_unittest("h2_zero_window_on_surface", test_zero_window), &
+         & new_unittest("cluster_dimer", test_dimer_branching), &
+         & new_unittest("cluster_cross", test_branching_xyz_cross), &
+         & new_unittest("cluster_octahedron", test_octahedral), &
+         & new_unittest("cluster_cube", test_cube), &
+         & new_unittest("cluster_pentagon", test_pentagonal), &
+         & new_unittest("cluster_tetrahedron", test_tetrahedral), &
          & new_unittest("brute_force_broad_window", test_brute_force_broad_window), &
          & new_unittest("stationary_box_bounds", test_stationary_box_bounds), &
          & new_unittest("batch_flush_accumulator", test_batch_accumulator), &
          & new_unittest("newton_sphere_point", test_newton_sphere_point), &
-         & new_unittest("newton_stage_switch", test_newton_stage_switch), &
+         & new_unittest("newton_start_multiplier", test_newton_start_multiplier), &
          & new_unittest("newton_far_seed_unreached", test_newton_far_seed_unreached), &
          & new_unittest("newton_far_point", test_newton_far_point), &
+         & new_unittest("newton_singular_system", test_newton_singular_system), &
+         & new_unittest("newton_non_finite_value_fails_alone", test_newton_non_finite_value), &
          & new_unittest("polish_escapes_far_pole", test_polish_far_pole), &
+         & new_unittest("polish_fails_non_finite_jet", test_polish_non_finite_jet), &
+         & new_unittest("polish_one_sided_saddle_repeats_captured", test_polish_one_sided_saddle), &
          & new_unittest("multistart_capture_stops_duplicates", test_capture_stops_duplicates), &
          & new_unittest("multistart_capture_keeps_twin_points", test_capture_keeps_twin_points), &
+         & new_unittest("multistart_capture_only_predictions", test_capture_only_predictions), &
          & new_unittest("finalize_canonical_order", test_finalize_canonical_order), &
          & new_unittest("finalize_canonical_order_chain", test_finalize_canonical_order_chain), &
          & new_unittest("finalize_sphere_anchor", test_finalize_sphere_anchor), &
          & new_unittest("finalize_branch_weight_fold", test_finalize_branch_fold), &
-         & new_unittest("octree_two_sphere_branches", test_octree_two_sphere), &
-         & new_unittest("octree_single_sphere_one_branch", test_octree_single_sphere), &
-         & new_unittest("octree_sign_change_bound_is_tight", test_octree_sign_change_bound), &
-         & new_unittest("octree_certifies_empty_ball", test_octree_empty_ball), &
-         & new_unittest("octree_surface_patch_coverage", test_octree_surface_patch_coverage), &
-         & new_unittest("octree_optional_region_certificate", test_octree_region_certificate), &
-         & new_unittest("octree_seed_anchor_within_trace_tolerance", test_octree_trace_on_surface), &
-         & new_unittest("octree_far_verified_point_radius", test_octree_far_point_radius), &
-         & new_unittest("octree_far_traced_radius", test_octree_far_traced_radius), &
-         & new_unittest("octree_seeds_on_sign_change_segments", test_octree_sign_change_seeds), &
-         & new_unittest("octree_sign_free_region_no_seeds", test_octree_sign_free_region), &
-         & new_unittest("octree_refinement_thin_feature", test_octree_refinement_thin_feature), &
-         & new_unittest("bad_octree_seed_size", test_bad_octree_seed_size, should_fail=.true.), &
-         & new_unittest("bad_octree_budgets", test_bad_octree_budgets, should_fail=.true.), &
-         & new_unittest("bad_octree_max_depth", test_bad_octree_max_depth, should_fail=.true.), &
-         & new_unittest("bad_octree_pdist_max", test_bad_octree_pdist_max, should_fail=.true.), &
-         & new_unittest("bad_octree_negative_slack", test_bad_octree_negative_slack, should_fail=.true.), &
-         & new_unittest("bad_octree_depth_cap", test_bad_octree_depth_cap, should_fail=.true.), &
-         & new_unittest("bad_octree_survivors", test_bad_octree_survivors, should_fail=.true.), &
-         & new_unittest("bad_octree_box_budget", test_bad_octree_box_budget, should_fail=.true.), &
-         & new_unittest("bad_octree_seed_before_init", test_bad_octree_seed_before_init, should_fail=.true.), &
-         & new_unittest("bad_octree_run_before_init", test_bad_octree_run_before_init, should_fail=.true.), &
-         & new_unittest("bad_octree_refine_levels", test_bad_octree_refine_levels, should_fail=.true.), &
-         & new_unittest("octree_neighbours_outside_box_budget", test_octree_neighbours_outside_budget), &
-         & new_unittest("octree_refinement_outside_box_budget", test_octree_refinement_outside_budget), &
-         & new_unittest("worker_octree_refinement_by_level", test_worker_octree_refinement), &
+         & new_unittest("rmesh_build_thread_independent", test_rmesh_thread_independent), &
+         & new_unittest("rmesh_level3_filter_and_level4_unfiltered", test_rmesh_level_filters), &
+         & new_unittest("rmesh_shell_query_partitions_ball", test_rmesh_shell_query), &
+         & new_unittest("rmesh_sses_build_thread_independent", test_rmesh_sses_thread_independent), &
+         & new_unittest("sses_projection_thread_independent", test_sses_projection_thread_independent), &
+         & new_unittest("level2_selective_rmesh_branches", test_level2_selective_rmesh), &
+         & new_unittest("level2_seed_filters", test_level2_seed_filters), &
+         & new_unittest("bad_rmesh_sample_size", test_bad_rmesh_sample_size, should_fail=.true.), &
+         & new_unittest("bad_rmesh_refine_levels", test_bad_rmesh_refine_levels, should_fail=.true.), &
+         & new_unittest("bad_rmesh_build_before_init", test_bad_rmesh_build_before_init, should_fail=.true.), &
+         & new_unittest("bad_rmesh_seed_before_build", test_bad_rmesh_seed_before_build, should_fail=.true.), &
+         & new_unittest("bad_rmesh_radii", test_bad_rmesh_radii, should_fail=.true.), &
+         & new_unittest("bad_rmesh_reach", test_bad_rmesh_reach, should_fail=.true.), &
+         & new_unittest("bad_rmesh_lattice_range", test_bad_rmesh_lattice_range, should_fail=.true.), &
+         & new_unittest("bad_rmesh_sample_size_infinite", test_bad_rmesh_sample_size_infinite, should_fail=.true.), &
+         & new_unittest("bad_rmesh_cone_scale", test_bad_rmesh_cone_scale, should_fail=.true.), &
+         & new_unittest("bad_rmesh_cone_scale_infinite", test_bad_rmesh_cone_scale_infinite, should_fail=.true.), &
+         & new_unittest("bad_rmesh_anchors_without_atoms", test_bad_rmesh_anchors_without_atoms, should_fail=.true.), &
+         & new_unittest("rmesh_back_facing_needs_owner", test_rmesh_back_facing_needs_owner), &
          & new_unittest("bad_batch_target_size", test_bad_batch_target_size, should_fail=.true.), &
-         & new_unittest("bad_newton_unreached_anchor", test_bad_newton_unreached_anchor, should_fail=.true.) &
+         & new_unittest("bad_newton_unreached_anchor", test_bad_newton_unreached_anchor, should_fail=.true.), &
+         & new_unittest("worker_skipped_anchor_empty_outputs", test_worker_skipped_anchor) &
          & ]
 
    end subroutine collect_cavity_drop_projection
@@ -144,11 +142,13 @@ contains
       !> Molecular geometry
       type(structure_type) :: mol
       !> Sphere centers, anchor, and box center
-      real(wp) :: positions(3, 1), anchor(3), center(3), direction(3)
+      real(wp) :: positions(3, 1), pos2(3, 2), anchor(3), center(3), direction(3)
+      real(wp) :: atom_lo(3), atom_hi(3)
       !> Rigid translation testing cancellation in coordinate differences
       real(wp) :: shift(3)
       !> Deterministic directions and translations
       integer :: i, trial
+      logical :: can_exclude
 
       positions = 0.0_wp
       call new(mol, [1], positions)
@@ -201,6 +201,30 @@ contains
       lsf%center_bounds_valid = .false.
       call check(error,.not. lsf%stationary_box_excluded(anchor, center, 0.1_wp), &
                  message="Applied bound without a valid atomic enclosure")
+      if (allocated(error)) return
+
+      ! Distant second atom encloses the anchor globally along x, while localized
+      ! screening bounds still exclude the transverse patch near atom 1
+      pos2 = reshape([0.0_wp, 0.0_wp, 0.0_wp, 40.0_wp, 0.0_wp, 0.0_wp], [3, 2])
+      call new(mol, [1, 1], pos2)
+      call lsf%update(mol, [1.0_wp, 1.0_wp])
+      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
+      center = [0.0_wp, 1.0_wp, 0.0_wp]
+      call lsf%stationary_region_bounds(anchor, center - 0.5_wp, center + 0.5_wp, &
+                                        atom_lo, atom_hi, can_exclude)
+      call check(error, can_exclude, message="Localized region bounds did not enable exclusion")
+      if (allocated(error)) return
+      call check(error, lsf%stationary_box_excluded(anchor, center, 0.1_wp, &
+                                                    atom_lower=atom_lo, atom_upper=atom_hi), &
+                 message="Localized region bounds did not exclude transverse patch")
+      if (allocated(error)) return
+      call check(error, lsf%stationary_box_excluded(anchor, center, 0.1_wp), &
+                 message="Direct localized stationary_box_excluded did not exclude transverse patch")
+      if (allocated(error)) return
+      center = [1.0_wp, 0.0_wp, 0.0_wp]
+      call check(error,.not. lsf%stationary_box_excluded(anchor, center, 0.1_wp, &
+                                                         atom_lower=atom_lo, atom_upper=atom_hi), &
+                 message="Localized bounds excluded analytic nearest point")
    end subroutine test_stationary_box_bounds
 
    !> Recover the farther minimum lost by discrete survivor clustering
@@ -298,6 +322,9 @@ contains
 
    !> A surface anchor is the only branch in a zero-distance window
    !>
+   !> - the window radius behind it is zero, so the worker finalizes it without
+   !>   a search
+   !>
    !> @param[out] error Zero-radius search failed
    subroutine test_zero_window(error)
       !> Test failure
@@ -343,7 +370,69 @@ contains
       call check(error, n_points, 1)
       if (allocated(error)) return
       call check(error, norm2(points(:, 1) - anchor), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, worker%n_seeded, 0, message="a zero window was searched")
    end subroutine test_zero_window
+
+   !> A skipped anchor gives empty outputs from a fresh worker
+   !>
+   !> - a switching value below the weight cut skips the anchor, so the row
+   !>   buffer of the fresh worker never grew
+   !>
+   !> @param[out] error Outputs missing or not empty
+   subroutine test_worker_skipped_anchor(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Projection settings
+      type(moist_cavity_drop_parameters_type) :: param
+      !> One-sphere level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Fresh projection worker
+      type(projection_worker_type) :: worker
+      !> Run context
+      type(moist_context_type) :: ctx
+      !> Molecular geometry
+      type(structure_type) :: mol
+      !> Native error
+      type(moist_error_type), allocatable :: native_error
+      !> Atom at the origin and anchor on its unit sphere
+      real(wp) :: positions(3, 1), anchor(3)
+      !> Returned rows
+      real(wp), allocatable :: points(:, :), normals(:, :), lambda(:), pdist(:), phi(:), weights(:)
+      !> Returned point count
+      integer :: n_points
+
+      positions = 0.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+      call new(mol, [1], positions)
+      call param%compute_derived(native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type())
+      call lsf%update(mol, [1.0_wp])
+      call worker%init(param, lsf, positions, native_error)
+      call new_context(ctx, verbosity=0, nthreads=1)
+      if (.not. allocated(native_error)) then
+         call worker%project_anchor(ctx, anchor, 1, n_points, native_error, points=points, normals=normals, &
+                                    lambda=lambda, pdist=pdist, phi=phi, weights=weights, f=0.0_wp)
+      end if
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call check(error, n_points, 0, message="a skipped anchor kept rows")
+      if (allocated(error)) return
+      call check(error, allocated(points) .and. allocated(normals) .and. allocated(lambda) .and. allocated(pdist) &
+                 .and. allocated(phi) .and. allocated(weights), message="an output of a skipped anchor is missing")
+      if (allocated(error)) return
+      call check(error, all(shape(points) == [3, 0]) .and. all(shape(normals) == [3, 0]), &
+                 message="points or normals of a skipped anchor are not (3, 0)")
+      if (allocated(error)) return
+      call check(error, size(lambda) + size(pdist) + size(phi) + size(weights), 0, &
+                 message="a row vector of a skipped anchor is not empty")
+   end subroutine test_worker_skipped_anchor
 
    !> Compare the level-4 projection with independently enumerated minima
    !>
@@ -392,7 +481,7 @@ contains
       !> Native hydrogen radius, in Bohr
       real(wp), parameter :: radius = 2.456643962006573_wp
       !> Returned branch count and matching indices
-      integer :: n_points, i, j, n_octree
+      integer :: n_points, i, j
       !> Distance from one reference minimum to the nearest native branch
       real(wp) :: distance, pdist_start
       !> Returned and unpruned surface-leaf reference points
@@ -450,17 +539,12 @@ contains
          do j = 1, n_points
             distance = min(distance, norm2(points(:, j) - targets(:, i)))
          end do
-         call check(error, distance < 1.0e-8_wp, message="Octree missed a strict minimum")
+         call check(error, distance < 1.0e-8_wp, message="Search missed a strict minimum")
          if (allocated(error)) return
       end do
 
-      pdist_start = 0.0_wp
-      n_octree = 0
-      select type (seeder => worker%seeder)
-      type is (octree_seeder_type)
-         pdist_start = seeder%dbg_pdist_start
-         n_octree = seeder%n_points
-      end select
+      ! The brute force covers the largest ball the search asked for
+      pdist_start = worker%pdist_search_max
       call brute_force_branches(lsf, point, param, pdist_start, reference, native_error, reference_seeds)
       if (allocated(native_error)) then
          call test_failed(error, native_error%message)
@@ -472,8 +556,8 @@ contains
       if (allocated(error)) return
       if (present(require_pruning)) then
          if (require_pruning) then
-            call check(error, 2*n_octree < reference_seeds, &
-                       message="Broad H2 search still refines most surface leaves")
+            call check(error, 2*worker%n_seeds < reference_seeds, &
+                       message="Broad H2 search still solves most surface leaves")
          end if
       end if
    end subroutine check_h2_branches
@@ -542,10 +626,10 @@ contains
       type(moist_error_type), allocatable, intent(out) :: error
       !> Reference work count
       integer, intent(out), optional :: n_seeds
-      !> Surface-only octree
-      type(octree_seeder_type) :: tree
-      !> Reference geometry callback
-      type(brute_force_context_type) :: context
+      !> Geometry evaluator, separate from the finder under test
+      type(moist_cavity_drop_lsf_svdw_type) :: probe
+      !> Centers of the surface leaves
+      real(wp), allocatable :: leaves(:, :)
       !> Local refinement of every leaf
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: ncfg
@@ -565,32 +649,28 @@ contains
       type(branch_weight_type) :: bw
 
       if (present(n_seeds)) n_seeds = 0
-      context%lsf = lsf
-      call tree%init(error, seed_size=param%seed%seed_size, max_boxes=param%seed%max_boxes, &
-                     max_survivors=param%seed%max_survivors, max_depth=param%seed%max_depth)
-      if (allocated(error)) return
+      probe = lsf
       p(:, 1) = anchor
-      call context%lsf%evaluate_batch(p, 0, v, error=error)
+      call probe%evaluate_batch(p, 0, v, error=error)
       if (allocated(error)) return
       call bw%init(param%branch%dpdist_max, param%phi_alpha)
-      call tree%run(anchor, v(1), radius, bw%x_max**2, brute_force_probe, context, error, &
-                    pdist_slack=bw%x_max, pdist_soft=bw%soft)
+      call surface_leaves(probe, anchor, radius, param%seed%seed_size, leaves, error)
       if (allocated(error)) return
-      if (present(n_seeds)) n_seeds = tree%n_points
+      if (present(n_seeds)) n_seeds = size(leaves, 2)
 
       ncfg%tol = param%solve%tol
       ncfg%max_iter = param%solve%max_iter
-      call batch%init(tree%n_points + 1, error)
+      call batch%init(size(leaves, 2) + 1, error)
       if (allocated(error)) return
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
-      do i = 1, tree%n_points
-         call batch%append(tree%points(:, i), 0.0_wp, icol)
+      do i = 1, size(leaves, 2)
+         call batch%append(leaves(:, i), 0.0_wp, icol)
       end do
-      call newton_solve_batch(batch, context%lsf, ncfg, param%phi_alpha, scratch, error)
+      call newton_solve_batch(batch, probe, ncfg, pcfg, param%phi_alpha, scratch, error)
       if (allocated(error)) return
       call new_context(ctx, verbosity=0, nthreads=1)
-      call polish_batch(ctx, batch, context%lsf, pcfg, ncfg, param%phi_alpha, scratch, error)
+      call polish_batch(ctx, batch, probe, pcfg, ncfg, param%phi_alpha, scratch, error)
       if (allocated(error)) return
 
       allocate (candidates(3, batch%n), multipliers(batch%n), gradients(3, batch%n), hessians(3, 3, batch%n))
@@ -629,42 +709,66 @@ contains
       points = candidates(:, 1:n_strict)
    end subroutine brute_force_branches
 
-   !> Surface-only batched probe for the brute-force reference
+   !> Centers of every leaf of edge at most `h` that may hold surface inside a ball
    !>
-   !> @param[in] points Evaluation points
-   !> @param[out] lsf0 Surface values
-   !> @param[out] radius Surface-free radii
-   !> @param[out] reached Every point is evaluated; an unreached one is an error
-   !> @param[inout] context Reference geometry
-   !> @param[out] error Evaluation failure
-   subroutine brute_force_probe(points, lsf0, radius, reached, context, error)
-      !> Evaluation points
-      real(wp), intent(in), contiguous :: points(:, :)
-      !> Surface values
-      real(wp), intent(out), contiguous :: lsf0(:)
-      !> Surface-free radii
-      real(wp), intent(out), contiguous :: radius(:)
-      !> Evaluated points
-      logical, intent(out), contiguous :: reached(:)
-      !> Reference geometry
-      class(*), intent(inout) :: context
-      !> Evaluation failure
+   !> - exhaustive box descent from the cube around the ball, independent of the
+   !>   seeders: a box is dropped only when it misses the ball or the exclusion
+   !>   radius at its center covers it
+   !>
+   !> @param[inout] lsf    Level set, updated for the geometry
+   !> @param[in]    anchor Ball center
+   !> @param[in]    radius Ball radius (Bohr)
+   !> @param[in]    h      Largest leaf edge (Bohr)
+   !> @param[out]   leaves Leaf centers (3, n)
+   !> @param[out]   error  Level set failure
+   subroutine surface_leaves(lsf, anchor, radius, h, leaves, error)
+      type(moist_cavity_drop_lsf_svdw_type), intent(inout) :: lsf
+      real(wp), intent(in) :: anchor(3)
+      real(wp), intent(in) :: radius
+      real(wp), intent(in) :: h
+      real(wp), allocatable, intent(out) :: leaves(:, :)
       type(moist_error_type), allocatable, intent(out) :: error
-      !> Point index
-      integer :: k
 
-      select type (context)
-      type is (brute_force_context_type)
-         call context%lsf%evaluate_batch(points, 0, lsf0, error=error)
+      real(wp), allocatable :: centers(:, :), next(:, :), values(:)
+      real(wp) :: edge, half_diag, gap(3)
+      integer :: i, n, nnext, ix, iy, iz
+      logical :: keep
+
+      edge = 2.0_wp*radius
+      centers = reshape(anchor, [3, 1])
+      allocate (leaves(3, 0))
+      do while (size(centers, 2) > 0)
+         allocate (values(size(centers, 2)))
+         call lsf%evaluate_batch(centers, 0, values, error=error)
          if (allocated(error)) return
-         do k = 1, size(points, 2)
-            radius(k) = context%lsf%exclusion_radius(lsf0(k))
-            reached(k) = .true.
+         half_diag = 0.5_wp*sqrt(3.0_wp)*edge
+         allocate (next(3, 8*size(centers, 2)))
+         nnext = 0
+         n = 0
+         do i = 1, size(centers, 2)
+            gap = max(abs(centers(:, i) - anchor) - 0.5_wp*edge, 0.0_wp)
+            keep = norm2(gap) <= radius .and. lsf%exclusion_radius(values(i)) < half_diag
+            if (.not. keep) cycle
+            if (edge <= h) then
+               n = n + 1
+               centers(:, n) = centers(:, i)
+               cycle
+            end if
+            do iz = -1, 1, 2
+               do iy = -1, 1, 2
+                  do ix = -1, 1, 2
+                     nnext = nnext + 1
+                     next(:, nnext) = centers(:, i) + 0.25_wp*edge*real([ix, iy, iz], wp)
+                  end do
+               end do
+            end do
          end do
-      class default
-         error stop "brute_force_probe: foreign context"
-      end select
-   end subroutine brute_force_probe
+         leaves = reshape([leaves, centers(:, 1:n)], [3, size(leaves, 2) + n])
+         centers = next(:, 1:nnext)
+         deallocate (next, values)
+         edge = 0.5_wp*edge
+      end do
+   end subroutine surface_leaves
 
    !> Check the dimer fixture from the development branching set
    !>
@@ -786,7 +890,7 @@ contains
                                   mol, 110, 1.0_wp)
    end subroutine test_tetrahedral
 
-   !> Require fine-octree recovery of the admissible minima the coarse octree finds
+   !> Require level-4 recovery of the admissible minima level 3 finds
    !>
    !> Level 3 is a comparison set, not a completeness certificate; extra
    !> valid level-4 branches are allowed. Both run with the weight cut
@@ -812,8 +916,8 @@ contains
       type(moist_context_type), target :: ctx
       !> Anchor-phase cavity
       type(cavity_type_drop), allocatable :: cavity
-      !> Coarse (level 3) and fine (level 4) octree projections
-      type(projection_rows_type) :: comparison, octree
+      !> Level-3 and level-4 projections
+      type(projection_rows_type) :: comparison, fine
       !> Reference level set for the geometry checks
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       !> Native construction error
@@ -837,17 +941,17 @@ contains
          call test_failed(error, title//": level 3: "//native_error%message)
          return
       end if
-      call project_cluster(cavity, 4, octree, native_error)
+      call project_cluster(cavity, 4, fine, native_error)
       if (allocated(native_error)) then
          call test_failed(error, title//": level 4: "//native_error%message)
          return
       end if
       call check_projection_geometry(cavity, lsf, comparison, error)
       if (allocated(error)) return
-      call check_projection_geometry(cavity, lsf, octree, error)
+      call check_projection_geometry(cavity, lsf, fine, error)
       if (allocated(error)) return
 
-      call row_bounds(octree, cavity%anchor%ngrid, first, last)
+      call row_bounds(fine, cavity%anchor%ngrid, first, last)
       nrelevant = 0
       do i = 1, comparison%n
          if (.not. relevant_row(cavity, comparison, i)) cycle
@@ -856,18 +960,18 @@ contains
          matches = 0
          if (first(aid) > 0) then
             do j = first(aid), last(aid)
-               if (.not. relevant_row(cavity, octree, j)) cycle
-               if (norm2(comparison%xyz(:, i) - octree%xyz(:, j)) <= 1.0e-6_wp) matches = matches + 1
+               if (.not. relevant_row(cavity, fine, j)) cycle
+               if (norm2(comparison%xyz(:, i) - fine%xyz(:, j)) <= 1.0e-6_wp) matches = matches + 1
             end do
          end if
          write (message, "(a,a,i0,a,i0)") title, ": anchor ", cavity%anchor%id(aid), &
-            ", matching octree branches ", matches
+            ", matching level-4 branches ", matches
          call check(error, matches, 1, message=trim(message))
          if (allocated(error)) return
       end do
       call check(error, nrelevant > 0, message="Comparison set contains no admissible minimum")
       if (allocated(error)) return
-      call check_cluster_brute_force(cavity, lsf, octree, error)
+      call check_cluster_brute_force(cavity, lsf, fine, error)
       if (allocated(error)) return
       deallocate (cavity)
       call ctx%delete()
@@ -922,7 +1026,7 @@ contains
       !> Row bounds and total reference count
       integer, allocatable :: first(:), last(:)
       integer :: aid, j, total
-      !> Settings with the fine level-4 octree of the compared rows
+      !> Level-4 settings of the compared rows
       type(moist_cavity_drop_parameters_type) :: param
       !> Branch window of the settings
       type(branch_weight_type) :: bw
@@ -1037,7 +1141,6 @@ contains
 
       param = cavity%param
       param%proj_level = level
-      ! The octree preset follows the level
       call param%compute_derived(error)
       if (allocated(error)) return
       call worker%init(param, cavity%lsf_model, cavity%mol%xyz, error)
@@ -1241,12 +1344,13 @@ contains
       !> Points and solver state
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchors, points
       real(wp) :: rs, anchors(3, 4), point(3), u(3), residual(3)
-      !> Steps per stage
-      integer :: n1(4), n2(4)
+      !> Steps per column
+      integer :: nsteps(4)
       !> Anchor and column
       integer :: k, icol
 
@@ -1264,7 +1368,7 @@ contains
          call batch%begin_run(k, anchors(:, k), 1)
          call batch%append(anchors(:, k), 0.0_wp, icol)
       end do
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
+      call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1291,7 +1395,7 @@ contains
          if (allocated(error)) return
          call check(error, batch%run_jet(k), "anchor jet recorded without an extra evaluation")
          if (allocated(error)) return
-         call check(error, n1(k) + n2(k) <= 20, "converges in a handful of steps")
+         call check(error, nsteps(k) <= 20, "converges in a handful of steps")
          if (allocated(error)) return
       end do
    end subroutine test_newton_sphere_point
@@ -1307,6 +1411,7 @@ contains
       !> Points and solver state
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, far seed and its value
@@ -1331,12 +1436,12 @@ contains
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol_anchor)
       call batch%append(far(:, 1), 0.0_wp, icol_far)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
       end if
-      call check(error, batch%status(icol_far), point_failed_unreached, "far seed is unreached")
+      call check(error, batch%status(icol_far), point_failed, "far seed is unreached")
       if (allocated(error)) return
       call check(error, batch%status(icol_anchor), point_converged, "anchor seed converges")
       if (allocated(error)) return
@@ -1357,6 +1462,7 @@ contains
       !> Points and solver state
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, analytic point and anchor value
@@ -1384,7 +1490,7 @@ contains
       call batch%init(4, failed)
       call batch%begin_run(1, anchor(:, 1), 1)
       call batch%append(anchor(:, 1), 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1398,11 +1504,79 @@ contains
                  abs(batch%pdist(icol) - 18.0_wp) <= 10.0_wp*tol*18.0_wp, "pdist is the full distance")
    end subroutine test_newton_far_point
 
-   !> The stage-1 exits: residual threshold, the cheap-step budget, and a zero
-   !> budget
+   !> The two starts of a column: at `lambda = 0` the first step needs no
+   !> Hessian, at `lambda /= 0` the start jet is refreshed to order 2
    !>
-   !> @param[out] error Wrong stage accounting
-   subroutine test_newton_stage_switch(error)
+   !> - one column per solve, on a counting level set that counts the order-2
+   !>   evaluations at the seed: none at `lambda = 0`, the one refresh at
+   !>   `lambda /= 0`; every later iterate lies off the seed
+   !>
+   !> @param[out] error Wrong point, step count or Hessian evaluations
+   subroutine test_newton_start_multiplier(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Counting single-atom level set
+      type(counting_svdw_type) :: lsf
+      !> Points and solver state
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      !> Sphere radius, anchor, seed, analytic point
+      real(wp) :: rs, anchor(3), seed(3), point(3)
+      !> Start multipliers
+      real(wp), parameter :: lambdas(2) = [0.0_wp, -0.5_wp]
+      !> Steps of the column
+      integer :: nsteps(1)
+      !> Column and start
+      integer :: icol, k
+
+      call sphere_lsf(lsf%moist_cavity_drop_lsf_svdw_type, rs, error)
+      if (allocated(error)) return
+      call batch%init(4, failed)
+
+      ! Off-axis seed on the surface, once without and once with a multiplier
+      anchor = [rs + 1.0_wp, 0.0_wp, 0.0_wp]
+      seed = rs*[cos(0.3_wp), sin(0.3_wp), 0.0_wp]
+      point = rs*unit_vector(anchor)
+      lsf%probe = seed
+      do k = 1, 2
+         call batch%clear()
+         call batch%begin_run(1, anchor, 1)
+         call batch%append(seed, lambdas(k), icol)
+         lsf%n_probe_hess = 0
+         call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
+         if (allocated(failed)) then
+            call test_failed(error, "batched Newton: "//failed%message)
+            return
+         end if
+         call check(error, batch%status(1), point_converged, "column converges")
+         if (allocated(error)) return
+         call check(error, norm2(batch%x(:, 1) - point) < 1.0e-9_wp, "analytic point")
+         if (allocated(error)) return
+         call check(error, nsteps(1) >= 1 .and. nsteps(1) <= 20, "steps counted")
+         if (allocated(error)) return
+         call check(error, .not. any(ieee_is_nan(batch%hessS(:, 1))), "final jet carries the Hessian")
+         if (allocated(error)) return
+         call check(error, lsf%n_probe_hess, k - 1, "order-2 evaluations at the seed: none at lambda = 0, one else")
+         if (allocated(error)) return
+      end do
+   end subroutine test_newton_start_multiplier
+
+   !> A singular KKT system: a singular tangent block takes the flat step, a
+   !> regular one is a vanishing gradient
+   !>
+   !> - one sphere, the column on its surface on the anchor's axis, where both
+   !>   tangent curvatures of `S` are `kappa`
+   !> - start multiplier `w / kappa`: the tangent block `w - lambda kappa`
+   !>   vanishes; the flat step resets the multiplier and Newton converges on the point
+   !> - start multiplier `1e17`: the tangent block is regular, the gradient
+   !>   (about one) is below the round-off of `lambda Hess S`, the system singular:
+   !>   `point_failed` before any step
+   !>
+   !> @param[out] error Wrong status, point or step count
+   subroutine test_newton_singular_system(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Single-atom level set
@@ -1410,91 +1584,104 @@ contains
       !> Points and solver state
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      !> Sphere radius, anchor, start, its jet, tangent curvature, start multipliers
+      real(wp) :: rs, anchor(3), start(3, 1), v(1), g(3, 1), h(6, 1), kappa, lambdas(2)
+      !> Status each start must end with, steps of the column
+      integer :: expected(2), nsteps(1)
+      !> Column and case
+      integer :: icol, k
+
+      call sphere_lsf(lsf, rs, error)
+      if (allocated(error)) return
+      anchor = [rs + 1.0_wp, 0.0_wp, 0.0_wp]
+      start(:, 1) = [rs, 0.0_wp, 0.0_wp]
+      call lsf%evaluate_batch(start, 2, v, lsf1_r=g, lsf2_rr_packed=h, error=failed)
+      if (allocated(failed)) then
+         call test_failed(error, "start jet: "//failed%message)
+         return
+      end if
+      ! Packed yy: a tangent direction of the start
+      kappa = h(3, 1)
+      call check(error, kappa > 0.0_wp, "the level set curves along the tangents")
+      if (allocated(error)) return
+
+      lambdas = [default_phi_alpha()/kappa, 1.0e17_wp]
+      expected = [point_converged, point_failed]
+      call batch%init(4, failed)
+      do k = 1, 2
+         call batch%clear()
+         call batch%begin_run(1, anchor, 1)
+         call batch%append(start(:, 1), lambdas(k), icol)
+         call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
+         if (allocated(failed)) then
+            call test_failed(error, "batched Newton: "//failed%message)
+            return
+         end if
+         call check(error, batch%status(1), expected(k), "singular tangent block steps, regular one fails")
+         if (allocated(error)) return
+      end do
+      call check(error, nsteps(1), 0, "the vanishing gradient fails before any step")
+      if (allocated(error)) return
+   end subroutine test_newton_singular_system
+
+   !> A column whose level set value is not finite fails alone
+   !>
+   !> - no bundled level set hands out such a value inside its reach; a host
+   !>   density callback can
+   !> - the anchor column of the same run takes the steps it takes on its own:
+   !>   the line search must not try it in place of the other column
+   !>
+   !> @param[out] error Non-finite column not failed, or the anchor column disturbed
+   subroutine test_newton_non_finite_value(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Single-atom level set, its value NaN at the seed
+      type(nan_value_svdw_type) :: lsf
+      !> Points and solver state
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       !> Sphere radius, anchor, seed
       real(wp) :: rs, anchor(3), seed(3)
-      !> Steps per stage
-      integer :: n1(1), n2(1)
-      !> Column
-      integer :: icol
+      !> Steps per column, steps of the anchor column on its own
+      integer :: nsteps(2), nsteps_alone
+      !> Column and solve
+      integer :: icol, k
 
-      call sphere_lsf(lsf, rs, error)
+      call sphere_lsf(lsf%moist_cavity_drop_lsf_svdw_type, rs, error)
       if (allocated(error)) return
+      anchor = [rs + 2.0_wp, 0.0_wp, 0.0_wp]
+      seed = (rs + 0.5_wp)*[cos(0.3_wp), sin(0.3_wp), 0.0_wp]
       call batch%init(4, failed)
 
-      !> Off-axis seed, near anchor: cheap steps contract, the residual rule switches
-      !> (from the anchor itself the radial cheap step is already exact on a sphere)
-      anchor = [rs + 1.0_wp, 0.0_wp, 0.0_wp]
-      seed = rs*[cos(0.3_wp), sin(0.3_wp), 0.0_wp]
-      cfg = drop_solve_parameters_type(switch_fnorm=0.1_wp, max_cheap_steps=100)
-      call batch%begin_run(1, anchor, 1)
-      call batch%append(seed, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
-      call check_stage_run(error, "residual switch", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 1, 20)
+      ! The anchor column alone, then followed by the seed with the NaN value
+      nsteps_alone = -1
+      do k = 1, 2
+         call batch%clear()
+         call batch%begin_run(1, anchor, 1)
+         call batch%append(anchor, 0.0_wp, icol)
+         if (k == 2) then
+            call batch%append(seed, 0.0_wp, icol)
+            lsf%poisoned = seed
+         end if
+         call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed, steps=nsteps)
+         if (allocated(failed)) then
+            call test_failed(error, "batched Newton: "//failed%message)
+            return
+         end if
+         call check(error, batch%status(1), point_converged, "anchor column converges")
+         if (allocated(error)) return
+         if (k == 1) nsteps_alone = nsteps(1)
+      end do
+      call check(error, nsteps(1), nsteps_alone, "anchor column takes the steps it takes alone")
       if (allocated(error)) return
-
-      !> Far anchor, seed off the axis, residual switch off: the budget switches
-      call batch%clear()
-      anchor = [3.0_wp*rs, 0.0_wp, 0.0_wp]
-      seed = rs*[cos(0.5_wp), sin(0.5_wp), 0.0_wp]
-      cfg = drop_solve_parameters_type(switch_fnorm=0.0_wp, max_cheap_steps=3)
-      call batch%begin_run(1, anchor, 1)
-      call batch%append(seed, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
-      call check_stage_run(error, "cheap-step budget", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 3, 3)
-      if (allocated(error)) return
-
-      !> No cheap step at all
-      call batch%clear()
-      anchor = [rs + 1.0_wp, 0.3_wp, -0.2_wp]
-      cfg = drop_solve_parameters_type(max_cheap_steps=0)
-      call batch%begin_run(1, anchor, 1)
-      call batch%append(anchor, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed, stage1_steps=n1, stage2_steps=n2)
-      call check_stage_run(error, "budget switch", failed, batch, rs*unit_vector(anchor), n1(1), n2(1), 0, 0)
-   end subroutine test_newton_stage_switch
-
-   !> Check one single-column stage run
-   !>
-   !> @param[out] error  Test failure
-   !> @param[in]  label  Case label
-   !> @param[in]  failed Native Newton failure
-   !> @param[in]  batch  Solved batch
-   !> @param[in]  point   Analytic point
-   !> @param[in]  n1     Cheap steps taken
-   !> @param[in]  n2     Full steps taken
-   !> @param[in]  n1_min Fewest cheap steps expected
-   !> @param[in]  n1_max Most cheap steps expected
-   subroutine check_stage_run(error, label, failed, batch, point, n1, n2, n1_min, n1_max)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Case label
-      character(len=*), intent(in) :: label
-      !> Native Newton failure
-      type(moist_error_type), allocatable, intent(in) :: failed
-      !> Solved batch
-      type(projection_batch_type), intent(in) :: batch
-      !> Analytic point
-      real(wp), intent(in) :: point(3)
-      !> Steps taken per stage and the cheap-step window
-      integer, intent(in) :: n1, n2, n1_min, n1_max
-      !> Message buffer
-      character(len=160) :: msg
-
-      if (allocated(failed)) then
-         call test_failed(error, label//": "//failed%message)
-         return
-      end if
-      write (msg, "(a,a,i0,a,i0)") label, ": cheap steps ", n1, ", full steps ", n2
-      call check(error, batch%status(1), point_converged, trim(msg)//": converged")
-      if (allocated(error)) return
-      call check(error, norm2(batch%x(:, 1) - point) < 1.0e-9_wp, trim(msg)//": analytic point")
-      if (allocated(error)) return
-      call check(error, n1 >= n1_min .and. n1 <= n1_max, trim(msg)//": cheap steps in window")
-      if (allocated(error)) return
-      call check(error, n2 >= 1, trim(msg)//": the full system finishes")
-   end subroutine check_stage_run
+      call check(error, batch%status(2), point_failed, "non-finite column fails")
+   end subroutine test_newton_non_finite_value
 
    !> A Newton point stuck on the far pole (a constrained maximum) is escaped
    !> and re-polished onto the near pole; the anchor's own point is accepted as is
@@ -1527,7 +1714,7 @@ contains
       call batch%begin_run(1, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
       call batch%append([-rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "batched Newton: "//failed%message)
          return
@@ -1549,9 +1736,149 @@ contains
       call check(error, norm2(batch%x(:, 2) - pole) < 1.0e-8_wp, "far pole escaped onto the near pole")
    end subroutine test_polish_far_pole
 
+   !> A converged column whose jet is not finite is never accepted
+   !>
+   !> - one sphere, the column on the anchor's own point, a minimum
+   !> - its Hessian set to NaN, as a host density callback can hand one back
+   !>   without an error
+   !>
+   !> @param[out] error The column was kept
+   subroutine test_polish_non_finite_jet(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Single-atom level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Points and solver state
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      !> Sphere radius, anchor
+      real(wp) :: rs, anchor(3)
+      !> Column
+      integer :: icol
+
+      call sphere_lsf(lsf, rs, error)
+      if (allocated(error)) return
+      anchor = [rs + 2.0_wp, 0.0_wp, 0.0_wp]
+      call new_context(ctx, verbosity=0, nthreads=1)
+
+      call batch%init(4, failed)
+      call batch%begin_run(1, anchor, 1)
+      call batch%append([rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
+      call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "batched Newton: "//failed%message)
+         return
+      end if
+      call check(error, batch%status(1), point_converged, "the start converges")
+      if (allocated(error)) return
+
+      batch%hessS(:, 1) = ieee_value(0.0_wp, ieee_quiet_nan)
+      call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "polish: "//failed%message)
+         return
+      end if
+      call check(error, batch%status(1), point_failed, "a NaN Hessian fails the column")
+   end subroutine test_polish_non_finite_jet
+
+   !> Repeat visits of a saddle with one descending sign are duplicates, not failures
+   !>
+   !> - carbon pair, a neck point just off the mirror plane, the anchor a little
+   !>   beyond the focal point of the meridian curvature: a weak saddle its third
+   !>   order dominates, so one meridian sign descends and the other climbs, while
+   !>   the two objectives agree within the symmetry tolerance of the saddle cache
+   !> - four columns on the saddle with `capture_duplicates`: the first escapes to
+   !>   a minimum, each repeat is its duplicate and stays where it is
+   !>
+   !> @param[out] error A repeat that failed, or no escape of the first visit
+   subroutine test_polish_one_sided_saddle(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Two-atom level set and its geometry
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(structure_type) :: mol
+      !> Points and solver state
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      !> Objective weight, saddle with its jet, normal, meridian tangent and curvature
+      real(wp) :: w, saddle(3, 1), v(1), g(3, 1), h(6, 1), hess(3, 3), n(3), tm(3), km
+      !> Multiplier and anchor that make the point a saddle
+      real(wp) :: lambda, anchor(3)
+      !> Column and visit
+      integer :: icol, j
+      !> Relative distance of the anchor beyond the focal point
+      real(wp), parameter :: eps = 1.0e-5_wp
+
+      call new(mol, [6, 6], reshape([-1.6_wp, 0.0_wp, 0.0_wp, 1.6_wp, 0.0_wp, 0.0_wp], [3, 2]))
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=2.5_wp, blend_3b=1.0_wp))
+      lsf%screening_threshold = 1.0e-11_wp
+      call lsf%update(mol, [3.0_wp, 3.0_wp])
+      call new_context(ctx, verbosity=0, nthreads=1)
+      w = default_phi_alpha()
+
+      ! Neck point in the xy plane: meridian tangent is the normal turned by 90 degrees
+      call retract_to_surface(pcfg, w, lsf, [0.02_wp, 2.5_wp, 0.0_wp], [0.0_wp, 0.0_wp, 0.0_wp], &
+                              saddle(:, 1), lambda, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "neck point: "//failed%message)
+         return
+      end if
+      call lsf%evaluate_batch(saddle, 2, v, lsf1_r=g, lsf2_rr_packed=h, error=failed)
+      if (allocated(failed)) then
+         call test_failed(error, "neck jet: "//failed%message)
+         return
+      end if
+      n = unit_vector(g(:, 1))
+      tm = [n(2), -n(1), 0.0_wp]
+      call unpack_sym_matrix(h(:, 1), hess, 3)
+      km = dot_product(tm, matmul(hess, tm))
+      call check(error, km < 0.0_wp, "the neck curves away from the anchor along the meridian")
+      if (allocated(error)) return
+      lambda = w*(1.0_wp + eps)/km
+      anchor = saddle(:, 1) - (lambda/w)*g(:, 1)
+
+      call batch%init(4, failed)
+      call batch%begin_run(1, anchor, 1)
+      do j = 1, 4
+         call batch%append(saddle(:, 1), lambda, icol)
+      end do
+      call newton_solve_batch(batch, lsf, ncfg, pcfg, w, scratch, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "batched Newton: "//failed%message)
+         return
+      end if
+      call check(error, all(batch%status(1:4) == point_converged), "every visit converges on the saddle")
+      if (allocated(error)) return
+
+      ncfg%capture_duplicates = .true.
+      call polish_batch(ctx, batch, lsf, pcfg, ncfg, w, scratch, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "polish: "//failed%message)
+         return
+      end if
+      call check(error, batch%status(1), point_accepted, "the first visit escapes to a minimum")
+      if (allocated(error)) return
+      call check(error, norm2(batch%x(:, 1) - saddle(:, 1)) > 1.0e-3_wp, "away from the saddle")
+      if (allocated(error)) return
+      do j = 2, 4
+         call check(error, batch%status(j), point_captured, "a repeat visit is a duplicate, not a failed saddle")
+         if (allocated(error)) return
+         call check(error, all(batch%x(:, j) == saddle(:, 1)), "and stays on the saddle")
+         if (allocated(error)) return
+      end do
+   end subroutine test_polish_one_sided_saddle
+
    !> The seeded pass stops starts that head into the accepted local point
    !>
-   !> - one sphere at level 3: every octree start of the anchor ends on the
+   !> - one sphere at level 3: every seed of the anchor ends on the
    !>   local point, so all of them are duplicates
    !> - the same worker with capture off is the reference: the same rows, more
    !>   level set evaluations, nothing captured
@@ -1690,7 +2017,7 @@ contains
       call local%init(4, failed)
       call local%begin_run(1, anchor, 1)
       call local%append([0.6_wp, 2.6_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(local, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(local, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (.not. allocated(failed)) call polish_batch(ctx, local, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "local point: "//failed%message)
@@ -1708,7 +2035,7 @@ contains
             call batch%append([0.1_wp*k, 2.6_wp, 0.0_wp], 0.0_wp, icol)
          end do
          ncfg%capture_duplicates = run == 1
-         call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+         call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
          if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
          if (allocated(failed)) then
             call test_failed(error, "seeded run: "//failed%message)
@@ -1778,6 +2105,93 @@ contains
 
    end subroutine test_capture_keeps_twin_points
 
+   !> Capture stops a column only on a Newton prediction
+   !>
+   !> - one sphere, anchor `0.05` Bohr above it; the run leads with the accepted
+   !>   point `p`, the second column starts on the surface `1e-3` rad off it, where
+   !>   the anchor's projection onto the tangent plane, `pdist 1e-3` from `p`, is
+   !>   within `capture_distance` of it, while the start itself is not
+   !> - `lambda = 0`: the flat step is the full system, a prediction; captured
+   !> - multiplier of `p`: the full step is the prediction; captured
+   !> - a large positive multiplier: the tangent block `w I - lambda Hess S` is
+   !>   negative, the full step no merit descent; the flat step taken instead lands
+   !>   on `p` as well, but it is a fallback direction: with a one-step budget the
+   !>   column runs out of iterations instead
+   !>
+   !> @param[out] error A fallback step captured, or a prediction did not
+   subroutine test_capture_only_predictions(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Single-atom level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Run of the accepted point, run under test
+      type(projection_batch_type) :: local, batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(drop_polish_parameters_type) :: pcfg
+      type(moist_context_type) :: ctx
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      !> Sphere radius, anchor, start, its jet, tangential curvature, start multipliers
+      real(wp) :: rs, anchor(3), start(3, 1), v(1), g(3, 1), h(6, 1), kappa, lambdas(3)
+      !> Status each start must end with
+      integer :: expected(3)
+      !> Columns and case
+      integer :: icol, k
+      !> Angle of the start off the axis (rad)
+      real(wp), parameter :: theta = 1.0e-3_wp
+
+      call sphere_lsf(lsf, rs, error)
+      if (allocated(error)) return
+      anchor = [rs + 0.05_wp, 0.0_wp, 0.0_wp]
+      call new_context(ctx, verbosity=0, nthreads=1)
+
+      call local%init(4, failed)
+      call local%begin_run(1, anchor, 1)
+      call local%append(anchor, 0.0_wp, icol)
+      call newton_solve_batch(local, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
+      if (.not. allocated(failed)) call polish_batch(ctx, local, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "accepted point: "//failed%message)
+         return
+      end if
+      call check(error, local%status(1), point_accepted, "accepted point verified")
+      if (allocated(error)) return
+
+      ! Off the axis in the xy-plane: z is a tangent direction of the start
+      start(:, 1) = rs*[cos(theta), sin(theta), 0.0_wp]
+      call check(error, norm2(start(:, 1) - local%x(:, 1)) > 1.0e-3_wp, "the start itself is no duplicate")
+      if (allocated(error)) return
+      call lsf%evaluate_batch(start, 2, v, lsf1_r=g, lsf2_rr_packed=h, error=failed)
+      if (allocated(failed)) then
+         call test_failed(error, "start jet: "//failed%message)
+         return
+      end if
+      kappa = h(6, 1)
+      call check(error, kappa > 0.0_wp, "the level set curves along the tangent z")
+      if (allocated(error)) return
+
+      lambdas = [0.0_wp, local%lambda(1), 4.0_wp*default_phi_alpha()/kappa]
+      expected = [point_captured, point_captured, point_failed]
+      ncfg%capture_duplicates = .true.
+      ncfg%max_iter = 1
+      call batch%init(4, failed)
+      do k = 1, 3
+         call batch%clear()
+         call batch%begin_run(1, anchor, 1)
+         call batch%append_copy(local, 1, icol)
+         call batch%append(start(:, 1), lambdas(k), icol)
+         call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
+         if (allocated(failed)) then
+            call test_failed(error, "batched Newton: "//failed%message)
+            return
+         end if
+         call check(error, batch%status(1), point_accepted, "the accepted point stays accepted")
+         if (allocated(error)) return
+         call check(error, batch%status(2), expected(k), "capture only on a Newton prediction")
+         if (allocated(error)) return
+      end do
+   end subroutine test_capture_only_predictions
+
    !> Whether two vectors agree within `tol`, or `10 tol` relative to the reference
    !>
    !> @param[in] a   Value
@@ -1837,11 +2251,62 @@ contains
       integer, intent(in), optional :: candidate_indices(:)
       type(moist_error_type), allocatable, intent(out) :: error
 
+      integer :: k
+
       self%n_points = self%n_points + size(points, 2)
+      if (order >= 2) then
+         do k = 1, size(points, 2)
+            if (all(points(:, k) == self%probe)) self%n_probe_hess = self%n_probe_hess + 1
+         end do
+      end if
       call self%moist_cavity_drop_lsf_svdw_type%evaluate_batch(points, order, lsf0, lsf1_r, &
                                                                lsf2_rr_packed, lsf3_rrr, lsf4_rrrr, &
                                                                candidate_indices, error)
    end subroutine counting_evaluate_batch
+
+   !> Evaluate as the SvdW level set, then replace the value at `poisoned` by NaN
+   !>
+   !> - a non-finite point is answered as `poisoned`: a NaN value and no error
+   !>
+   !> @param[inout] self              Level set with a NaN value at one point
+   !> @param[in]    points            Evaluation points (3, n)
+   !> @param[in]    order             Highest spatial derivative to write
+   !> @param[out]   lsf0              Values (n)
+   !> @param[out]   lsf1_r            Gradients (3, n)
+   !> @param[out]   lsf2_rr_packed    Packed Hessians (6, n)
+   !> @param[out]   lsf3_rrr          Packed third derivatives (10, n)
+   !> @param[out]   lsf4_rrrr         Packed fourth derivatives (15, n)
+   !> @param[in]    candidate_indices Shared atom list
+   !> @param[out]   error             Evaluation failure
+   subroutine nan_value_evaluate_batch(self, points, order, lsf0, lsf1_r, lsf2_rr_packed, &
+                                       lsf3_rrr, lsf4_rrrr, candidate_indices, error)
+      class(nan_value_svdw_type), intent(inout) :: self
+      real(wp), intent(in), contiguous :: points(:, :)
+      integer, intent(in) :: order
+      real(wp), intent(out), contiguous :: lsf0(:)
+      real(wp), intent(out), optional, contiguous :: lsf1_r(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf2_rr_packed(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf3_rrr(:, :)
+      real(wp), intent(out), optional, contiguous :: lsf4_rrrr(:, :)
+      integer, intent(in), optional :: candidate_indices(:)
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      !> Points with every non-finite one moved to `poisoned`
+      real(wp) :: finite_points(3, size(points, 2))
+      integer :: k
+
+      finite_points = points
+      do k = 1, size(points, 2)
+         if (.not. all(abs(points(:, k)) <= huge(1.0_wp))) finite_points(:, k) = self%poisoned
+      end do
+      call self%moist_cavity_drop_lsf_svdw_type%evaluate_batch(finite_points, order, lsf0, lsf1_r, &
+                                                               lsf2_rr_packed, lsf3_rrr, lsf4_rrrr, &
+                                                               candidate_indices, error)
+      if (allocated(error)) return
+      do k = 1, size(points, 2)
+         if (all(finite_points(:, k) == self%poisoned)) lsf0(k) = ieee_value(0.0_wp, ieee_quiet_nan)
+      end do
+   end subroutine nan_value_evaluate_batch
 
    !> The canonical branch order is lexicographic with a tie tolerance
    !>
@@ -1988,7 +2453,7 @@ contains
       call batch%append(anchor%xyz, 0.0_wp, icol)
       call batch%append(anchor%xyz + [1.0e-3_wp, 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call batch%append(point, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "Newton/polish: "//failed%message)
@@ -2088,7 +2553,7 @@ contains
       call batch%begin_run(anchor%index, anchor%xyz, 1)
       call batch%append([-(h - rs), 0.0_wp, 0.0_wp], 0.0_wp, icol)
       call batch%append([h - rs, 0.0_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, ncfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, ncfg, pcfg, default_phi_alpha(), scratch, failed)
       if (.not. allocated(failed)) call polish_batch(ctx, batch, lsf, pcfg, ncfg, default_phi_alpha(), scratch, failed)
       if (allocated(failed)) then
          call test_failed(error, "Newton/polish: "//failed%message)
@@ -2248,1118 +2713,8 @@ contains
    end function default_phi_alpha
 
    !* ================================================================================= *!
-   !*                  Octree surface coverage on an analytic level set                 *!
+   !*                                  Batch and Newton                                 *!
    !* ================================================================================= *!
-
-   !> Probe callback: level set value and exact Lipschitz exclusion radius
-   !>
-   !> @param[in]  x       Evaluation point
-   !> @param[out] lsf0    Level set value
-   !> @param[out] radius  Surface-free radius around `x`
-   !> @param[in]  context Sphere union definition
-   subroutine sphere_union_probe(x, lsf0, radius, context)
-      real(wp), intent(in) :: x(3)
-      real(wp), intent(out) :: lsf0
-      real(wp), intent(out) :: radius
-      class(*), intent(in) :: context
-
-      integer :: i
-      real(wp) :: d
-
-      lsf0 = huge(1.0_wp)
-      radius = 0.0_wp
-
-      select type (context)
-      type is (sphere_union_context)
-         do i = 1, context%nsphere
-            d = norm2(x - context%center(:, i)) - context%radius(i)
-            lsf0 = min(lsf0, d)
-         end do
-      class default
-         error stop "sphere_union_probe: foreign context"
-      end select
-
-      radius = abs(lsf0)
-   end subroutine sphere_union_probe
-
-   !> Batched probe: the scalar sphere-union probe at every point
-   !>
-   !> @param[in]    points  Evaluation points (3, n)
-   !> @param[out]   lsf0    Level set values
-   !> @param[out]   radius  Surface-free radii
-   !> @param[out]   reached Every point is evaluated
-   !> @param[inout] context Sphere union definition
-   !> @param[out]   error   Never set
-   subroutine sphere_union_probe_batch(points, lsf0, radius, reached, context, error)
-      real(wp), intent(in), contiguous :: points(:, :)
-      real(wp), intent(out), contiguous :: lsf0(:)
-      real(wp), intent(out), contiguous :: radius(:)
-      logical, intent(out), contiguous :: reached(:)
-      class(*), intent(inout) :: context
-      type(moist_error_type), allocatable, intent(out) :: error
-
-      integer :: k
-
-      do k = 1, size(points, 2)
-         call sphere_union_probe(points(:, k), lsf0(k), radius(k), context)
-         reached(k) = .true.
-      end do
-   end subroutine sphere_union_probe_batch
-
-   !> Batched probe of the sphere union that certifies no surface-free ball
-   !>
-   !> @param[in]    points  Evaluation points (3, n)
-   !> @param[out]   lsf0    Level set values
-   !> @param[out]   radius  Zero radii
-   !> @param[out]   reached Every point is evaluated
-   !> @param[inout] context Sphere union definition
-   !> @param[out]   error   Never set
-   subroutine sphere_union_probe_blind(points, lsf0, radius, reached, context, error)
-      real(wp), intent(in), contiguous :: points(:, :)
-      real(wp), intent(out), contiguous :: lsf0(:)
-      real(wp), intent(out), contiguous :: radius(:)
-      logical, intent(out), contiguous :: reached(:)
-      class(*), intent(inout) :: context
-      type(moist_error_type), allocatable, intent(out) :: error
-
-      integer :: k
-
-      call sphere_union_probe_batch(points, lsf0, radius, reached, context, error)
-      do k = 1, size(points, 2)
-         radius(k) = 0.0_wp
-      end do
-   end subroutine sphere_union_probe_blind
-
-   !> Two equal spheres straddling the anchor: the closest-point projection is
-   !> two-valued and the search must return both branches
-   subroutine test_octree_two_sphere(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(octree_seeder_type) :: octree
-      type(sphere_union_context) :: ctx
-      type(moist_error_type), allocatable :: solver_error
-      real(wp) :: anchor(3), lsf0, radius
-      integer :: i, n_left, n_right
-
-      ! Spheres of radius 1 centered at x = -2 and x = +2. The anchor sits at
-      ! the origin, equidistant from both surfaces at pdist = 1
-      ctx%nsphere = 2
-      ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%center(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius = [1.0_wp, 1.0_wp]
-      anchor = 0.0_wp
-
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree init: "//solver_error%message)
-         return
-      end if
-
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, &
-                      pdist2_slack=0.5_wp, probe=sphere_union_probe_batch, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree run: "//solver_error%message)
-         return
-      end if
-
-      call check(error, octree%n_points > 0, message="surface coverage produced no seeds")
-      if (allocated(error)) return
-
-      ! Both admissible surface patches have seeds near their surfaces
-      n_left = 0
-      n_right = 0
-      do i = 1, octree%n_points
-         if (octree%points(1, i) < 0.0_wp) n_left = n_left + 1
-         if (octree%points(1, i) > 0.0_wp) n_right = n_right + 1
-         call sphere_union_probe(octree%points(:, i), lsf0, radius, ctx)
-         call check(error, radius <= sqrt(3.0_wp)*octree%seed_size/2.0_wp, &
-                    message="seed lies farther than a leaf circumradius from the surface")
-         if (allocated(error)) return
-      end do
-      call check(error, n_left > 0 .and. n_right > 0, &
-                 message="one of the two surface patches has no seed")
-   end subroutine test_octree_two_sphere
-
-   !> A single sphere admits exactly one branch, and the search tightens its own
-   !> radius down to that branch instead of certifying the ball it started from
-   subroutine test_octree_single_sphere(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(octree_seeder_type) :: octree
-      type(sphere_union_context) :: ctx
-      type(moist_error_type), allocatable :: solver_error
-      real(wp) :: anchor(3), lsf0, radius
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius(1) = 2.0_wp
-      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
-
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree init: "//solver_error%message)
-         return
-      end if
-
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      ! Start from a ball far wider than needed: the anchor is 1 Bohr inside a
-      ! sphere of radius 2, so the only branch sits at pdist = 1
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=5.0_wp, &
-                      pdist2_slack=0.25_wp, probe=sphere_union_probe_batch, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree run: "//solver_error%message)
-         return
-      end if
-
-      call check(error, octree%n_points > 0, message="surface coverage produced no seeds")
-      if (allocated(error)) return
-
-      ! pdist_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
-      ! the run started from: the sign-change bound did the tightening
-      call check(error, octree%pdist_max_final < 1.2_wp, &
-                 message="search failed to tighten its own admissible radius")
-   end subroutine test_octree_single_sphere
-
-   !> The sign-change bound is refined by the probed center's own surface-free
-   !> ball, which must leave it above the truth and should land close to it
-   subroutine test_octree_sign_change_bound(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(octree_seeder_type) :: octree
-      type(sphere_union_context) :: ctx
-      type(moist_error_type), allocatable :: solver_error
-      real(wp) :: anchor(3), lsf0, radius, pdist_true
-
-      !> Squared-distance slack defining the admissible set
-      real(wp), parameter :: slack = 0.25_wp
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius(1) = 1.0_wp
-      anchor = [3.0_wp, 0.0_wp, 0.0_wp]
-
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree init: "//solver_error%message)
-         return
-      end if
-
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      ! The anchor sits 2 Bohr outside the sphere, so pdist_min is exactly 2 and
-      ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
-      ! that bounds the crossing by the probed center alone, without taking off
-      ! that center's surface-free radius, stops around 2.1035 instead
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=5.0_wp, &
-                      pdist2_slack=slack, probe=sphere_union_probe_batch, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree run: "//solver_error%message)
-         return
-      end if
-
-      call check(error, octree%n_points > 0, message="surface coverage produced no seeds")
-      if (allocated(error)) return
-
-      pdist_true = sqrt(4.0_wp + slack)
-
-      ! The epsilon absorbs a last-bit difference in how the bound is summed,
-      ! not a real shortfall: the margin a working run keeps here is ~2e-3
-      call check(error, octree%pdist_max_final >= pdist_true - 1.0e-10_wp, &
-                 message="certified radius fell below the true admissible one")
-      if (allocated(error)) return
-
-      call check(error, octree%pdist_max_final <= 1.01_wp*pdist_true, &
-                 message="sign-change bound is not being refined by the "// &
-                 "exclusion radius")
-   end subroutine test_octree_sign_change_bound
-
-   !> A ball holding no surface is certified empty, with no seeds and without
-   !> spending more than the root box
-   subroutine test_octree_empty_ball(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(octree_seeder_type) :: octree
-      type(sphere_union_context) :: ctx
-      type(moist_error_type), allocatable :: solver_error
-      real(wp) :: anchor(3), lsf0, radius
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius(1) = 10.0_wp
-      anchor = 0.0_wp
-
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree init: "//solver_error%message)
-         return
-      end if
-
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      ! The surface is 10 Bohr away; a ball of radius 1 around the anchor holds
-      ! none of it, and the root box alone proves that
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, &
-                      pdist2_slack=0.25_wp, probe=sphere_union_probe_batch, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, "octree run: "//solver_error%message)
-         return
-      end if
-
-      call check(error, octree%n_points, 0, &
-                 message="empty ball produced seeds")
-      if (allocated(error)) return
-      call check(error, octree%n_boxes_visited, 1, &
-                 message="empty ball took more than the root box to certify")
-   end subroutine test_octree_empty_ball
-
-   !> Cover an analytically known spherical cap throughout its admissible window
-   subroutine test_octree_surface_patch_coverage(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Analytic sphere
-      type(sphere_union_context) :: ctx
-      !> Search error
-      type(moist_error_type), allocatable :: solver_error
-      !> Search anchor and level-set probe
-      real(wp) :: anchor(3), lsf0, radius
-      !> Exact cap samples and distance to the closest seed box
-      real(wp) :: point(3), theta, phi, distance
-      !> Sample and seed indices
-      integer :: itheta, iphi, i
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = 0.0_wp
-      ctx%radius(1) = 1.0_wp
-      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, &
-                      pdist2_slack=0.5_wp, probe=sphere_union_probe_batch, &
-                      context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-
-      ! pdist^2 = 5 - 4*cos(theta); the admissible cap has cos(theta) >= 7/8
-      do itheta = 0, 8
-         theta = acos(0.875_wp)*real(itheta, wp)/8.0_wp
-         do iphi = 0, 23
-            phi = 2.0_wp*pi*real(iphi, wp)/24.0_wp
-            point = [cos(theta), sin(theta)*cos(phi), sin(theta)*sin(phi)]
-            distance = huge(1.0_wp)
-            do i = 1, octree%n_points
-               distance = min(distance, maxval(abs(point - octree%points(:, i))))
-            end do
-            call check(error, distance <= 0.5_wp*octree%seed_size + 1.0e-12_wp, &
-                       message="an admissible surface point has no seed box")
-            if (allocated(error)) return
-         end do
-      end do
-   end subroutine test_octree_surface_patch_coverage
-
-   !> Keep analytic sphere stationary points while discarding transverse boxes
-   subroutine test_octree_region_certificate(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Reused tree
-      type(octree_seeder_type) :: tree
-      !> Unit sphere at the origin
-      type(sphere_union_context) :: context
-      !> Native error
-      type(moist_error_type), allocatable :: native_error
-      !> Distance origin and probe values
-      real(wp) :: anchor(3), value, radius, distance
-      !> Unpruned count and nearest/farthest sphere point indices
-      integer :: unpruned, sign_index, i
-
-      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
-      call sphere_union_probe(anchor, value, radius, context)
-      call tree%init(seed_size=0.1_wp, error=native_error)
-      if (allocated(native_error)) then
-         call test_failed(error, native_error%message)
-         return
-      end if
-      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe_batch, context, native_error)
-      if (allocated(native_error)) then
-         call test_failed(error, native_error%message)
-         return
-      end if
-      unpruned = tree%n_points
-      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe_batch, context, native_error, &
-                    exclude_region=sphere_stationarity_excluded)
-      if (allocated(native_error)) then
-         call test_failed(error, native_error%message)
-         return
-      end if
-      call check(error, tree%n_regions_excluded > 0 .and. 2*tree%n_points < unpruned, &
-                 message="Optional certificate did not discard transverse boxes")
-      if (allocated(error)) return
-      do sign_index = -1, 1, 2
-         distance = huge(1.0_wp)
-         do i = 1, tree%n_points
-            distance = min(distance, maxval(abs(tree%points(:, i) - [real(sign_index, wp), 0.0_wp, 0.0_wp])))
-         end do
-         call check(error, distance <= 0.5_wp*tree%seed_size, &
-                    message="Optional certificate removed an analytic stationary point")
-         if (allocated(error)) return
-      end do
-      call tree%run(anchor, value, 4.0_wp, 20.0_wp, sphere_union_probe_batch, context, native_error)
-      if (allocated(native_error)) then
-         call test_failed(error, native_error%message)
-         return
-      end if
-      call check(error, tree%n_points, unpruned, message="Reference search changed after a pruned run")
-      if (allocated(error)) return
-      call check(error, tree%n_regions_excluded, 0, message="Region exclusion count was not reset")
-   end subroutine test_octree_region_certificate
-
-   !> With no slack, an anchor within the sphere-trace tolerance of the surface
-   !> is its own single seed, and the last search's tallies are cleared
-   !>
-   !> - the trace stops at the anchor, so the starting radius is zero; a
-   !>   nonzero value at the anchor skips the exact-surface shortcut
-   !>
-   !> @param[out] error Missing seed or stale tally
-   subroutine test_octree_trace_on_surface(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Single-atom level set
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(octree_seeder_type) :: octree
-      type(seed_request_type) :: request
-      type(moist_error_type), allocatable :: failed
-      !> Surface radius, probe point and value
-      real(wp) :: rs, p(3, 1), v(1)
-
-      call sphere_lsf(lsf, rs, error)
-      if (allocated(error)) return
-      call octree%init(failed, seed_size=0.2_wp)
-      if (allocated(failed)) then
-         call test_failed(error, "octree init: "//failed%message)
-         return
-      end if
-
-      ! A regular search first, so the tallies hold something
-      p(:, 1) = [rs + 1.0_wp, 0.0_wp, 0.0_wp]
-      call lsf%evaluate_batch(p, 0, v, error=failed)
-      request%anchor = p(:, 1)
-      request%lsf0_anchor = v(1)
-      request%pdist2_slack = 0.25_wp
-      if (.not. allocated(failed)) call octree%seed(lsf, request, failed)
-      if (allocated(failed)) then
-         call test_failed(error, "octree seed: "//failed%message)
-         return
-      end if
-      call check(error, octree%n_boxes_visited > 0, "the regular search probes boxes")
-      if (allocated(error)) return
-
-      p(:, 1) = [rs + 1.0e-9_wp, 0.0_wp, 0.0_wp]
-      call lsf%evaluate_batch(p, 0, v, error=failed)
-      if (allocated(failed)) then
-         call test_failed(error, "anchor value: "//failed%message)
-         return
-      end if
-      call check(error, v(1) /= 0.0_wp .and. abs(v(1)) < 1.0e-7_wp, "anchor next to, not on, the surface")
-      if (allocated(error)) return
-      request%anchor = p(:, 1)
-      request%lsf0_anchor = v(1)
-      request%pdist2_slack = 0.0_wp
-      request%pdist_start = -1.0_wp
-      call octree%seed(lsf, request, failed)
-      if (allocated(failed)) then
-         call test_failed(error, "octree seed: "//failed%message)
-         return
-      end if
-      call check(error, octree%n_points, 1, "one seed")
-      if (allocated(error)) return
-      call check(error, all(octree%points(:, 1) == request%anchor), "the seed is the anchor")
-      if (allocated(error)) return
-      call check(error, octree%n_boxes_visited == 0 .and. octree%pdist_max_final == 0.0_wp, &
-                 "the tallies of the previous search are cleared")
-   end subroutine test_octree_trace_on_surface
-
-   !> A verified point beyond the fallback search radius bounds the search as it is
-   !>
-   !> @param[out] error Missing or misplaced seeds
-   subroutine test_octree_far_point_radius(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      call check_octree_far_surface(error, from_point=.true.)
-   end subroutine test_octree_far_point_radius
-
-   !> A surface beyond the fallback search radius, reached by the trace, bounds the
-   !> search as it is
-   !>
-   !> @param[out] error Missing or misplaced seeds
-   subroutine test_octree_far_traced_radius(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-
-      call check_octree_far_surface(error, from_point=.false.)
-   end subroutine test_octree_far_traced_radius
-
-   !> Seeds at a single sphere whose only surface lies beyond the fallback radius
-   !>
-   !> - the anchor sits `distance` outside the sphere on the x axis, so the
-   !>   analytic point is the radial one and the whole window lies beyond the
-   !>   request's `pdist_fallback`
-   !> - the request carries the radius of that point, `sqrt(distance^2 + slack)`,
-   !>   or no radius, so the seeder traces the surface itself
-   !> - every seed lies near the point and at least one exists
-   !>
-   !> @param[out] error     Missing or misplaced seeds
-   !> @param[in]  from_point Whether the request carries the radius of the point
-   subroutine check_octree_far_surface(error, from_point)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Whether the request carries the radius of the point
-      logical, intent(in) :: from_point
-      !> Single-atom level set
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(octree_seeder_type) :: octree
-      type(seed_request_type) :: request
-      type(moist_error_type), allocatable :: failed
-      !> Surface radius, anchor and its value, analytic point
-      real(wp) :: rs, p(3, 1), v(1), point(3)
-      !> Seed index
-      integer :: i
-      !> Anchor distance from the surface (Bohr)
-      real(wp), parameter :: distance = 18.0_wp
-      !> Squared-distance window (Bohr^2)
-      real(wp), parameter :: slack = 0.25_wp
-      !> Largest seed distance from the point (Bohr), far below `distance`
-      real(wp), parameter :: near = 1.0_wp
-
-      call sphere_lsf(lsf, rs, error)
-      if (allocated(error)) return
-      call octree%init(failed, seed_size=0.2_wp)
-      if (allocated(failed)) then
-         call test_failed(error, "octree init: "//failed%message)
-         return
-      end if
-
-      p(:, 1) = [rs + distance, 0.0_wp, 0.0_wp]
-      point = [rs, 0.0_wp, 0.0_wp]
-      call lsf%evaluate_batch(p, 0, v, error=failed)
-      if (allocated(failed)) then
-         call test_failed(error, "anchor value: "//failed%message)
-         return
-      end if
-      call check(error, .not. lsf%unreached(1), "fixture anchor lies within the screening reach")
-      if (allocated(error)) return
-
-      request%anchor = p(:, 1)
-      request%lsf0_anchor = v(1)
-      request%pdist2_slack = slack
-      request%pdist_start = -1.0_wp
-      if (from_point) request%pdist_start = sqrt(distance**2 + slack)
-      call check(error, distance > request%pdist_fallback, "fixture surface lies beyond the fallback radius")
-      if (allocated(error)) return
-
-      call octree%seed(lsf, request, failed)
-      if (allocated(failed)) then
-         call test_failed(error, "octree seed: "//failed%message)
-         return
-      end if
-      call check(error, octree%n_points > 0, "the far surface produced no seeds")
-      if (allocated(error)) return
-      do i = 1, octree%n_points
-         call check(error, norm2(octree%points(:, i) - point) <= near, "a seed lies far from the point")
-         if (allocated(error)) return
-      end do
-   end subroutine check_octree_far_surface
-
-   !> Seeds sit on sign-change segments between face-neighbour leaf centers
-   !>
-   !> - a segment runs along one lattice axis, so a seed shares two coordinates
-   !>   with the leaf-center lattice; a leaf-center seed shares all three
-   !> - the seed lies between two centers on opposite sides of the surface, so
-   !>   the exact distance of the sphere puts it within one leaf edge of it
-   !>
-   !> @param[out] error Seed off a sign-change segment
-   subroutine test_octree_sign_change_seeds(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Unit sphere at the origin
-      type(sphere_union_context) :: ctx
-      !> Search error
-      type(moist_error_type), allocatable :: solver_error
-      !> Anchor, probe value and radius, leaf edge, lattice coordinate
-      real(wp) :: anchor(3), lsf0, radius, edge, q
-      !> Seed, coordinate and lattice-coordinate counters
-      integer :: i, c, n_lattice
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = 0.0_wp
-      ctx%radius(1) = 1.0_wp
-      anchor = [2.0_wp, 0.0_wp, 0.0_wp]
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%init(seed_size=0.1_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=2.0_wp, pdist2_slack=0.5_wp, &
-                      probe=sphere_union_probe_batch, context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-      call check(error, octree%n_points > 0, message="the sphere cap produced no seeds")
-      if (allocated(error)) return
-
-      edge = 2.0_wp*octree%root_half/real(2**octree%dbg_leaf_depth, wp)
-      do i = 1, octree%n_points
-         call sphere_union_probe(octree%points(:, i), lsf0, radius, ctx)
-         call check(error, abs(lsf0) <= edge, message="a seed lies farther than a leaf edge from the surface")
-         if (allocated(error)) return
-         ! Center offsets are `edge/2 (2 lat + 1 - 2^depth)` for integer `lat`
-         n_lattice = 0
-         do c = 1, 3
-            q = 0.5_wp*((octree%points(c, i) - anchor(c))/(0.5_wp*edge) + real(2**octree%dbg_leaf_depth - 1, wp))
-            if (abs(q - real(nint(q), wp)) < 1.0e-9_wp) n_lattice = n_lattice + 1
-         end do
-         call check(error, n_lattice, 2, message="a seed is not on a segment between face-neighbour centers")
-         if (allocated(error)) return
-      end do
-   end subroutine test_octree_sign_change_seeds
-
-   !> A ball without surface that nothing certifies yields leaves but no seeds
-   !>
-   !> - the blind probe frees no box, so every leaf survives, has no sign change
-   !>   and is refined without finding one
-   !>
-   !> @param[out] error Seed from a sign-free leaf
-   subroutine test_octree_sign_free_region(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Sphere far larger than the search ball
-      type(sphere_union_context) :: ctx
-      !> Search error
-      type(moist_error_type), allocatable :: solver_error
-      !> Anchor and probe
-      real(wp) :: anchor(3), lsf0, radius
-      !> Surviving leaves
-      integer :: n_leaves
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = 0.0_wp
-      ctx%radius(1) = 10.0_wp
-      anchor = 0.0_wp
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%init(seed_size=0.5_wp, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, pdist2_slack=0.25_wp, &
-                      probe=sphere_union_probe_blind, context=ctx, error=solver_error)
-      if (allocated(solver_error)) then
-         call test_failed(error, solver_error%message)
-         return
-      end if
-      n_leaves = octree%dbg_leaves(octree%dbg_leaf_depth)
-      call check(error, n_leaves > 0, message="the uncertified ball kept no leaf")
-      if (allocated(error)) return
-      call check(error, octree%dbg_refined, n_leaves, message="a leaf without evidence was not refined")
-      if (allocated(error)) return
-      call check(error, octree%n_points, 0, message="a sign-free region produced seeds")
-   end subroutine test_octree_sign_free_region
-
-   !> A feature thinner than a leaf, between the leaf centers, is found by the child probes
-   !>
-   !> - a sphere of radius 0.05 around a child center of the leaf at
-   !>   (0.25, 0.25, 0.25), edge 0.5: no leaf center is inside it, so no leaf
-   !>   has evidence, and the crossing on the radial parent-child segment is
-   !>   exact for the distance function
-   !> - with the refinement disabled the search finds nothing
-   !>
-   !> @param[out] error Missed or spurious feature
-   subroutine test_octree_refinement_thin_feature(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Small sphere off every leaf center
-      type(sphere_union_context) :: ctx
-      !> Search error
-      type(moist_error_type), allocatable :: solver_error
-      !> Anchor and probe
-      real(wp) :: anchor(3), lsf0, radius, closest
-      !> Seed index and refinement setting
-      integer :: i, levels
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = [0.375_wp, 0.375_wp, 0.375_wp]
-      ctx%radius(1) = 0.05_wp
-      anchor = 0.0_wp
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      do levels = 1, 0, -1
-         call octree%init(seed_size=0.5_wp, refine_levels=levels, error=solver_error)
-         if (allocated(solver_error)) then
-            call test_failed(error, solver_error%message)
-            return
-         end if
-         call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=1.0_wp, pdist2_slack=0.25_wp, &
-                         probe=sphere_union_probe_batch, context=ctx, error=solver_error)
-         if (allocated(solver_error)) then
-            call test_failed(error, solver_error%message)
-            return
-         end if
-         call check(error, octree%dbg_evidence, 0, message="a leaf center resolves the thin feature")
-         if (allocated(error)) return
-         if (levels == 0) then
-            call check(error, octree%n_points, 0, message="the feature was found without refinement")
-            return
-         end if
-         call check(error, octree%n_points, 1, message="refinement did not seed the thin feature once")
-         if (allocated(error)) return
-         closest = huge(1.0_wp)
-         do i = 1, octree%n_points
-            call sphere_union_probe(octree%points(:, i), lsf0, radius, ctx)
-            closest = min(closest, abs(lsf0))
-         end do
-         call check(error, closest < 1.0e-12_wp, message="the child seed is off the feature surface")
-         if (allocated(error)) return
-      end do
-   end subroutine test_octree_refinement_thin_feature
-
-   !> Exact stationary-axis exclusion for the analytic sphere fixture
-   !>
-   !> @param[in] center     Box midpoint (3)
-   !> @param[in] half_width Cube half-width
-   !> @param[in] context    Single sphere centered on the anchor's x-axis
-   function sphere_stationarity_excluded(center, half_width, context) result(excluded)
-      !> Box midpoint
-      real(wp), intent(in) :: center(3)
-      !> Cube half-width
-      real(wp), intent(in) :: half_width
-      !> Analytic sphere fixture
-      class(*), intent(in) :: context
-      !> Box cannot intersect the stationary x-axis
-      logical :: excluded
-
-      excluded = .false.
-      select type (context)
-      type is (sphere_union_context)
-         excluded = any(abs(center(2:3) - context%center(2:3, 1)) > half_width)
-      end select
-   end function sphere_stationarity_excluded
-
-   !> Fail an expected-failure test only on the targeted refusal
-   !>
-   !> - test-drive inverts `should_fail` tests, so any other outcome, including
-   !>   a different error, reports the test as failed
-   !>
-   !> @param[out] error    Test failure, set only on the expected error
-   !> @param[in]  err      Library error, possibly unallocated
-   !> @param[in]  expected The exact refusal text
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(moist_error_type), allocatable, intent(in) :: err
-      !> The exact refusal text
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (err%message == expected) call test_failed(error, err%message)
-   end subroutine expect_error
-
-   !> Run the octree on a 2 Bohr sphere from an anchor 1 Bohr off its center
-   !>
-   !> @param[inout] octree       Initialized seeder
-   !> @param[in]    pdist_max    Starting radius
-   !> @param[in]    pdist2_slack Squared-distance window
-   !> @param[out]   failed       Native refusal
-   subroutine run_sphere_octree(octree, pdist_max, pdist2_slack, failed)
-      !> Initialized seeder
-      type(octree_seeder_type), intent(inout) :: octree
-      !> Starting radius and window
-      real(wp), intent(in) :: pdist_max, pdist2_slack
-      !> Native refusal
-      type(moist_error_type), allocatable, intent(out) :: failed
-      type(sphere_union_context) :: ctx
-      real(wp) :: anchor(3), lsf0, radius
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
-      ctx%radius(1) = 2.0_wp
-      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%run(anchor=anchor, lsf0_anchor=lsf0, pdist_max=pdist_max, pdist2_slack=pdist2_slack, &
-                      probe=sphere_union_probe_batch, context=ctx, error=failed)
-   end subroutine run_sphere_octree
-
-   !> A nonpositive seed size is refused
-   subroutine test_bad_octree_seed_size(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=0.0_wp)
-      call expect_error(error, failed, "Octree branch search: seed_size must be positive")
-   end subroutine test_bad_octree_seed_size
-
-   !> A nonpositive box or survivor budget is refused
-   subroutine test_bad_octree_budgets(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, max_boxes=0)
-      call expect_error(error, failed, "Octree branch search: box and survivor budgets must be positive")
-   end subroutine test_bad_octree_budgets
-
-   !> A depth limit outside the addressable lattice is refused
-   subroutine test_bad_octree_max_depth(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, max_depth=0)
-      call expect_error(error, failed, "Octree branch search: max_depth out of range")
-   end subroutine test_bad_octree_max_depth
-
-   !> A nonpositive starting radius is refused
-   subroutine test_bad_octree_pdist_max(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=0.1_wp)
-      if (allocated(failed)) return
-      call run_sphere_octree(octree, 0.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: pdist_max must be positive")
-   end subroutine test_bad_octree_pdist_max
-
-   !> A negative squared-distance slack would poison the radius cap with a NaN,
-   !> after which every comparison against it is false and nothing is bounded
-   subroutine test_bad_octree_negative_slack(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=0.1_wp)
-      if (allocated(failed)) return
-      call run_sphere_octree(octree, 5.0_wp, -0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: pdist2_slack must not be negative")
-   end subroutine test_bad_octree_negative_slack
-
-   !> A depth cap that stops short of the requested seed size must be reported
-   !>
-   !> - continuing with coarser leaves would merge minima the configured
-   !>   resolution separates while still claiming a completed enumeration; a
-   !>   5 Bohr ball needs depth 7 to reach 0.1 Bohr leaves, three is not enough
-   subroutine test_bad_octree_depth_cap(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=0.1_wp, max_depth=3)
-      if (allocated(failed)) return
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: max_depth (3) bottoms out at a leaf edge "// &
-                        "of 1.2500 Bohr, coarser than the requested seed_size of .1000 Bohr. Raise "// &
-                        "max_depth to at least 7 or loosen seed_size.")
-   end subroutine test_bad_octree_depth_cap
-
-   !> More surviving leaves than the survivor budget is refused
-   subroutine test_bad_octree_survivors(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=4.0_wp, max_survivors=1)
-      if (allocated(failed)) return
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: survivor budget exhausted; "// &
-                        "seed_size is too small for the admissible radius.")
-   end subroutine test_bad_octree_survivors
-
-   !> A next frontier beyond the box budget is refused while it is generated
-   !>
-   !> - the root contains the anchor and splits into eight children that all
-   !>   pass the cap, nine boxes against a budget of eight
-   subroutine test_bad_octree_box_budget(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, seed_size=0.1_wp, max_boxes=8)
-      if (allocated(failed)) return
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: box budget exhausted before the "// &
-                        "search ball was certified. Either the level set supplies no exclusion "// &
-                        "radius (pruning nothing), or seed_size is too small for the admissible radius.")
-   end subroutine test_bad_octree_box_budget
-
-   !> Seeding with an uninitialized octree is refused
-   subroutine test_bad_octree_seed_before_init(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(seed_request_type) :: request
-      type(moist_error_type), allocatable :: failed
-
-      request%anchor = [1.0_wp, 0.0_wp, 0.0_wp]
-      call octree%seed(lsf, request, failed)
-      call expect_error(error, failed, "Octree branch search: run before init")
-   end subroutine test_bad_octree_seed_before_init
-
-   !> Running an uninitialized octree is refused
-   subroutine test_bad_octree_run_before_init(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      call expect_error(error, failed, "Octree branch search: run before init")
-   end subroutine test_bad_octree_run_before_init
-
-   !> A negative refinement depth is refused
-   subroutine test_bad_octree_refine_levels(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(octree_seeder_type) :: octree
-      type(moist_error_type), allocatable :: failed
-
-      call octree%init(failed, refine_levels=-1)
-      call expect_error(error, failed, "Octree branch search: refine_levels must not be negative")
-   end subroutine test_bad_octree_refine_levels
-
-   !> Face-neighbour probes are not charged to the box budget
-   !>
-   !> - the budget is the tree descent of the same search, so every depth fits
-   !>   exactly and the face neighbours lie beyond it
-   !> - the seeds equal those of the unbudgeted search
-   !>
-   !> @param[out] error Refusal, or seeds differing from the unbudgeted search
-   subroutine test_octree_neighbours_outside_budget(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Search error
-      type(moist_error_type), allocatable :: failed
-      !> Seeds of the unbudgeted search
-      real(wp), allocatable :: ref_points(:, :)
-      !> Tree-descent boxes of the unbudgeted search
-      integer :: descent
-
-      call octree%init(failed, seed_size=0.5_wp)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call check(error, octree%dbg_neighbours > 0, "the fixture probes no face neighbour")
-      if (allocated(error)) return
-      call check(error, octree%n_boxes_visited, sum(octree%dbg_probed), &
-                 message="the budgeted count is not the tree descent")
-      if (allocated(error)) return
-      descent = octree%n_boxes_visited
-      ref_points = octree%points(:, 1:octree%n_points)
-
-      call octree%init(failed, seed_size=0.5_wp, max_boxes=descent)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call run_sphere_octree(octree, 5.0_wp, 0.25_wp, failed)
-      if (allocated(failed)) then
-         call test_failed(error, "budget of the tree descent: "//failed%message)
-         return
-      end if
-      call check(error, octree%n_points, size(ref_points, 2), &
-                 message="the budgeted search emits a different seed count")
-      if (allocated(error)) return
-      call check(error, all(octree%points(:, 1:octree%n_points) == ref_points), &
-                 "the budgeted search emits different seeds")
-   end subroutine test_octree_neighbours_outside_budget
-
-   !> Refinement probes are not charged to the box budget
-   !>
-   !> - a blind search of a sign-free ball refines every leaf; the budget is
-   !>   its tree descent, so the face neighbours and children lie beyond it
-   !> - the seeds and the refinement equal those of the unbudgeted search
-   !>
-   !> @param[out] error Refusal, or a result differing from the unbudgeted search
-   subroutine test_octree_refinement_outside_budget(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Search under test
-      type(octree_seeder_type) :: octree
-      !> Sphere far larger than the search ball
-      type(sphere_union_context) :: ctx
-      !> Search error
-      type(moist_error_type), allocatable :: failed
-      !> Anchor and probe
-      real(wp) :: anchor(3), lsf0, radius
-      !> Seeds of the unbudgeted search
-      real(wp), allocatable :: ref_points(:, :)
-      !> Tree-descent boxes and children probed by the unbudgeted search
-      integer :: descent, children
-
-      ctx%nsphere = 1
-      ctx%center(:, 1) = 0.0_wp
-      ctx%radius(1) = 10.0_wp
-      anchor = 0.0_wp
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-      call octree%init(failed, seed_size=0.5_wp)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call octree%run(anchor, lsf0, 1.0_wp, 0.25_wp, sphere_union_probe_blind, ctx, failed)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call check(error, octree%dbg_children > 0, "the fixture probes no refinement child")
-      if (allocated(error)) return
-      descent = octree%n_boxes_visited
-      children = octree%dbg_children
-      ref_points = octree%points(:, 1:octree%n_points)
-
-      call octree%init(failed, seed_size=0.5_wp, max_boxes=descent)
-      if (allocated(failed)) then
-         call test_failed(error, failed%message)
-         return
-      end if
-      call octree%run(anchor, lsf0, 1.0_wp, 0.25_wp, sphere_union_probe_blind, ctx, failed)
-      if (allocated(failed)) then
-         call test_failed(error, "budget of the tree descent: "//failed%message)
-         return
-      end if
-      call check(error, octree%dbg_children, children, &
-                 message="the budgeted search probes a different number of children")
-      if (allocated(error)) return
-      call check(error, octree%n_points, size(ref_points, 2), &
-                 message="the budgeted search emits a different seed count")
-      if (allocated(error)) return
-      call check(error, all(octree%points(:, 1:octree%n_points) == ref_points), &
-                 "the budgeted search emits different seeds")
-   end subroutine test_octree_refinement_outside_budget
-
-   !> The worker refines evidence-free leaves in the fine octree only
-   !>
-   !> - the octree each level's worker builds (the fallback at level 1, the
-   !>   seeder at levels 3, 4) runs a blind search of a sign-free ball, so every
-   !>   surviving leaf lacks evidence
-   !> - the coarse octree of levels 1, 3 keeps such leaves but probes no child;
-   !>   the fine octree of level 4 probes their children
-   !>
-   !> @param[out] error Refinement differing from the level's rule
-   subroutine test_worker_octree_refinement(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      !> Projection settings
-      type(moist_cavity_drop_parameters_type) :: param
-      !> One-sphere level set the worker is built on
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      !> Worker under test
-      type(projection_worker_type) :: worker
-      !> Molecular geometry
-      type(structure_type) :: mol
-      !> Sphere far larger than the search ball
-      type(sphere_union_context) :: ctx
-      !> Native error
-      type(moist_error_type), allocatable :: native_error
-      !> Atom position, anchor and probe
-      real(wp) :: positions(3, 1), anchor(3), lsf0, radius
-      !> Projection level and its index in `levels`
-      integer :: il, level
-      !> Every projection level
-      integer, parameter :: levels(3) = [1, 3, 4]
-      !> Level label for the messages
-      character(len=8) :: label
-
-      positions = 0.0_wp
-      call new(mol, [1], positions)
-      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type())
-      call lsf%update(mol, [1.0_wp])
-      ctx%nsphere = 1
-      ctx%center(:, 1) = 0.0_wp
-      ctx%radius(1) = 10.0_wp
-      anchor = 0.0_wp
-      call sphere_union_probe(anchor, lsf0, radius, ctx)
-
-      do il = 1, size(levels)
-         level = levels(il)
-         write (label, "(a,i0)") "level ", level
-         param%proj_level = level
-         call param%compute_derived(native_error)
-         if (.not. allocated(native_error)) call worker%init(param, lsf, positions, native_error)
-         if (allocated(native_error)) then
-            call test_failed(error, trim(label)//": "//native_error%message)
-            return
-         end if
-         if (level == 1) then
-            call check(error, allocated(worker%fallback), message=trim(label)//": no fallback octree")
-            if (allocated(error)) return
-            call run_blind(worker%fallback)
-         else
-            call check(error, allocated(worker%seeder), message=trim(label)//": no seeder")
-            if (allocated(error)) return
-            call run_blind(worker%seeder)
-         end if
-         if (allocated(error)) return
-      end do
-
-   contains
-
-      !> Run the blind search with `seeder` and check its refinement
-      !>
-      !> @param[inout] seeder Octree built by the worker
-      subroutine run_blind(seeder)
-         class(projection_seeder_type), intent(inout) :: seeder
-
-         select type (seeder)
-         type is (octree_seeder_type)
-            call seeder%run(anchor, lsf0, 1.0_wp, 0.25_wp, sphere_union_probe_blind, ctx, native_error)
-            if (allocated(native_error)) then
-               call test_failed(error, trim(label)//": "//native_error%message)
-               return
-            end if
-            call check(error, seeder%dbg_refined > 0, &
-                       message=trim(label)//": the fixture keeps no leaf without evidence")
-            if (allocated(error)) return
-            if (level <= 3) then
-               call check(error, seeder%dbg_children, 0, &
-                          message=trim(label)//": the coarse octree probed refinement children")
-            else
-               call check(error, seeder%dbg_children > 0, &
-                          message=trim(label)//": the fine octree probed no refinement child")
-            end if
-         class default
-            call test_failed(error, trim(label)//": the worker's search is not an octree")
-         end select
-      end subroutine run_blind
-
-   end subroutine test_worker_octree_refinement
 
    !> A batch with a nonpositive flush target is refused
    subroutine test_bad_batch_target_size(error)
@@ -3377,20 +2732,1128 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(projection_batch_type) :: batch
       type(drop_solve_parameters_type) :: cfg
+      type(drop_polish_parameters_type) :: pcfg
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
       real(wp) :: rs, anchor(3)
       integer :: icol
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
 
-      call sphere_lsf(lsf, rs, error)
-      if (allocated(error)) return
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
       anchor = [80.0_wp, 0.0_wp, 0.0_wp]
       call batch%init(8, failed)
       call batch%begin_run(7, anchor, 1)
       call batch%append(anchor, 0.0_wp, icol)
-      call newton_solve_batch(batch, lsf, cfg, default_phi_alpha(), scratch, failed)
+      call newton_solve_batch(batch, lsf, cfg, pcfg, default_phi_alpha(), scratch, failed)
       call expect_error(error, failed, &
                         "Projection Newton: anchor 7 lies beyond the level set reach, no atom screens it")
    end subroutine test_bad_newton_unreached_anchor
+
+   !* ================================================================================= *!
+   !*                              Surface mesh seeder                                  *!
+   !* ================================================================================= *!
+
+   !> Surface mesh build input of a cluster cavity: every anchor seeded
+   !>
+   !> @param[in]  cavity   Anchor-phase cavity
+   !> @param[in]  nthreads Build threads
+   !> @param[out] geometry Build input
+   subroutine cluster_build_input(cavity, nthreads, geometry)
+      !> Anchor-phase cavity
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Build threads
+      integer, intent(in) :: nthreads
+      !> Build input
+      type(seed_build_type), intent(out) :: geometry
+
+      geometry%centers = cavity%mol%xyz
+      geometry%radii = cavity%radii
+      geometry%anchors = cavity%anchor%xyz(:, 1:cavity%anchor%ngrid)
+      geometry%reach = cavity%param%branch%reach_off
+      geometry%nthreads = nthreads
+   end subroutine cluster_build_input
+
+   !> Built level-4 surface mesh seeder of a cluster cavity
+   !>
+   !> @param[in]  cavity   Anchor-phase cavity
+   !> @param[in]  nthreads Build threads
+   !> @param[out] seeder   Built seeder
+   !> @param[out] error    Native failure
+   subroutine build_cluster_rmesh(cavity, nthreads, seeder, error)
+      !> Anchor-phase cavity
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Build threads
+      integer, intent(in) :: nthreads
+      !> Built seeder
+      type(projection_seeder_type), intent(out) :: seeder
+      !> Native failure
+      type(moist_error_type), allocatable, intent(out) :: error
+      !> Level-4 settings
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Build input
+      type(seed_build_type) :: geometry
+
+      param = cavity%param
+      param%proj_level = 4
+      call param%compute_derived(error)
+      if (allocated(error)) return
+      call init_mesh(seeder, error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels)
+      if (allocated(error)) return
+      call cluster_build_input(cavity, nthreads, geometry)
+      call seeder%build(cavity%lsf_model, geometry, error)
+   end subroutine build_cluster_rmesh
+
+   !> The built mesh does not depend on the build's thread count
+   !>
+   !> @param[out] error Meshes differ
+   subroutine test_rmesh_thread_independent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Shared serial context
+      type(moist_context_type), target :: ctx
+      !> Anchor-phase cavity
+      type(cavity_type_drop), allocatable :: cavity
+      !> Fixture geometry
+      type(structure_type) :: mol
+      !> Reference level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Serial and threaded builds
+      type(projection_seeder_type) :: serial, threaded
+      !> Native failure
+      type(moist_error_type), allocatable :: native_error
+
+      call new(mol, [6, 6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
+                                        5.2_wp, 0.3_wp, 0.0_wp, &
+                                        2.4_wp, 4.6_wp, 0.7_wp], [3, 3]))
+      call new_context(ctx, verbosity=0, nthreads=1)
+      allocate (cavity)
+      call build_cluster_anchors(cavity, ctx, mol, 302, 0.8_wp, lsf, native_error)
+      if (.not. allocated(native_error)) call build_cluster_rmesh(cavity, 1, serial, native_error)
+      if (.not. allocated(native_error)) call build_cluster_rmesh(cavity, 3, threaded, native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+      call check(error, serial%nsample, threaded%nsample, message="Sample counts differ")
+      if (allocated(error)) return
+      call check(error, serial%nsample > 0, message="The mesh holds no sample")
+      if (allocated(error)) return
+      call check(error, all(serial%y == threaded%y) .and. all(serial%normal == threaded%normal) &
+                 .and. all(serial%form == threaded%form), message="Samples differ between thread counts")
+      if (allocated(error)) return
+      call check(error, serial%cover == threaded%cover, message="Covering radii differ")
+      deallocate (cavity)
+      call ctx%delete()
+   end subroutine test_rmesh_thread_independent
+
+   !> The level-3 seed filters cut the seeds and keep every row of the unfiltered search
+   !>
+   !> - two meshes of the level-3 spacing: the level-3 one with its filters, and
+   !>   one without, as level 4 keeps every sample
+   !>
+   !> @param[out] error Filter did not reduce seeds or lost a row
+   subroutine test_rmesh_level_filters(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Shared serial context
+      type(moist_context_type), target :: ctx
+      !> Anchor-phase cavity
+      type(cavity_type_drop), allocatable :: cavity
+      !> Fixture geometry
+      type(structure_type) :: mol
+      !> Reference level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Level-3 meshes with and without the filters, and the workers for level 3 and 4
+      type(projection_seeder_type) :: seeder, unfiltered
+      type(seed_build_type) :: geometry
+      type(projection_worker_type) :: w3, w4
+      type(moist_cavity_drop_parameters_type) :: param
+      type(moist_error_type), allocatable :: native_error
+      integer, allocatable :: nrows(:), slots(:)
+      logical, allocatable :: lost(:)
+      integer :: i, n, ia, ib, matches
+
+      call new(mol, [6, 6, 6, 6, 6], reshape([ &
+                                             0.00_wp, 4.21_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, 4.22_wp, &
+                                             0.00_wp, -4.18_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, -4.15_wp, &
+                                             0.02_wp, 0.10_wp, -0.20_wp], [3, 5])*aatoau)
+      call new_context(ctx, verbosity=0, nthreads=1)
+      allocate (cavity)
+      call build_cluster_anchors(cavity, ctx, mol, 302, 1.0_wp, lsf, native_error)
+      if (.not. allocated(native_error)) then
+         param = cavity%param
+         param%proj_level = 3
+         call param%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         call init_mesh(seeder, native_error, sample_size=param%seed%seed_size, refine_levels=param%seed%refine_levels, &
+                          filter_cone=param%seed%filter_cone, filter_grazing=param%seed%filter_grazing, &
+                          filter_back_facing=param%seed%filter_back_facing, filter_focal=param%seed%filter_focal, &
+                          cone_scale=param%seed%cone_scale)
+      end if
+      if (.not. allocated(native_error)) then
+         call init_mesh(unfiltered, native_error, sample_size=param%seed%seed_size, &
+                              refine_levels=param%seed%refine_levels)
+      end if
+      if (.not. allocated(native_error)) then
+         call cluster_build_input(cavity, 1, geometry)
+         call seeder%build(cavity%lsf_model, geometry, native_error)
+      end if
+      if (.not. allocated(native_error)) call unfiltered%build(cavity%lsf_model, geometry, native_error)
+      if (.not. allocated(native_error)) call w3%init(param, cavity%lsf_model, cavity%mol%xyz, native_error)
+      if (.not. allocated(native_error)) then
+         param%proj_level = 4
+         call param%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) call w4%init(param, cavity%lsf_model, cavity%mol%xyz, native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+
+      w3%finalize%wleb_cut = -1.0_wp
+      w4%finalize%wleb_cut = -1.0_wp
+      n = cavity%anchor%ngrid
+      allocate (nrows(n), lost(n))
+      slots = [(i, i=1, n)]
+      call w3%process_chunk(cavity%ctx, slots, cavity%anchor%xyz(:, 1:n), cavity%anchor%owner(1:n), &
+                            cavity%anchor%wleb0(1:n), cavity%anchor%f0(1:n), nrows, lost, native_error, &
+                            seeder=seeder)
+      if (.not. allocated(native_error)) then
+         call w4%process_chunk(cavity%ctx, slots, cavity%anchor%xyz(:, 1:n), cavity%anchor%owner(1:n), &
+                               cavity%anchor%wleb0(1:n), cavity%anchor%f0(1:n), nrows, lost, native_error, &
+                               seeder=unfiltered)
+      end if
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+
+      call check(error, w3%n_seeds > 0 .and. 2*w3%n_seeds < w4%n_seeds, &
+                 message="The filters did not cut level-3 seeds by >50% relative to the unfiltered search")
+      if (allocated(error)) return
+      call check_projection_geometry(cavity, lsf, w3%rows, error)
+      if (allocated(error)) return
+      do ia = 1, w4%rows%n
+         if (.not. relevant_row(cavity, w4%rows, ia)) cycle
+         matches = 0
+         do ib = 1, w3%rows%n
+            if (w3%rows%anchor(ib) /= w4%rows%anchor(ia)) cycle
+            if (.not. relevant_row(cavity, w3%rows, ib)) cycle
+            if (norm2(w4%rows%xyz(:, ia) - w3%rows%xyz(:, ib)) <= 1.0e-6_wp) matches = matches + 1
+         end do
+         call check(error, matches, 1, message="The filters dropped a relevant row of the unfiltered search")
+         if (allocated(error)) return
+      end do
+      deallocate (cavity)
+      call ctx%delete()
+   end subroutine test_rmesh_level_filters
+
+   !> Every anchor of a cluster cavity through one worker, the raw rows kept
+   !>
+   !> - the worker builds its own seeder for the chunk unless `seeder` is given
+   !>
+   !> @param[in]    cavity Anchor-phase cavity
+   !> @param[in]    param  Projection settings, derived
+   !> @param[inout] worker Worker, set up here
+   !> @param[out]   nrows  Rows per anchor
+   !> @param[out]   error  Native failure
+   !> @param[in]    seeder Built seeder to search with
+   subroutine project_cluster_with(cavity, param, worker, nrows, error, seeder)
+      !> Anchor-phase cavity
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Projection settings
+      type(moist_cavity_drop_parameters_type), intent(in) :: param
+      !> Worker
+      type(projection_worker_type), intent(inout) :: worker
+      !> Rows per anchor
+      integer, allocatable, intent(out) :: nrows(:)
+      !> Native failure
+      type(moist_error_type), allocatable, intent(out) :: error
+      !> Built seeder
+      type(projection_seeder_type), intent(in), optional :: seeder
+      logical, allocatable :: lost(:)
+      integer :: n, k
+
+      n = cavity%anchor%ngrid
+      allocate (nrows(n), lost(n))
+      call worker%init(param, cavity%lsf_model, cavity%mol%xyz, error)
+      if (allocated(error)) return
+      worker%finalize%wleb_cut = -1.0_wp
+      call worker%process_chunk(cavity%ctx, [(k, k=1, n)], cavity%anchor%xyz(:, 1:n), cavity%anchor%owner(1:n), &
+                                cavity%anchor%wleb0(1:n), cavity%anchor%f0(1:n), nrows, lost, error, seeder=seeder)
+   end subroutine project_cluster_with
+
+   !> Whether every relevant row of anchor `aid` in `a` has exactly one relevant
+   !> row of that anchor in `b` within 1e-6 Bohr
+   !>
+   !> @param[in] cavity Settings and anchors
+   !> @param[in] a      Rows to match
+   !> @param[in] b      Candidate partners
+   !> @param[in] aid    Anchor
+   function rows_covered(cavity, a, b, aid) result(covered)
+      !> Settings and anchors
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Rows to match and candidate partners
+      type(projection_rows_type), intent(in) :: a, b
+      !> Anchor
+      integer, intent(in) :: aid
+      !> Every relevant row matched once
+      logical :: covered
+      integer :: ia, ib, matches
+
+      covered = .true.
+      do ia = 1, a%n
+         if (a%anchor(ia) /= aid) cycle
+         if (.not. relevant_row(cavity, a, ia)) cycle
+         matches = 0
+         do ib = 1, b%n
+            if (b%anchor(ib) /= aid) cycle
+            if (.not. relevant_row(cavity, b, ib)) cycle
+            if (norm2(a%xyz(:, ia) - b%xyz(:, ib)) <= 1.0e-6_wp) matches = matches + 1
+         end do
+         covered = covered .and. matches == 1
+      end do
+   end function rows_covered
+
+   !> Cross cluster of [[test_rmesh_level_filters]] with a soft level set, anchors at 302 points per atom
+   !>
+   !> @param[out]   cavity Anchor-phase cavity
+   !> @param[inout] ctx    Borrowed context
+   !> @param[out]   lsf    Level set of the geometry
+   !> @param[out]   error  Native failure
+   subroutine soft_cross_cluster(cavity, ctx, lsf, error)
+      !> Anchor-phase cavity
+      type(cavity_type_drop), intent(out) :: cavity
+      !> Borrowed context
+      type(moist_context_type), intent(inout), target :: ctx
+      !> Level set of the geometry
+      type(moist_cavity_drop_lsf_svdw_type), intent(out) :: lsf
+      !> Native failure
+      type(moist_error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+
+      call new(mol, [6, 6, 6, 6, 6], reshape([ &
+                                             0.00_wp, 4.21_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, 4.22_wp, &
+                                             0.00_wp, -4.18_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, -4.15_wp, &
+                                             0.02_wp, 0.10_wp, -0.20_wp], [3, 5])*aatoau)
+      call build_cluster_anchors(cavity, ctx, mol, 302, 5.5_wp, lsf, error)
+   end subroutine soft_cross_cluster
+
+   !> Level 2 finalizes a close fully open local point and otherwise searches as level 3
+   !>
+   !> - the cross cluster at level 2, and at level 3 with level 2's mesh spacing
+   !>   and seed filters, so only the routing differs; each worker builds its own
+   !>   mesh from its chunk's search balls
+   !> - level 3 searches the anchors level 2 searches and those level 2
+   !>   finalizes from a fully open local point within 0.5 Bohr
+   !> - an anchor whose nearest point lies beyond 0.5 Bohr keeps the same
+   !>   relevant rows at both levels; a nearer one keeps a subset at level 2
+   !>
+   !> @param[out] error Level 2 routed or searched differently
+   subroutine test_level2_selective_rmesh(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Shared serial context
+      type(moist_context_type), target :: ctx
+      !> Anchor-phase cavity
+      type(cavity_type_drop), allocatable :: cavity
+      !> Reference level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Level-2 and level-3 workers and their settings
+      type(projection_worker_type) :: w2, w3
+      type(moist_cavity_drop_parameters_type) :: param2, param3
+      type(moist_error_type), allocatable :: native_error
+      integer, allocatable :: nrows2(:), nrows3(:), first(:), last(:)
+      integer :: aid
+      logical :: same
+      character(len=64) :: message
+      !> Level 2's distance below which a fully open local point is finalized (Bohr)
+      real(wp), parameter :: close_pdist = 0.5_wp
+
+      call new_context(ctx, verbosity=0, nthreads=1)
+      allocate (cavity)
+      call soft_cross_cluster(cavity, ctx, lsf, native_error)
+      if (.not. allocated(native_error)) then
+         param2 = cavity%param
+         param2%proj_level = 2
+         call param2%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         param3 = cavity%param
+         param3%proj_level = 3
+         call param3%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         param3%seed%seed_size = param2%seed%seed_size
+         param3%seed%cone_scale = param2%seed%cone_scale
+         param3%seed%filter_grazing = param2%seed%filter_grazing
+         param3%seed%filter_back_facing = param2%seed%filter_back_facing
+         param3%seed%filter_focal = param2%seed%filter_focal
+         call project_cluster_with(cavity, param2, w2, nrows2, native_error)
+      end if
+      if (.not. allocated(native_error)) call project_cluster_with(cavity, param3, w3, nrows3, native_error)
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+
+      call check(error, w2%n_window_skipped > 0 .and. w3%n_window_skipped == 0, &
+                 message="Level 2 finalized no close fully open local point")
+      if (allocated(error)) return
+      call check(error, w3%n_seeded, w2%n_seeded + w2%n_window_skipped, &
+                 message="Level 3 searched other anchors than level 2 and its close ones")
+      if (allocated(error)) return
+      call check(error, count(nrows2 > 1) > 0, message="Level 2 found no branched anchors on cross cluster")
+      if (allocated(error)) return
+      call check_projection_geometry(cavity, lsf, w2%rows, error)
+      if (allocated(error)) return
+
+      call row_bounds(w3%rows, cavity%anchor%ngrid, first, last)
+      do aid = 1, cavity%anchor%ngrid
+         same = rows_covered(cavity, w2%rows, w3%rows, aid)
+         if (first(aid) > 0) then
+            if (minval(w3%rows%pdist(first(aid):last(aid))) > close_pdist) then
+               same = same .and. rows_covered(cavity, w3%rows, w2%rows, aid)
+            end if
+         end if
+         write (message, "(a,i0)") "Level 2 and level 3 rows differ, anchor ", cavity%anchor%id(aid)
+         call check(error, same, message=trim(message))
+         if (allocated(error)) return
+      end do
+      deallocate (cavity)
+      call ctx%delete()
+   end subroutine test_level2_selective_rmesh
+
+   !> Level 2's seed filters cut seeds and keep every relevant row
+   !>
+   !> - the cross cluster of [[test_level2_selective_rmesh]] at level 2, at
+   !>   level 2 without its back-facing or its grazing filter, with the focal
+   !>   filter alone, without any filter, with a wider tangent cone (2.0), and
+   !>   with that wider cone alone
+   !> - each filter of level 2 leaves fewer seeds to solve; the focal filter is
+   !>   compared without the others, which drop its samples first here
+   !> - level 2 keeps the relevant rows of the run with the wider cone alone
+   !>
+   !> @param[out] error A filter cut no seed, or a relevant row was lost
+   subroutine test_level2_seed_filters(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Shared serial context
+      type(moist_context_type), target :: ctx
+      !> Anchor-phase cavity
+      type(cavity_type_drop), allocatable :: cavity
+      !> Reference level set
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      !> Workers of level 2, without its back-facing or grazing filter, with the
+      !> focal filter alone, without any filter, with the wider cone, and with
+      !> the wider cone alone
+      type(projection_worker_type) :: w2, w_back, w_graze, w_focal, w_none, w_cone, w_cone_only
+      type(moist_cavity_drop_parameters_type) :: param, variant
+      type(moist_error_type), allocatable :: native_error
+      integer, allocatable :: nrows(:)
+      integer :: aid
+      character(len=64) :: message
+
+      call new_context(ctx, verbosity=0, nthreads=1)
+      allocate (cavity)
+      call soft_cross_cluster(cavity, ctx, lsf, native_error)
+      if (.not. allocated(native_error)) then
+         param = cavity%param
+         param%proj_level = 2
+         call param%compute_derived(native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         call check(error, param%seed%filter_cone .and. param%seed%filter_grazing .and. &
+                    param%seed%filter_back_facing .and. param%seed%filter_focal .and. &
+                    param%seed%cone_scale == 1.5_wp, message="Level 2 settings without its filters")
+         if (allocated(error)) return
+         call project_cluster_with(cavity, param, w2, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant = param
+         variant%seed%filter_back_facing = .false.
+         call project_cluster_with(cavity, variant, w_back, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant = param
+         variant%seed%filter_grazing = .false.
+         call project_cluster_with(cavity, variant, w_graze, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant = param
+         variant%seed%filter_cone = .false.
+         variant%seed%filter_back_facing = .false.
+         variant%seed%filter_grazing = .false.
+         call project_cluster_with(cavity, variant, w_focal, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant%seed%filter_focal = .false.
+         call project_cluster_with(cavity, variant, w_none, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant = param
+         variant%seed%cone_scale = 2.0_wp
+         call project_cluster_with(cavity, variant, w_cone, nrows, native_error)
+      end if
+      if (.not. allocated(native_error)) then
+         variant%seed%filter_back_facing = .false.
+         variant%seed%filter_grazing = .false.
+         variant%seed%filter_focal = .false.
+         call project_cluster_with(cavity, variant, w_cone_only, nrows, native_error)
+      end if
+      if (allocated(native_error)) then
+         call test_failed(error, native_error%message)
+         return
+      end if
+
+      call check(error, w2%n_seeds > 0 .and. w2%n_seeds < w_back%n_seeds, &
+                 message="The back-facing filter cut no seed")
+      if (allocated(error)) return
+      call check(error, w2%n_seeds < w_graze%n_seeds, message="The grazing filter cut no seed")
+      if (allocated(error)) return
+      call check(error, w_focal%n_seeds < w_none%n_seeds, message="The focal filter cut no seed")
+      if (allocated(error)) return
+      call check(error, w2%n_seeds < w_cone%n_seeds, message="The narrower tangent cone cut no seed")
+      if (allocated(error)) return
+      do aid = 1, cavity%anchor%ngrid
+         write (message, "(a,i0)") "The level-2 filters lost a relevant row, anchor ", cavity%anchor%id(aid)
+         call check(error, rows_covered(cavity, w_cone_only%rows, w2%rows, aid), message=trim(message))
+         if (allocated(error)) return
+      end do
+      deallocate (cavity)
+      call ctx%delete()
+   end subroutine test_level2_seed_filters
+
+   !> A shell query and the ball inside it give the ball's seeds
+   !>
+   !> - for anchors around one sphere: the seeds of the ball `r`, as a multiset,
+   !>   are those of the ball `r_in` and of the shell `(r_in, r]` together, and
+   !>   no seed of the shell is one of the inner ball
+   !> - one atom, so the level set's stationarity certificate takes the same
+   !>   atom bounds for every ball and decides each bin alike
+   !>
+   !> @param[out] error Shell and inner ball do not partition the ball
+   subroutine test_rmesh_shell_query(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(seed_build_type) :: geometry
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      !> Seeds of the ball, the inner ball and the shell
+      real(wp), allocatable :: ball(:, :), inner(:, :), shell(:, :)
+      real(wp) :: rs
+      logical :: shell_flag
+      integer :: ia
+      !> Ball and inner ball radii (Bohr)
+      real(wp), parameter :: r_out = 1.4_wp, r_in = 0.6_wp
+
+      call sphere_lsf(lsf, rs, error)
+      if (allocated(error)) return
+      call init_mesh(seeder, failed, sample_size=0.2_wp, refine_levels=1)
+      if (allocated(failed)) then
+         call test_failed(error, "init: "//failed%message)
+         return
+      end if
+      call single_atom_input(geometry)
+      geometry%anchors = reshape([rs, 0.0_wp, 0.0_wp, 0.0_wp, rs + 0.4_wp, 0.0_wp, &
+                                  0.0_wp, 0.0_wp, rs - 0.3_wp], [3, 3])
+      call seeder%build(lsf, geometry, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "build: "//failed%message)
+         return
+      end if
+      do ia = 1, size(geometry%anchors, 2)
+         request%anchor = geometry%anchors(:, ia)
+         request%owner = 1
+         request%pdist_start = r_out
+         request%pdist_inner = -1.0_wp
+         call query(ball, shell_flag)
+         if (allocated(error)) return
+         call check(error, .not. shell_flag, "a ball query is not a shell")
+         if (allocated(error)) return
+         request%pdist_start = r_in
+         call query(inner, shell_flag)
+         if (allocated(error)) return
+         request%pdist_start = r_out
+         request%pdist_inner = r_in
+         call query(shell, shell_flag)
+         if (allocated(error)) return
+         call check(error, shell_flag, "a shell query reports its shell")
+         if (allocated(error)) return
+         call check(error, size(inner, 2) > 0 .and. size(shell, 2) > 0, "the fixture has seeds inside and outside")
+         if (allocated(error)) return
+         call check(error, size(ball, 2), size(inner, 2) + size(shell, 2), "the ball holds the inner ball and the shell")
+         if (allocated(error)) return
+         call check(error, same_multiset(ball, reshape([inner, shell], [3, size(inner, 2) + size(shell, 2)])), &
+                    "the ball's seeds are the inner ball's and the shell's")
+         if (allocated(error)) return
+         call check(error, disjoint(inner, shell), "a seed of the inner ball is in the shell")
+         if (allocated(error)) return
+      end do
+
+   contains
+
+      !> Seeds of the current request
+      !>
+      !> @param[out] points    Seeds (3, n)
+      !> @param[out] filtered  The scratch's `shell_filtered`
+      subroutine query(points, filtered)
+         real(wp), allocatable, intent(out) :: points(:, :)
+         logical, intent(out) :: filtered
+
+         call seeder%seed(scratch, lsf, request, failed)
+         if (allocated(failed)) then
+            call test_failed(error, "seed: "//failed%message)
+            allocate (points(3, 0))
+            filtered = .false.
+            return
+         end if
+         points = scratch%points(:, 1:scratch%n_points)
+         filtered = scratch%shell_filtered
+      end subroutine query
+
+      !> Whether two point lists hold the same points, bit for bit, with multiplicity
+      !>
+      !> @param[in] a First list
+      !> @param[in] b Second list, as long as `a`
+      logical function same_multiset(a, b)
+         real(wp), intent(in) :: a(:, :), b(:, :)
+
+         logical, allocatable :: used(:)
+         integer :: i, j
+
+         same_multiset = .false.
+         allocate (used(size(b, 2)), source=.false.)
+         do i = 1, size(a, 2)
+            do j = 1, size(b, 2)
+               if (used(j)) cycle
+               if (all(a(:, i) == b(:, j))) exit
+            end do
+            if (j > size(b, 2)) return
+            used(j) = .true.
+         end do
+         same_multiset = all(used)
+      end function same_multiset
+
+      !> Whether no point of `a` equals one of `b`
+      !>
+      !> @param[in] a First list
+      !> @param[in] b Second list
+      logical function disjoint(a, b)
+         real(wp), intent(in) :: a(:, :), b(:, :)
+
+         integer :: i, j
+
+         disjoint = .false.
+         do i = 1, size(a, 2)
+            do j = 1, size(b, 2)
+               if (all(a(:, i) == b(:, j))) return
+            end do
+         end do
+         disjoint = .true.
+      end function disjoint
+
+   end subroutine test_rmesh_shell_query
+
+   !> SSES geometry of three atoms with anchors on their spheres
+   !>
+   !> @param[out] lsf      SSES level set, updated for the geometry
+   !> @param[out] mol      Geometry
+   !> @param[out] geometry Build input: six anchors per atom, balls of 3 Bohr
+   subroutine sses_cluster(lsf, mol, geometry)
+      type(moist_cavity_drop_lsf_sses_type), intent(out) :: lsf
+      type(structure_type), intent(out) :: mol
+      type(seed_build_type), intent(out) :: geometry
+
+      real(wp), parameter :: radius = 3.2_wp
+      real(wp), parameter :: dirs(3, 6) = reshape([1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
+                                                   0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, &
+                                                   0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp], [3, 6])
+      integer :: i, d
+
+      call new(mol, [6, 6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
+                                        5.2_wp, 0.3_wp, 0.0_wp, &
+                                        2.4_wp, 4.6_wp, 0.7_wp], [3, 3]))
+      call lsf%new()
+      call lsf%update(mol, [radius, radius, radius])
+      geometry%centers = mol%xyz
+      geometry%radii = [radius, radius, radius]
+      allocate (geometry%anchors(3, 18))
+      do i = 1, 3
+         do d = 1, 6
+            geometry%anchors(:, 6*(i - 1) + d) = mol%xyz(:, i) + radius*dirs(:, d)
+         end do
+      end do
+      geometry%reach = 5.67_wp
+   end subroutine sses_cluster
+
+   !> An SSES mesh does not depend on the build's thread count
+   !>
+   !> - SSES warm-starts its moment solve from the last point a clone evaluated;
+   !>   every build slice starts without that history, so builds at 1 and 3
+   !>   threads, and two at 3, give the same samples bit for bit
+   !>
+   !> @param[out] error Meshes differ
+   subroutine test_rmesh_sses_thread_independent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_sses_type) :: lsf
+      type(structure_type) :: mol
+      type(seed_build_type) :: geometry
+      type(projection_seeder_type) :: serial, threaded
+      type(moist_error_type), allocatable :: failed
+      integer :: run
+
+      call sses_cluster(lsf, mol, geometry)
+      call init_mesh(serial, failed, sample_size=0.5_wp, refine_levels=0)
+      if (.not. allocated(failed)) call serial%build(lsf, geometry, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "serial build: "//failed%message)
+         return
+      end if
+      call check(error, serial%nsample > 0, message="The mesh holds no sample")
+      if (allocated(error)) return
+      do run = 1, 2
+         geometry%nthreads = 3
+         call init_mesh(threaded, failed, sample_size=0.5_wp, refine_levels=0)
+         if (.not. allocated(failed)) call threaded%build(lsf, geometry, failed)
+         if (allocated(failed)) then
+            call test_failed(error, "threaded build: "//failed%message)
+            return
+         end if
+         call check(error, serial%nsample, threaded%nsample, message="Sample counts differ")
+         if (allocated(error)) return
+         call check(error, all(serial%y == threaded%y) .and. all(serial%normal == threaded%normal) &
+                    .and. all(serial%form == threaded%form) .and. serial%cover == threaded%cover, &
+                    message="Samples differ between thread counts")
+         if (allocated(error)) return
+      end do
+   end subroutine test_rmesh_sses_thread_independent
+
+   !> An SSES projection does not depend on the thread count
+   !>
+   !> - the level-3 projector of a three-atom SSES cavity at 1 and 3 threads,
+   !>   twice at 3, in chunks of 8 anchors: the same rows bit for bit
+   !>
+   !> @param[out] error Rows differ
+   subroutine test_sses_projection_thread_independent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_sses_type) :: lsf
+      type(structure_type) :: mol
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp), allocatable :: ref(:, :), rows(:, :)
+      integer :: run
+      integer, parameter :: threads(3) = [1, 3, 3]
+
+      call sses_cluster(lsf, mol, geometry)
+      do run = 1, size(threads)
+         call project(threads(run), rows)
+         if (allocated(error)) return
+         if (run == 1) then
+            call check(error, size(rows, 2) > 0, message="The projection has no row")
+            if (allocated(error)) return
+            ref = rows
+            cycle
+         end if
+         call check(error, size(rows, 2), size(ref, 2), message="Row counts differ between thread counts")
+         if (allocated(error)) return
+         call check(error, all(rows == ref), message="Rows differ between thread counts")
+         if (allocated(error)) return
+      end do
+
+   contains
+
+      !> Rows of the level-3 projector at `nthreads`
+      !>
+      !> @param[in]  nthreads Threads of the run context
+      !> @param[out] xyz      Row positions (3, n)
+      subroutine project(nthreads, xyz)
+         integer, intent(in) :: nthreads
+         real(wp), allocatable, intent(out) :: xyz(:, :)
+
+         type(moist_context_type), target :: ctx
+         type(cavity_type_drop), allocatable :: cavity
+         type(moist_cavity_drop_parameters_type) :: param
+         integer :: nremoved
+
+         call new_context(ctx, verbosity=0, nthreads=nthreads)
+         param%num_leb = 302
+         param%proj_level = 3
+         ! Many small chunks, which the threads take in any order
+         param%batch_size = 8
+         allocate (cavity)
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf, param=param, &
+                              error=failed, ctx=ctx)
+         if (.not. allocated(failed)) then
+            cavity%nsph = mol%nat
+            call cavity%radius_model%update(mol, failed)
+         end if
+         if (.not. allocated(failed)) then
+            cavity%radii = cavity%radius_model%f0
+            cavity%mol = mol
+            cavity%sphxyz = mol%xyz
+            call cavity%lsf_model%update(mol, cavity%radii)
+            call cavity%ensure_lebedev_cache(failed)
+         end if
+         if (.not. allocated(failed)) then
+            call cavity%anchor%fill(cavity%sphxyz, cavity%radii, cavity%ang_grid, cavity%ang_weight)
+            call cavity%iswig%update(mol, cavity%radii, wleb_max=maxval(cavity%anchor%wleb0))
+            call cavity%anchor%compute_switching(cavity%iswig, ctx%get_num_threads())
+            call cavity%anchor%filter(cavity%param%finalize%wleb_cut, nremoved)
+            call cavity%project_all_points(failed)
+         end if
+         if (allocated(failed)) then
+            call test_failed(error, failed%message)
+            allocate (xyz(3, 0))
+            return
+         end if
+         xyz = cavity%xyz(:, 1:cavity%ngrid)
+         deallocate (cavity)
+         call ctx%delete()
+      end subroutine project
+
+   end subroutine test_sses_projection_thread_independent
+
+   !> One-atom build input around the origin
+   !>
+   !> @param[out] geometry Build input
+   subroutine single_atom_input(geometry)
+      !> Build input
+      type(seed_build_type), intent(out) :: geometry
+
+      allocate (geometry%centers(3, 1), source=0.0_wp)
+      geometry%radii = [3.0_wp]
+      geometry%anchors = reshape([3.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      geometry%reach = 5.67_wp
+   end subroutine single_atom_input
+
+   !> Initialize a mesh seeder from the default seed settings and the given overrides
+   !>
+   !> @param[inout] seeder             Seeder
+   !> @param[out]   error              Refused settings
+   !> @param[in]    sample_size        Sample spacing (Bohr)
+   !> @param[in]    refine_levels      Levels below the sample spacing
+   !> @param[in]    filter_cone        Tangent-cone filter
+   !> @param[in]    filter_grazing     Grazing filter
+   !> @param[in]    filter_back_facing Back-facing filter
+   !> @param[in]    filter_focal       Focal filter
+   !> @param[in]    cone_scale         Tangent-cone scale
+   subroutine init_mesh(seeder, error, sample_size, refine_levels, filter_cone, filter_grazing, &
+                        filter_back_facing, filter_focal, cone_scale)
+      type(projection_seeder_type), intent(inout) :: seeder
+      type(moist_error_type), allocatable, intent(out) :: error
+      real(wp), intent(in), optional :: sample_size
+      integer, intent(in), optional :: refine_levels
+      logical, intent(in), optional :: filter_cone
+      logical, intent(in), optional :: filter_grazing
+      logical, intent(in), optional :: filter_back_facing
+      logical, intent(in), optional :: filter_focal
+      real(wp), intent(in), optional :: cone_scale
+
+      type(drop_seed_parameters_type) :: seed
+
+      if (present(sample_size)) seed%seed_size = sample_size
+      if (present(refine_levels)) seed%refine_levels = refine_levels
+      if (present(filter_cone)) seed%filter_cone = filter_cone
+      if (present(filter_grazing)) seed%filter_grazing = filter_grazing
+      if (present(filter_back_facing)) seed%filter_back_facing = filter_back_facing
+      if (present(filter_focal)) seed%filter_focal = filter_focal
+      if (present(cone_scale)) seed%cone_scale = cone_scale
+      call seeder%init(seed, error)
+   end subroutine init_mesh
+
+   !> A nonpositive sample size is refused
+   subroutine test_bad_rmesh_sample_size(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_error_type), allocatable :: failed
+
+      call init_mesh(seeder, failed, sample_size=0.0_wp)
+      call expect_error(error, failed, "Surface mesh seeder: sample size must be positive")
+   end subroutine test_bad_rmesh_sample_size
+
+   !> A negative refinement depth is refused
+   subroutine test_bad_rmesh_refine_levels(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_error_type), allocatable :: failed
+
+      call init_mesh(seeder, failed, refine_levels=-1)
+      call expect_error(error, failed, "Surface mesh seeder: refine_levels must not be negative")
+   end subroutine test_bad_rmesh_refine_levels
+
+   !> A build before `init` is refused
+   subroutine test_bad_rmesh_build_before_init(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call single_atom_input(geometry)
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Surface mesh seeder: build before init")
+   end subroutine test_bad_rmesh_build_before_init
+
+   !> Seeding before the build is refused
+   subroutine test_bad_rmesh_seed_before_build(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_mesh(seeder, failed)
+      if (allocated(failed)) return
+      request%anchor = [rs, 0.0_wp, 0.0_wp]
+      request%pdist_start = 1.0_wp
+      call seeder%seed(scratch, lsf, request, failed)
+      call expect_error(error, failed, "Surface mesh seeder: seed before build")
+   end subroutine test_bad_rmesh_seed_before_build
+
+   !> Radii that do not match the centers are refused
+   subroutine test_bad_rmesh_radii(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_mesh(seeder, failed)
+      if (allocated(failed)) return
+      call single_atom_input(geometry)
+      geometry%radii = [3.0_wp, 3.0_wp]
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Surface mesh seeder: one radius per atom center required")
+   end subroutine test_bad_rmesh_radii
+
+   !> A nonpositive reach is refused
+   subroutine test_bad_rmesh_reach(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_mesh(seeder, failed)
+      if (allocated(failed)) return
+      call single_atom_input(geometry)
+      geometry%reach = 0.0_wp
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Surface mesh seeder: reach must be positive")
+   end subroutine test_bad_rmesh_reach
+
+   !> A region beyond the lattice key range is refused
+   subroutine test_bad_rmesh_lattice_range(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_mesh(seeder, failed)
+      if (allocated(failed)) return
+      geometry%centers = reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0e8_wp, 0.0_wp, 0.0_wp], [3, 2])
+      geometry%radii = [3.0_wp, 3.0_wp]
+      geometry%anchors = reshape([3.0_wp, 0.0_wp, 0.0_wp], [3, 1])
+      geometry%reach = 5.67_wp
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Surface mesh seeder: the region does not fit the lattice keys; "// &
+                        "raise the sample size or split the geometry")
+   end subroutine test_bad_rmesh_lattice_range
+
+   !> An infinite sample size is refused
+   subroutine test_bad_rmesh_sample_size_infinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_error_type), allocatable :: failed
+
+      call init_mesh(seeder, failed, sample_size=ieee_value(1.0_wp, ieee_positive_inf))
+      call expect_error(error, failed, "Surface mesh seeder: sample size must be finite")
+   end subroutine test_bad_rmesh_sample_size_infinite
+
+   !> A negative tangent-cone scale is refused
+   subroutine test_bad_rmesh_cone_scale(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_error_type), allocatable :: failed
+
+      call init_mesh(seeder, failed, cone_scale=-1.5_wp)
+      call expect_error(error, failed, "Surface mesh seeder: cone scale must be positive")
+   end subroutine test_bad_rmesh_cone_scale
+
+   !> An infinite tangent-cone scale is refused
+   subroutine test_bad_rmesh_cone_scale_infinite(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_error_type), allocatable :: failed
+
+      call init_mesh(seeder, failed, cone_scale=ieee_value(1.0_wp, ieee_positive_inf))
+      call expect_error(error, failed, "Surface mesh seeder: cone scale must be finite")
+   end subroutine test_bad_rmesh_cone_scale_infinite
+
+   !> Anchors without an atom center are refused
+   subroutine test_bad_rmesh_anchors_without_atoms(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(projection_seeder_type) :: seeder
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(seed_build_type) :: geometry
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Fixture failure, discarded: a clean return fails the inverted test
+      type(error_type), allocatable :: setup
+
+      call sphere_lsf(lsf, rs, setup)
+      if (allocated(setup)) then
+         ! Discarded with stat 0, so the test-drive finalizer does not escalate
+         setup%stat = 0
+         return
+      end if
+      call init_mesh(seeder, failed)
+      if (allocated(failed)) return
+      call single_atom_input(geometry)
+      deallocate (geometry%centers, geometry%radii)
+      allocate (geometry%centers(3, 0), geometry%radii(0))
+      call seeder%build(lsf, geometry, failed)
+      call expect_error(error, failed, "Surface mesh seeder: anchors without an atom center")
+   end subroutine test_bad_rmesh_anchors_without_atoms
+
+   !> The back-facing filter is skipped for a request without an owner
+   !>
+   !> - one sphere and a ball that holds it whole: with the owner the filter
+   !>   drops the far side, without an owner every sample is kept, as for an
+   !>   anchor without an accepted local point
+   !>
+   !> @param[out] error A request without an owner was filtered
+   subroutine test_rmesh_back_facing_needs_owner(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(projection_seeder_type) :: seeder
+      type(seeder_scratch_type) :: scratch
+      type(seed_build_type) :: geometry
+      type(seed_request_type) :: request
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs
+      !> Seeds without the filter, with the owner, and without an owner
+      integer :: n_all, n_owner, n_unknown
+
+      call sphere_lsf(lsf, rs, error)
+      if (allocated(error)) return
+      call init_mesh(seeder, failed, filter_back_facing=.true.)
+      if (allocated(failed)) then
+         call test_failed(error, "init: "//failed%message)
+         return
+      end if
+      call single_atom_input(geometry)
+      geometry%anchors = reshape([rs + 0.4_wp, 0.0_wp, 0.0_wp], [3, 1])
+      geometry%reach = 2.0_wp*rs + 1.0_wp
+      call seeder%build(lsf, geometry, failed)
+      if (allocated(failed)) then
+         call test_failed(error, "build: "//failed%message)
+         return
+      end if
+
+      ! The atom center is the origin, the default `owner_center`
+      request%anchor = geometry%anchors(:, 1)
+      request%pdist_start = geometry%reach
+      request%owner = 1
+      call count_seeds(n_all)
+      if (allocated(error)) return
+      request%has_accepted = .true.
+      call count_seeds(n_owner)
+      if (allocated(error)) return
+      request%owner = 0
+      call count_seeds(n_unknown)
+      if (allocated(error)) return
+      call check(error, n_owner < n_all, "the fixture has no back-facing sample to drop")
+      if (allocated(error)) return
+      call check(error, n_unknown, n_all, "a request without an owner was filtered")
+
+   contains
+
+      !> Seeds of the current request
+      !>
+      !> @param[out] n Seeds
+      subroutine count_seeds(n)
+         integer, intent(out) :: n
+
+         n = 0
+         call seeder%seed(scratch, lsf, request, failed)
+         if (allocated(failed)) then
+            call test_failed(error, "seed: "//failed%message)
+            return
+         end if
+         n = scratch%n_points
+      end subroutine count_seeds
+
+   end subroutine test_rmesh_back_facing_needs_owner
+
+   !* ================================================================================= *!
+   !*                              Spherical chart seeder                               *!
+   !* ================================================================================= *!
+
 
 end module test_cavity_drop_projection

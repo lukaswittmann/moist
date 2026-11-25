@@ -1223,7 +1223,7 @@ contains
    !>   the derivative of an observable is `scale sum_i w_lsf0(i)` of its adjoint
    !> - reference: 4-point differences of `sum(a)` and `sum(v)`; with the core
    !>   fill off the build reads `rho_iso` elsewhere only in the exclusion radii
-   !>   of the octree seeder, which place seeds, not rows
+   !>   of the mesh seeder, which place seeds, not rows
    !> - volume adjoint of `v_i = a_i (r_i - c) . n_i / 3`, the origin `c` being
    !>   nuclear
    !> - branched anchors with rows inside the branch window and partly open

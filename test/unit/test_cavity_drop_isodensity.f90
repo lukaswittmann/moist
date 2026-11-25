@@ -3233,8 +3233,7 @@ contains
 
    !> Every projector reports a fill refusal as an error, wherever it meets it
    !>
-   !> The local Newton (level 1) and the coarse octree (level 3) reach the fill;
-   !> the fine octree (level 4) exhausts its budget before it reaches it
+   !> The local Newton and the mesh searches of every level reach the fill
    subroutine test_core_fill_seed_abort(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -3246,7 +3245,7 @@ contains
       type(mctc_error), allocatable :: cavity_error
       character(len=8) :: label
       !> Levels that reach the fill
-      integer, parameter :: levels(2) = [1, 3]
+      integer, parameter :: levels(4) = [1, 2, 3, 4]
       integer :: il, level
 
       ! One thread: the first anchor to fail decides where the abort is latched

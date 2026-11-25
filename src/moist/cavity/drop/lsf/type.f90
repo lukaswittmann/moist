@@ -67,7 +67,7 @@
 !>
 !>   - [[exclusion_radius]]`(lsf0)`: minimum distance from the point to any *surface*, given
 !>     the value there
-!>     - consumer: octree surface coverage, "can I discard this region?"
+!>     - consumer: the surface mesh seeder, "can I discard this region?"
 !>     - safe answer **zero** (prune nothing); an over-estimate silently loses branches
 !>     - companion [[far_exclusion_radius]]`()`: same promise for every point no atom reaches
 !>       (an unreached batch column), a model constant, zero by default
@@ -1114,8 +1114,7 @@ contains
    !>   - packed slots: sorted tuples `a <= b <= c <= d`, last index slowest,
    !>     [[moist_math_packed]]'s `packed_index3` / `packed_index4`
    !>   - `candidate_indices`, when present, is the atom list for *all* points
-   !>     (octree children reuse the parent's list, seeds of one anchor share the
-   !>     anchor's neighbourhood): unique ids in 1..ncenters (`error stop`
+   !>     (seeds of one anchor share the anchor's neighbourhood): unique ids in 1..ncenters (`error stop`
    !>     otherwise), sorted ascending before use; absent means the full screen
    !>     per point
    !>   - unreached columns ([[lsf_base_unreached]]`(column)`, valid until the next
@@ -2017,13 +2016,13 @@ contains
    !>   in less than that distance
    !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
    !>
-   !> What lets the octree surface coverage (projection levels 3-4) discard boxes
-   !> within the search window: minima live on the surface, so a region proven
-   !> free of surface holds no minimum
+   !> What lets the surface mesh seeder skip cells within the search region:
+   !> minima live on the surface, so a region proven free of surface holds no
+   !> minimum
    !>
    !> Zero is the safe answer and the base returns it unconditionally: it
-   !> certifies nothing, so a search built on it prunes nothing and runs into
-   !> its own box budget rather than silently reporting a false certificate
+   !> certifies nothing, so a search built on it prunes nothing rather than
+   !> silently reporting a false certificate
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point

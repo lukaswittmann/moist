@@ -9,9 +9,7 @@ module moist_cavity_drop_parameters
    use moist_cavity_drop_projection_batch, only: default_batch_size
    use moist_cavity_drop_projection_parameters, only: drop_seed_parameters_type, drop_solve_parameters_type, &
                                                      drop_polish_parameters_type, drop_finalize_parameters_type, &
-                                                     drop_branch_parameters_type, is_valid_seed_method, &
-                                                     max_lattice_depth, seed_method_octree, seed_method_global, &
-                                                     seed_method_sphere
+                                                     drop_branch_parameters_type
 
    implicit none(type, external)
 
@@ -317,7 +315,6 @@ contains
 
       !> Value under test is finite and within its bound
       logical :: valid
-      character(len=64) :: message
 
       valid = ieee_is_finite(self%tolerance)
       if (valid) valid = self%tolerance > 0.0_wp
@@ -337,26 +334,6 @@ contains
       end if
       if (.not. is_valid_proj_level(self%proj_level)) then
          call fatal_error(error, "Invalid DROP numerical parameters: projection level must be 1, 2, 3 or 4")
-         return
-      end if
-      !> Seeder, spacing and refinement of the level
-      call self%seed%init_level(self%proj_level)
-
-      if (.not. is_valid_seed_method(self%seed%method_used)) then
-         call fatal_error(error, "Invalid DROP numerical parameters: unknown projection seeder")
-         return
-      end if
-      if (self%seed%max_boxes < 1) then
-         call fatal_error(error, "Octree box budget must be positive")
-         return
-      end if
-      if (self%seed%max_survivors < 1) then
-         call fatal_error(error, "Octree survivor budget must be positive")
-         return
-      end if
-      if (self%seed%max_depth < 1 .or. self%seed%max_depth > max_lattice_depth) then
-         write (message, "(a,i0)") "Octree depth limit must lie in 1..", max_lattice_depth
-         call fatal_error(error, trim(message))
          return
       end if
       if (self%batch_size < 1) then
@@ -471,10 +448,9 @@ contains
          self%hor_off = -2.0_wp
          self%hor_on = -1.0_wp
       end if
-      ! Seed filters of the level or the listed ones; the back-facing one only
-      ! where the horizon switch closes such points
-      call self%seed%init_filters(self%proj_level, self%hor_off >= 0.0_wp, error)
-      if (allocated(error)) return
+      ! Spacing, refinement and seed filters of the level; the back-facing filter
+      ! only where the horizon switch closes such points
+      call self%seed%init_level(self%proj_level, self%hor_off >= 0.0_wp)
 
       !> Grid point adjacency list cutoff from density kernel length
       self%adj_list_grid_cutoff = 4.0_wp*self%rho_grid_h
@@ -518,12 +494,6 @@ contains
       ! Projection
       call self%register_int_scalar("projection.maxiter", self%solve%max_iter)
       call self%register_int_scalar("projection.level", self%proj_level)
-      call self%register_string("projection.seeder", self%seed%method)
-      call self%register_string("projection.seed_filters", self%seed%filters)
-      ! Per-anchor octree budgets: the octree seeder and the requests global and sphere hand to it
-      call self%register_int_scalar("projection.octree.max_boxes", self%seed%max_boxes)
-      call self%register_int_scalar("projection.octree.max_survivors", self%seed%max_survivors)
-      call self%register_int_scalar("projection.octree.max_depth", self%seed%max_depth)
       ! Batched projection
       call self%register_int_scalar("projection.batch_size", self%batch_size)
       call self%register_real_scalar("projection.newton.max_step", self%solve%max_step)
@@ -685,15 +655,17 @@ contains
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
       if (detailed) then
          call pp%kv("Maximum iterations", self%solve%max_iter)
-         call pp%kv("Seeder", trim(self%seed%method_used))
          call pp%kv("Seed spacing", self%seed%seed_size, "Bohr")
-         select case (self%seed%method_used)
-         case (seed_method_octree, seed_method_global, seed_method_sphere)
-            call pp%kv("Octree box budget", self%seed%max_boxes)
-         case default
-            ! The surface mesh runs no per-anchor octree: no budget to print
-            call pp%kv("Seed filters", self%seed%filters_label())
-         end select
+         call pp%push("Seed filters:")
+         if (self%seed%filter_cone) then
+            call pp%kv("Tangent cone", self%seed%cone_scale)
+         else
+            call pp%kv("Tangent cone", "off")
+         end if
+         call pp%kv("Grazing", self%seed%filter_grazing)
+         call pp%kv("Back-facing", self%seed%filter_back_facing)
+         call pp%kv("Focal", self%seed%filter_focal)
+         call pp%pop()
          call pp%kv("Batch size", self%batch_size)
       end if
       call pp%pop()

@@ -51,17 +51,17 @@
 !> - zero window: finalized at every level
 !> - level 2 shortcut (`level2_window_pdist`) counted in `n_window_skipped`
 !> - other levels refused
-!> - seeder `seed%method_used` with `seed%init_level` and `seed%init_filters`:
-!>   mesh seeds pass all four filters at level 2 (narrower tangent cone;
-!>   back-facing one only when the horizon switch closes such normals), the
-!>   tangent cone alone at level 3, none at level 4
+!> - surface mesh seeder with the level's settings (`seed%init_level`): seeds
+!>   pass all four filters at level 2 (back-facing one only when the horizon
+!>   switch closes such normals), the tangent cone alone at level 3, none at
+!>   levels 1 and 4
 !> - nothing accepted after the search: `lost`, no row; also `unseeded` when no
 !>   search gave a seed (no surface within the reach)
 !> - `nearest_count`: starting guess, not a correctness parameter
 !> - `full_reach` (debug): every search with ball and radius at the reach; same
 !>   rows as the adaptive radius as far as the seeder finds the same points
-!> - build-fatal, returned in `error`: LSF failure, exhausted octree budget,
-!>   anchor on its owner center, singular tangent block
+!> - build-fatal, returned in `error`: LSF failure, anchor on its owner center,
+!>   singular tangent block
 module moist_cavity_drop_projection_worker
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -80,7 +80,6 @@ module moist_cavity_drop_projection_worker
                                                     finalize_anchor, point_gate
    use moist_cavity_drop_projection_seed, only: projection_seeder_type, seeder_scratch_type, seed_request_type, &
                                                 seed_build_type
-   use moist_cavity_drop_projection_seed_factory, only: new_projection_seeder
    use moist_utils_mem, only: grow_array
    use moist_math_sorter, only: sort_index
    implicit none(type, external)
@@ -173,10 +172,9 @@ module moist_cavity_drop_projection_worker
       logical :: full_reach = .false.
       !> Seeder of the level's settings, from `init`; `process_chunk` builds it
       !> for its chunk
-      class(projection_seeder_type), allocatable :: seeder
-      !> This thread's scratch, from the seeder of the search; holds the seeds of
-      !> the last request
-      class(seeder_scratch_type), allocatable :: scratch
+      type(projection_seeder_type) :: seeder
+      !> This thread's scratch; holds the seeds of the last request
+      type(seeder_scratch_type) :: scratch
       !> Switching functions and branch weight model
       type(moist_math_smoothstep_sigmoid_type) :: f_crit, f_foc, f_hor, f_wleb
       !> Reach gate on the projection distance, falling from `reach_on` to `reach_off`
@@ -265,10 +263,8 @@ contains
       grows = self%next(r) == next_extended
    end function local_grows
 
-   !> Build input of a search pass: the geometry and the first and largest search
+   !> Build input of a search pass: the geometry and the largest search
    !> ball of every anchor the pass will seed, in chunk and run order
-   !>
-   !> - every atom keeps the world axes: per-atom orientations are not set
    !>
    !> @param[in]  local    Local passes of the chunks, in chunk order
    !> @param[in]  centers  Atom centers (3, nat)
@@ -293,27 +289,19 @@ contains
          end do
       end do
       geometry%reach = reach
-      allocate (geometry%anchors(3, n), geometry%owners(n), geometry%radius(n), geometry%radius_max(n))
+      allocate (geometry%anchors(3, n), geometry%radius_max(n))
       n = 0
       do ic = 1, size(local)
          do r = 1, local(ic)%batch%nrun
             if (.not. local(ic)%seeded(r)) cycle
             n = n + 1
             geometry%anchors(:, n) = local(ic)%batch%run_xyz(:, r)
-            geometry%owners(n) = local(ic)%batch%run_owner(r)
-            geometry%radius(n) = local(ic)%radius(r)
-            geometry%radius_max(n) = geometry%radius(n)
-            if (local(ic)%grows(r)) geometry%radius_max(n) = max(geometry%radius(n), reach)
+            geometry%radius_max(n) = local(ic)%radius(r)
+            if (local(ic)%grows(r)) geometry%radius_max(n) = max(local(ic)%radius(r), reach)
          end do
       end do
       geometry%centers = centers
       geometry%radii = radii
-      allocate (geometry%frames(3, 3, size(radii)), source=0.0_wp)
-      do ic = 1, size(radii)
-         do r = 1, 3
-            geometry%frames(r, r, ic) = 1.0_wp
-         end do
-      end do
       geometry%nthreads = nthreads
    end subroutine search_geometry
 
@@ -409,10 +397,10 @@ contains
       end if
       call self%branch_weight%init(param%branch%dpdist_max, param%phi_alpha, param%branch%sep_cut)
 
-      if (allocated(self%seeder)) deallocate (self%seeder)
-      call new_projection_seeder(self%seeder, param%seed, error, debug, unit)
+      if (present(debug)) self%seeder%debug = debug
+      if (present(unit)) self%seeder%unit = unit
+      call self%seeder%init(param%seed, error)
       if (allocated(error)) return
-      call self%seeder%new_scratch(self%scratch)
 
       if (.not. allocated(self%passn)) allocate (self%passn)
       if (.not. allocated(self%passn_last)) allocate (self%passn_last)
@@ -630,7 +618,7 @@ contains
    !> - `seeder` may be the worker's own `self%seeder`: the pass must never
    !>   define that component, as the two dummies then name one object
    !>
-   !> @param[inout] self     Worker; its `scratch` comes from `seeder` (`new_scratch`)
+   !> @param[inout] self     Worker; its `scratch` takes the seeds
    !> @param[in]    ctx      Run context, read only (polish traces)
    !> @param[in]    local    Local pass of the chunk
    !> @param[in]    seeder   Built seeder, read only
@@ -648,7 +636,7 @@ contains
       class(projection_worker_type), intent(inout) :: self
       type(moist_context_type), intent(in) :: ctx
       type(local_pass_type), intent(in) :: local
-      class(projection_seeder_type), intent(in) :: seeder
+      type(projection_seeder_type), intent(in) :: seeder
       integer, intent(in) :: slots(:)
       real(wp), intent(in) :: anchors(:, :)
       integer, intent(in) :: owners(:)
@@ -692,32 +680,26 @@ contains
 
    contains
 
-      !> Request of the anchor of local run `r1`: the whole ball of radius `radius`
+      !> Request of anchor `k1`: the whole ball of radius `radius`
       !>
       !> - the radius is positive: a window ball of a fully open point (a zero
       !>   window finalizes in the local pass) or an extended-search ball, at
       !>   least `min_ball_fraction` of the reach
       !> - the seed filters of the level are the seeder's settings
       !>
-      !> @param[in]  r1           Local run index
       !> @param[in]  k1           Anchor index within the chunk
       !> @param[in]  radius       Search radius (Bohr), positive
       !> @param[in]  has_accepted Whether the anchor already has an accepted local foot
       !> @param[out] request      Request
-      subroutine anchor_request(r1, k1, radius, has_accepted, request)
-         integer, intent(in) :: r1, k1
+      subroutine anchor_request(k1, radius, has_accepted, request)
+         integer, intent(in) :: k1
          real(wp), intent(in) :: radius
          logical, intent(in) :: has_accepted
          type(seed_request_type), intent(out) :: request
 
-         real(wp) :: grad_anchor(3)
-
-         request%index = slots(k1)
          request%anchor = anchors(:, k1)
          request%owner = owners(k1)
          request%owner_center = self%centers(:, owners(k1))
-         ! Only the value: the sign every unreached probe of an octree search takes
-         call local%batch%anchor_jet(r1, request%lsf0_anchor, grad_anchor)
          request%pdist_start = radius
          request%has_accepted = has_accepted
       end subroutine anchor_request
@@ -736,7 +718,7 @@ contains
          integer :: n_new, i
 
          self%pdist_search_max = max(self%pdist_search_max, radius)
-         call anchor_request(r1, k1, radius, .true., request)
+         call anchor_request(k1, radius, .true., request)
          call seeder%seed(self%scratch, self%lsf, request, error)
          if (allocated(error)) return
          self%n_seeded = self%n_seeded + 1
@@ -800,7 +782,7 @@ contains
          solved_last = self%queue(e)%next - 1
          inner = prev_ball
          do
-            call anchor_request(self%queue(e)%run, k1, self%queue(e)%ball, self%queue(e)%jloc > 0, request)
+            call anchor_request(k1, self%queue(e)%ball, self%queue(e)%jloc > 0, request)
             request%nearest_first = .true.
             request%pdist_inner = inner
             call seeder%seed(self%scratch, self%lsf, request, error)
@@ -1173,7 +1155,7 @@ contains
       logical, intent(out) :: lost(:)
       type(error_type), allocatable, intent(out) :: error
       logical, intent(out), optional :: unseeded(:)
-      class(projection_seeder_type), intent(in), optional :: seeder
+      type(projection_seeder_type), intent(in), optional :: seeder
 
       type(local_pass_type) :: local(1)
       type(seed_build_type) :: geometry
@@ -1184,16 +1166,14 @@ contains
       call self%solve_local(ctx, slots, anchors, owners, wlebs, fs, local(1), error)
       if (allocated(error)) return
       if (present(seeder)) then
-         call seeder%new_scratch(self%scratch)
          call self%search(ctx, local(1), seeder, slots, anchors, owners, wlebs, fs, nrows, lost, error, unseeded)
          return
       end if
       call search_geometry(local, self%centers, self%lsf%radii, self%reach_off, ctx%get_num_threads(), geometry)
-      if (size(geometry%radius) > 0) then
+      if (size(geometry%radius_max) > 0) then
          call self%seeder%build(self%lsf, geometry, error)
          if (allocated(error)) return
       end if
-      call self%seeder%new_scratch(self%scratch)
       call self%search(ctx, local(1), self%seeder, slots, anchors, owners, wlebs, fs, nrows, lost, error, unseeded)
    end subroutine worker_process_chunk
 

@@ -5,10 +5,10 @@
 !>
 !> 1. local pass: local Newton and next step per anchor
 !>    ([[projection_worker_type]]); the chunk's [[local_pass_type]] kept
-!> 2. seeder `seed%method_used` built once from the geometry and the first
-!>    search ball of every seeded anchor ([[search_geometry]])
-!> 3. search pass, heaviest chunks first ([[search_order]]): each worker's
-!>    scratch from the built seeder; seed, solve, finalize into its row buffer
+!> 2. surface mesh seeder built once from the geometry and the largest search
+!>    ball of every seeded anchor ([[search_geometry]])
+!> 3. search pass, heaviest chunks first ([[search_order]]): each worker seeds
+!>    from the built mesh, solves and finalizes into its row buffer
 !>
 !> Then row counts prefix-summed into `offset`, buffers scattered into the CSR
 !> row arrays
@@ -16,7 +16,7 @@
 !> - rows below the weight cut never appended, no post-filter
 !> - anchor without an accepted point lost, no row; warned when it had seeds,
 !>   only reported without any seed up to the reach (no surface there)
-!> - LSF failure, exhausted octree budget, singular tangent block: abort through
+!> - LSF failure, singular tangent block: abort through
 !>   [[drop_abort_latch_type]] with the first failing chunk's error in pass
 !>   order (anchor order, heaviest first in the search pass) at any thread
 !>   count; chunks behind it skipped, those ahead still run
@@ -30,7 +30,6 @@ submodule(moist_cavity_drop) moist_cavity_drop_projection
    use moist_cavity_drop_projection_worker, only: projection_worker_type, local_pass_type, search_geometry, &
                                                   search_order
    use moist_cavity_drop_projection_seed, only: projection_seeder_type, seed_build_type
-   use moist_cavity_drop_projection_seed_factory, only: new_projection_seeder
    implicit none(type, external)
 
    !> Area share removed by the reach gate above which the build warns
@@ -56,7 +55,7 @@ contains
       !> Local pass of every chunk, kept for its search pass
       type(local_pass_type), allocatable :: local(:)
       !> Seeder of the level, built between the passes and read by every worker
-      class(projection_seeder_type), allocatable :: seeder
+      type(projection_seeder_type) :: seeder
       type(seed_build_type) :: geometry
       type(error_type), allocatable :: local_error
       integer, allocatable :: nrows_of(:), chunk_order(:)
@@ -88,7 +87,9 @@ contains
       allocate (unseeded(nmax_anchor), source=.false.)
       call abort%reset()
 
-      call new_projection_seeder(seeder, self%param%seed, error, debug=self%ctx%debug, unit=self%ctx%unit)
+      seeder%debug = self%ctx%debug
+      seeder%unit = self%ctx%unit
+      call seeder%init(self%param%seed, error)
       if (allocated(error)) return
 
       pp = self%ctx%printer(level=4)
@@ -99,7 +100,7 @@ contains
       do ipass = 1, 2
          if (ipass == 2) then
             call search_geometry(local, self%mol%xyz, self%radii, self%param%branch%reach_off, nthreads, geometry)
-            has_seeded = size(geometry%radius) > 0
+            has_seeded = size(geometry%radius_max) > 0
             if (has_seeded) then
                call search_order(local, chunk_order)
                call self%ctx%timer%start("Seed mesh")
@@ -123,11 +124,6 @@ contains
                                            debug=self%ctx%debug, unit=self%ctx%unit)
             if (allocated(local_error)) call abort%latch_error(local_error, 0)
          end if
-         ! Setup scratch
-         if (ipass == 2 .and. has_seeded .and. .not. abort%is_set()) then
-            call seeder%new_scratch(workers(thread_slot)%scratch)
-         end if
-
          ! Shared setup failure on any thread before the first chunk starts
          !$omp barrier
 

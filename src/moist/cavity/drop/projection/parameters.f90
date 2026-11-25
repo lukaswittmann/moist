@@ -19,31 +19,30 @@ module moist_cavity_drop_projection_parameters
    public :: drop_seed_parameters_type, drop_branch_parameters_type
    public :: drop_solve_parameters_type, drop_polish_parameters_type, drop_finalize_parameters_type
 
-   !> Seed step: the octree surface coverage (levels 3, 4; fallback of 1)
+   !> Seed step: the surface mesh seeder's settings, derived from `proj_level`
+   !> ([[seed_init_level]]; levels 2, 3, 4; failed local solves of 1)
    type :: drop_seed_parameters_type
-      !> Leaf edge length of the octree (Bohr), derived from `proj_level`
+      !> Sample spacing of the mesh (Bohr)
       real(wp) :: seed_size = 1.0_wp
-      !> Refinement levels of a surviving leaf without sign change, derived from
-      !> `proj_level`; 0 drops such a leaf unrefined
+      !> Lattice levels below the sample spacing for a cell without sign change;
+      !> 0 leaves such a cell unrefined
       integer :: refine_levels = 0
-      !> Tree-descent box budget per anchor; the level-synchronous search counts every
-      !> box probed at every depth, so it trips earlier than the old lazy best-first
-      !> search did for the same value; face-neighbour and refinement probes not counted
-      integer :: max_boxes = 500000
-      !> Surviving-leaf budget per anchor
-      integer :: max_survivors = 200000
-      !> Octree depth limit
-      integer :: max_depth = 12
-      !> Largest accepted `max_depth`, keeping the seeder's integer lattice
-      !> coordinates representable (`max_addressable_depth` of the octree seeder)
-      !>
-      !> - not a configuration key
-      integer :: max_addressable_depth = 20
+      !> Seed filters: a seed is dropped
+      !> outside the tangent cone of an anchor with an accepted local point
+      logical :: filter_cone = .false.
+      !> on a patch the anchor sees edge-on
+      logical :: filter_grazing = .false.
+      !> with a normal turned away from the anchor's sphere direction, for an
+      !> anchor with an accepted local point
+      logical :: filter_back_facing = .false.
+      !> beyond both focal centers of its patch, where a point is a maximum of
+      !> the distance
+      logical :: filter_focal = .false.
+      !> Tangent-cone scale in units of `h (1 + r k_max)`, the same at every level
+      real(wp) :: cone_scale = 1.5_wp
    contains
-      !> Coarse octree: levels 1 (fallback) and 3
-      procedure :: init_coarse => seed_init_coarse
-      !> Fine octree: level 4
-      procedure :: init_fine => seed_init_fine
+      !> Spacing, refinement and seed filters of a projection level
+      procedure :: init_level => seed_init_level
    end type drop_seed_parameters_type
 
    !> Branch model: the distance window of the branch weights, which also bounds
@@ -81,17 +80,19 @@ module moist_cavity_drop_projection_parameters
       real(wp) :: tol = 1.0e-10_wp
       !> Step budget per point
       integer :: max_iter = 50
-      !> `||F||` below which a point switches to full Newton
-      real(wp) :: switch_fnorm = 1.0e-3_wp
-      !> Cheap steps after which a point switches to full Newton
-      integer :: max_cheap_steps = 2
-      !> Smallest line-search step, accepted unconditionally
-      real(wp) :: ls_floor = 0.1_wp
-      !> Longest spatial Newton step before the line search (Bohr)
+      !> Longest spatial Newton step before the line search (Bohr), also of the
+      !> polish's Riemannian Newton steps
       real(wp) :: max_step = 1.0_wp
       !> Margin of the merit penalty over the multiplier, `mu >= |lambda+| + margin`
       real(wp) :: merit_margin = 1.0_wp
-      !> Stop a column whose prediction lands on an earlier accepted column of its run
+      !> Stop duplicates of a point the run already holds
+      !>
+      !> - Newton: a column whose prediction (full step, or flat step at
+      !>   `lambda = 0`, unscaled) lands on a captor of its run, an accepted
+      !>   column or a strict minimum converged in the same solve
+      !> - polish: the escape walk stops on an accepted point of its run, and a
+      !>   repeated visit of a saddle is skipped once the walks of its directions
+      !>   are confirmed
       logical :: capture_duplicates = .false.
    end type drop_solve_parameters_type
 
@@ -99,18 +100,17 @@ module moist_cavity_drop_projection_parameters
    type :: drop_polish_parameters_type
       !> Iterations of the Riemannian saddle escape
       integer :: escape_max_iter = 150
-      !> Line-search trials per escape iteration
-      integer :: escape_max_ls_iter = 20
       !> Initial line-search step of a non-saddle escape update; 1 is the full Newton step
       real(wp) :: escape_alpha_init = 1.0_wp
-      !> Reduction of a rejected line-search step
-      real(wp) :: escape_alpha_reduce = 0.75_wp
-      !> Armijo coefficient of the escape line search
-      real(wp) :: escape_armijo_c = 1.0e-4_wp
-      !> Fixed step along negative curvature when leaving a saddle
-      real(wp) :: escape_step = 0.5_wp
+      !> Feasibility `|S|` for a KKT point
+      real(wp) :: kkt_tol_feas = 1.0e-6_wp
+      !> Stationarity `||w(x - a) - lambda grad S||` for a KKT point
+      real(wp) :: kkt_tol_stat = 1.0e-6_wp
+      !> Gradient norm floor for a well-defined tangent plane
+      real(wp) :: kkt_tol_grad = 1.0e-10_wp
       !> Reduced-Hessian eigenvalue, relative to `||H_L||_F`, below whose negative a
-      !> point is a saddle and above which a minimum; one threshold for check and escape
+      !> point is a saddle and above which a minimum; one threshold for check and
+      !> escape, and, tenfold, the Newton captor test
       real(wp) :: saddle_eig_tol = 1.0e-8_wp
       !> Retraction iterations
       integer :: retract_max_iter = 50
@@ -132,29 +132,49 @@ module moist_cavity_drop_projection_parameters
 
 contains
 
-   !> Coarse octree preset: 1 Bohr leaves, a leaf without sign change is dropped
+   !> Seed-step preset of a projection level
    !>
-   !> - sets the leaf size and the refinement only; the budgets stay
+   !> | level | spacing (Bohr) | refinement | cone | grazing | back-facing | focal |
+   !> |-------|----------------|-----------|------|---------|-------------|-------|
+   !> | 1     | 1.0            | 0         | no   | no      | no          | no    |
+   !> | 2     | 0.5            | 0         | yes  | yes     | yes         | yes   |
+   !> | 3     | 0.3            | 0         | yes  | no      | no          | no    |
+   !> | 4     | 0.2            | 1         | no   | no      | no          | no    |
    !>
-   !> @param[inout] self Seed-step settings
-   pure subroutine seed_init_coarse(self)
+   !> - level 1 seeds only its failed local solves
+   !> - level 2 seeds failed local solves, partial/closed gates, and fully open
+   !>   local points beyond `0.50` Bohr
+   !> - a back-facing seed leads to a point the horizon switch closes: with the
+   !>   switch off, level 2 leaves the filter out
+   !>
+   !> @param[inout] self                Seed-step settings
+   !> @param[in]    level               Projection level
+   !> @param[in]    horizon_closes_back Whether the horizon switch closes back-facing points
+   pure subroutine seed_init_level(self, level, horizon_closes_back)
       class(drop_seed_parameters_type), intent(inout) :: self
+      integer, intent(in) :: level
+      logical, intent(in) :: horizon_closes_back
 
-      self%seed_size = 1.0_wp
-      self%refine_levels = 0
-   end subroutine seed_init_coarse
-
-   !> Fine octree preset: 0.2 Bohr leaves, a leaf without sign change has its
-   !> children probed once
-   !>
-   !> - sets the leaf size and the refinement only; the budgets stay
-   !>
-   !> @param[inout] self Seed-step settings
-   pure subroutine seed_init_fine(self)
-      class(drop_seed_parameters_type), intent(inout) :: self
-
-      self%seed_size = 0.2_wp
-      self%refine_levels = 1
-   end subroutine seed_init_fine
+      select case (level)
+      case (4)
+         self%seed_size = 0.2_wp
+         self%refine_levels = 1
+      case (3)
+         self%seed_size = 0.3_wp
+         self%refine_levels = 0
+         self%filter_cone = .true.
+      case (2)
+         self%seed_size = 0.5_wp
+         self%refine_levels = 0
+         self%filter_cone = .true.
+         self%filter_grazing = .true.
+         self%filter_back_facing = .true. .and. horizon_closes_back
+         self%filter_focal = .true.
+      case default
+         self%seed_size = 1.0_wp
+         self%refine_levels = 0
+      end select
+      self%cone_scale = 1.5_wp
+   end subroutine seed_init_level
 
 end module moist_cavity_drop_projection_parameters

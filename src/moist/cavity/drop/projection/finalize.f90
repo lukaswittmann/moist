@@ -89,7 +89,7 @@ module moist_cavity_drop_projection_finalize
       procedure :: destroy => rows_destroy
    end type projection_rows_type
 
-   !> Per-thread finalize scratch on the heap; an octree run can hand one anchor
+   !> Per-thread finalize scratch on the heap; a search can hand one anchor
    !> thousands of columns, too many for a worker thread's stack
    type :: finalize_scratch_type
       !> Allocated columns

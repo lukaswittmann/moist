@@ -1,9 +1,8 @@
 !> Tests for the per-point DROP projection pieces: candidate deduplication, the
 !> horizon gate, the focal gate at umbilics, optimality classification, saddle escape (sphere, necks,
 !> multi-sphere clusters, the threshold band and inflection points), retraction,
-!> and the single-anchor projection entry at every level, including the octree
-!> retry of a failed local solve, the restart of an anchor whose seeds all fail,
-!> and an anchor without surface in reach
+!> and the single-anchor projection entry at every level, including the coarse
+!> mesh retry of a failed local solve and an anchor without surface in reach
 module test_cavity_drop_projector
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -16,16 +15,16 @@ module test_cavity_drop_projector
    use moist_math_packed, only: packed_full_contract2
    use moist_math_linalg, only: cross_product, setup_tangent_frame
    use moist_cavity_drop_projection_batch, only: projection_batch_type, &
-                                                point_converged, point_accepted, point_failed_iterations
+                                                point_converged, point_accepted, point_captured, point_failed
    use moist_cavity_drop_projection_newton, only: newton_scratch_type, newton_solve_batch
-   use moist_cavity_drop_projection_polish, only: polish_batch, &
+   use moist_cavity_drop_projection_polish, only: polish_batch, saddle_cache_type, &
                                                  check_constrained_optimality, riemannian_newton_escape, &
                                                  retract_to_surface
    use moist_cavity_drop_projection_finalize, only: dedupe_candidates, cp_jacobian_weight
    use moist_math_smoothstep, only: moist_math_smoothstep_sigmoid_type, new_smoothstep_sigmoid
    use moist_cavity_drop_projection_worker, only: projection_worker_type
    use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fill_legacy_radii
+   use test_helpers, only: expect_error, fill_legacy_radii
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_utils_format, only: to_string
    implicit none(type, external)
@@ -85,6 +84,10 @@ contains
                   new_unittest("escape_pocket_pass_saddle", test_escape_pocket_pass), &
                   new_unittest("escape_cavity_saddles_in_batch", test_escape_cavity_batch), &
                   new_unittest("escape_bent_chain_axis_saddle", test_escape_bent_chain), &
+                  new_unittest("polish_symmetric_saddle_opposite_sign_and_dedup", test_polish_symmetric_saddle_dedup), &
+                  new_unittest("polish_asymmetric_dedup_early_capture_and_isotropic_guard", &
+                               test_polish_asymmetric_dedup_and_guards), &
+                  new_unittest("polish_dedup_failed_leader_captures_nothing", test_polish_dedup_failed_leader), &
                   new_unittest("saddle_band_check_and_escape_agree", test_saddle_band_agreement), &
                   new_unittest("saddle_threshold_scales_with_hessian_norm", test_saddle_threshold_scales), &
                   new_unittest("polish_keeps_point_flat_to_third_order", test_polish_flat_third_order), &
@@ -92,11 +95,12 @@ contains
                   new_unittest("polish_escapes_inflection", test_polish_inflection_escapes), &
                   new_unittest("project_anchor_single_atom_levels", test_project_single_levels), &
                   new_unittest("project_anchor_midpoint_branches", test_project_midpoint), &
-                  new_unittest("project_anchor_failed_local_octree", test_project_failed_octree), &
-                  new_unittest("project_anchor_failed_seeds_restart", test_project_restart), &
+                  new_unittest("project_anchor_failed_local_retry", test_project_failed_retry), &
                   new_unittest("project_anchor_no_surface_in_reach", test_project_unseeded), &
                   new_unittest("project_anchor_failed_local_nearest_point", test_project_nearest_point), &
                   new_unittest("project_anchor_nearest_point_confirmed", test_project_nearest_confirmed), &
+                  new_unittest("project_anchor_default_level_window_branch", test_project_default_window), &
+                  new_unittest("project_anchor_level2_close_window", test_project_level2_close_window), &
                   new_unittest("bad_strict_saddle", test_bad_strict_saddle, should_fail=.true.), &
                   new_unittest("bad_flat_optimality", test_bad_flat_optimality, should_fail=.true.), &
                   new_unittest("bad_retraction_centre", test_bad_retraction_centre, should_fail=.true.), &
@@ -104,11 +108,9 @@ contains
                   new_unittest("bad_escape_budget", test_bad_escape_budget, should_fail=.true.), &
                   new_unittest("bad_escape_centre", test_bad_escape_centre, should_fail=.true.), &
                   new_unittest("bad_newton_budget", test_bad_newton_budget, should_fail=.true.), &
-                  new_unittest("bad_octree_budget", test_bad_octree_budget, should_fail=.true.), &
                   new_unittest("bad_inflection_strict", test_bad_inflection_strict, should_fail=.true.), &
                   new_unittest("bad_retraction_critical_point", test_bad_retraction_critical, should_fail=.true.), &
                   new_unittest("bad_worker_level", test_bad_worker_level, should_fail=.true.), &
-                  new_unittest("bad_worker_level_2", test_bad_worker_level_2, should_fail=.true.), &
                   new_unittest("bad_nearest_count", test_bad_nearest_count, should_fail=.true.), &
                   new_unittest("bad_singular_tangent_jacobian", test_bad_singular_jacobian, should_fail=.true.) &
                   ]
@@ -521,7 +523,7 @@ contains
       call batch%init(4, failed)
       call batch%begin_run(1, anchor, 1)
       call batch%append(seed, 0.0_wp, icol)
-      call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%phi_alpha, scratch, failed)
+      call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%polish, fx%param%phi_alpha, scratch, failed)
       call check(error, .not. allocated(failed), "Newton succeeds")
       if (allocated(error)) return
       call check(error, batch%status(1), point_converged, "Newton converges")
@@ -740,8 +742,8 @@ contains
          if (allocated(error)) return
 
          !> The walk alone: the descent from the saddle, on the surface, to convergence
-         call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, &
-                                       saddle_pt, anchor, lambda, r_out, lambda_out, failed)
+         call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%param%solve%max_step, &
+                                       fx%lsf, saddle_pt, anchor, lambda, r_out, lambda_out, failed)
          call check(error, .not. allocated(failed), "the walk converges within its budget")
          if (allocated(error)) return
          call lsf_value(fx, r_out, s_out, g_out, error)
@@ -1030,6 +1032,309 @@ contains
 
    end subroutine test_escape_bent_chain
 
+   !> Near-symmetric saddle deduplication explores both mirror basins before skipping repeats
+   !>
+   !> - four copies of the equilateral-triangle pass saddle on the mirror plane `x = 0`,
+   !>   with `capture_duplicates = .true.` and a persistent saddle cache
+   !> - visit 1 escapes to one flanking minimum, visit 2 is forced along the opposite 3D
+   !>   direction to the mirror twin, and visits 3-4 plus a subsequent cross-round visit
+   !>   are skipped as captured
+   !> - no column is a minimum before the polish, so a captured column left on the
+   !>   pass was skipped by the saddle cache; an escape walk moves its column
+   subroutine test_polish_symmetric_saddle_dedup(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(fixture_type) :: fx
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(newton_scratch_type) :: scratch
+      type(saddle_cache_type) :: scache
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: rs, anchor(3), mins(3, 3), start(3, 1), pass(3), lambda_pass
+      real(wp) :: starts(3, 4), lambdas(4), x_pre(3, 4)
+      integer :: j
+      logical :: hit2, hit3
+
+      call cluster_fixture(fx, triangle_xyz(1.0_wp), rs, error)
+      if (allocated(error)) return
+      anchor = [0.0_wp, 0.0_wp, rs]
+      call pocket_minima(fx, anchor, rs, mins, error)
+      if (allocated(error)) return
+
+      start(:, 1) = [0.0_wp, -0.1_wp*rs, 0.6_wp*rs]
+      call solve_columns(fx, anchor, start, batch, scratch, error)
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_converged, "Newton converges on the pass saddle")
+      if (allocated(error)) return
+      pass = batch%x(:, 1)
+      lambda_pass = batch%lambda(1)
+
+      do j = 1, 4
+         starts(:, j) = pass
+         lambdas(j) = lambda_pass
+      end do
+      call solve_columns(fx, anchor, starts, batch, scratch, error, lambdas=lambdas)
+      if (allocated(error)) return
+      do j = 1, 4
+         call check(error, batch%status(j), point_converged, "each duplicate column stays on the pass")
+         if (allocated(error)) return
+      end do
+      x_pre = batch%x(:, 1:4)
+
+      ncfg = fx%param%solve
+      ncfg%capture_duplicates = .true.
+      call scache%reset(1)
+      call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed, &
+                        saddle_cache=scache)
+      call check(error, .not. allocated(failed), "polish succeeds on symmetric saddle batch")
+      if (allocated(error)) return
+
+      call check(error, batch%status(1), point_accepted, "1st visit escapes to first mirror minimum")
+      if (allocated(error)) return
+      call check(error, batch%status(2), point_accepted, "2nd visit escapes in opposite sign to mirror twin")
+      if (allocated(error)) return
+      call check(error, batch%status(3), point_captured, "3rd visit is skipped by saddle dedup")
+      if (allocated(error)) return
+      call check(error, batch%status(4), point_captured, "4th visit is skipped by saddle dedup")
+      if (allocated(error)) return
+      call check(error, norm2(batch%x(:, 1) - batch%x(:, 2)) > 0.1_wp, &
+                 "1st and 2nd visits reach distinct mirror minima")
+      if (allocated(error)) return
+      hit2 = norm2(batch%x(:, 1) - mins(:, 2)) < POS_THR .or. norm2(batch%x(:, 2) - mins(:, 2)) < POS_THR
+      hit3 = norm2(batch%x(:, 1) - mins(:, 3)) < POS_THR .or. norm2(batch%x(:, 2) - mins(:, 3)) < POS_THR
+      call check(error, hit2 .and. hit3, "both flanking mirror minima are recovered")
+      if (allocated(error)) return
+      ! Only visit 2 walks the opposite sign: visits 3 and 4 never leave the pass
+      call check(error, all(batch%x(:, 3) == x_pre(:, 3)) .and. all(batch%x(:, 4) == x_pre(:, 4)), &
+                 "visits 3 and 4 are deduplicated without an escape walk")
+      if (allocated(error)) return
+
+      !> Cross-round persistence: a later batch on the same anchor skips the cached saddle immediately
+      call solve_columns(fx, anchor, reshape(pass, [3, 1]), batch, scratch, error, lambdas=[lambda_pass])
+      if (allocated(error)) return
+      x_pre(:, 1) = batch%x(:, 1)
+      call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed, &
+                        saddle_cache=scache)
+      call check(error, .not. allocated(failed), "cross-round polish succeeds")
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_captured, "cross-round repeat is skipped by persistent cache")
+      if (allocated(error)) return
+      call check(error, all(batch%x(:, 1) == x_pre(:, 1)), "cross-round repeat launches no escape walk")
+
+      call scache%destroy()
+   end subroutine test_polish_symmetric_saddle_dedup
+
+   !> Asymmetric saddle dedup, early capture during escape, and isotropic index-2 guard
+   !>
+   !> - unequal-atom neck meridian saddle: strongly asymmetric, so visits 2-3 skip immediately
+   !> - placing the saddle ahead of its destination minimum in a fresh batch triggers early
+   !>   capture inside `riemannian_newton_escape` once pass 1 registers the minimum
+   !> - isotropic index-2 far pole of a single sphere is never skipped by saddle dedup
+   !> - a capture, by the saddle cache or inside the escape walk, leaves its column
+   !>   where it was; an escape walk moves it
+   subroutine test_polish_asymmetric_dedup_and_guards(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(fixture_type) :: fx, fx_s
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(newton_scratch_type) :: scratch
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: xm, rm, rs, anchor(3), x_sad(3), lam_sad, x_min(3), lam_min
+      real(wp) :: starts3(3, 3), lam3(3), starts2(3, 2), lam2(2), x_pre(3, 3)
+      logical :: saddle, kkt
+      integer :: j
+
+      !> Part A: asymmetric neck meridian saddle (unequal atoms -> nonzero 3rd derivative)
+      call neck_fixture(fx, [0.8_wp, 1.2_wp], error)
+      if (allocated(error)) return
+      call neck_location(fx, xm, rm, error)
+      if (allocated(error)) return
+      anchor = [xm, rm + 2.0_wp, 0.0_wp]
+      call on_surface(fx, [xm, rm, 0.0_wp], anchor, x_sad, lam_sad, error)
+      if (allocated(error)) return
+      call solve_columns(fx, anchor, reshape(x_sad, [3, 1]), batch, scratch, error, lambdas=[lam_sad])
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_converged, "Newton converges on the asymmetric neck saddle")
+      if (allocated(error)) return
+      x_sad = batch%x(:, 1)
+      lam_sad = batch%lambda(1)
+      call check_constrained_optimality(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, x_sad, &
+                                        anchor, lam_sad, failed, is_saddle=saddle, is_kkt=kkt)
+      call check(error, .not. allocated(failed) .and. kkt .and. saddle, "neck waist is a saddle")
+      if (allocated(error)) return
+
+      do j = 1, 3
+         starts3(:, j) = x_sad
+         lam3(j) = lam_sad
+      end do
+      call solve_columns(fx, anchor, starts3, batch, scratch, error, lambdas=lam3)
+      if (allocated(error)) return
+      x_pre = batch%x(:, 1:3)
+      ncfg = fx%param%solve
+      ncfg%capture_duplicates = .true.
+      call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed)
+      call check(error, .not. allocated(failed), "polish succeeds on asymmetric saddle batch")
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_accepted, "1st visit escapes asymmetric saddle")
+      if (allocated(error)) return
+      call check(error, norm2(batch%x(:, 1) - x_pre(:, 1)) > POS_THR, "1st visit walks off the saddle")
+      if (allocated(error)) return
+      call check(error, batch%status(2), point_captured, "2nd visit skipped immediately on asymmetric saddle")
+      if (allocated(error)) return
+      call check(error, batch%status(3), point_captured, "3rd visit skipped immediately on asymmetric saddle")
+      if (allocated(error)) return
+      ! No minimum before the polish, so nothing captures inside a walk: the repeats are deduplicated
+      call check(error, all(batch%x(:, 2) == x_pre(:, 2)) .and. all(batch%x(:, 3) == x_pre(:, 3)), &
+                 "repeats deduplicated without any escape walk, no opposite-sign escape")
+      if (allocated(error)) return
+      x_min = batch%x(:, 1)
+      lam_min = batch%lambda(1)
+
+      !> Part B: early duplicate capture inside escape (saddle placed before its destination minimum)
+      starts2(:, 1) = x_sad
+      starts2(:, 2) = x_min
+      lam2 = [lam_sad, lam_min]
+      call solve_columns(fx, anchor, starts2, batch, scratch, error, lambdas=lam2)
+      if (allocated(error)) return
+      x_pre(:, 1:2) = batch%x(:, 1:2)
+      call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed)
+      call check(error, .not. allocated(failed), "polish succeeds for early-capture batch")
+      if (allocated(error)) return
+      call check(error, batch%status(2), point_accepted, "minimum column accepted in pass 1")
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_captured, "saddle escape captured early by known minimum")
+      if (allocated(error)) return
+      ! The only saddle visit of a fresh cache cannot be deduplicated; a capture after the
+      ! re-solve would have moved the column
+      call check(error, all(batch%x(:, 1) == x_pre(:, 1)), "the walk stops on the minimum before it moves the column")
+      if (allocated(error)) return
+
+      !> Part C: isotropic index-2 guard on a single sphere's far pole (mu_min == mu_max < 0)
+      call build_fixture(fx_s, single_atom(), error)
+      if (allocated(error)) return
+      call surface_radius(fx_s, rs, error)
+      if (allocated(error)) return
+      anchor = [rs + 3.0_wp, 0.0_wp, 0.0_wp]
+      starts2(:, 1) = [-rs - 0.05_wp, 0.0_wp, 0.0_wp]
+      starts2(:, 2) = [-rs - 0.05_wp, 0.0_wp, 0.0_wp]
+      call solve_columns(fx_s, anchor, starts2, batch, scratch, error)
+      if (allocated(error)) return
+      x_pre(:, 1:2) = batch%x(:, 1:2)
+      ncfg = fx_s%param%solve
+      ncfg%capture_duplicates = .true.
+      call polish_batch(fx_s%ctx, batch, fx_s%lsf, fx_s%param%polish, ncfg, fx_s%param%phi_alpha, scratch, failed)
+      call check(error, .not. allocated(failed), "polish succeeds on isotropic index-2 batch")
+      if (allocated(error)) return
+      ! Both far-pole visits are saddles and walk off: neither is deduplicated
+      call check(error, norm2(batch%x(:, 1) - x_pre(:, 1)) > POS_THR &
+                 .and. norm2(batch%x(:, 2) - x_pre(:, 2)) > POS_THR, "isotropic index-2 saddle is never deduplicated")
+      if (allocated(error)) return
+      call check(error, batch%status(1), point_accepted, "1st isotropic escape lands on near pole")
+      if (allocated(error)) return
+      call check(error, norm2(batch%x(:, 1) - [rs, 0.0_wp, 0.0_wp]) < POS_THR, "near pole recovered")
+
+   end subroutine test_polish_asymmetric_dedup_and_guards
+
+   !> A saddle whose escape leader fails captures none of its other visits
+   !>
+   !> - the asymmetric neck saddle (three visits) and the near-symmetric pass saddle
+   !>   (four visits) of the dedup tests, polished with a Newton budget of no step: the
+   !>   re-solve after every escape fails at once, so no leader is confirmed
+   !> - nothing in the batch is accepted, so no column may end captured: each visit
+   !>   walks off the saddle instead, a new leader once the failed one's entry is dropped
+   !> - a later polish of the same saddle with the full budget and the same persistent
+   !>   cache finds no entry of the failed leaders: it walks and ends accepted
+   subroutine test_polish_dedup_failed_leader(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(fixture_type) :: fx
+      type(projection_batch_type) :: batch
+      type(drop_solve_parameters_type) :: ncfg
+      type(newton_scratch_type) :: scratch
+      type(saddle_cache_type) :: scache
+      type(moist_error_type), allocatable :: failed
+      real(wp) :: xm, rm, rs, anchor(3), x_sad(3), lam_sad, starts(3, 4), lams(4), x_pre(3, 4), mins(3, 3)
+      integer :: icase, nvisit, j
+
+      do icase = 1, 2
+         if (icase == 1) then
+            !> Asymmetric neck meridian saddle of unequal atoms
+            call neck_fixture(fx, [0.8_wp, 1.2_wp], error)
+            if (allocated(error)) return
+            call neck_location(fx, xm, rm, error)
+            if (allocated(error)) return
+            anchor = [xm, rm + 2.0_wp, 0.0_wp]
+            call on_surface(fx, [xm, rm, 0.0_wp], anchor, x_sad, lam_sad, error)
+            if (allocated(error)) return
+            starts(:, 1) = x_sad
+            nvisit = 3
+         else
+            !> Near-symmetric pass saddle of the equilateral triangle
+            call cluster_fixture(fx, triangle_xyz(1.0_wp), rs, error)
+            if (allocated(error)) return
+            anchor = [0.0_wp, 0.0_wp, rs]
+            call pocket_minima(fx, anchor, rs, mins, error)
+            if (allocated(error)) return
+            starts(:, 1) = [0.0_wp, -0.1_wp*rs, 0.6_wp*rs]
+            lam_sad = 0.0_wp
+            nvisit = 4
+         end if
+         call solve_columns(fx, anchor, starts(:, 1:1), batch, scratch, error, lambdas=[lam_sad])
+         if (allocated(error)) return
+         call check(error, batch%status(1), point_converged, "Newton converges on the saddle")
+         if (allocated(error)) return
+         x_sad = batch%x(:, 1)
+         lam_sad = batch%lambda(1)
+         do j = 1, nvisit
+            starts(:, j) = x_sad
+            lams(j) = lam_sad
+         end do
+         call solve_columns(fx, anchor, starts(:, 1:nvisit), batch, scratch, error, lambdas=lams(1:nvisit))
+         if (allocated(error)) return
+         x_pre(:, 1:nvisit) = batch%x(:, 1:nvisit)
+
+         ncfg = fx%param%solve
+         ncfg%capture_duplicates = .true.
+         ncfg%max_iter = 0
+         call scache%reset(1)
+         call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed, &
+                           saddle_cache=scache)
+         call check(error, .not. allocated(failed), "polish without Newton steps succeeds")
+         if (allocated(error)) return
+         call check(error, batch%status(1), point_failed, "the first leader's re-solve fails")
+         if (allocated(error)) return
+         call check(error, count(batch%status(1:nvisit) == point_accepted), 0, "no visit is accepted")
+         if (allocated(error)) return
+         call check(error, count(batch%status(1:nvisit) == point_captured), 0, &
+                    "no visit is captured without an accepted point to duplicate")
+         if (allocated(error)) return
+         do j = 1, nvisit
+            call check(error, norm2(batch%x(:, j) - x_pre(:, j)) > POS_THR, "every visit walks off the saddle")
+            if (allocated(error)) return
+         end do
+
+         !> The failed entries do not persist: a later visit walks and is accepted
+         call solve_columns(fx, anchor, reshape(x_sad, [3, 1]), batch, scratch, error, lambdas=[lam_sad])
+         if (allocated(error)) return
+         x_pre(:, 1) = batch%x(:, 1)
+         ncfg%max_iter = fx%param%solve%max_iter
+         call polish_batch(fx%ctx, batch, fx%lsf, fx%param%polish, ncfg, fx%param%phi_alpha, scratch, failed, &
+                           saddle_cache=scache)
+         call check(error, .not. allocated(failed), "polish with the full budget succeeds")
+         if (allocated(error)) return
+         call check(error, batch%status(1), point_accepted, "the later visit is accepted")
+         if (allocated(error)) return
+         call check(error, norm2(batch%x(:, 1) - x_pre(:, 1)) > POS_THR, "the later visit walks")
+         if (allocated(error)) return
+         call scache%destroy()
+      end do
+
+   end subroutine test_polish_dedup_failed_leader
+
    !* ================================================================================= *!
    !*                        Saddle threshold and degenerate points                     *!
    !* ================================================================================= *!
@@ -1236,7 +1541,7 @@ contains
       real(wp) :: rs, anchor(3)
       integer :: il, level, n
       !> Every projection level
-      integer, parameter :: levels(3) = [1, 3, 4]
+      integer, parameter :: levels(4) = [1, 2, 3, 4]
 
       call build_fixture(fx, single_atom(), error)
       if (allocated(error)) return
@@ -1273,7 +1578,7 @@ contains
    end subroutine test_project_single_levels
 
    !> Between two equal atoms the gradient vanishes by symmetry; the local solve
-   !> fails and every level's octree retry finds the two mirror branches
+   !> fails and every level's search finds the two mirror branches
    subroutine test_project_midpoint(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1285,7 +1590,7 @@ contains
       real(wp) :: rs, half, anchor(3), s, g(3)
       integer :: il, level, n, i
       !> Every projection level
-      integer, parameter :: levels(3) = [1, 3, 4]
+      integer, parameter :: levels(4) = [1, 2, 3, 4]
 
       call build_fixture(fx, single_atom(), error)
       if (allocated(error)) return
@@ -1323,11 +1628,11 @@ contains
 
    end subroutine test_project_midpoint
 
-   !> A failed local solve at level 1 is retried from the coarse octree of
-   !> level 3: same seeds, same points
+   !> A failed local solve at level 1 is retried from its coarse mesh and
+   !> finds the points of a level-3 search
    !>
    !> - midpoint of a carbon pair, where the vanishing gradient stalls Newton
-   subroutine test_project_failed_octree(error)
+   subroutine test_project_failed_retry(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
@@ -1360,7 +1665,7 @@ contains
       if (allocated(error)) return
       call check(error, worker%n_escalated, 1, "the failed local solve is escalated")
       if (allocated(error)) return
-      call check(error, seeds, seeds_ref, "the retry proposes the level-3 octree seeds")
+      call check(error, seeds > 0 .and. seeds_ref > 0, "the retry and the level-3 search are seeded")
       if (allocated(error)) return
       call check(error, .not. lost, "the anchor keeps a point")
       if (allocated(error)) return
@@ -1368,66 +1673,7 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(pts(:, 1:n) - ref(:, 1:n_ref))) < POS_THR, "the level-3 points")
 
-   end subroutine test_project_failed_octree
-
-   !> An anchor whose seeds all fail is solved again with the full system
-   !>
-   !> - anchor on the axis of an argon-pair neck: the surface is a ring around it, and a
-   !>   long cheap stage (50 steps) carries every seed onto the axis
-   !> - `h = 4.2` gives a neck radius of about 1.04 Bohr; the same holds from about 3.6
-   !>   (radius 2.4) up to the pinch-off just above 4.33, so the value is not tuned
-   !> - every ring point is equally far from the anchor, which is the focal point of the
-   !>   ring and sees its normals tangent to the anchor sphere, so the points carry no
-   !>   weight; the weight cut is disabled to see them
-   !> - negative control: without the restart (seeds solved once, as a worker
-   !>   whose restart keeps the cheap steps does) the anchor is lost with seeds
-   subroutine test_project_restart(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      type(fixture_type) :: fx
-      type(projection_worker_type) :: worker
-      type(moist_error_type), allocatable :: failed
-      type(structure_type) :: mol
-      real(wp), parameter :: h = 4.2_wp
-      real(wp), allocatable :: pdist(:)
-      real(wp) :: anchor(3), rm
-      integer :: n, seeds
-      logical :: lost, unseeded
-
-      call new(mol, [18, 18], reshape([0.0_wp, 0.0_wp, -h, 0.0_wp, 0.0_wp, h], [3, 2]))
-      call build_fixture(fx, mol, error, blend_k=5.5_wp)
-      if (allocated(error)) return
-      fx%param%branch%reach_on = 1.6_wp
-      fx%param%branch%reach_off = 2.4_wp
-      anchor = 0.0_wp
-      ! The waist lies in the plane z = 0, which holds the ray along +y from the origin
-      call ring_radius(fx, 0.0_wp, rm, error)
-      if (allocated(error)) return
-
-      fx%param%solve%max_cheap_steps = 50
-      call new_worker(fx, 3, worker, error)
-      if (allocated(error)) return
-      worker%solve_restart = worker%solve_seeded
-      call worker%project_anchor(fx%ctx, anchor, 1, n, failed, n_seeds=seeds, lost=lost, unseeded=unseeded)
-      call check(error, .not. allocated(failed), "control: projection succeeds")
-      if (allocated(error)) return
-      call check(error, seeds > 0 .and. lost .and. .not. unseeded, "control: every seed of the anchor fails")
-      if (allocated(error)) return
-
-      call new_worker(fx, 3, worker, error)
-      if (allocated(error)) return
-      worker%finalize%wleb_cut = -1.0_wp
-      call worker%project_anchor(fx%ctx, anchor, 1, n, failed, pdist=pdist, lost=lost, unseeded=unseeded)
-      call check(error, .not. allocated(failed), "projection succeeds")
-      if (allocated(error)) return
-      call check(error, worker%n_restarted, 1, "the anchor is solved again")
-      if (allocated(error)) return
-      call check(error, .not. lost .and. .not. unseeded .and. n > 0, "and keeps an accepted point")
-      if (allocated(error)) return
-      call check(error, maxval(abs(pdist(1:n) - rm)) < POS_THR, "every point lies on the neck ring")
-
-   end subroutine test_project_restart
+   end subroutine test_project_failed_retry
 
    !> An anchor with no surface within the reach is lost without a seed
    !>
@@ -1512,11 +1758,9 @@ contains
       end do
    end subroutine test_project_nearest_point
 
-   !> The second search finds the closest point that the nearest seed missed
+   !> One seed in the first round still ends on the closest point, the x pole
    !>
-   !> - one seed in the first round: the nearest crossing lies on the flatter y
-   !>   sheet and converges to its farther pole
-   !> - without the second search that farther point is all the anchor keeps
+   !> - the second search confirms the nearest seed's point
    !> - the weight cut is disabled, so the raw branch sets are compared
    subroutine test_project_nearest_confirmed(error)
       !> Error handle
@@ -1541,47 +1785,114 @@ contains
       if (allocated(error)) return
       call check(error, n > 0, "the anchor keeps a point")
       if (allocated(error)) return
-      call check(error, abs(minval(pdist(1:n)) - pdist_x) < POS_THR, "the second search finds the x pole")
+      call check(error, abs(minval(pdist(1:n)) - pdist_x) < POS_THR, "the closest point is the x pole")
+   end subroutine test_project_nearest_confirmed
+
+   !> At the default level a fully open local point seeds its branch window from
+   !> the worker's own surface mesh and finds the branch behind it
+   !>
+   !> - carbon pair, the anchor on the axis 0.5 Bohr off the midpoint: the local
+   !>   point is the near atom's pole, the far atom's pole 1 Bohr farther lies in
+   !>   a widened window; the horizon switch is off, so both are fully open
+   subroutine test_project_default_window(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(fixture_type) :: fx
+      type(projection_worker_type) :: worker
+      type(moist_cavity_drop_parameters_type) :: defaults
+      type(moist_error_type), allocatable :: failed
+      real(wp), allocatable :: pts(:, :), pdist(:)
+      real(wp) :: rs, s, g(3)
+      integer :: n, i, seeds
+
+      call build_fixture(fx, single_atom(), error)
+      if (allocated(error)) return
+      call surface_radius(fx, rs, error)
+      if (allocated(error)) return
+      call build_fixture(fx, carbon_pair(2.2_wp*rs), error)
+      if (allocated(error)) return
+      fx%param%w_0hor_on = 0.0_wp
+      fx%param%branch%dpdist_max = 2.0_wp
+
+      call new_worker(fx, defaults%proj_level, worker, error)
+      if (allocated(error)) return
+      call worker%project_anchor(fx%ctx, [-0.5_wp, 0.0_wp, 0.0_wp], 1, n, failed, points=pts, pdist=pdist, &
+                                 n_seeds=seeds)
+      if (allocated(failed)) then
+         call test_failed(error, "projection failed: "//failed%message)
+         return
+      end if
+      call check(error, worker%n_seeded == 1 .and. worker%n_extended == 0 .and. worker%n_escalated == 0, &
+                 "the fully open local point seeds its window")
+      if (allocated(error)) return
+      call check(error, seeds > 0, "the window holds seeds")
+      if (allocated(error)) return
+      call check(error, worker%seeder%built .and. worker%seeder%nsample > 0, "the worker built its surface mesh")
+      if (allocated(error)) return
+      call check(error, n, 2, "the branch behind the local point is found")
+      if (allocated(error)) return
+      do i = 1, n
+         call lsf_value(fx, pts(:, i), s, g, error)
+         if (allocated(error)) return
+         call check(error, abs(s) < 1.0e-12_wp, "every branch is on the surface")
+         if (allocated(error)) return
+      end do
+      call check(error, norm2(pts(:, 1) + pts(:, 2)) < POS_THR, "the branches are the mirror poles")
+      if (allocated(error)) return
+      call check(error, abs(abs(pdist(2) - pdist(1)) - 1.0_wp) < POS_THR, "the far pole is 1 Bohr farther")
+   end subroutine test_project_default_window
+
+   !> Level 2 seeds the window of a fully open local point only beyond 0.5 Bohr
+   !>
+   !> - one atom, anchors on the x axis 0.45 and 0.55 Bohr above the surface:
+   !>   the nearer is finalized from its local point and counted, the farther
+   !>   seeds its window
+   subroutine test_project_level2_close_window(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(fixture_type) :: fx
+      type(projection_worker_type) :: worker
+      type(moist_error_type), allocatable :: failed
+      real(wp), allocatable :: pdist(:)
+      real(wp) :: rs
+      integer :: i, n, seeds
+      !> Heights of the anchors above the surface (Bohr)
+      real(wp), parameter :: height(2) = [0.45_wp, 0.55_wp]
+
+      call build_fixture(fx, single_atom(), error)
+      if (allocated(error)) return
+      call surface_radius(fx, rs, error)
       if (allocated(error)) return
 
-      call new_worker(fx, 1, worker, error)
-      if (allocated(error)) return
-      worker%nearest_count = 1
-      worker%confirm_nearest = .false.
-      worker%finalize%wleb_cut = -1.0_wp
-      call worker%project_anchor(fx%ctx, [0.0_wp, 0.0_wp, 0.0_wp], 1, n, failed, points=pts, pdist=pdist)
-      call check(error, .not. allocated(failed), "projection without the second search succeeds")
-      if (allocated(error)) return
-      call check(error, n, 1, "the first round alone keeps one point")
-      if (allocated(error)) return
-      call check(error, abs(pdist(1) - pdist_y) < POS_THR, "the nearest seed alone ends on the farther y pole")
-   end subroutine test_project_nearest_confirmed
+      do i = 1, size(height)
+         call new_worker(fx, 2, worker, error)
+         if (allocated(error)) return
+         call worker%project_anchor(fx%ctx, [rs + height(i), 0.0_wp, 0.0_wp], 1, n, failed, pdist=pdist, &
+                                    n_seeds=seeds)
+         if (allocated(failed)) then
+            call test_failed(error, "projection failed: "//failed%message)
+            return
+         end if
+         call check(error, n == 1 .and. worker%n_extended == 0, "a convex surface has one branch, from the local point")
+         if (allocated(error)) return
+         call check(error, abs(pdist(1) - height(i)) < POS_THR, "the local point is the pole")
+         if (allocated(error)) return
+         if (i == 1) then
+            call check(error, worker%n_seeded == 0 .and. worker%n_window_skipped == 1 .and. seeds == 0, &
+                       "below 0.5 Bohr the window is not seeded")
+         else
+            call check(error, worker%n_seeded == 1 .and. worker%n_window_skipped == 0 .and. seeds > 0, &
+                       "beyond 0.5 Bohr the window is seeded")
+         end if
+         if (allocated(error)) return
+      end do
+   end subroutine test_project_level2_close_window
 
    !* ================================================================================= *!
    !*                                    Error paths                                    *!
    !* ================================================================================= *!
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(moist_error_type), allocatable, intent(in) :: err
-      !> The exact refusal text
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (err%message == expected) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> Strict mode refuses a saddle that the caller cannot handle
    subroutine test_bad_strict_saddle(error)
@@ -1679,8 +1990,8 @@ contains
       end if
       fx%param%polish%escape_alpha_init = 1.0_wp
       fx%param%polish%escape_max_iter = 1
-      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, &
-                                    r0, anchor, lambda0, r, lambda, failed)
+      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%param%solve%max_step, &
+                                    fx%lsf, r0, anchor, lambda0, r, lambda, failed)
       call expect_error(error, failed, "Riemannian Newton did not converge within max iterations")
    end subroutine test_bad_escape_budget
 
@@ -1695,8 +2006,8 @@ contains
 
       if (.not. sphere_setup(fx, rs)) return
       anchor = [rs + 3.0_wp, 0.0_wp, 0.0_wp]
-      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, &
-                                    [0.0_wp, 0.0_wp, 0.0_wp], anchor, 0.0_wp, r, lambda, failed)
+      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%param%solve%max_step, &
+                                    fx%lsf, [0.0_wp, 0.0_wp, 0.0_wp], anchor, 0.0_wp, r, lambda, failed)
       call expect_error(error, failed, "Riemannian escape: degenerate LSF gradient")
    end subroutine test_bad_escape_centre
 
@@ -1721,36 +2032,12 @@ contains
       if (allocated(failed)) return
       call batch%begin_run(1, anchor, 1)
       call batch%append([-rs - 0.05_wp, 0.02_wp, 0.0_wp], 0.0_wp, icol)
-      call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%phi_alpha, scratch, failed)
+      call newton_solve_batch(batch, fx%lsf, ncfg, fx%param%polish, fx%param%phi_alpha, scratch, failed)
       if (allocated(failed)) return
-      if (batch%status(1) == point_failed_iterations) then
+      if (batch%status(1) == point_failed) then
          call test_failed(error, "Newton iteration budget exhausted")
       end if
    end subroutine test_bad_newton_budget
-
-   !> An exhausted octree box budget is raised as a build-aborting error
-   subroutine test_bad_octree_budget(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      type(fixture_type) :: fx
-      type(projection_worker_type) :: worker
-      type(moist_error_type), allocatable :: failed
-      real(wp) :: rs, anchor(3)
-      integer :: n
-
-      if (.not. sphere_setup(fx, rs)) return
-      anchor = [rs + 3.0_wp, 0.0_wp, 0.0_wp]
-      call new_worker(fx, 4, worker, error, max_boxes=16)
-      if (allocated(error)) then
-         deallocate (error)
-         return
-      end if
-      call worker%project_anchor(fx%ctx, anchor, 1, n, failed)
-      call expect_error(error, failed, "Octree branch search: box budget exhausted before the "// &
-                        "search ball was certified. Either the level set supplies no exclusion "// &
-                        "radius (pruning nothing), or seed_size is too small for the admissible radius.")
-   end subroutine test_bad_octree_budget
 
    !> A nearest-point round without seeds is refused
    subroutine test_bad_nearest_count(error)
@@ -1875,26 +2162,8 @@ contains
       param = fx%param
       param%proj_level = 5
       call worker%init(param, fx%lsf, fx%mol%xyz, failed)
-      call expect_error(error, failed, "DROP projection: level must be 1, 3 or 4")
+      call expect_error(error, failed, "DROP projection: level must be 1, 2, 3 or 4")
    end subroutine test_bad_worker_level
-
-   !> A worker refuses projection level 2
-   subroutine test_bad_worker_level_2(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      type(fixture_type) :: fx
-      type(projection_worker_type) :: worker
-      type(moist_cavity_drop_parameters_type) :: param
-      type(moist_error_type), allocatable :: failed
-      real(wp) :: rs
-
-      if (.not. sphere_setup(fx, rs)) return
-      param = fx%param
-      param%proj_level = 2
-      call worker%init(param, fx%lsf, fx%mol%xyz, failed)
-      call expect_error(error, failed, "DROP projection: level must be 1, 3 or 4")
-   end subroutine test_bad_worker_level_2
 
    !> A tangent block that vanishes while both switches stay on is refused
    !>
@@ -2069,8 +2338,7 @@ contains
    !> @param[in]  level     Projection level
    !> @param[out] worker    Configured worker
    !> @param[out] error     Error handle
-   !> @param[in]  max_boxes Octree box budget override
-   subroutine new_worker(fx, level, worker, error, max_boxes)
+   subroutine new_worker(fx, level, worker, error)
       !> Fixture
       type(fixture_type), intent(in) :: fx
       !> Projection level
@@ -2079,15 +2347,12 @@ contains
       type(projection_worker_type), intent(out) :: worker
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
-      !> Octree box budget
-      integer, intent(in), optional :: max_boxes
 
       type(moist_cavity_drop_parameters_type) :: param
       type(moist_error_type), allocatable :: failed
 
       param = fx%param
       param%proj_level = level
-      if (present(max_boxes)) param%seed%max_boxes = max_boxes
       ! Tests set user-facing fields on the fixture; resolve what derives from them
       call param%compute_derived(failed)
       if (allocated(failed)) then
@@ -2538,7 +2803,7 @@ contains
          if (present(lambdas)) lambda = lambdas(j)
          call batch%append(starts(:, j), lambda, icol)
       end do
-      call newton_solve_batch(batch, fx%lsf, fx%param%solve, fx%param%phi_alpha, scratch, failed)
+      call newton_solve_batch(batch, fx%lsf, fx%param%solve, fx%param%polish, fx%param%phi_alpha, scratch, failed)
       if (allocated(failed)) call test_failed(error, "Newton failed: "//failed%message)
    end subroutine solve_columns
 
@@ -2566,7 +2831,7 @@ contains
       type(newton_scratch_type) :: scratch
       type(moist_error_type), allocatable :: failed
 
-      status = point_failed_iterations
+      status = point_failed
       x = 0.0_wp
       call solve_columns(fx, anchor, reshape(seed, [3, 1]), batch, scratch, error, lambdas=[lambda])
       if (allocated(error)) return
@@ -2616,8 +2881,8 @@ contains
       call check(error, kkt, "the far pole is a KKT point")
       if (allocated(error)) return
       ! An exhausted budget on the way down is of no interest; the distance is
-      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%lsf, &
-                                    r, anchor, lambda, r_out, lambda_out, failed)
+      call riemannian_newton_escape(fx%ctx, fx%param%polish, fx%param%phi_alpha, fx%param%solve%max_step, &
+                                    fx%lsf, r, anchor, lambda, r_out, lambda_out, failed)
       walked = norm2(r_out - r)
    end subroutine far_pole_regime
 

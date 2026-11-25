@@ -3873,7 +3873,7 @@ contains
    !> - `r_cap`: `tau(+Inf)` of the reached certificate, valid where `PD_f = 0`
    !> - unreached means no atom within the band end OR a non-finite lift with
    !>   `S > 0`; the certificate covers the first, which every unreached column
-   !>   is at order 0 (the octree's probe; `w_A` underflowing to zero needs the
+   !>   is at order 0 (the seeder's probe; `w_A` underflowing to zero needs the
    !>   last ~1e-60 of a band)
    !> - per-point path: every point with an empty active list
    !> - zero with the fade off (no reach, no such bound), outside the guards of
