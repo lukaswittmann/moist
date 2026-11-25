@@ -72,8 +72,8 @@ module moist_cavity_drop_threads
    !> A latch is written only on a failure path, so the serialization it costs
    !> is irrelevant
    type :: drop_abort_latch_type
-      !> Whether any thread has latched a failure
-      logical :: requested = .false.
+      !> Whether any thread has latched a failure; read through `is_set` or `skips`
+      logical, private :: requested = .false.
       !> Latched error object, when the failure carried one
       type(error_type), allocatable :: error
       !> Latched status code, when the failure carried one instead
@@ -89,6 +89,10 @@ module moist_cavity_drop_threads
       procedure :: latch_message => abort_latch_message
       !> Latch a status code and the grid point it came from
       procedure :: latch_status => abort_latch_status
+      !> Whether any failure is latched, safe inside a parallel region
+      procedure :: is_set => abort_latch_is_set
+      !> Whether a loop index lies behind the latched failure
+      procedure :: skips => abort_latch_skips
    end type drop_abort_latch_type
 
 contains
@@ -216,6 +220,7 @@ contains
 
       !$omp critical (drop_abort_latch)
       if (latch_wins(self, candidate)) then
+         !$omp atomic write
          self%requested = .true.
          self%igrid = candidate
          self%status = 0
@@ -247,6 +252,7 @@ contains
 
       !$omp critical (drop_abort_latch)
       if (latch_wins(self, candidate)) then
+         !$omp atomic write
          self%requested = .true.
          self%igrid = candidate
          self%status = 0
@@ -275,6 +281,7 @@ contains
 
       !$omp critical (drop_abort_latch)
       if (latch_wins(self, igrid)) then
+         !$omp atomic write
          self%requested = .true.
          self%igrid = igrid
          self%status = status
@@ -284,6 +291,48 @@ contains
       end if
       !$omp end critical (drop_abort_latch)
    end subroutine abort_latch_status
+
+   !> Whether any thread has latched a failure
+   !>
+   !> - atomic read against the atomic write of the latching routines, so a
+   !>   worker may ask from inside the parallel loop
+   !>
+   !> @param[in] self  abort latch
+   function abort_latch_is_set(self) result(set)
+      !> Abort latch
+      class(drop_abort_latch_type), intent(in) :: self
+      !> Whether a failure is latched
+      logical :: set
+
+      !$omp atomic read
+      set = self%requested
+   end function abort_latch_is_set
+
+   !> Whether a loop index lies behind the latched failure
+   !>
+   !> - `.false.` while nothing is latched, at the cost of one atomic read
+   !> - the latched index is read under the latch's lock, so it belongs to the
+   !>   failure seen; an index at or ahead of it is not skipped
+   !> - a failure latched without an index (0) skips every index from 1 on
+   !>
+   !> @param[in] self  abort latch
+   !> @param[in] idx   loop index, in the numbering the failures are latched with
+   function abort_latch_skips(self, idx) result(skip)
+      !> Abort latch
+      class(drop_abort_latch_type), intent(in) :: self
+      !> Loop index
+      integer, intent(in) :: idx
+      !> Whether the index lies behind the latched failure
+      logical :: skip
+
+      !$omp atomic read
+      skip = self%requested
+      if (.not. skip) return
+
+      !$omp critical (drop_abort_latch)
+      skip = idx > self%igrid
+      !$omp end critical (drop_abort_latch)
+   end function abort_latch_skips
 
    !> Whether a candidate failure displaces the one currently latched
    !>

@@ -10,6 +10,7 @@ program tester
    use test_utils_timer, only: collect_utils_timer
    use test_utils_context, only: collect_utils_context
    use test_utils_mem, only: collect_utils_mem
+   use test_utils_prettyprint, only: collect_utils_prettyprint
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_utils_prettylistprint_threaded, only: collect_utils_prettylistprint_threaded
    use test_utils_format, only: collect_utils_format
@@ -109,6 +110,7 @@ program tester
       & new_testsuite("utils_timer", collect_utils_timer), &
       & new_testsuite("utils_context", collect_utils_context), &
       & new_testsuite("utils_mem", collect_utils_mem), &
+      & new_testsuite("utils_prettyprint", collect_utils_prettyprint), &
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
       & new_testsuite("utils_prettylistprint_threaded", collect_utils_prettylistprint_threaded), &
       & new_testsuite("utils_format", collect_utils_format), &

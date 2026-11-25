@@ -249,7 +249,7 @@ contains
 
       !$omp do schedule(dynamic, 1)
       do itile = 1, ntile
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
 
          ! Clear the rows the previous tile of this thread touched
          do k = 1, nrow
@@ -269,7 +269,7 @@ contains
                                     tile_lsf2, tile_lsf3, abort)) cycle
 
          do p = 1, np
-            if (abort%requested) cycle
+            if (abort%is_set()) cycle
 
             igrid = igrid0 + p - 1
             anchor = self%anchor%xyz(:, self%anchor_of_row(igrid))
@@ -371,7 +371,7 @@ contains
             end if
          end do
          ! A latched point voids the result, so its tile is not contracted
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
 
          !* -------------- Field channel: contract with nuclear partials -------------- *!
          ! The level set contracts the jet indices itself: `vjp_f1_rA_batch`

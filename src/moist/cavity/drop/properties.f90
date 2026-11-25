@@ -343,7 +343,7 @@ contains
 
       !$omp do schedule(dynamic)
       do i = 1, self%ngrid
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
          call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, i), lsf_error)
          if (allocated(lsf_error)) then
             call abort%latch_error(lsf_error, i)
@@ -464,7 +464,7 @@ contains
 
       !$omp do schedule(dynamic, 1)
       do itile = 1, ntile
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
 
          igrid0 = (itile - 1)*tile + 1
          np = min(tile, self%ngrid - igrid0 + 1)

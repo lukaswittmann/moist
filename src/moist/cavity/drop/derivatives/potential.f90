@@ -167,7 +167,7 @@ contains
 
       !$omp do schedule(dynamic, 1)
       do itile = 1, ntile
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
 
          igrid0 = (itile - 1)*tile + 1
          np = min(tile, self%ngrid - igrid0 + 1)
@@ -179,7 +179,7 @@ contains
                                     tile_lsf2, tile_lsf3, abort)) cycle
 
          do p = 1, np
-            if (abort%requested) cycle
+            if (abort%is_set()) cycle
 
             igrid = igrid0 + p - 1
             owner_idx = self%owner(igrid)

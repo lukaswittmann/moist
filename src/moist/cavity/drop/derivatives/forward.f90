@@ -325,7 +325,7 @@ contains
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
          !$omp cancellation point do
-         if (abort%requested) cycle
+         if (abort%is_set()) cycle
          !* -------------------------- Primitive derivatives -------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_prim)
 
