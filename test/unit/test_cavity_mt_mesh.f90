@@ -8,7 +8,7 @@ module test_cavity_mt_mesh
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_mt_mesh, only: mt_mesh_type, build_mt_mesh
-   use test_helpers, only: check_moist_error
+   use test_helpers, only: check_moist_error, expect_error
    implicit none(type, external)
    private
    public :: collect_cavity_mt_mesh
@@ -307,7 +307,7 @@ contains
       xyz = 0.0_wp
       call init_analytic(lsf, xyz, [1.0_wp])
       call build_mt_mesh(lsf, xyz(:, 1:0), 0.25_wp, mesh, mesh_error, nthreads=1)
-      call check_moist_error(error, mesh_error)
+      call expect_error(error, mesh_error, "invalid spacing or atomic coordinates")
    end subroutine test_bad_no_atoms
 
    !> Reject a sphere that falls between all lattice nodes
@@ -322,7 +322,7 @@ contains
       ! The nearest lattice node lies 0.035 bohr from the center
       call init_analytic(lsf, xyz, [0.01_wp])
       call build_mt_mesh(lsf, xyz, 0.5_wp, mesh, mesh_error, nthreads=1)
-      call check_moist_error(error, mesh_error)
+      call expect_error(error, mesh_error, "lattice resolves no closed surface")
    end subroutine test_bad_unresolved
 
    !> Reject nonfinite atomic coordinates

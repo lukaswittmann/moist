@@ -49,10 +49,6 @@ module test_cavity_drop_branching
 
    real(wp), parameter :: PROJ_TOL = 1E-14_wp
    integer, parameter :: PROJ_MAXITER = 50
-   !> Cheap Newton steps of the soft-level-set (k <= 1.5) FD fixtures: the
-   !> library's short cheap stage solves their many duplicate seeds in full
-   !> steps, about twice the time
-   integer, parameter :: SOFT_CHEAP_STEPS = 50
 
    !> Branch window for [[test_branching_xyz_totals]] so we have a lot of branching
    real(wp), parameter :: TOTALS_BRANCH_DPDIST = 2.8_wp
@@ -1306,8 +1302,7 @@ contains
       real(wp) :: live
 
       call get_test_sibling_gate(mol)
-      call build_switch_cavity(cavity, ctx, mol, 1.5_wp, 0.2_wp, 0.0_wp, 0.15_wp, error, &
-                               cheap_steps=SOFT_CHEAP_STEPS)
+      call build_switch_cavity(cavity, ctx, mol, 1.5_wp, 0.2_wp, 0.0_wp, 0.15_wp, error)
       if (allocated(error)) return
       live = sibling_gate_response(cavity)
       call check(error, live > 1.0e-2_wp, &
@@ -1483,10 +1478,9 @@ contains
    !> @param[in]    reach_on   Open edge of the reach gate (default: the library's)
    !> @param[in]    reach_off  Closed edge of the reach gate (default: the library's)
    !> @param[in]    full_reach Search every anchor to the reach (default off)
-   !> @param[in]    cheap_steps Cheap Newton steps per point (default: the library's)
    !> @param[in]    lsf      Level set in place of SvdW; `blend_k` and `blend_3b` then unused
    subroutine build_switch_cavity(cavity, ctx, mol, blend_k, dpdist, hor_off, hor_on, error, blend_3b, &
-                                  reach_on, reach_off, full_reach, cheap_steps, lsf)
+                                  reach_on, reach_off, full_reach, lsf)
       type(cavity_type_drop), allocatable, intent(out) :: cavity
       type(moist_context_type), target, intent(inout) :: ctx
       type(structure_type), intent(in) :: mol
@@ -1495,7 +1489,6 @@ contains
       real(wp), intent(in), optional :: blend_3b
       real(wp), intent(in), optional :: reach_on, reach_off
       logical, intent(in), optional :: full_reach
-      integer, intent(in), optional :: cheap_steps
       class(moist_cavity_drop_lsf_type), intent(in), optional :: lsf
 
       type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
@@ -1514,7 +1507,6 @@ contains
       if (present(reach_on)) param%branch%reach_on = reach_on
       if (present(reach_off)) param%branch%reach_off = reach_off
       if (present(full_reach)) param%branch%full_reach = full_reach
-      if (present(cheap_steps)) param%solve%max_cheap_steps = cheap_steps
       allocate (cavity)
       if (present(lsf)) then
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf, &
@@ -1633,7 +1625,6 @@ contains
       param%proj_level = 3
       param%branch%dpdist_max = 7.0_wp
       param%w_0hor_on = 0.0_wp
-      param%solve%max_cheap_steps = SOFT_CHEAP_STEPS
       call check_drop_row_gradient(error, mol, param=param, lsf=drop_fd_svdw(blend_k=1.0_wp, blend_3b=1.0_wp), &
                                    require_branching=.true., step=STEP_SIZE, noise_floor=.true.)
    end subroutine test_cross_branching
@@ -1686,8 +1677,8 @@ contains
          ! signed horizon switch closes under defaults
          call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110, do_fine=.true., &
-            tolerance=PROJ_TOL, solve=drop_solve_parameters_type(max_iter=PROJ_MAXITER, &
-            max_cheap_steps=SOFT_CHEAP_STEPS), proj_level=3, w_0hor_on=0.0_wp, &
+            tolerance=PROJ_TOL, solve=drop_solve_parameters_type(max_iter=PROJ_MAXITER), &
+            proj_level=3, w_0hor_on=0.0_wp, &
             branch=drop_branch_parameters_type(dpdist_max=TOTALS_BRANCH_DPDIST)), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)

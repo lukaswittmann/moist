@@ -2400,8 +2400,8 @@ contains
       !> Expected diagnostics: seven option cases, then the two radii cases
       character(len=48), parameter :: needles(9) = [character(len=48) :: &
          & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
-         & "Invalid DROP options", "projection level must be 1, 3 or 4", &
-         & "projection level must be 1, 3 or 4", "projection level must be 1, 3 or 4", &
+         & "Invalid DROP options", "projection level must be 1, 2, 3 or 4", &
+         & "projection level must be 1, 2, 3 or 4", "projection level must be 1, 2, 3 or 4", &
          & "[moist_new_drop_cavity] Radii are not initialized", &
          & "[moist_new_iswig_cavity] Radii are not initialized"]
       integer :: icase
@@ -2431,7 +2431,7 @@ contains
          case (6)
             options%proj_level = 5_c_int
          case (7)
-            options%proj_level = 2_c_int
+            options%proj_level = -1_c_int
          case default
             ! Cases 8 and 9 keep the default options
             continue

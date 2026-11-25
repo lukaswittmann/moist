@@ -20,7 +20,7 @@ module test_channels
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
       & parameter_adjoint_response_type, current_response_item, response_accumulate, response_clear
    use moist_channels_fields, only: field_query_type, field_real, field_int, field_bool, field_max_rank
-   use test_helpers, only: check_moist_error
+   use test_helpers, only: check_moist_error, expect_error
    implicit none(type, external)
    private
    public :: collect_channels
@@ -1829,9 +1829,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_potential_adjoint_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'potential_adjoint' cannot accumulate")
    end subroutine test_response_potential_adjoint_extension
 
    !> A repeated host extension of the parameter adjoint is refused, never merged
@@ -1845,9 +1847,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_parameter_adjoint_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'parameter_adjoint' cannot accumulate")
    end subroutine test_response_parameter_adjoint_extension
 
    !> A repeated host extension of the density item is refused, never merged
@@ -1861,9 +1865,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_density_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'density' cannot accumulate")
    end subroutine test_response_density_extension
 
    !> A repeated host extension of the Gaussian amplitude item is refused, never merged
@@ -1877,9 +1883,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_gaussian_amplitude_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'gaussian_amplitude' cannot accumulate")
    end subroutine test_response_gaussian_amplitude_extension
 
    !> A repeated host extension of the atomic multipole adjoint is refused, never merged
@@ -1893,9 +1901,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_multipole_adjoint_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'atomic_multipole_adjoint' cannot accumulate")
    end subroutine test_response_multipole_adjoint_extension
 
    !> A repeated host extension of the atomic charge adjoint is refused, never merged
@@ -1909,9 +1919,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_charge_adjoint_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'atomic_charge_adjoint' cannot accumulate")
    end subroutine test_response_charge_adjoint_extension
 
    !> A repeated host extension of the radial potential adjoint is refused, never merged
@@ -1925,9 +1937,11 @@ contains
       type(response_type) :: response
       !> Extended item
       type(host_radial_adjoint_type) :: item
+      ! First accumulation is setup; its failure returns cleanly, failing the inverted test
       call response_accumulate(response, item, err)
-      if (.not. allocated(err)) call response_accumulate(response, item, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call response_accumulate(response, item, err)
+      call expect_error(error, err, "'radial_potential_adjoint' cannot accumulate")
    end subroutine test_response_radial_adjoint_extension
 
    !* ================================================================================= *!

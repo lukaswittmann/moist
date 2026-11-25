@@ -15,6 +15,7 @@ module test_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: expect_error
    implicit none(type, external)
    private
 
@@ -335,13 +336,11 @@ contains
 
       call make_test_molecule(mol)
       call new_radii_custom_atoms([2.00_wp, 1.10_wp], model, err)
-      if (allocated(err)) then
-         call test_failed(error, "unexpected constructor failure: "//trim(err%message))
-         return
-      end if
+      ! Constructor failure returns cleanly, which fails the inverted test
+      if (allocated(err)) return
 
       call model%update(mol, err)
-      if (allocated(err)) call test_failed(error, trim(err%message))
+      call expect_error(error, err, "Custom atom radii size")
    end subroutine test_custom_atoms_size_mismatch_fails
 
    subroutine test_custom_elements_empty_fails(error)
@@ -405,13 +404,11 @@ contains
 
       call make_test_molecule(mol)
       call new_radii_custom_elements([1], [1.20_wp], model, err)
-      if (allocated(err)) then
-         call test_failed(error, "unexpected constructor failure: "//trim(err%message))
-         return
-      end if
+      ! Constructor failure returns cleanly, which fails the inverted test
+      if (allocated(err)) return
 
       call model%update(mol, err)
-      if (allocated(err)) call test_failed(error, trim(err%message))
+      call expect_error(error, err, "No custom radius provided for atomic number 13")
    end subroutine test_custom_elements_missing_for_molecule_fails
 
    subroutine test_custom_string_guidance(error)

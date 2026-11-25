@@ -6,6 +6,7 @@ module test_utils_context
    use testdrive, only: new_unittest, unittest_type, error_type, check
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
    use moist_context, only: moist_context_type, new_context
+   use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
    private
 
@@ -41,6 +42,7 @@ contains
                   new_unittest("warning_in_output", test_warning_in_output), &
                   new_unittest("delete_is_safe", test_delete_is_safe), &
                   new_unittest("output_contracts", test_output_contracts), &
+                  new_unittest("printer_gated", test_printer_gated), &
                   new_unittest("failed_files", test_failed_files) &
                   ]
 
@@ -905,6 +907,47 @@ contains
       if (allocated(error)) return
       call check(error, debug_only, "debug file receives only the debug message")
    end subroutine test_output_contracts
+
+   !> printer(level) routes to ctx%unit and silences output below the requested level
+   subroutine test_printer_gated(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      type(prettyprinter) :: pp_low, pp_high
+      integer :: iu, stat
+      character(128) :: line1, line2
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "scratch unit opens")
+      if (allocated(error)) return
+
+      call new_context(ctx, nthreads=0, verbosity=2, unit=iu)
+      pp_high = ctx%printer(level=4)
+      call pp_high%push("Suppressed:")
+      call pp_high%step("Hidden step", 1.25_wp)
+      call pp_high%pop()
+
+      pp_low = ctx%printer()
+      call pp_low%push("Visible:")
+      call pp_low%step("Shown step", 0.5_wp)
+      call pp_low%pop()
+      call ctx%delete()
+
+      rewind (iu)
+      read (iu, "(a)", iostat=stat) line1
+      call check(error, stat == 0 .and. trim(line1) == "Visible:", "enabled printer writes section header")
+      if (.not. allocated(error)) then
+         read (iu, "(a)", iostat=stat) line2
+         call check(error, stat == 0 .and. index(line2, "Shown step") > 0, "enabled printer writes step line")
+      end if
+      if (.not. allocated(error)) then
+         read (iu, "(a)", iostat=stat) line2
+         call check(error, is_iostat_end(stat), "suppressed printer writes no lines")
+      end if
+      close (iu)
+      if (allocated(error)) return
+      call check(error, .not. pp_high%active .and. pp_low%active, "active flags match verbosity threshold")
+   end subroutine test_printer_gated
 
    !> Failed owned-file opens retain a usable borrowed stream and expose status
    subroutine test_failed_files(error)

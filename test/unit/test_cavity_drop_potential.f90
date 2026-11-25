@@ -72,7 +72,7 @@ module test_cavity_drop_potential
    use moist_context, only: moist_context_type, new_context
    use moist_math_packed, only: packed_index
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
-   use test_helpers, only: fill_legacy_radii, get_test_sibling_gate, fd_probe_type, &
+   use test_helpers, only: expect_error, fill_legacy_radii, get_test_sibling_gate, fd_probe_type, &
       & fd_derivative, fd_compare
    use moist_utils_format, only: to_string
    implicit none(type, external)
@@ -1329,27 +1329,6 @@ contains
    !* ============================================================================== *!
    !*                                    Refusals                                     *!
    !* ============================================================================== *!
-
-   !> Report the expected refusal as a test failure
-   !>
-   !> The should_fail registration turns that failure into a pass; an absent
-   !> error or a different message leaves the test passing, which is reported
-   !>
-   !> @param[out] error     Test failure, set only on the expected error
-   !> @param[in]  err       Library error, possibly unallocated
-   !> @param[in]  expected  Substring the expected message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-
-   end subroutine expect_error
 
    !> The switching adjoint of one row reaches the level-set weights of its siblings
    !>

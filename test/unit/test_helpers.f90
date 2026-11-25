@@ -36,6 +36,7 @@
 !>   * `get_test_sibling_gate(mol)` - five atoms with rows behind partly open
 !>                                       closer rows of the same anchor
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
+!>   * `expect_error(error, err, expected)` - the expected refusal of a `should_fail` test
 !>   * `fd2_scalar(fp, fm, h, df, error)` - 2-point central FD formula, fails on a
 !>                                         nonfinite derivative
 !>   * `fd2_offsets` - the matching stencil offsets, in units of h
@@ -154,7 +155,7 @@ module test_helpers
    public :: fd_derivative
    public :: fd_compare
    public :: rel_deviation
-   public :: check_moist_error
+   public :: check_moist_error, expect_error
    public :: fill_legacy_radii
    public :: build_numbering_map
    public :: cavity_xi0
@@ -1147,6 +1148,23 @@ contains
          call test_failed(error, trim(err%message))
       end if
    end subroutine check_moist_error
+
+   !> Raise the test failure only when `err` names the expected refusal
+   !>
+   !> - for `should_fail=.true.` tests, where test-drive inverts the outcome: a
+   !>   clean return or a different error fails the test
+   !>
+   !> @param[out] error    Test failure, set only on the expected error
+   !> @param[in]  err      Library error, possibly unallocated
+   !> @param[in]  expected Text the message of the expected error contains
+   subroutine expect_error(error, err, expected)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable, intent(in) :: err
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
 
    !> 2-point central finite-difference formula:
    !>   f'(x) ~ (f(x+h) - f(x-h)) / (2 h)

@@ -23,7 +23,7 @@ module test_model_component_pcm_solvers
    use mctc_env, only: wp, sp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_env_error, only: moist_error_type => error_type
-   use test_helpers, only: check_moist_error, det_rand
+   use test_helpers, only: check_moist_error, expect_error, det_rand
    use moist_math_lapack, only: getrf, getrs, sytrf, sytrs
    use moist_model_continuum_component_pcm_solvers, only: pcm_operator, pcm_complex_operator, &
       & pcm_solver, pcm_dense_solver, pcm_gmres_solver, pcm_block_jacobi, &
@@ -793,7 +793,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .false., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_rejects_nan_rhs
 
    !> Dense transposed solve rejects an infinite right-hand side
@@ -811,7 +811,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .true., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_rejects_inf_rhs
 
    !> Dense solve rejects a NaN operator with a finite forcing
@@ -829,7 +829,7 @@ contains
       call new_test_operator(op, a, 1, .false., .false.)
       call solver%reset(1)
       call solver%solve(op, .false., b(:, 1), x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "solution is not finite")
    end subroutine test_dense_rejects_nan_operator
 
    !> Dense complex solve rejects a NaN right-hand side
@@ -849,7 +849,7 @@ contains
       zb(3) = cmplx(1.0_wp, ieee_value(1.0_wp, ieee_quiet_nan), kind=wp)
       call solver%reset(1)
       call solver%solve_complex(zop, .false., zb, zx, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_dense_complex_rejects_nan_rhs
 
    !> Legacy LU wrapper rejects a NaN right-hand side
@@ -863,7 +863,7 @@ contains
       call rhs_block(b)
       b(4, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
       call solve_pcm_lu(a, b(:, 1), q, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "right-hand side is not finite")
    end subroutine test_lu_rejects_nan_rhs
 
    !> Legacy LU wrapper rejects a NaN matrix
@@ -877,7 +877,7 @@ contains
       call rhs_block(b)
       a(2, 2) = ieee_value(1.0_wp, ieee_quiet_nan)
       call solve_pcm_lu(a, b(:, 1), q, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "solution is not finite")
    end subroutine test_lu_rejects_nan_matrix
 
    !> A rejected non-finite right-hand side is not counted as a solve
@@ -2591,7 +2591,7 @@ contains
       x = 1.0_wp
       problem%offset = ieee_value(1.0_wp, ieee_quiet_nan)
       call problem%solve(x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "residual at zero is not finite")
    end subroutine test_nonlinear_rejects_nan_forcing
 
    !> Newton rejects an infinite forcing
@@ -2608,7 +2608,7 @@ contains
       x = 1.0_wp
       problem%offset = ieee_value(1.0_wp, ieee_positive_inf)
       call problem%solve(x, err)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "residual at zero is not finite")
    end subroutine test_nonlinear_rejects_inf_forcing
 
    !> Exact zero forcing returns x = 0 without error

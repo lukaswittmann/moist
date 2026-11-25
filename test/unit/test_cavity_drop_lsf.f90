@@ -246,7 +246,7 @@ module test_cavity_drop_lsf
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: get_test_structures, get_test_radii, get_test_points, &
+   use test_helpers, only: expect_error, get_test_structures, get_test_radii, get_test_points, &
                            center_at_origin, det_rand, fd_probe_type, fd_derivative, &
                            fd_compare
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
@@ -8391,25 +8391,6 @@ contains
       call check(error, lsf%screening_offset(radii(1)) < band_end, &
                  more="the control offset must differ from the band end")
    end subroutine test_svdw_fade_reach
-
-   !> Fail the test only when `err` carries the expected message
-   !>
-   !> For `should_fail` tests: a clean return or another error reports the test as failed
-   !>
-   !> @param[out] error    Test failure, set only on the expected error
-   !> @param[in]  err      Library error, possibly unallocated
-   !> @param[in]  expected Substring the message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> Per-column flag of the latest batch on `lsf`, read right after the call
    !>

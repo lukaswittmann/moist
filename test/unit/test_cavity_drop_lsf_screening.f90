@@ -33,7 +33,8 @@ contains
                   new_unittest("sparse_geometry_memory", test_sparse_geometry), &
                   new_unittest("huge_query_returns_all", test_huge_query), &
                   new_unittest("empty_and_single", test_empty_and_single), &
-                  new_unittest("tail_and_inplace_sort_agree", test_tail_and_inplace_sort) &
+                  new_unittest("tail_and_inplace_sort_agree", test_tail_and_inplace_sort), &
+                  new_unittest("box_bounds_matches_query_box", test_box_bounds) &
                   ]
    end subroutine collect_cavity_drop_lsf_screening
 
@@ -587,5 +588,53 @@ contains
       call check(error, cells%natoms == 0 .and. .not. allocated(cells%slot_atom), &
                  more="destroy resets")
    end subroutine test_empty_and_single
+
+   !> `query_box_bounds` matches the exact center bounds of `query_box` in grid and full-scan modes
+   subroutine test_box_bounds(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cell_list_type) :: grid, flat
+      real(wp), allocatable :: xyz(:, :), reach(:)
+      real(wp) :: lo(3), hi(3), blo_g(3), bhi_g(3), blo_f(3), bhi_f(3), ref_lo(3), ref_hi(3)
+      integer :: out(nat_fixture), nout, ng, nf, iq, k, state
+
+      state = 43
+      call random_atoms(nat_fixture, xyz, reach, state)
+      call grid%build(xyz, reach, full_scan_below=0)
+      call flat%build(xyz, reach, full_scan_below=nat_fixture + 1)
+
+      do iq = 1, nquery
+         call random_box(lo, hi, state)
+         if (mod(iq, 10) == 0) then
+            lo = lo + 100.0_wp
+            hi = hi + 100.0_wp
+         end if
+         call grid%query_box(lo, hi, out, nout)
+         call grid%query_box_bounds(lo, hi, blo_g, bhi_g, ng)
+         call flat%query_box_bounds(lo, hi, blo_f, bhi_f, nf)
+         call check(error, ng == nout .and. nf == nout, &
+                    more="query_box_bounds count must match query_box")
+         if (allocated(error)) return
+         if (nout == 0) then
+            call check(error, all(blo_g == 0.0_wp) .and. all(bhi_g == 0.0_wp), &
+                       more="empty query_box_bounds must zero bounds")
+            if (allocated(error)) return
+         else
+            ref_lo = xyz(:, out(1))
+            ref_hi = xyz(:, out(1))
+            do k = 2, nout
+               ref_lo = min(ref_lo, xyz(:, out(k)))
+               ref_hi = max(ref_hi, xyz(:, out(k)))
+            end do
+            call check(error, all(blo_g == ref_lo) .and. all(bhi_g == ref_hi), &
+                       more="grid query_box_bounds must match exact min/max centers")
+            if (allocated(error)) return
+            call check(error, all(blo_f == ref_lo) .and. all(bhi_f == ref_hi), &
+                       more="full-scan query_box_bounds must match exact min/max centers")
+            if (allocated(error)) return
+         end if
+      end do
+   end subroutine test_box_bounds
 
 end module test_cavity_drop_lsf_screening

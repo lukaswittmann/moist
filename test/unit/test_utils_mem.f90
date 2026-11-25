@@ -1,5 +1,6 @@
 !> Test suite for the array growth helpers in moist_utils_mem
 module test_utils_mem
+   use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
@@ -30,6 +31,10 @@ contains
                   new_unittest("grow_real_2d_contracts", test_grow_real_2d_contracts), &
                   new_unittest("filter_real_2d_contracts", test_filter_real_2d_contracts), &
                   new_unittest("grow_int_1d_contracts", test_grow_int_1d_contracts), &
+                  new_unittest("grow_int64_1d_contracts", test_grow_int64_1d_contracts), &
+                  new_unittest("shrink_int64_1d_reports", test_shrink_int64_1d_reports), &
+                  new_unittest("grow_int_2d_contracts", test_grow_int_2d_contracts), &
+                  new_unittest("shrink_int_2d_reports", test_shrink_int_2d_reports), &
                   new_unittest("filter_int_1d_contracts", test_filter_int_1d_contracts), &
                   new_unittest("grow_logical_1d_contracts", test_grow_logical_1d_contracts), &
                   new_unittest("filter_logical_1d_contracts", test_filter_logical_1d_contracts) &
@@ -497,6 +502,136 @@ contains
       call check(error, all(a == 0), "empty growth fills every element")
 
    end subroutine test_grow_int_1d_contracts
+
+   !> Verify every element, default fill, no-op, and unallocated growth of the
+   !> 64-bit integer specific
+   subroutine test_grow_int64_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer(int64), allocatable :: a(:), expected(:)
+      type(moist_error_type), allocatable :: refused
+
+      a = [2_int64, 4_int64, huge(1_int64)]
+      expected = a
+      call grow_array(a, 5, fill_value=-9_int64, error=refused)
+      call check(error, .not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, size(a), 5, "explicit growth reaches the requested size")
+      if (allocated(error)) return
+      call check(error, all(a(1:3) == expected), "all old values preserved, 64-bit range included")
+      if (allocated(error)) return
+      call check(error, all(a(4:5) == -9_int64), "all new values filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 5, error=refused)
+      call check(error, .not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(a == expected), "same size preserves all values")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 3, error=refused)
+      call check(error, .not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, size(a), 3, "unallocated growth reaches the requested size")
+      if (allocated(error)) return
+      call check(error, all(a == 0_int64), "default fill covers every element")
+
+   end subroutine test_grow_int64_1d_contracts
+
+   !> The 64-bit integer specific reports a shrink, names itself and keeps the array
+   subroutine test_shrink_int64_1d_reports(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer(int64), allocatable :: a(:)
+      type(moist_error_type), allocatable :: refused
+
+      a = [1_int64, 2_int64, 3_int64]
+      call grow_array(a, 2, error=refused)
+
+      call check(error, allocated(refused), "shrink reported")
+      if (allocated(error)) return
+      call check(error, index(refused%message, "grow_array_int64_1d") > 0, &
+                 "message identifies the 64-bit integer specific")
+      if (allocated(error)) return
+      call check(error, size(a), 3, "array kept its size")
+      if (allocated(error)) return
+      call check(error, all(a == [1_int64, 2_int64, 3_int64]), "refusal preserves every element")
+
+   end subroutine test_shrink_int64_1d_reports
+
+   !> Verify every element, default fill, no-op, and unallocated growth of the
+   !> rank-2 integer specific
+   subroutine test_grow_int_2d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: a(:, :), expected(:, :)
+      type(moist_error_type), allocatable :: refused
+
+      a = reshape([1, 2, 3, 4, 5, 6], [3, 2])
+      expected = a
+      call grow_array(a, 3, 4, fill_value=-9, error=refused)
+      call check(error, .not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, size(a, 1), 3, "explicit growth keeps the first extent")
+      if (allocated(error)) return
+      call check(error, size(a, 2), 4, "explicit growth reaches the requested second extent")
+      if (allocated(error)) return
+      call check(error, all(a(:, 1:2) == expected), "all old columns preserved")
+      if (allocated(error)) return
+      call check(error, all(a(:, 3:4) == -9), "all new columns filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 3, 4, error=refused)
+      call check(error, .not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(a == expected), "same size preserves all values")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 3, 2, error=refused)
+      call check(error, .not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, size(a, 1), 3, "unallocated growth takes the first extent")
+      if (allocated(error)) return
+      call check(error, size(a, 2), 2, "unallocated growth takes the second extent")
+      if (allocated(error)) return
+      call check(error, all(a == 0), "default fill covers every element")
+
+   end subroutine test_grow_int_2d_contracts
+
+   !> The rank-2 integer specific reports a shrink and a new first extent, and
+   !> keeps the array
+   subroutine test_shrink_int_2d_reports(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, allocatable :: a(:, :)
+      type(moist_error_type), allocatable :: refused
+
+      allocate (a(3, 5), source=7)
+      call grow_array(a, 3, 2, error=refused)
+      call check(error, allocated(refused), "shrink reported")
+      if (allocated(error)) return
+      call check(error, index(refused%message, "grow_array_int_2d: Cannot shrink") > 0, &
+                 "message identifies the specific and the refused operation")
+      if (allocated(error)) return
+      call check(error, size(a, 2), 5, "array kept its second extent")
+      if (allocated(error)) return
+
+      !> Second extent grows here, so only the first-extent guard can fire
+      call grow_array(a, 4, 6, error=refused)
+      call check(error, allocated(refused), "first-extent change reported")
+      if (allocated(error)) return
+      call check(error, index(refused%message, "first dimension") > 0, &
+                 "message names the first dimension")
+      if (allocated(error)) return
+      call check(error, size(a, 1), 3, "array kept its first extent")
+      if (allocated(error)) return
+      call check(error, all(a == 7), "refusals preserve every element")
+
+   end subroutine test_shrink_int_2d_reports
 
    !> Verify selection, stable order, prefix extent, empty masks, and allocation
    subroutine test_filter_int_1d_contracts(error)

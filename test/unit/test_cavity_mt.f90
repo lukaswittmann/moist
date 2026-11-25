@@ -19,7 +19,7 @@ module test_cavity_mt
    use moist_channels_coupling, only: coupling_type, density_matrix_request_type, nuclear_charge_request_type
    use moist_channels_fields, only: field_query_type
    use pcmgen_gauss_conductor, only: conductor_state, conductor_assemble, conductor_medium, conductor_solve
-   use test_helpers, only: check_moist_error, read_printout
+   use test_helpers, only: check_moist_error, expect_error, read_printout
    implicit none(type, external)
    private
    public :: collect_cavity_mt
@@ -798,9 +798,11 @@ contains
       call lsf%new()
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call new_radii_custom_atoms([3.0_wp], radius_model, err)
-      if (.not. allocated(err)) call new_cavity_mt(cav, radius_model, lsf, err)
-      if (.not. allocated(err)) call cav%update(mol, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call new_cavity_mt(cav, radius_model, lsf, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "Cavity has no context")
    end subroutine test_bad_update_without_context
 
    !> Reject an update after the level set was removed from a constructed cavity
@@ -815,11 +817,10 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err)
-      if (.not. allocated(err)) then
-         deallocate (cav%lsf_model)
-         call cav%update(mol, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      deallocate (cav%lsf_model)
+      call cav%update(mol, err)
+      call expect_error(error, err, "Construct the marching tetrahedra cavity")
    end subroutine test_bad_update_without_lsf
 
    !> Reject a structure without atoms
@@ -836,11 +837,10 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err)
-      if (.not. allocated(err)) then
-         call new(empty, none, nowhere)
-         call cav%update(empty, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call new(empty, none, nowhere)
+      call cav%update(empty, err)
+      call expect_error(error, err, "requires at least one atom")
    end subroutine test_bad_update_no_atoms
 
    !> Settings changed after construction are validated again on update
@@ -855,11 +855,10 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err)
-      if (.not. allocated(err)) then
-         cav%param%area_tolerance = 1.0_wp
-         call cav%update(mol, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      cav%param%area_tolerance = 1.0_wp
+      call cav%update(mol, err)
+      call expect_error(error, err, "area_tolerance must lie")
    end subroutine test_bad_update_area_tolerance
 
    !> Reject a nonpositive Gaussian width coefficient
@@ -876,7 +875,7 @@ contains
       call lsf%new()
       param%gaussian_scale = 0.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "gaussian_scale must be positive")
    end subroutine test_bad_gaussian_scale
 
    !> Reject a nonpositive lattice spacing
@@ -893,7 +892,7 @@ contains
       call lsf%new()
       param%spacing = 0.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "spacing and target_area must be positive")
    end subroutine test_bad_spacing
 
    !> Reject a zero area tolerance
@@ -910,7 +909,7 @@ contains
       call lsf%new()
       param%area_tolerance = 0.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "area_tolerance must lie")
    end subroutine test_bad_zero_area_tolerance
 
    !> Reject a negative critical-switch start
@@ -927,7 +926,7 @@ contains
       call lsf%new()
       param%w_0ls_from = -0.1_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "w_0ls_from < w_0ls_to")
    end subroutine test_bad_switch_start
 
    !> Reject a nonpositive critical-bump prefactor
@@ -944,7 +943,7 @@ contains
       call lsf%new()
       param%w_0ls_a = 0.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "critical-bump parameters must be positive")
    end subroutine test_bad_critical_prefactor
 
    !> Reject a negative weight cutoff
@@ -961,7 +960,7 @@ contains
       call lsf%new()
       param%weight_cutoff = -1.0e-3_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "weight_cutoff must lie")
    end subroutine test_bad_negative_weight_cutoff
 
    !> Reject a nonpositive critical-bump exponent
@@ -978,7 +977,7 @@ contains
       call lsf%new()
       param%w_0ls_p = 0.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "critical-bump parameters must be positive")
    end subroutine test_bad_critical_bump
 
    !> Reject a weight cutoff that suppresses every point
@@ -995,7 +994,7 @@ contains
       call lsf%new()
       param%weight_cutoff = 1.0_wp
       call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
-      call check_moist_error(error, err)
+      call expect_error(error, err, "weight_cutoff must lie")
    end subroutine test_bad_weight_cutoff
 
    !> Reject a level set with a NaN spatial gradient
@@ -1011,8 +1010,9 @@ contains
       call lsf%new()
       lsf%gradient = ieee_value(1.0_wp, ieee_quiet_nan)
       call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
-      if (.not. allocated(err)) call cav%update(mol, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "Nonfinite marching tetrahedra LSF gradient")
    end subroutine test_bad_nan_gradient
 
    !> Reject a finite level-set gradient whose norm overflows
@@ -1028,8 +1028,9 @@ contains
       call lsf%new()
       lsf%gradient = huge(1.0_wp)
       call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
-      if (.not. allocated(err)) call cav%update(mol, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "Nonfinite MT LSF gradient magnitude")
    end subroutine test_bad_overflow_gradient
 
    !> Reject an update after the radius model was removed from a constructed cavity
@@ -1044,11 +1045,10 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err)
-      if (.not. allocated(err)) then
-         deallocate (cav%radius_model)
-         call cav%update(mol, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      deallocate (cav%radius_model)
+      call cav%update(mol, err)
+      call expect_error(error, err, "Construct the marching tetrahedra cavity")
    end subroutine test_bad_update_without_radius_model
 
    !> Reject a structure whose atom count differs from the custom radii
@@ -1064,13 +1064,12 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
-      if (.not. allocated(err)) then
-         xyz = 0.0_wp
-         xyz(1, 2) = 2.0_wp
-         call new(pair, [1, 1], xyz)
-         call cav%update(pair, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      xyz = 0.0_wp
+      xyz(1, 2) = 2.0_wp
+      call new(pair, [1, 1], xyz)
+      call cav%update(pair, err)
+      call expect_error(error, err, "Custom atom radii size")
    end subroutine test_bad_update_radius_count
 
    !> Reject a sphere that falls between the lattice nodes
@@ -1079,8 +1078,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
+      type(mctc_error), allocatable :: err
 
-      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [0.05_wp], coarse_parameters())
+      call lsf%new()
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters(), radius=0.05_wp)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "lattice resolves no closed surface")
    end subroutine test_bad_unresolved_surface
 
    !> Reject a surface that the level set refuses
@@ -1095,8 +1101,9 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
-      if (.not. allocated(err)) call cav%update(mol, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "rejects the surface")
    end subroutine test_bad_rejected_surface
 
    !> Reject a level set that fails at patch points but not at face centroids
@@ -1112,15 +1119,16 @@ contains
 
       call lsf%new()
       call new_sphere_cavity(ctx, cav, mol, lsf, err, coarse_parameters())
-      if (.not. allocated(err)) call cav%update(mol, err)
-      if (.not. allocated(err)) then
-         call counting%new()
-         counting%intact = size(cav%mesh%area)
-         counting%fail_late = .true.
-         call new_sphere_cavity(failing_ctx, failing, mol, counting, err, coarse_parameters())
-      end if
-      if (.not. allocated(err)) call failing%update(mol, err)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      if (allocated(err)) return
+      call counting%new()
+      counting%intact = size(cav%mesh%area)
+      counting%fail_late = .true.
+      call new_sphere_cavity(failing_ctx, failing, mol, counting, err, coarse_parameters())
+      if (allocated(err)) return
+      call failing%update(mol, err)
+      call expect_error(error, err, "Level set evaluation failed")
    end subroutine test_bad_patch_evaluation
 
    !> Reject Gaussian widths whose pair exponents underflow in the width correction
@@ -1129,11 +1137,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(moist_cavity_mt_parameters_type) :: param
+      type(mctc_error), allocatable :: err
 
+      call lsf%new()
       param = coarse_parameters()
       param%gaussian_scale = 1.0e-170_wp
-      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [3.0_wp], param)
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, param)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "Nonfinite marching tetrahedra width correction")
    end subroutine test_bad_tiny_gaussian_scale
 
    !> Reject the overflowing width of a single point, which has no pair terms
@@ -1142,13 +1157,20 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type), target :: ctx
       type(cavity_type_mt) :: cav
+      type(structure_type) :: mol
+      type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(moist_cavity_mt_parameters_type) :: param
+      type(mctc_error), allocatable :: err
 
+      call lsf%new()
       ! One patch below one bohr**2
       param%spacing = 0.05_wp
       param%target_area = 1.0_wp
       param%gaussian_scale = huge(1.0_wp)
-      call fixture(error, ctx, cav, reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]), [0.25_wp], param)
+      call new_sphere_cavity(ctx, cav, mol, lsf, err, param, radius=0.25_wp)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      call expect_error(error, err, "Nonfinite marching tetrahedra Gaussian widths")
    end subroutine test_bad_huge_gaussian_scale
 
    !> Reject a build before the first update
@@ -1162,14 +1184,12 @@ contains
       type(mctc_error), allocatable :: err
 
       call new_density_cavity(ctx, cav, mol, err)
-      if (.not. allocated(err)) then
-         call cav%new_coupling(coupling, err)
-         if (.not. allocated(err)) then
-            call cav%build(coupling, err)
-            call cav%release_coupling(coupling)
-         end if
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%new_coupling(coupling, err)
+      if (allocated(err)) return
+      call cav%build(coupling, err)
+      call cav%release_coupling(coupling)
+      call expect_error(error, err, "Cavity must be updated first")
    end subroutine test_bad_build_before_update
 
    !> Settings changed after a deferred update are validated again on build
@@ -1182,12 +1202,12 @@ contains
       type(mctc_error), allocatable :: err
 
       call new_density_cavity(ctx, cav, mol, err)
-      if (.not. allocated(err)) call cav%update(mol, err)
-      if (.not. allocated(err)) then
-         cav%param%area_tolerance = 1.0_wp
-         call build_with_density(cav, err)
-      end if
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      if (allocated(err)) return
+      cav%param%area_tolerance = 1.0_wp
+      call build_with_density(cav, err)
+      call expect_error(error, err, "area_tolerance must lie")
    end subroutine test_bad_build_area_tolerance
 
    !> Reject a host nuclear charge above the atomic number
@@ -1200,9 +1220,11 @@ contains
       type(mctc_error), allocatable :: err
 
       call new_density_cavity(ctx, cav, mol, err)
-      if (.not. allocated(err)) call cav%update(mol, err)
-      if (.not. allocated(err)) call build_with_density(cav, err, z=2.0_wp)
-      call check_moist_error(error, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      if (allocated(err)) return
+      call build_with_density(cav, err, z=2.0_wp)
+      call expect_error(error, err, "exceeds Z")
    end subroutine test_bad_build_nuclear_charge
 
    !> Reject a density surface inside the core fill of an ECP nucleus
@@ -1215,10 +1237,12 @@ contains
       type(mctc_error), allocatable :: err
 
       call new_density_cavity(ctx, cav, mol, err)
-      if (.not. allocated(err)) call cav%update(mol, err)
+      if (allocated(err)) return
+      call cav%update(mol, err)
+      if (allocated(err)) return
       ! The fill ball of 2 bohr encloses the zero set at 1.73 bohr
-      if (.not. allocated(err)) call build_with_density(cav, err, z=0.5_wp)
-      call check_moist_error(error, err)
+      call build_with_density(cav, err, z=0.5_wp)
+      call expect_error(error, err, "ECP core fill")
    end subroutine test_bad_build_core_fill
 
    !> Coarse settings for cavities that fail after meshing
@@ -1230,7 +1254,7 @@ contains
       param%target_area = 2.0_wp
    end function coarse_parameters
 
-   !> Construct a single-sphere cavity of radius 3 bohr without updating it
+   !> Construct a single-sphere cavity without updating it
    !>
    !> @param[in,out] ctx Borrowed run context
    !> @param[out] cav Constructed cavity
@@ -1238,7 +1262,8 @@ contains
    !> @param[in] lsf Level set copied into the cavity
    !> @param[out] err Construction failure
    !> @param[in] param Optional settings
-   subroutine new_sphere_cavity(ctx, cav, mol, lsf, err, param)
+   !> @param[in] radius Optional sphere radius, bohr, default 3
+   subroutine new_sphere_cavity(ctx, cav, mol, lsf, err, param, radius)
       !> Borrowed run context
       type(moist_context_type), intent(inout), target :: ctx
       !> Constructed cavity
@@ -1251,11 +1276,16 @@ contains
       type(mctc_error), allocatable, intent(out) :: err
       !> Optional settings
       type(moist_cavity_mt_parameters_type), intent(in), optional :: param
+      !> Optional sphere radius
+      real(wp), intent(in), optional :: radius
       class(radius_type), allocatable :: radius_model
+      real(wp) :: sphere
 
+      sphere = 3.0_wp
+      if (present(radius)) sphere = radius
       call new_context(ctx, verbosity=0, nthreads=1)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call new_radii_custom_atoms([3.0_wp], radius_model, err)
+      call new_radii_custom_atoms([sphere], radius_model, err)
       if (allocated(err)) return
       call new_cavity_mt(cav, radius_model, lsf, err, param, ctx)
    end subroutine new_sphere_cavity

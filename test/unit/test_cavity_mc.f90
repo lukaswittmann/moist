@@ -18,7 +18,7 @@ module test_cavity_mc
    use moist_channels_coupling, only: coupling_type
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: check_moist_error, read_printout
+   use test_helpers, only: check_moist_error, expect_error, read_printout
 
    implicit none(type, external)
    private
@@ -953,10 +953,12 @@ contains
       call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call new_radii_custom_atoms([SPHERE_RADIUS], radius_model, cavity_error)
+      if (allocated(cavity_error)) return
       call lsf%new()
-      if (.not. allocated(cavity_error)) call new_cavity_mc(cav, radius_model, lsf, cavity_error, ctx=ctx)
-      if (.not. allocated(cavity_error)) call cav%update(mol, cavity_error)
-      call check_moist_error(error, cavity_error)
+      call new_cavity_mc(cav, radius_model, lsf, cavity_error, ctx=ctx)
+      if (allocated(cavity_error)) return
+      call cav%update(mol, cavity_error)
+      call expect_error(error, cavity_error, "Injected level-set failure")
    end subroutine test_bad_lsf_evaluation
 
    !> Reject every evaluation point

@@ -14,6 +14,7 @@ module test_cavity_adjoint
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use test_helpers, only: expect_error
    use moist_cavity_adjoint, only: cavity_adjoint_type
    use moist_utils_format, only: to_string
    implicit none(type, external)
@@ -41,28 +42,6 @@ contains
                   new_unittest("bad_area_size", test_area_fails, should_fail=.true.) &
                   ]
    end subroutine collect_cavity_adjoint
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> init sizes and zeroes every channel, re-init resizes, zero clears
    subroutine test_storage(error)

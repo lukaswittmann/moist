@@ -40,7 +40,7 @@ module test_cavity_drop_isodensity
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: fd4_scalar, fd4_offsets, fd6_scalar, get_test_points, center_at_origin, &
+   use test_helpers, only: expect_error, fd4_scalar, fd4_offsets, fd6_scalar, get_test_points, center_at_origin, &
                            rel_deviation, det_rand
    use moist_utils_env, only: get_env
    use moist_model_continuum_gems_utils, only: BuildSuperStructure
@@ -253,6 +253,8 @@ contains
                               test_bad_evaluate_batch_no_density, should_fail=.true.), &
                  new_unittest("bad_callback_vjp_batch_no_callback", &
                               test_bad_callback_vjp_no_callback, should_fail=.true.), &
+                 new_unittest("bad_callback_non_finite_hessian", &
+                              test_bad_callback_non_finite, should_fail=.true.), &
                   new_unittest("bad_gradient_after_update", test_gradient_after_update_fails, should_fail=.true.), &
                   new_unittest("bad_gradient_after_prepare_build", test_gradient_after_staging_fails, &
                                should_fail=.true.) &
@@ -5048,26 +5050,6 @@ contains
                  more="the update kept the surface arrays of the previous structure")
    end subroutine test_update_drops_surface
 
-   !> Raise the test failure only when `err` names the expected refusal
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   outcome: a clean return or a different error fails the test
-   !>
-   !> @param[out] error    Test failure, set only on the expected error
-   !> @param[in]  err      Library error, possibly unallocated
-   !> @param[in]  expected Substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
-
    !> A nuclear gradient of a cavity updated to a new structure but not built
    !> is refused, not taken from the surface of the previous structure
    subroutine test_gradient_after_update_fails(error)
@@ -6250,6 +6232,51 @@ contains
       call lsf%vjp_f1_rA_batch(pts, w0, w1, w2, res, error=lsf_err)
       call expect_error(error, lsf_err, "vjp_f1_rA_batch failed at point 1: no density callback bound")
    end subroutine test_bad_callback_vjp_no_callback
+
+   !> A host density Hessian holding a NaN is refused at the point, not handed on
+   subroutine test_bad_callback_non_finite(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      type(mctc_error), allocatable :: lsf_err
+
+      call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [ndim, 1]))
+      call lsf%new(callback_ptr=c_funloc(nan_hessian_callback), context=c_null_ptr, &
+                   param=moist_cavity_drop_lsf_isodensity_param_type(core_fill=.false.))
+      call lsf%update(mol, [3.0_wp])
+      call lsf%set_max_deriv(2)
+      call lsf%prepare([2.0_wp, 0.0_wp, 0.0_wp], lsf_err)
+      call expect_error(error, lsf_err, "External LSF returned a non-finite density or derivative")
+   end subroutine test_bad_callback_non_finite
+
+   !> Finite density and gradient, one NaN in the Hessian when it is requested
+   function nan_hessian_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
+      type(c_ptr), value :: context
+      real(c_double), intent(in) :: point(3)
+      real(c_double), intent(out) :: rho
+      real(c_double), intent(out) :: drho(3)
+      type(c_ptr), value :: d2rho
+      type(c_ptr), value :: d3rho
+      integer(c_int) :: status
+
+      real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
+
+      status = 0_c_int
+      if (c_associated(context) .or. any(point /= point)) status = 1_c_int
+      rho = 1.0_c_double
+      drho = 0.0_c_double
+      if (c_associated(d2rho)) then
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = 0.0_c_double
+         hptr(2, 3) = ieee_value(1.0_c_double, ieee_quiet_nan)
+      end if
+      if (c_associated(d3rho)) then
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = 0.0_c_double
+      end if
+   end function nan_hessian_callback
 
    !> The callback variant runs the looping default: bitwise prepare + accessors
    subroutine test_batch_callback_loops(error)

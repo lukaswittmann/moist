@@ -34,7 +34,7 @@ module test_parameters
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use test_helpers, only: read_printout, printed_entry
+   use test_helpers, only: expect_error, read_printout, printed_entry
    implicit none(type, external)
    private
    public :: collect_parameters
@@ -330,7 +330,7 @@ contains
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call require_cavity(drop, [character(len=32) :: "Projection tol.", "Wleb switch off", "xi_born", &
-         "Octree seed size", "Max. distance excess", "Cell grid full-scan below", "Surface normals"], error)
+         "Seed spacing", "Max. distance excess", "Cell grid full-scan below", "Surface normals"], error)
       if (allocated(error)) return
 
       call cfc%new()
@@ -680,28 +680,6 @@ contains
 
    end subroutine test_invalid_fields
 
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(moist_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
-
    !> A grid without a fitted Born zeta is refused at load
    subroutine test_bad_drop_load_unfitted_grid(error)
       !> Test failure, set only on the expected error
@@ -774,22 +752,6 @@ contains
       call param%compute_derived(err)
       call expect_error(error, err, "Projection batch size must be positive")
    end subroutine test_bad_drop_batch_size
-
-   !> A negative Newton stage-switch residual is refused
-   subroutine test_bad_drop_newton_switch_fnorm(error)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error
-      type(moist_error), allocatable :: err
-      !> Settings under test
-      type(moist_cavity_drop_parameters_type) :: param
-
-      call param%init_defaults()
-      param%solve%switch_fnorm = -1.0e-3_wp
-      call param%compute_derived(err)
-      call expect_error(error, err, "Newton stage-switch residual must be nonnegative")
-   end subroutine test_bad_drop_newton_switch_fnorm
-
 
    !> A horizon band whose on-edge lies below its off-edge is refused
    subroutine test_bad_drop_horizon_bounds(error)
@@ -915,22 +877,22 @@ contains
       character(len=*), parameter :: path = "moist-test-parameters-unknown-keys.toml"
 
       call read_fixture(param, path, [character(len=32) :: "do_rho = true", "[grid]", "num_leb = 110", &
-                        "[projection.newton]", "max_cheap_steps = 3", "cheap_steps = 3"], err, ok)
+                        "[projection.newton]", "max_step = 0.75", "step = 3"], err, ok)
       call check(error, ok, "fixture file")
       if (allocated(error)) return
       call check(error, allocated(err), "unknown keys are accepted")
       if (allocated(error)) return
-      call check(error, index(err%message, "Unknown parameters: do_rho, projection.newton.cheap_steps") > 0, &
+      call check(error, index(err%message, "Unknown parameters: do_rho, projection.newton.step") > 0, &
                  more=err%message)
       if (allocated(error)) return
       ! Control: the same file without the unknown keys is read
       call read_fixture(param, path, [character(len=32) :: "[grid]", "num_leb = 110", "[projection.newton]", &
-                        "max_cheap_steps = 3"], err, ok)
+                        "max_step = 0.75"], err, ok)
       call check(error, ok, "fixture file")
       if (allocated(error)) return
       call check(error, .not. allocated(err), "known keys are refused")
       if (allocated(error)) return
-      call check(error, param%num_leb == 110 .and. param%solve%max_cheap_steps == 3, "known keys are not read")
+      call check(error, param%num_leb == 110 .and. param%solve%max_step == 0.75_wp, "known keys are not read")
    end subroutine test_unknown_keys_named
 
    !> Write a parameter file, read it and remove it again
@@ -1031,9 +993,9 @@ contains
                  "defaults do not restore the reach band")
    end subroutine test_drop_reach_defaults
 
-   !> The octree preset follows the projection level: the coarse octree at
-   !> levels 1 and 3 drops a leaf without sign change, the fine one of level 4
-   !> has smaller leaves and refines them
+   !> The seed preset follows the projection level: a coarse octree at level 1,
+   !> the mesh at levels 3 and 4 with smaller spacing, refined at level 4 only;
+   !> an explicit seeder replaces the level's and keeps its spacing
    subroutine test_drop_seed_follows_level(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1042,7 +1004,7 @@ contains
       !> Settings under test
       type(moist_cavity_drop_parameters_type) :: param
       !> Preset of each level
-      type(drop_seed_parameters_type) :: seed1, seed3, seed4
+      type(drop_seed_parameters_type) :: seed1, seed2, seed3, seed4
 
       call param%init_defaults()
       param%proj_level = 1
@@ -1052,6 +1014,13 @@ contains
          return
       end if
       seed1 = param%seed
+      param%proj_level = 2
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      seed2 = param%seed
       param%proj_level = 4
       call param%compute_derived(err)
       if (allocated(err)) then
@@ -1066,13 +1035,24 @@ contains
          return
       end if
       seed3 = param%seed
-      call check(error, seed1%seed_size == seed3%seed_size .and. seed1%refine_levels == seed3%refine_levels, &
-                 "the level-1 fallback is not the coarse octree")
+      call check(error, seed1%method_used == "rmesh" .and. seed2%method_used == "rmesh" .and. &
+                 seed3%method_used == "rmesh" .and. seed4%method_used == "rmesh", "the level's seeder is not derived")
       if (allocated(error)) return
-      call check(error, seed3%refine_levels == 0 .and. seed4%refine_levels > 0, &
-                 "only the fine octree refines a leaf without sign change")
+      call check(error, seed1%refine_levels == 0 .and. seed2%refine_levels == 0 .and. &
+                 seed3%refine_levels == 0 .and. seed4%refine_levels > 0, &
+                 "only level 4 refines a cell without sign change")
       if (allocated(error)) return
-      call check(error, seed4%seed_size < seed3%seed_size, "the fine octree has no smaller leaves")
+      call check(error, seed4%seed_size < seed3%seed_size .and. seed3%seed_size < seed2%seed_size .and. &
+                 seed2%seed_size < seed1%seed_size, "the spacing does not shrink with the level")
+      if (allocated(error)) return
+      param%seed%method = "global"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%method_used == "global" .and. param%seed%seed_size == seed3%seed_size, &
+                 "an explicit seeder does not replace the level's")
    end subroutine test_drop_seed_follows_level
 
    !> A nonpositive octree box budget is refused
@@ -1119,6 +1099,252 @@ contains
       call param%compute_derived(err)
       call expect_error(error, err, "Octree depth limit must lie in 1..20")
    end subroutine test_bad_drop_octree_max_depth
+
+   !> A seeder name no seeder answers to is refused
+   subroutine test_bad_drop_seed_method(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%seed%method = "nonsense"
+      call param%compute_derived(err)
+      call expect_error(error, err, "unknown projection seeder")
+   end subroutine test_bad_drop_seed_method
+
+   !> The seed filters follow the projection level: all four at level 2, the
+   !> tangent cone alone at level 3, none at levels 1 and 4; the back-facing one
+   !> only while the horizon switch is on
+   subroutine test_drop_seed_filters_follow_level(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Filters expected per level: cone, grazing, back-facing, focal
+      logical, parameter :: expected(4, 4) = reshape([.false., .false., .false., .false., &
+                                                      .true., .true., .true., .true., &
+                                                      .true., .false., .false., .false., &
+                                                      .false., .false., .false., .false.], [4, 4])
+      integer :: level
+      character(len=48) :: message
+
+      do level = 1, 4
+         call param%init_defaults()
+         param%proj_level = level
+         call param%compute_derived(err)
+         if (allocated(err)) then
+            call test_failed(error, err%message)
+            return
+         end if
+         write (message, "(a,i0)") "seed filters of level ", level
+         call check(error, all([param%seed%filter_cone, param%seed%filter_grazing, param%seed%filter_back_facing, &
+                                param%seed%filter_focal] .eqv. expected(:, level)), trim(message))
+         if (allocated(error)) return
+      end do
+      call check(error, param%seed%filters_label() == "none", "label without a filter")
+      if (allocated(error)) return
+
+      call param%init_defaults()
+      param%proj_level = 2
+      param%w_0hor_on = 0.0_wp
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%filter_cone .and. param%seed%filter_grazing .and. param%seed%filter_focal &
+                 .and. .not. param%seed%filter_back_facing, &
+                 "level 2 drops back-facing seeds without the horizon switch")
+      if (allocated(error)) return
+      call check(error, param%seed%filters_label() == "cone, grazing, focal", "label of the filters in use")
+   end subroutine test_drop_seed_filters_follow_level
+
+   !> A filter list replaces the level's filters at any level; `none` switches
+   !> every one off
+   subroutine test_drop_seed_filters_listed(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%proj_level = 4
+      param%seed%filters = "cone,focal  back_facing"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%filter_cone .and. param%seed%filter_focal .and. param%seed%filter_back_facing &
+                 .and. .not. param%seed%filter_grazing, "the listed filters are not the ones in use")
+      if (allocated(error)) return
+
+      param%proj_level = 2
+      param%seed%filters = "none"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, .not. (param%seed%filter_cone .or. param%seed%filter_grazing .or. &
+                               param%seed%filter_back_facing .or. param%seed%filter_focal), &
+                 "none left a level-2 filter on")
+      if (allocated(error)) return
+
+      param%seed%filters = "grazing"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%filter_grazing .and. .not. (param%seed%filter_cone .or. &
+                                                               param%seed%filter_back_facing .or. &
+                                                               param%seed%filter_focal), &
+                 "a single listed filter is not the only one in use")
+   end subroutine test_drop_seed_filters_listed
+
+   !> A filter name no filter answers to is refused
+   subroutine test_bad_drop_seed_filter_name(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%seed%filters = "cone, horizon"
+      call param%compute_derived(err)
+      call expect_error(error, err, "Unknown projection seed filter 'horizon'")
+   end subroutine test_bad_drop_seed_filter_name
+
+   !> An empty filter list is refused
+   subroutine test_bad_drop_seed_filter_empty(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%seed%filters = " , "
+      call param%compute_derived(err)
+      call expect_error(error, err, "Empty projection seed filter list")
+   end subroutine test_bad_drop_seed_filter_empty
+
+   !> The back-facing filter is refused while the horizon switch is off
+   subroutine test_bad_drop_seed_filter_back_facing(error)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+
+      call param%init_defaults()
+      param%w_0hor_on = 0.0_wp
+      param%seed%filters = "back_facing"
+      call param%compute_derived(err)
+      call expect_error(error, err, "Seed filter back_facing needs the horizon switch")
+   end subroutine test_bad_drop_seed_filter_back_facing
+
+   !> Leading blanks do not change what a seeder or filter setting names
+   subroutine test_drop_seed_settings_leading_blanks(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Filters of the level
+      character(len=:), allocatable :: label
+
+      call param%init_defaults()
+      param%proj_level = 2
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      label = param%seed%filters_label()
+      call check(error, label /= "none", "the level has no filter to tell auto from none")
+      if (allocated(error)) return
+
+      param%seed%filters = "  auto"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%filters_label() == label, "auto after blanks does not take the level's filters")
+      if (allocated(error)) return
+
+      param%seed%filters = "  none"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%filters_label() == "none", "none after blanks left a filter on")
+      if (allocated(error)) return
+
+      ! Level 1 seeds from the mesh: an explicit seeder shows
+      param%proj_level = 1
+      param%seed%method = "  octree"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%method_used == "octree", "a seeder after blanks is not the one in use")
+      if (allocated(error)) return
+
+      param%seed%method = "  auto"
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, param%seed%method_used == "rmesh", "auto after blanks does not take the level's seeder")
+   end subroutine test_drop_seed_settings_leading_blanks
+
+   !> A refused filter list leaves the filters in use as they were
+   subroutine test_drop_seed_filters_refusal_keeps_filters(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable :: err
+      !> Settings under test
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Filters before the refusal
+      character(len=:), allocatable :: label
+
+      call param%init_defaults()
+      param%proj_level = 2
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      label = param%seed%filters_label()
+      call check(error, label /= "cone", "the level's filters are the one the refused list reads first")
+      if (allocated(error)) return
+
+      ! One known name, then an unknown one
+      param%seed%filters = "cone, horizon"
+      call param%seed%init_filters(param%proj_level, .true., err)
+      call check(error, allocated(err), "the list with an unknown filter was not refused")
+      if (allocated(error)) return
+      call check(error, param%seed%filters_label() == label, "the refused list changed the filters in use")
+   end subroutine test_drop_seed_filters_refusal_keeps_filters
 
    !> A non-finite SvdW fade band is refused while the fade is on
    subroutine test_bad_svdw_fade_nonfinite(error)
@@ -1194,21 +1420,6 @@ contains
       call param%validate(err)
       call expect_error(error, err, "CFC fade needs a2 < 0")
    end subroutine test_bad_cfc_fade_a2
-
-   !> A negative Newton cheap-step budget is refused
-   subroutine test_bad_drop_newton_max_cheap_steps(error)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error
-      type(moist_error), allocatable :: err
-      !> Settings under test
-      type(moist_cavity_drop_parameters_type) :: param
-
-      call param%init_defaults()
-      param%solve%max_cheap_steps = -1
-      call param%compute_derived(err)
-      call expect_error(error, err, "Newton cheap-step budget must not be negative")
-   end subroutine test_bad_drop_newton_max_cheap_steps
 
    !> A nonpositive Newton step cap is refused
    subroutine test_bad_drop_newton_max_step(error)
@@ -1371,8 +1582,6 @@ contains
          new_unittest("bad_drop_load_missing_file", test_bad_drop_load_missing_file, should_fail=.true.), &
          new_unittest("bad_cfc_pair_power", test_bad_cfc_pair_power, should_fail=.true.), &
          new_unittest("bad_drop_batch_size", test_bad_drop_batch_size, should_fail=.true.), &
-         new_unittest("bad_drop_newton_switch_fnorm", test_bad_drop_newton_switch_fnorm, should_fail=.true.), &
-         new_unittest("bad_drop_newton_max_cheap_steps", test_bad_drop_newton_max_cheap_steps, should_fail=.true.), &
          new_unittest("bad_drop_horizon_bounds", test_bad_drop_horizon_bounds, should_fail=.true.), &
          new_unittest("drop_horizon_off", test_drop_horizon_off), &
          new_unittest("bad_drop_critical_bounds", test_bad_drop_critical_bounds, should_fail=.true.), &
@@ -1387,6 +1596,15 @@ contains
          new_unittest("bad_drop_octree_max_boxes", test_bad_drop_octree_max_boxes, should_fail=.true.), &
          new_unittest("bad_drop_octree_max_survivors", test_bad_drop_octree_max_survivors, should_fail=.true.), &
          new_unittest("bad_drop_octree_max_depth", test_bad_drop_octree_max_depth, should_fail=.true.), &
+         new_unittest("bad_drop_seed_method", test_bad_drop_seed_method, should_fail=.true.), &
+         new_unittest("drop_seed_filters_follow_level", test_drop_seed_filters_follow_level), &
+         new_unittest("drop_seed_filters_listed", test_drop_seed_filters_listed), &
+         new_unittest("bad_drop_seed_filter_name", test_bad_drop_seed_filter_name, should_fail=.true.), &
+         new_unittest("bad_drop_seed_filter_empty", test_bad_drop_seed_filter_empty, should_fail=.true.), &
+         new_unittest("bad_drop_seed_filter_back_facing", test_bad_drop_seed_filter_back_facing, &
+                      should_fail=.true.), &
+         new_unittest("drop_seed_settings_leading_blanks", test_drop_seed_settings_leading_blanks), &
+         new_unittest("drop_seed_filters_refusal_keeps_filters", test_drop_seed_filters_refusal_keeps_filters), &
          new_unittest("bad_svdw_fade_nonfinite", test_bad_svdw_fade_nonfinite, should_fail=.true.), &
          new_unittest("bad_svdw_fade_nonpositive", test_bad_svdw_fade_nonpositive, should_fail=.true.), &
          new_unittest("bad_cfc_fade_nonfinite", test_bad_cfc_fade_nonfinite, should_fail=.true.), &
@@ -1869,7 +2087,7 @@ contains
          case (5)
             param%proj_level = 5
          case (6)
-            param%proj_level = 2
+            param%proj_level = -1
          case (7)
             param%branch%dpdist_max = ieee_value(1.0_wp, ieee_quiet_nan)
          case (8)
@@ -1905,9 +2123,9 @@ contains
       type(moist_pcm_parameters_type) :: pcm
 
       call configured(drop, '{"tolerance":2e-7,"do_fine":true,"grid":{"num_leb":110},"objective":{"alpha":2},'// &
-                      '"projection":{"maxiter":72,"level":4,"batch_size":64,'// &
-                      '"newton":{"switch_fnorm":1e-2,"max_cheap_steps":2,'// &
-                      '"max_step":0.6,"merit_margin":2.5},'// &
+                      '"projection":{"maxiter":72,"level":4,"seeder":"octree","seed_filters":"cone, focal",'// &
+                      '"batch_size":64,'// &
+                      '"newton":{"max_step":0.6,"merit_margin":2.5},'// &
                       '"octree":{"max_boxes":123,"max_survivors":43,'// &
                       '"max_depth":8}},'// &
                       '"screening":{"cell_grid_full_scan_below":19},'// &
@@ -1920,14 +2138,15 @@ contains
       call check(error, drop%num_leb == 110 .and. drop%do_fine .and. &
                  drop%solve%max_iter == 72 .and. drop%proj_level == 4 .and. &
                  drop%seed%max_boxes == 123 .and. drop%seed%max_survivors == 43 .and. &
-                 drop%seed%max_depth == 8 .and. &
+                 drop%seed%max_depth == 8 .and. drop%seed%method == "octree" .and. &
                  drop%cell_grid_full_scan_below == 19 .and. drop%wleb_prune_level == 2)
       if (allocated(error)) return
-      call check(error, drop%batch_size == 64 .and. drop%solve%max_cheap_steps == 2, &
-                 more="batched projection integer keys")
+      call check(error, drop%batch_size == 64, more="batched projection integer keys")
       if (allocated(error)) return
-      call check(error, maxval(abs([drop%solve%switch_fnorm, drop%solve%max_step, drop%solve%merit_margin] - &
-                                   [1.0e-2_wp, 0.6_wp, 2.5_wp])), 0.0_wp, thr=1.0e-14_wp)
+      call check(error, drop%seed%filters == "cone, focal", more="projection seed filter key")
+      if (allocated(error)) return
+      call check(error, maxval(abs([drop%solve%max_step, drop%solve%merit_margin] - &
+                                   [0.6_wp, 2.5_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
       call check(error, maxval(abs([drop%tolerance, drop%phi_alpha, drop%w_0ls_off, &
                                     drop%w_0ls_on, drop%w_0ls_p, drop%w_0ls_a, &

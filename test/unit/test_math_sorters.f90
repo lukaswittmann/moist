@@ -18,6 +18,7 @@
 !>
 !> Error paths: none; a too-small workspace is an `error stop`
 module test_math_sorters
+   use, intrinsic :: iso_fortran_env, only: int64
    use, intrinsic :: ieee_arithmetic, only: ieee_is_negative
    use mctc_env, only: wp
    use test_helpers, only: det_rand
@@ -58,6 +59,7 @@ contains
                   new_unittest("ord_sort_reverse", test_ord_sort_reverse), &
                   new_unittest("ord_sort_work", test_ord_sort_work), &
                   new_unittest("sort_int_ascending", test_sort_int_ascending), &
+                 new_unittest("sort_int64_ascending", test_sort_int64_ascending), &
                   new_unittest("sort_real_ascending", test_sort_real_ascending), &
                   new_unittest("sort_reverse", test_sort_reverse), &
                   new_unittest("sort_index_real", test_sort_index_real), &
@@ -242,6 +244,30 @@ contains
       end do
       call check(error, ndeep > 0, "fixture never drives sort into its heap sort")
    end subroutine test_sort_int_ascending
+
+   !> 64-bit integer introsort: ascending values on every fixture, keys beyond the
+   !> default-integer range
+   subroutine test_sort_int64_ascending(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      integer(int64), parameter :: shift = 4294967296_int64
+      integer, allocatable :: orig(:)
+      integer(int64), allocatable :: a(:)
+      integer :: is, ip, n
+
+      do is = 1, size(sizes)
+         n = sizes(is)
+         do ip = 1, npattern
+            orig = int_pattern(n, ip)
+            a = int(orig, int64)*shift - 7_int64
+            call sort(a)
+            call check(error, all(a == int(orig(stable_reference_int(orig, .false.)), int64)*shift - 7_int64), &
+                       "sort (64-bit integer) is not the ascending order"//label(n, ip))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_sort_int64_ascending
 
    !> Real introsort: ascending values on every fixture
    subroutine test_sort_real_ascending(error)

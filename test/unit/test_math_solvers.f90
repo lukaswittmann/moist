@@ -25,7 +25,7 @@ module test_math_solvers
                                NLESOLVER_SCALAR_BOUNDS, &
                                NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_finite
-   use test_helpers, only: fd4_scalar, fd4_offsets
+   use test_helpers, only: expect_error, fd4_scalar, fd4_offsets
    use moist_utils_format, only: to_string
    implicit none(type, external)
    private
@@ -920,12 +920,12 @@ contains
                              tol=1.0e-12_wp, &
                              tolx=1.0e-14_wp)
 
-      ! Construction is expected to succeed; the one-iteration solve from a far
-      ! start must then report non-convergence (registered should_fail=.true.)
-      if (allocated(solver)) then
-         call solver%solve(x, solver_error)
-      end if
-      if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
+      ! Construction failure returns cleanly, which fails the inverted test
+      ! (registered should_fail=.true.); the one-iteration solve from a far
+      ! start must then report non-convergence
+      if (allocated(solver_error) .or. .not. allocated(solver)) return
+      call solver%solve(x, solver_error)
+      call expect_error(error, solver_error, "Newton solver [code 3]")
    end subroutine test_newton_maxiter_fail
 
    !* ================================================================================= *!

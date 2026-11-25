@@ -6,7 +6,7 @@ module test_cavity_mt_patches
    use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
    use moist_cavity_mt_mesh, only: mt_mesh_type
    use moist_cavity_mt_patches, only: mt_patch_type, build_mt_patches
-   use test_helpers, only: check_moist_error
+   use test_helpers, only: check_moist_error, expect_error
    implicit none(type, external)
    private
    public :: collect_cavity_mt_patches
@@ -417,7 +417,7 @@ contains
       call make_sheets(mesh, 1, 1.0_wp)
       ! Smallest subnormal target
       call build_mt_patches(mesh, tiny(1.0_wp)*epsilon(1.0_wp), 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "subdivision area underflows")
    end subroutine test_bad_underflow
 
    !> Reject a mesh without geometry
@@ -470,7 +470,7 @@ contains
 
       call make_sheets(mesh, 1, 1.0_wp)
       call build_mt_patches(mesh, 1.0e-12_wp, 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "MT patch count exceeds integer capacity")
    end subroutine test_bad_patch_count
 
    !> Reject components whose patch counts overflow only in total
@@ -484,7 +484,7 @@ contains
       ! 1.5e9 patches per unit sheet
       call make_sheets(mesh, 2, 1.0_wp)
       call build_mt_patches(mesh, 1.0_wp/1.5e9_wp, 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "MT patch count exceeds integer capacity")
    end subroutine test_bad_total_count
 
    !> Reject a face subdivided into more pieces than the graph can index
@@ -498,7 +498,7 @@ contains
       ! About 7e4 divisions per edge of a half-unit face
       call make_sheets(mesh, 1, 1.0_wp)
       call build_mt_patches(mesh, 1.0e-8_wp, 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "triangle subdivision exceeds integer capacity")
    end subroutine test_bad_face_subdivision
 
    !> Reject faces whose pieces overflow the graph only in total
@@ -512,7 +512,7 @@ contains
       ! 1.5e4 divisions per edge: 2.25e8 pieces per face, 4.5e8 in total
       call make_sheets(mesh, 1, 1.0_wp)
       call build_mt_patches(mesh, 0.5_wp/(0.01_wp*1.5e4_wp**2), 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "MT patch graph exceeds integer capacity")
    end subroutine test_bad_graph_size
 
    !> Reject one-sided face adjacency
@@ -526,7 +526,7 @@ contains
       call make_sheets(mesh, 1, 1.0_wp)
       mesh%neighbors(3, 2) = 0
       call build_mt_patches(mesh, 0.25_wp, 0.1_wp, patches, patch_error)
-      call check_moist_error(error, patch_error)
+      call expect_error(error, patch_error, "nonreciprocal face adjacency")
    end subroutine test_bad_adjacency
 
    !> Three long planar lobes of 0.6 bohr^2 on the edges of a tiny hub triangle

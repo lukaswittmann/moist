@@ -24,7 +24,7 @@ module test_math_grid_3d_guards
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use test_helpers, only: get_cartesian_gaussian_grid, center_at_origin, get_uniform_recipe, &
+   use test_helpers, only: expect_error, get_cartesian_gaussian_grid, center_at_origin, get_uniform_recipe, &
       & get_qc_handymod_recipe, check_moist_error
    use moist_math_grid_3d_base, only: moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
@@ -87,30 +87,6 @@ contains
                   new_unittest("power_radii_size", test_power_radii_size_fails, should_fail=.true.) &
                   ]
    end subroutine collect_math_grid_3d_guards
-
-   !> Fail an expected-failure test only on the targeted library error
-   !>
-   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
-   !>   verdict: a raised test failure passes, a clean return fails
-   !> - Fails the test only when `err` names `expected`; no error or a
-   !>   different one returns cleanly, so the test is reported as failed
-   !> - Callers must therefore return cleanly (never `test_failed`) when their
-   !>   own setup fails, or a broken fixture would pass as the expected error
-   !>
-   !> @param[out] error     test failure, set only on the expected error
-   !> @param[in]  err       library error, possibly unallocated
-   !> @param[in]  expected  substring the expected error message must contain
-   subroutine expect_error(error, err, expected)
-      !> Test failure, set only on the expected error
-      type(error_type), allocatable, intent(out) :: error
-      !> Library error, possibly unallocated
-      type(mctc_error), allocatable, intent(in) :: err
-      !> Substring the expected error message must contain
-      character(len=*), intent(in) :: expected
-
-      if (.not. allocated(err)) return
-      if (index(err%message, expected) > 0) call test_failed(error, err%message)
-   end subroutine expect_error
 
    !> Fail unless `merr` is set and names `expected`
    !>
