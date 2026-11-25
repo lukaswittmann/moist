@@ -667,7 +667,7 @@ contains
       call slots%release(thread_slot)
       !$omp end parallel
 
-      if (abort%requested) then
+      if (abort%is_set()) then
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else

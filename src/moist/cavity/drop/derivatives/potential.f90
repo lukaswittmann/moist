@@ -208,7 +208,7 @@ contains
 
       call self%ctx%timer%stop(h_weights)
 
-      if (abort%requested) then
+      if (abort%is_set()) then
          w_lsf0 = 0.0_wp
          w_lsf1 = 0.0_wp
          w_lsf2 = 0.0_wp
